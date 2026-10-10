@@ -105,6 +105,9 @@ export type InlineFrameHost = {
   measure(id: string, height: number): number;
   /** Drop `id` from the live set (its host unmounted); notifies if it had been live. */
   release(id: string): void;
+  /** The last height remembered for `id` (the registry keeps it past eviction/release, so a
+   *  remounted frame can restore its size before it remeasures); the floor if never measured. */
+  heightOf(id: string): number;
   /** Is `id` a live frame right now? */
   isLive(id: string): boolean;
   /** Subscribe to live-set changes; returns an unsubscribe. */
@@ -133,6 +136,7 @@ export function createInlineFrameHost(cap: number = MAX_LIVE_FRAMES): InlineFram
       reg.release(id);
       if (was) emit();
     },
+    heightOf: (id) => reg.heightOf(id),
     isLive: (id) => reg.isLive(id),
     subscribe(listener) {
       listeners.add(listener);
@@ -224,11 +228,26 @@ function InlineArtifactHost({
   const key = frameKey(artifact);
   const src = useMemo(() => embedSrc(artifact), [artifact.id, artifact.version]);
   const { ref: slotRef, mounted } = useLazyMount<HTMLDivElement>();
-  const live = useSyncExternalStore(host.subscribe, () => host.isLive(key));
-  // Seeded from the optional `height` prop hint (0 = none), then driven by the frame's reported
-  // height. Kept across a live→resume flip (the host component stays mounted) so the card
-  // doesn't jump; the registry also remembers it for a remount.
-  const [measured, setMeasured] = useState<number | null>(artifact.height || null);
+  // Whether THIS host currently holds its one live-slot claim on the registry (taken on mount,
+  // dropped on unmount). An eviction drops our live slot but NOT this claim — inlineFrames
+  // reference-counts holders — so this ref lets `resume` re-register without taking a second
+  // claim (#4111), and lets the first render below treat the pre-register window as live.
+  const claimedRef = useRef(false);
+  const liveInStore = useSyncExternalStore(host.subscribe, () => host.isLive(key));
+  // A just-mounted frame hasn't run its register effect yet, so the store still reads "not live"
+  // for that first render and the resume card would flash before `live` settled true (#4111).
+  // Treat the mounted-but-not-yet-claimed window as live; once claimed the store is authoritative
+  // (claimedRef stays true across an eviction, so an evicted frame still falls to the resume card).
+  const live = liveInStore || (mounted && !claimedRef.current);
+  // Seeded from the registry's remembered height for this (id, version) so a remount restores the
+  // frame's last size instead of snapping back to the hint or the floor (#4111); then driven by
+  // the frame's reported height. heightOf returns the floor when nothing was ever measured, so a
+  // first mount falls back to the optional `height` prop hint (0 = none). Kept across a
+  // live→resume flip (the host component stays mounted) so the card doesn't jump.
+  const [measured, setMeasured] = useState<number | null>(() => {
+    const remembered = host.heightOf(key);
+    return remembered > MIN_FRAME_HEIGHT ? remembered : artifact.height || null;
+  });
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const navigatedRef = useRef(false);
   const initTimers = useRef<number[]>([]);
@@ -240,6 +259,7 @@ function InlineArtifactHost({
   useEffect(() => {
     if (!mounted) return;
     host.register(key);
+    claimedRef.current = true;
     const el = slotRef.current;
     let io: IntersectionObserver | undefined;
     if (el && typeof IntersectionObserver !== "undefined") {
@@ -254,6 +274,7 @@ function InlineArtifactHost({
     return () => {
       io?.disconnect();
       host.release(key);
+      claimedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- slotRef is a stable ref object
   }, [mounted, host, key]);
@@ -400,7 +421,16 @@ function InlineArtifactHost({
     [],
   );
 
-  const resume = useCallback(() => host.register(key), [host, key]);
+  // Re-register an evicted frame to bring it back live. The eviction that produced this card
+  // dropped our live slot but NOT our claim (inlineFrames reference-counts holders, and we are
+  // still mounted), so registering outright would add a SECOND claim — then unmount's release()
+  // would see one claim remaining and keep the key live with no frame, leaking the slot forever
+  // (#4111). Drop our claim first, then re-take exactly one.
+  const resume = useCallback(() => {
+    if (claimedRef.current) host.release(key);
+    host.register(key);
+    claimedRef.current = true;
+  }, [host, key]);
   const shownHeight = measured ?? MIN_FRAME_HEIGHT;
 
   return (
