@@ -484,6 +484,11 @@ def _show(
         "created": nv["ts"],
         "updated": nv["ts"],
     }
+    if inline:
+        # Persist placement on the ARTIFACT, not just this one chip: update_artifact and
+        # rewrite_artifact read it back (``_store._is_inline``) so the next version's chip stays
+        # inline too (ADR 0118 D2). ABSENT on a panel artifact, so the default store is unchanged.
+        art["placement"] = "inline"
     store["artifacts"].insert(0, art)
     store["current"] = art["id"]
     _store._write_store(store)
@@ -577,7 +582,9 @@ def _update(old_string: str, new_string: str, artifact_id: str, checked: _links.
     return (
         f"Updated artifact {art['id']} → version {v}." + report,
         (art["id"], v, _store._version_key(art)),
-        _ref.ref_tail(art),
+        # An inline artifact keeps its inline chip across edits (ADR 0118 D2) — placement is read
+        # from the artifact, not re-specified per edit, so an update never silently panels it.
+        _ref.ref_tail(art, inline=_store._is_inline(art)),
     )
 
 
@@ -625,7 +632,8 @@ def _rewrite(code: str, title: str, artifact_id: str, checked: _links.Checked | 
     return (
         f"Rewrote artifact {art['id']} → version {v}." + report + _save_nudge(art["id"]),
         (art["id"], v, _store._version_key(art)),
-        _ref.ref_tail(art),
+        # Same as update: a rewrite of an inline artifact stays inline (ADR 0118 D2).
+        _ref.ref_tail(art, inline=_store._is_inline(art)),
     )
 
 

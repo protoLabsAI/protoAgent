@@ -637,6 +637,15 @@ def _is_pinned(art: dict) -> bool:
     return art.get("pinned") is True
 
 
+def _is_inline(art: dict) -> bool:
+    """Inline placement (ADR 0118 D2): the artifact renders in the conversation, not the panel.
+    Persisted on the ARTIFACT so update_artifact/rewrite_artifact keep every later version's chip
+    inline — an inline artifact IS an artifact. Strictly the string ``"inline"``; the key is
+    ABSENT on a panel artifact (not ``"panel"``), so a store that never created an inline artifact
+    is byte-for-byte the pre-0118 shape (the same downgrade-safe rule ``pinned`` follows)."""
+    return art.get("placement") == "inline"
+
+
 def _pinned(store: dict) -> list[dict]:
     """The pinned artifacts, in store (most-recently-touched first) order."""
     return [a for a in store.get("artifacts", []) if _is_pinned(a)]

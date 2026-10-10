@@ -311,6 +311,36 @@ def test_inline_placement_flows_through_the_show_service(monkeypatch, tmp_path):
     assert "inline" not in extract_component(r2["ref"])["props"]
 
 
+def test_inline_placement_survives_update_and_rewrite(monkeypatch, tmp_path):
+    # The create-review regression: placement is a property of the ARTIFACT (persisted in the
+    # store), so update_artifact / rewrite_artifact keep every later version's chip inline rather
+    # than silently panelling it — neither tool takes (or needs) a placement argument.
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    art.show_artifact.invoke({"kind": "html", "code": "<p>v1</p>", "placement": "inline"})
+    aid = art._read_store()["artifacts"][0]["id"]
+    assert art._read_store()["artifacts"][0]["placement"] == "inline"
+
+    up = art.update_artifact.invoke({"old_string": "v1", "new_string": "v2"})
+    assert extract_component(up)["props"]["inline"] is True
+    rw = art.rewrite_artifact.invoke({"code": "<p>v3</p>"})
+    rw_props = extract_component(rw)["props"]
+    assert rw_props["inline"] is True and rw_props["artifact_id"] == aid
+
+
+def test_panel_artifact_stays_panel_across_update_and_rewrite(monkeypatch, tmp_path):
+    # The mirror case: a default (panel) artifact never gains an inline flag on edit, and the
+    # store carries no placement key at all — the pre-0118 shape, byte-for-byte.
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    art.show_artifact.invoke({"kind": "html", "code": "<p>v1</p>"})
+    assert "placement" not in art._read_store()["artifacts"][0]
+    up = art.update_artifact.invoke({"old_string": "v1", "new_string": "v2"})
+    assert "inline" not in extract_component(up)["props"]
+    rw = art.rewrite_artifact.invoke({"code": "<p>v3</p>"})
+    assert "inline" not in extract_component(rw)["props"]
+
+
 def test_validator_sanitizes_inline_and_height(monkeypatch, tmp_path):
     # r4: a non-bool inline and a non-int height are DROPPED (payload still valid); an int height
     # is clamped into [HEIGHT_MIN, HEIGHT_MAX]. A real bool / in-range int is kept untouched.
