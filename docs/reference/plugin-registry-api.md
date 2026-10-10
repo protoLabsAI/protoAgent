@@ -187,7 +187,7 @@ enabled plugin already registered keeps the first and warns (resolved in the loa
 ### `registry.register_component` {#registry-register-component}
 
 ```python
-registry.register_component(name: str, validator) -> None
+registry.register_component(name: str, validator, frame: str | None = None) -> None
 ```
 
 Contribute a component-v1 KIND ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)) the chat stream may carry — e.g. a chip
@@ -208,6 +208,14 @@ validator is refused with a warning. The kind is live only while the plugin is
 loaded — disabling it stops extraction on the next reload. `show_component` never
 builds a plugin kind. Guard with `getattr(registry, "register_component", None)` on
 hosts older than this seam.
+
+`frame` (optional, ADR 0118 D5) declares that the kind renders in a plugin-served
+PAGE instead of a compiled console renderer — a path RELATIVE to this plugin's public
+route prefix (`/plugins/<id>`), e.g. `"component.html"`. Because an opaque-origin
+frame iframe sends no bearer, the page must be auth-exempt: the frame is refused (same
+log-and-skip as a bad name) if it is absolute, contains a `..` segment, or is not
+covered by the manifest's `public_paths`. An accepted frame is stored on
+`component_frames[name]` for a later card to carry through the loader.
 
 ### `registry.register_embedder` {#registry-register-embedder}
 
