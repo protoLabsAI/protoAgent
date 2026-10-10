@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { registerChatComponent } from "../ext/componentRegistry";
 import type { ChatMessage, ChatPart, ToolCall } from "../lib/types";
+import chatComponentCss from "./chat-component.css?raw";
 import { ChatMessageView } from "./ChatMessageView";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -293,5 +294,16 @@ describe("ChatMessageView — a send-to-chat user turn shows a 'from ‹title›
   it("an ordinary typed user turn has no from-label", () => {
     render({ id: "u3", role: "user", content: "hello", status: "done" });
     expect(container.querySelector('[data-testid="chat-from-artifact"]')).toBeNull();
+  });
+
+  it("the label sits on its own line — block-level flex, not inline-flex (#4124)", () => {
+    // `inline-flex` ran the chip into the message text ("from Bill SplitterI am splitting…"); a
+    // block-level `flex` puts it on its own line above the text. Assert the rule on the CSS source
+    // (jsdom does not apply stylesheets), scoped to the .chat-from-artifact block.
+    const rule = chatComponentCss.match(/\.chat-from-artifact\s*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    const body = rule![1];
+    expect(body).toMatch(/display:\s*flex\s*;/);
+    expect(body).not.toMatch(/display:\s*inline-flex/);
   });
 });
