@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.200.0",
+    "date": "2026-10-10",
+    "changes": [
+      "Moving a tool to a subagent no longer tells the agent the tool is gone (#4104).",
+      "A review lane that spends a whole turn thinking is retried with thinking off, not nudged into the same loop (#4115).",
+      "PROTO.md documents how epic branches are reviewed and landed (#4110).",
+      "App guides now cover model connections, documents, memory, and data recovery (#4113)."
+    ]
+  },
+  {
     "version": "v0.199.0",
     "date": "2026-10-09",
     "changes": [
