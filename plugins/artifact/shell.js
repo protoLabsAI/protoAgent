@@ -33,6 +33,12 @@
   // (postMessage) to the gated /ask endpoint → the agent → back. parent.postMessage
   // works from the sandbox; the shell validates e.source and calls the bearer-gated
   // endpoint. ask() rejects if the operator hasn't enabled it (ARTIFACT_ASK_ENABLED).
+  // send(text) / openLink(url) (ADR 0118 D4) sit next to ask: the shim posts them up to the
+  // shell, which SANITY-checks and relays them to the console host (its embedder); the HOST
+  // owns the gates (gesture / length / busy / rate for send, https + origin allowlist for
+  // openLink) and posts a verdict back down. Each returns a Promise that resolves on accept
+  // and rejects with the host's reason (e.g. "the agent is busy"), so the frame can show it.
+  // ask stays opt-in and unchanged; send is on by default (D4).
   var SHIM = '<script>(function(){var s=0,w={};'
     + 'window.addEventListener("message",function(e){var m=e.data||{};'
     // Live re-theme (#1872): base() bakes the tokens in as literals at render time,
@@ -48,7 +54,13 @@
     + 'var p=w[m.id];if(!p)return;delete w[m.id];m.error?p.reject(new Error(m.error)):p.resolve(m.text);});'
     + 'window.protoArtifact={ask:function(prompt){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej};'
     + 'parent.postMessage({type:"protoArtifact:ask",id:id,prompt:String(prompt)},"*");'
-    + 'setTimeout(function(){if(w[id]){delete w[id];rej(new Error("ask timed out"));}},60000);});}};'
+    + 'setTimeout(function(){if(w[id]){delete w[id];rej(new Error("ask timed out"));}},60000);});},'
+    + 'send:function(text){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej};'
+    + 'parent.postMessage({type:"protoArtifact:send",id:id,text:String(text)},"*");'
+    + 'setTimeout(function(){if(w[id]){delete w[id];rej(new Error("send timed out"));}},60000);});},'
+    + 'openLink:function(url){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej};'
+    + 'parent.postMessage({type:"protoArtifact:openLink",id:id,url:String(url)},"*");'
+    + 'setTimeout(function(){if(w[id]){delete w[id];rej(new Error("openLink timed out"));}},60000);});}};'
     + '})();<\/script>';
   // Design-system surface: link the same-origin DS plugin-kit stylesheet (host-served at
   // /_ds/, min_protoagent_version 0.34.0) into html/react/markdown artifacts so they can use
@@ -1980,6 +1992,8 @@
       linkLabels=keep; renderLinks();
       return;
     }
+    // send-to-chat / openLink (ADR 0118 D4) — relayed UP to the console host, which gates them.
+    if(m.type==="protoArtifact:send" || m.type==="protoArtifact:openLink"){ relayBridge(m); return; }
     if(m.type!=="protoArtifact:ask") return;
     function reply(p){ try{ $frame.contentWindow.postMessage(Object.assign({type:"protoArtifact:result",id:m.id},p),"*"); }catch(_){} }
     try{
@@ -1988,6 +2002,50 @@
       if(!r.ok){ var t=""; try{ t=await r.text(); }catch(_){} reply({error:("ask failed ("+r.status+") "+t).slice(0,300)}); return; }
       var d=await r.json(); reply({text:(d&&d.text)||""});
     }catch(err){ reply({error:String(err).slice(0,300)}); }
+  });
+
+  // ── send-to-chat / openLink bridge (ADR 0118 D4) ───────────────────────────────────────
+  // The in-frame shim's send()/openLink() post up here; the shell SANITY-checks and relays the
+  // request to the console host (its embedder), which owns the real gates — a user gesture,
+  // length, "the agent is busy", the 1-per-2s rate (send) / https + origin allowlist
+  // (openLink) — in S10. The host posts its verdict back down (`protoArtifact:bridgeResult`)
+  // and we relay it into the frame as a `protoArtifact:result`, resolving/rejecting the frame's
+  // Promise. Trust lives in the host: the shell never decides whether a send is allowed; it
+  // only tags the request with which artifact/version it came from (D4 origin metadata) and
+  // correlates the reply. Works in panel AND embed mode — the embedder is the console host
+  // either way.
+  var bridgeSeq = 0, bridgePending = {};  // host-correlation id (cid) → the frame's own call id
+  function relayBridge(m){
+    var frameId = m.id, kind = (m.type === "protoArtifact:send") ? "send" : "openLink";
+    function deny(msg){ if(!$frame) return; try{ $frame.contentWindow.postMessage({type:"protoArtifact:result", id:frameId, error:msg}, "*"); }catch(_){} }
+    // No embedder to gate the request (a standalone page load, not embedded in the console) →
+    // refuse locally so the frame's Promise doesn't hang until its timeout. The host is the
+    // only thing trusted to allow it, so without one the answer is no.
+    if(window.parent === window){ deny(kind + " is unavailable here"); return; }
+    var cid = ++bridgeSeq;
+    bridgePending[cid] = frameId;
+    var payload = {type:m.type, cid:cid, via:"artifact", artifact_id:renderingId||null, version:renderingN||0};
+    // Coarse sanity bound only — the host enforces the real 1–4000 / https limits. Kept well
+    // above 4000 so a too-long send still reaches the host and is rejected there, not silently
+    // trimmed into range here.
+    if(kind === "send") payload.text = String(m.text||"").slice(0, 16384);
+    else payload.url = String(m.url||"").slice(0, 4096);
+    try{ window.parent.postMessage(payload, "*"); }
+    catch(_){ delete bridgePending[cid]; deny(kind + " failed"); }
+  }
+  // The host's verdict for a relayed send/openLink. Trusted only from the embedder (fromEmbedder,
+  // defined below) — never from the nested artifact frame (model code) or a sibling — and matched
+  // to a pending request by its correlation id, so a stray post can't resolve an unrelated call.
+  window.addEventListener("message", function(e){
+    var m = e.data;
+    if(!m || m.type !== "protoArtifact:bridgeResult" || !fromEmbedder(e)) return;
+    var frameId = bridgePending[m.cid];
+    if(frameId === undefined) return;  // unknown / already-settled correlation id
+    delete bridgePending[m.cid];
+    if(!$frame) return;
+    var reply = {type:"protoArtifact:result", id:frameId};
+    if(m.ok) reply.text = String(m.text||""); else reply.error = String(m.error||"rejected").slice(0,300);
+    try{ $frame.contentWindow.postMessage(reply, "*"); }catch(_){}
   });
 
   // Deep-link from the console (#3617): a chat `artifact-ref` chip asks the panel to show ONE
