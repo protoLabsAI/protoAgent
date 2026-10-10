@@ -20,8 +20,13 @@ a work product.**
 |---|---|---|---|
 | **Text** | markdown (prose, code, mermaid fences, KaTeX, GFM tables) | no | a fact, a short explanation, code, or a small static table — the answer is just *words and numbers* |
 | **Data component** | `show_component` → `component-v1` | no | exact values, a record, ordered steps, a code pointer — structured data you want rendered natively, not a widget |
-| **Inline artifact** | `show_artifact(…, placement="inline")` | yes (artifact sandbox) | an answer the user **interacts with in the conversation** — a calculator, a what-if explainer, a chart, a small tool — that belongs beside your prose in scrollback |
+| **Inline artifact** | `show_artifact(…, placement="inline")` | yes (artifact sandbox) | an answer the user **interacts with right in the conversation** — a calculator, a what-if explainer, a chart, a small tool — that belongs beside your prose in scrollback |
 | **Panel artifact** | `show_artifact(…)` (the default, `placement="panel"`) | yes (same sandbox) | a **work product** carried across turns — a document, a deck, a PDF, a large app — that the user opens, edits and returns to |
+
+`placement` is a real argument on the tool — the full signature is
+`show_artifact(kind, code, title="", links=None, placement="panel")`. It **defaults to
+`"panel"`**, so a plain `show_artifact(kind, code)` still opens the panel; add `placement="inline"`
+to climb to the inline tier. (`show_service`, the async variant, takes the same `placement`.)
 
 An inline artifact **is** an artifact: same store, versions, render verdict,
 `update_artifact`/`rewrite_artifact`, and an **Open in panel** button — only *where* it renders
