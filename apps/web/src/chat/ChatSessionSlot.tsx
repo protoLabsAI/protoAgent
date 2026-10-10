@@ -29,7 +29,8 @@ import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatTranscript } from "./ChatTranscript";
 import { ArtifactChatSendContext, type ArtifactChatSend } from "../artifacts/ArtifactRefChip";
-import { ComponentChatSendContext, type ComponentChatSend } from "./FrameComponentHost";
+import { ComponentChatSendContext, ComponentFrameRegistryContext, type ComponentChatSend } from "./FrameComponentHost";
+import { createFrameRegistry } from "../artifacts/inlineFrames";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import {
   noteTurnFinished,
@@ -1776,24 +1777,31 @@ export function ChatSessionSlot({
     [artifactSessionId, artifactIsBusy, sendFromComponent],
   );
 
+  // One frame-component registry PER CHAT VIEW (ADR 0118 D2 / S12b): every FrameComponentHost in
+  // this transcript shares it, so the six-live-frame cap bounds them together and one tab's
+  // components can't evict another's. Created once per slot (the slot outlives individual turns).
+  const [componentFrameRegistry] = useState(() => createFrameRegistry());
+
   if (!session) return null;
 
   return (
     <div className="chat-session-slot" hidden={!visible}>
       <ArtifactChatSendContext.Provider value={artifactChatSend}>
         <ComponentChatSendContext.Provider value={componentChatSend}>
-          <ChatTranscript
-            sessionId={sessionId}
-            messages={messages}
-            dismissedToolCalls={dismissedToolCalls}
-            actions={transcriptActions}
-            steerQueue={steerQueue}
-            serverTurnLabel={serverTurnLabel}
-            status={status}
-            onCancelDelegation={transcriptCancelDelegation}
-            onDismissToolCall={transcriptDismissToolCall}
-            onCancelSteer={transcriptCancelSteer}
-          />
+          <ComponentFrameRegistryContext.Provider value={componentFrameRegistry}>
+            <ChatTranscript
+              sessionId={sessionId}
+              messages={messages}
+              dismissedToolCalls={dismissedToolCalls}
+              actions={transcriptActions}
+              steerQueue={steerQueue}
+              serverTurnLabel={serverTurnLabel}
+              status={status}
+              onCancelDelegation={transcriptCancelDelegation}
+              onDismissToolCall={transcriptDismissToolCall}
+              onCancelSteer={transcriptCancelSteer}
+            />
+          </ComponentFrameRegistryContext.Provider>
         </ComponentChatSendContext.Provider>
       </ArtifactChatSendContext.Provider>
 

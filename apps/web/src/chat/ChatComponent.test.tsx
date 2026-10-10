@@ -7,10 +7,12 @@ import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createFrameRegistry } from "../artifacts/inlineFrames";
 import { registerChatComponent } from "../ext/componentRegistry";
 import type { ComponentCatalogEntry } from "../lib/api/components";
 import type { ComponentSpec } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
+import { ComponentFrameRegistryContext } from "./FrameComponentHost";
 
 // The component catalog is the frame-resolution input (ADR 0118 D5 / S12b). Mock the hook so the
 // resolution-order tests control it synchronously (and the built-in table tests run with an empty
@@ -143,5 +145,33 @@ describe("ChatComponent — resolution order (ADR 0118 D5 / S12b)", () => {
     render({ component: "mystery", props: {} });
     expect(container.querySelector(".chat-comp-unknown")?.textContent).toBe("[unsupported component: mystery]");
     expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  // The fix behind S12b's rejected round: ChatComponent must hand every frame host the SHARED
+  // per-chat-view registry (via ComponentFrameRegistryContext), NOT let each host mint its own
+  // one-frame registry — otherwise the six-live-frame cap is never enforced and a transcript full
+  // of plugin components keeps every iframe live. Seven distinct frame kinds under one registry
+  // must settle at six live iframes + one evicted card. (jsdom has no IntersectionObserver, so the
+  // hosts mount eagerly — same basis as the FrameComponentHost cap test.)
+  it("shares one registry across frame components, enforcing the six-live-frame cap", () => {
+    catalogState.rows = Array.from({ length: 7 }, (_, i) => ({
+      name: `pl-frame-${i}`,
+      plugin: "demo",
+      frame_url: `/plugins/demo/w${i}`,
+    }));
+    const registry = createFrameRegistry();
+    act(() =>
+      root.render(
+        h(
+          ComponentFrameRegistryContext.Provider,
+          { value: registry },
+          ...catalogState.rows.map((r) => h(ChatComponent, { key: r.name, spec: { component: r.name, props: {} } })),
+        ),
+      ),
+    );
+    // One shared budget: six live frames, the seventh evicted to a static card.
+    expect(registry.size()).toBe(6);
+    expect(container.querySelectorAll("iframe").length).toBe(6);
+    expect(container.querySelectorAll(".frame-component-host__evicted").length).toBe(1);
   });
 });

@@ -54,6 +54,17 @@ import { apiUrl } from "../lib/api";
 //     ChatSessionSlot runTurn), tagged with the origin `{via:"component", kind, plugin}` so the
 //     turn is a normal, visible, auditable user message with a "from ‹title›" label.
 
+// The per-chat-view registry every frame-rendered plugin component shares, so the
+// six-live-frame cap (inlineFrames.ts, ADR 0118 D2) bounds them TOGETHER — a seventh live
+// component evicts the least-recently-visible one to a static card. ChatComponent (the one
+// production caller) reads this and hands it to each FrameComponentHost; ChatSessionSlot scopes
+// a fresh one PER CHAT VIEW via the Provider, so one tab's components can't evict another's. A
+// single module default keeps the budget bounded even for a standalone render (a test, a future
+// surface) that doesn't wrap a Provider — mirrors InlineFrameHostContext for artifacts. Without
+// this, each host fell back to its OWN one-frame registry and the cap was never enforced.
+const sharedComponentFrameRegistry = createFrameRegistry();
+export const ComponentFrameRegistryContext = createContext<FrameRegistry>(sharedComponentFrameRegistry);
+
 export type FrameComponentHostProps = {
   /** Stable id for this component instance — the frame-budget registry key and the
    *  `touch`/`measure`/`release` handle, AND the per-frame rate-limit key for the send gate.

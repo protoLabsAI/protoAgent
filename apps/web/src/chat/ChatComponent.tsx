@@ -1,6 +1,6 @@
 import "./chat-component.css";
 
-import type { JSX } from "react";
+import { useContext, type JSX } from "react";
 
 import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
 
@@ -8,7 +8,7 @@ import { CodeRefChip } from "../codeviewer/CodeRefChip";
 import { resolveChatComponent, type ComponentFrame } from "../ext/componentRegistry";
 import { useComponentCatalog } from "../lib/api/components";
 import type { ComponentSpec } from "../lib/types";
-import { FrameComponentHost } from "./FrameComponentHost";
+import { ComponentFrameRegistryContext, FrameComponentHost } from "./FrameComponentHost";
 
 // Curated, data-only chat component registry (ADR 0051 Slice 2). Renders typed
 // component-v1 DataParts inline in the transcript. No code execution — props are pure
@@ -140,6 +140,11 @@ export function ChatComponent({ spec }: { spec: ComponentSpec }) {
   const entry = catalog.find((e) => e.name === spec.component) ?? null;
   const frame: ComponentFrame | null = entry ? { frame_url: entry.frame_url, plugin: entry.plugin } : null;
   const resolved = resolveChatComponent(spec.component, BUILTINS, frame);
+  // The per-chat-view frame registry shared by EVERY frame component in this transcript, so the
+  // six-live-frame cap bounds them together (ChatSessionSlot scopes one per chat view; the module
+  // default keeps even a standalone render bounded). Without passing it, each host would make its
+  // own one-frame registry and the cap would never apply.
+  const frameRegistry = useContext(ComponentFrameRegistryContext);
 
   if (resolved.via === "unsupported") {
     return <div className="chat-comp chat-comp-unknown">[unsupported component: {spec.component}]</div>;
@@ -155,6 +160,7 @@ export function ChatComponent({ spec }: { spec: ComponentSpec }) {
           kind={spec.component}
           plugin={resolved.plugin}
           props={spec.props || {}}
+          registry={frameRegistry}
           title={spec.component}
         />
       </div>
