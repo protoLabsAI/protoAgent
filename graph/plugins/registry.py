@@ -8,9 +8,29 @@ explicit means a plugin never imports protoAgent internals to extend it.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 log = logging.getLogger("protoagent.plugins")
+
+
+def _accept_component_frame(plugin_id: str, frame, public_paths) -> str | None:
+    """Validate a component's optional ``frame`` (ADR 0118 D5).
+
+    A frame is a path RELATIVE to the plugin's public route prefix (``/plugins/<id>``) that
+    renders the kind in a plugin-served page. Because an opaque-origin frame iframe sends no
+    bearer, that page must be auth-exempt — i.e. covered by the manifest's ``public_paths``.
+    Returns the cleaned relative path when it is safe and exposed; ``None`` (the caller logs +
+    skips) for an absolute path, any ``..`` segment, or a path the manifest did not list.
+
+    Kept host-free + stdlib-only so ``graph/plugins/testkit.py`` can duplicate it verbatim
+    (it is vendored into standalone plugin CI); a parity test keeps the two copies in sync."""
+    s = str(frame).strip()
+    if not s or s.startswith("/") or ".." in PurePosixPath(s).parts:
+        return None
+    full = f"/plugins/{plugin_id}/{s}"  # resolve against the plugin's public view prefix
+    if not any(full.startswith(pp) for pp in (public_paths or [])):
+        return None
+    return s
 
 
 def _prefix_conforms(prefix: str, plugin_id: str) -> bool:
@@ -53,7 +73,12 @@ class PluginRegistry:
     """
 
     def __init__(
-        self, plugin_id: str, plugin_dir: Path, config: dict | None = None, config_section: str | None = None
+        self,
+        plugin_id: str,
+        plugin_dir: Path,
+        config: dict | None = None,
+        config_section: str | None = None,
+        public_paths: list[str] | None = None,
     ):
         # The plugin's manifest id — the slug every namespaced thing derives from. Pass it
         # to the SDK calls that take an explicit owner (``sdk.schedule_recurring``,
@@ -80,6 +105,11 @@ class PluginRegistry:
         # The top-level config key this plugin's section lives under (``config_section``
         # or the id) — the lookup key for ``live_config()``.
         self.config_section: str = config_section or plugin_id
+        # The manifest's auth-exempt prefixes (ADR 0118 D5) — the set a component ``frame``
+        # must live under, since an opaque-origin frame iframe sends no bearer. Already
+        # namespace-scoped by the manifest parser (``/plugins/<id>/…`` or
+        # ``/api/plugins/<id>/…``); empty when the host doesn't wire it (unit tests).
+        self.public_paths: list[str] = list(public_paths or [])
         from graph.plugins.host import HOST
 
         # Host services (agent invoke + event bus) a surface/route can use — the
@@ -110,6 +140,10 @@ class PluginRegistry:
         self.embedders: dict = {}  # name -> (config) -> (text -> vector) embed_fn (ADR 0031)
         self.chat_commands: dict = {}  # token -> async (rest, session_id) -> str|None (user-only control commands)
         self.components: dict = {}  # component-v1 kind -> props validator (#3617)
+        # kind -> frame page path (relative to /plugins/<id>), parallel to ``components`` so
+        # every existing reader of it keeps working untouched (ADR 0118 D5, #4087). A later
+        # card (S11b) carries this through the loader into GET /api/components.
+        self.component_frames: dict = {}
         self.services: dict = {}  # "<plugin_id>.<name>" -> callable, other plugins' sdk.service (ADR 0116)
         self.service_meta: dict = {}  # name -> {"plugin_id", "description"}; parallel, see goal_verifier_meta
 
@@ -268,7 +302,7 @@ class PluginRegistry:
             return
         self.chat_commands[token] = handler
 
-    def register_component(self, name: str, validator) -> None:
+    def register_component(self, name: str, validator, frame: str | None = None) -> None:
         """Contribute a component-v1 KIND (ADR 0051) the chat stream may carry — e.g. a chip
         that points into this plugin's console view (the artifact plugin's ``artifact-ref``,
         #3617).
@@ -286,7 +320,15 @@ class PluginRegistry:
         validator is refused with a warning. The kind is live only while the plugin is
         loaded — disabling it stops extraction on the next reload. ``show_component`` never
         builds a plugin kind. Guard with ``getattr(registry, "register_component", None)`` on
-        hosts older than this seam."""
+        hosts older than this seam.
+
+        ``frame`` (optional, ADR 0118 D5) declares that the kind renders in a plugin-served
+        PAGE instead of a compiled console renderer — a path RELATIVE to this plugin's public
+        route prefix (``/plugins/<id>``), e.g. ``"component.html"``. Because an opaque-origin
+        frame iframe sends no bearer, the page must be auth-exempt: the frame is refused (same
+        log-and-skip as a bad name) if it is absolute, contains a ``..`` segment, or is not
+        covered by the manifest's ``public_paths``. An accepted frame is stored on
+        ``component_frames[name]`` for a later card to carry through the loader."""
         from graph.components import is_plugin_component_name
 
         if not is_plugin_component_name(name) or not callable(validator):
@@ -299,7 +341,22 @@ class PluginRegistry:
         if name in self.components:
             log.warning("[plugins] %s: component %s registered twice — keeping the first", self.plugin_id, name)
             return
+        stored_frame: str | None = None
+        if frame is not None:
+            stored_frame = _accept_component_frame(self.plugin_id, frame, self.public_paths)
+            if stored_frame is None:
+                log.warning(
+                    "[plugins] %s: component %r frame %r refused — must be a path relative to "
+                    "/plugins/%s (no leading '/', no '..') listed in the manifest public_paths",
+                    self.plugin_id,
+                    name,
+                    frame,
+                    self.plugin_id,
+                )
+                return
         self.components[name] = validator
+        if stored_frame is not None:
+            self.component_frames[name] = stored_frame
 
     def register_service(self, name: str, fn, description: str = "") -> None:
         """Offer ``fn`` to OTHER plugins as the service ``<plugin_id>.<name>`` (ADR 0116).
