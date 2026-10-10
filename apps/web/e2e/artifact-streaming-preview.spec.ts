@@ -91,3 +91,40 @@ test("the inline artifact streams a live preview before the tool ends, then hand
   await expect(page.locator('[data-testid="artifact-ref-inline"]')).toBeVisible();
   await expect(preview).toHaveCount(0);
 });
+
+test("a turn with NO reasoning part (unfolded) still streams the preview, then hands over to the real frame", async ({ page }) => {
+  // Claude on the OAuth lane sends no reasoning, so its artifact turn never folds into a WorkBlock
+  // (foldPlan needs reasoning AND a tool). This is the #4121 repro: the preview used to mount only
+  // inside the folded WorkBlock, so on an unfolded turn the operator saw a plain tool card and no
+  // preview. The NOREASON scenario is ARTIFACTREF STREAM minus the reasoning part.
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+
+  const streamRequest = page.waitForRequest(
+    (r) => r.url().endsWith("/a2a") && r.method() === "POST" && r.postDataJSON()?.method === "SendStreamingMessage",
+  );
+  await composer.fill("ARTIFACTREF STREAM NOREASON PARK THE TOOL");
+  await composer.press("Enter");
+  const sessionId = String((await streamRequest).postDataJSON().params.message.contextId);
+
+  // The turn has a tool call but no reasoning, so it does NOT fold — there is no WorkBlock …
+  const preview = page.locator('[data-testid="streaming-preview"]');
+  await expect(preview).toBeVisible();
+  await expect(page.locator(".work")).toHaveCount(0);
+  // … the live preview still hosts its sandboxed frame …
+  await expect(preview.locator('[data-testid="streaming-preview-frame"]')).toBeVisible();
+  // … the real inline frame has NOT mounted yet, and the answer hasn't landed.
+  await expect(page.locator('[data-testid="artifact-ref-inline"]')).toHaveCount(0);
+  await expect(page.getByText("Here's the streamed page.")).toHaveCount(0);
+
+  // Release the turn: tool end → artifact-ref → answer → terminal frame.
+  const release = await page.request.post(`/api/__test__/turns/${encodeURIComponent(sessionId)}/release`);
+  expect((await release.json()).released).toBe(true);
+
+  // Handover on the unfolded path too: the preview gives way to the artifact's OWN inline frame,
+  // and the answer lands below it.
+  await expect(page.getByText("Here's the streamed page.")).toBeVisible();
+  await expect(page.locator('[data-testid="artifact-ref-inline"]')).toBeVisible();
+  await expect(preview).toHaveCount(0);
+});
