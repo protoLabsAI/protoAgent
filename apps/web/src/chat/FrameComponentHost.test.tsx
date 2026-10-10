@@ -297,6 +297,7 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b)", () 
     setActivation({ isActive: true });
     const chat = chatStub();
     const { frame, post } = mountBridge(chat);
+    frame.focus(); // the gesture landed IN this frame (#4122) — an in-frame click focuses the iframe
     dispatch(frame, { type: "protoComponent:send", cid: 7, text: "  run the report  " });
     // The NORMAL send path, tagged {via:"component", kind, plugin} (via lives in ChatSessionSlot).
     expect(chat.send).toHaveBeenCalledTimes(1);
@@ -316,6 +317,33 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b)", () 
     // Every message the host posts on this path is bearer-free (BEARER is planted in beforeEach).
     expect(post.mock.calls.length).toBeGreaterThan(0);
     for (const [message] of post.mock.calls) expect(JSON.stringify(message)).not.toContain(BEARER);
+  });
+
+  // The gesture must land IN this frame too (ADR 0118 S16 / #4122): navigator.userActivation is
+  // live for a click ANYWHERE in the console, so the host also requires document.activeElement ===
+  // its own iframe. A click on console chrome leaves focus off the frame; an in-frame click moves
+  // focus to it. The gate is reused from the artifact host, so this proves it holds here too.
+  it("rejects a send after a click on console chrome, accepts one with focus in the frame (#4122)", () => {
+    setActivation({ isActive: true });
+    const chat = chatStub();
+    const { frame, post } = mountBridge(chat);
+    // Active user activation, but focus is on a console-chrome element, not the frame → rejected.
+    const chrome = document.createElement("button");
+    document.body.appendChild(chrome);
+    chrome.focus();
+    expect(document.activeElement).toBe(chrome);
+    dispatch(frame, { type: "protoComponent:send", cid: 7, text: "chrome click" });
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("click or key press") }));
+    expect(container.querySelector('[data-testid="component-send-rejected"]')?.textContent).toContain("click or key press");
+    chrome.remove();
+    // Now the gesture lands IN the frame (focus moves to the iframe) → accepted.
+    post.mockClear();
+    frame.focus();
+    expect(document.activeElement).toBe(frame);
+    dispatch(frame, { type: "protoComponent:send", cid: 7, text: "in-frame click" });
+    expect(chat.send).toHaveBeenCalledWith("in-frame click", { kind: "pl-demo", plugin: "demo" });
+    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "in-frame click" }));
   });
 
   it("a send while the agent is busy is rejected with 'the agent is busy'", () => {

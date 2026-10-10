@@ -358,9 +358,18 @@ function InlineArtifactHost({
       }
       // The host checks its OWN user activation (User Activation v2 propagates a child frame's
       // gesture to its ancestors, so a frame can't fake it by posting on its own). A runtime
-      // missing the API yields needs-confirm, not a silent trust.
+      // missing the API yields needs-confirm, not a silent trust. And the gesture must have landed
+      // IN this frame — a click inside the iframe moves focus to it, so requiring
+      // document.activeElement === our frame rejects a click on console chrome (a resume card, a
+      // tab, "Open in panel") or a click meant for a sibling frame (#4122).
       const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
-      const verdict = bridge.checkSend({ frameId: key, text: String(m.text ?? ""), userActivation: ua, isBusy: chat.isBusy });
+      const verdict = bridge.checkSend({
+        frameId: key,
+        text: String(m.text ?? ""),
+        userActivation: ua,
+        isBusy: chat.isBusy,
+        focusInFrame: () => document.activeElement === frameRef.current,
+      });
       const origin = {
         artifact_id: typeof m.artifact_id === "string" ? m.artifact_id : artifact.id,
         version: typeof m.version === "number" ? m.version : artifact.version,

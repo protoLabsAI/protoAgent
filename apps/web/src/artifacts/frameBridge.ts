@@ -43,6 +43,15 @@ export interface SendCheck {
   /** Injected predicate — true when the TARGET session already has a turn running. The bridge
    *  owns no session state, so the host answers this. Omitted ⇒ treated as idle. */
   isBusy?: () => boolean;
+  /** Injected predicate — true when the gesture landed INSIDE this frame (the host answers
+   *  `document.activeElement === <this frame's iframe>`). `userActivation.isActive` is true for a
+   *  recent gesture ANYWHERE on the page, so on its own it lets a click on console chrome (a resume
+   *  card, a tab, "Open in panel") — or a click meant for a SIBLING frame — drive a send from a
+   *  frame that was never touched (#4122). A click inside an iframe moves focus to that iframe; a
+   *  click on chrome does not, so this pins the gesture to THIS frame. Checked only when the
+   *  User Activation API is present (the needs-confirm path already asks the operator). Omitted ⇒
+   *  not enforced (direct unit use); the real hosts always pass it. */
+  focusInFrame?: () => boolean;
 }
 
 export type OpenLinkRejectReason = "invalid-url" | "not-https" | "origin-not-allowed";
@@ -102,9 +111,15 @@ export function evaluateSend(check: SendCheck, lastSentAt: number | null, now: n
   const ua = check.userActivation;
   if (ua === undefined || ua === null) {
     // No User Activation API on this runtime — can't trust a silent gesture, so ask first.
+    // (Focus-in-frame is not consulted here: the operator confirms the send explicitly.)
     return { status: "needs-confirm", text, message: `Send "${previewText(text)}" to chat?` };
   }
-  if (!ua.isActive) {
+  // A trusted gesture must be BOTH active AND delivered inside THIS frame. `isActive` alone is
+  // true for a recent click ANYWHERE on the page, which let a click on console chrome or a
+  // sibling frame drive this frame's send (#4122); `focusInFrame` pins it to this frame. Omitted
+  // ⇒ not enforced (direct unit use); the hosts always inject it.
+  const inFrame = check.focusInFrame ? check.focusInFrame() : true;
+  if (!ua.isActive || !inFrame) {
     return {
       status: "rejected",
       reason: "no-gesture",
