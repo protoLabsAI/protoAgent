@@ -851,6 +851,23 @@ function scenarioFor(prompt) {
   // wrote — a chip in the transcript that (live, desktop) opens the Artifact panel on it.
   // `ARTIFACTREF V<n>` points at v<n> of `art-chain`; `ARTIFACTREF GONE` at a deleted one.
   // The store it points into is artifact-chip.spec.ts's own (it routes /history + /refs).
+  // Inline placement (ADR 0118 D2): the create tool wrote `placement="inline"`, so the
+  // artifact-ref carries `inline: true` (+ a height hint) and the chip hosts the artifact's own
+  // embed frame right in the transcript. Points at `art-inline` in artifact-inline.spec.ts's
+  // own html store (it routes /history + /refs).
+  if (t.includes("ARTIFACTREF INLINE")) {
+    return {
+      events: [
+        { id: "art-i", name: "show_artifact", phase: "start", input: JSON.stringify({ kind: "html", placement: "inline", title: "Inline calc", code: "<html/>" }) },
+        { id: "art-i", name: "show_artifact", phase: "end", output: "Created inline html artifact art-inline — showing in the transcript." },
+      ],
+      component: {
+        component: "artifact-ref",
+        props: { artifact_id: "art-inline", version: 1, versions_total: 1, title: "Inline calc", kind: "html", inline: true, height: 160 },
+      },
+      answer: "Here's the inline calculator.",
+    };
+  }
   const artRef = t.match(/ARTIFACTREF (GONE|V(\d+))/);
   if (artRef) {
     const gone = artRef[1] === "GONE";

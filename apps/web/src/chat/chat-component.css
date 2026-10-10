@@ -181,3 +181,68 @@
   font-size: var(--pl-font-size-2xs);
   line-height: 16px;
 }
+
+/* inline artifact host (ADR 0118 D2 / S7b) — the artifact's own embed frame rendered right in
+   the transcript, under a small head with the title · version and an Open-in-panel button. */
+.artifact-ref-inline {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  margin: var(--pl-space-1) 0;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-md);
+  overflow: hidden;
+  background: var(--pl-color-bg-raised);
+}
+.artifact-ref-inline__head {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  padding: var(--pl-space-1) var(--pl-space-2);
+  border-bottom: 1px solid var(--pl-color-border);
+  font-size: var(--pl-font-size-xs);
+}
+.artifact-ref-inline__spacer {
+  flex: 1 1 auto;
+}
+.artifact-ref-inline__open {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.artifact-ref-inline__open:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.artifact-ref-inline__open:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
+}
+.artifact-ref-inline__frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+}
+.artifact-ref-inline__body {
+  width: 100%;
+}
+.artifact-ref-inline__resume {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  border: 0;
+  background: var(--pl-color-bg-inset, var(--pl-color-bg));
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+  cursor: pointer;
+}
+.artifact-ref-inline__resume:hover {
+  color: var(--pl-color-fg);
+}
