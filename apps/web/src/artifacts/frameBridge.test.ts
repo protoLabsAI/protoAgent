@@ -106,6 +106,40 @@ describe("send gate", () => {
     expect(bridge.checkSend(sendCheck({ frameId: "a" })).status).toBe("rejected");
   });
 
+  // ADR 0118 S16 / #4122 — a gesture is trusted only when it landed INSIDE this frame. The host
+  // injects `focusInFrame` (document.activeElement === its iframe); `userActivation.isActive` is
+  // true for a click ANYWHERE on the page, so without this a click on console chrome or one meant
+  // for a sibling frame could drive this frame's send.
+  it("rejects an active gesture whose focus is not in the frame (#4122)", () => {
+    const bridge = createFrameBridge({ now: () => 0 });
+    const v = bridge.checkSend(sendCheck({ userActivation: { isActive: true }, focusInFrame: () => false }));
+    expect(v.status).toBe("rejected");
+    if (v.status === "rejected") expect(v.reason).toBe("no-gesture");
+  });
+
+  it("accepts an active gesture whose focus IS in the frame", () => {
+    const bridge = createFrameBridge({ now: () => 0 });
+    const v = bridge.checkSend(sendCheck({ userActivation: { isActive: true }, focusInFrame: () => true }));
+    expect(v.status).toBe("ok");
+  });
+
+  it("focus-in-frame is moot when the UA API is missing — still needs-confirm", () => {
+    const bridge = createFrameBridge({ now: () => 0 });
+    // The operator confirms explicitly on this path, so an unfocused frame still asks rather than
+    // rejecting (and never advances the rate window).
+    const v = bridge.checkSend(sendCheck({ userActivation: undefined, focusInFrame: () => false }));
+    expect(v.status).toBe("needs-confirm");
+  });
+
+  it("a focus-rejected send never reserves the rate window", () => {
+    let clock = 0;
+    const bridge = createFrameBridge({ now: () => clock });
+    expect(bridge.checkSend(sendCheck({ focusInFrame: () => false })).status).toBe("rejected");
+    // A later focused send from the same frame is NOT rate-limited — the rejected one reserved nothing.
+    clock = 10;
+    expect(bridge.checkSend(sendCheck({ focusInFrame: () => true })).status).toBe("ok");
+  });
+
   it("noteSend reserves the window for the needs-confirm path", () => {
     let clock = 0;
     const bridge = createFrameBridge({ now: () => clock });

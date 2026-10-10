@@ -521,6 +521,7 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b)", () => 
     setActivation({ isActive: true });
     const chat = chatStub();
     const { f, post } = await mountInline(chat);
+    f.focus(); // the gesture landed IN this frame (#4122) — focus moves to the iframe on an in-frame click
     await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "  Recompute at 42  ", artifact_id: "a-1", version: 2 });
     // The NORMAL send path is used, tagged with the D4 origin metadata + title for the label.
     expect(chat.send).toHaveBeenCalledTimes(1);
@@ -602,6 +603,92 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b)", () => 
       );
     });
     expect(chat.send).not.toHaveBeenCalled();
+  });
+
+  // ── the gesture must land IN this frame (ADR 0118 S16 / #4122) ───────────────────────────────
+  // navigator.userActivation.isActive is true for a recent click ANYWHERE in the console, so the
+  // send gate also requires document.activeElement === this frame's own iframe. A click inside an
+  // iframe moves focus to it; a click on console chrome (the resume card, a tab, "Open in panel")
+  // does not, and a click in a sibling frame focuses the SIBLING. These guard the holes the
+  // pre-handoff walk found: autosend-on-load riding the resume-card click, and cross-frame theft.
+
+  it("a send that follows a click on console chrome is rejected, even with active user activation (#4122)", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    setActivation({ isActive: true });
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat);
+    // The operator just clicked something in the console (a resume card / tab / button), not the
+    // frame: user activation is live, but focus is on that chrome element, not this iframe.
+    const chrome = document.createElement("button");
+    document.body.appendChild(chrome);
+    chrome.focus();
+    expect(document.activeElement).toBe(chrome);
+    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "AUTOSEND ON LOAD", artifact_id: "a-1", version: 2 });
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("click or key press") }));
+    expect(container.querySelector('[data-testid="artifact-send-rejected"]')?.textContent).toContain("click or key press");
+    chrome.remove();
+  });
+
+  it("a send that follows a click INSIDE the frame (focus on the iframe) is accepted (#4122)", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    setActivation({ isActive: true });
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat);
+    f.focus(); // a click inside the iframe moves focus to it
+    expect(document.activeElement).toBe(f);
+    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "run it now", artifact_id: "a-1", version: 2 });
+    expect(chat.send).toHaveBeenCalledWith("run it now", { artifact_id: "a-1", version: 2, title: "Chart" });
+    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "run it now" }));
+  });
+
+  it("a sibling frame cannot use another frame's click (#4122)", async () => {
+    vi.spyOn(api, "artifactRefs").mockImplementation(async (ids: string[]) => {
+      const artifacts: Record<string, { title: string; kind: string; version_count: number; oldest: number }> = {};
+      for (const id of ids) artifacts[id] = { title: "Chart", kind: "html", version_count: 1, oldest: 1 };
+      return { artifacts };
+    });
+    setActivation({ isActive: true });
+    const chat = chatStub();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() =>
+      root.render(
+        h(
+          QueryClientProvider,
+          { client: qc },
+          h(
+            InlineFrameHostContext.Provider,
+            { value: createInlineFrameHost(6) }, // room for both frames, so neither is evicted
+            h(
+              InlineFrameBridgeContext.Provider,
+              { value: createFrameBridge() },
+              h(
+                ArtifactChatSendContext.Provider,
+                { value: chat },
+                ["a-1", "a-2"].map((id) =>
+                  h(ArtifactRefChip, { key: id, props: { artifact_id: id, version: 1, title: "Chart", kind: "html", inline: true } }),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await flush();
+    const frames = [...container.querySelectorAll<HTMLIFrameElement>('[data-testid="artifact-inline-frame"]')];
+    expect(frames.length).toBe(2);
+    const [a, b] = frames;
+    vi.spyOn(a.contentWindow as Window, "postMessage").mockImplementation(() => {});
+    const postB = vi.spyOn(b.contentWindow as Window, "postMessage").mockImplementation(() => {});
+    // The click landed in frame A — focus is on A's iframe. Frame B tries to ride that activation.
+    a.focus();
+    expect(document.activeElement).toBe(a);
+    await dispatch(b, { type: "protoArtifact:send", cid: 7, text: "steal the click", artifact_id: "a-2", version: 1 });
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(postB).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("click or key press") }));
+    // The frame that actually holds focus (A) sends fine — the gate is per-frame, not global.
+    await dispatch(a, { type: "protoArtifact:send", cid: 7, text: "my own click", artifact_id: "a-1", version: 1 });
+    expect(chat.send).toHaveBeenCalledWith("my own click", { artifact_id: "a-1", version: 1, title: "Chart" });
   });
 
   it("openLink opens an https link in a new tab with noopener,noreferrer, through the host", async () => {
