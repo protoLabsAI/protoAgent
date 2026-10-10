@@ -8,6 +8,7 @@ ROOT anchors there off the repo root rather than the test's parent dir."""
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -1554,9 +1555,10 @@ def test_html_kind_injects_through_the_prologue_aware_builder(monkeypatch, tmp_p
     # html still routes through the prologue-aware builder (injection inside <head>) AND now
     # carries the curated ESM import map, like react (regression: it used to inject only
     # dsLink()+base(), so a bare `import … from "three"` had no map and failed — ADR 0118 D6).
+    assert "var im = htmlImportMap(code);" in js
     assert (
-        'if (kind === "html") return htmlDoc(code, dsLink() + base(kind) + '
-        '\'<script type="importmap">\' + IMPORTMAP + \'<\\/script>\');'
+        "return htmlDoc(im.code, dsLink() + base(kind) + (im.map ? "
+        "'<script type=\"importmap\">' + im.map + '<\\/script>' : ''));"
     ) in js
     assert "dsLink() + base(kind) + code" not in js  # the prepend that displaced the doctype
 
@@ -2463,3 +2465,48 @@ def test_save_file_artifact_not_found_names_where_it_looked(monkeypatch, tmp_pat
     _fence(monkeypatch, art, workspace=ws)
     out = art.save_file_artifact.invoke({"path": "sheets/missing.pdf"})
     assert "No file at" in out and "workspace" in out
+
+
+# ── html import map: merged with an author's own map, never stacked ahead of it ─────────────
+
+
+def _run_html_import_map(code: str) -> dict:
+    from tests.test_artifact_slides import _js_function, _node
+
+    js = (Path(__file__).resolve().parents[1] / "plugins" / "artifact" / "shell.js").read_text(encoding="utf-8")
+    regex_line = next(line for line in js.splitlines() if "var AUTHOR_IMPORTMAP = " in line)
+    harness = "\n".join(
+        [
+            'var IMPORTMAP = JSON.stringify({imports: {three: "/v/three.module.min.js", d3: "/v/d3.mjs"}});',
+            regex_line,
+            _js_function(js, "htmlImportMap"),
+            f"console.log(JSON.stringify(htmlImportMap({json.dumps(code)})));",
+        ]
+    )
+    return _node(harness)
+
+
+def test_html_without_its_own_import_map_gets_the_shell_map():
+    out = _run_html_import_map("<p>hi</p><script type=module>import * as T from 'three'</script>")
+    assert json.loads(out["map"])["imports"]["three"] == "/v/three.module.min.js"
+    assert out["code"].startswith("<p>hi</p>")
+
+
+def test_an_author_import_map_is_merged_with_author_entries_winning_and_lifted_out():
+    code = (
+        '<head><script type="importmap">{"imports": {"three": "./my-three.js", "lodash": "./lodash.js"}, '
+        '"scopes": {"/x/": {"a": "./a.js"}}}</script></head><body>x</body>'
+    )
+    out = _run_html_import_map(code)
+    merged = json.loads(out["map"])
+    assert merged["imports"] == {"three": "./my-three.js", "d3": "/v/d3.mjs", "lodash": "./lodash.js"}
+    assert merged["scopes"] == {"/x/": {"a": "./a.js"}}
+    assert "importmap" not in out["code"]  # exactly one map remains: the merged one
+    assert out["code"] == "<head></head><body>x</body>"
+
+
+def test_an_unparseable_author_import_map_is_left_alone_and_no_shell_map_is_added():
+    code = '<script type="importmap">{not json</script><p>x</p>'
+    out = _run_html_import_map(code)
+    assert out["map"] is None
+    assert out["code"] == code

@@ -606,13 +606,36 @@
     return m[0] + inject + code.slice(m[0].length);
   }
 
+  // An html artifact may ship its OWN <script type="importmap">. Only the first import map in a
+  // document takes effect, so stacking the shell's ahead of it would silently shadow the
+  // author's. Merge instead: the author's entries win, the shell's fill in the curated
+  // specifiers the author didn't name, and the author's tag is lifted out so ONE map remains.
+  // An author map that isn't valid JSON is left exactly as written and the shell's is not
+  // injected, which is the pre-ADR-0118 behavior for that artifact.
+  var AUTHOR_IMPORTMAP = /<script\b[^>]*\btype\s*=\s*["']?importmap["']?[^>]*>([\s\S]*?)<\/script\s*>/i;
+  function htmlImportMap(code){
+    var m = AUTHOR_IMPORTMAP.exec(code);
+    if (!m) return {code: code, map: IMPORTMAP};
+    var own;
+    try { own = JSON.parse(m[1]); } catch (e) { return {code: code, map: null}; }
+    if (!own || typeof own !== "object" || Array.isArray(own)) return {code: code, map: null};
+    var merged = {imports: Object.assign({}, JSON.parse(IMPORTMAP).imports, own.imports || {})};
+    if (own.scopes) merged.scopes = own.scopes;
+    if (own.integrity) merged.integrity = own.integrity;
+    return {code: code.slice(0, m.index) + code.slice(m.index + m[0].length), map: JSON.stringify(merged)};
+  }
+
   function srcdoc(kind, code, links) {
     // `html` gets the SAME curated ESM import map as `react` (injected ahead of the author's
     // own markup by htmlDoc, so it precedes any `<script type="module">` the artifact ships):
     // a plain html artifact can then `import * as THREE from "three"` (or d3 / chart.js / lucide)
     // and the bare specifier resolves to the same-origin vendored module — the three.js (ADR 0118
     // D6) support promised in the changelog/LICENSES only works because of this map, not base().
-    if (kind === "html") return htmlDoc(code, dsLink() + base(kind) + '<script type="importmap">' + IMPORTMAP + '<\/script>');
+    // An author's own import map is merged into it, never shadowed (htmlImportMap).
+    if (kind === "html") {
+      var im = htmlImportMap(code);
+      return htmlDoc(im.code, dsLink() + base(kind) + (im.map ? '<script type="importmap">' + im.map + '<\/script>' : ''));
+    }
     if (kind === "svg") return '<!doctype html>' + base(kind) + viewport(code) + gfxScript({}) +
       '<script>__artVP.full();<\/script></body>';
     // mermaid.run() is async: the viewport + code links mount once the <svg> exists. A rejected
