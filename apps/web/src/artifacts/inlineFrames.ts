@@ -41,16 +41,20 @@ type FrameEntry = { id: string; recency: number; height: number };
 export type FrameRegistry = {
   /** Max live frames; evictions keep `size()` at or below it. */
   readonly cap: number;
-  /** Register — or refresh — `id` as live. Returns the frame evicted to stay within `cap`
+  /** Register a holder of `id` as live. Returns the frame evicted to stay within `cap`
    *  (its id + last measured height), or `null` when there was room or `id` was already
-   *  live. Registering a live id is a no-op that only refreshes its visibility recency. */
+   *  live. Reference-counted: each holder is one claim (two mounts of one component share
+   *  an id), so a second register on a live id consumes NO new slot and evicts nothing — it
+   *  only refreshes visibility recency. */
   register(id: string): EvictedFrame | null;
   /** Mark `id` visible now, so it is not the next frame evicted. No-op for an unknown id. */
   touch(id: string): void;
   /** Record `id`'s reported content height (clamped). Returns the clamped value, and
    *  remembers it for the resume card even after `id` is evicted or released. */
   measure(id: string, height: number): number;
-  /** Drop `id` from the live set (its frame unmounted). Its remembered height is kept. */
+  /** Release one holder's claim on `id` (its frame unmounted). The slot is dropped from the
+   *  live set only when the LAST holder releases — a surviving co-id mount keeps it live. A
+   *  no-op once `id` has no live claims (e.g. already evicted). Remembered height is kept. */
   release(id: string): void;
   /** The last height remembered for `id`, or the floor if it never measured. */
   heightOf(id: string): number;
@@ -64,6 +68,13 @@ export type FrameRegistry = {
 
 export function createFrameRegistry(cap: number = MAX_LIVE_FRAMES): FrameRegistry {
   const live = new Map<string, FrameEntry>();
+  // How many mounted hosts currently claim each id — the AUTHORITATIVE reference count,
+  // kept independent of the live-slot map so it survives eviction. Two mounts of one
+  // component share an id (see FrameComponentHostProps), so `register`/`release` come in
+  // pairs per host and a slot is freed only when the LAST holder releases. Driving release
+  // off this count (not the live entry) also means a stale release from an evicted holder
+  // can never drop a freshly re-registered sibling's slot. Deleted at zero, so no leak.
+  const claims = new Map<string, number>();
   // Heights persist past eviction/release so a resume card — or a re-registered frame —
   // keeps its last size. Scoped to one chat view's registry, cleared when it is discarded.
   const heights = new Map<string, number>();
@@ -83,8 +94,11 @@ export function createFrameRegistry(cap: number = MAX_LIVE_FRAMES): FrameRegistr
   return {
     cap,
     register(id) {
+      claims.set(id, (claims.get(id) ?? 0) + 1);
       const existing = live.get(id);
       if (existing) {
+        // Another holder of an already-live id: shares the one slot, so no new slot is
+        // consumed and nothing is evicted — just refresh its visibility recency.
         existing.recency = bump();
         return null;
       }
@@ -104,6 +118,15 @@ export function createFrameRegistry(cap: number = MAX_LIVE_FRAMES): FrameRegistr
       return clamped;
     },
     release(id) {
+      const remaining = (claims.get(id) ?? 0) - 1;
+      if (remaining > 0) {
+        // A co-id mount is still here — keep the slot live for the survivor.
+        claims.set(id, remaining);
+        return;
+      }
+      // Last holder gone (or an id with no claims — e.g. one already evicted): clear the
+      // claim and free its live slot. `live.delete` is a no-op if it was already evicted.
+      claims.delete(id);
       live.delete(id);
     },
     heightOf(id) {
