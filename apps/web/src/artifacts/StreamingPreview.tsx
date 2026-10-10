@@ -89,7 +89,12 @@ export function previewCsp(nonce: string): string {
 
 /** OIU's gate: show the preview once the first `<style>` has closed (so it is never unstyled), or
  *  once {@link PREVIEW_BODY_BYTE_THRESHOLD} bytes of body markup have arrived with no style at all.
- *  Monotonic — once open for a given stream it stays open as more markup arrives. */
+ *
+ *  This is a POINT-IN-TIME predicate on the current buffer, NOT monotonic on its own: once the byte
+ *  branch has opened the gate, a later still-opening `<style>` makes `bodyBytesWithoutStyle` read 0
+ *  again while `firstStyleClosed` is still false, so this flips back to false mid-stream. The
+ *  component is what makes "shown" monotonic — {@link StreamingPreview} latches this open so the
+ *  frame never unmounts and remounts underneath an in-flight post. */
 export function previewGateOpen(html: string): boolean {
   return firstStyleClosed(html) || bodyBytesWithoutStyle(html) >= PREVIEW_BODY_BYTE_THRESHOLD;
 }
@@ -175,8 +180,18 @@ export type StreamingPreviewProps = {
 export function StreamingPreview({ buffer, kind = "", title = "" }: StreamingPreviewProps) {
   const name = refName({ title, kind });
   const processed = useMemo(() => processPartialHtml(buffer.text), [buffer.text]);
-  const gateOpen = useMemo(() => previewGateOpen(buffer.text), [buffer.text]);
-  const showPreview = PREVIEW_KINDS.has(kind) && gateOpen;
+
+  // `previewGateOpen` is a point-in-time predicate and can flip back to false mid-stream (a later
+  // still-opening `<style>` zeroes the byte count before it closes). LATCH it here: once the preview
+  // has opened for this stream it stays open for the life of this card. Without the latch the frame
+  // would unmount on the retract and remount when the gate re-opened, and the markup posted to the
+  // remounted-but-not-yet-loaded frame would be lost — blanking the preview if that was the final
+  // chunk. Setting state during render (guarded, so it runs at most once) is React's sanctioned way
+  // to derive state from props across renders; it re-renders before commit, so there is no flash.
+  const gateOpenNow = useMemo(() => previewGateOpen(buffer.text), [buffer.text]);
+  const [gateLatched, setGateLatched] = useState(false);
+  if (gateOpenNow && !gateLatched) setGateLatched(true);
+  const showPreview = PREVIEW_KINDS.has(kind) && (gateLatched || gateOpenNow);
 
   // One random nonce per mounted frame; the srcdoc (and thus the CSP) are built once from it.
   const [nonce] = useState(randomNonce);
@@ -184,6 +199,13 @@ export function StreamingPreview({ buffer, kind = "", title = "" }: StreamingPre
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const [frameLoaded, setFrameLoaded] = useState(false);
+
+  // If the preview is ever torn down (e.g. the kind changes away from html/svg), drop the loaded
+  // flag so any future frame must fire its own load before we post — markup can never land on a
+  // remounted-but-unwired frame. The latch above means this does not fire during a live stream.
+  useEffect(() => {
+    if (!showPreview) setFrameLoaded(false);
+  }, [showPreview]);
 
   // Post the processed markup on every update once the frame is mounted and has loaded. The load
   // flag gates the first post so it does not land before the frame's receiver is wired. Throttle,

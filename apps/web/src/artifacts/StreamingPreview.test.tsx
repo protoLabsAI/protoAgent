@@ -11,6 +11,7 @@ import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PREVIEW_BODY_BYTE_THRESHOLD } from "./processPartialHtml";
 import idiomorphLicense from "./vendor/idiomorph.LICENSE.txt?raw";
 import idiomorphMin from "./vendor/idiomorph.min.js?raw";
 import { StreamingPreview, type StreamingPreviewProps } from "./StreamingPreview";
@@ -132,6 +133,41 @@ describe("StreamingPreview — gating + non-preview kinds (r3)", () => {
     expect(theFrame()).toBeNull();
     render({ buffer: { text: "a".repeat(1536), done: false }, kind: "html" });
     expect(theFrame()).not.toBeNull();
+  });
+
+  it("latches the gate open: a later unclosed <style> never retracts the frame, and the final chunk still reaches it", () => {
+    // 1.5 KB of style-less body opens the gate on byte count alone; the frame mounts and loads.
+    const opened = "a".repeat(PREVIEW_BODY_BYTE_THRESHOLD);
+    render({ buffer: { text: opened, done: false }, kind: "html" });
+    const frame = theFrame();
+    expect(frame).not.toBeNull();
+
+    const win = frame!.contentWindow as Window;
+    const spy = vi.spyOn(win, "postMessage");
+    act(() => {
+      frame!.dispatchEvent(new Event("load"));
+    });
+
+    // A later still-opening <style> makes previewGateOpen() read false again (bodyBytesWithoutStyle
+    // → 0, firstStyleClosed → false). The gate must NOT retract — the SAME frame element stays
+    // mounted, so no remount can swallow an in-flight post. (Old, un-latched code unmounted here.)
+    render({ buffer: { text: `${opened}<style>.x{color`, done: false }, kind: "html" });
+    expect(theFrame()).toBe(frame);
+
+    // The final chunk closes the <style> and carries the last body; it must still post to the frame.
+    render({
+      buffer: { text: `${opened}<style>.x{color:red}</style><p>final</p>`, done: true },
+      kind: "html",
+    });
+    expect(theFrame()).toBe(frame);
+
+    const morphCalls = spy.mock.calls.filter(
+      (c) => (c[0] as { type?: string })?.type === "proto-preview:morph",
+    );
+    const lastCall = morphCalls[morphCalls.length - 1];
+    const lastHtml = (lastCall?.[0] as { html?: string } | undefined)?.html ?? "";
+    expect(lastHtml).toContain("final");
+    expect(lastHtml).not.toMatch(/<script/i);
   });
 
   it.each(["react", "mermaid", "vega-lite"])("renders a placeholder only for %s, never a frame", (kind) => {
