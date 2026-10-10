@@ -318,9 +318,13 @@
   outline: 2px solid var(--pl-color-accent);
   outline-offset: 1px;
 }
-/* "from ‹title›" label on a user turn an artifact's send bridge started (ADR 0118 D4). */
+/* "from ‹title›" label on a user turn an artifact's send bridge started (ADR 0118 D4). Block-level
+   `flex` (not `inline-flex`) so the label sits on its OWN line above the message text, rather than
+   running on into it — "from Bill Splitter" then "I am splitting…", not "from Bill SplitterI am…"
+   (#4124). `align-self: flex-start` keeps the chip tight to its content inside a column layout. */
 .chat-from-artifact {
-  display: inline-flex;
+  display: flex;
+  align-self: flex-start;
   align-items: center;
   gap: var(--pl-space-1);
   margin-bottom: var(--pl-space-1);
