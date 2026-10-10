@@ -73,7 +73,13 @@ def test_each_inline_kind_dispatches_without_a_placement_branch(monkeypatch, tmp
     # Each of the five inline kinds has a single placement-independent branch in srcdoc().
     for kind in INLINE_KINDS:
         assert f'kind === "{kind}"' in src, kind
-    assert 'return htmlDoc(code, dsLink() + base(kind))' in src
+    # html routes through the prologue-aware htmlDoc() builder and now also carries the curated
+    # ESM import map (ADR 0118 D6), exactly like react — still one placement-independent branch,
+    # identical for the panel and the embed.
+    assert (
+        'return htmlDoc(code, dsLink() + base(kind) + '
+        '\'<script type="importmap">\' + IMPORTMAP + \'<\\/script>\');'
+    ) in src
     assert 'return vegaDoc(code)' in src
 
 
