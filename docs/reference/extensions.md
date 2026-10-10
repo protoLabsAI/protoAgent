@@ -245,9 +245,26 @@ These are **not** on the agent card and have no SDK helper. They stay MIME-typed
 | `application/vnd.protolabs.reasoning-v1+json` | `WORKING` frames | `{"text": "…"}` — streamed `scratch_pad` "thinking", batched ~24 chars per frame | `a2a_impl/executor.py` line 314 (const at line 57) | `reasoningFromParts` (`api.ts` line 546) |
 | `application/vnd.protolabs.component-v1+json` | `WORKING` frames | `{"component": "table"\|"keyvalue"\|"timeline", "props": {...}}` — ADR 0051 Slice 2 generative components | `a2a_impl/executor.py` line 451; MIME + types in `graph/components.py` line 17 | `componentFromParts` (`api.ts` line 533) |
 | `application/vnd.protolabs.context-v1+json` | terminal artifact | `{contextTokens, enabled?, trigger?, compactionAtTokens?}` — context-window / compaction readout | `a2a_impl/executor.py` line 685 (const at line 646) | `contextFromParts` (`api.ts` line 587) |
+| `application/vnd.protolabs.tool-args-v1+json` | `WORKING` frames | `{id, arg, offset, chunk, done}` — a streamed preview of one tool's declared string argument, decoded incrementally server-side (ADR 0118 D3). **Live-only** (see below). | `a2a_impl/executor.py` (`TOOL_ARGS_MIME` const, `tool_args` branch); produced by `server/turn_stream.py` | S3 console decode (`a2aStream.ts`) |
 | `application/vnd.protolabs.<schema>+json` | terminal artifact | a schema-validated structured skill result, when the caller sent a `skillHint` for a skill declaring an `output_schema` | `ProtoAgentExecutor._append_structured` (line 208), MIME from `pa.skill_result_mime(name)` | any consumer matching the declared MIME off the card's skill |
 
 Reasoning deltas are a *streaming* affordance, but the a2a-sdk `TaskManager` moves every status frame's message into durable `history` — so `a2a_impl/stores.py::coalesce_reasoning_history` (line 240) collapses each contiguous run of reasoning messages into one before the task is saved. Without it a single turn persisted ~700 near-single-word `Message` rows and `tasks/get?historyLength=N` returned word fragments instead of conversation.
+
+### `tool-args-v1` — streamed tool arguments (ADR 0118 D3)
+
+A tool may declare `metadata={"stream_args": "<arg>"}` to opt one **string** argument into live streaming. While the model streams that tool's `tool_call_chunks`, `server/turn_stream.py` accumulates the raw arg JSON per tool-call id and extracts the named value **incrementally on the server** with a small partial-JSON string scanner — it decodes `\n`, `\"`, `\\` and `\uXXXX`, holds back an unterminated trailing escape until more arrives, accepts the arg in any key position, and emits **nothing** for a non-string value. The console never parses partial JSON; it receives already-decoded substrings.
+
+The producer yields `("tool_args", {id, arg, offset, chunk, done})` frames, flushed at **≤4 Hz or every 2 KB** (whichever first) plus a final `done: true`; streaming stops silently once the value passes the artifact size cap. The executor relays each as a `tool-args-v1` DataPart on a `WORKING` frame.
+
+| Field | What |
+|---|---|
+| `id` | The tool-call id — the same id the eventual `tool-call-v1` card carries, so a consumer binds the preview to its tool card. |
+| `arg` | The streamed argument's name (the tool's declared `stream_args` value, e.g. `"code"`). |
+| `offset` | Character offset into the decoded value where `chunk` begins — frames are contiguous, so `offset` of frame *n+1* equals `offset + len(chunk)` of frame *n*. |
+| `chunk` | The newly decoded substring of the value. |
+| `done` | `true` on the final frame for this arg (the value's closing quote was reached, or the model call ended). |
+
+It is **live-only**: previews are **never persisted to task history and never replayed** on resubscribe or hydration. The executor emits them on `WORKING` status frames, so the a2a-sdk `TaskManager` would move them into durable `history` like any other status message — `a2a_impl/stores.py::drop_tool_args_history` removes them on every save, so a reattach or reload replays the finished artifact, never a stale partial. Being template-local content, `tool-args-v1` is **not** declared on the agent card; a consumer that ignores it still gets the finished tool-call card and the answer. There is no change to `tool-call-v1`.
 
 ## Fork-only declarative extensions
 
