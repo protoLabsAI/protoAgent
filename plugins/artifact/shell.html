@@ -4,6 +4,10 @@
   // kit's own <link> loads before the kit exists, so it's base-prefixed by hand.
   window.__base = location.pathname.split("/plugins/")[0];
   document.write('<link rel="stylesheet" href="' + window.__base + '/_ds/plugin-kit.css">');
+  // Embed mode (ADR 0118 D2): ?embed=<id>&v=<n> renders ONE version with no panel chrome.
+  // Flag it on <html> before first paint so the toolbar never flashes in; shell.js reads the
+  // query itself and renders through the SAME frame builder the panel uses.
+  if (/[?&]embed=/.test(location.search)) document.documentElement.classList.add("embed");
 </script>
 <style>
   /* Layout only — colors/typography come from plugin-kit.css's --pl-* tokens, which
@@ -66,6 +70,17 @@
      assistive tech here (a bare button-label swap on an unfocused button isn't). */
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
     clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  /* Embed mode (ADR 0118 D2): one artifact version, no panel chrome — the frame follows its
+     reported content height and the console host clamps it to [80,1200]. Toggled by the .embed
+     class the pre-parse script sets from ?embed=; the panel view (no class) is untouched. */
+  html.embed, html.embed body, html.embed #wrap, html.embed #stage{height:auto;min-height:0}
+  html.embed #bar, html.embed #editor, html.embed #linkpanel, html.embed #empty{display:none !important}
+  html.embed #stage{position:static}
+  html.embed #frame{position:static;height:auto}
+  /* Inert "unavailable" state for an unknown id/version — never an error page. */
+  #unavail{display:none;align-items:center;justify-content:center;height:100%;
+    text-align:center;padding:24px;font-size:14px;color:var(--pl-color-fg-muted,#9aa0aa)}
+  html.embed #unavail{height:auto;min-height:80px}
 </style></head><body>
 <div id="wrap">
   <div id="bar">
@@ -89,6 +104,7 @@
   </div>
   <div id="stage">
     <div id="empty">No artifact yet. Ask the agent to render one — a chart, diagram, or widget.</div>
+    <div id="unavail" role="status">Artifact unavailable.</div>
     <iframe id="frame" sandbox="allow-scripts allow-pointer-lock" allow="pointer-lock" referrerpolicy="no-referrer"></iframe>
     <div id="linkpanel" role="dialog" aria-label="Code links" style="display:none">
       <div id="linkhead"><span>Code links</span><button id="linkclose" class="pl-btn pl-btn--sm" type="button" title="Close (Esc)">Close</button></div>

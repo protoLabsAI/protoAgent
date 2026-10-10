@@ -77,6 +77,38 @@
     + 'addEventListener("unhandledrejection",function(e){show("⚠ "+((e.reason&&e.reason.message)||e.reason));});'
     + 'addEventListener("load",function(){if(W.__artKind!=="react"&&W.__artKind!=="vega-lite")setTimeout(function(){if(!W.__artRep)W.__artOk();},80);});'
     + '})();<\/script>';
+  // Height reporting for the embed placement (ADR 0118 D2). Injected ONLY into embed frames
+  // (by embedSuffix below) — the panel carries no reporter, so its frames are untouched. A
+  // ResizeObserver posts the frame's CONTENT height up to the shell on every size change (plus on
+  // load and when the shell asks via protoArtifact:measure); the shell sizes the frame to it and
+  // relays it to the console host, which clamps it to [80,1200].
+  // Measures the BOX height of <html>/<body> — which embedSuffix's CSS frees to size to content
+  // (flow kinds) or pins to a width-proportional box (fill kinds) — NOT
+  // documentElement.scrollHeight, which is floored at the viewport (the frame's OWN height) and so
+  // could only ever GROW, never shrink, and left the overflow:hidden svg/mermaid frames reporting
+  // their own squashed height. Deduped so an unchanged measure doesn't thrash the host. No `</`
+  // inside: rides a srcdoc <script>.
+  var HEIGHTJS = '<script>(function(){var W=window,D=document,last=-1;'
+    + 'function h(){var d=D.documentElement,b=D.body,'
+    + 'dh=d&&d.getBoundingClientRect?d.getBoundingClientRect().height:0,'
+    + 'bh=b?Math.max(b.scrollHeight||0,b.getBoundingClientRect?b.getBoundingClientRect().height:0):0;'
+    + 'return Math.ceil(Math.max(dh,bh));}'
+    + 'function send(){var v=h();if(v===last)return;last=v;'
+    + 'try{W.parent.postMessage({type:"protoArtifact:height",height:v},"*");}catch(_){}}'
+    + 'if(W.ResizeObserver){var ro=new W.ResizeObserver(send);ro.observe(D.documentElement);if(D.body)ro.observe(D.body);}'
+    + 'W.addEventListener("load",send);'
+    + 'W.addEventListener("message",function(ev){if(((ev.data)||{}).type==="protoArtifact:measure")send();});'
+    + 'send();'
+    + '})();<\/script>';
+  // The CSS reset embedSuffix pairs with HEIGHTJS (ADR 0118 D2). FLOW kinds (html, markdown, react,
+  // charts, .md file previews) size to their content, so <html>/<body> are freed to shrink-wrap.
+  // FILL kinds (navigable svg/mermaid diagrams, paged decks/PDF/Word, and the scroll-box file
+  // cards) have no intrinsic content height — their panel CSS deliberately fills the stage — so
+  // they get a width-proportional box clamped to a sane range instead of being squashed to the
+  // 150px iframe default. !important so it wins over the kind's own html,body rule regardless of
+  // cascade order. No `</` inside: rides a srcdoc <style>.
+  var EMBED_FLOW_CSS = 'html,body{height:auto !important;min-height:0 !important}';
+  var EMBED_FILL_CSS = 'html,body{height:clamp(260px,62vw,760px) !important;min-height:0 !important}';
   function base(kind){
     var cs = getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n) || d).trim(); }
@@ -1229,6 +1261,20 @@
       $estat=document.getElementById("estat"), $dlstat=document.getElementById("dlstat");
   var editing=false;
 
+  // Embed placement (ADR 0118 D2): /plugins/artifact/view?embed=<id>&v=<version> renders ONE
+  // version with no panel chrome. EMBED is {id, ver} (ver = the LIFETIME version number the
+  // artifact-ref chip carries; 0/absent = latest) or null for the normal panel. Parsed off the
+  // query the browser keeps — the view route serves the same static page either way.
+  function embedParams(search){
+    var m=/[?&]embed=([^&]*)/.exec(search||""); if(!m) return null;
+    var id=""; try{ id=decodeURIComponent(m[1]||""); }catch(_){ id=m[1]||""; }
+    if(!id) return null;
+    var vm=/[?&]v=([^&]*)/.exec(search||""), ver=0;
+    if(vm){ var raw=vm[1]; try{ raw=decodeURIComponent(raw); }catch(_){} ver=parseInt(raw,10); }
+    return {id:id, ver:(isFinite(ver)&&ver>0)?ver:0};
+  }
+  var EMBED = embedParams(location.search);
+
   // Persist the user's selection (artifact + version + whether to auto-follow the newest) so it
   // STICKS across a tab-away/back — the plugin-view iframe unmounts on tab switch, so the shell
   // reloads fresh; without this it snapped back to the latest artifact. Same-origin page → plain
@@ -1397,6 +1443,12 @@
   new MutationObserver(pushTheme).observe(document.documentElement,{attributes:true,attributeFilter:["style","class","data-theme"]});
   // A theme switch can race a render — re-push once the fresh srcdoc has loaded.
   $frame.addEventListener("load", pushTheme);
+  // Embed only: wake the frame's dormant height reporter (HEIGHTJS) so it starts posting its
+  // content height up on every size change. A no-op in the panel (never sent).
+  $frame.addEventListener("load", function(){
+    if(!EMBED) return;
+    try{ $frame.contentWindow.postMessage({type:"protoArtifact:measure"}, "*"); }catch(_){}
+  });
 
   $art.addEventListener("change", function(e){
     selId=e.target.value; selVer=null; followNewest=(selId===(curId||(arts[0]&&arts[0].id)));
@@ -1902,12 +1954,14 @@
     if(!$frame || e.source!==$frame.contentWindow) return;
     var m=e.data||{};
     if(m.type==="protoArtifact:pptx"||m.type==="protoArtifact:pdf"||m.type==="protoArtifact:docx"){ pptxMessage(m); return; }
+    // Embed only: the frame's measured content height → size the frame and relay it to the host.
+    if(m.type==="protoArtifact:height"){ if(EMBED) embedHeight(m.height); return; }
     // Render verdict from the sandbox (#1458) → relay to /render-status so the agent's
     // create/edit reply + check_artifact can surface a render failure. Best-effort POST —
     // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,
     // not user-facing data, so there's no lying empty state to correct.
     if(m.type==="protoArtifact:render"){
-      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,n:renderingN,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
+      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,n:renderingN,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} if(!EMBED) kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256); embed has no standing poll */ }
       return;
     }
     // A click on a linked diagram element (ADR 0038 amendment). Only the KEY is read from the
@@ -1973,7 +2027,7 @@
   }
   window.addEventListener("message", function(e){
     var m=e.data;
-    if(!m || m.type!=="protoArtifact:select" || !fromEmbedder(e)) return;
+    if(!m || m.type!=="protoArtifact:select" || !fromEmbedder(e) || EMBED) return;  // embed shows a fixed version
     var id=typeof m.id==="string" ? m.id.slice(0,64) : "";
     var ver=(typeof m.ver==="number" && isFinite(m.ver)) ? Math.floor(m.ver) : 0;
     if(!id || ver<1) return;
@@ -2033,13 +2087,127 @@
     pollTimer = setTimeout(async function(){ await poll(); schedulePoll(); }, idle ? POLL_IDLE_MS : POLL_FAST_MS);
   }
   function kickPoll(){ storeChangedAt = Date.now(); clearTimeout(pollTimer); poll().then(schedulePoll, schedulePoll); }
+
+  // ── embed placement (ADR 0118 D2) ───────────────────────────────────────────────────────
+  // renders exactly ONE version with no panel chrome, through the SAME srcdoc()/fileCard()
+  // builder render() uses — so its nonce CSP, vendored SRI LIB map, theme tokens + live
+  // re-theme, loader lockdown and render-verdict reporting are all inherited (there is no
+  // second frame builder). The frame reports its content height (HEIGHTJS, woken by the
+  // protoArtifact:measure below) and the shell relays it to the console host, which clamps it.
+  var EMBED_TRIES = 8, EMBED_RETRY_MS = 1200, EMBED_MIN_H = 80, EMBED_MAX_H = 1200;
+  // Resolve {art, idx, v} for id + LIFETIME version in the store mirror, or null when the
+  // artifact is absent or the version is out of range / trimmed at the cap → the inert
+  // "unavailable" state. ver 0/absent follows the latest.
+  function embedLocate(list, id, ver){
+    var a=null, i;
+    for(i=0;i<list.length;i++) if(list[i].id===id){ a=list[i]; break; }
+    if(!a || !a.versions || !a.versions.length) return null;
+    var n=a.versions.length, vtot=total(a), idx;
+    if(!ver) idx=n-1;
+    else { idx=ver-(vtot-n)-1; if(idx<0 || idx>n-1) return null; }
+    return {art:a, idx:idx, v:a.versions[idx]};
+  }
+  function showUnavail(){
+    var el=document.getElementById("unavail"); if(el) el.style.display="flex";
+    if($frame){ $frame.style.display="none"; $frame.removeAttribute("srcdoc"); }
+    lastRendered=""; embedPostParent({type:"protoArtifact:height", height:EMBED_MIN_H});
+  }
+  function hideUnavail(){ var el=document.getElementById("unavail"); if(el) el.style.display="none"; }
+  // The content height the frame measured → size the frame to it and relay it to the host.
+  function embedHeight(h){
+    h=Math.floor(+h||0); if(h<=0) return;
+    // Clamp to the console host's own [EMBED_MIN_H, EMBED_MAX_H] range so a frame whose content is
+    // sized in viewport units (e.g. 100vh + padding) can't drive the frame — and the measurement
+    // that follows it — upward without bound; it converges at the cap instead of growing forever.
+    h=Math.max(EMBED_MIN_H, Math.min(EMBED_MAX_H, h));
+    if($frame) $frame.style.height=h+"px";
+    embedPostParent({type:"protoArtifact:height", height:h});
+  }
+  // Which embed sizing a kind gets: FILL (a width-proportional box) for the navigable svg/mermaid
+  // viewports, the paged deck/PDF/Word frames, and the scroll-box file cards — none has a content
+  // height to follow; FLOW (size-to-content) for html, markdown, react, charts, and .md previews.
+  function embedFill(a, v){
+    if(a.kind==="svg" || a.kind==="mermaid") return true;
+    if(a.kind!=="file") return false;   // html, markdown, react, vega-lite
+    return previewKind((v.file||{}).filename, (v.file||{}).mime) !== "md";  // .md renders as flowing prose
+  }
+  // Append the height reporter + its CSS reset to a built frame doc WITHOUT touching the doc the
+  // panel builder produced (so there is no second builder and the panel stays byte-identical). The
+  // reporter is injected here, in the embed path only — NOT in base() — so it rides EVERY embed
+  // frame, including the script-free file cards (table/json/text/sheets) and the nonce-CSP
+  // decks/PDF/Word frames that never call base(). Its inline <script> reuses the doc's existing CSP
+  // nonce when it has one (vega / slides / PDF / Word run under a nonce CSP, which would otherwise
+  // block a bare inline script and leave those embeds never reporting); the nonce-free kinds take a
+  // bare <script>.
+  function embedSuffix(doc, fill){
+    var m = /script-src 'nonce-([A-Za-z0-9]+)'/.exec(doc);
+    var tag = m ? '<script nonce="' + m[1] + '">' : '<script>';
+    return '<style>' + (fill ? EMBED_FILL_CSS : EMBED_FLOW_CSS) + '</style>'
+      + HEIGHTJS.replace('<script>', tag);
+  }
+  // Post UP to the embedder (the console host). Targeted at its origin where the browser tells
+  // us (ancestorOrigins), like openTarget — a height int is low-stakes, but stay a good citizen.
+  function embedPostParent(msg){
+    if(window.parent===window) return;
+    var anc=location.ancestorOrigins, origin=(anc && anc.length) ? anc[0] : "*";
+    try{ window.parent.postMessage(msg, origin); }catch(_){}
+  }
+  // Render the one requested version through the shared builder; returns false when it isn't in
+  // the store mirror yet (the caller retries, then settles on the unavailable state).
+  function renderEmbed(){
+    var r = EMBED && embedLocate(arts, EMBED.id, EMBED.ver);
+    if(!r) return false;
+    hideUnavail();
+    var a=r.art, vi=r.idx, v=r.v;
+    // Same render-verdict plumbing as render() so a failed inline render still reaches the agent.
+    renderingId=a.id; renderingVer=vi+1; renderingTs=v.ts;
+    renderingN=(a.version_count||a.versions.length)-a.versions.length+vi+1;
+    renderingLinks = (a.kind==="mermaid" && v.links && typeof v.links==="object" && !Array.isArray(v.links)) ? v.links : null;
+    linkLabels = null;
+    var key="embed:"+a.id+"@"+vi+"@"+v.ts;
+    if(key!==lastRendered){
+      lastRendered=key;
+      pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)||docxOk(v))
+        ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"} : null);
+      // SAME builder as the panel; the embed-only tail (height reporter + sizing CSS) is appended
+      // AFTER it, so the frame's own doc — its CSP, vendored libs and SRI — is byte-identical.
+      var doc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks);
+      $frame.srcdoc = doc + embedSuffix(doc, embedFill(a, v)); $frame.style.display="block";
+    }
+    return true;
+  }
+  // One bounded fetch of the gated store (the kit's bearer arrives with the handshake, so an
+  // early try before it lands retries rather than stranding). A fixed inline version never
+  // changes, so there's no standing poll — stop once rendered, settle on "unavailable" if the
+  // id/version never appears.
+  function embedBoot(){
+    var tries=0;
+    (function attempt(){
+      tries++;
+      kit.apiFetch("/api/plugins/artifact/history").then(function(r){
+        if(!r.ok) throw new Error(String(r.status));
+        return r.json();
+      }).then(function(d){
+        arts=(d && d.artifacts) || []; curId=(d && d.current) || null;
+        if(renderEmbed()) return;
+        if(tries<EMBED_TRIES){ setTimeout(attempt, EMBED_RETRY_MS); return; }
+        showUnavail();
+      }).catch(function(){
+        if(tries<EMBED_TRIES){ setTimeout(attempt, EMBED_RETRY_MS); return; }
+        showUnavail();
+      });
+    })();
+  }
+
   // Boot ONCE, on whichever fires first: the handshake (the bearer arrives with
   // protoagent:init, so the gated history poll authenticates) or a short timer
   // for the no-handshake case (standalone page / older host).
   var booted = false;
   // loadSel() restores the operator's last selection — a pending deep-link (#3617) that arrived
   // before boot still wins, applied by the first poll right after.
-  function boot(){ if (booted) return; booted = true; loadSel(); poll(); schedulePoll(); }
+  function boot(){ if (booted) return; booted = true;
+    if (EMBED) { embedBoot(); return; }   // one version, no chrome, no standing poll
+    loadSel(); poll(); schedulePoll(); }
   kit.initPluginView(boot);
   setTimeout(boot, 800);
-  document.addEventListener("visibilitychange", function(){ if(!document.hidden && booted) kickPoll(); }); // refresh on return
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden && booted && !EMBED) kickPoll(); }); // refresh on return (panel only)
