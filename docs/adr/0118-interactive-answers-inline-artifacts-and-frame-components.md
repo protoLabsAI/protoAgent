@@ -65,8 +65,8 @@ For G5, we considered a per-turn routing middleware like OIU's `JevVisualization
 |---|---|---|---|
 | Text | markdown (incl. mermaid fences) | no | facts, prose, code, small tables |
 | Data component | `show_component` → `component-v1` | no | exact values, records, steps, code pointers |
-| **Inline artifact** (new) | `show_artifact(…, placement="inline")` | yes, in the artifact sandbox | an answer the user interacts with *in the conversation*: calculator, explainer, chart, small tool |
-| Panel artifact | `show_artifact(…)` (default) | yes, same sandbox | a document or tool worked on over many turns, decks, PDFs, large apps |
+| **Inline artifact** (new) | `show_artifact(…)` (the default for html/svg/mermaid/react/vega-lite) | yes, in the artifact sandbox | an answer the user interacts with *in the conversation*: calculator, explainer, chart, small tool |
+| Panel artifact | `show_artifact(…, placement="panel")` (and the default for markdown, decks, PDFs, files) | yes, same sandbox | a document or tool worked on over many turns, decks, PDFs, large apps |
 
 An inline artifact **is** an artifact. It has the same store, versions, render verdict, `update_artifact`/`rewrite_artifact` and "Open in panel". Only where it renders differs.
 
