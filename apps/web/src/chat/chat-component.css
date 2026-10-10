@@ -246,3 +246,48 @@
 .artifact-ref-inline__resume:hover {
   color: var(--pl-color-fg);
 }
+/* The host's send-to-chat verdict (ADR 0118 D4): the needs-confirm prompt / an in-place
+   rejection ("the agent is busy", a refused link). Sits under the frame so the operator sees
+   where their click landed. */
+.artifact-ref-inline__bridge {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-1) var(--pl-space-2);
+  border-top: 1px solid var(--pl-color-border);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg);
+}
+.artifact-ref-inline__bridge--rejected {
+  color: var(--pl-color-fg-muted);
+}
+.artifact-ref-inline__bridge-msg {
+  flex: 1 1 auto;
+}
+.artifact-ref-inline__bridge-btn {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.artifact-ref-inline__bridge-btn:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.artifact-ref-inline__bridge-btn:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
+}
+/* "from ‹title›" label on a user turn an artifact's send bridge started (ADR 0118 D4). */
+.chat-from-artifact {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  margin-bottom: var(--pl-space-1);
+  font-size: var(--pl-font-size-2xs);
+  color: var(--pl-color-fg-muted);
+}

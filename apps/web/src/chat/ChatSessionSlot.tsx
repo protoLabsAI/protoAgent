@@ -28,6 +28,7 @@ import { insertRoomBubble } from "./roomBubble";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatTranscript } from "./ChatTranscript";
+import { ArtifactChatSendContext, type ArtifactChatSend } from "../artifacts/ArtifactRefChip";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import {
   noteTurnFinished,
@@ -970,6 +971,10 @@ export function ChatSessionSlot({
       resumeMessageId?: string;
       // This message answers the pending HITL interrupt (#1560) — see resumeHitl.
       hitlResume?: boolean;
+      // This turn was started by an artifact's send-to-chat bridge (ADR 0118 D4), not typed
+      // into the composer. It is still a NORMAL, visible user turn — this only tags where the
+      // click came from so the bubble shows a "from ‹title›" label and the turn stays audited.
+      sentVia?: ChatMessage["sentVia"];
     } = {},
   ) {
     if (!session || !content) return;
@@ -982,6 +987,7 @@ export function ChatSessionSlot({
       content,
       createdAt: Date.now(),
       status: "done",
+      ...(opts.sentVia ? { sentVia: opts.sentVia } : {}),
     };
     // On an approval resume, CONTINUE the original assistant message (`resumeMessageId`) instead of
     // minting a fresh bubble — so the pre- and post-approval tool cards extend ONE message / one
@@ -1690,20 +1696,48 @@ export function ChatSessionSlot({
 
   if (!session) return null;
 
+  // Send-to-chat bridge target (ADR 0118 D4 / S10b): an inline artifact frame rendered in THIS
+  // session's transcript reaches its chat through here. `send` reuses the NORMAL turn path so the
+  // message is an ordinary, visible user turn — just tagged (`sentVia`) with the artifact it came
+  // from, for the "from ‹title›" label and the audit trail. `isBusy` is the D4 "the agent is
+  // busy" gate: a streaming / attended-server / HITL-parked turn refuses a fresh artifact send.
+  // Both are latest-closures so the stable context value always reads current state; the memo
+  // only re-keys on the session id so inline hosts don't re-subscribe every render. (The panel
+  // can provide the same shape to reach the active chat tab.)
+  const artifactIsBusy = useLatestCallback(
+    () => status === "streaming" || Boolean(serverTurnControl) || Boolean(hitl),
+  );
+  const sendFromArtifact = useLatestCallback(
+    (text: string, origin: { artifact_id: string; version: number; title?: string }) => {
+      if (!session) return;
+      void runTurn(text, { sentVia: { via: "artifact", ...origin } });
+    },
+  );
+  const artifactSessionId = session?.id ?? null;
+  const artifactChatSend = useMemo<ArtifactChatSend | null>(
+    () =>
+      artifactSessionId
+        ? { sessionId: artifactSessionId, isBusy: artifactIsBusy, send: sendFromArtifact }
+        : null,
+    [artifactSessionId, artifactIsBusy, sendFromArtifact],
+  );
+
   return (
     <div className="chat-session-slot" hidden={!visible}>
-      <ChatTranscript
-        sessionId={sessionId}
-        messages={messages}
-        dismissedToolCalls={dismissedToolCalls}
-        actions={transcriptActions}
-        steerQueue={steerQueue}
-        serverTurnLabel={serverTurnLabel}
-        status={status}
-        onCancelDelegation={transcriptCancelDelegation}
-        onDismissToolCall={transcriptDismissToolCall}
-        onCancelSteer={transcriptCancelSteer}
-      />
+      <ArtifactChatSendContext.Provider value={artifactChatSend}>
+        <ChatTranscript
+          sessionId={sessionId}
+          messages={messages}
+          dismissedToolCalls={dismissedToolCalls}
+          actions={transcriptActions}
+          steerQueue={steerQueue}
+          serverTurnLabel={serverTurnLabel}
+          status={status}
+          onCancelDelegation={transcriptCancelDelegation}
+          onDismissToolCall={transcriptDismissToolCall}
+          onCancelSteer={transcriptCancelSteer}
+        />
+      </ArtifactChatSendContext.Provider>
 
       <div
         className="composer-wrap"

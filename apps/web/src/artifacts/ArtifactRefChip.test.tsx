@@ -9,7 +9,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
 import { resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
 import { useUI } from "../state/uiStore";
-import { ArtifactRefChip, createInlineFrameHost, InlineFrameHostContext } from "./ArtifactRefChip";
+import {
+  ArtifactChatSendContext,
+  ArtifactRefChip,
+  createInlineFrameHost,
+  InlineFrameBridgeContext,
+  InlineFrameHostContext,
+  type ArtifactChatSend,
+} from "./ArtifactRefChip";
+import { createFrameBridge } from "./frameBridge";
 import { ARTIFACT_VIEW_KEY } from "./artifactRef";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -314,5 +322,172 @@ describe("ArtifactRefChip", () => {
     await mount({ ...REF, inline: true });
     expect(frame()).toBeNull();
     expect(container.querySelector('[data-testid="artifact-ref-off"]')).not.toBeNull();
+  });
+});
+
+// The send-to-chat / openLink bridge (ADR 0118 D4 / S10b): the inline host relays an in-frame
+// protoArtifact.send()/openLink() request UP from ITS embed frame, runs it through the frameBridge
+// gates, and posts the verdict (protoArtifact:bridgeResult) back down. Trust is the host's —
+// never the model-authored frame — so these drive the gates end to end through the host.
+describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b)", () => {
+  const frame = () => container.querySelector<HTMLIFrameElement>('[data-testid="artifact-inline-frame"]');
+
+  function setActivation(value: { isActive: boolean } | undefined) {
+    if (value === undefined) {
+      delete (navigator as unknown as { userActivation?: unknown }).userActivation;
+    } else {
+      Object.defineProperty(navigator, "userActivation", { value, configurable: true });
+    }
+  }
+  afterEach(() => setActivation(undefined));
+
+  function chatStub(over: Partial<ArtifactChatSend> = {}): ArtifactChatSend & { send: ReturnType<typeof vi.fn> } {
+    return { sessionId: "s-1", isBusy: () => false, send: vi.fn(), ...over } as ArtifactChatSend & {
+      send: ReturnType<typeof vi.fn>;
+    };
+  }
+
+  async function mountInline(chat: ArtifactChatSend | null, props: Record<string, unknown> = { ...REF, inline: true }) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // A fresh bridge per mount so the module default's rate window from one test can't
+    // rate-limit the next (the busy/rate gates precede the gesture gate).
+    act(() =>
+      root.render(
+        h(
+          QueryClientProvider,
+          { client: qc },
+          h(
+            InlineFrameBridgeContext.Provider,
+            { value: createFrameBridge() },
+            h(ArtifactChatSendContext.Provider, { value: chat }, h(ArtifactRefChip, { props })),
+          ),
+        ),
+      ),
+    );
+    await flush();
+    const f = frame()!;
+    expect(f).not.toBeNull();
+    // The host posts its verdict back to the frame's own window — capture it rather than let
+    // jsdom actually dispatch into the detached contentWindow.
+    const post = vi.spyOn(f.contentWindow as Window, "postMessage").mockImplementation(() => {});
+    return { f, post };
+  }
+
+  async function dispatch(f: HTMLIFrameElement, data: Record<string, unknown>) {
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", { data, source: f.contentWindow }));
+    });
+  }
+
+  const bridgeResult = (ok: boolean, extra: Record<string, unknown> = {}) =>
+    [expect.objectContaining({ type: "protoArtifact:bridgeResult", cid: 7, ok, ...extra }), "*"];
+
+  it("a gesture-backed send posts a labelled user turn and resolves the frame's promise", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    setActivation({ isActive: true });
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat);
+    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "  Recompute at 42  ", artifact_id: "a-1", version: 2 });
+    // The NORMAL send path is used, tagged with the D4 origin metadata + title for the label.
+    expect(chat.send).toHaveBeenCalledTimes(1);
+    expect(chat.send).toHaveBeenCalledWith("Recompute at 42", { artifact_id: "a-1", version: 2, title: "Chart" });
+    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "Recompute at 42" }));
+    expect(container.querySelector('[data-testid="artifact-send-rejected"]')).toBeNull();
+  });
+
+  it("a send with NO user activation is rejected — no turn starts", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    setActivation({ isActive: false });
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat);
+    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "do it", artifact_id: "a-1", version: 2 });
+    expect(chat.send).not.toHaveBeenCalled();
+    // The frame learns why, and the operator sees the refusal in place.
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("click or key press") }));
+    const notice = container.querySelector('[data-testid="artifact-send-rejected"]');
+    expect(notice?.textContent).toContain("click or key press");
+  });
+
+  it("a send while the agent is busy is rejected with 'the agent is busy' — no turn starts", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    setActivation({ isActive: true });
+    const chat = chatStub({ isBusy: () => true });
+    const { f, post } = await mountInline(chat);
+    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "do it", artifact_id: "a-1", version: 2 });
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: "the agent is busy" }));
+    expect(container.querySelector('[data-testid="artifact-send-rejected"]')?.textContent).toContain("the agent is busy");
+  });
+
+  it("with no User Activation API it asks first, then posts the turn when the operator confirms", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    setActivation(undefined); // runtime without navigator.userActivation
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat);
+    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "run it", artifact_id: "a-1", version: 2 });
+    // Nothing posted yet — the host asks inline.
+    expect(chat.send).not.toHaveBeenCalled();
+    const confirm = container.querySelector('[data-testid="artifact-send-confirm"]');
+    expect(confirm?.textContent).toContain('Send "run it" to chat?');
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="artifact-send-confirm-ok"]')!.click();
+    });
+    expect(chat.send).toHaveBeenCalledWith("run it", { artifact_id: "a-1", version: 2, title: "Chart" });
+    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "run it" }));
+  });
+
+  it("cancelling the confirm prompt sends nothing and rejects the frame's promise", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    setActivation(undefined);
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat);
+    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "run it", artifact_id: "a-1", version: 2 });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="artifact-send-confirm-cancel"]')!.click();
+    });
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("cancelled") }));
+  });
+
+  it("with no chat wired the send is refused rather than left hanging", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    setActivation({ isActive: true });
+    const { f, post } = await mountInline(null);
+    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "do it", artifact_id: "a-1", version: 2 });
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("can't send to chat") }));
+  });
+
+  it("a send from SOME OTHER window is ignored (e.source is the gate)", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    setActivation({ isActive: true });
+    const chat = chatStub();
+    await mountInline(chat);
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { type: "protoArtifact:send", cid: 7, text: "do it" }, source: window }),
+      );
+    });
+    expect(chat.send).not.toHaveBeenCalled();
+  });
+
+  it("openLink opens an https link in a new tab with noopener,noreferrer, through the host", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat);
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    await dispatch(f, { type: "protoArtifact:openLink", cid: 7, url: "https://example.com/docs" });
+    expect(open).toHaveBeenCalledWith("https://example.com/docs", "_blank", "noopener,noreferrer");
+    expect(post).toHaveBeenCalledWith(...bridgeResult(true));
+  });
+
+  it("openLink refuses a non-https link and opens nothing", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat);
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    await dispatch(f, { type: "protoArtifact:openLink", cid: 7, url: "http://example.com" });
+    expect(open).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("https") }));
+    expect(container.querySelector('[data-testid="artifact-send-rejected"]')?.textContent).toContain("https");
   });
 });

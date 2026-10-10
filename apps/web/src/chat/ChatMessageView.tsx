@@ -2,7 +2,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Timer, X } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, X } from "lucide-react";
 import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
@@ -164,6 +164,16 @@ export function ChatMessageView({
             : undefined
       }
     >
+      {/* A user turn an artifact's send-to-chat bridge started (ADR 0118 D4): a small "from
+          ‹title›" label so the operator can tell it apart from one they typed. It is still a
+          normal, visible user message; the label is the only thing that changes. Title is
+          model-authored → renders as React text, never markup. */}
+      {message.role === "user" && message.sentVia ? (
+        <div className="chat-from-artifact" data-testid="chat-from-artifact">
+          <Sparkles size={12} aria-hidden />
+          <span>from {message.sentVia.title || message.sentVia.artifact_id}</span>
+        </div>
+      ) : null}
       {/* An `@<name>`-addressed answer (#3042) is this participant's own words, not the
           lead agent's paraphrase of them — say whose. The role stays "assistant" so every
           other renderer is untouched; the chip is the only thing that changes. */}

@@ -25,6 +25,7 @@ import {
   type ArtifactRef,
   type RefState,
 } from "./artifactRef";
+import { createFrameBridge, type FrameBridge } from "./frameBridge";
 import {
   clampHeight,
   createFrameRegistry,
@@ -148,6 +149,37 @@ export function createInlineFrameHost(cap: number = MAX_LIVE_FRAMES): InlineFram
 const sharedInlineFrameHost = createInlineFrameHost();
 export const InlineFrameHostContext = createContext<InlineFrameHost>(sharedInlineFrameHost);
 
+// ── send-to-chat / openLink host bridge (ADR 0118 D4 / S10b) ────────────────────────────────
+
+/** How an inline artifact frame reaches the chat it is rendered in. The hosting ChatSessionSlot
+ *  provides it (ArtifactChatSendContext.Provider); `send` runs the frame's text through the
+ *  NORMAL send path as a visible, origin-tagged user turn (ChatMessage.sentVia), and `isBusy`
+ *  answers the gate's busy check for THIS session. Absent (no provider — a test, or a standalone
+ *  panel) ⇒ the host refuses the send, so the frame's Promise rejects instead of hanging. The
+ *  panel can supply the same shape to reach the active chat tab. */
+export type ArtifactChatSend = {
+  sessionId: string;
+  /** True when THIS session already has a turn running / parked — the D4 "the agent is busy" gate. */
+  isBusy: () => boolean;
+  /** Post `text` as a visible user turn tagged with where it came from. */
+  send: (text: string, origin: { artifact_id: string; version: number; title?: string }) => void;
+};
+export const ArtifactChatSendContext = createContext<ArtifactChatSend | null>(null);
+
+// One host-side bridge for the console's inline frames: it holds the per-frame send rate windows
+// (frameBridge.ts). A single module default keeps the 1-per-2s gate consistent across the whole
+// transcript; the gate DECISIONS live in frameBridge (D4), never in the model-authored frame. A
+// test (or a future per-view wiring) can scope its own via the context Provider.
+const sharedInlineFrameBridge = createFrameBridge();
+export const InlineFrameBridgeContext = createContext<FrameBridge>(sharedInlineFrameBridge);
+
+/** The host's verdict shown inline on an inline artifact: the D4 needs-confirm prompt (the
+ *  runtime lacks the User Activation API, so the host asks before posting) or a rejection the
+ *  operator sees in place ("the agent is busy", a bad gesture, rate-limited, a refused link). */
+type BridgeNotice =
+  | { kind: "confirm"; cid: number; text: string; message: string }
+  | { kind: "rejected"; message: string };
+
 function Inert({ name, version, reason, testId }: { name: string; version: string; reason: string; testId: string }) {
   return (
     <div className="code-ref-inert artifact-ref-inert" data-testid={testId}>
@@ -178,6 +210,15 @@ function InlineArtifactHost({
   older: boolean;
 }) {
   const host = useContext(InlineFrameHostContext);
+  // How THIS inline frame reaches its chat (D4 / S10b) — null when no provider wraps the
+  // transcript (a test, or a standalone render), in which case a send is refused.
+  const chat = useContext(ArtifactChatSendContext);
+  // The host-side gate bridge (per-frame rate windows); the shared module default unless a
+  // Provider scopes one (tests do, for isolation).
+  const bridge = useContext(InlineFrameBridgeContext);
+  // The host's inline verdict on a send/openLink: the needs-confirm prompt or a rejection the
+  // operator sees in place. Cleared when the operator answers or a fresh request arrives.
+  const [bridgeNotice, setBridgeNotice] = useState<BridgeNotice | null>(null);
   // Each (artifact, version) gets its OWN live slot — see frameKey: an inline artifact re-emits a
   // fresh ref per version, and keying by id alone would collapse the versions into one.
   const key = frameKey(artifact);
@@ -240,6 +281,102 @@ function InlineArtifactHost({
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [live, host, key, src]);
+
+  // Post the host's verdict back down to THIS embed frame (shell.js correlates it by `cid` and
+  // relays it to the model frame's send()/openLink() Promise). Always to our own frame's window.
+  const replyToFrame = useCallback((cid: number, result: { ok: boolean; text?: string; error?: string }) => {
+    const win = frameRef.current?.contentWindow;
+    if (!win) return;
+    win.postMessage({ type: "protoArtifact:bridgeResult", cid, ...result }, "*");
+  }, []);
+
+  // The send/openLink bridge (ADR 0118 D4 / S10b). The shell relays an in-frame
+  // protoArtifact.send()/openLink() UP to this host as `protoArtifact:send|openLink` carrying a
+  // correlation id (`cid`) and the D4 origin metadata (`via/artifact_id/version`). The host owns
+  // the TRUST decision — never the model-authored frame — so every request runs through the
+  // frameBridge gates here, and the verdict goes back down via replyToFrame. Gated on e.source
+  // being THIS frame's own window (a sibling or the nested frame can't drive another chip's chat),
+  // which is the strong guarantee; only mounted/live frames carry a window to match.
+  useEffect(() => {
+    if (!live) return;
+    const onBridge = (e: MessageEvent) => {
+      const win = frameRef.current?.contentWindow;
+      if (!win || e.source !== win) return; // only our own embed frame
+      const m = (e.data || {}) as {
+        type?: unknown;
+        cid?: unknown;
+        text?: unknown;
+        url?: unknown;
+        artifact_id?: unknown;
+        version?: unknown;
+      };
+      if (m.type !== "protoArtifact:send" && m.type !== "protoArtifact:openLink") return;
+      const cid = typeof m.cid === "number" ? m.cid : NaN;
+      if (Number.isNaN(cid)) return;
+
+      if (m.type === "protoArtifact:openLink") {
+        // https-only, narrowed by the operator's optional origin allowlist (wired in a later
+        // slice); on accept the HOST opens the tab with the mandatory noopener,noreferrer.
+        const verdict = bridge.checkOpenLink({ url: String(m.url ?? "") });
+        if (verdict.status === "ok") {
+          window.open(verdict.url, "_blank", "noopener,noreferrer");
+          replyToFrame(cid, { ok: true });
+        } else {
+          setBridgeNotice({ kind: "rejected", message: verdict.message });
+          replyToFrame(cid, { ok: false, error: verdict.message });
+        }
+        return;
+      }
+
+      // send: a visible user turn into THIS chat. Refuse up front when no chat is wired.
+      if (!chat) {
+        const message = "This answer can't send to chat here.";
+        setBridgeNotice({ kind: "rejected", message });
+        replyToFrame(cid, { ok: false, error: message });
+        return;
+      }
+      // The host checks its OWN user activation (User Activation v2 propagates a child frame's
+      // gesture to its ancestors, so a frame can't fake it by posting on its own). A runtime
+      // missing the API yields needs-confirm, not a silent trust.
+      const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
+      const verdict = bridge.checkSend({ frameId: key, text: String(m.text ?? ""), userActivation: ua, isBusy: chat.isBusy });
+      const origin = {
+        artifact_id: typeof m.artifact_id === "string" ? m.artifact_id : artifact.id,
+        version: typeof m.version === "number" ? m.version : artifact.version,
+        title: name,
+      };
+      if (verdict.status === "ok") {
+        setBridgeNotice(null);
+        chat.send(verdict.text, origin);
+        replyToFrame(cid, { ok: true, text: verdict.text });
+      } else if (verdict.status === "rejected") {
+        setBridgeNotice({ kind: "rejected", message: verdict.message });
+        replyToFrame(cid, { ok: false, error: verdict.message });
+      } else {
+        // needs-confirm: ask the operator inline, resolve the frame's Promise once they answer.
+        setBridgeNotice({ kind: "confirm", cid, text: verdict.text, message: verdict.message });
+      }
+    };
+    window.addEventListener("message", onBridge);
+    return () => window.removeEventListener("message", onBridge);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- frameRef/replyToFrame are stable; re-bind on live/key/chat
+  }, [live, key, chat, artifact.id, artifact.version, name, replyToFrame]);
+
+  // Answer the needs-confirm prompt (reads this render's notice, so it's always the live one). On
+  // "send" the request goes out now, so advance the frame's rate window (checkSend never did — it
+  // returned needs-confirm) and post the user turn; either way settle the frame's Promise so
+  // send() doesn't hang to its timeout.
+  function resolveConfirm(accept: boolean) {
+    if (!bridgeNotice || bridgeNotice.kind !== "confirm") return;
+    if (accept && chat) {
+      bridge.noteSend(key);
+      chat.send(bridgeNotice.text, { artifact_id: artifact.id, version: artifact.version, title: name });
+      replyToFrame(bridgeNotice.cid, { ok: true, text: bridgeNotice.text });
+    } else {
+      replyToFrame(bridgeNotice.cid, { ok: false, error: "Send cancelled." });
+    }
+    setBridgeNotice(null);
+  }
 
   // The live re-theme PluginView performs (ADR 0026 / S6), reused verbatim so the embed repaints
   // on a console theme switch without a reload.
@@ -319,6 +456,43 @@ function InlineArtifactHost({
           Click to resume
         </button>
       )}
+      {/* The host's send/openLink verdict (ADR 0118 D4): the needs-confirm prompt, or a
+          rejection shown in place. The frame also gets the verdict on its send()/openLink()
+          Promise; this makes the decision visible to the operator, where their click landed. */}
+      {bridgeNotice?.kind === "confirm" ? (
+        <div className="artifact-ref-inline__bridge" data-testid="artifact-send-confirm" role="alertdialog">
+          <span className="artifact-ref-inline__bridge-msg">{bridgeNotice.message}</span>
+          <button
+            type="button"
+            className="artifact-ref-inline__bridge-btn"
+            data-testid="artifact-send-confirm-ok"
+            onClick={() => resolveConfirm(true)}
+          >
+            Send
+          </button>
+          <button
+            type="button"
+            className="artifact-ref-inline__bridge-btn"
+            data-testid="artifact-send-confirm-cancel"
+            onClick={() => resolveConfirm(false)}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : bridgeNotice?.kind === "rejected" ? (
+        <div className="artifact-ref-inline__bridge artifact-ref-inline__bridge--rejected" data-testid="artifact-send-rejected" role="status">
+          <span className="artifact-ref-inline__bridge-msg">{bridgeNotice.message}</span>
+          <button
+            type="button"
+            className="artifact-ref-inline__bridge-btn"
+            data-testid="artifact-send-rejected-dismiss"
+            aria-label="Dismiss"
+            onClick={() => setBridgeNotice(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
