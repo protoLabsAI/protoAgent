@@ -877,11 +877,18 @@ function scenarioFor(prompt) {
   // Reasoning is included so the turn folds into the WorkBlock (where the spotlight preview lives).
   // Points at `art-inline` (artifact-streaming-preview.spec.ts routes its own html store). Pair
   // with "PARK THE TOOL" to hold the turn mid-tool so the preview is observable before the end.
+  //
+  // The tool START frame carries input "" — exactly as the real server does: it streams only the
+  // `code` arg (server/turn_stream.py), leaving the call's full args (kind/placement/title) for a
+  // second tool_start at model end. So the console has NOTHING to parse for placement while the
+  // code streams, and the preview MUST come from the decoded buffer alone — the path the console
+  // bug fixed in S8c broke by keying the preview on `input`. The kind rides the markup (html), the
+  // handover reads the artifact-ref component below, not the args.
   if (t.includes("ARTIFACTREF STREAM")) {
     return {
       reasoning: "Writing the page…",
       events: [
-        { id: "art-i", name: "show_artifact", phase: "start", input: JSON.stringify({ kind: "html", placement: "inline", title: "Streamed page" }) },
+        { id: "art-i", name: "show_artifact", phase: "start", input: "" },
         { id: "art-i", name: "show_artifact", phase: "end", output: "Created inline html artifact art-inline — showing in the transcript." },
       ],
       // The first slice closes a <style>, so the preview gate opens at once (never flashes unstyled).

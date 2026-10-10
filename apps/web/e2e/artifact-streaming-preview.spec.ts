@@ -2,15 +2,18 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { ARTIFACT_PLUGIN_STATUS } from "./artifactPanel";
 
-// Streamed inline-artifact preview (ADR 0118 D3 / S8c): while a `show_artifact` call with inline
-// placement is still writing, the console decodes its `code` arg into a live buffer (S3) and the
-// WorkBlock hosts a sandboxed PREVIEW of the half-written markup — so the operator isn't left on a
-// spinner until the tool ends. When the tool finishes and the artifact-ref lands, the preview gives
-// way to the artifact's own inline frame (S7b).
+// Streamed inline-artifact preview (ADR 0118 D3 / S8c): while a `show_artifact` call is still
+// writing, the console decodes its `code` arg into a live buffer (S3) and the WorkBlock hosts a
+// sandboxed PREVIEW of the half-written markup — so the operator isn't left on a spinner until the
+// tool ends. When the tool finishes and the artifact-ref lands, the preview gives way to the
+// artifact's own inline frame (S7b).
 //
-// The turn is parked mid-tool by the mock ("PARK THE TOOL"), so the preview is guaranteed to be on
-// screen BEFORE the tool ends — no race against machine speed. The inline-frame handover and the
-// chip/inert states are covered by artifact-inline.spec.ts; this spec owns the live-preview path.
+// The mock streams the tool's START frame with EMPTY args (as the real server does — only the
+// `code` arg streams; the full args arrive at model end), so the preview here can only come from
+// the decoded buffer, not from parsing the call input. The turn is parked mid-tool by the mock
+// ("PARK THE TOOL"), so the preview is guaranteed to be on screen BEFORE the tool ends — no race
+// against machine speed. The chip/inert states are covered by artifact-inline.spec.ts; this spec
+// owns the live-preview path and its handover to the real frame.
 
 // A single-version html artifact the handover frame resolves to (same shape as artifact-inline).
 const INLINE_STORE = {
@@ -73,6 +76,8 @@ test("the inline artifact streams a live preview before the tool ends, then hand
   const preview = page.locator('[data-testid="streaming-preview"]');
   await expect(preview).toBeVisible();
   await expect(preview.locator('[data-testid="streaming-preview-frame"]')).toBeVisible();
+  // … the real inline frame has NOT mounted yet (this IS the preview, not a premature handover) …
+  await expect(page.locator('[data-testid="artifact-ref-inline"]')).toHaveCount(0);
   // … and the turn has NOT ended yet (the answer only arrives after release).
   await expect(page.getByText("Here's the streamed page.")).toHaveCount(0);
 

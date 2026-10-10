@@ -8,10 +8,22 @@ import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { registerChatComponent } from "../ext/componentRegistry";
 import type { ChatMessage, ChatPart, ToolCall } from "../lib/types";
 import { ChatMessageView } from "./ChatMessageView";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// A hermetic stand-in for the artifact-ref renderer (the real one is registered by an app bootstrap
+// the unit env doesn't load). Echoes the props so a test can count the renders AND read the height
+// the S8c handover injects — without depending on the Artifact panel being available in the store.
+registerChatComponent("artifact-ref", ({ props }) =>
+  h("div", {
+    "data-testid": "artifact-ref-stub",
+    "data-inline": String(props.inline === true),
+    "data-height": String(props.height ?? ""),
+  }),
+);
 
 const SENTENCE = "protoAgent is a private, plugin-extensible desktop agent.";
 const ANSWER = "Done — the three bullets are in your notes.";
@@ -84,6 +96,59 @@ describe("ChatMessageView — pre-tool text stays put when the turn folds", () =
     const [s] = visibleOutsideWork(SENTENCE);
     const [a] = visibleOutsideWork(ANSWER);
     expect(s.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("ChatMessageView — streaming inline artifact hands over without doubling (S8c)", () => {
+  // The inline artifact-ref (S7b) the streaming show_artifact hands its preview over to.
+  const ref: ChatPart = {
+    kind: "component",
+    spec: {
+      component: "artifact-ref",
+      props: { artifact_id: "art-inline", version: 1, versions_total: 1, title: "Streamed page", kind: "html", inline: true, height: 160 },
+    },
+  };
+  const reasoning: ChatPart = { kind: "reasoning", text: "Writing the page…" };
+  const tools: ChatPart = { kind: "tools", ids: ["art-i"] };
+  const refStubs = () => [...container.querySelectorAll('[data-testid="artifact-ref-stub"]')];
+
+  it("while streaming, the landed ref renders exactly once — in the spotlight handover, not the answer", () => {
+    const streamingDone: ChatMessage = {
+      id: "a1",
+      role: "assistant",
+      content: "",
+      status: "streaming",
+      parts: [reasoning, tools, ref],
+      toolCalls: [{ id: "art-i", name: "show_artifact", input: "", status: "done" }],
+      toolArgs: { "art-i": { arg: "code", text: '<style>#x{color:red}</style><div id="x">live', done: true } },
+    };
+    render(streamingDone);
+    // The handover replaced the preview with the real frame — no preview card is left up …
+    expect(container.querySelector('[data-testid="streaming-preview"]')).toBeNull();
+    // … and the ref renders exactly ONCE (pulled out of the answer so it doesn't stack below the
+    // spotlight), seeded with the preview's starting height since no frame measured one (no jump).
+    const stubs = refStubs();
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0].getAttribute("data-inline")).toBe("true");
+    expect(stubs[0].getAttribute("data-height")).toBe("240");
+  });
+
+  it("once the turn settles, the ref renders once in the answer and the spotlight is gone", () => {
+    const settled: ChatMessage = {
+      id: "a1",
+      role: "assistant",
+      content: "",
+      status: "done",
+      parts: [reasoning, tools, ref, { kind: "text", text: "Here's the streamed page." }],
+      toolCalls: [{ id: "art-i", name: "show_artifact", input: "", status: "done" }],
+      // toolArgs are dropped when the turn settles (ADR 0118 D3).
+    };
+    render(settled);
+    expect(container.querySelector(".work-spotlight")).toBeNull();
+    const stubs = refStubs();
+    expect(stubs).toHaveLength(1);
+    // Now the answer owns it, at its own height hint — the spotlight no longer seeds the height.
+    expect(stubs[0].getAttribute("data-height")).toBe("160");
   });
 });
 
