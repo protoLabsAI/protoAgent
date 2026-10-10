@@ -1215,6 +1215,22 @@ function scenarioFor(prompt) {
     };
   if (t.includes("CALC"))
     return { name: "calculator", input: { expression: "19 * 23" }, output: "19 * 23 = 437", answer: "19 × 23 = 437." };
+  if (t.includes("FRAMEKIND"))
+    // Frame-rendered plugin component (ADR 0118 D5 / S12b): a component-v1 kind the console has
+    // NO built-in renderer for. It resolves through the live catalog (GET /api/components) to the
+    // plugin's FRAME page and hosts it inline — so the component renders with no console rebuild.
+    // frame-component.spec.ts routes the catalog + the frame page.
+    return {
+      events: [
+        { id: "fc-1", name: "show_component", phase: "start", input: JSON.stringify({ component: "pl-demo-widget" }) },
+        { id: "fc-1", name: "show_component", phase: "end", output: "Rendered the demo widget for the user." },
+      ],
+      component: {
+        component: "pl-demo-widget",
+        props: { greeting: "hello from the plugin" },
+      },
+      answer: "Here's the demo widget.",
+    };
   if (t.includes("COMPONENT"))
     // show_component (#1323): the tool fires AND emits a component-v1 part. The tool card is
     // suppressed (it's a render directive); the table renders inline below the answer.

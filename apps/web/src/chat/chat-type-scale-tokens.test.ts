@@ -80,9 +80,11 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     // button (2xs) and the resume card (xs) → 12, then three more from the send-to-chat bridge
     // (ADR 0118 S10b, #4086): the bridge notice (xs), its button (2xs) and the from-‹title›
     // label (2xs) → 15.
+    // Then two more from the frame-component host's bridge notice (ADR 0118 S12b, #4088): the
+    // notice (xs) and its button (2xs) → 17.
     expect(tokenCount(chatCss)).toBe(34);
     expect(tokenCount(promptviewerCss)).toBe(12);
-    expect(tokenCount(chatComponentCss)).toBe(15);
+    expect(tokenCount(chatComponentCss)).toBe(17);
     expect(tokenCount(hitlCss)).toBe(7);
   });
 

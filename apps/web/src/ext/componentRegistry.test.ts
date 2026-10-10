@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { dispatchLiveComponent, registerChatComponent, registeredChatComponents } from "./componentRegistry";
+import {
+  dispatchLiveComponent,
+  registerChatComponent,
+  registeredChatComponents,
+  resolveChatComponent,
+} from "./componentRegistry";
 
 // The fork/plugin seam for inline chat-component renderers (#1323) — add a new kind, override
 // a built-in (last-wins), and unregister.
@@ -64,5 +69,45 @@ describe("live component hooks (#3617)", () => {
     dispatchLiveComponent({ component: "pin2", props: {} });
     expect(calls).toEqual([]);
     off();
+  });
+});
+
+// The fixed resolution order (ADR 0118 D5 / S12b): a TS-registered renderer wins, then a core
+// built-in, then a plugin FRAME (a catalog `frame_url`), else unsupported — so a plugin ships a
+// frame component with no console rebuild, yet a fork can still override any kind in TS.
+describe("resolveChatComponent", () => {
+  const builtin = () => null as never;
+  const BUILTINS = { table: builtin };
+  const frame = { frame_url: "/plugins/demo/widget", plugin: "demo" };
+
+  it("a TS-registered renderer wins over a built-in of the same kind", () => {
+    const reg = () => null as never;
+    const off = registerChatComponent("table", reg);
+    expect(resolveChatComponent("table", BUILTINS, frame)).toEqual({ via: "renderer", render: reg });
+    off();
+  });
+
+  it("falls back to a built-in when nothing is registered", () => {
+    expect(resolveChatComponent("table", BUILTINS, null)).toEqual({ via: "renderer", render: builtin });
+  });
+
+  it("resolves a catalog frame when neither a registered renderer nor a built-in claims the kind", () => {
+    expect(resolveChatComponent("pl-demo", BUILTINS, frame)).toEqual({
+      via: "frame",
+      frameUrl: "/plugins/demo/widget",
+      plugin: "demo",
+    });
+  });
+
+  it("a TS-registered renderer STILL wins over a frame of the same kind", () => {
+    const reg = () => null as never;
+    const off = registerChatComponent("pl-demo", reg);
+    expect(resolveChatComponent("pl-demo", BUILTINS, frame)).toEqual({ via: "renderer", render: reg });
+    off();
+  });
+
+  it("is unsupported for an unknown kind with no frame — or a frame row whose frame_url is null", () => {
+    expect(resolveChatComponent("nope", BUILTINS, null)).toEqual({ via: "unsupported" });
+    expect(resolveChatComponent("nope", BUILTINS, { frame_url: null, plugin: "demo" })).toEqual({ via: "unsupported" });
   });
 });

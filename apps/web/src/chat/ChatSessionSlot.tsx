@@ -29,6 +29,7 @@ import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatTranscript } from "./ChatTranscript";
 import { ArtifactChatSendContext, type ArtifactChatSend } from "../artifacts/ArtifactRefChip";
+import { ComponentChatSendContext, type ComponentChatSend } from "./FrameComponentHost";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import {
   noteTurnFinished,
@@ -1756,23 +1757,44 @@ export function ChatSessionSlot({
     [artifactSessionId, artifactIsBusy, sendFromArtifact],
   );
 
+  // Send-to-chat bridge target for a FRAME-rendered plugin component (ADR 0118 D5 / S12b): the
+  // exact same NORMAL turn path as the artifact bridge above, tagged with a component-shaped
+  // origin ({via:"component", kind, plugin}) for the "from ‹title›" label + audit trail. The
+  // busy gate is shared. Same stable-closure + session-keyed-memo discipline, and the same
+  // reasoning for sitting above the `if (!session)` return (hook count stays stable).
+  const sendFromComponent = useLatestCallback(
+    (text: string, origin: { kind: string; plugin: string | null; title?: string }) => {
+      if (!session) return;
+      void runTurn(text, { sentVia: { via: "component", ...origin } });
+    },
+  );
+  const componentChatSend = useMemo<ComponentChatSend | null>(
+    () =>
+      artifactSessionId
+        ? { sessionId: artifactSessionId, isBusy: artifactIsBusy, send: sendFromComponent }
+        : null,
+    [artifactSessionId, artifactIsBusy, sendFromComponent],
+  );
+
   if (!session) return null;
 
   return (
     <div className="chat-session-slot" hidden={!visible}>
       <ArtifactChatSendContext.Provider value={artifactChatSend}>
-        <ChatTranscript
-          sessionId={sessionId}
-          messages={messages}
-          dismissedToolCalls={dismissedToolCalls}
-          actions={transcriptActions}
-          steerQueue={steerQueue}
-          serverTurnLabel={serverTurnLabel}
-          status={status}
-          onCancelDelegation={transcriptCancelDelegation}
-          onDismissToolCall={transcriptDismissToolCall}
-          onCancelSteer={transcriptCancelSteer}
-        />
+        <ComponentChatSendContext.Provider value={componentChatSend}>
+          <ChatTranscript
+            sessionId={sessionId}
+            messages={messages}
+            dismissedToolCalls={dismissedToolCalls}
+            actions={transcriptActions}
+            steerQueue={steerQueue}
+            serverTurnLabel={serverTurnLabel}
+            status={status}
+            onCancelDelegation={transcriptCancelDelegation}
+            onDismissToolCall={transcriptDismissToolCall}
+            onCancelSteer={transcriptCancelSteer}
+          />
+        </ComponentChatSendContext.Provider>
       </ArtifactChatSendContext.Provider>
 
       <div

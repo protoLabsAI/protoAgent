@@ -5,8 +5,10 @@ import type { JSX } from "react";
 import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
 
 import { CodeRefChip } from "../codeviewer/CodeRefChip";
-import { registeredChatComponents } from "../ext/componentRegistry";
+import { resolveChatComponent, type ComponentFrame } from "../ext/componentRegistry";
+import { useComponentCatalog } from "../lib/api/components";
 import type { ComponentSpec } from "../lib/types";
+import { FrameComponentHost } from "./FrameComponentHost";
 
 // Curated, data-only chat component registry (ADR 0051 Slice 2). Renders typed
 // component-v1 DataParts inline in the transcript. No code execution — props are pure
@@ -124,12 +126,41 @@ const BUILTINS: Record<string, (p: { props: Record<string, unknown> }) => JSX.El
 };
 
 export function ChatComponent({ spec }: { spec: ComponentSpec }) {
-  // Registered (fork/plugin) renderers win over the built-ins of the same name, so a fork can
-  // both add new kinds and re-skin a built-in (#1323).
-  const Renderer = registeredChatComponents()[spec.component] ?? BUILTINS[spec.component];
-  if (!Renderer) {
+  // Resolution order (ADR 0118 D5 / S12b), in componentRegistry.resolveChatComponent:
+  //   1. a TS-registered (fork/plugin) renderer — ALWAYS wins, so a fork can add new kinds AND
+  //      re-skin a built-in or override a frame kind (#1323);
+  //   2. a core BUILT-IN renderer;
+  //   3. a plugin FRAME from the live component catalog (`frame_url`) — hosted in a sandboxed,
+  //      bearer-free iframe, so a plugin ships a component with NO console rebuild;
+  //   4. otherwise a labelled "unsupported" note.
+  // The catalog self-refreshes on plugin (re)loads, so a newly-enabled plugin's kind resolves
+  // without a reload. An empty/absent catalog (a pre-S11 server, a failed fetch) simply leaves
+  // only steps 1–2, exactly as before.
+  const { catalog } = useComponentCatalog();
+  const entry = catalog.find((e) => e.name === spec.component) ?? null;
+  const frame: ComponentFrame | null = entry ? { frame_url: entry.frame_url, plugin: entry.plugin } : null;
+  const resolved = resolveChatComponent(spec.component, BUILTINS, frame);
+
+  if (resolved.via === "unsupported") {
     return <div className="chat-comp chat-comp-unknown">[unsupported component: {spec.component}]</div>;
   }
+  if (resolved.via === "frame") {
+    // A plugin-served page renders the component in a locked-down, bearer-free iframe. `kind` +
+    // `plugin` tag a send's origin ({via:"component", kind, plugin}); props are forwarded verbatim.
+    return (
+      <div className="chat-comp chat-comp-frame">
+        <FrameComponentHost
+          id={spec.component}
+          frameUrl={resolved.frameUrl}
+          kind={spec.component}
+          plugin={resolved.plugin}
+          props={spec.props || {}}
+          title={spec.component}
+        />
+      </div>
+    );
+  }
+  const Renderer = resolved.render;
   try {
     return <Renderer props={spec.props || {}} />;
   } catch {
