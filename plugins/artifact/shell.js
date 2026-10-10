@@ -77,21 +77,38 @@
     + 'addEventListener("unhandledrejection",function(e){show("⚠ "+((e.reason&&e.reason.message)||e.reason));});'
     + 'addEventListener("load",function(){if(W.__artKind!=="react"&&W.__artKind!=="vega-lite")setTimeout(function(){if(!W.__artRep)W.__artOk();},80);});'
     + '})();<\/script>';
-  // Height reporting for the embed placement (ADR 0118 D2). DORMANT until the shell asks
-  // (protoArtifact:measure) — the panel never asks, so its frames are unaffected — at which
-  // point a ResizeObserver posts the content height up to the shell on every size change (and
-  // on load). The shell relays it to the console host, which clamps it to [80,1200]. Injected
-  // into EVERY frame by base() so the embed path renders through the SAME builder as the panel;
-  // for the nonce-CSP kinds it is nonced alongside SHIM/ERRBOOT. No `</` inside: rides a srcdoc
-  // <script>.
-  var HEIGHTJS = '<script>(function(){var W=window,D=document,on=0;'
-    + 'function h(){var b=D.body,e=D.documentElement;'
-    + 'return Math.max(e?e.scrollHeight:0,e?e.offsetHeight:0,b?b.scrollHeight:0,b?b.offsetHeight:0);}'
-    + 'function send(){try{W.parent.postMessage({type:"protoArtifact:height",height:h()},"*");}catch(_){}}'
-    + 'W.addEventListener("message",function(ev){if(((ev.data)||{}).type!=="protoArtifact:measure"||on)return;on=1;'
+  // Height reporting for the embed placement (ADR 0118 D2). Injected ONLY into embed frames
+  // (by embedSuffix below) — the panel carries no reporter, so its frames are untouched. A
+  // ResizeObserver posts the frame's CONTENT height up to the shell on every size change (plus on
+  // load and when the shell asks via protoArtifact:measure); the shell sizes the frame to it and
+  // relays it to the console host, which clamps it to [80,1200].
+  // Measures the BOX height of <html>/<body> — which embedSuffix's CSS frees to size to content
+  // (flow kinds) or pins to a width-proportional box (fill kinds) — NOT
+  // documentElement.scrollHeight, which is floored at the viewport (the frame's OWN height) and so
+  // could only ever GROW, never shrink, and left the overflow:hidden svg/mermaid frames reporting
+  // their own squashed height. Deduped so an unchanged measure doesn't thrash the host. No `</`
+  // inside: rides a srcdoc <script>.
+  var HEIGHTJS = '<script>(function(){var W=window,D=document,last=-1;'
+    + 'function h(){var d=D.documentElement,b=D.body,'
+    + 'dh=d&&d.getBoundingClientRect?d.getBoundingClientRect().height:0,'
+    + 'bh=b?Math.max(b.scrollHeight||0,b.getBoundingClientRect?b.getBoundingClientRect().height:0):0;'
+    + 'return Math.ceil(Math.max(dh,bh));}'
+    + 'function send(){var v=h();if(v===last)return;last=v;'
+    + 'try{W.parent.postMessage({type:"protoArtifact:height",height:v},"*");}catch(_){}}'
     + 'if(W.ResizeObserver){var ro=new W.ResizeObserver(send);ro.observe(D.documentElement);if(D.body)ro.observe(D.body);}'
-    + 'W.addEventListener("load",send);send();});'
+    + 'W.addEventListener("load",send);'
+    + 'W.addEventListener("message",function(ev){if(((ev.data)||{}).type==="protoArtifact:measure")send();});'
+    + 'send();'
     + '})();<\/script>';
+  // The CSS reset embedSuffix pairs with HEIGHTJS (ADR 0118 D2). FLOW kinds (html, markdown, react,
+  // charts, .md file previews) size to their content, so <html>/<body> are freed to shrink-wrap.
+  // FILL kinds (navigable svg/mermaid diagrams, paged decks/PDF/Word, and the scroll-box file
+  // cards) have no intrinsic content height — their panel CSS deliberately fills the stage — so
+  // they get a width-proportional box clamped to a sane range instead of being squashed to the
+  // 150px iframe default. !important so it wins over the kind's own html,body rule regardless of
+  // cascade order. No `</` inside: rides a srcdoc <style>.
+  var EMBED_FLOW_CSS = 'html,body{height:auto !important;min-height:0 !important}';
+  var EMBED_FILL_CSS = 'html,body{height:clamp(260px,62vw,760px) !important;min-height:0 !important}';
   function base(kind){
     var cs = getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n) || d).trim(); }
@@ -102,7 +119,7 @@
     // __artKind lets ERRBOOT decide how to confirm a clean render (on-load vs react mount).
     return '<style>:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+'}'
       + 'html,body{margin:0;background:'+bg+';color:'+fg+'}</style>'
-      + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT + HEIGHTJS;
+      + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT;
   }
   // Artifact libs are VENDORED + served same-origin (/plugins/artifact/vendor/…), so
   // react/mermaid renders work fully OFFLINE — no cdnjs dependency. Still pinned with
@@ -2077,7 +2094,7 @@
   // re-theme, loader lockdown and render-verdict reporting are all inherited (there is no
   // second frame builder). The frame reports its content height (HEIGHTJS, woken by the
   // protoArtifact:measure below) and the shell relays it to the console host, which clamps it.
-  var EMBED_TRIES = 8, EMBED_RETRY_MS = 1200, EMBED_MIN_H = 80;
+  var EMBED_TRIES = 8, EMBED_RETRY_MS = 1200, EMBED_MIN_H = 80, EMBED_MAX_H = 1200;
   // Resolve {art, idx, v} for id + LIFETIME version in the store mirror, or null when the
   // artifact is absent or the version is out of range / trimmed at the cap → the inert
   // "unavailable" state. ver 0/absent follows the latest.
@@ -2098,9 +2115,35 @@
   function hideUnavail(){ var el=document.getElementById("unavail"); if(el) el.style.display="none"; }
   // The content height the frame measured → size the frame to it and relay it to the host.
   function embedHeight(h){
-    h=Math.max(0, Math.floor(+h||0)); if(!h) return;
+    h=Math.floor(+h||0); if(h<=0) return;
+    // Clamp to the console host's own [EMBED_MIN_H, EMBED_MAX_H] range so a frame whose content is
+    // sized in viewport units (e.g. 100vh + padding) can't drive the frame — and the measurement
+    // that follows it — upward without bound; it converges at the cap instead of growing forever.
+    h=Math.max(EMBED_MIN_H, Math.min(EMBED_MAX_H, h));
     if($frame) $frame.style.height=h+"px";
     embedPostParent({type:"protoArtifact:height", height:h});
+  }
+  // Which embed sizing a kind gets: FILL (a width-proportional box) for the navigable svg/mermaid
+  // viewports, the paged deck/PDF/Word frames, and the scroll-box file cards — none has a content
+  // height to follow; FLOW (size-to-content) for html, markdown, react, charts, and .md previews.
+  function embedFill(a, v){
+    if(a.kind==="svg" || a.kind==="mermaid") return true;
+    if(a.kind!=="file") return false;   // html, markdown, react, vega-lite
+    return previewKind((v.file||{}).filename, (v.file||{}).mime) !== "md";  // .md renders as flowing prose
+  }
+  // Append the height reporter + its CSS reset to a built frame doc WITHOUT touching the doc the
+  // panel builder produced (so there is no second builder and the panel stays byte-identical). The
+  // reporter is injected here, in the embed path only — NOT in base() — so it rides EVERY embed
+  // frame, including the script-free file cards (table/json/text/sheets) and the nonce-CSP
+  // decks/PDF/Word frames that never call base(). Its inline <script> reuses the doc's existing CSP
+  // nonce when it has one (vega / slides / PDF / Word run under a nonce CSP, which would otherwise
+  // block a bare inline script and leave those embeds never reporting); the nonce-free kinds take a
+  // bare <script>.
+  function embedSuffix(doc, fill){
+    var m = /script-src 'nonce-([A-Za-z0-9]+)'/.exec(doc);
+    var tag = m ? '<script nonce="' + m[1] + '">' : '<script>';
+    return '<style>' + (fill ? EMBED_FILL_CSS : EMBED_FLOW_CSS) + '</style>'
+      + HEIGHTJS.replace('<script>', tag);
   }
   // Post UP to the embedder (the console host). Targeted at its origin where the browser tells
   // us (ancestorOrigins), like openTarget — a height int is low-stakes, but stay a good citizen.
@@ -2126,7 +2169,10 @@
       lastRendered=key;
       pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)||docxOk(v))
         ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"} : null);
-      $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks); $frame.style.display="block";
+      // SAME builder as the panel; the embed-only tail (height reporter + sizing CSS) is appended
+      // AFTER it, so the frame's own doc — its CSP, vendored libs and SRI — is byte-identical.
+      var doc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks);
+      $frame.srcdoc = doc + embedSuffix(doc, embedFill(a, v)); $frame.style.display="block";
     }
     return true;
   }

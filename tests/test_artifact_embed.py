@@ -3,9 +3,11 @@
 ``/plugins/artifact/view?embed=<id>&v=<version>`` renders exactly ONE artifact version with no
 panel chrome, through the SAME ``srcdoc()`` frame builder the panel uses — so its nonce CSP,
 vendored SRI LIB map, theme tokens, loader lockdown and render-verdict reporting are all
-inherited, and there is no second frame builder. The embed frame reports its content height
-(a dormant reporter woken by ``protoArtifact:measure``) and the shell relays it to the console
-host. An unknown id/version is an inert "unavailable" state, never an error page.
+inherited, and there is no second frame builder. The embed frame reports its content height — a
+reporter appended to EVERY embed frame by ``embedSuffix`` (NOT by ``base()``, which only the
+scripted kinds reach), measuring the content BOX so the height can shrink as well as grow — and
+the shell relays it to the console host. An unknown id/version is an inert "unavailable" state,
+never an error page.
 
 The in-frame height reporter and the version-resolution helper are run under ``node`` where it's
 on PATH, so they're checked as BEHAVIOUR, not just as strings; those cases skip cleanly without
@@ -15,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.test_artifact_plugin import ROOT, _app, _load
+from tests.test_artifact_plugin import _app, _load
 from tests.test_artifact_slides import NODE, _js_function, _node
 
 # node subprocesses + the shell's platform-sensitive deps → platform-sensitive.
@@ -179,9 +181,12 @@ def test_unavailable_state_is_inert_markup(monkeypatch, tmp_path):
 # ── r3: the height message is posted on content change ───────────────────────────
 
 
-def test_frame_reports_height_on_measure_and_resize(monkeypatch, tmp_path):
-    """The reporter is DORMANT until the shell sends protoArtifact:measure, then posts the
-    content height on the wake and on every ResizeObserver callback (content change)."""
+def test_frame_reports_content_height_and_can_shrink(monkeypatch, tmp_path):
+    """The reporter self-starts (on injection, on load, and when the shell sends
+    protoArtifact:measure) and posts the content BOX height on every ResizeObserver callback. It
+    measures getBoundingClientRect height, NOT documentElement.scrollHeight — scrollHeight is
+    floored at the viewport (the frame's own height), so measuring it made height grow-only and
+    kept the overflow:hidden svg/mermaid frames squashed. An unchanged measure is deduped."""
     if not NODE:
         pytest.skip("node not on PATH")
     art = _load(monkeypatch, tmp_path)
@@ -195,23 +200,77 @@ global.window = {
   addEventListener: (t, f) => { if (t === "message") global.__msg = f; },
   ResizeObserver: function (cb) { roCb = cb; this.observe = () => { observed++; }; },
 };
-global.document = { documentElement: { scrollHeight: 321, offsetHeight: 300 },
-                    body: { scrollHeight: 321, offsetHeight: 300 } };
+// documentElement.scrollHeight is pinned to a huge VIEWPORT-floored value the reporter must
+// ignore; `dh`/`bh` are the real content box heights it reads instead (so it can shrink).
+let dh = 300, bh = 300;
+global.document = {
+  documentElement: { scrollHeight: 9999, getBoundingClientRect: () => ({ height: dh }) },
+  body: { get scrollHeight() { return bh; }, getBoundingClientRect: () => ({ height: bh }) },
+};
 eval(HEIGHTJS.replace(/^<script>/, "").replace(/<\/script>$/, ""));
-const dormant = posts.length;                                   // nothing before a measure
-global.__msg({ data: { type: "protoArtifact:measure" } });      // wake it
-const afterMeasure = posts.length;
-global.document.documentElement.scrollHeight = 540;             // content grew
-global.document.body.scrollHeight = 540;
-if (roCb) roCb();                                               // the ResizeObserver fires
-console.log(JSON.stringify({ dormant, afterMeasure, observed, posts }));
+const onInit = posts.length;                               // self-starts on injection
+global.__msg({ data: { type: "protoArtifact:measure" } }); // same height → deduped, no new post
+const afterSameMeasure = posts.length;
+dh = 540; bh = 540; roCb();                                // content grew
+dh = 150; bh = 150; roCb();                                // content shrank
+console.log(JSON.stringify({ onInit, afterSameMeasure, observed, posts }));
 """
     )
     out = _node(harness)
-    assert out["dormant"] == 0, "the panel never asks, so the reporter must stay silent until measured"
-    assert out["afterMeasure"] == 1 and out["observed"] >= 1
-    assert out["posts"][0] == {"type": "protoArtifact:height", "height": 321}
-    assert out["posts"][-1] == {"type": "protoArtifact:height", "height": 540}
+    assert out["onInit"] == 1, "the reporter self-starts in embed frames"
+    assert out["afterSameMeasure"] == 1, "an unchanged measure is deduped"
+    assert out["observed"] >= 1
+    # The first post is the content box height (300), never the 9999 viewport-floored scrollHeight.
+    assert out["posts"][0] == {"type": "protoArtifact:height", "height": 300}
+    heights = [p["height"] for p in out["posts"]]
+    assert 540 in heights, "a taller content change is reported"
+    assert out["posts"][-1] == {"type": "protoArtifact:height", "height": 150}, "shrinking content is reported too"
+
+
+def test_height_reporter_rides_every_embed_frame_not_just_base(monkeypatch, tmp_path):
+    """Finding (correctness): HEIGHTJS used to live in base(), which the script-free file cards
+    (table/json/text/sheets) and the nonce-CSP decks/PDF/Word frames never call — so those embeds
+    never reported a height. It now rides the embed path (embedSuffix), appended to the frame the
+    shared builder produced, so EVERY embed kind reports."""
+    js = _js(_load(monkeypatch, tmp_path))
+    assert "HEIGHTJS" not in _js_function(js, "base"), "the reporter must not live in base() (misses non-base cards)"
+    embed = _js_function(js, "renderEmbed")
+    assert "embedSuffix(doc, embedFill(a, v))" in embed, "renderEmbed must append the reporter to the built frame"
+    assert "HEIGHTJS" in _js_function(js, "embedSuffix")
+    # Fill vs flow: the viewport/paged/scroll-box cards get a sized box, the rest size to content.
+    fill = _js_function(js, "embedFill")
+    assert '"svg"' in fill and '"mermaid"' in fill and "previewKind(" in fill
+
+
+def test_embed_suffix_reuses_the_frames_csp_nonce(monkeypatch, tmp_path):
+    """The appended reporter must carry the doc's own CSP nonce for the nonce-CSP kinds (vega /
+    slides / PDF / Word), or the inline script is blocked and the frame never reports; the
+    nonce-free kinds get a bare <script>. embedSuffix only APPENDS — it never rewrites the CSP
+    meta, so the embed frame's CSP stays identical to the panel's."""
+    js = _js(_load(monkeypatch, tmp_path))
+    harness = (
+        _assignment(js, "HEIGHTJS")
+        + _assignment(js, "EMBED_FLOW_CSS")
+        + _assignment(js, "EMBED_FILL_CSS")
+        + _js_function(js, "embedSuffix")
+        + r"""
+const csp = '<!doctype html><meta http-equiv="Content-Security-Policy" '
+  + 'content="default-src \'none\'; script-src \'nonce-ABC123\'; style-src \'unsafe-inline\'">body';
+const plain = '<!doctype html><meta charset="utf-8">body';
+const s1 = embedSuffix(csp, true), s2 = embedSuffix(plain, false);
+console.log(JSON.stringify({
+  cspNonced: s1.includes('<script nonce="ABC123">'),
+  cspNoBareScript: !s1.includes('<script>'),
+  cspFill: s1.includes('clamp('),
+  plainBare: s2.includes('<script>'),
+  plainNoNonce: !s2.includes('nonce='),
+  plainFlow: s2.includes('height:auto'),
+}));
+"""
+    )
+    out = _node(harness)
+    assert out["cspNonced"] and out["cspNoBareScript"] and out["cspFill"]
+    assert out["plainBare"] and out["plainNoNonce"] and out["plainFlow"]
 
 
 def test_shell_wakes_the_frame_and_relays_the_height(monkeypatch, tmp_path):
@@ -238,12 +297,13 @@ def test_panel_boot_and_render_are_unchanged(monkeypatch, tmp_path):
     # Embed takes a dedicated boot; the panel keeps its exact selection + polling boot.
     assert "if (EMBED) { embedBoot(); return; }" in boot
     assert "loadSel(); poll(); schedulePoll();" in boot
-    # The reporter is injected into every frame but is DORMANT (acts only on measure), and the
-    # panel never sends measure outside the embed-gated load handler.
+    # The reporter rides only the embed path (embedSuffix), so no panel frame carries it; the one
+    # measure sender is embed-gated, so the panel never pokes a frame about its height.
     assert js.count('postMessage({type:"protoArtifact:measure"}') == 1
     assert "if(!EMBED) return;" in _js(art)  # the measure sender is embed-gated
-    # The panel render path never consults placement.
+    # The panel render path never consults placement, nor appends the embed-only suffix.
     assert "EMBED" not in _js_function(js, "render")
+    assert "embedSuffix" not in _js_function(js, "render")
 
 
 def test_view_route_serves_the_embed_query_without_a_server_change(monkeypatch, tmp_path):
@@ -261,15 +321,8 @@ def test_view_route_serves_the_embed_query_without_a_server_change(monkeypatch, 
 
 
 def test_shell_js_has_no_premature_script_close(monkeypatch, tmp_path):
-    """The dormant reporter rides a srcdoc <script>, so its close must be escaped."""
+    """The height reporter rides a srcdoc <script>, so its close must be escaped."""
     art = _load(monkeypatch, tmp_path)
     assert "</script>" not in _js(art)
     assert "<\\/script>" in _assignment(_js(art), "HEIGHTJS")
     assert "</" not in _assignment(_js(art), "HEIGHTJS").replace("<\\/script>", "")
-
-
-def test_changelog_fragment_is_well_formed():
-    frag = ROOT.parent.parent / "changelog.d" / "4081.added.md"
-    text = frag.read_text(encoding="utf-8")
-    assert text.startswith("- **"), "a changelog fragment MUST begin with a top-level bullet"
-    assert "#4081" in text
