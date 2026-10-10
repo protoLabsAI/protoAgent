@@ -8,6 +8,28 @@ description: When the user wants to SEE, render, visualize, preview, or "show me
 The console has an **Artifact panel** powered by the `show_artifact` tool. Use it whenever the
 user wants to **look at something rendered** rather than get source files.
 
+## The presentation ladder — prefer the lowest tier that answers
+
+protoAgent can show an answer at four tiers. **Prefer the lowest tier that answers the
+request**: each rung costs more than the one below it (a component more than text, a sandboxed
+frame more than a component) and a plainer answer reads faster, so climb only when the rung
+below genuinely can't carry the answer. The rule of thumb is **inline for an answer, panel for
+a work product.**
+
+| Tier | Mechanism | Runs code? | Reach for it when… |
+|---|---|---|---|
+| **Text** | markdown (prose, code, mermaid fences, KaTeX, GFM tables) | no | a fact, a short explanation, code, or a small static table — the answer is just *words and numbers* |
+| **Data component** | `show_component` → `component-v1` | no | exact values, a record, ordered steps, a code pointer — structured data you want rendered natively, not a widget |
+| **Inline artifact** | `show_artifact(…, placement="inline")` | yes (artifact sandbox) | an answer the user **interacts with in the conversation** — a calculator, a what-if explainer, a chart, a small tool — that belongs beside your prose in scrollback |
+| **Panel artifact** | `show_artifact(…)` (the default, `placement="panel"`) | yes (same sandbox) | a **work product** carried across turns — a document, a deck, a PDF, a large app — that the user opens, edits and returns to |
+
+An inline artifact **is** an artifact: same store, versions, render verdict,
+`update_artifact`/`rewrite_artifact`, and an **Open in panel** button — only *where* it renders
+differs. Inline lives in the transcript next to your message; panel opens the side panel.
+`placement="inline"` is allowed for `html`, `svg`, `mermaid`, `react` and `vega-lite`; other
+kinds fall back to the panel. Default to **inline** for a self-contained answer and reserve the
+**panel** for something the user will keep working on.
+
 ## When to use `show_artifact` (NOT the filesystem)
 
 - "show me…", "render…", "visualize…", "draw…", "make a chart/diagram/flowchart of…",
@@ -187,6 +209,56 @@ const line = await window.protoArtifact.ask("Greet the player as a grumpy dwarf,
 
 It only works if the operator set `ARTIFACT_ASK_ENABLED` — if it's off, `ask()` rejects with a
 message telling them how to enable it, so write artifacts that degrade gracefully.
+
+`html` and `react` artifacts also get **`window.protoArtifact.send(text)`** — it puts `text`
+into the chat **as a user message** and starts a normal, visible turn. Unlike `ask`, it's **on
+by default**: it costs exactly what typing costs and the operator sees exactly what was sent.
+Use it to let the user act on a result — but wire it **only to a labelled button** (never to
+load, a timer, or an input change; it needs a real user gesture) and put the **selected values
+into the text**, because the agent sees only that text — the artifact's control state is never
+synced to the agent.
+
+```js
+// a "Ask about this scenario" button, after the user picks values
+btn.addEventListener("click", () =>
+  window.protoArtifact.send(`Split a $${bill} bill ${people} ways with a ${tip}% tip.`));
+```
+
+## Authoring order for `html` (so it previews while you write it)
+
+An inline `html` artifact streams into a live preview as you write it, so author it top to
+bottom in this order:
+
+1. **`<style>` first.** Put all CSS in a leading `<style>` block. The preview stays hidden until
+   your first `<style>` closes, so leading with it means the answer is **never shown unstyled**.
+2. **Readable markup next.** Write the body so it reads as a finished answer *before any script
+   runs* — real labels, headings and default values live in the HTML, not injected by JS.
+3. **Scripts last.** Put `<script>` at the end. The preview strips scripts and runs them only
+   once the markup is whole, so nothing legible should depend on a script having executed.
+
+The same order helps `react` and `svg`: static, styled structure first, behaviour last.
+
+## Quality bar for interactive answers
+
+An inline artifact is an *answer*, so hold it to the bar a good answer meets. Every item below
+is non-negotiable for a calculator, explainer, chart or tool:
+
+- **Every enabled control does real work.** No dead buttons, no inputs that change nothing. If a
+  control isn't wired yet, disable it or leave it out.
+- **Accessible controls.** Every input has a connected `<label>`; the widget is fully operable by
+  **keyboard**; focus is **visibly** indicated (don't strip the focus ring without replacing it).
+- **Validated numeric input.** Read with `valueAsNumber`, guard with `Number.isFinite`, clamp to
+  sensible **domain bounds**, and refuse **zero divisors**. **Never** render `NaN`, `Infinity`, or
+  a **stale** result left over from the last valid input — show a clear placeholder or an inline
+  message instead.
+- **Units and assumptions shown.** Label every quantity with its **unit**, and state on screen any
+  **assumption** you baked in (tax rate, rounding, currency) — don't bury it in the math.
+- **Reduced motion.** Respect `prefers-reduced-motion`, and give any animation a **pause** and a
+  **reset** control.
+- **Labelled provenance.** Mark each value as **sample**, **user-provided**, **retrieved**, or
+  **calculated**, so the user can tell example data from their own input from a computed result.
+- **`send` carries the values.** Call `protoArtifact.send(...)` only from a **labelled button**,
+  with the **selected values** written into the text — the agent sees the text, never the controls.
 
 ## When to still write files
 
