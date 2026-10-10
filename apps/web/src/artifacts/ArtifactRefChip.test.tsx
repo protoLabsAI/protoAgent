@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
 import { resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
 import { useUI } from "../state/uiStore";
-import { ArtifactRefChip } from "./ArtifactRefChip";
+import { ArtifactRefChip, createInlineFrameHost, InlineFrameHostContext } from "./ArtifactRefChip";
 import { ARTIFACT_VIEW_KEY } from "./artifactRef";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -124,5 +124,195 @@ describe("ArtifactRefChip", () => {
     meta(null);
     await mount({ artifact_id: "", version: "x" });
     expect(container.textContent).toContain("[artifact-ref: missing artifact_id/version]");
+  });
+
+  // ── inline placement (ADR 0118 D2 / S7b) ──────────────────────────────────────────────────
+
+  const frame = () => container.querySelector<HTMLIFrameElement>('[data-testid="artifact-inline-frame"]');
+
+  it("a ref WITHOUT inline renders the unchanged chip — no embed frame", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    await mount(REF);
+    expect(chip()).not.toBeNull();
+    expect(container.querySelector('[data-testid="artifact-ref-inline"]')).toBeNull();
+    expect(frame()).toBeNull();
+  });
+
+  it("an inline ref hosts the artifact's embed frame and clamps its reported height to [80,1200]", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    await mount({ ...REF, inline: true, height: 300 });
+    // The chip button gives way to the embed frame; the head still offers Open in panel.
+    expect(chip()).toBeNull();
+    const f = frame();
+    expect(f).not.toBeNull();
+    expect(container.querySelector('[data-testid="artifact-inline-open"]')).not.toBeNull();
+    // The embed URL names the artifact + version (S5 ?embed=<id>&v=<n>).
+    expect(f!.getAttribute("src")).toContain("embed=a-1");
+    expect(f!.getAttribute("src")).toContain("v=2");
+    // The height hint seeds the initial size before the frame measures.
+    expect(f!.style.height).toBe("300px");
+    // A too-tall report clamps to the 1200 ceiling — taller content scrolls inside the frame.
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { type: "protoArtifact:height", height: 5000 }, source: f!.contentWindow }),
+      );
+    });
+    expect(f!.style.height).toBe("1200px");
+    // …and a tiny report floors at 80.
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { type: "protoArtifact:height", height: 12 }, source: f!.contentWindow }),
+      );
+    });
+    expect(f!.style.height).toBe("80px");
+    // A height post from some OTHER window is ignored (source is the strong gate).
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", { data: { type: "protoArtifact:height", height: 999 }, source: window }));
+    });
+    expect(f!.style.height).toBe("80px");
+  });
+
+  it("mounts the inline frame lazily — only once it scrolls near the viewport", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    const callbacks: Array<(entries: Array<{ isIntersecting: boolean }>) => void> = [];
+    class FakeIO {
+      constructor(cb: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        callbacks.push(cb);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = FakeIO;
+    try {
+      await mount({ ...REF, inline: true });
+      // Not yet scrolled in: the host card exists, but the frame hasn't mounted.
+      expect(container.querySelector('[data-testid="artifact-ref-inline"]')).not.toBeNull();
+      expect(frame()).toBeNull();
+      // Scroll it into view → the frame mounts.
+      await act(async () => {
+        callbacks.forEach((cb) => cb([{ isIntersecting: true }]));
+      });
+      expect(frame()).not.toBeNull();
+    } finally {
+      (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
+    }
+  });
+
+  it("obeys the live-frame cap: an evicted frame becomes a 'Click to resume' card keeping its height", async () => {
+    vi.spyOn(api, "artifactRefs").mockImplementation(async (ids: string[]) => {
+      const artifacts: Record<string, { title: string; kind: string; version_count: number; oldest: number }> = {};
+      for (const id of ids) artifacts[id] = { title: "Chart", kind: "html", version_count: 1, oldest: 1 };
+      return { artifacts };
+    });
+    const host = createInlineFrameHost(2); // a tiny cap so three frames exercise one eviction
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ids = ["a-1", "a-2", "a-3"];
+    act(() =>
+      root.render(
+        h(
+          QueryClientProvider,
+          { client: qc },
+          h(
+            InlineFrameHostContext.Provider,
+            { value: host },
+            ids.map((id) => h(ArtifactRefChip, { key: id, props: { artifact_id: id, version: 1, title: "Chart", kind: "html", inline: true, height: 240 } })),
+          ),
+        ),
+      ),
+    );
+    await flush();
+    // Three inline hosts, but the cap keeps only two frames live; the least-recently-visible
+    // (the first mounted) is swapped for a resume card at its last height.
+    expect(container.querySelectorAll('[data-testid="artifact-ref-inline"]').length).toBe(3);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
+    const resume = container.querySelector<HTMLButtonElement>('[data-testid="artifact-inline-resume"]');
+    expect(resume).not.toBeNull();
+    expect(resume!.textContent).toContain("Click to resume");
+    expect(resume!.style.height).toBe("240px"); // keeps its height so the layout doesn't jump
+    // Resuming re-registers it: it mounts again and a different frame is evicted to hold the cap.
+    await act(async () => {
+      resume!.click();
+    });
+    await flush();
+    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(1);
+  });
+
+  // The backend re-emits an inline ref for EVERY version of an inline artifact
+  // (update_artifact/rewrite_artifact keep the inline placement), so several version frames of
+  // one artifact id coexist in the transcript. The live-frame registry must key by (id, version),
+  // not id alone — else the versions collapse into one slot and the cap stops holding.
+  const metaMany = (version_count: number) =>
+    vi.spyOn(api, "artifactRefs").mockImplementation(async (ids: string[]) => {
+      const artifacts: Record<string, { title: string; kind: string; version_count: number; oldest: number }> = {};
+      for (const id of ids) artifacts[id] = { title: "Chart", kind: "html", version_count, oldest: 1 };
+      return { artifacts };
+    });
+
+  const renderInline = (versions: number[], host: ReturnType<typeof createInlineFrameHost>) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() =>
+      root.render(
+        h(
+          QueryClientProvider,
+          { client: qc },
+          h(
+            InlineFrameHostContext.Provider,
+            { value: host },
+            // The SAME artifact id at different versions — what a revised inline answer emits.
+            versions.map((v) =>
+              h(ArtifactRefChip, { key: v, props: { artifact_id: "a-1", version: v, title: "Chart", kind: "html", inline: true, height: 240 } }),
+            ),
+          ),
+        ),
+      ),
+    );
+  };
+
+  it("the live-frame cap counts each VERSION of one artifact separately — siblings don't share a slot", async () => {
+    metaMany(3);
+    const host = createInlineFrameHost(2); // cap 2, so a third version frame forces one eviction
+    renderInline([1, 2, 3], host);
+    await flush();
+    // Three inline hosts of the one artifact; keyed by id alone they'd all share a slot and the
+    // cap wouldn't bite (three live frames). Keyed by (id, version) the cap holds: two frames, one
+    // resume card — and the two live frames point at distinct versions.
+    expect(container.querySelectorAll('[data-testid="artifact-ref-inline"]').length).toBe(3);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(1);
+    const srcs = [...container.querySelectorAll('[data-testid="artifact-inline-frame"]')].map((f) => f.getAttribute("src"));
+    expect(new Set(srcs).size).toBe(2);
+  });
+
+  it("unmounting one version's host leaves its sibling versions' frames live — release is per (id, version)", async () => {
+    metaMany(2);
+    const host = createInlineFrameHost(6); // room for both, so neither is evicted
+    renderInline([1, 2], host);
+    await flush();
+    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
+    // Drop version 1's host. Keyed by id alone, its release would delete the shared slot and flip
+    // version 2 to a resume card; keyed by (id, version) it only frees its own slot.
+    renderInline([2], host);
+    await flush();
+    expect(container.querySelectorAll('[data-testid="artifact-ref-inline"]').length).toBe(1);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(1);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(0);
+  });
+
+  it("an inline ref whose artifact is gone falls back to the inert chip — no frame", async () => {
+    meta(null);
+    await mount({ ...REF, inline: true });
+    expect(frame()).toBeNull();
+    expect(container.querySelector('[data-testid="artifact-ref-inline"]')).toBeNull();
+    const inert = container.querySelector('[data-testid="artifact-ref-gone"]');
+    expect(inert?.textContent).toContain("no longer available");
+  });
+
+  it("an inline ref with the Artifact panel off renders the inert chip — no frame", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    useUI.setState({ railOrder: { left: ["chat"], right: [], bottom: [], hidden: [] } });
+    await mount({ ...REF, inline: true });
+    expect(frame()).toBeNull();
+    expect(container.querySelector('[data-testid="artifact-ref-off"]')).not.toBeNull();
   });
 });
