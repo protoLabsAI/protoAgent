@@ -20,6 +20,7 @@ import { ChatMessageView } from "./ChatMessageView";
 registerChatComponent("artifact-ref", ({ props }) =>
   h("div", {
     "data-testid": "artifact-ref-stub",
+    "data-artifact-id": String(props.artifact_id ?? ""),
     "data-inline": String(props.inline === true),
     "data-height": String(props.height ?? ""),
   }),
@@ -149,6 +150,84 @@ describe("ChatMessageView — streaming inline artifact hands over without doubl
     expect(stubs).toHaveLength(1);
     // Now the answer owns it, at its own height hint — the spotlight no longer seeds the height.
     expect(stubs[0].getAttribute("data-height")).toBe("160");
+  });
+});
+
+describe("ChatMessageView — a SECOND streaming inline artifact never hands over to the first (S8c)", () => {
+  // The regression the review caught: a turn that already rendered inline artifact A, then streams a
+  // second inline `show_artifact` B. The handover must be keyed to the SPOTLIT call (B) by emission
+  // order — not the last inline ref in the turn (which, until B's own ref lands, is A's). Otherwise
+  // A gets yanked out of the answer and, on B's `done`, B's preview is swapped for A's frame.
+  const reasoning: ChatPart = { kind: "reasoning", text: "Writing two pages…" };
+  const toolsA: ChatPart = { kind: "tools", ids: ["art-A"] };
+  const refA: ChatPart = {
+    kind: "component",
+    spec: {
+      component: "artifact-ref",
+      props: { artifact_id: "art-A", version: 1, versions_total: 1, title: "First page", kind: "html", inline: true, height: 160 },
+    },
+  };
+  const toolsB: ChatPart = { kind: "tools", ids: ["art-B"] };
+  const refB: ChatPart = {
+    kind: "component",
+    spec: {
+      component: "artifact-ref",
+      props: { artifact_id: "art-B", version: 1, versions_total: 1, title: "Second page", kind: "html", inline: true, height: 200 },
+    },
+  };
+  const refStubs = () => [...container.querySelectorAll('[data-testid="artifact-ref-stub"]')];
+  const byArtifactId = () =>
+    Object.fromEntries(refStubs().map((s) => [s.getAttribute("data-artifact-id"), s]));
+
+  it("B's code finishing (before B's ref lands) does NOT swap B's preview for A's frame", () => {
+    // B's buffer is `done` but B's own artifact-ref has not been emitted yet. The ONLY inline ref in
+    // the turn so far is A's. The buggy, un-keyed handover grabbed A's ref here — swapping B's preview
+    // for A's frame and blanking A from the answer.
+    const bWriting: ChatMessage = {
+      id: "a1",
+      role: "assistant",
+      content: "",
+      status: "streaming",
+      parts: [reasoning, toolsA, refA, toolsB],
+      toolCalls: [
+        { id: "art-A", name: "show_artifact", input: "", status: "done" },
+        { id: "art-B", name: "show_artifact", input: "", status: "done" },
+      ],
+      toolArgs: { "art-B": { arg: "code", text: '<style>#y{color:green}</style><div id="y">second', done: true } },
+    };
+    render(bWriting);
+    // B keeps its OWN preview — it has not mis-handed over to A's frame.
+    expect(container.querySelector('[data-testid="streaming-preview"]')).not.toBeNull();
+    // A's inline frame is still in the transcript (not pulled into B's slot), at A's own height hint —
+    // a normal answer render, not the 240 the spotlight handover would have seeded.
+    const stubs = refStubs();
+    expect(stubs).toHaveLength(1);
+    expect(stubs[0].getAttribute("data-artifact-id")).toBe("art-A");
+    expect(stubs[0].getAttribute("data-height")).toBe("160");
+  });
+
+  it("once B's own ref lands, the handover targets B and A stays in the answer", () => {
+    const bLanded: ChatMessage = {
+      id: "a1",
+      role: "assistant",
+      content: "",
+      status: "streaming",
+      parts: [reasoning, toolsA, refA, toolsB, refB],
+      toolCalls: [
+        { id: "art-A", name: "show_artifact", input: "", status: "done" },
+        { id: "art-B", name: "show_artifact", input: "", status: "done" },
+      ],
+      toolArgs: { "art-B": { arg: "code", text: '<style>#y{color:green}</style><div id="y">second', done: true } },
+    };
+    render(bLanded);
+    // B's preview gave way to B's OWN frame; A is untouched. Two frames total, one per artifact.
+    expect(container.querySelector('[data-testid="streaming-preview"]')).toBeNull();
+    const byId = byArtifactId();
+    expect(Object.keys(byId).sort()).toEqual(["art-A", "art-B"]);
+    // A renders in the answer at its own hint; B is the spotlight handover, seeded with the preview's
+    // fixed starting height (no frame measured one) so the slot does not jump.
+    expect(byId["art-A"].getAttribute("data-height")).toBe("160");
+    expect(byId["art-B"].getAttribute("data-height")).toBe("240");
   });
 });
 

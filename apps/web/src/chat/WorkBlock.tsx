@@ -71,14 +71,30 @@ export function spotlightToolId(parts: ChatPart[]): string | undefined {
   return last && last.ids.length ? last.ids[last.ids.length - 1] : undefined;
 }
 
-/** The inline (S7b) `artifact-ref` component this turn's streaming `show_artifact` hands its preview
- *  over to, or null. The one correlation available: a live turn has at most one streaming inline
- *  artifact and at most one inline ref lands for it — there is no shared id on the wire. Exported so
- *  ChatMessageView pulls this ref OUT of the answer while the spotlight owns it (else a second frame
- *  stacks below the preview) and feeds it back as the handover target. */
-export function findInlineArtifactRef(parts: ChatPart[]): ComponentSpec | null {
-  for (let i = parts.length - 1; i >= 0; i--) {
+/** The inline (S7b) `artifact-ref` component the SPOTLIT `show_artifact` call hands its preview over
+ *  to, or null while its ref has not landed yet. Correlated to that one call by EMISSION ORDER, not
+ *  by a shared wire id (there is none): a call's ref rides on its tool reply, which the server lifts
+ *  into a component part at the call's `tool_end` — so the ref appears right AFTER the call's own
+ *  `tools` group in `parts`, and before any later tool group (a later group is a different call).
+ *  Scanning that window — rather than taking the LAST inline ref in the turn — is what keeps a turn
+ *  that already rendered inline artifact A from mis-handing a second, still-streaming B's preview
+ *  over to A's frame (which would blank A from the transcript and, on B's `done`, swap B's preview
+ *  for A). Takes the FULL turn parts and the spotlit tool id; exported so ChatMessageView pulls this
+ *  ref OUT of the answer while the spotlight owns it (else a second frame stacks below the preview)
+ *  and feeds it back as the handover target. */
+export function findInlineArtifactRef(parts: ChatPart[], spotlitToolId: string): ComponentSpec | null {
+  let groupAt = -1;
+  for (let i = 0; i < parts.length; i++) {
     const p = parts[i];
+    if (p.kind === "tools" && p.ids.includes(spotlitToolId)) {
+      groupAt = i;
+      break;
+    }
+  }
+  if (groupAt < 0) return null;
+  for (let i = groupAt + 1; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.kind === "tools") break; // a newer call's group — its ref is not the spotlit call's
     if (p.kind === "component" && p.spec.component === "artifact-ref" && p.spec.props.inline === true) return p.spec;
   }
   return null;

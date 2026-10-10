@@ -199,16 +199,18 @@ export function ChatMessageView({
           // — two frames would stack and the preview's measured height would be lost to a fresh mount
           // at the ref's own height (the layout jump). So once the ref has landed, pull it out of the
           // answer and hand it to the WorkBlock, which (on `done`) swaps the preview for it seeded
-          // with the last measured height. Decided off the SAME spotlit call the preview renders from
-          // (spotlightToolId + inlineArtifactPreview) so the suppression and the render can't diverge.
-          // Once the turn settles the spotlight is gone and the ref renders normally in the answer.
-          const spotlitCall =
-            fold && streaming
-              ? message.toolCalls?.find((c) => c.id === spotlightToolId(workParts))
-              : undefined;
+          // with the last measured height. The ref is correlated to the SPOTLIT call by emission order
+          // (findInlineArtifactRef over the FULL parts, keyed on the spotlit id) — never the last
+          // inline ref in the turn, which in a turn that already rendered an earlier inline artifact
+          // would be that OTHER artifact's ref, not this call's. Decided off the SAME spotlit call the
+          // preview renders from (spotlightToolId + inlineArtifactPreview) so the suppression and the
+          // render can't diverge. Once the turn settles the spotlight is gone and the ref renders
+          // normally in the answer.
+          const spotlitId = fold && streaming ? spotlightToolId(workParts) : undefined;
+          const spotlitCall = spotlitId ? message.toolCalls?.find((c) => c.id === spotlitId) : undefined;
           const handoverRef =
-            spotlitCall && inlineArtifactPreview(spotlitCall, message.toolArgs)
-              ? findInlineArtifactRef(answerParts)
+            spotlitId && spotlitCall && inlineArtifactPreview(spotlitCall, message.toolArgs)
+              ? findInlineArtifactRef(parts, spotlitId)
               : null;
           const answerToRender = handoverRef
             ? answerParts.filter((p) => !(p.kind === "component" && p.spec === handoverRef))
