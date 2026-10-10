@@ -39,27 +39,42 @@ export function toToolArgsBuffer(buffers: ToolArgsBuffers, id: string): ToolArgs
   return acc ? { arg: acc.arg, text: acc.text, done: acc.done } : undefined;
 }
 
+/** Number of Unicode code points in `s`. The server measures `offset`/`chunk` length in
+ *  Python code points (`stream.emitted += len(chunk)`, server/turn_stream.py), so every offset
+ *  comparison here must count code points too — NOT JS `.length`, which counts UTF-16 code
+ *  units and so double-counts every non-BMP character (an emoji, say). Spreading a string
+ *  iterates it by code point. */
+function cpLength(s: string): number {
+  return [...s].length;
+}
+
 /** Fold one decoded tool-args-v1 frame into its tool call's buffer, returning the next map
  *  (pure — the input map is left untouched). Appends `chunk` at `offset`: a contiguous or
  *  overlapping chunk extends `text` and the overlapping prefix is dropped, so a duplicated or
  *  re-sent frame is a no-op; a chunk that arrives ahead of a gap is stashed in `pending` and
  *  merged once the gap closes. So out-of-order and duplicated frames both converge on the
- *  correct text, and `done` latches once any frame for this arg sets it. */
+ *  correct text, and `done` latches once any frame for this arg sets it. All offset arithmetic
+ *  is in code points (see `cpLength`) so a non-BMP character never shifts the reassembly. */
 export function appendToolArgs(buffers: ToolArgsBuffers, evt: ToolArgsEvent): ToolArgsBuffers {
   const prev = buffers[evt.id];
   let text = prev?.text ?? "";
+  let textLen = cpLength(text); // the assembled length in CODE POINTS — the offsets' unit
   const pending: Record<number, string> = { ...(prev?.pending ?? {}) };
 
   // Place `chunk` at `offset` if it reaches the current end; otherwise stash it (keeping the
-  // longer of any chunk already stashed at that offset). Returns whether `text` grew.
+  // longer of any chunk already stashed at that offset). `offset`/lengths are code points, so
+  // slice by code point (`[...chunk]`), never by UTF-16 index. Returns whether `text` grew.
   const place = (offset: number, chunk: string): boolean => {
-    if (offset + chunk.length <= text.length) return false; // wholly behind the end — a duplicate
-    if (offset <= text.length) {
-      text += chunk.slice(text.length - offset); // contiguous/overlapping — keep only the new tail
+    const cps = [...chunk];
+    if (offset + cps.length <= textLen) return false; // wholly behind the end — a duplicate
+    if (offset <= textLen) {
+      const tail = cps.slice(textLen - offset); // contiguous/overlapping — keep only the new tail
+      text += tail.join("");
+      textLen += tail.length;
       return true;
     }
     const stashed = pending[offset];
-    if (stashed === undefined || chunk.length > stashed.length) pending[offset] = chunk;
+    if (stashed === undefined || cps.length > cpLength(stashed)) pending[offset] = chunk;
     return false;
   };
 
@@ -70,7 +85,7 @@ export function appendToolArgs(buffers: ToolArgsBuffers, evt: ToolArgsEvent): To
     grew = false;
     for (const key of Object.keys(pending)) {
       const offset = Number(key);
-      if (offset > text.length) continue; // still ahead of a gap
+      if (offset > textLen) continue; // still ahead of a gap
       const chunk = pending[offset];
       delete pending[offset];
       if (place(offset, chunk)) grew = true; // placed; a stale duplicate simply evaporates

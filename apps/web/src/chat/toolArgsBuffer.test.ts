@@ -93,6 +93,31 @@ describe("appendToolArgs — reassemble one tool call's argument (r1)", () => {
     expect(buf).toEqual({ arg: "code", text: "world", done: true });
   });
 
+  it("counts offsets in CODE POINTS, so a non-BMP char (emoji) never shifts the reassembly", () => {
+    // The server measures `offset`/`chunk` length in Python code points; a JS `.length`
+    // (UTF-16 code units) double-counts "😀", so frame 2 at code-point offset 1 would look
+    // like it overlaps and drop its first char — rendering "😀bc" instead of "😀abc".
+    const contiguous = fold("c1", [
+      { offset: 0, chunk: "😀" }, // one code point (two UTF-16 units)
+      { offset: 1, chunk: "abc", done: true },
+    ]);
+    expect(contiguous).toEqual({ arg: "code", text: "😀abc", done: true });
+
+    // Out-of-order across an emoji: the tail lands first and waits, the head closes the gap.
+    const reordered = fold("c1", [
+      { offset: 2, chunk: "b" }, // after "a😀" — stashed ahead of the gap
+      { offset: 0, chunk: "a😀", done: true },
+    ]);
+    expect(reordered).toEqual({ arg: "code", text: "a😀b", done: true });
+
+    // A resend overlapping an emoji is still a pure no-op (nothing re-appended or dropped).
+    const overlap = fold("c1", [
+      { offset: 0, chunk: "a😀b" }, // code points: a(0) 😀(1) b(2)
+      { offset: 1, chunk: "😀b" }, // wholly behind the end → duplicate
+    ]);
+    expect(overlap?.text).toBe("a😀b");
+  });
+
   it("keeps separate tool calls independent, and leaves the input map untouched (pure)", () => {
     const first = appendToolArgs(emptyToolArgs(), { id: "a", arg: "code", offset: 0, chunk: "aa", done: false });
     const second = appendToolArgs(first, { id: "b", arg: "query", offset: 0, chunk: "bb", done: true });
