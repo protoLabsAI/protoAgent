@@ -74,10 +74,11 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     // chat.css: 15 from the px migration (#3688 part 4) + 20 from the rem→scale migration
     // (DS audit type-scale 2b), less the one `.chat-delegation-toggle` site removed when the
     // hand-rolled control was swapped to a DS Button (#551 action-button rule, card 2). The
-    // other three files are untouched by both.
+    // other three files are untouched by both — except chat-component.css gained the
+    // `.chat-comp-source` caption (ADR 0118 S1, #4077), a 9th in-scale --pl-font-size-xs site.
     expect(tokenCount(chatCss)).toBe(34);
     expect(tokenCount(promptviewerCss)).toBe(12);
-    expect(tokenCount(chatComponentCss)).toBe(8);
+    expect(tokenCount(chatComponentCss)).toBe(9);
     expect(tokenCount(hitlCss)).toBe(7);
   });
 
