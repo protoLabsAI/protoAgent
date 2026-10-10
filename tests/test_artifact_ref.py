@@ -247,6 +247,140 @@ def test_validator_accepts_minimal_props(monkeypatch, tmp_path):
     assert art._ref.validate_artifact_ref({"artifact_id": "a", "version": 2, "kind": "file"}) is None
 
 
+# ── inline placement (ADR 0118 D2/D3) ────────────────────────────────────────────────────
+
+
+def test_default_show_emits_no_inline_or_height(monkeypatch, tmp_path):
+    # r1: a default (panel) call's result text and ref payload are byte-for-byte as before.
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    code = "<h1>Hi</h1>"
+    out = art.show_artifact.invoke({"kind": "html", "code": code, "title": "Doc"})
+    aid = art._read_store()["artifacts"][0]["id"]
+    assert extract_component(out)["props"] == {
+        "artifact_id": aid,
+        "version": 1,
+        "versions_total": 1,
+        "title": "Doc",
+        "kind": "html",
+    }
+    assert strip_component(out) == (
+        f"Created html artifact {aid} ({len(code)} chars) — now showing in the Artifact panel. "
+        "Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,code",
+    [
+        ("html", "<p>hi</p>"),
+        ("svg", "<svg/>"),
+        ("mermaid", "graph TD;A-->B;"),
+        ("react", "function App(){return null}"),
+        ("vega-lite", '{"mark":"point","data":{"values":[{"x":1}]}}'),
+    ],
+)
+def test_inline_placement_emits_inline_ref(monkeypatch, tmp_path, kind, code):
+    # r2: inline on a frame-renderable kind carries inline: true (and no spurious fallback note).
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    out = art.show_artifact.invoke({"kind": kind, "code": code, "placement": "inline"})
+    props = extract_component(out)["props"]
+    assert props["inline"] is True
+    assert props["kind"] == kind
+    assert "can't render inline" not in strip_component(out)
+
+
+def test_inline_on_unsupported_kind_falls_back_to_panel(monkeypatch, tmp_path):
+    # r3: markdown can't render inline → panel, with a note in the result and no inline flag.
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    out = art.show_artifact.invoke({"kind": "markdown", "code": "# Hi", "placement": "inline"})
+    assert "markdown can't render inline" in strip_component(out)
+    assert "inline" not in extract_component(out)["props"]
+
+
+def test_inline_placement_flows_through_the_show_service(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    r = art.show_service(kind="svg", code="<svg/>", title="S", placement="inline")
+    assert r["ok"] is True
+    assert extract_component(r["ref"])["props"]["inline"] is True
+    r2 = art.show_service(kind="markdown", code="# Hi", placement="inline")
+    assert "markdown can't render inline" in r2["message"]
+    assert "inline" not in extract_component(r2["ref"])["props"]
+
+
+def test_inline_placement_survives_update_and_rewrite(monkeypatch, tmp_path):
+    # The create-review regression: placement is a property of the ARTIFACT (persisted in the
+    # store), so update_artifact / rewrite_artifact keep every later version's chip inline rather
+    # than silently panelling it — neither tool takes (or needs) a placement argument.
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    art.show_artifact.invoke({"kind": "html", "code": "<p>v1</p>", "placement": "inline"})
+    aid = art._read_store()["artifacts"][0]["id"]
+    assert art._read_store()["artifacts"][0]["placement"] == "inline"
+
+    up = art.update_artifact.invoke({"old_string": "v1", "new_string": "v2"})
+    assert extract_component(up)["props"]["inline"] is True
+    rw = art.rewrite_artifact.invoke({"code": "<p>v3</p>"})
+    rw_props = extract_component(rw)["props"]
+    assert rw_props["inline"] is True and rw_props["artifact_id"] == aid
+
+
+def test_panel_artifact_stays_panel_across_update_and_rewrite(monkeypatch, tmp_path):
+    # The mirror case: a default (panel) artifact never gains an inline flag on edit, and the
+    # store carries no placement key at all — the pre-0118 shape, byte-for-byte.
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    art.show_artifact.invoke({"kind": "html", "code": "<p>v1</p>"})
+    assert "placement" not in art._read_store()["artifacts"][0]
+    up = art.update_artifact.invoke({"old_string": "v1", "new_string": "v2"})
+    assert "inline" not in extract_component(up)["props"]
+    rw = art.rewrite_artifact.invoke({"code": "<p>v3</p>"})
+    assert "inline" not in extract_component(rw)["props"]
+
+
+def test_validator_sanitizes_inline_and_height(monkeypatch, tmp_path):
+    # r4: a non-bool inline and a non-int height are DROPPED (payload still valid); an int height
+    # is clamped into [HEIGHT_MIN, HEIGHT_MAX]. A real bool / in-range int is kept untouched.
+    art = _load(monkeypatch, tmp_path)
+    v = art._ref.validate_artifact_ref
+
+    bad = {"artifact_id": "a", "version": 1, "kind": "html", "inline": "yes", "height": "tall"}
+    assert v(bad) is None
+    assert "inline" not in bad and "height" not in bad
+
+    high = {"artifact_id": "a", "version": 1, "kind": "html", "height": 5000}
+    assert v(high) is None and high["height"] == art._ref.HEIGHT_MAX
+
+    low = {"artifact_id": "a", "version": 1, "kind": "html", "height": 10}
+    assert v(low) is None and low["height"] == art._ref.HEIGHT_MIN
+
+    floaty = {"artifact_id": "a", "version": 1, "kind": "html", "height": 300.5}
+    assert v(floaty) is None and "height" not in floaty  # a float is not an int → dropped
+
+    boolheight = {"artifact_id": "a", "version": 1, "kind": "html", "height": True}
+    assert v(boolheight) is None and "height" not in boolheight  # bool is not a height
+
+    good = {"artifact_id": "a", "version": 1, "kind": "html", "inline": True, "height": 400}
+    assert v(good) is None and good == {
+        "artifact_id": "a",
+        "version": 1,
+        "kind": "html",
+        "inline": True,
+        "height": 400,
+    }
+
+
+def test_write_tools_declare_stream_args(monkeypatch, tmp_path):
+    # r5: the three write tools carry stream_args: "code" metadata; save_file_artifact does not.
+    art = _load(monkeypatch, tmp_path)
+    for t in (art.show_artifact, art.update_artifact, art.rewrite_artifact):
+        assert t.metadata == {"stream_args": "code"}
+    assert "stream_args" not in (art.save_file_artifact.metadata or {})
+
+
 # ── /refs ───────────────────────────────────────────────────────────────────────────────
 
 
