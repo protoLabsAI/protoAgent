@@ -66,9 +66,14 @@ const sharedComponentFrameRegistry = createFrameRegistry();
 export const ComponentFrameRegistryContext = createContext<FrameRegistry>(sharedComponentFrameRegistry);
 
 export type FrameComponentHostProps = {
-  /** Stable id for this component instance — the frame-budget registry key and the
+  /** Stable id for this component OCCURRENCE — the frame-budget registry key and the
    *  `touch`/`measure`/`release` handle, AND the per-frame rate-limit key for the send gate.
-   *  Two mounts of the same component share one id. */
+   *  It must be unique PER OCCURRENCE, never the component kind: the registry reference-counts a
+   *  repeated id into one shared slot, so passing the kind would collapse every render of that
+   *  kind in a transcript into a single slot (defeating the six-live-frame cap) and make them
+   *  share one remembered height and one send rate window. ChatComponent mints one per occurrence
+   *  with `useId()`. Two deliberate mounts that DO pass the same id (e.g. a handover twin) share
+   *  one slot by design — see the reference-count note in inlineFrames.register. */
   id: string;
   /** The resolved `/plugins/<id>/<frame>` page this component renders in (from the catalog's
    *  `frame_url`). Routed through `apiUrl` for the slug-aware base, like every plugin frame. */

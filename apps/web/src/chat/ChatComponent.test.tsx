@@ -174,4 +174,32 @@ describe("ChatComponent — resolution order (ADR 0118 D5 / S12b)", () => {
     expect(container.querySelectorAll("iframe").length).toBe(6);
     expect(container.querySelectorAll(".frame-component-host__evicted").length).toBe(1);
   });
+
+  // Regression (S12b review): the cap must also bound N occurrences of the SAME kind. ChatComponent
+  // must key each frame host by the OCCURRENCE (useId), never by the component kind — the registry
+  // reference-counts a repeated id into ONE shared slot, so keying by kind would keep every copy of
+  // one plugin kind live in a single slot (cap defeated) and make them share one height + one send
+  // rate window. Seven occurrences of ONE kind under one registry must still settle at six live
+  // iframes + one evicted card. (The distinct-kinds test above can't catch this — each kind already
+  // had a unique id.)
+  it("caps repeated occurrences of the SAME frame kind, keying each by occurrence not kind", () => {
+    catalogState.rows = [{ name: "pl-dup", plugin: "demo", frame_url: "/plugins/demo/dup" }];
+    const registry = createFrameRegistry();
+    act(() =>
+      root.render(
+        h(
+          ComponentFrameRegistryContext.Provider,
+          { value: registry },
+          ...Array.from({ length: 7 }, (_, i) =>
+            h(ChatComponent, { key: i, spec: { component: "pl-dup", props: { n: i } } }),
+          ),
+        ),
+      ),
+    );
+    // Each occurrence took its own slot, so the seventh evicted one — NOT all seven collapsed into
+    // a single always-live slot.
+    expect(registry.size()).toBe(6);
+    expect(container.querySelectorAll("iframe").length).toBe(6);
+    expect(container.querySelectorAll(".frame-component-host__evicted").length).toBe(1);
+  });
 });

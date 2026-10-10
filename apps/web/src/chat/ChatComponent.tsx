@@ -1,6 +1,6 @@
 import "./chat-component.css";
 
-import { useContext, type JSX } from "react";
+import { useContext, useId, type JSX } from "react";
 
 import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
 
@@ -145,6 +145,14 @@ export function ChatComponent({ spec }: { spec: ComponentSpec }) {
   // default keeps even a standalone render bounded). Without passing it, each host would make its
   // own one-frame registry and the cap would never apply.
   const frameRegistry = useContext(ComponentFrameRegistryContext);
+  // A per-OCCURRENCE id for the frame host — NOT the component kind. The registry keys its live
+  // slot, remembered height, and send rate-window by this id and reference-counts repeats, so
+  // keying by kind would collapse every occurrence of one plugin kind in the transcript into a
+  // SINGLE slot: the six-live-frame cap wouldn't hold, and all those copies would share one
+  // height and one rate window. `useId()` is stable across this instance's renders and unique per
+  // occurrence (React guarantees tree-uniqueness), exactly the per-instance key ArtifactRefChip's
+  // frameKey mints from (id, version). The kind is passed separately below for the origin tag.
+  const frameId = useId();
 
   if (resolved.via === "unsupported") {
     return <div className="chat-comp chat-comp-unknown">[unsupported component: {spec.component}]</div>;
@@ -155,7 +163,7 @@ export function ChatComponent({ spec }: { spec: ComponentSpec }) {
     return (
       <div className="chat-comp chat-comp-frame">
         <FrameComponentHost
-          id={spec.component}
+          id={frameId}
           frameUrl={resolved.frameUrl}
           kind={spec.component}
           plugin={resolved.plugin}
