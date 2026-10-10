@@ -1213,13 +1213,18 @@ export type ChatMessage = {
    *  instead of a full-size assistant bubble. Persisted, so the card treatment survives reload;
    *  absent on operator-initiated turns, which stay full-size. */
   origin?: string;
-  /** Origin tag for a user turn an artifact's send-to-chat bridge started (ADR 0118 D4 / S10b),
-   *  instead of the operator typing it. The turn is a NORMAL, visible user message — this only
-   *  records WHERE the click came from, so the bubble can show a small "from ‹title›" label and
-   *  the turn stays auditable as the user's. The audited identity is `{via, artifact_id, version}`
-   *  (exactly the D4 metadata); `title` is a display convenience the inline host supplies for the
-   *  label. Absent on a normally-typed turn. */
-  sentVia?: { via: "artifact"; artifact_id: string; version: number; title?: string };
+  /** Origin tag for a user turn a frame's send-to-chat bridge started (ADR 0118 D4), instead of
+   *  the operator typing it. The turn is a NORMAL, visible user message — this only records WHERE
+   *  the click came from, so the bubble can show a small "from ‹title›" label and the turn stays
+   *  auditable as the user's. Two frame origins carry it:
+   *    - an inline ARTIFACT frame (S10b): `{via, artifact_id, version}` — exactly the D4 metadata;
+   *    - a plugin COMPONENT frame (S12b): `{via, kind, plugin}` — the component-v1 kind and the
+   *      plugin that owns the frame (`plugin` null for a core frame kind).
+   *  `title` is a display convenience the host supplies for the label. Absent on a normally-typed
+   *  turn. */
+  sentVia?:
+    | { via: "artifact"; artifact_id: string; version: number; title?: string }
+    | { via: "component"; kind: string; plugin: string | null; title?: string };
   /** A server turn's result that `chat.resumed` APPENDED, because this transcript had no
    *  preview of that turn to replace: a scheduled fire or a watch reaction that landed while
    *  some other turn here was still running. It is not that running turn's row. So the

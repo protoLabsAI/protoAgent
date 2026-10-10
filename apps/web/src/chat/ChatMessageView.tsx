@@ -164,14 +164,20 @@ export function ChatMessageView({
             : undefined
       }
     >
-      {/* A user turn an artifact's send-to-chat bridge started (ADR 0118 D4): a small "from
-          ‹title›" label so the operator can tell it apart from one they typed. It is still a
-          normal, visible user message; the label is the only thing that changes. Title is
-          model-authored → renders as React text, never markup. */}
+      {/* A user turn a frame's send-to-chat bridge started (ADR 0118 D4): a small "from ‹title›"
+          label so the operator can tell it apart from one they typed. It is still a normal,
+          visible user message; the label is the only thing that changes. Both frame origins —
+          an inline artifact (S10b) and a plugin component (S12b) — render the same chip; the
+          label falls back to the artifact id or the component kind when no title was supplied.
+          Title/kind are model/plugin-authored → render as React text, never markup. */}
       {message.role === "user" && message.sentVia ? (
         <div className="chat-from-artifact" data-testid="chat-from-artifact">
           <Sparkles size={12} aria-hidden />
-          <span>from {message.sentVia.title || message.sentVia.artifact_id}</span>
+          <span>
+            from{" "}
+            {message.sentVia.title ||
+              (message.sentVia.via === "component" ? message.sentVia.kind : message.sentVia.artifact_id)}
+          </span>
         </div>
       ) : null}
       {/* An `@<name>`-addressed answer (#3042) is this participant's own words, not the
