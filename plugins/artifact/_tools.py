@@ -17,6 +17,24 @@ log = logging.getLogger("protoagent.plugins.artifact")
 
 _KINDS = {"html", "svg", "mermaid", "react", "markdown", "vega-lite"}
 
+# Kinds that can render in the inline frame (ADR 0118 D2). `markdown` (and files/decks on the
+# save side) render text/pages, not through the sandboxed frame, so they stay in the panel.
+_INLINE_KINDS = frozenset({"html", "svg", "mermaid", "react", "vega-lite"})
+
+
+def _resolve_placement(placement: str, kind: str) -> tuple[bool, str]:
+    """Whether this call emits an INLINE artifact-ref, plus a note for the tool result when an
+    inline request falls back to the panel (ADR 0118 D2). Inline is only for the frame-renderable
+    kinds; any placement other than "inline" is the default panel, silently."""
+    if (placement or "").strip().lower() != "inline":
+        return False, ""
+    if kind in _INLINE_KINDS:
+        return True, ""
+    return False, (
+        f"\n\nNote: {kind} can't render inline — showing it in the Artifact panel instead. "
+        f"Inline placement is available for: {', '.join(sorted(_INLINE_KINDS))}."
+    )
+
 
 # Bounds on the write-time spec walk. A real chart spec is a few levels deep; the rows in
 # `data.values` are never walked (below), so the node budget counts structure, not data.
@@ -343,7 +361,9 @@ def _then_render(result: _LockedResult) -> str:
 
 @tool
 @_busy_reply
-def show_artifact(kind: str, code: str, title: str = "", links: dict | str | None = None) -> str:
+def show_artifact(
+    kind: str, code: str, title: str = "", links: dict | str | None = None, placement: str = "panel"
+) -> str:
     """CREATE a new generative-UI artifact in the console's Artifact panel.
 
     ``kind`` is one of: "html" (a full or partial HTML document), "svg" (inline SVG markup),
@@ -372,6 +392,13 @@ def show_artifact(kind: str, code: str, title: str = "", links: dict | str | Non
     a data SHAPE → a component. Prefer either over writing files when the user just wants to
     SEE something rendered. Returns the artifact id.
 
+    ``placement`` is ``"panel"`` (default) or ``"inline"``. Inline renders the SAME artifact
+    directly in the conversation — the same sandbox, versions and "Open in panel" — for an
+    answer the user interacts with in place (a calculator, an explainer, a chart, a small tool).
+    Inline is available for html, svg, mermaid, react and vega-lite; any other kind falls back
+    to the panel, and the reply says so. Prefer inline for an answer, the panel for a work
+    product you iterate on over many turns.
+
     CODE-LINKED DIAGRAMS (mermaid only): ``links`` maps diagram elements to code, so the
     operator can click a node or a message and land on that code in the console's code pane.
     ``{"<key>": {"project", "path", "line", "end_line"?, "note"?}}`` — keys are a flowchart /
@@ -387,10 +414,10 @@ def show_artifact(kind: str, code: str, title: str = "", links: dict | str | Non
     (≤ 280 chars).
     """
     checked = _links.check(links)
-    return _then_render(_show(kind, code, title, checked))
+    return _then_render(_show(kind, code, title, checked, placement))
 
 
-def show_service(kind: str, code: str, title: str = "") -> dict:
+def show_service(kind: str, code: str, title: str = "", placement: str = "panel") -> dict:
     """The ``artifact.show`` plugin service (ADR 0116): create an artifact for ANOTHER plugin.
 
     How a plugin puts something in the Artifact panel without importing this one — e.g. the data
@@ -400,7 +427,10 @@ def show_service(kind: str, code: str, title: str = "") -> dict:
         r = show(kind="vega-lite", code=spec_json, title="Best weekdays")
 
     It is exactly ``show_artifact`` minus the code ``links``: the same kinds, size cap, per-kind
-    checks, version chain and render-verdict wait. Returns a dict — never raises for a refusal:
+    checks, version chain and render-verdict wait. ``placement`` is ``"panel"`` (default) or
+    ``"inline"`` — inline renders the artifact in the conversation (html/svg/mermaid/react/
+    vega-lite; any other kind falls back to the panel, noted in ``message``). Returns a dict —
+    never raises for a refusal:
 
     - ``ok`` — False when nothing was created (``message`` says why);
     - ``id`` / ``version`` — the new artifact and its version (``""`` / ``0`` on a refusal);
@@ -414,7 +444,7 @@ def show_service(kind: str, code: str, title: str = "") -> dict:
     it from a sync tool body, or from async code via ``asyncio.to_thread`` — never directly on an
     event loop."""
     try:
-        result = _show(kind, code, title)
+        result = _show(kind, code, title, placement=placement)
     except _store.StoreLockTimeout as e:
         return {"ok": False, "id": "", "version": 0, "message": str(e), "ref": ""}
     msg, target, *rest = result
@@ -430,7 +460,9 @@ def show_service(kind: str, code: str, title: str = "") -> dict:
 
 
 @_store.serialized
-def _show(kind: str, code: str, title: str, checked: _links.Checked | None = None) -> _LockedResult:
+def _show(
+    kind: str, code: str, title: str, checked: _links.Checked | None = None, placement: str = "panel"
+) -> _LockedResult:
     k = (kind or "").strip().lower()
     if k not in _KINDS:
         return f"Unknown artifact kind {kind!r}. Use one of: {', '.join(sorted(_KINDS))}.", None
@@ -439,6 +471,7 @@ def _show(kind: str, code: str, title: str, checked: _links.Checked | None = Non
         return err, None
     if err := _kind_problem(k, code):
         return err, None
+    inline, placement_note = _resolve_placement(placement, k)
     kept, report = _links.finish(checked, k, code) if checked else ({}, "")
     store = _store._read_store()
     nv = _store._new_version(code, extra={"links": kept} if kept else None)
@@ -458,8 +491,8 @@ def _show(kind: str, code: str, title: str, checked: _links.Checked | None = Non
     msg = (
         f"Created {k} artifact {art['id']} ({len(code)} chars) — now showing in the Artifact "
         f"panel. Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
-    ) + report
-    return msg, (art["id"], 1, _store._version_key(art)), _ref.ref_tail(art)
+    ) + placement_note + report
+    return msg, (art["id"], 1, _store._version_key(art)), _ref.ref_tail(art, inline=inline)
 
 
 def _carry_links(art: dict, checked: _links.Checked | None, new_code: str) -> tuple[dict, str]:
@@ -594,6 +627,14 @@ def _rewrite(code: str, title: str, artifact_id: str, checked: _links.Checked | 
         (art["id"], v, _store._version_key(art)),
         _ref.ref_tail(art),
     )
+
+
+# The write tools declare the string argument the server streams as a live inline preview
+# (ADR 0118 D3: tool metadata ``{"stream_args": "code"}`` → `tool_args` frames). Harmless on a
+# host without the streaming seam — it's read, never required.
+show_artifact.metadata = {"stream_args": "code"}
+update_artifact.metadata = {"stream_args": "code"}
+rewrite_artifact.metadata = {"stream_args": "code"}
 
 
 def _pin_mark(art: dict) -> str:
