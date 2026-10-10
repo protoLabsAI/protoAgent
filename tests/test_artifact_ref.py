@@ -164,7 +164,9 @@ def test_register_on_a_host_without_the_seam_turns_the_tail_off(monkeypatch, tmp
 def test_every_create_and_revise_tool_emits_a_valid_ref(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
     _live(art)
-    out = art.show_artifact.invoke({"kind": "html", "code": "<h1>Hi</h1>", "title": "  My\n  page "})
+    # placement="panel" keeps this exercising the panel ref shape (no inline flag) now that the
+    # default is inline — the point here is that every create/revise tool emits a valid chip.
+    out = art.show_artifact.invoke({"kind": "html", "code": "<h1>Hi</h1>", "title": "  My\n  page ", "placement": "panel"})
     comp = extract_component(out)
     aid = art._read_store()["artifacts"][0]["id"]
     assert comp == {
@@ -250,12 +252,14 @@ def test_validator_accepts_minimal_props(monkeypatch, tmp_path):
 # ── inline placement (ADR 0118 D2/D3) ────────────────────────────────────────────────────
 
 
-def test_default_show_emits_no_inline_or_height(monkeypatch, tmp_path):
-    # r1: a default (panel) call's result text and ref payload are byte-for-byte as before.
+def test_explicit_panel_show_emits_no_inline_or_height(monkeypatch, tmp_path):
+    # r3: an explicit placement="panel" opens the panel even for a frame-renderable kind — its
+    # result text and ref payload are byte-for-byte the pre-inline panel shape (no inline/height),
+    # and no placement key is persisted (the pre-0118 store shape).
     art = _load(monkeypatch, tmp_path)
     _live(art)
     code = "<h1>Hi</h1>"
-    out = art.show_artifact.invoke({"kind": "html", "code": code, "title": "Doc"})
+    out = art.show_artifact.invoke({"kind": "html", "code": code, "title": "Doc", "placement": "panel"})
     aid = art._read_store()["artifacts"][0]["id"]
     assert extract_component(out)["props"] == {
         "artifact_id": aid,
@@ -264,10 +268,59 @@ def test_default_show_emits_no_inline_or_height(monkeypatch, tmp_path):
         "title": "Doc",
         "kind": "html",
     }
+    assert "placement" not in art._read_store()["artifacts"][0]
     assert strip_component(out) == (
         f"Created html artifact {aid} ({len(code)} chars) — now showing in the Artifact panel. "
         "Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
     )
+
+
+@pytest.mark.parametrize(
+    "kind,code",
+    [
+        ("html", "<p>hi</p>"),
+        ("svg", "<svg/>"),
+        ("mermaid", "graph TD;A-->B;"),
+        ("react", "function App(){return null}"),
+        ("vega-lite", '{"mark":"point","data":{"values":[{"x":1}]}}'),
+    ],
+)
+def test_default_placement_is_inline_for_interactive_kinds(monkeypatch, tmp_path, kind, code):
+    # r1: with NO placement argument, a frame-renderable kind now defaults to INLINE (ADR 0118 D2;
+    # 2026-10-10 operator decision) — the chip carries inline: true, no fallback note, and the
+    # store records placement="inline" so later edits stay inline.
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    out = art.show_artifact.invoke({"kind": kind, "code": code})
+    props = extract_component(out)["props"]
+    assert props["inline"] is True
+    assert props["kind"] == kind
+    assert "can't render inline" not in strip_component(out)
+    assert art._read_store()["artifacts"][0]["placement"] == "inline"
+
+
+def test_default_placement_on_markdown_is_silent_panel(monkeypatch, tmp_path):
+    # r2: a non-frame kind under the DEFAULT goes to the panel SILENTLY — no fallback note, no
+    # inline flag on the chip, and no placement key persisted (the pre-0118 panel shape).
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    out = art.show_artifact.invoke({"kind": "markdown", "code": "# Hi"})
+    assert "can't render inline" not in strip_component(out)
+    assert "inline" not in extract_component(out)["props"]
+    assert "placement" not in art._read_store()["artifacts"][0]
+
+
+def test_service_default_placement_matches_the_tool(monkeypatch, tmp_path):
+    # r5: artifact.show's default placement matches show_artifact — a frame kind defaults to inline,
+    # and a non-frame kind defaults silently to the panel (no note, no inline flag).
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    r = art.show_service(kind="svg", code="<svg/>", title="S")
+    assert r["ok"] is True
+    assert extract_component(r["ref"])["props"]["inline"] is True
+    r2 = art.show_service(kind="markdown", code="# Hi")
+    assert "can't render inline" not in r2["message"]
+    assert "inline" not in extract_component(r2["ref"])["props"]
 
 
 @pytest.mark.parametrize(
@@ -329,11 +382,11 @@ def test_inline_placement_survives_update_and_rewrite(monkeypatch, tmp_path):
 
 
 def test_panel_artifact_stays_panel_across_update_and_rewrite(monkeypatch, tmp_path):
-    # The mirror case: a default (panel) artifact never gains an inline flag on edit, and the
+    # The mirror case: an explicit-panel artifact never gains an inline flag on edit, and the
     # store carries no placement key at all — the pre-0118 shape, byte-for-byte.
     art = _load(monkeypatch, tmp_path)
     _live(art)
-    art.show_artifact.invoke({"kind": "html", "code": "<p>v1</p>"})
+    art.show_artifact.invoke({"kind": "html", "code": "<p>v1</p>", "placement": "panel"})
     assert "placement" not in art._read_store()["artifacts"][0]
     up = art.update_artifact.invoke({"old_string": "v1", "new_string": "v2"})
     assert "inline" not in extract_component(up)["props"]
