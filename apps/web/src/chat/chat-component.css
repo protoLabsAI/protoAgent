@@ -15,6 +15,11 @@
 
 /* table — chrome comes from the DS `Table` primitives (.pl-table); this wrapper
    only owns the surrounding card layout (.chat-comp / .chat-comp-table). */
+.chat-comp-source {
+  margin-top: var(--pl-space-2);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
 
 /* key-value */
 .chat-comp-kv dl {
