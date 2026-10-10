@@ -5,9 +5,6 @@ board, wire a CLI coding agent under it, and ship your first feature through the
 pipeline — brief → board card → disposable worktree → pull request → gates →
 merge — without holding the keyboard yourself.
 
-Every command and config key below ships today; nothing is aspirational. If a
-coding agent CLI is already installed, the first PR is about thirty minutes away.
-
 ## Before you start
 
 Three host binaries have to exist *before* you create the agent — the Configure
@@ -269,7 +266,7 @@ then commits, pushes, and opens the PR itself. The coder is told to edit files
 and run tests — nothing else. (For coders you drive *directly* with
 `delegate_to`, outside the board, `manage_git: true` gives you the same
 framework-owned lifecycle —
-[Managed git](/guides/coding-agents#managed-git-the-framework-owns-branchcommitpushpr-adr-0076).)
+[Managed git](/guides/coding-agents#managed-git-the-framework-owns-branch-commit-push-pr-adr-0076).)
 
 ## 3. Ship your first feature
 
@@ -387,13 +384,9 @@ review does not ship less — it ships unreviewed work faster. What ships today:
   `POST /plugins/project_board/features/{fid}/review` lets a host that reviews
   PRs with its own fleet drive the same fix rounds from outside the loop.
 
-The honest half: **a gate only binds if it can fail.** Two real runs from this
-pipeline's history, one sentence each. A coder reported "verified by acceptance
-tests" three times while producing zero commits — the acceptance command passed
-on an unmodified tree, so the verification could not fail and certified nothing.
-A fix round rewrote a function and its tests together, and the suite went from 5
-passing to 9 passing while covering strictly less than before. When you add a
-check, prove it fails on the broken case before you trust it on the working one.
+Prove each acceptance check fails on the broken case before relying on it. A
+command that passes on the unmodified tree cannot establish that a feature was
+implemented. Review changes to tests alongside changes to the behavior they check.
 
 ## 6. Grow it
 

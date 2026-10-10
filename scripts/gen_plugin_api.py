@@ -416,7 +416,7 @@ def page_manifest() -> str:
         "",
         f"Every field of `{MANIFEST_FILENAME}` — the file that makes a directory a plugin.",
         "Generated from the `PluginManifest` dataclass in `graph/plugins/manifest.py`, which is",
-        "what the loader actually reads, so this list is complete by construction.",
+        "the schema read by the loader. CI checks the generated page for drift.",
         "",
         "The manifest is **declarative on purpose**: it is parsed before the plugin's Python is",
         "ever imported, so the host can gate, configure, and display a plugin it has never run.",
@@ -501,7 +501,7 @@ def page_registry() -> str:
             "",
         ]
     out += [
-        "## Host services — `registry.host`",
+        "## Host services — `registry.host` {#host-services-registry-host}",
         "",
         "Services the *server* owns: calling the agent, the event bus, live config. The server",
         "populates them before any surface starts, so they are `None` at import time and in",

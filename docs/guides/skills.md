@@ -1,42 +1,25 @@
 # Skills (`SKILL.md`)
 
-protoAgent loads **human-authored skills** in the [AgentSkills](https://agentskills.io/specification)
-open `SKILL.md` format — the same portable format Claude Code, Hermes, and
-OpenClaw use. A skill teaches the agent *how and when* to use its tools for a
-recurring task. Every available skill is listed in the agent's context as an
-always-on `<available_skills>` index — just its name + one-line summary — and the
-agent **loads a skill's full procedure on demand** with the `load_skill` tool the
-moment it judges one fits the task ([progressive disclosure, ADR 0060](/adr/0060-skill-progressive-disclosure)).
-A `load_skill` call shows in chat as an ordinary tool card, so you can see which
-guidance shaped the turn. (This replaced the old per-turn relevance retrieval,
-which injected full skill bodies on every model call.)
+A `SKILL.md` teaches the agent when and how to use its tools for a recurring task.
+Manage skills in **Settings → Skills**. The agent sees names and descriptions,
+then loads a full procedure with `load_skill` when it needs it; that call appears
+in chat as a tool card.
 
-> The console surfaces the skill index under **Agent → Skills**. A skill
-> **advises** (loaded guidance the model may adapt); it does **not** execute. For
-> deterministic, run-the-same-steps orchestration across subagents, that's a
-> [Workflow](/guides/workflows#skills-vs-workflows) — different tool, different altitude.
-
-::: warning Two different things are called a "skill"
-This page is about **`SKILL.md` procedures** — guidance the agent loads mid-turn.
-An **[A2A card skill](/guides/add-a-skill)** is something else entirely: an entry on
-the agent card that advertises a capability *other agents* can dispatch to. Same
-word, different subsystem — if you're here to make your agent callable by another
-agent, you want that page.
-:::
+Skills are guidance the model can adapt. For a fixed sequence of subagent steps,
+use a [workflow](/guides/workflows#skills-vs-workflows). To advertise a capability
+to other agents, use an [A2A card entry](/guides/add-a-skill).
 
 ## Write one (the short path)
 
-1. Create `skills/<name>/SKILL.md` (or drop it in the skills folder shown in
-   **Agent → Skills**).
+1. Create `<instance_root>/skills/<name>/SKILL.md`, using the root from
+   `protoagent config explain`, or create a skill in **Settings → Skills**.
 2. Give it frontmatter — `name` + a one-line `description`. That description is the
    *only* thing the agent sees until it loads the skill, so write it as "when to use
    this", not as a title.
 3. Write the procedure in the body: the steps, the tools to use, what "done" looks like.
-4. Reload (**Agent → Skills → Reload**, or restart). The skill appears in the index.
+4. Reload (**Settings → Skills → Reload**, or restart). The skill appears in the index.
 5. Ask the agent to do the task. Watch for the `load_skill` tool card — that's the
    confirmation it picked your skill up.
-
-The rest of this page is the detail behind those five steps.
 
 ## Anatomy of a skill
 
@@ -111,18 +94,20 @@ it in the editor with **"Hide from the agent — operator `/slash` command only.
 
 ## Where skills live
 
-Two roots, mirroring protoAgent's config bundle/live split:
+Skills load from these roots:
 
-- **Bundled (shipped, read-only):** `config/skills/<slug>/SKILL.md` — example
-  skills that travel with the agent (and into the desktop sidecar).
-- **Your skills (writable, drop-in):** `<config-dir>/skills/<slug>/SKILL.md`,
-  where `<config-dir>` is `PROTOAGENT_CONFIG_DIR` (defaults to `config/`).
-  Override the root with `skills.dir` in the config.
+- **Bundled:** `config/skills/<slug>/SKILL.md` in the installed app or source tree.
+- **Live drop-ins:** `<instance_root>/config/skills/<slug>/SKILL.md`.
+  `skills.dir` overrides this root.
+- **Console-authored:** `<instance_root>/skills/<slug>/SKILL.md`.
+- **Plugin skills:** directories registered by enabled plugins.
+
+Use `protoagent config explain` to find the instance and config roots.
 
 If a live skill and a bundled skill share a `name`, the live one wins.
 Sub-folders are organizational only — the skill is named by its frontmatter.
 
-Skills authored in the console (**Agent → Skills**) are indexed **live** — create,
+Skills authored in the console (**Settings → Skills**) are indexed **live** — create,
 edit, and delete take effect immediately, no restart. Skills you drop on disk by
 hand (a new `SKILL.md` folder) are picked up on the next server start or config
 reload, since there's no filesystem watch on the skill roots.
@@ -132,7 +117,7 @@ reload, since there's no filesystem watch on the skill roots.
 ```yaml
 skills:
   enabled: true            # default
-  db_path: /sandbox/skills.db   # falls back to ~/.protoagent/skills.db
+  db_path: /sandbox/skills.db   # resolves to <instance_root>/skills.db
   top_k: 5                 # max skills listed in the always-on <available_skills> index
   dir: ""                  # optional override for the writable skills root
 ```
@@ -162,7 +147,7 @@ commons:
   a proven one explicitly.
 
 The commons is **host-level and un-scoped** — every agent pointing at the same
-`commons.path` reads it, regardless of `instance.id`. Run two *isolated* fleets on
+`commons.path` reads it, regardless of their instance root. Run two *isolated* fleets on
 one host by giving each a distinct `commons.path`. The boot log names the active
 tier and path (`[skills] tier=layered into …`).
 

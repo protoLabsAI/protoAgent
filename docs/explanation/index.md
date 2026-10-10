@@ -1,6 +1,6 @@
 # Explanation
 
-Understanding-oriented. Read these when you want to know *why* the template is shaped the way it is — grouped by **domain** (same order as the other sections).
+Understand the runtime, its architecture, and the reasons behind its design.
 
 ## Agent core & runtime
 
@@ -10,7 +10,7 @@ Understanding-oriented. Read these when you want to know *why* the template is s
 | [Prompt contracts](/explanation/prompt-contracts) | What exactly goes into the lead, subagent, external and provider-transformed prompts — and what keeps them small? |
 | [Model output](/explanation/output-protocol) | Native reasoning, and the thin guard that strips provider-leaked `<think>` from answers |
 | [Mid-turn steering](/explanation/steering) | How can I redirect the agent mid-turn without stopping and losing its work? |
-| [LiteLLM gateway](/explanation/litellm-gateway) | Why route every call through a gateway instead of the provider SDK? |
+| [LiteLLM gateway](/explanation/litellm-gateway) | When should I use a gateway, and how do native providers fit in? |
 
 ## Tools, MCP & plugins
 
@@ -28,6 +28,7 @@ Understanding-oriented. Read these when you want to know *why* the template is s
 
 | Page | Question it answers |
 |---|---|
+| [How rooms work](/explanation/rooms) | How do participants receive context, continue conversations, and return late answers? |
 | [A2A protocol](/explanation/a2a-protocol) | What does A2A actually require, and where do naive implementations go wrong? |
 | [Cost & trace propagation](/explanation/cost-and-trace) | Why do we emit cost-v1 and parse `a2a.trace`, and why that specific shape? |
 

@@ -1,13 +1,9 @@
 # MCP (Model Context Protocol)
 
-protoAgent can connect to external [MCP](https://modelcontextprotocol.io)
-servers and expose **their tools as agent tools** — a standard way to plug in
-filesystems, browsers, databases, SaaS APIs, and more without writing any
-protoAgent-specific tool code. MCP is the same interop layer Claude Code,
-Hermes, and OpenClaw speak, so the existing server ecosystem works out of the
-box.
-
-Built on [`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters).
+Connect an MCP server to make its tools available to your agent. MCP supports
+external filesystems, browsers, databases, and service APIs without a
+protoAgent-specific plugin. The connection uses
+[`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters).
 
 ## Enabling it
 

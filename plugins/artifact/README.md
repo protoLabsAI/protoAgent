@@ -7,20 +7,21 @@ same isolation model as Claude Artifacts / Open WebUI. Generated code runs, but 
 console. React artifacts can `import` a curated **offline** set — charts, icons, and the protoLabs
 **design-system** components.
 
-It's also the **reference external plugin**: pure Python + a self-served iframe page + a bundled
-skill — no host build, no federation. Installable from this git URL.
+It ships Python tools, a self-served iframe page, and a bundled skill. Plugin
+authors can use it as an example of a view that needs no host frontend build.
 
 ## Install
 
-In the protoAgent console: **Plugins → Download → install from a git URL**, or in config:
+Artifact is bundled and enabled by default. To re-enable it, use **Settings →
+Plugins → Installed**, or declare it in config:
 
 ```yaml
 plugins:
   enabled: [artifact]
 ```
 
-then install `https://github.com/protoLabsAI/artifact-plugin` (ADR 0027). Installing enables it
-and mounts its console view live, with no restart.
+Save the enabled state to mount its console view live. For everyday file creation
+and downloads, see [Work with documents and files](../../docs/guides/documents-and-files.md).
 
 ## What it adds
 

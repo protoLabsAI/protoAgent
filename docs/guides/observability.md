@@ -140,7 +140,7 @@ scrape_configs:
 
 Prometheus is live-scrape-only and Langfuse is opt-in/external — so protoAgent also keeps a **durable, queryable per-turn rollup** of its own (ADR 0006 Slice 2). One row is written per terminal turn leg (completed / failed / canceled / parked) — from either turn driver through the shared writer `server/turn_telemetry.py::record_turn`, plus one per CLI coding-agent run since #3015 — with accumulated token usage (incl. prompt-cache), USD cost, wall-clock duration, and LLM-call + tool-call counts. This is the substrate for "what was expensive/slow over time" and the self-improving flywheel.
 
-ON by default (one cheap write per turn). The SQLite path follows the usual `/sandbox` → `~/.protoagent` fallback and is instance-scoped (ADR 0004). Disable or relocate via config:
+ON by default (one cheap write per turn). The default SQLite path is `<instance_root>/telemetry.db` (ADR 0065). Disable or relocate via config:
 
 ```yaml
 telemetry:

@@ -22,7 +22,7 @@ tool — `source` is an `http(s)` URL (including YouTube) or a local file path. 
 link or a file in chat ("read this and remember it", "ingest this PDF") and it runs the
 same pipeline below, rather than trying to `web_search`/`fetch_url` a media link (which
 can't get a transcript). It's distinct from `memory_ingest`, which only stores text the
-agent already has — see the [tool table](/guides/knowledge#the-agents-memory-tools).
+agent already has — see the [tool table](/guides/knowledge#the-agent-s-memory-tools).
 
 Audio/video/image paths need the same setup as the console (`knowledge.transcribe_model`
 / `knowledge.image_describe_model`, plus `ffmpeg` on PATH for video); if one isn't

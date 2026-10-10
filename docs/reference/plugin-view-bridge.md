@@ -61,7 +61,7 @@ Sent on every live operator theme switch, carrying the same `theme` shape as `in
 your view stays on the theme it booted with while the console around it changes. The kit's
 `initPluginView()` maps both `init` and `theme` onto the DS `--pl-*` custom properties for you.
 
-## Events — `subscribe` / `event` / `publish`
+## Events — `subscribe` / `event` / `publish` {#events-subscribe-event-publish}
 
 The event bus ([ADR 0039](/adr/0039-plugin-event-bus)) relayed across the sandbox boundary.
 

@@ -1,10 +1,8 @@
 # Customize & deploy
 
-Use this guide when you've run through the wizard, decided the template fits your use case, and now want to fork it into your own GitHub repo + ship a deployable image. If you're still evaluating, stay on the [first-agent tutorial](/tutorials/first-agent) — you don't need any of this to run the agent locally.
-
-## Why this is a separate step
-
-The [setup wizard](/tutorials/first-agent) handles runtime customization — model, tools, persona, auth — without editing code. Everything below is structural: renaming the template throughout the codebase, bending the release pipeline to your repo, baking your fork's identity into the Docker image. Do it once per fork, not every time you tweak a setting.
+Create your own repository from the template, configure its identity, and ship a
+Docker image. For a running agent's persona or model, use
+[Settings](/guides/react-tauri-ui#agent-settings-telemetry).
 
 ## The operator-fork contract
 
@@ -13,7 +11,7 @@ The [setup wizard](/tutorials/first-agent) handles runtime customization — mod
 | You want to customize… | Seam (declare/add — don't edit core) |
 |---|---|
 | Advertised skills + card description | `a2a.skills` / `a2a.description` in config, or `register_a2a_skill` (#570) |
-| Add / drop tools | `register_tools` plugin / `tools.disabled` (no core edit) |
+| Add / drop tools | `register_tool` plugin / `tools.disabled` (no core edit) |
 | Where a turn's memory lives (`thread_id`) | `register_thread_id_resolver` plugin (#571) |
 | Lock outbound callbacks / peer consults | `security.callback_allowlist` CIDRs in config (#572) |
 | Outbound host allowlist for `fetch_url` | `egress.allowed_hosts` in config |
@@ -42,7 +40,7 @@ env prefix, and the `protoagent.plugin.yaml` manifest name — renaming it rewri
 ~120 files and conflicts on every upstream merge, for zero functional gain. The
 **user-facing** name is data, not code:
 
-- `identity.name` in `config/langgraph-config.yaml` (set by the wizard) — drives the console brand, window title, and agent card. A fork sets this once and the whole UI follows.
+- `identity.name` in the instance's `langgraph-config.yaml` (set by the wizard) — drives the console brand, window title, and agent card. A fork sets this once and the whole UI follows.
 - `AGENT_NAME` env — the short slug for the Prometheus metric prefix and the Langfuse tag.
   (It also names a legacy `<AGENT_NAME>_API_KEY` auth header, which is **deprecated** —
   use the bearer token below instead; see [#2632](https://github.com/protoLabsAI/protoAgent/issues/2632).)
@@ -131,7 +129,7 @@ A plugin can contribute card skills too, via `register_a2a_skill(spec)`. The `na
 
 ## 5. (Optional) Add domain tools
 
-See [Starter tools](/reference/starter-tools) for the full default set. To **drop** a core tool, list it in `tools.disabled` (config — no code edit). To **add** tools, ship a [plugin](/guides/plugins) (`register_tools`) — that's the no-fork path that survives upstream merges. Editing `get_all_tools()` in `tools/lg_tools.py` directly still works but is the legacy core-edit that conflicts on re-sync. Any tool the agent ends up with becomes a checkbox in the wizard and drawer automatically.
+See [Starter tools](/reference/starter-tools) for the full default set. To **drop** a core tool, list it in `tools.disabled` (config — no code edit). To **add** tools, ship a [plugin](/guides/plugins) (`register_tool`) — that's the no-fork path that survives upstream merges. Editing `get_all_tools()` in `tools/lg_tools.py` directly still works but is the legacy core-edit that conflicts on re-sync. Registered tools appear in **Settings → Tools**.
 
 The memory tools are dropped automatically when `middleware.knowledge: false`; the scheduler tools when `middleware.scheduler: false`. See [Schedule future work](/guides/scheduler) and [Configuration](/reference/configuration#middleware) for the toggles.
 
@@ -144,14 +142,18 @@ The memory tools are dropped automatically when `middleware.knowledge: false`; t
 ```bash
 docker build -t ghcr.io/my-org/my-agent:local .
 
-# local test — mount the config volume so wizard completions persist
-docker run --rm -p 7870:7870 \
+# Local test — persist instance data and serve the console
+docker run --rm -p 127.0.0.1:7870:7870 \
     -e OPENAI_API_KEY="$OPENAI_API_KEY" \
-    -v my-agent-config:/opt/protoagent/config \
+    -e PROTOAGENT_UI=console -e PROTOAGENT_ALLOW_OPEN=1 \
+    -v my-agent-sandbox:/sandbox \
     ghcr.io/my-org/my-agent:local
 ```
 
-The Dockerfile declares `VOLUME /opt/<agent>/config` so even without `-v` the wizard writes persist across container runs on the same Docker host — they live in an anonymous volume. For production, use a named volume or host mount so you can back it up.
+The named `/sandbox` volume preserves config, conversations, credentials, and
+plugin stores. This local example publishes only to loopback; set an auth token
+before exposing the port beyond the host. See [Deploy in Docker](/guides/deploy-docker)
+for config seeds and production persistence.
 
 Once the local build is happy, merge a PR to trigger the release pipeline ([Deploy via GHCR](/guides/deploy)).
 

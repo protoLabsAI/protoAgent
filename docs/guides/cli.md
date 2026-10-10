@@ -1,13 +1,8 @@
 # The `protoagent` command
 
-`protoagent` is the terminal control plane for a protoAgent runtime — install,
-run, and manage an instance without touching the console. It's the discoverable
-front door that replaces the bare `python -m server <subcommand>` invocation
-(ADR 0075 — added in a follow-up).
-
-> Chatting with an agent is a separate job — that's what [`proto`](https://github.com/protoLabsAI/protoCLI)
-> (the A2A terminal client) is for. `protoagent` runs and manages the runtime;
-> `proto` talks to it. They meet at the wire (A2A / ACP), not in one binary.
+Install, run, and manage an agent from the terminal with `protoagent`.
+For an interactive fleet view, run `protoagent fleet`; for terminal chat, use an
+A2A client such as [protoCLI](https://github.com/protoLabsAI/protoCLI).
 
 ## Install
 
@@ -250,7 +245,7 @@ each address the instance is reachable on:
 $ protoagent pair
 Pairing code for ava:  K7QM2-XPA4F   (expires in 4:59)
 
-On the hub, enter it under Settings ▸ Agents ▸ Pair…, or run:
+On the hub, enter it under Settings ▸ Fleet ▸ Discover ▸ Pair…, or run:
   protoagent fleet pair http://100.64.1.2:7870 K7QM2-XPA4F   (tailnet)
   protoagent fleet pair http://192.168.1.20:7870 K7QM2-XPA4F   (lan)
 ```
@@ -314,26 +309,13 @@ protoagent agent export --dry-run     # review only: what is stripped, what the 
 protoagent agent export -o ~/snapshots/   # write the zip
 ```
 
-The snapshot is a **recipe, not a backup**: SOUL, secret-stripped config, `plugins.lock`
-SHA pins, MCP server definitions and `SKILL.md` dirs. No runtime history, no credentials,
-no plugin code — importing yields a *fresh* agent, not a resumed one.
+A snapshot creates a fresh agent from its persona, redacted configuration, plugin
+pins, MCP definitions, and skills. It does not restore chats or runtime state.
+Review `REVIEW.md` and the exported files before sharing: recognized secrets are
+removed, but private prose and unrecognized credentials can remain.
 
-Credentials never travel. What the target must re-supply is listed by name in a
-`required_secrets` inventory, and every zip carries a `REVIEW.md` spelling out what was
-stripped and what still needs re-pointing. Two things it distinguishes, because the
-response differs:
-
-- **Credential-shaped text found in free text** (a token pasted into `SOUL.md` or a config
-  field) — scrubbed from the artifact, but still in the *source* agent. Treat it as exposed
-  and rotate it.
-- **Machine-local paths** — scrubbed because they carry your username. Nothing to rotate;
-  re-point them after import.
-
-Redaction of free text is a safety net, not a guarantee — read the artifact before you
-publish it.
-
-The same export is in the console at **Settings ▸ Agent ▸ Snapshot**, which shows the review
-first and downloads the zip on a second click.
+For the app controls, see [Export or copy an agent](/guides/agent-snapshots).
+Use [Back up and restore data](/guides/backup-and-restore) for full recovery.
 
 ### Importing an agent
 
@@ -343,23 +325,13 @@ protoagent agent import vera-snapshot.zip --name vera-2 --yes \
   --secret providers.gateway=sk-…
 ```
 
-**Importing runs code.** A snapshot names plugin repos, and applying it clones them and
-enables them in-process — so `import` always prints its plan first (every URL, with
-unfamiliar sources flagged, plus the capabilities the config grants) and refuses to apply
-until you pass `--yes`. Read the plan; it is describing what is about to run on your machine.
+Import installs and enables the plugin code named in its plan. Read the repository
+URLs, granted capabilities, and required credentials before applying with `--yes`.
+Supply credentials to the new agent through its Settings, or use repeatable
+`--secret NAME=VALUE` arguments; command-line secrets can appear in shell history.
 
-The config applies **verbatim**, including capability settings like `filesystem.allow_run`
-and `operator.allowed_dirs` — those are part of the agent's definition, so they're shown in
-the plan rather than silently stripped. Its model connections travel in the provider-registry
-shape wherever the registry can express them, and a connection's key is named by the
-connection (`providers.<id>`); the retiring `model.api_key` keeps its name unless it *is* the
-`gateway` connection's key. `--dry-run` prints the names to supply (see
-[Agent snapshots](agent-snapshots.md#the-model-connection-travels-as-a-registry)).
-
-The new agent arrives **incomplete** until its credentials are supplied: none travel in a
-snapshot. Pass them with `--secret NAME=VALUE` (repeatable, written `0600` to the new agent
-only), or set them afterwards in that agent's Settings ▸ Secrets. Only credentials the
-*source* agent actually had are reported missing.
+See [Snapshot reference](/reference/agent-snapshots) for contents, knowledge
+exclusions, credential names, and model-connection inheritance.
 
 ## Roadmap
 
