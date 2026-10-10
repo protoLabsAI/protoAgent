@@ -78,6 +78,62 @@ describe("createFrameRegistry", () => {
     expect(reg.heightOf("a")).toBe(1200);
     expect(reg.heightOf("never-seen")).toBe(MIN_FRAME_HEIGHT);
   });
+
+  it("reference-counts a shared id: the slot stays live until EVERY holder releases", () => {
+    const reg = createFrameRegistry();
+    // Two mounts of one component share an id (FrameComponentHostProps allows it).
+    reg.register("shared"); // host A
+    expect(reg.register("shared")).toBeNull(); // host B shares the slot — no new slot, no eviction
+    expect(reg.size()).toBe(1);
+
+    reg.release("shared"); // host A unmounts — host B still holds the slot
+    expect(reg.isLive("shared")).toBe(true);
+    expect(reg.size()).toBe(1);
+
+    reg.release("shared"); // host B unmounts — last holder gone, slot freed
+    expect(reg.isLive("shared")).toBe(false);
+    expect(reg.size()).toBe(0);
+
+    // Releasing again, or releasing an id that was never live, is a harmless no-op.
+    expect(() => reg.release("shared")).not.toThrow();
+    expect(() => reg.release("never")).not.toThrow();
+    expect(reg.size()).toBe(0);
+  });
+
+  it("a shared id consumes ONE slot toward the cap, not one per holder", () => {
+    const reg = createFrameRegistry();
+    // Two holders of f0 plus five distinct ids = six live slots (f0 counts once).
+    reg.register("f0");
+    reg.register("f0");
+    for (let i = 1; i < 6; i++) reg.register(`f${i}`);
+    expect(reg.size()).toBe(6);
+
+    // A seventh DISTINCT id still evicts exactly one to hold the cap.
+    expect(reg.register("f6")).not.toBeNull();
+    expect(reg.size()).toBe(6);
+  });
+
+  it("a stale release from an evicted holder never drops a re-registered sibling's slot", () => {
+    const reg = createFrameRegistry(2);
+    reg.register("x"); // holder A of x
+    reg.register("x"); // holder B of x — x live, two claims
+    reg.register("y"); // fills the cap (2)
+    reg.register("z"); // evicts the least-recently-visible (x) — x's slot is gone, claims remain
+    expect(reg.isLive("x")).toBe(false);
+
+    // A newer holder C re-registers x, re-granting it a fresh live slot…
+    reg.register("x");
+    expect(reg.isLive("x")).toBe(true);
+
+    // …and the two STALE releases from the evicted A/B must not kill C's slot.
+    reg.release("x"); // was A
+    reg.release("x"); // was B
+    expect(reg.isLive("x")).toBe(true);
+
+    // Only C's own release frees it.
+    reg.release("x");
+    expect(reg.isLive("x")).toBe(false);
+  });
 });
 
 // A mock IntersectionObserver: it records what it observes and lets a test drive the callback.

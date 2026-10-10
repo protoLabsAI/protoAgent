@@ -192,4 +192,26 @@ describe("FrameComponentHost", () => {
     expect(container.querySelectorAll("iframe").length).toBe(6);
     expect(container.querySelectorAll(".frame-component-host__evicted").length).toBe(1);
   });
+
+  it("keeps the survivor's live frame when one of two hosts sharing an id unmounts", () => {
+    // The props doc explicitly allows two mounts of one component to share an id; they then
+    // share ONE budget slot. Unmounting either must NOT drop the slot for the one left behind
+    // (the regression: a single `release` used to delete the shared slot, flipping the
+    // survivor permanently into the "Paused to save resources" card with nothing to re-register it).
+    const registry = createFrameRegistry();
+    const twin = (key: string) =>
+      h(FrameComponentHost, { key, id: "shared", frameUrl: "/plugins/demo/widget", props: {}, registry });
+
+    act(() => root.render(h("div", null, twin("a"), twin("b"))));
+    // Both mounts are live → two iframes, but a single registry slot between them.
+    expect(container.querySelectorAll("iframe").length).toBe(2);
+    expect(registry.size()).toBe(1);
+
+    // Unmount the first twin (key "a"); the second (key "b") is reconciled by key and preserved.
+    act(() => root.render(h("div", null, twin("b"))));
+    expect(registry.isLive("shared")).toBe(true);
+    // The survivor still shows its LIVE iframe, not the eviction card.
+    expect(container.querySelectorAll("iframe").length).toBe(1);
+    expect(container.querySelector(".frame-component-host__evicted")).toBeNull();
+  });
 });
