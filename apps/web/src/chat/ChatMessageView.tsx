@@ -7,6 +7,7 @@ import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
 
+import { StreamingPreview } from "../artifacts/StreamingPreview";
 import { openDocument } from "../docviewer";
 import { slashCommandName } from "../ext/slashRegistry";
 import { loadBackgroundReport } from "../lib/api";
@@ -222,12 +223,17 @@ export function ChatMessageView({
           // preview renders from (spotlightToolId + inlineArtifactPreview) so the suppression and the
           // render can't diverge. Once the turn settles the spotlight is gone and the ref renders
           // normally in the answer.
-          const spotlitId = fold && streaming ? spotlightToolId(workParts) : undefined;
+          // The streaming inline `show_artifact` call that gets the LIVE PREVIEW in the spotlight
+          // (ADR 0118 D3, S8c). Derived for BOTH the folded and unfolded paths off the SAME spotlit
+          // call, so the folded WorkBlock and the unfolded render below can never diverge on which
+          // tool they preview / hand over. Claude on the OAuth lane sends no reasoning, so its
+          // artifact turn never folds (foldPlan needs reasoning AND a tool) — leaving the preview,
+          // which only the WorkBlock spotlight hosted, with nowhere to mount (#4121). Gated on
+          // `streaming` alone (not `fold && streaming`) so the unfolded case computes it too.
+          const spotlitId = streaming ? spotlightToolId(workParts) : undefined;
           const spotlitCall = spotlitId ? message.toolCalls?.find((c) => c.id === spotlitId) : undefined;
-          const handoverRef =
-            spotlitId && spotlitCall && inlineArtifactPreview(spotlitCall, message.toolArgs)
-              ? findInlineArtifactRef(parts, spotlitId)
-              : null;
+          const spotlitPreview = spotlitCall ? inlineArtifactPreview(spotlitCall, message.toolArgs) : null;
+          const handoverRef = spotlitId && spotlitPreview ? findInlineArtifactRef(parts, spotlitId) : null;
           const answerToRender = handoverRef
             ? answerParts.filter((p) => !(p.kind === "component" && p.spec === handoverRef))
             : answerParts;
@@ -275,7 +281,26 @@ export function ChatMessageView({
                 ...leadParts.map(renderInline),
                 ...(fold
                   ? [<WorkBlock key="work" parts={workParts} toolCalls={message.toolCalls} toolArgs={message.toolArgs} streaming={streaming} renderFinal={renderFinal} />]
-                  : workParts.map(renderInline)),
+                  : [
+                      ...workParts.map(renderInline),
+                      // Unfolded turns have no WorkBlock, so the live artifact preview (and its S8c
+                      // handover to the real inline frame) that the WorkBlock spotlight hosts has no
+                      // home. Render it here through the SAME StreamingPreview path so a turn with a
+                      // tool call but NO reasoning — Claude on the OAuth lane — still shows the live
+                      // preview and hands it over, instead of a plain tool card and no preview (#4121).
+                      ...(spotlitPreview
+                        ? [
+                            <div className="work-spotlight" key="spotlight">
+                              <StreamingPreview
+                                buffer={spotlitPreview.buffer}
+                                kind={spotlitPreview.kind}
+                                title={spotlitPreview.title}
+                                renderFinal={renderFinal}
+                              />
+                            </div>,
+                          ]
+                        : []),
+                    ]),
                 ...answerToRender.map(renderInline),
               ]}
             </>

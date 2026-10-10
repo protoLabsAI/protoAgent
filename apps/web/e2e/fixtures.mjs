@@ -884,6 +884,31 @@ function scenarioFor(prompt) {
   // code streams, and the preview MUST come from the decoded buffer alone — the path the console
   // bug fixed in S8c broke by keying the preview on `input`. The kind rides the markup (html), the
   // handover reads the artifact-ref component below, not the args.
+  // ARTIFACTREF STREAM NOREASON (#4121): the SAME streamed inline show_artifact as ARTIFACTREF
+  // STREAM, but with NO reasoning part — the shape Claude on the OAuth lane emits (it sends no
+  // thinking). foldPlan needs BOTH a tool call AND reasoning to fold, so this turn stays UNFOLDED:
+  // it exercises the unfolded live-preview path in ChatMessageView, where the WorkBlock — and the
+  // spotlight preview it used to host — never mount. Everything else matches ARTIFACTREF STREAM.
+  // Checked BEFORE the plain ARTIFACTREF STREAM branch because this prompt also contains that
+  // substring. Pair with "PARK THE TOOL" to hold the turn mid-tool so the preview is observable.
+  if (t.includes("ARTIFACTREF STREAM NOREASON")) {
+    return {
+      events: [
+        { id: "art-i", name: "show_artifact", phase: "start", input: "" },
+        { id: "art-i", name: "show_artifact", phase: "end", output: "Created inline html artifact art-inline — showing in the transcript." },
+      ],
+      toolArgs: {
+        id: "art-i",
+        arg: "code",
+        chunks: ['<style>#live{color:#09f}</style><div id="live">', "live preview ", "streaming…</div>"],
+      },
+      component: {
+        component: "artifact-ref",
+        props: { artifact_id: "art-inline", version: 1, versions_total: 1, title: "Streamed page", kind: "html", inline: true, height: 160 },
+      },
+      answer: "Here's the streamed page.",
+    };
+  }
   if (t.includes("ARTIFACTREF STREAM")) {
     return {
       reasoning: "Writing the page…",
