@@ -190,6 +190,120 @@ describe("StreamingPreview — gating + non-preview kinds (r3)", () => {
   });
 });
 
+describe("StreamingPreview — throttle + milestone flush (r1)", () => {
+  // The morph posts the host makes to the (jsdom-inert) frame, newest last.
+  function morphsOf(spy: ReturnType<typeof vi.spyOn>): unknown[][] {
+    return (spy.mock.calls as unknown[][]).filter((c) => (c[0] as { type?: string })?.type === "proto-preview:morph");
+  }
+  function htmlOf(call: unknown[] | undefined): string {
+    return (call?.[0] as { html?: string } | undefined)?.html ?? "";
+  }
+
+  it("throttles ordinary updates to one post per second; the trailing post carries the newest markup", () => {
+    vi.useFakeTimers();
+    try {
+      render({ buffer: { text: "<style>.a{color:red}</style><p>1</p>", done: false }, kind: "html" });
+      const frame = theFrame()!;
+      const spy = vi.spyOn(frame.contentWindow as Window, "postMessage");
+
+      // Load wires the receiver; the first post is a milestone (first <style> closed + body appears).
+      act(() => void frame.dispatchEvent(new Event("load")));
+      expect(morphsOf(spy)).toHaveLength(1);
+
+      // Two further chunks inside the 1 s window — neither posts immediately (throttled, not a
+      // milestone), and the second does NOT reschedule the first's trailing timer.
+      render({ buffer: { text: "<style>.a{color:red}</style><p>12</p>", done: false }, kind: "html" });
+      render({ buffer: { text: "<style>.a{color:red}</style><p>123</p>", done: false }, kind: "html" });
+      expect(morphsOf(spy)).toHaveLength(1);
+
+      // The window elapses → exactly ONE trailing post fires, with the newest markup.
+      act(() => void vi.advanceTimersByTime(1000));
+      expect(morphsOf(spy)).toHaveLength(2);
+      expect(htmlOf(morphsOf(spy)[1])).toContain("123");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes a milestone immediately inside the throttle window: first <style> closed, then done", () => {
+    vi.useFakeTimers();
+    try {
+      // Gate opens on body bytes alone (no style yet); the first post is the body-appears milestone.
+      const body = "a".repeat(PREVIEW_BODY_BYTE_THRESHOLD);
+      render({ buffer: { text: body, done: false }, kind: "html" });
+      const frame = theFrame()!;
+      const spy = vi.spyOn(frame.contentWindow as Window, "postMessage");
+      act(() => void frame.dispatchEvent(new Event("load")));
+      expect(morphsOf(spy)).toHaveLength(1);
+
+      // A plain chunk inside the window is throttled …
+      render({ buffer: { text: `${body}b`, done: false }, kind: "html" });
+      expect(morphsOf(spy)).toHaveLength(1);
+
+      // … but the chunk that CLOSES the first <style> is a milestone — it flushes at once.
+      render({ buffer: { text: `${body}<style>.x{color:red}</style>`, done: false }, kind: "html" });
+      expect(morphsOf(spy)).toHaveLength(2);
+
+      // Another plain chunk is throttled again …
+      render({ buffer: { text: `${body}<style>.x{color:red}</style><p>x</p>`, done: false }, kind: "html" });
+      expect(morphsOf(spy)).toHaveLength(2);
+
+      // … and `done` always flushes immediately, newest markup and all.
+      render({ buffer: { text: `${body}<style>.x{color:red}</style><p>final</p>`, done: true }, kind: "html" });
+      expect(morphsOf(spy)).toHaveLength(3);
+      expect(htmlOf(morphsOf(spy)[2])).toContain("final");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("StreamingPreview — handover to the final inline frame (r2)", () => {
+  const MEASURED = 321; // inside the [80,1200] clamp, so it survives verbatim
+
+  it("keeps the preview while streaming even when a final frame is on offer", () => {
+    const renderFinal = (height: number) =>
+      h("div", { "data-testid": "final-frame", "data-height": String(height) }, "FINAL");
+    render({ buffer: { text: GATE_OPEN, done: false }, kind: "html", renderFinal });
+    expect(theFrame()).not.toBeNull();
+    expect(byTestId("final-frame")).toBeNull();
+  });
+
+  it("on tool end swaps the preview for the final inline frame, seeded with the last measured height", () => {
+    const renderFinal = (height: number) =>
+      h("div", { "data-testid": "final-frame", "data-height": String(height) }, "FINAL");
+
+    render({ buffer: { text: GATE_OPEN, done: false }, kind: "html", renderFinal });
+    const frame = theFrame()!;
+
+    // The frame reports its content height; the host clamps + remembers it.
+    act(() =>
+      void window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "proto-preview:height", height: MEASURED },
+          source: frame.contentWindow,
+        }),
+      ),
+    );
+
+    // The stream ends → the preview frame is gone, the final inline frame is rendered in its place,
+    // and it is seeded with the last measured preview height so the slot does not jump.
+    render({ buffer: { text: GATE_OPEN, done: true }, kind: "html", renderFinal });
+    expect(theFrame()).toBeNull();
+    const final = byTestId("final-frame")!;
+    expect(final).not.toBeNull();
+    expect(final.getAttribute("data-height")).toBe(String(MEASURED));
+  });
+
+  it("hands over at the preview's fixed starting height when the frame never reported one", () => {
+    const renderFinal = (height: number) =>
+      h("div", { "data-testid": "final-frame", "data-height": String(height) }, "FINAL");
+    // Done from the first render, no height message in between → the fixed 240 starting height.
+    render({ buffer: { text: GATE_OPEN, done: true }, kind: "html", renderFinal });
+    expect(byTestId("final-frame")?.getAttribute("data-height")).toBe("240");
+  });
+});
+
 describe("vendored Idiomorph (r4)", () => {
   it("is the pinned 0BSD build, safe to inline, recorded with version + sha256", () => {
     // The pinned release is an IIFE exposing `Idiomorph`.

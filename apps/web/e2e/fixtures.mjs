@@ -17,6 +17,9 @@ export const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 export const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
 export const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
 export const REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json";
+// A streamed tool-argument slice (ADR 0118 D3): a contiguous chunk of one tool call's declared
+// string arg, already decoded server-side, on a WORKING frame — decoded by toolArgsFromParts.
+export const TOOL_ARGS_MIME = "application/vnd.protolabs.tool-args-v1+json";
 
 // The brief a DELEGATE_BG turn hands to `sonnet` — long on purpose: it is the wall of text the
 // delegation row keeps behind "Show brief" instead of rendering as a chat bubble.
@@ -868,6 +871,39 @@ function scenarioFor(prompt) {
       answer: "Here's the inline calculator.",
     };
   }
+  // ARTIFACTREF STREAM (ADR 0118 D3 / S8c): an inline show_artifact whose `code` arrives LIVE as
+  // tool-args-v1 slices BEFORE the tool ends — so the WorkBlock shows a sandboxed live PREVIEW
+  // while the model writes, then hands over to the real inline frame once the artifact-ref lands.
+  // Reasoning is included so the turn folds into the WorkBlock (where the spotlight preview lives).
+  // Points at `art-inline` (artifact-streaming-preview.spec.ts routes its own html store). Pair
+  // with "PARK THE TOOL" to hold the turn mid-tool so the preview is observable before the end.
+  //
+  // The tool START frame carries input "" — exactly as the real server does: it streams only the
+  // `code` arg (server/turn_stream.py), leaving the call's full args (kind/placement/title) for a
+  // second tool_start at model end. So the console has NOTHING to parse for placement while the
+  // code streams, and the preview MUST come from the decoded buffer alone — the path the console
+  // bug fixed in S8c broke by keying the preview on `input`. The kind rides the markup (html), the
+  // handover reads the artifact-ref component below, not the args.
+  if (t.includes("ARTIFACTREF STREAM")) {
+    return {
+      reasoning: "Writing the page…",
+      events: [
+        { id: "art-i", name: "show_artifact", phase: "start", input: "" },
+        { id: "art-i", name: "show_artifact", phase: "end", output: "Created inline html artifact art-inline — showing in the transcript." },
+      ],
+      // The first slice closes a <style>, so the preview gate opens at once (never flashes unstyled).
+      toolArgs: {
+        id: "art-i",
+        arg: "code",
+        chunks: ['<style>#live{color:#09f}</style><div id="live">', "live preview ", "streaming…</div>"],
+      },
+      component: {
+        component: "artifact-ref",
+        props: { artifact_id: "art-inline", version: 1, versions_total: 1, title: "Streamed page", kind: "html", inline: true, height: 160 },
+      },
+      answer: "Here's the streamed page.",
+    };
+  }
   const artRef = t.match(/ARTIFACTREF (GONE|V(\d+))/);
   if (artRef) {
     const gone = artRef[1] === "GONE";
@@ -1402,6 +1438,20 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
       final: false,
     });
 
+  // A tool-args-v1 slice (ADR 0118 D3): one contiguous chunk of a tool's declared string arg on a
+  // WORKING frame, decoded by toolArgsFromParts into the live preview buffer (chat/toolArgsBuffer).
+  const toolArgsFrame = (data) =>
+    wrap({
+      kind: "status-update",
+      taskId,
+      contextId,
+      status: {
+        state: "working",
+        message: { role: "agent", parts: [{ kind: "data", data, metadata: { mimeType: TOOL_ARGS_MIME } }] },
+      },
+      final: false,
+    });
+
   // Single-tool scenarios synthesize a start/end pair; multi-tool scenarios
   // (e.g. SUBAGENT) provide their own ordered event list.
   const toolEvents =
@@ -1447,6 +1497,16 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
   for (const ev of toolEvents) {
     const text = ev.phase === "start" ? `🔧 ${ev.name}: ${ev.input ?? ""}` : `✅ ${ev.name} → ${ev.output ?? ""}`;
     frames.push(statusFrame(text, ev));
+    // After the matching tool's START frame, stream its declared argument as tool-args-v1 slices
+    // (ADR 0118 D3): contiguous chunks on WORKING frames, offsets in CODE POINTS like the server.
+    if (ev.phase === "start" && scenario.toolArgs && scenario.toolArgs.id === ev.id) {
+      const { id, arg, chunks } = scenario.toolArgs;
+      let offset = 0;
+      chunks.forEach((chunk, i) => {
+        frames.push(toolArgsFrame({ id, arg, offset, chunk, done: i === chunks.length - 1 }));
+        offset += [...chunk].length;
+      });
+    }
   }
   // Room frames (room-v1, #3042): a delegation's outgoing ask / a participant's reply, each
   // its own status frame carrying the room DataPart — decoded by roomReplyFromParts.

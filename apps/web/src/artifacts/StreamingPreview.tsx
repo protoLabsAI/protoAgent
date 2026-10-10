@@ -1,9 +1,26 @@
+// The throttle/flush cadence (1 update/s with an immediate flush on milestones) and the
+// reported-height clamp below are ported from OpenIntelligentUI (OIU), MIT-licensed.
+//   repo:   https://github.com/CopilotKit/OpenIntelligentUI
+//   path:   apps/app/src/components/generative-ui/open-generative-ui/renderer.tsx
+//   commit: f6e4388
+//
+// The MIT License — Copyright (c) Atai Barkai
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this
+// software and associated documentation files (the "Software"), to deal in the Software
+// without restriction, including without limitation the rights to use, copy, modify, merge,
+// publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons
+// to whom the Software is furnished to do so, subject to the following conditions: the above
+// copyright notice and this permission notice shall be included in all copies or substantial
+// portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+// See the OIU LICENSE for the full text.
+
 import { Sparkles } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { ToolArgsBuffer } from "../chat/toolArgsBuffer";
 import { refName } from "./artifactRef";
-import { MIN_FRAME_HEIGHT } from "./inlineFrames";
+import { clampHeight, MIN_FRAME_HEIGHT } from "./inlineFrames";
 import {
   bodyBytesWithoutStyle,
   firstStyleClosed,
@@ -46,10 +63,16 @@ import idiomorphMin from "./vendor/idiomorph.min.js?raw";
 // closes, or until 1.5 KB of body markup has streamed with no style in sight — so the preview does
 // not flash unstyled, nor stall forever on a style-less document.
 //
-// SCOPE of this slice: post the processed markup on EVERY update. Throttling to 1/s with milestone
-// flushes, and the handover that swaps this preview for the real inline frame (D2) keeping the last
-// measured height, are S8c — so the frame here uses a fixed preview height and does not yet read a
-// height message back.
+// Cadence (S8c, OIU renderer.tsx): markup is posted at most ONCE A SECOND so a fast stream does
+// not thrash the frame, with an IMMEDIATE flush on the milestones where a stale frame reads worst —
+// the first `<style>` closing (the first styled paint), the first body markup appearing, and the
+// stream's `done`. The frame reports its content height back (`proto-preview:height`); we clamp it
+// to the inline-frame bounds and size the preview from it.
+//
+// Handover (S8c): when the stream is `done` and the caller has the real artifact-ref in hand, it
+// passes `renderFinal`; this component then renders that final inline frame (S7b) IN PLACE of the
+// preview, seeded with the last measured height so the transcript layout does not jump as the
+// sandboxed preview gives way to the artifact's own embed.
 
 /** The kinds that get a live preview frame; every other kind shows the placeholder only. */
 const PREVIEW_KINDS = new Set(["html", "svg"]);
@@ -60,9 +83,16 @@ const PREVIEW_ROOT_ID = "proto-preview-root";
 /** The postMessage type the host sends and the in-frame receiver listens for. */
 const PREVIEW_MORPH_TYPE = "proto-preview:morph";
 
-/** The preview frame's fixed height for this slice. S8c drives it from a reported height and hands
- *  the measured value over to the final inline frame so the transcript layout does not jump. */
+/** The postMessage type the FRAME sends back after each morph, carrying its content height. */
+const PREVIEW_HEIGHT_TYPE = "proto-preview:height";
+
+/** The preview frame's starting height, used until the frame reports its own content height
+ *  (then clamped to the inline-frame bounds). Also the height handed to the final inline frame if
+ *  the preview never measured — so the handover never collapses the slot to nothing. */
 const PREVIEW_FRAME_HEIGHT = 240;
+
+/** At most one markup post per second (OIU renderer.tsx), save for the milestone flushes below. */
+const PREVIEW_THROTTLE_MS = 1000;
 
 const STATUS_BY_KIND: Record<string, string> = {
   html: "Preparing preview…",
@@ -115,14 +145,23 @@ function randomNonce(): string {
 }
 
 /** The in-frame receiver: on each `proto-preview:morph` post, morph the root's children to match
- *  the processed markup so the preview updates in place instead of being rebuilt. Built from the
- *  module constants so the host and the frame agree on the type and the root id. */
+ *  the processed markup so the preview updates in place instead of being rebuilt, then post the
+ *  document's content height back so the host can size the frame (and hand that height to the
+ *  final inline frame on swap). Built from the module constants so the host and the frame agree on
+ *  the message types and the root id. */
 const MORPH_RECEIVER = [
   "(function(){",
+  "function report(){",
+  "try{",
+  "var h=Math.ceil(document.documentElement.scrollHeight||document.body.scrollHeight||0);",
+  `parent.postMessage({type:${JSON.stringify(PREVIEW_HEIGHT_TYPE)},height:h},"*");`,
+  "}catch(_){}",
+  "}",
   "function render(html){",
   `var root=document.getElementById(${JSON.stringify(PREVIEW_ROOT_ID)});`,
   "if(!root)return;",
   'try{Idiomorph.morph(root,html,{morphStyle:"innerHTML"});}catch(_){root.innerHTML="";}',
+  "report();",
   "}",
   'window.addEventListener("message",function(ev){',
   "var d=ev.data;",
@@ -175,9 +214,14 @@ export type StreamingPreviewProps = {
   kind?: string;
   /** The artifact title once known; a kind-derived name stands in until then. */
   title?: string;
+  /** The handover (S8c): supplied by the caller ONCE it holds the real artifact-ref — so it is
+   *  absent until the artifact has been created. When present AND the stream is `done`, this
+   *  component renders `renderFinal(height)` — the real inline frame (S7b) — IN PLACE of the
+   *  preview, passing the last measured preview height so the slot keeps its size across the swap. */
+  renderFinal?: (height: number) => ReactNode;
 };
 
-export function StreamingPreview({ buffer, kind = "", title = "" }: StreamingPreviewProps) {
+export function StreamingPreview({ buffer, kind = "", title = "", renderFinal }: StreamingPreviewProps) {
   const name = refName({ title, kind });
   const processed = useMemo(() => processPartialHtml(buffer.text), [buffer.text]);
 
@@ -200,6 +244,11 @@ export function StreamingPreview({ buffer, kind = "", title = "" }: StreamingPre
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const [frameLoaded, setFrameLoaded] = useState(false);
 
+  // The frame's last reported content height, clamped to the inline-frame bounds — null until it
+  // first measures. Sizes the preview frame and seeds the handover so the final inline frame
+  // starts at the same height (no layout jump).
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
+
   // If the preview is ever torn down (e.g. the kind changes away from html/svg), drop the loaded
   // flag so any future frame must fire its own load before we post — markup can never land on a
   // remounted-but-unwired frame. The latch above means this does not fire during a live stream.
@@ -207,13 +256,79 @@ export function StreamingPreview({ buffer, kind = "", title = "" }: StreamingPre
     if (!showPreview) setFrameLoaded(false);
   }, [showPreview]);
 
-  // Post the processed markup on every update once the frame is mounted and has loaded. The load
-  // flag gates the first post so it does not land before the frame's receiver is wired. Throttle,
-  // milestone flush and height handover are S8c; here every change posts.
+  // Size the preview from the height the frame reports after each morph (proto-preview:height),
+  // gated on `e.source` being THIS frame's own opaque-origin window — the whole gate, as the
+  // payload is one int we re-clamp host-side to [80,1200] anyway.
+  useEffect(() => {
+    if (!showPreview) return;
+    const onMessage = (e: MessageEvent) => {
+      const win = frameRef.current?.contentWindow;
+      if (!win || e.source !== win) return;
+      const d = (e.data || {}) as { type?: unknown; height?: unknown };
+      if (d.type !== PREVIEW_HEIGHT_TYPE) return;
+      const h = typeof d.height === "number" ? d.height : NaN;
+      setMeasuredHeight(clampHeight(h));
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [showPreview]);
+
+  // Post the processed markup, THROTTLED to one post per second (OIU renderer.tsx) with an
+  // IMMEDIATE flush on the milestones where a stale frame reads worst: the first `<style>` closing,
+  // the first body markup appearing, and the stream's `done`. The load flag gates the first post so
+  // it never lands before the frame's receiver is wired. A trailing post is scheduled once per
+  // window and NOT rescheduled by later chunks (throttle, not debounce), so a chatty stream still
+  // advances every second rather than stalling until it pauses.
+  const lastPostAtRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingHtmlRef = useRef<string | null>(null);
+  const milestoneRef = useRef({ styleClosed: false, body: false });
   useEffect(() => {
     if (!showPreview || !frameLoaded) return;
-    postMarkup(frameRef.current?.contentWindow, processed);
-  }, [showPreview, frameLoaded, processed]);
+    pendingHtmlRef.current = processed;
+    const flush = () => {
+      timerRef.current = null;
+      lastPostAtRef.current = Date.now();
+      const html = pendingHtmlRef.current;
+      pendingHtmlRef.current = null;
+      if (html !== null) postMarkup(frameRef.current?.contentWindow, html);
+    };
+    // Milestones — each fires at most once per stream, save `done` which always flushes.
+    const styleClosedNow = firstStyleClosed(buffer.text);
+    const bodyNow = processed.length > 0;
+    const milestone =
+      buffer.done ||
+      (styleClosedNow && !milestoneRef.current.styleClosed) ||
+      (bodyNow && !milestoneRef.current.body);
+    if (styleClosedNow) milestoneRef.current.styleClosed = true;
+    if (bodyNow) milestoneRef.current.body = true;
+
+    const sinceLast = Date.now() - lastPostAtRef.current;
+    if (milestone || sinceLast >= PREVIEW_THROTTLE_MS) {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      flush();
+      return;
+    }
+    // Within the throttle window: schedule ONE trailing post for the window's end; later chunks
+    // only refresh `pendingHtmlRef` (above) so the trailing post carries the newest markup.
+    if (timerRef.current === null) {
+      timerRef.current = setTimeout(flush, PREVIEW_THROTTLE_MS - sinceLast);
+    }
+  }, [showPreview, frameLoaded, processed, buffer.text, buffer.done]);
+
+  // Never leave a trailing post timer behind on unmount.
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
+
+  // Handover (S8c): once the stream is `done` and the caller has handed us the real artifact-ref
+  // (`renderFinal`), swap the sandboxed preview for the artifact's own inline frame (S7b), seeded
+  // with the last measured height so the slot keeps its size. Placed after every hook so the hook
+  // order is stable across the swap.
+  const lastHeight = measuredHeight ?? PREVIEW_FRAME_HEIGHT;
+  if (buffer.done && renderFinal) {
+    return <>{renderFinal(lastHeight)}</>;
+  }
 
   return (
     <div
@@ -240,7 +355,7 @@ export function StreamingPreview({ buffer, kind = "", title = "" }: StreamingPre
           // read the console's credentials. The markup is injected via postMessage, never the URL.
           sandbox="allow-scripts"
           srcDoc={srcdoc}
-          style={{ height: PREVIEW_FRAME_HEIGHT, width: "100%", border: 0 }}
+          style={{ height: lastHeight, width: "100%", border: 0 }}
           onLoad={() => setFrameLoaded(true)}
         />
       ) : (

@@ -1179,6 +1179,12 @@ export type ChatMessage = {
    *  text/tool-call order is preserved. Absent on history-loaded messages, which fall
    *  back to the grouped reasoning→toolCalls→content layout. */
   parts?: ChatPart[];
+  /** LIVE-ONLY streamed tool-argument previews (ADR 0118 D3), keyed by tool-call id — the
+   *  per-tool-call buffer the console decodes off working frames (`chat/toolArgsBuffer`,
+   *  structurally the `ToolArgsBuffer` view). Stamped while the turn streams so the WorkBlock can
+   *  render a live artifact preview, and DROPPED when the turn settles: never persisted, never
+   *  rebuilt on hydration/reattach (a reload shows the finished tool card, never a stale partial). */
+  toolArgs?: Record<string, { arg: string; text: string; done: boolean }>;
   /** Streamed scratch_pad reasoning ("thinking") — rendered as a collapsible block
    *  above the answer; never part of `content`. */
   reasoning?: string;

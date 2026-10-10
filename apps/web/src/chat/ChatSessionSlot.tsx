@@ -58,6 +58,7 @@ import {
   applyText,
   applyToolEvent,
   createParkTracker,
+  createToolArgsTracker,
   settleStreamEnd,
 } from "./turnReducers";
 import { applyDelegateProgress, settleDelegateProgress } from "./delegateProgress";
@@ -1067,6 +1068,12 @@ export function ChatSessionSlot({
     // server-side), so it settles as before.
     const park = createParkTracker();
 
+    // Live streamed tool-argument previews (ADR 0118 D3, S3): the server decodes one tool's
+    // declared string arg incrementally; `onToolArgs` folds each slice into this tracker and
+    // stamps the whole set onto the live bubble so the WorkBlock can preview it. Live-only — the
+    // `finally` drops it so a reload never shows a stale partial.
+    const toolArgsTracker = createToolArgsTracker();
+
     // Reveal queue (#2993): streamed answer deltas don't render the instant
     // their frame arrives — they drip out at a steady ~word cadence. Diagnosis
     // (measured; see revealQueue.ts and server/chat.py's [stream-delta] log):
@@ -1298,6 +1305,20 @@ export function ChatSessionSlot({
           // …and any registered kind's live hook (#3617 — the artifact-ref chip opens the
           // Artifact panel on the version the agent just wrote). Same rule: live stream only.
           dispatchLiveComponent(spec, session.id);
+        },
+        onToolArgs: (evt) => {
+          // A streamed tool-argument slice (ADR 0118 D3): fold it into the tracker and stamp the
+          // full preview set onto the live bubble. No reveal.flush — this is a SEPARATE surface
+          // (the tool's own live preview), not part of the text↔tool ordering.
+          bumpWatchdog();
+          toolArgsTracker.push(evt);
+          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+          if (!latest) return;
+          const previews = toolArgsTracker.all();
+          chatStore.updateMessages(
+            session.id,
+            latest.messages.map((message) => (message.id === assistantId ? { ...message, toolArgs: previews } : message)),
+          );
         },
         onRoomReply: (reply) => {
           // A delegation rendered inline as a mini-conversation (#3042): the lead's
@@ -1587,6 +1608,18 @@ export function ChatSessionSlot({
     } finally {
       // First, so nothing below can throw past it and leak the claim.
       endLocalTurn();
+      // Drop the live tool-arg previews: they never outlive their turn (ADR 0118 D3), so a reload
+      // shows the finished tool card, not a stale partial. The durable store already omits them.
+      if (toolArgsTracker.size > 0) {
+        toolArgsTracker.clear();
+        const withPreviews = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+        if (withPreviews) {
+          chatStore.updateMessages(
+            session.id,
+            withPreviews.messages.map((m) => (m.id === assistantId && m.toolArgs ? { ...m, toolArgs: undefined } : m)),
+          );
+        }
+      }
       // Whatever path unwound (done / error / abort / watchdog), never strand
       // withheld text in the reveal queue. Already-settled bubbles keep their
       // terminal status (the apply's status guard).
