@@ -1,10 +1,10 @@
-import designTokens from "@protolabsai/design/tokens.json";
 import { Spinner } from "@protolabsai/ui/data";
 import { Button } from "@protolabsai/ui/primitives";
 import { AlertTriangle, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
+import { postInit, scheduleInitReposts, usePluginFrameThemeSync } from "./pluginFrameHandshake";
 import { registerContextMenu } from "../contextMenu/registry";
 import { useContextMenuStore } from "../contextMenu/store";
 import type { MenuEntry } from "../contextMenu/types";
@@ -55,68 +55,11 @@ export function pluginMenuType(pluginId: string): string {
   return `plugin-view:${pluginId}`;
 }
 
-// The `--pl-*` custom-property names the design package publishes, derived from its
-// tokens.json exactly the way the DS build generates tokens.css: kebab-case each key
-// path under a `--pl` prefix. The top-level `light` block is the light-MODE override
-// set (same names, different values), not extra tokens — skip it. Exported so tests
-// can pin the derived list against the shipped token set.
-const kebab = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
-function collectTokenVars(node: Record<string, unknown>, prefix: string, acc: string[]): string[] {
-  for (const [key, value] of Object.entries(node)) {
-    if (prefix === "--pl" && key === "light") continue;
-    const name = `${prefix}-${kebab(key)}`;
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      collectTokenVars(value as Record<string, unknown>, name, acc);
-    } else {
-      acc.push(name);
-    }
-  }
-  return acc;
-}
-export const PL_TOKEN_VARS: readonly string[] = collectTokenVars(
-  designTokens as Record<string, unknown>, "--pl", [],
-);
-
-// The active light/dark mode: the explicit `data-theme` force on <html> when the theme
-// machinery set one (agentTheme.ts / the DS ThemePanel), else the OS preference.
-function themeMode(): string {
-  const forced = document.documentElement.getAttribute("data-theme");
-  if (forced) return forced;
-  try {
-    return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
-  } catch {
-    return "dark";
-  }
-}
-
-// Console theme forwarded to a plugin view so it can match the console look (ADR 0026
-// theming bridge). One flat record, three layers:
-//   • the original curated six keys (bg/bgPanel/fg/fgMuted/brand/border) — unchanged;
-//     older plugin-kits bridge ONLY these onto --pl-* tokens, so they're the
-//     backward-compat contract (#2225);
-//   • the FULL computed --pl-* snapshot, keyed off @protolabsai/design's tokens.json —
-//     the kit passes --pl-*-form keys straight onto the page's :root, so a view inherits
-//     the operator's whole active theme (spacing, radii, status colors, fonts), not just
-//     the six curated slots;
-//   • `mode` — the current data-theme ("light"/"dark"), so a page can pick
-//     mode-appropriate assets/color-scheme (an unknown key to older kits — ignored).
-// Exported so the command palette (ADR 0057) can hand the same theme to an
-// inline-morphed plugin iframe.
-export function consoleTheme(): Record<string, string> {
-  if (typeof window === "undefined") return {};
-  const s = getComputedStyle(document.documentElement);
-  const g = (n: string) => s.getPropertyValue(n).trim();
-  const theme: Record<string, string> = {
-    bg: g("--pl-color-bg"), bgPanel: g("--pl-color-bg-raised"), fg: g("--pl-color-fg"),
-    fgMuted: g("--pl-color-fg-muted"), brand: g("--pl-color-accent"), border: g("--pl-color-border"),
-    mode: themeMode(),
-  };
-  for (const name of PL_TOKEN_VARS) {
-    const v = g(name);
-    if (v) theme[name] = v; // an unresolvable var is omitted — the kit skips empties anyway
-  }
-  return theme;
-}
+// The console theme snapshot + its derived --pl-* var list now live in the shared
+// handshake module (pluginFrameHandshake.ts), where the other iframe hosts reuse them.
+// Re-exported here so existing importers (App, Launcher, the token-set tests) keep their
+// `./PluginView` import paths.
+export { consoleTheme, PL_TOKEN_VARS } from "./pluginFrameHandshake";
 
 // Host for a plugin-contributed console surface (ADR 0026): a same-origin iframe
 // of the page the plugin serves, with optional view-tabs, a loading overlay, a
@@ -191,17 +134,6 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
   // to keep this view mounted (hidden) when another surface is active. Store-reported;
   // App owns the mount policy.
   const setPluginBackground = useUI((s) => s.setPluginBackground);
-
-  // Post the bearer + theme to the iframe. Idempotent on the kit side (applyTheme just
-  // re-sets CSS vars), so it's safe to call repeatedly — which the handshake relies on.
-  const postInit = (win: Window) => {
-    try {
-      const origin = new URL(apiUrl(src), window.location.href).origin;
-      win.postMessage({ type: "protoagent:init", token: authToken() || null, theme: consoleTheme() }, origin);
-    } catch {
-      /* cross-origin / detached — best effort */
-    }
-  };
 
   // Open the console's context menu (ADR 0036) for a right-click the PAGE reported (#3030).
   //
@@ -431,7 +363,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         // theme until a manual switch. Re-send the bearer + theme now that we know it's
         // listening, so it themes immediately. (Older kits don't ping; handleLoad's
         // retry covers those.)
-        if (frameRef.current?.contentWindow) postInit(frameRef.current.contentWindow);
+        if (frameRef.current?.contentWindow) postInit(frameRef.current.contentWindow, src);
         pageReadyRef.current = true;
         flushInbox();
       } else if (m.type === "protoagent:subscribe") {
@@ -543,28 +475,11 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
     };
   }, [src, pluginId, bindingPluginId, view.key, embedded, setPluginBackground]);
 
-  // Live re-theme (ADR 0026/0042). The console fires a `protoagent:theme` window event on
-  // any theme/accent change (watchThemeChanges in agentTheme.ts observes the root's
-  // style/data-theme). Re-post the FRESH theme payload to the mounted iframe so an embedded
-  // plugin view repaints WITHOUT a reload — its plugin-kit listens for `protoagent:theme`
-  // and re-skins the --pl-* tokens. `handleLoad` only covers the first paint; this covers
-  // every subsequent switch. (consoleTheme() reads the now-updated :root vars at fire time.)
-  useEffect(() => {
-    const onThemeChange = () => {
-      const win = frameRef.current?.contentWindow;
-      // Not navigated yet → about:blank, wrong origin, nobody listening (see navigatedRef).
-      // handleLoad posts the FRESH theme on load, so nothing is lost by skipping here.
-      if (!win || !navigatedRef.current) return;
-      try {
-        const origin = new URL(apiUrl(src), window.location.href).origin;
-        win.postMessage({ type: "protoagent:theme", theme: consoleTheme() }, origin);
-      } catch {
-        /* cross-origin / detached — best effort */
-      }
-    };
-    window.addEventListener("protoagent:theme", onThemeChange);
-    return () => window.removeEventListener("protoagent:theme", onThemeChange);
-  }, [src]);
+  // Live re-theme (ADR 0026/0042): re-post the FRESH theme to the mounted iframe on any
+  // theme/accent change so the view repaints WITHOUT a reload. `handleLoad` covers the first
+  // paint; this covers every subsequent switch. Lives in the shared handshake module so the
+  // other iframe hosts re-theme identically.
+  usePluginFrameThemeSync(frameRef, src, navigatedRef);
 
   function handleLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
     // Synchronously, BEFORE postInit: the page can answer with `subscribe` (and its `since`
@@ -575,18 +490,14 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
     if (!win) return;
     // Hand the page the bearer + theme AFTER load — same origin, targeted, not in the URL.
     // The plugin page registers its `message` listener asynchronously (dynamic import of the
-    // plugin-kit), so this first post can land BEFORE the kit is listening and be dropped —
+    // plugin-kit), so the first post can land BEFORE the kit is listening and be dropped —
     // the view then renders with the kit's default theme until a manual theme switch (the
-    // "toggle around for it to load" bug). So re-post on a short schedule; the retry lands
-    // once the kit is ready, and postInit is idempotent so the extra posts are harmless. A
-    // newer kit that pings `protoagent:ready` makes this exact (handled above); the retry is
-    // the fallback for kits that only listen.
+    // "toggle around for it to load" bug). scheduleInitReposts posts once immediately then
+    // re-posts on a short schedule; a retry lands once the kit is ready, and postInit is
+    // idempotent so the extra posts are harmless. A newer kit that pings `protoagent:ready`
+    // makes this exact (handled above); the retry is the fallback for kits that only listen.
     initTimers.current.forEach(clearTimeout);
-    initTimers.current = [];
-    postInit(win);
-    for (const ms of [100, 300, 700, 1500]) {
-      initTimers.current.push(window.setTimeout(() => postInit(win), ms));
-    }
+    initTimers.current = scheduleInitReposts(win, src);
   }
 
   // ADR 0038 — plugin views are sandboxed iframes (the plugin serves its own page). Module
