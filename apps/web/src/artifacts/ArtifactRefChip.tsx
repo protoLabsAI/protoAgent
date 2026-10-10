@@ -252,10 +252,27 @@ function InlineArtifactHost({
   const navigatedRef = useRef(false);
   const initTimers = useRef<number[]>([]);
 
+  // Bring this frame (back) live holding EXACTLY one claim. The eviction that drops our live slot
+  // leaves our claim intact (inlineFrames reference-counts holders, and we are still mounted), so
+  // registering outright would add a SECOND claim — then unmount's release() would see one claim
+  // remaining and keep the key live with no frame, leaking the slot forever (#4111). Drop our
+  // surviving claim first, then re-take exactly one. Used by the resume card's click AND by the
+  // visibility observer below when an evicted frame scrolls back into view (#4123).
+  const resume = useCallback(() => {
+    if (claimedRef.current) host.release(key);
+    host.register(key);
+    claimedRef.current = true;
+  }, [host, key]);
+
   // Claim a live slot once the frame mounts (lazily); free it on unmount. Registering past the
   // cap evicts the least-recently-visible frame — its host re-reads `isLive` and renders the
   // resume card. A visibility observer keeps `touch` current so a frame scrolled away long ago
-  // is the one that goes (not whichever mounted first).
+  // is the one that goes (not whichever mounted first). And when an ALREADY-evicted frame scrolls
+  // back into view — its slot taken by a frame in another chat tab that is now hidden but still
+  // mounted (hidden tabs don't unmount, so they hold their slots) — it re-registers so
+  // least-recently-seen eviction reclaims the slot from those hidden frames instead of leaving a
+  // dead resume card (#4123). The re-register runs through `resume`, so it never double-claims —
+  // the single-claim invariant (#4111) still holds.
   useEffect(() => {
     if (!mounted) return;
     host.register(key);
@@ -265,7 +282,9 @@ function InlineArtifactHost({
     if (el && typeof IntersectionObserver !== "undefined") {
       io = new IntersectionObserver(
         (entries) => {
-          if (entries.some((e) => e.isIntersecting)) host.touch(key);
+          if (!entries.some((e) => e.isIntersecting)) return;
+          if (host.isLive(key)) host.touch(key);
+          else resume();
         },
         { rootMargin: "0px" },
       );
@@ -276,8 +295,8 @@ function InlineArtifactHost({
       host.release(key);
       claimedRef.current = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- slotRef is a stable ref object
-  }, [mounted, host, key]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- slotRef is a stable ref; resume is stable per (host, key)
+  }, [mounted, host, key, resume]);
 
   // Size the frame from the height it reports (protoArtifact:height — S5). Gated on e.source
   // being THIS frame's own window, the strong guarantee; the payload is a single int the shell
@@ -430,16 +449,6 @@ function InlineArtifactHost({
     [],
   );
 
-  // Re-register an evicted frame to bring it back live. The eviction that produced this card
-  // dropped our live slot but NOT our claim (inlineFrames reference-counts holders, and we are
-  // still mounted), so registering outright would add a SECOND claim — then unmount's release()
-  // would see one claim remaining and keep the key live with no frame, leaking the slot forever
-  // (#4111). Drop our claim first, then re-take exactly one.
-  const resume = useCallback(() => {
-    if (claimedRef.current) host.release(key);
-    host.register(key);
-    claimedRef.current = true;
-  }, [host, key]);
   const shownHeight = measured ?? MIN_FRAME_HEIGHT;
 
   return (

@@ -441,6 +441,157 @@ describe("ArtifactRefChip", () => {
     expect(f2!.style.height).toBe("456px");
   });
 
+  // ── inline frames reclaim a slot after switching chats (ADR 0118 S17, #4123) ────────────────
+  // Hidden chat tabs stay mounted and keep their live-frame slots, so a frame in the chat you
+  // switch TO was evicted while its tab was hidden. When it scrolls back into view the visibility
+  // observer must RE-REGISTER it — `touch` alone is a no-op once a frame is evicted — so
+  // least-recently-seen eviction reclaims the slot from the now-hidden tab's frames, with no click.
+
+  // An IntersectionObserver fake that remembers which elements each instance observes, so a test
+  // can fire "visible" at specific slots: a first pass hits the lazy-mount observers (mounting the
+  // frame), a later pass hits the per-host visibility observers (both watch the same slot div).
+  class ReIO {
+    static instances: ReIO[] = [];
+    cb: (entries: Array<{ isIntersecting: boolean }>) => void;
+    observed = new Set<Element>();
+    constructor(cb: (entries: Array<{ isIntersecting: boolean }>) => void) {
+      this.cb = cb;
+      ReIO.instances.push(this);
+    }
+    observe(el: Element) {
+      this.observed.add(el);
+    }
+    unobserve(el: Element) {
+      this.observed.delete(el);
+    }
+    disconnect() {
+      this.observed.clear();
+    }
+    static reset() {
+      ReIO.instances = [];
+    }
+  }
+  const fireVisible = (els: Element[]) => {
+    const want = new Set(els);
+    for (const io of ReIO.instances) {
+      const hit = [...io.observed].filter((el) => want.has(el));
+      if (hit.length) io.cb(hit.map(() => ({ isIntersecting: true })));
+    }
+  };
+  const inlineSlots = () => [...container.querySelectorAll<HTMLElement>('[data-testid="artifact-ref-inline"]')];
+  const metaAll = () =>
+    vi.spyOn(api, "artifactRefs").mockImplementation(async (ids: string[]) => {
+      const artifacts: Record<string, { title: string; kind: string; version_count: number; oldest: number }> = {};
+      for (const id of ids) artifacts[id] = { title: "Chart", kind: "html", version_count: 1, oldest: 1 };
+      return { artifacts };
+    });
+  const renderGroup = (ids: string[], host: ReturnType<typeof createInlineFrameHost>) => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() =>
+      root.render(
+        h(
+          QueryClientProvider,
+          { client: qc },
+          h(
+            InlineFrameHostContext.Provider,
+            { value: host },
+            ids.map((id) =>
+              h(ArtifactRefChip, {
+                key: id,
+                props: { artifact_id: id, version: 1, title: "Chart", kind: "html", inline: true, height: 240 },
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  };
+
+  it("switching chats reclaims slots: chat A fills 6, chat B's in-view frames go live with no click (#4123)", async () => {
+    metaAll();
+    ReIO.reset();
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = ReIO;
+    const host = createInlineFrameHost(6); // the real cap
+    const aIds = ["a-1", "a-2", "a-3", "a-4", "a-5", "a-6"]; // chat A fills all six slots
+    const bIds = ["b-1", "b-2"]; // chat B's in-view frames — evicted while B's tab was hidden
+    try {
+      // Both tabs are mounted at once (a hidden tab stays mounted); render B's chips first.
+      renderGroup([...bIds, ...aIds], host);
+      await flush();
+      // Nothing mounts until it scrolls near the viewport.
+      expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(0);
+      const all = inlineSlots();
+      expect(all.length).toBe(8);
+      const bSlots = all.slice(0, 2);
+      const aSlots = all.slice(2);
+      // Chat B was visited first: its in-view frames mount and claim slots.
+      await act(async () => fireVisible(bSlots));
+      await flush();
+      expect(host.isLive("v1 b-1")).toBe(true);
+      expect(host.isLive("v1 b-2")).toBe(true);
+      expect(bSlots[0].querySelector("iframe")?.getAttribute("src")).toContain("embed=b-1");
+      // Then chat A's six frames scroll in and fill the cap, evicting B's frames (now a hidden tab).
+      await act(async () => fireVisible(aSlots));
+      await flush();
+      expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(6);
+      expect(host.isLive("v1 b-1")).toBe(false);
+      expect(host.isLive("v1 b-2")).toBe(false);
+      for (const d of bSlots) expect(d.querySelector('[data-testid="artifact-inline-resume"]')).not.toBeNull();
+      // Switch back to chat B: its frames scroll into view again. The visibility observer
+      // re-registers them (a plain touch is a no-op once evicted), reclaiming slots from A's
+      // now-hidden frames — without any click on the resume card.
+      await act(async () => fireVisible(bSlots));
+      await flush();
+      for (const d of bSlots) {
+        expect(d.querySelector('[data-testid="artifact-inline-frame"]')).not.toBeNull();
+        expect(d.querySelector('[data-testid="artifact-inline-resume"]')).toBeNull();
+      }
+      expect(host.isLive("v1 b-1")).toBe(true);
+      expect(host.isLive("v1 b-2")).toBe(true);
+      // The cap still holds: exactly six live frames, two of A's evicted to make room.
+      expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(6);
+      expect(host.isLive("v1 a-1")).toBe(false);
+      expect(host.isLive("v1 a-2")).toBe(false);
+    } finally {
+      ReIO.reset();
+      (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
+    }
+  });
+
+  it("a frame reclaimed by scrolling back into view holds exactly one claim — unmount frees it, no leak (#4123, #4111)", async () => {
+    metaAll();
+    ReIO.reset();
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = ReIO;
+    const host = createInlineFrameHost(2); // tiny cap so one eviction happens
+    try {
+      renderGroup(["a-1", "a-2", "a-3"], host);
+      await flush();
+      const all = inlineSlots();
+      expect(all.length).toBe(3);
+      // Scroll a-1 in first, then a-2 and a-3 — a-1 is least-recently-seen, so it is the eviction.
+      await act(async () => fireVisible([all[0]]));
+      await flush();
+      await act(async () => fireVisible([all[1], all[2]]));
+      await flush();
+      expect(host.isLive("v1 a-1")).toBe(false);
+      // a-1 scrolls back into view → the observer re-registers it (no click), evicting a sibling.
+      await act(async () => fireVisible([all[0]]));
+      await flush();
+      expect(host.isLive("v1 a-1")).toBe(true);
+      // The cap never grows past 2: exactly two frames live after the reclaim.
+      expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
+      // Exactly one claim: unmounting everything must free the slot, not strand it live (#4111).
+      renderGroup([], host);
+      await flush();
+      expect(host.isLive("v1 a-1")).toBe(false);
+      expect(host.isLive("v1 a-2")).toBe(false);
+      expect(host.isLive("v1 a-3")).toBe(false);
+    } finally {
+      ReIO.reset();
+      (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
+    }
+  });
+
   it("an inline ref whose artifact is gone falls back to the inert chip — no frame", async () => {
     meta(null);
     await mount({ ...REF, inline: true });
