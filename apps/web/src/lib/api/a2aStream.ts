@@ -160,6 +160,11 @@ const DELEGATE_PROGRESS_MIME = "application/vnd.protolabs.delegate-progress-v1+j
 // A goal drive's transient status line (#4012) — "🎯 checking the goal…". Its own typed
 // frame (not a plain-text status, which a delegator's card committed as content).
 const GOAL_STATUS_MIME = "application/vnd.protolabs.goal-status-v1+json";
+// A streamed preview of one tool's declared string argument (ADR 0118 D3) — rides WORKING
+// frames as `{id, arg, offset, chunk, done}`, decoded incrementally server-side. LIVE-ONLY:
+// the durable store drops these from history (a2a_impl/stores.py), so snapshot replay never
+// sees one — we decode it only off a live status frame, never in replayTaskSnapshot.
+const TOOL_ARGS_MIME = "application/vnd.protolabs.tool-args-v1+json";
 
 // The two protolabs-a2a SDK extensions we consume ride the message/artifact METADATA
 // map keyed by their extension URI (protolabs-a2a 0.3.0) — they are no longer MIME-typed
@@ -247,6 +252,37 @@ export function componentFromParts(parts?: RawPart[]): ComponentSpec | null {
     | undefined;
   if (!d || typeof d.component !== "string") return null;
   return { component: d.component, props: (d.props as Record<string, unknown>) || {} };
+}
+
+/** One decoded tool-args-v1 DataPart (ADR 0118 D3): a contiguous slice of one tool call's
+ *  declared string argument, already decoded server-side (the console never parses partial
+ *  JSON). `offset` is the character position into the value where `chunk` begins; `done` marks
+ *  the final frame for this arg. The buffer that reassembles these lives in `chat/toolArgsBuffer`. */
+export type ToolArgsEvent = {
+  id: string;
+  arg: string;
+  offset: number;
+  chunk: string;
+  done: boolean;
+};
+
+/** Decode a tool-args-v1 DataPart off a WORKING frame's parts, or null. */
+export function toolArgsFromParts(parts?: RawPart[]): ToolArgsEvent | null {
+  const d = dataByMime(parts, TOOL_ARGS_MIME) as
+    | { id?: unknown; arg?: unknown; offset?: unknown; chunk?: unknown; done?: unknown }
+    | null;
+  // The tool-call id binds the preview to its card; a frame without one is unusable.
+  if (!d || typeof d.id !== "string" || !d.id) return null;
+  // proto-JSON round-trips numbers as floats — floor the offset back to an int. A terminal
+  // frame can carry just `done: true` with no chunk, so an absent/empty chunk is valid.
+  const offset = typeof d.offset === "number" ? Math.floor(d.offset) : 0;
+  return {
+    id: d.id,
+    arg: typeof d.arg === "string" ? d.arg : "",
+    offset: offset >= 0 ? offset : 0,
+    chunk: typeof d.chunk === "string" ? d.chunk : "",
+    done: d.done === true,
+  };
 }
 
 /** The author of an `@<name>`-addressed answer, off a working frame's parts (#3042).
@@ -469,6 +505,11 @@ export type TurnStreamHandlers = {
   onReasoning?: (delta: string) => void;
   onToolCall?: (evt: ToolEvent) => void;
   onComponent?: (spec: ComponentSpec) => void;
+  /** A streamed slice of a tool's declared string argument (ADR 0118 D3). LIVE-ONLY — fired
+   *  only off live WORKING status frames, never from a snapshot/history replay, so a reattach
+   *  or reload never resurrects a stale partial. The buffer the consumer reassembles these into
+   *  is cleared when the turn ends (`chat/toolArgsBuffer`). */
+  onToolArgs?: (evt: ToolArgsEvent) => void;
   /** One exchange of an `@<name>`-addressed turn. A chain (#3050) sends several — each
    *  is a participant speaking, so each becomes its own authored message. */
   onRoomReply?: (reply: RoomReply) => void;
@@ -667,6 +708,11 @@ export function makeA2ADispatcher(
       if (toolEvent) handlers.onToolCall?.(toolEvent);
       const component = componentFromParts(parts);
       if (component) handlers.onComponent?.(component);
+      // tool-args-v1 (ADR 0118 D3) is decoded ONLY here — on a live working frame — and never
+      // in replayTaskSnapshot, so it stays live-only: the durable store drops it from history,
+      // and a reattach/hydration replays the finished artifact, never a stale partial.
+      const toolArgs = toolArgsFromParts(parts);
+      if (toolArgs) handlers.onToolArgs?.(toolArgs);
       const roomReply = roomReplyFromParts(parts);
       if (roomReply) handlers.onRoomReply?.(roomReply);
       const consumedSteers = consumedSteersFromParts(parts);
