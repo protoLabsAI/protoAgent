@@ -160,7 +160,13 @@ mutually exclusive. The API can still accept both flags.
 
 The integrated docs build resolves 12,586 local links and 3,041 section links
 across 231 pages; all 71 checked prior section URLs remain. Generated navigation
-and API checks and the commit secret scan passed.
+and API checks and the commit secret scan passed. The current console build and
+109 targeted Chromium checks also passed, including the changed deletion defaults.
+
+The full Python suite recorded 12,293 passes and 15 skips. One unchanged Git-stamp
+test exceeded its 500 ms timing threshold under parallel load (661 ms); its entire
+30-test module passed on rerun. Lint, import contracts, attribution, and lockfile
+checks passed. The 42 focused documentation/browser-link tests passed separately.
 
 ## Ongoing checks
 
