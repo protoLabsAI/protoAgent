@@ -50,6 +50,24 @@ def test_skill_md_mentions_inline_placement_and_send():
     assert "protoArtifact.send" in text
 
 
+def test_skill_md_teaches_the_degrade_paths():
+    """r2: naming the mechanisms isn't enough — the skill must teach them SAFELY.
+
+    Inline placement (ADR 0118 S4) and the ``send`` bridge (S10) land in sibling
+    slices, so a console at this point in the epic may not offer either yet. The
+    skill must therefore teach the panel as inline's universal fallback and
+    require ``send`` to be feature-detected, so an answer written to the guidance
+    renders (and never throws ``send is not a function``) regardless of which
+    slices have merged. This asserts the guidance, not just the keyword."""
+    squished = _squished(_skill_text())
+    # Inline degrades to the panel — the answer is never lost.
+    assert "universal fallback" in squished
+    assert "the answer is never lost" in squished
+    # `send` must be feature-detected before it's called.
+    assert "feature-detect" in squished
+    assert 'typeof window.protoartifact?.send === "function"' in squished
+
+
 def test_skill_md_describes_the_four_tier_ladder():
     """r2: the ladder is present with all four tiers and the two rules of thumb."""
     text = _skill_text()

@@ -15,16 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **Tables accept an optional source caption (#4077).** The inline `table` component now
-  takes an optional `source` prop — a short string (≤200 chars) naming where the rows came
-  from. `show_component` asks the agent to set it whenever the rows aren't the user's own
-  input (a web search, a fetched page, a file, a tool result) so the provenance travels
-  with the data. A non-string or over-long `source` is dropped from the props and the table
-  still renders; tables without a `source` are unchanged.
-
-- **Presentation ladder in the rendering-artifacts skill (#4085).** The skill now teaches the four-tier ladder (text → `show_component` → inline artifact via `show_artifact(…, placement="inline")` → panel artifact) with "prefer the lowest tier that answers" and "inline for an answer, panel for a work product", the html authoring order (`<style>` first, readable markup, scripts last), and a quality bar for interactive answers (working controls, labelled/keyboard-operable inputs with visible focus, validated numeric input, shown units and assumptions, reduced motion, labelled value provenance, and `protoArtifact.send` only from a labelled button). Adds `evals.md`, a hand-labelled prompt-to-tier set.
-
 ## [0.199.0] - 2026-10-09
 
 ### Added

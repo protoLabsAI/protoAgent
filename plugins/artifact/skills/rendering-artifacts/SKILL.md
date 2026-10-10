@@ -26,9 +26,16 @@ a work product.**
 An inline artifact **is** an artifact: same store, versions, render verdict,
 `update_artifact`/`rewrite_artifact`, and an **Open in panel** button — only *where* it renders
 differs. Inline lives in the transcript next to your message; panel opens the side panel.
-`placement="inline"` is allowed for `html`, `svg`, `mermaid`, `react` and `vega-lite`; other
-kinds fall back to the panel. Default to **inline** for a self-contained answer and reserve the
+`placement="inline"` is allowed for `html`, `svg`, `mermaid`, `react` and `vega-lite`; any other
+kind renders in the panel. Default to **inline** for a self-contained answer and reserve the
 **panel** for something the user will keep working on.
+
+Inline placement is part of protoAgent's **interactive-answers** capability, and the **panel is
+its universal fallback**: where a console or a `show_artifact` build doesn't offer inline
+placement, the same call still renders the artifact in the panel — the answer is never lost. So
+choose the **tier** by what the answer *is* (a calculator, a chart, a small tool), pass
+`placement="inline"` to ask for it beside your prose, and describe the answer by **what it does**,
+not by where it landed — then you're right whether it renders inline or in the panel.
 
 ## When to use `show_artifact` (NOT the filesystem)
 
@@ -210,18 +217,29 @@ const line = await window.protoArtifact.ask("Greet the player as a grumpy dwarf,
 It only works if the operator set `ARTIFACT_ASK_ENABLED` — if it's off, `ask()` rejects with a
 message telling them how to enable it, so write artifacts that degrade gracefully.
 
-`html` and `react` artifacts also get **`window.protoArtifact.send(text)`** — it puts `text`
-into the chat **as a user message** and starts a normal, visible turn. Unlike `ask`, it's **on
-by default**: it costs exactly what typing costs and the operator sees exactly what was sent.
-Use it to let the user act on a result — but wire it **only to a labelled button** (never to
-load, a timer, or an input change; it needs a real user gesture) and put the **selected values
-into the text**, because the agent sees only that text — the artifact's control state is never
-synced to the agent.
+`html` and `react` artifacts can also use **`window.protoArtifact.send(text)`** — it puts `text`
+into the chat **as a user message** and starts a normal, visible turn. Unlike `ask`, `send` is
+**on by default** where the console provides it: it costs exactly what typing costs and the
+operator sees exactly what was sent. Use it to let the user act on a result, subject to three
+rules:
+
+- **Feature-detect it first.** `send` is part of the interactive-answers bridge and isn't on
+  every console, so call it **only when it's actually there** —
+  `typeof window.protoArtifact?.send === "function"` — and keep a plain fallback (show the
+  result as text the user can read or copy) for when it isn't. An artifact that calls `send`
+  unconditionally throws where the bridge is absent.
+- **Only from a labelled button** — never on load, a timer, or an input change; it needs a real
+  user gesture.
+- **Put the selected values into the text,** because the agent sees only that text — the
+  artifact's control state is never synced to the agent.
 
 ```js
 // a "Ask about this scenario" button, after the user picks values
-btn.addEventListener("click", () =>
-  window.protoArtifact.send(`Split a $${bill} bill ${people} ways with a ${tip}% tip.`));
+btn.addEventListener("click", () => {
+  const msg = `Split a $${bill} bill ${people} ways with a ${tip}% tip.`;
+  if (typeof window.protoArtifact?.send === "function") window.protoArtifact.send(msg);
+  else showResult(msg); // degrade: keep the answer visible when the bridge is off
+});
 ```
 
 ## Authoring order for `html` (so it previews while you write it)
@@ -258,7 +276,9 @@ is non-negotiable for a calculator, explainer, chart or tool:
 - **Labelled provenance.** Mark each value as **sample**, **user-provided**, **retrieved**, or
   **calculated**, so the user can tell example data from their own input from a computed result.
 - **`send` carries the values.** Call `protoArtifact.send(...)` only from a **labelled button**,
-  with the **selected values** written into the text — the agent sees the text, never the controls.
+  **after feature-detecting it** (`typeof window.protoArtifact?.send === "function"`, with a plain
+  fallback), with the **selected values** written into the text — the agent sees the text, never
+  the controls.
 
 ## When to still write files
 
