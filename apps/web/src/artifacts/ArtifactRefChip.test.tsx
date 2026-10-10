@@ -307,6 +307,140 @@ describe("ArtifactRefChip", () => {
     expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(0);
   });
 
+  // ── slot leak on resume + resume-card flash + remount height (ADR 0118 D2 / S7c, #4111) ──────
+
+  it("resuming then unmounting frees the slot — the resumed frame leaks no claim (repro #4111)", async () => {
+    vi.spyOn(api, "artifactRefs").mockImplementation(async (ids: string[]) => {
+      const artifacts: Record<string, { title: string; kind: string; version_count: number; oldest: number }> = {};
+      for (const id of ids) artifacts[id] = { title: "Chart", kind: "html", version_count: 1, oldest: 1 };
+      return { artifacts };
+    });
+    const host = createInlineFrameHost(2); // cap 2 so three chips force one eviction
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const renderIds = (ids: string[]) =>
+      act(() =>
+        root.render(
+          h(
+            QueryClientProvider,
+            { client: qc },
+            h(
+              InlineFrameHostContext.Provider,
+              { value: host },
+              ids.map((id) =>
+                h(ArtifactRefChip, {
+                  key: id,
+                  props: { artifact_id: id, version: 1, title: "Chart", kind: "html", inline: true, height: 240 },
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+    renderIds(["a-1", "a-2", "a-3"]);
+    await flush();
+    // Cap 2: the first-mounted frame (a-1) is the least-recently-visible, so it is evicted to a
+    // resume card and is no longer live.
+    const resume = container.querySelector<HTMLButtonElement>('[data-testid="artifact-inline-resume"]');
+    expect(resume).not.toBeNull();
+    expect(host.isLive("v1 a-1")).toBe(false);
+    // Click to resume: a-1 re-registers (evicting a sibling to hold the cap) and goes live again.
+    await act(async () => {
+      resume!.click();
+    });
+    await flush();
+    expect(host.isLive("v1 a-1")).toBe(true);
+    // Unmount everything. Resume must NOT have added a second claim — else release() sees one
+    // claim remaining and keeps the key live with no frame, leaking the slot forever.
+    renderIds([]);
+    await flush();
+    expect(host.isLive("v1 a-1")).toBe(false);
+    // And a fresh mount + unmount of a-1 must also leave nothing behind.
+    renderIds(["a-1"]);
+    await flush();
+    expect(host.isLive("v1 a-1")).toBe(true);
+    renderIds([]);
+    await flush();
+    expect(host.isLive("v1 a-1")).toBe(false);
+  });
+
+  it("a mounting inline frame never commits the 'Click to resume' card before it registers (#4111)", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    const callbacks: Array<(entries: Array<{ isIntersecting: boolean }>) => void> = [];
+    class FakeIO {
+      constructor(cb: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        callbacks.push(cb);
+      }
+      observe() {}
+      disconnect() {}
+    }
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = FakeIO;
+    const seenResume: Node[] = [];
+    const hasResume = (n: Node) =>
+      n.nodeType === 1 &&
+      ((n as HTMLElement).dataset?.testid === "artifact-inline-resume" ||
+        !!(n as HTMLElement).querySelector?.('[data-testid="artifact-inline-resume"]'));
+    const mo = new MutationObserver((records) => {
+      for (const r of records) for (const n of r.addedNodes) if (hasResume(n)) seenResume.push(n);
+    });
+    const host = createInlineFrameHost(6);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    try {
+      act(() =>
+        root.render(
+          h(
+            QueryClientProvider,
+            { client: qc },
+            h(InlineFrameHostContext.Provider, { value: host }, h(ArtifactRefChip, { props: { ...REF, inline: true } })),
+          ),
+        ),
+      );
+      await flush();
+      // Not scrolled in yet: the lazy placeholder, no frame and no resume card.
+      expect(frame()).toBeNull();
+      mo.observe(container, { childList: true, subtree: true });
+      // Scroll it into view → the frame mounts and registers. The first render after `mounted`
+      // flips runs before the register effect, so the resume card used to be committed to the DOM
+      // for a frame before `live` settled true. It must never appear during this transition.
+      await act(async () => {
+        callbacks.forEach((cb) => cb([{ isIntersecting: true }]));
+      });
+      await flush();
+      for (const r of mo.takeRecords()) for (const n of r.addedNodes) if (hasResume(n)) seenResume.push(n);
+      expect(seenResume).toEqual([]);
+      expect(frame()).not.toBeNull();
+    } finally {
+      mo.disconnect();
+      (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
+    }
+  });
+
+  it("a remounted inline frame restores its last measured height from the registry (#4111)", async () => {
+    metaMany(2);
+    const host = createInlineFrameHost(6); // room for all, so nothing is evicted
+    renderInline([2], host);
+    await flush();
+    const f1 = frame();
+    expect(f1).not.toBeNull();
+    // The frame reports a content height; the registry remembers it past unmount.
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent("message", { data: { type: "protoArtifact:height", height: 456 }, source: f1!.contentWindow }),
+      );
+    });
+    expect(f1!.style.height).toBe("456px");
+    // Unmount the frame…
+    renderInline([], host);
+    await flush();
+    expect(frame()).toBeNull();
+    // …then remount the same (id, version). It restores 456 immediately — not the 240 hint, not
+    // the 80 floor — before the frame has a chance to remeasure.
+    renderInline([2], host);
+    await flush();
+    const f2 = frame();
+    expect(f2).not.toBeNull();
+    expect(f2!.style.height).toBe("456px");
+  });
+
   it("an inline ref whose artifact is gone falls back to the inert chip — no frame", async () => {
     meta(null);
     await mount({ ...REF, inline: true });
