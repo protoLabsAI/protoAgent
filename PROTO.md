@@ -253,7 +253,7 @@ has to read the whole epic as one diff at the end.
   its head. A `neutral` `QA panel` ("Incomplete pass", `hold:incomplete-coverage`)
   means a finder lane did not run and that part of the diff is unreviewed. Re-run the
   panel (`@vera review` on the PR) before merging. The board enforces this for projects
-  with `require_complete_review: true`.
+  with `require_complete_review: true` (projectBoard-plugin#520).
 - **Do not put `merge-hold` on slices bound for the epic.** The operator's hands-on test
   happens once, on the epic, before it goes to `main`. A per-slice hold only freezes
   the dependency chain behind it.
@@ -264,7 +264,8 @@ has to read the whole epic as one diff at the end.
   attributes every commit in `main..epic/<name>` to a slice PR with a complete PASS, or
   to a clean sync merge. It reviews only what is left over (direct pushes, conflict
   fixes, slices with incomplete reviews) and posts an attestation table as its
-  verdict. Merge the epic with a **merge commit**, not a squash, so each slice stays
+  verdict (pr-reviewer-plugin#271, `pr_reviewer.epic_attestation`, on by default). Merge
+  the epic with a **merge commit**, not a squash, so each slice stays
   visible in `git log` and `blame`.
 - **Only the epic → `main` PR says `Fixes #<epic issue>`.** A slice says
   `Refs #<epic issue>` plus `Fixes` for its own slice issue; otherwise the first slice
