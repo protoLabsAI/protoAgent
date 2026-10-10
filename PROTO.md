@@ -242,6 +242,40 @@ loses its tracker while the closed issue reads as "delivered". Earlier slices sa
 reads — see #3170 (its gate landed in #3304, the tool in #3306, and the binding
 had no issue at all until #3313).
 
+### Epic branches: review slice by slice, land the epic by attestation
+
+A feature too big for one PR ships on a long-lived `epic/<name>` branch (ADR 0114 and
+ADR 0118 ran this way). **The slice PRs are the review of record**, so the reviewer never
+has to read the whole epic as one diff at the end.
+
+- **Each slice PR targets `epic/<name>`, never `main`, and gets the full panel.** CI
+  runs on `epic/**` bases. A slice merges into the epic only on a **complete** PASS at
+  its head. A `neutral` `QA panel` ("Incomplete pass", `hold:incomplete-coverage`)
+  means a finder lane did not run and that part of the diff is unreviewed. Re-run the
+  panel (`@vera review` on the PR) before merging. The board enforces this for projects
+  with `require_complete_review: true` (projectBoard-plugin#520).
+  If the re-review is **also** incomplete, the panel cannot finish this diff. Seen on
+  #4101: a finder lane ran its whole output budget as reasoning and returned no answer.
+  Run an adversarial review subagent over the slice instead, post its result on the PR,
+  and merge by hand. A hand merge skips the gate, so never merge without that substitute
+  review.
+- **Do not put `merge-hold` on slices bound for the epic.** The operator's hands-on test
+  happens once, on the epic, before it goes to `main`. A per-slice hold only freezes
+  the dependency chain behind it.
+- **Sync `main` into the epic regularly.** A clean merge introduces nothing new to
+  review. If the sync conflicts, resolve it in its own small PR into the epic, so the
+  resolution is reviewed like any other slice.
+- **The epic → `main` PR is reviewed by attestation, not re-review.** The reviewer
+  attributes every commit in `main..epic/<name>` to a slice PR with a complete PASS, or
+  to a clean sync merge. It reviews only what is left over (direct pushes, conflict
+  fixes, slices with incomplete reviews) and posts an attestation table as its
+  verdict (pr-reviewer-plugin#271, `pr_reviewer.epic_attestation`, on by default). Merge
+  the epic with a **merge commit**, not a squash, so each slice stays
+  visible in `git log` and `blame`.
+- **Only the epic → `main` PR says `Fixes #<epic issue>`.** A slice says
+  `Refs #<epic issue>` plus `Fixes` for its own slice issue; otherwise the first slice
+  merge closes the epic.
+
 ## Filing issues
 
 Issues are gated too — but only **flagged**, never blocked. The silent
