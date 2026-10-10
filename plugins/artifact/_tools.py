@@ -22,18 +22,30 @@ _KINDS = {"html", "svg", "mermaid", "react", "markdown", "vega-lite"}
 _INLINE_KINDS = frozenset({"html", "svg", "mermaid", "react", "vega-lite"})
 
 
-def _resolve_placement(placement: str, kind: str) -> tuple[bool, str]:
+def _resolve_placement(placement: str | None, kind: str) -> tuple[bool, str]:
     """Whether this call emits an INLINE artifact-ref, plus a note for the tool result when an
-    inline request falls back to the panel (ADR 0118 D2). Inline is only for the frame-renderable
-    kinds; any placement other than "inline" is the default panel, silently."""
-    if (placement or "").strip().lower() != "inline":
+    explicit inline request falls back to the panel (ADR 0118 D2; inline-by-default as of the
+    2026-10-10 operator decision).
+
+    Placement DEFAULTS to inline: with no explicit placement (``None``), the frame-renderable
+    kinds (``_INLINE_KINDS``) render inline and every other kind (markdown, decks, PDFs, files)
+    falls back to the panel SILENTLY — no note. The "not available inline" note is reserved for a
+    caller who EXPLICITLY passed ``placement="inline"`` on an unsupported kind. An explicit
+    ``placement="panel"`` always opens the panel."""
+    norm = (placement or "").strip().lower()
+    if norm not in ("", "inline"):
+        # Any explicit placement other than "inline" — notably "panel" — opens the panel, silently.
         return False, ""
     if kind in _INLINE_KINDS:
         return True, ""
-    return False, (
-        f"\n\nNote: {kind} can't render inline — showing it in the Artifact panel instead. "
-        f"Inline placement is available for: {', '.join(sorted(_INLINE_KINDS))}."
-    )
+    # A non-frame kind can't render inline → panel. The fallback note is only for an EXPLICIT
+    # inline request; under the default (``placement is None``) the panel is silent.
+    if placement is not None:
+        return False, (
+            f"\n\nNote: {kind} can't render inline — showing it in the Artifact panel instead. "
+            f"Inline placement is available for: {', '.join(sorted(_INLINE_KINDS))}."
+        )
+    return False, ""
 
 
 # Bounds on the write-time spec walk. A real chart spec is a few levels deep; the rows in
@@ -362,7 +374,7 @@ def _then_render(result: _LockedResult) -> str:
 @tool
 @_busy_reply
 def show_artifact(
-    kind: str, code: str, title: str = "", links: dict | str | None = None, placement: str = "panel"
+    kind: str, code: str, title: str = "", links: dict | str | None = None, placement: str | None = None
 ) -> str:
     """CREATE a new generative-UI artifact in the console's Artifact panel.
 
@@ -392,12 +404,14 @@ def show_artifact(
     a data SHAPE → a component. Prefer either over writing files when the user just wants to
     SEE something rendered. Returns the artifact id.
 
-    ``placement`` is ``"panel"`` (default) or ``"inline"``. Inline renders the SAME artifact
-    directly in the conversation — the same sandbox, versions and "Open in panel" — for an
-    answer the user interacts with in place (a calculator, an explainer, a chart, a small tool).
-    Inline is available for html, svg, mermaid, react and vega-lite; any other kind falls back
-    to the panel, and the reply says so. Prefer inline for an answer, the panel for a work
-    product you iterate on over many turns.
+    ``placement`` DEFAULTS to ``"inline"``; pass ``"panel"`` to override it. Inline renders the
+    SAME artifact directly in the conversation — the same sandbox, versions and "Open in panel" —
+    for an answer the user interacts with in place (a calculator, an explainer, a chart, a small
+    tool). Inline placement covers html, svg, mermaid, react and vega-lite; any other kind
+    (markdown, decks, PDFs, files) renders in the panel instead — SILENTLY under the default, with
+    a note only when you EXPLICITLY pass ``placement="inline"`` on such a kind. Pass
+    ``placement="panel"`` for a work product you iterate on over many turns (a document, a deck, a
+    large app) — that still opens the panel.
 
     CODE-LINKED DIAGRAMS (mermaid only): ``links`` maps diagram elements to code, so the
     operator can click a node or a message and land on that code in the console's code pane.
@@ -417,7 +431,7 @@ def show_artifact(
     return _then_render(_show(kind, code, title, checked, placement))
 
 
-def show_service(kind: str, code: str, title: str = "", placement: str = "panel") -> dict:
+def show_service(kind: str, code: str, title: str = "", placement: str | None = None) -> dict:
     """The ``artifact.show`` plugin service (ADR 0116): create an artifact for ANOTHER plugin.
 
     How a plugin puts something in the Artifact panel without importing this one — e.g. the data
@@ -427,9 +441,10 @@ def show_service(kind: str, code: str, title: str = "", placement: str = "panel"
         r = show(kind="vega-lite", code=spec_json, title="Best weekdays")
 
     It is exactly ``show_artifact`` minus the code ``links``: the same kinds, size cap, per-kind
-    checks, version chain and render-verdict wait. ``placement`` is ``"panel"`` (default) or
-    ``"inline"`` — inline renders the artifact in the conversation (html/svg/mermaid/react/
-    vega-lite; any other kind falls back to the panel, noted in ``message``). Returns a dict —
+    checks, version chain and render-verdict wait. ``placement`` DEFAULTS to ``"inline"`` (pass
+    ``"panel"`` to override) — inline renders the artifact in the conversation (html/svg/mermaid/
+    react/vega-lite); any other kind renders in the panel, SILENTLY under the default and noted in
+    ``message`` only when ``placement="inline"`` is explicit. Returns a dict —
     never raises for a refusal:
 
     - ``ok`` — False when nothing was created (``message`` says why);
@@ -461,7 +476,7 @@ def show_service(kind: str, code: str, title: str = "", placement: str = "panel"
 
 @_store.serialized
 def _show(
-    kind: str, code: str, title: str, checked: _links.Checked | None = None, placement: str = "panel"
+    kind: str, code: str, title: str, checked: _links.Checked | None = None, placement: str | None = None
 ) -> _LockedResult:
     k = (kind or "").strip().lower()
     if k not in _KINDS:

@@ -20,13 +20,16 @@ a work product.**
 |---|---|---|---|
 | **Text** | markdown (prose, code, mermaid fences, KaTeX, GFM tables) | no | a fact, a short explanation, code, or a small static table — the answer is just *words and numbers* |
 | **Data component** | `show_component` → `component-v1` | no | exact values, a record, ordered steps, a code pointer — structured data you want rendered natively, not a widget |
-| **Inline artifact** | `show_artifact(…, placement="inline")` | yes (artifact sandbox) | an answer the user **interacts with right in the conversation** — a calculator, a what-if explainer, a chart, a small tool — that belongs beside your prose in scrollback |
-| **Panel artifact** | `show_artifact(…)` (the default, `placement="panel"`) | yes (same sandbox) | a **work product** carried across turns — a document, a deck, a PDF, a large app — that the user opens, edits and returns to |
+| **Inline artifact** | `show_artifact(…)` (the default) | yes (artifact sandbox) | an answer the user **interacts with right in the conversation** — a calculator, a what-if explainer, a chart, a small tool — that belongs beside your prose in scrollback |
+| **Panel artifact** | `show_artifact(…, placement="panel")` | yes (same sandbox) | a **work product** carried across turns — a document, a deck, a PDF, a large app — that the user opens, edits and returns to |
 
-`placement` is a real argument on the tool — the full signature is
-`show_artifact(kind, code, title="", links=None, placement="panel")`. It **defaults to
-`"panel"`**, so a plain `show_artifact(kind, code)` still opens the panel; add `placement="inline"`
-to climb to the inline tier. (`show_service`, the async variant, takes the same `placement`.)
+`placement` is a real argument on the tool (`show_artifact(kind, code, title="", links=None,
+placement=…)`). It **defaults to `"inline"`**, so a plain `show_artifact(kind, code)` renders the
+answer inline for the frame-renderable kinds (html, svg, mermaid, react, vega-lite); pass
+`placement="panel"` to put it in the side panel instead. An explicit `placement="inline"` on a
+kind that can't render inline (markdown, a deck, a PDF, a file) falls back to the panel with a
+note; under the default that same fallback is silent. (`show_service`, the async variant, takes
+the same `placement`.)
 
 An inline artifact **is** an artifact: same store, versions, render verdict,
 `update_artifact`/`rewrite_artifact`, and an **Open in panel** button — only *where* it renders
@@ -38,9 +41,10 @@ kind renders in the panel. Default to **inline** for a self-contained answer and
 Inline placement is part of protoAgent's **interactive-answers** capability, and the **panel is
 its universal fallback**: where a console or a `show_artifact` build doesn't offer inline
 placement, the same call still renders the artifact in the panel — the answer is never lost. So
-choose the **tier** by what the answer *is* (a calculator, a chart, a small tool), pass
-`placement="inline"` to ask for it beside your prose, and describe the answer by **what it does**,
-not by where it landed — then you're right whether it renders inline or in the panel.
+choose the **tier** by what the answer *is* (a calculator, a chart, a small tool), let it render
+**inline** (the default) beside your prose — or pass `placement="panel"` for a work product — and
+describe the answer by **what it does**, not by where it landed — then you're right whether it
+renders inline or in the panel.
 
 ## When to use `show_artifact` (NOT the filesystem)
 

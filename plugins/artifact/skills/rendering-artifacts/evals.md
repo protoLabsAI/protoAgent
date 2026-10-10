@@ -6,7 +6,7 @@ later routing experiment (ADR 0118 D7, deferred) has a ground truth to score aga
 reviewer can sanity-check the ladder's guidance by reading realistic prompts.
 
 The four tiers, lowest to highest: **text** → **component** (`show_component`) →
-**inline** (`show_artifact(…, placement="inline")`) → **panel** (`show_artifact(…)`).
+**inline** (`show_artifact(…)`, the default) → **panel** (`show_artifact(…, placement="panel")`).
 
 The rule the labels follow: **prefer the lowest tier that answers**, and **inline for an
 answer, panel for a work product**.
