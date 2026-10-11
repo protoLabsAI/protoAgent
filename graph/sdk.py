@@ -1141,6 +1141,26 @@ def cancel_plugin_jobs(plugin_id: str) -> int:
 # lines of code, with no seam to copy. This is the seam.
 
 
+def deleted_chat_sessions(session_ids) -> set[str] | None:
+    """Which of these console chat session ids the operator has DELETED.
+
+    A deleted chat leaves a durable tombstone (ADR 0104; never count-evicted), so a session id
+    in the returned set is gone for good: no transcript of it survives to point at anything a
+    plugin keeps for it. Use it to retire per-session state only once its chat is gone — e.g.
+    the artifact store keeps an inline answer while any chat that shows it still exists (#4138).
+
+    Returns ``None`` when it can't tell (no task store at this instance, or it can't be read).
+    Treat ``None`` as "every one may still exist" — never delete on a guess. Synchronous and
+    cheap (one indexed read); safe from sync code in any runtime process."""
+    try:
+        from a2a_impl.stores import tombstoned_chat_sessions
+
+        return tombstoned_chat_sessions(session_ids)
+    except Exception as exc:  # noqa: BLE001 — unknown, never a guess
+        log.warning("[sdk] deleted_chat_sessions unavailable: %s", exc)
+        return None
+
+
 def plugin_store(subdir: str = "", *, plugin_id: str) -> Path:
     """This plugin's own writable directory, scoped to the running instance.
 

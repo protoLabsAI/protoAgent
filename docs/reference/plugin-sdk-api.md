@@ -39,7 +39,7 @@ the module's own.
 
 **Plugin-owned recurring jobs (#1642)** — [`cancel_plugin_jobs()`](#sdk-cancel-plugin-jobs), [`cancel_scheduled()`](#sdk-cancel-scheduled), [`plugin_job_prefix()`](#sdk-plugin-job-prefix), [`schedule_recurring()`](#sdk-schedule-recurring)
 
-**Plugin state (own the file, never core's)** — [`plugin_store()`](#sdk-plugin-store)
+**Plugin state (own the file, never core's)** — [`deleted_chat_sessions()`](#sdk-deleted-chat-sessions), [`plugin_store()`](#sdk-plugin-store)
 
 **Plugin metric timeseries (#1632)** — [`metric_history()`](#sdk-metric-history), [`metric_last()`](#sdk-metric-last), [`record_metric()`](#sdk-record-metric)
 
@@ -605,6 +605,23 @@ keep firing prompts about a plugin that's gone. Only jobs under this instance's
 Also useful to a plugin that wants to tear down its whole cadence at once.
 
 ## Plugin state (own the file, never core's)
+
+### `sdk.deleted_chat_sessions` {#sdk-deleted-chat-sessions}
+
+```python
+sdk.deleted_chat_sessions(session_ids) -> set[str] | None
+```
+
+Which of these console chat session ids the operator has DELETED.
+
+A deleted chat leaves a durable tombstone ([ADR 0104](/adr/0104-session-turns-read-api); never count-evicted), so a session id
+in the returned set is gone for good: no transcript of it survives to point at anything a
+plugin keeps for it. Use it to retire per-session state only once its chat is gone — e.g.
+the artifact store keeps an inline answer while any chat that shows it still exists ([#4138](https://github.com/protoLabsAI/protoAgent/issues/4138)).
+
+Returns `None` when it can't tell (no task store at this instance, or it can't be read).
+Treat `None` as "every one may still exist" — never delete on a guess. Synchronous and
+cheap (one indexed read); safe from sync code in any runtime process.
 
 ### `sdk.plugin_store` {#sdk-plugin-store}
 

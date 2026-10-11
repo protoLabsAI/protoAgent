@@ -8,8 +8,10 @@ import logging
 import os
 import secrets
 from pathlib import Path
+from typing import Annotated, Any
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
 from . import _config, _docx, _links, _pdfview, _preview, _ref, _render_status, _slides, _store
 
@@ -130,6 +132,27 @@ _recent_full_saves: dict[str, list[int]] = {}
 _PIN_NAMES_SHOWN = 5
 
 
+def _chat_session(state: Any) -> str:
+    """The calling chat's session id, from the tool's injected graph state (#4138).
+    ``current_session_id()`` alone reads EMPTY inside a tool body; ``_session_id_from`` prefers
+    the state and keeps that contextvar only as a fallback. ``""`` when neither knows it — an
+    ACP tool process, a direct call — and the artifact then records no chat (evictable as before)."""
+    try:
+        from tools.session import _session_id_from
+
+        return _session_id_from(state)
+    except Exception:  # noqa: BLE001 — no host: read the state directly
+        return (state.get("session_id") or "").strip() if isinstance(state, dict) else ""
+
+
+def _stamp_ref(art: dict, session_id: str) -> None:
+    """Record that this call's ``artifact-ref`` goes out in ``session_id``'s chat, so eviction
+    keeps ``art`` while that chat exists (#4138). Only when the chip is emitted at all — on a
+    host without the component seam no chat ever shows it."""
+    if _ref.EMIT:
+        _store._stamp_chat_session(art, session_id)
+
+
 def _busy_reply(fn):
     """A mutating tool whose store stays locked past its bound (``_store.StoreLockTimeout`` —
     another process is wedged holding it) replies with why and that nothing changed, rather than
@@ -213,7 +236,13 @@ def _resolve_file(path: str, project: str = "") -> tuple[Path | None, str]:
 
 @tool
 @_busy_reply
-def save_file_artifact(path: str, title: str = "", artifact_id: str = "", project: str = "") -> str:
+def save_file_artifact(
+    path: str,
+    title: str = "",
+    artifact_id: str = "",
+    project: str = "",
+    state: Annotated[Any, InjectedState] = None,
+) -> str:
     """Save a GENERATED FILE (a .docx / .xlsx / .pptx / .pdf / image / text file you already
     wrote to disk) into the Artifact panel as a VERSIONED download artifact — so the file gets
     the same edit-history + inspectable panel treatment as a rendered artifact, and the user
@@ -268,7 +297,9 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "", projec
     # A Word document gets the docx renderer's preflight (zip inflation + image pixel budget).
     docx = _docx.preflight(data) if _docx.is_docx(p.name, mime) else None
     ext = p.suffix.lower().lstrip(".") or "bin"
-    return _save_file(p.name, data, mime, preview, thumb, ext, title, artifact_id, slides, pdf, docx)
+    return _save_file(
+        p.name, data, mime, preview, thumb, ext, title, artifact_id, slides, pdf, docx, session_id=_chat_session(state)
+    )
 
 
 @_store.serialized
@@ -284,6 +315,7 @@ def _save_file(
     slides: dict | None = None,
     pdf: dict | None = None,
     docx: dict | None = None,
+    session_id: str = "",
 ) -> str:
     """save_file_artifact's store read-modify-write. The blob is written INSIDE the lock on
     purpose: the blob sweep runs under it too, so it can never see (and delete) a blob that
@@ -327,6 +359,7 @@ def _save_file(
             "created": nv["ts"],
             "updated": nv["ts"],
         }
+        _stamp_ref(art, session_id)
         store["artifacts"].insert(0, art)
         store["current"] = art_id
         _store._write_store(store)
@@ -335,6 +368,7 @@ def _save_file(
     else:
         if title:
             art["title"] = title
+        _stamp_ref(art, session_id)
         v = _store._commit_version(store, art, preview, extra={"file": file_meta, "blob": blob_name})
     kb = len(data) // 1024
     return (
@@ -374,7 +408,12 @@ def _then_render(result: _LockedResult) -> str:
 @tool
 @_busy_reply
 def show_artifact(
-    kind: str, code: str, title: str = "", links: dict | str | None = None, placement: str | None = None
+    kind: str,
+    code: str,
+    title: str = "",
+    links: dict | str | None = None,
+    placement: str | None = None,
+    state: Annotated[Any, InjectedState] = None,
 ) -> str:
     """CREATE a new generative-UI artifact in the console's Artifact panel.
 
@@ -433,10 +472,12 @@ def show_artifact(
     (≤ 280 chars).
     """
     checked = _links.check(links)
-    return _then_render(_show(kind, code, title, checked, placement))
+    return _then_render(_show(kind, code, title, checked, placement, session_id=_chat_session(state)))
 
 
-def show_service(kind: str, code: str, title: str = "", placement: str | None = None) -> dict:
+def show_service(
+    kind: str, code: str, title: str = "", placement: str | None = None, session_id: str = ""
+) -> dict:
     """The ``artifact.show`` plugin service (ADR 0116): create an artifact for ANOTHER plugin.
 
     How a plugin puts something in the Artifact panel without importing this one — e.g. the data
@@ -449,7 +490,10 @@ def show_service(kind: str, code: str, title: str = "", placement: str | None = 
     checks, version chain and render-verdict wait. ``placement`` DEFAULTS to ``"inline"`` (pass
     ``"panel"`` to override) — inline renders the artifact in the conversation (html/svg/mermaid/
     react/vega-lite); any other kind renders in the panel, SILENTLY under the default and noted in
-    ``message`` only when ``placement="inline"`` is explicit. Returns a dict —
+    ``message`` only when ``placement="inline"`` is explicit. ``session_id`` is the chat the
+    caller's reply goes out in (``tools.session._session_id_from`` of the caller's injected
+    state): pass it when you append ``ref``, so eviction keeps the artifact while that chat
+    exists (#4138); omitted, the artifact is evictable oldest-first. Returns a dict —
     never raises for a refusal:
 
     - ``ok`` — False when nothing was created (``message`` says why);
@@ -464,7 +508,7 @@ def show_service(kind: str, code: str, title: str = "", placement: str | None = 
     it from a sync tool body, or from async code via ``asyncio.to_thread`` — never directly on an
     event loop."""
     try:
-        result = _show(kind, code, title, placement=placement)
+        result = _show(kind, code, title, placement=placement, session_id=session_id)
     except _store.StoreLockTimeout as e:
         return {"ok": False, "id": "", "version": 0, "message": str(e), "ref": ""}
     msg, target, *rest = result
@@ -481,7 +525,12 @@ def show_service(kind: str, code: str, title: str = "", placement: str | None = 
 
 @_store.serialized
 def _show(
-    kind: str, code: str, title: str, checked: _links.Checked | None = None, placement: str | None = None
+    kind: str,
+    code: str,
+    title: str,
+    checked: _links.Checked | None = None,
+    placement: str | None = None,
+    session_id: str = "",
 ) -> _LockedResult:
     k = (kind or "").strip().lower()
     if k not in _KINDS:
@@ -509,6 +558,7 @@ def _show(
         # rewrite_artifact read it back (``_store._is_inline``) so the next version's chip stays
         # inline too (ADR 0118 D2). ABSENT on a panel artifact, so the default store is unchanged.
         art["placement"] = "inline"
+    _stamp_ref(art, session_id)
     store["artifacts"].insert(0, art)
     store["current"] = art["id"]
     _store._write_store(store)
@@ -558,7 +608,13 @@ def _carry_links(art: dict, checked: _links.Checked | None, new_code: str) -> tu
 
 @tool
 @_busy_reply
-def update_artifact(old_string: str, new_string: str, artifact_id: str = "", links: dict | str | None = None) -> str:
+def update_artifact(
+    old_string: str,
+    new_string: str,
+    artifact_id: str = "",
+    links: dict | str | None = None,
+    state: Annotated[Any, InjectedState] = None,
+) -> str:
     """Make a TARGETED edit to an existing artifact: replace ``old_string`` with ``new_string``
     in its current source, creating a new version. ``old_string`` must match the current source
     EXACTLY ONCE (whitespace included) — add surrounding context to disambiguate if needed.
@@ -571,11 +627,17 @@ def update_artifact(old_string: str, new_string: str, artifact_id: str = "", lin
     If your edit renumbers sequence messages (msg:<n>), pass the corrected map.
     """
     checked = _links.check(links)
-    return _then_render(_update(old_string, new_string, artifact_id, checked))
+    return _then_render(_update(old_string, new_string, artifact_id, checked, session_id=_chat_session(state)))
 
 
 @_store.serialized
-def _update(old_string: str, new_string: str, artifact_id: str, checked: _links.Checked | None = None) -> _LockedResult:
+def _update(
+    old_string: str,
+    new_string: str,
+    artifact_id: str,
+    checked: _links.Checked | None = None,
+    session_id: str = "",
+) -> _LockedResult:
     if not old_string:
         return "old_string must not be empty.", None
     store = _store._read_store()
@@ -601,6 +663,7 @@ def _update(old_string: str, new_string: str, artifact_id: str, checked: _links.
     if err := _kind_problem(art["kind"], new_code):
         return err, None
     kept, report = _carry_links(art, checked, new_code)
+    _stamp_ref(art, session_id)
     v = _store._commit_version(store, art, new_code, extra={"links": kept} if kept else None)
     return (
         f"Updated artifact {art['id']} → version {v}." + report,
@@ -613,7 +676,13 @@ def _update(old_string: str, new_string: str, artifact_id: str, checked: _links.
 
 @tool
 @_busy_reply
-def rewrite_artifact(code: str, title: str = "", artifact_id: str = "", links: dict | str | None = None) -> str:
+def rewrite_artifact(
+    code: str,
+    title: str = "",
+    artifact_id: str = "",
+    links: dict | str | None = None,
+    state: Annotated[Any, InjectedState] = None,
+) -> str:
     """Replace an artifact's ENTIRE source with ``code``, creating a new version (the kind is
     kept). Use this for a large change where a targeted ``update_artifact`` would be awkward;
     prefer ``update_artifact`` for small edits — a rewrite round-trips the full body through
@@ -625,11 +694,13 @@ def rewrite_artifact(code: str, title: str = "", artifact_id: str = "", links: d
     the new source is a new diagram, so pass the ``links`` for it (the old version keeps its own).
     """
     checked = _links.check(links)
-    return _then_render(_rewrite(code, title, artifact_id, checked))
+    return _then_render(_rewrite(code, title, artifact_id, checked, session_id=_chat_session(state)))
 
 
 @_store.serialized
-def _rewrite(code: str, title: str, artifact_id: str, checked: _links.Checked | None = None) -> _LockedResult:
+def _rewrite(
+    code: str, title: str, artifact_id: str, checked: _links.Checked | None = None, session_id: str = ""
+) -> _LockedResult:
     code = code or ""
     if err := _store._too_big(code):
         return err, None
@@ -651,6 +722,7 @@ def _rewrite(code: str, title: str, artifact_id: str, checked: _links.Checked | 
                 f"\nThe previous version's {len(old)} code link(s) were not carried over (a rewrite is a "
                 "new diagram) — pass `links` to link this one."
             )
+    _stamp_ref(art, session_id)
     v = _store._commit_version(store, art, code, extra={"links": kept} if kept else None)
     return (
         f"Rewrote artifact {art['id']} → version {v}." + report + _save_nudge(art["id"]),
@@ -686,11 +758,17 @@ def list_artifacts() -> str:
         lines.append(
             f"{a['id']}  [{a['kind']}]  {a['title'] or '(untitled)'}  · v{len(a['versions'])}{_pin_mark(a)}{cur}"
         )
+    cap = _config._max_history()
+    unpinned = len(store["artifacts"]) - len(_store._pinned(store))
     retention = (
-        f"Retention: the {_config._max_history()} most recently touched unpinned artifacts are kept "
-        f"(older ones are evicted); pinned artifacts ({len(_store._pinned(store))}/"
-        f"{_config._max_pinned()} pins used) are never evicted."
+        f"Retention: up to {cap} unpinned artifacts are kept; past that the oldest one no surviving "
+        f"chat still shows is evicted (an artifact shown in a chat stays until that chat is deleted); "
+        f"pinned artifacts ({len(_store._pinned(store))}/{_config._max_pinned()} pins used) are never evicted."
     )
+    if unpinned > cap:
+        # The all-referenced case (#4138): the store keeps live answers over its cap rather than
+        # delete one — say so where the agent (and the operator through it) looks.
+        retention += f" The store is {unpinned - cap} over that cap: every remaining artifact is still shown in a chat."
     return "Artifacts (pinned first, then newest first):\n" + "\n".join(lines) + "\n\n" + retention
 
 

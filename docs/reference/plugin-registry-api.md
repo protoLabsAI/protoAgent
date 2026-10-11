@@ -209,7 +209,7 @@ loaded — disabling it stops extraction on the next reload. `show_component` ne
 builds a plugin kind. Guard with `getattr(registry, "register_component", None)` on
 hosts older than this seam.
 
-`frame` (optional, ADR 0118 D5) declares that the kind renders in a plugin-served
+`frame` (optional, [ADR 0118](/adr/0118-interactive-answers-inline-artifacts-and-frame-components) D5) declares that the kind renders in a plugin-served
 PAGE instead of a compiled console renderer — a path RELATIVE to this plugin's public
 route prefix (`/plugins/<id>`), e.g. `"component.html"`. Because an opaque-origin
 frame iframe sends no bearer, the page must be auth-exempt: the frame is refused (same
