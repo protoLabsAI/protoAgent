@@ -61,6 +61,7 @@ import {
   applyToolEvent,
   createParkTracker,
   createToolArgsTracker,
+  elapsedSince,
   settleStreamEnd,
   stopBubble,
 } from "./turnReducers";
@@ -1137,10 +1138,11 @@ export function ChatSessionSlot({
               if (m.id !== assistantId) return m;
               const toolCalls = m.toolCalls?.map((c) =>
                 c.status === "running"
-                  ? { ...c, status: "done" as const, durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined) }
+                  ? { ...c, status: "done" as const, durationMs: c.durationMs ?? elapsedSince(c, now) }
                   : c,
               );
-              return { ...m, status: failed ? "error" : "done", toolCalls };
+              // Footer time = when the reply landed, as a reload reads it (#4076).
+              return { ...m, status: failed ? "error" : "done", toolCalls, createdAt: now };
             }),
             assistantId,
           ),
@@ -1516,7 +1518,7 @@ export function ChatSessionSlot({
                   message.id !== assistantId
                     ? message
                     : canceledByServer
-                      ? stopBubble(message)
+                      ? stopBubble(message, { at: Date.now() })
                       : settleStreamEnd(message, { parked: false }),
                 ),
               ),

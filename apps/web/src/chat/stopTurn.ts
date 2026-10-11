@@ -26,6 +26,7 @@ export function resolveStopTarget(messages: ChatMessage[], liveTaskId: string): 
  *  `running` tool cards) would spin forever. Partial content is kept; the bubble
  *  and its unfinished cards are marked STOPPED (#4076), so neither the live view
  *  nor the persisted copy a reload restores paints a ✓ on a call that never returned. */
-export function finalizeStoppedMessages(messages: ChatMessage[]): ChatMessage[] {
-  return messages.map((m) => (m.role !== "assistant" || m.status !== "streaming" ? m : stopBubble(m)));
+export function finalizeStoppedMessages(messages: ChatMessage[], at: number = Date.now()): ChatMessage[] {
+  // Stamped with the stop instant: the footer reads when the turn ENDED, as a reload does (#4076).
+  return messages.map((m) => (m.role !== "assistant" || m.status !== "streaming" ? m : stopBubble(m, { at })));
 }

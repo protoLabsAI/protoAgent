@@ -162,6 +162,24 @@ async def test_stream_args_tool_yields_ordered_frames_concatenating_to_the_value
 
 
 @pytest.mark.asyncio
+async def test_tool_args_frames_carry_the_sibling_string_args_written_first(env):
+    # `kind` precedes `code`, so every frame says it is an html artifact — the console can
+    # tell from the first slice whether the call can render inline (#4076).
+    env.install(_artifact_script(env.clock), tools=[_tool("show_artifact", stream_args="code")])
+    targs = [p for k, p in [f async for f in _stream()] if k == "tool_args"]
+    assert targs and all(p.get("hints") == {"kind": "html"} for p in targs)
+
+
+def test_leading_string_args_reads_only_complete_strings_before_the_streamed_arg():
+    lead = turn_stream._leading_string_args
+    raw = '{"kind": "markdown", "n": 3, "placement": "panel", "title": "' + "x" * 300 + '", "code": "# hi'
+    assert lead(raw, "code") == {"kind": "markdown", "placement": "panel"}
+    # Keys AFTER the streamed arg are never read; an incomplete value stops the scan.
+    assert lead('{"code": "a", "kind": "html"}', "code") == {}
+    assert lead('{"kind": "mark', "code") == {}
+
+
+@pytest.mark.asyncio
 async def test_tool_without_stream_args_metadata_yields_no_tool_args_frames(env):
     # Same stream, but the tool declares no stream_args (empty bound_tools).
     env.install(_artifact_script(env.clock), tools=[])

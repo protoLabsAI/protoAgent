@@ -831,7 +831,13 @@ export type ToolCall = {
   stopped?: boolean;
   /** Client wall-clock when the start frame arrived (ms epoch). */
   startedAt?: number;
-  /** Elapsed start→end, stamped client-side when the end frame arrives. */
+  /** `startedAt` is NOT when the call started: the start frame was REPLAYED from a task
+   *  snapshot (reload / reattach), so `now - startedAt` would measure the replay, not the
+   *  call (#4076). A duration is then taken only from the wire's measured `durationMs`. */
+  startReplayed?: boolean;
+  /** Elapsed start→end: the server-measured execution time off the end frame when it
+   *  carries one, else stamped client-side when the end frame arrives. Absent when unknown —
+   *  the card then shows no duration rather than a fake one. */
   durationMs?: number;
   /** id of the enclosing `task` tool, if this call ran inside a subagent. */
   parentId?: string;
@@ -928,6 +934,11 @@ export type ToolEvent = {
   /** True pre-truncation result size in chars, from the wire fragment (#2775). */
   outputChars?: number;
   error?: boolean; // an "end" that failed (phase "failed" on the wire) → card shows the X
+  /** The server-measured execution time, on an end frame (#4076). */
+  durationMs?: number;
+  /** Replayed from a task snapshot (reload / reattach), not seen live — so the client's
+   *  clock between this frame and its pair measures nothing (#4076). */
+  replayed?: boolean;
   /** id of the enclosing `task` delegation when this is a subagent's own tool call —
    *  set server-side so nesting is explicit (by id), not inferred from frame order. */
   parentId?: string;

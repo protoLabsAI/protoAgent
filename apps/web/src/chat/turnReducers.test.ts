@@ -11,7 +11,7 @@ import type { ChatMessage } from "../lib/types";
 import { reattachKeyForMessages, settleAnsweredPause, shouldReattach } from "./reattach";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import { makeA2ADispatcher } from "../lib/api/a2aStream";
-import { applyToolEvent, createParkTracker, isParkedState, settleStreamEnd, unpauseBubble } from "./turnReducers";
+import { applyToolEvent, createParkTracker, isParkedState, settleStreamEnd, stopBubble, unpauseBubble } from "./turnReducers";
 
 const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
 
@@ -186,5 +186,33 @@ describe("createParkTracker over the real frame dispatcher (#3956)", () => {
     dispatch(workingFrame);
     expect(park.parked).toBe(false);
     expect(transitions).toEqual(["parked", "unparked"]);
+  });
+});
+
+describe("tool durations and the settled footer time (#4076)", () => {
+  const base = (): ChatMessage => ({ id: "a1", role: "assistant", content: "", status: "streaming", createdAt: 1000 });
+
+  it("a live end with the wire's measured duration uses it", () => {
+    let m = applyToolEvent(base(), { id: "t1", name: "x", phase: "start" });
+    m = applyToolEvent(m, { id: "t1", name: "x", phase: "end", output: "ok", durationMs: 4321 });
+    expect(m.toolCalls?.[0].durationMs).toBe(4321);
+  });
+
+  it("a REPLAYED start/end pair gets no client-clock duration", () => {
+    let m = applyToolEvent(base(), { id: "t1", name: "x", phase: "start", replayed: true });
+    m = applyToolEvent(m, { id: "t1", name: "x", phase: "end", output: "ok", replayed: true });
+    expect(m.toolCalls?.[0].durationMs).toBeUndefined();
+    // …nor a live end landing on a card whose start was replayed (a reattach).
+    let r = applyToolEvent(base(), { id: "t2", name: "x", phase: "start", replayed: true });
+    r = applyToolEvent(r, { id: "t2", name: "x", phase: "end", output: "ok" });
+    expect(r.toolCalls?.[0].durationMs).toBeUndefined();
+    expect(settleStreamEnd(applyToolEvent(base(), { id: "t3", name: "x", phase: "start", replayed: true }), { parked: false }).toolCalls?.[0].durationMs).toBeUndefined();
+  });
+
+  it("a settled live turn's footer time is when it ENDED, as a reload reads it", () => {
+    expect(settleStreamEnd(base(), { parked: false, now: 99_000 }).createdAt).toBe(99_000);
+    expect(stopBubble(base(), { at: 77_000 }).createdAt).toBe(77_000);
+    // A replayed stop (no instant given) keeps its own.
+    expect(stopBubble(base()).createdAt).toBe(1000);
   });
 });

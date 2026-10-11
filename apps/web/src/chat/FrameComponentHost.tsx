@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { consoleTheme, INIT_REPOST_DELAYS } from "../app/pluginFrameHandshake";
 import { InlineFrameBridgeContext } from "../artifacts/ArtifactRefChip";
 import { BridgeNoticeView, useFrameSendGate } from "../artifacts/SendConfirmChip";
+import { useFrameFocusGuard } from "../artifacts/frameFocusGuard";
 import { createFrameRegistry, useLazyMount, type FrameRegistry } from "../artifacts/inlineFrames";
 import { apiUrl } from "../lib/api";
 
@@ -284,6 +285,10 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     window.addEventListener("message", onBridge);
     return () => window.removeEventListener("message", onBridge);
   }, [live, id, kind, plugin, chat, bridge, replyToFrame, gate.propose, gate.showRejection]);
+
+  // A self-focusing component must not pull the composer's focus into its frame (#4076): focus
+  // enters only on the operator's own click or Tab.
+  useFrameFocusGuard(frameRef, live);
 
   // Clear any pending init re-posts when the frame unmounts / re-points.
   useEffect(() => {

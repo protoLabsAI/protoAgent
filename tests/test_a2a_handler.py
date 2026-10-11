@@ -733,6 +733,46 @@ async def test_tool_end_fragment_carries_true_output_size():
 
 
 @pytest.mark.asyncio
+async def test_tool_end_fragment_carries_the_measured_duration():
+    """#4076: the end frame carries the call's measured `durationMs` (the durable store
+    keeps it), so a reload shows the real duration instead of a replayed ~0ms. An
+    unmeasured call (duration 0) carries none — the console then shows no duration."""
+    import json
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("tool_end", {"id": "t1", "name": "fetch_url", "output": "a", "duration_ms": 1_234})
+        yield ("tool_end", {"id": "t2", "name": "fetch_url", "output": "b", "duration_ms": 0})
+        yield ("done", "ok")
+
+    app = _build_app(stream)
+    fragments = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "s",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                frame = json.loads(line[5:].strip())
+                msg = frame.get("result", {}).get("statusUpdate", {}).get("status", {}).get("message")
+                frag = (msg or {}).get("metadata", {}).get(pa.TOOL_CALL_EXT_URI)
+                if frag is not None:
+                    fragments.append(frag)
+
+    by_id = {f.get("toolCallId"): f for f in fragments if f.get("phase") == "completed"}
+    assert int(by_id["t1"]["durationMs"]) == 1_234
+    assert "durationMs" not in by_id["t2"]
+
+
+@pytest.mark.asyncio
 async def test_errored_tool_end_surfaces_phase_failed():
     """A tool_end flagged error → a phase=\"failed\" tool-call DataPart (the card
     renders the X), carrying the error text. A genuine command failure takes this

@@ -225,6 +225,7 @@ function toolEventFromMeta(metadata: ExtMetadata): ToolEvent | null {
         error?: string;
         parentToolCallId?: string;
         outputChars?: number;
+        durationMs?: number;
       }
     | null;
   if (!d) return null;
@@ -238,6 +239,8 @@ function toolEventFromMeta(metadata: ExtMetadata): ToolEvent | null {
     // True pre-truncation result size (#2775) — proto-JSON round-trips numbers as
     // floats, so coerce back to an int for the chip arithmetic.
     ...(typeof d.outputChars === "number" ? { outputChars: Math.floor(d.outputChars) } : {}),
+    // The server-measured execution time (#4076) — what a replayed card shows after a reload.
+    ...(typeof d.durationMs === "number" && d.durationMs > 0 ? { durationMs: Math.round(d.durationMs) } : {}),
     error: d.phase === "failed" || Boolean(d.error),
     // Set only for a subagent's own tool calls → nest under the `task` card by id.
     ...(d.parentToolCallId ? { parentId: d.parentToolCallId } : {}),
@@ -264,25 +267,39 @@ export type ToolArgsEvent = {
   offset: number;
   chunk: string;
   done: boolean;
+  /** The short string args the model wrote BEFORE the streamed one (e.g. show_artifact's
+   *  `kind`/`placement`/`title`), decoded server-side — so the console knows, from the first
+   *  slice, whether the call can render inline at all (#4076). */
+  hints?: Record<string, string>;
 };
 
 /** Decode a tool-args-v1 DataPart off a WORKING frame's parts, or null. */
 export function toolArgsFromParts(parts?: RawPart[]): ToolArgsEvent | null {
   const d = dataByMime(parts, TOOL_ARGS_MIME) as
-    | { id?: unknown; arg?: unknown; offset?: unknown; chunk?: unknown; done?: unknown }
+    | { id?: unknown; arg?: unknown; offset?: unknown; chunk?: unknown; done?: unknown; hints?: unknown }
     | null;
   // The tool-call id binds the preview to its card; a frame without one is unusable.
   if (!d || typeof d.id !== "string" || !d.id) return null;
   // proto-JSON round-trips numbers as floats — floor the offset back to an int. A terminal
   // frame can carry just `done: true` with no chunk, so an absent/empty chunk is valid.
   const offset = typeof d.offset === "number" ? Math.floor(d.offset) : 0;
+  const hints = stringHints(d.hints);
   return {
     id: d.id,
     arg: typeof d.arg === "string" ? d.arg : "",
     offset: offset >= 0 ? offset : 0,
     chunk: typeof d.chunk === "string" ? d.chunk : "",
     done: d.done === true,
+    ...(hints ? { hints } : {}),
   };
+}
+
+/** The string-valued entries of a tool-args `hints` object, or undefined when there are none. */
+function stringHints(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) if (typeof v === "string") out[k] = v;
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** The author of an `@<name>`-addressed answer, off a working frame's parts (#3042).
@@ -618,7 +635,9 @@ function replayTaskSnapshot(
     }
     catchUpText(msg.metadata);
     const toolEvent = toolEventFromMeta(msg.metadata);
-    if (toolEvent) handlers.onToolCall?.(toolEvent);
+    // Replayed, not live: the client clock between this frame and its pair is the replay's
+    // own microseconds, never the call's duration (#4076).
+    if (toolEvent) handlers.onToolCall?.({ ...toolEvent, replayed: true });
     const reasoning = reasoningFromParts(msg.parts);
     if (reasoning) handlers.onReasoning?.(reasoning);
     const component = componentFromParts(msg.parts);

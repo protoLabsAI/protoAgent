@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ToolArgsBuffer } from "../chat/toolArgsBuffer";
 import { refName } from "./artifactRef";
 import { clampHeight, MIN_FRAME_HEIGHT } from "./inlineFrames";
+import { cachedPluginKitCss, consoleScheme, loadPluginKitCss, previewThemeCss } from "./previewTheme";
 import {
   bodyBytesWithoutStyle,
   firstStyleClosed,
@@ -82,6 +83,14 @@ const PREVIEW_ROOT_ID = "proto-preview-root";
 
 /** The postMessage type the host sends and the in-frame receiver listens for. */
 const PREVIEW_MORPH_TYPE = "proto-preview:morph";
+
+/** The postMessage type the host sends to (re)fill one of the frame's two host stylesheets — the
+ *  DS kit once its CSS has loaded, or the console theme after a live re-theme. */
+const PREVIEW_STYLE_TYPE = "proto-preview:style";
+
+/** The ids of the frame's host-owned `<style>` elements — the only ones a style post may fill. */
+const PREVIEW_KIT_STYLE_ID = "proto-preview-kit";
+const PREVIEW_THEME_STYLE_ID = "proto-preview-theme";
 
 /** The postMessage type the FRAME sends back after each morph, carrying its content height. */
 const PREVIEW_HEIGHT_TYPE = "proto-preview:height";
@@ -163,27 +172,50 @@ const MORPH_RECEIVER = [
   'try{Idiomorph.morph(root,html,{morphStyle:"innerHTML"});}catch(_){root.innerHTML="";}',
   "report();",
   "}",
+  // A host style post: fill one of the two HOST-owned style elements (kit / theme) by id — never
+  // any other node — and re-stamp the scheme on <html>, which the theme rules key off.
+  "function restyle(d){",
+  `if(d.id!==${JSON.stringify(PREVIEW_KIT_STYLE_ID)}&&d.id!==${JSON.stringify(PREVIEW_THEME_STYLE_ID)})return;`,
+  "var el=document.getElementById(d.id);",
+  "if(el)el.textContent=d.css;",
+  'if(d.scheme==="light"||d.scheme==="dark")document.documentElement.setAttribute("data-theme",d.scheme);',
+  "report();",
+  "}",
   'window.addEventListener("message",function(ev){',
+  "if(ev.source!==parent)return;",
   "var d=ev.data;",
+  `if(d&&d.type===${JSON.stringify(PREVIEW_STYLE_TYPE)}&&typeof d.css==="string"){restyle(d);return;}`,
   `if(!d||d.type!==${JSON.stringify(PREVIEW_MORPH_TYPE)}||typeof d.html!=="string")return;`,
   "render(d.html);",
   "});",
   "})();",
 ].join("");
 
-/** Build the preview frame's srcdoc: the exact CSP meta, a minimal reset style (allowed by
- *  `style-src 'unsafe-inline'`), the empty morph root, and ONE nonce'd script carrying the vendored
- *  Idiomorph plus the receiver. Any `</script` in the vendored lib is defused so it cannot close
- *  its host `<script>` early (there are none at the pinned version — belt-and-braces). */
-function buildPreviewSrcdoc(nonce: string): string {
+/** Build the preview frame's srcdoc: the exact CSP meta; the console's theme, inlined (allowed by
+ *  `style-src 'unsafe-inline'`) exactly as the live artifact frame gets it — the DS kit's CSS text
+ *  (if it has loaded yet; else it is posted in once it has), then the `--pl-*` palette + a
+ *  console-matched `color-scheme` + html/body colours + the `:where()` control defaults, keyed on
+ *  the `data-theme` stamped on `<html>` (#4076); the empty morph root; and ONE nonce'd script
+ *  carrying the vendored Idiomorph plus the receiver. Any `</script` in the vendored lib is defused
+ *  so it cannot close its host `<script>` early (there are none at the pinned version —
+ *  belt-and-braces). */
+export function buildPreviewSrcdoc(
+  nonce: string,
+  theme: { scheme: "light" | "dark"; css: string; kitCss: string } = {
+    scheme: consoleScheme(),
+    css: previewThemeCss(),
+    kitCss: cachedPluginKitCss(),
+  },
+): string {
   const idiomorph = idiomorphMin.replace(/<\/(script)/gi, "<\\/$1");
   return [
     "<!doctype html>",
-    '<html lang="en">',
+    `<html lang="en" data-theme="${theme.scheme}">`,
     "<head>",
     '<meta charset="utf-8">',
     `<meta http-equiv="Content-Security-Policy" content="${previewCsp(nonce)}">`,
-    "<style>html,body{margin:0;padding:8px;font:14px/1.5 system-ui,-apple-system,sans-serif;color-scheme:light dark;}</style>",
+    `<style id="${PREVIEW_KIT_STYLE_ID}">${theme.kitCss}</style>`,
+    `<style id="${PREVIEW_THEME_STYLE_ID}">${theme.css}</style>`,
     "</head>",
     "<body>",
     `<div id="${PREVIEW_ROOT_ID}"></div>`,
@@ -237,9 +269,21 @@ export function StreamingPreview({ buffer, kind = "", title = "", renderFinal }:
   if (gateOpenNow && !gateLatched) setGateLatched(true);
   const showPreview = PREVIEW_KINDS.has(kind) && (gateLatched || gateOpenNow);
 
-  // One random nonce per mounted frame; the srcdoc (and thus the CSP) are built once from it.
+  // One random nonce per mounted frame; the srcdoc (and thus the CSP) are built once from it —
+  // carrying the console theme and, when already cached, the DS kit CSS (#4076). Start the kit's
+  // one-time fetch now, so it has usually landed by the time the gate opens.
+  // Built when the frame first SHOWS (not at card mount) so it picks up the kit if it landed
+  // in between; `showPreview` is latched for a live stream, so this builds once.
   const [nonce] = useState(randomNonce);
-  const srcdoc = useMemo(() => buildPreviewSrcdoc(nonce), [nonce]);
+  const built = useMemo(
+    () => (showPreview ? { srcdoc: buildPreviewSrcdoc(nonce), hadKit: cachedPluginKitCss() !== "" } : null),
+    [nonce, showPreview],
+  );
+  const srcdoc = built?.srcdoc ?? "";
+  const srcdocHadKit = built?.hadKit ?? false;
+  useEffect(() => {
+    void loadPluginKitCss();
+  }, []);
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const [frameLoaded, setFrameLoaded] = useState(false);
@@ -315,6 +359,35 @@ export function StreamingPreview({ buffer, kind = "", title = "", renderFinal }:
       timerRef.current = setTimeout(flush, PREVIEW_THROTTLE_MS - sinceLast);
     }
   }, [showPreview, frameLoaded, processed, buffer.text, buffer.done]);
+
+  // Theme (#4076): the srcdoc inlines the console theme as it is at mount, plus the DS kit CSS if
+  // it is cached. Once the frame is loaded, post the kit in when its one-time fetch settles (a
+  // first preview on the page mounts before it has), and re-post the theme on a live console
+  // re-theme (`protoagent:theme`, agentTheme.ts) so the preview never drifts from the console.
+  useEffect(() => {
+    if (!showPreview || !frameLoaded) return;
+    let cancelled = false;
+    const post = (id: string, css: string) => {
+      const win = frameRef.current?.contentWindow;
+      if (!win) return;
+      try {
+        win.postMessage({ type: PREVIEW_STYLE_TYPE, id, css, scheme: consoleScheme() }, "*");
+      } catch {
+        /* detached — best effort */
+      }
+    };
+    if (!srcdocHadKit) {
+      void loadPluginKitCss().then((css) => {
+        if (!cancelled && css) post(PREVIEW_KIT_STYLE_ID, css);
+      });
+    }
+    const onTheme = () => post(PREVIEW_THEME_STYLE_ID, previewThemeCss());
+    window.addEventListener("protoagent:theme", onTheme);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("protoagent:theme", onTheme);
+    };
+  }, [showPreview, frameLoaded, srcdocHadKit]);
 
   // Never leave a trailing post timer behind on unmount.
   useEffect(() => () => {

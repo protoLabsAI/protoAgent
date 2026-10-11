@@ -28,6 +28,7 @@ import {
   type RefState,
 } from "./artifactRef";
 import { createFrameBridge, type FrameBridge } from "./frameBridge";
+import { useFrameFocusGuard } from "./frameFocusGuard";
 import { BridgeNoticeView, useFrameSendGate } from "./SendConfirmChip";
 import {
   clampHeight,
@@ -447,6 +448,10 @@ function InlineArtifactHost({
   // The live re-theme PluginView performs (ADR 0026 / S6), reused verbatim so the embed repaints
   // on a console theme switch without a reload.
   usePluginFrameThemeSync(frameRef, src, navigatedRef);
+
+  // A self-focusing artifact must not pull the composer's focus into its frame (#4076): focus
+  // enters only on the operator's own click or Tab.
+  useFrameFocusGuard(frameRef, mounted && live);
 
   // Hand the embed the bearer + theme after it navigates (never a token in the URL). The DS
   // plugin-kit registers its listener asynchronously, so re-post on a short schedule; the
