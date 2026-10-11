@@ -300,7 +300,7 @@ def test_panel_boot_and_render_are_unchanged(monkeypatch, tmp_path):
     boot = _js_function(js, "boot")
     # Embed takes a dedicated boot; the panel keeps its exact selection + polling boot.
     assert "if (EMBED) { embedBoot(); return; }" in boot
-    assert "loadSel(); poll(); schedulePoll();" in boot
+    assert "loadSel(); loadHead(); poll(); schedulePoll();" in boot
     # The reporter rides only the embed path (embedSuffix), so no panel frame carries it; the one
     # measure sender is embed-gated, so the panel never pokes a frame about its height.
     assert js.count('postMessage({type:"protoArtifact:measure"}') == 1

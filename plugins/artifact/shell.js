@@ -18,9 +18,9 @@
   }
   // Store mirror: arts = [{id,kind,title,versions:[{code,ts,by}]}], curId = focused.
   // selId/selVer = the artifact + version the USER is viewing (selVer null = latest, so
-  // it auto-follows new versions). followNewest jumps to the newest artifact on create
-  // unless the user navigated to an older one.
-  var arts = [], curId = null, selId = null, selVer = null, followNewest = true, lastRendered = "";
+  // it auto-follows new versions). followNewest jumps to the newest PANEL artifact on create
+  // unless the user navigated to an older one; panelHead is that artifact (see headOf).
+  var arts = [], curId = null, selId = null, selVer = null, followNewest = true, lastRendered = "", panelHead = null;
   // The version in the frame, for render-status (#1458): its id, 1-based position, and its identity —
   // lifetime number + ts — which the route resolves even after a trim has shifted the position.
   var renderingId = null, renderingVer = 0, renderingN = 0, renderingTs = 0;
@@ -55,6 +55,11 @@
     // buttons went near-black on a light console (#4124).
     + 'if(m.type==="protoArtifact:theme"&&m.tokens){var st=document.documentElement.style;'
     + 'for(var k in m.tokens){if(k.indexOf("--pl-")===0)st.setProperty(k,String(m.tokens[k]));}'
+    // The scheme rides along (the shell reads it off the new --pl-color-bg) and is written into
+    // base()'s own :root rule — not inline — so native controls and scrollbars flip with the
+    // theme while an author's own :root{color-scheme} still wins, exactly as at first render.
+    + 'if(m.scheme==="dark"||m.scheme==="light"){var b=document.getElementById("__artbase");'
+    + 'try{b.sheet.cssRules[0].style.setProperty("color-scheme",m.scheme);}catch(_){}}'
     + 'return;}'
     + 'if(m.type!=="protoArtifact:result")return;'
     + 'var p=w[m.id];if(!p)return;delete w[m.id];m.error?p.reject(p.b?nay(m.error):new Error(m.error)):p.resolve(m.text);});'
@@ -93,9 +98,10 @@
     + 'W.__artErr=show;W.__artOk=function(){rep(true,"");};'
     + 'addEventListener("error",function(e){show("⚠ "+(e.message||(e.error&&e.error.message)||"Script error")+(e.lineno?" (line "+e.lineno+")":""));},true);'
     // A send()/openLink() refusal the artifact didn't catch is not a render failure: log it
-    // quietly (no overlay, no failed verdict). Every other unhandled rejection still shows.
+    // quietly (no overlay, no failed verdict) and preventDefault() it, so the browser doesn't also
+    // report it as an "Uncaught (in promise)" error. Every other unhandled rejection still shows.
     + 'addEventListener("unhandledrejection",function(e){var r=e.reason;'
-    + 'if(r&&r.protoArtifactRefusal){try{console.info("protoArtifact: not sent \u2014 "+r.message);}catch(_){}return;}'
+    + 'if(r&&r.protoArtifactRefusal){try{e.preventDefault();}catch(_){}try{console.info("protoArtifact: not sent \u2014 "+r.message);}catch(_){}return;}'
     + 'show("⚠ "+((r&&r.message)||r));});'
     + 'addEventListener("load",function(){if(W.__artKind!=="react"&&W.__artKind!=="vega-lite")setTimeout(function(){if(!W.__artRep)W.__artOk();},80);});'
     + '})();<\/script>';
@@ -177,7 +183,7 @@
     // color-scheme follows the console, so native controls (inputs, scrollbars, date pickers) are
     // dark on a dark theme instead of glaring white.
     var scheme=bgIsDark(bg)?"dark":"light";
-    return '<style>:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+';'+decl+'color-scheme:'+scheme+'}'
+    return '<style id="__artbase">:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+';'+decl+'color-scheme:'+scheme+'}'
       + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}'
       + DEFAULTS + '</style>'
       + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT;
@@ -1444,6 +1450,51 @@
   function loadSel(){ try{ var s=JSON.parse(localStorage.getItem(SEL_KEY)||"null");
     if(s&&typeof s==="object"){ selId=s.selId||null; selVer=(s.selVer==null?null:s.selVer); followNewest=(s.followNewest!==false); } }catch(_){} }
 
+  // The head follow-newest tracks persists beside the selection (its own key, so the selection's
+  // stored shape is unchanged): without it a reload couldn't tell "a new panel artifact arrived"
+  // from "the head I was already following".
+  var HEAD_KEY = "protoartifact.head";
+  function saveHead(){ try{ localStorage.setItem(HEAD_KEY, panelHead||""); }catch(_){} }
+  function loadHead(){ try{ panelHead=localStorage.getItem(HEAD_KEY)||null; }catch(_){} }
+
+  // Follow-newest follows PANEL artifacts only (ADR 0118 D2: an inline answer has no side effect
+  // on the panel). The store's `current` moves to every new artifact — inline answers included,
+  // and ones another session made — so the panel can't just chase it. headOf picks the panel
+  // artifact to follow: `current` when it is panel-placed, else the most recently written panel
+  // artifact (only a write moves `current`, so that is the last panel artifact it pointed at);
+  // null when there is none. The poll moves the selection only when the head CHANGES, so an
+  // inline answer (which leaves the head where it was) never moves the panel, and a selection
+  // the operator opened from an inline chip stays put until a new panel artifact arrives.
+  function headOf(list, cur){
+    var i, a, best=null, bestTs=-1;
+    for(i=0;i<list.length;i++) if(list[i].id===cur && list[i].placement!=="inline") return cur;
+    for(i=0;i<list.length;i++){
+      a=list[i]; if(a.placement==="inline") continue;
+      var vs=a.versions||[], ts=+((vs.length && vs[vs.length-1].ts) || a.updated || a.created || 0);
+      if(ts>bestTs){ bestTs=ts; best=a; }
+    }
+    return best ? best.id : null;
+  }
+  // The follow rules a fresh poll applies, pure so they can be tested: s is the selection state
+  // {selId, selVer, followNewest, head} before the poll; returns the new one (+ save: re-persist).
+  //   • Following: jump only when a new panel artifact became the head — an inline answer or a
+  //     write to a non-panel artifact leaves the panel where it is. With nothing selected yet (or
+  //     the selection deleted) it lands on the head, or the newest anything when no panel artifact
+  //     exists, so the panel never sits blank over a non-empty store.
+  //   • A pinned selection whose artifact was deleted would strand the panel on a dead id — fall
+  //     back to auto-follow + the head and re-persist so it doesn't linger.
+  function nextSel(list, cur, s){
+    var head=headOf(list, cur), moved=head!==s.head, fallback=head || (list[0] && list[0].id) || null;
+    var gone=!s.selId || !list.some(function(a){ return a.id===s.selId; });
+    var o={selId:s.selId, selVer:s.selVer, followNewest:s.followNewest, head:head, save:false};
+    if(s.followNewest){ if((moved && head) || gone) o.selId=fallback; o.selVer=null; }
+    else if(s.selId && gone){ o.followNewest=true; o.selId=fallback; o.selVer=null; o.save=true; }
+    return o;
+  }
+  // Whether picking `id` leaves the panel on the newest thing (so it keeps following): the panel
+  // head, or the store's current artifact itself (an inline answer opened in the panel just now).
+  function atNewest(id){ return !!id && (id===panelHead || id===curId); }
+
   function total(a){ return (a && (a.version_count||a.versions.length)) || 0; }
   function selArt(){ for(var i=0;i<arts.length;i++) if(arts[i].id===selId) return arts[i]; return arts[0]||null; }
   function verIdx(a){ // selVer clamped to a's range; null/out-of-range → latest (auto-follow)
@@ -1596,11 +1647,19 @@
   // palette. The DS plugin-kit re-themes THIS page by rewriting the --pl-* tokens on
   // the root element; observe that and push the fresh tokens into the frame (the
   // SHIM applies them in place — no re-srcdoc, so interactive artifact state survives).
+  // The scheme travels with the tokens (a live switch flips the frame's native controls too,
+  // not only its colours), and this page's own color-scheme follows the console's ground the
+  // same way — the kit's :root default otherwise tracks the OS, so the shell's scrollbars stayed
+  // light on a dark console whenever the OS was light. Written only on a change: the observer
+  // below watches this very style attribute.
   function pushTheme(){
+    var tokens=themeTokens(), scheme=bgIsDark(tokens["--pl-color-bg"])?"dark":"light";
+    if(document.documentElement.style.colorScheme!==scheme) document.documentElement.style.colorScheme=scheme;
     if(!$frame || !$frame.contentWindow || $frame.style.display==="none") return;
-    try{ $frame.contentWindow.postMessage({type:"protoArtifact:theme",tokens:themeTokens()},"*"); }catch(_){}
+    try{ $frame.contentWindow.postMessage({type:"protoArtifact:theme",tokens:tokens,scheme:scheme},"*"); }catch(_){}
   }
   new MutationObserver(pushTheme).observe(document.documentElement,{attributes:true,attributeFilter:["style","class","data-theme"]});
+  pushTheme();  // this page's own color-scheme from the first paint's ground (no frame yet)
   // A theme switch can race a render — re-push once the fresh srcdoc has loaded.
   frameNav.onLoad(pushTheme);
   // Embed only: wake the frame's dormant height reporter (HEIGHTJS) so it starts posting its
@@ -1611,7 +1670,7 @@
   });
 
   $art.addEventListener("change", function(e){
-    selId=e.target.value; selVer=null; followNewest=(selId===(curId||(arts[0]&&arts[0].id)));
+    selId=e.target.value; selVer=null; followNewest=atNewest(selId);
     saveSel(); render();
   });
   $vprev.addEventListener("click", function(){ var a=selArt(); if(!a)return; var vi=verIdx(a);
@@ -2253,10 +2312,10 @@
     var vtot=total(a), idx=want-(vtot-a.versions.length)-1;
     selId=a.id;
     // The newest version → follow it (selVer null), and follow newest ARTIFACTS only when this
-    // is also the panel's current one (the picker's own rule). An older version pins it: auto-
+    // is also the newest one (the picker's own rule, atNewest). An older version pins it: auto-
     // follow off, so the next agent edit doesn't yank the operator off the version they asked
     // for. A version trimmed at the cap falls back to the oldest one still kept.
-    if(idx>=a.versions.length-1){ selVer=null; followNewest=(a.id===(curId||(arts[0]&&arts[0].id))); }
+    if(idx>=a.versions.length-1){ selVer=null; followNewest=atNewest(a.id); }
     else { selVer=Math.max(0,idx); followNewest=false; }
     if(editing) exitEdit();
     saveSel();
@@ -2308,12 +2367,10 @@
       lastEtag = (r.headers && r.headers.get && r.headers.get("ETag")) || "";
       storeChangedAt = Date.now();   // fresh payload ⇒ stay on the fast cadence for a bit
       var d = await r.json(); arts = (d && d.artifacts) || []; curId = (d && d.current) || null;
-      if (followNewest) { selId = curId || (arts[0] && arts[0].id) || null; selVer = null; }
-      // A pinned selection whose artifact was deleted (not in arts) would strand the panel on a
-      // dead id — fall back to auto-follow + newest and re-persist so it doesn't linger.
-      else if (selId && !arts.some(function(a){ return a.id===selId; })) {
-        followNewest = true; selId = curId || (arts[0] && arts[0].id) || null; selVer = null; saveSel();
-      }
+      var n = nextSel(arts, curId, {selId:selId, selVer:selVer, followNewest:followNewest, head:panelHead});
+      selId = n.selId; selVer = n.selVer; followNewest = n.followNewest;
+      if (n.head !== panelHead) { panelHead = n.head; saveHead(); }
+      if (n.save) saveSel();
       takePendingSel(true);  // a chip's deep-link (#3617) — after the follow rules, so it wins
       rebuildArtSelect(); render();
       pollOk();
@@ -2445,7 +2502,7 @@
   // before boot still wins, applied by the first poll right after.
   function boot(){ if (booted) return; booted = true;
     if (EMBED) { embedBoot(); return; }   // one version, no chrome, no standing poll
-    loadSel(); poll(); schedulePoll(); }
+    loadSel(); loadHead(); poll(); schedulePoll(); }
   kit.initPluginView(boot);
   setTimeout(boot, 800);
   document.addEventListener("visibilitychange", function(){ if(!document.hidden && booted && !EMBED) kickPoll(); }); // refresh on return (panel only)

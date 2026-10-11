@@ -202,7 +202,8 @@ def test_theme_tokens_carry_the_chart_palette(monkeypatch, tmp_path):
         assert tok in block, tok
     assert '"--pl-color-chart-series"+_s' in block
     # every frame's live re-theme pushes the same set the chart was drawn with
-    assert "tokens:themeTokens()" in _js_function(js, "pushTheme")
+    push = _js_function(js, "pushTheme")
+    assert "var tokens=themeTokens()" in push and "tokens:tokens" in push
 
 
 # ── the frame controller, run under node against a stub vega-embed ─────────────
