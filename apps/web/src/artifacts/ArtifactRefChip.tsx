@@ -29,6 +29,7 @@ import {
 } from "./artifactRef";
 import { createFrameBridge, type FrameBridge } from "./frameBridge";
 import { useFrameFocusGuard } from "./frameFocusGuard";
+import { FrameActivationShield, FrameQuarantineNotice } from "./FrameGuardViews";
 import { BridgeNoticeView, useFrameSendGate } from "./SendConfirmChip";
 import {
   clampHeight,
@@ -449,9 +450,10 @@ function InlineArtifactHost({
   // on a console theme switch without a reload.
   usePluginFrameThemeSync(frameRef, src, navigatedRef);
 
-  // A self-focusing artifact must not pull the composer's focus into its frame (#4076): focus
-  // enters only on the operator's own click or Tab.
-  useFrameFocusGuard(frameRef, mounted && live);
+  // A self-focusing artifact must not pull the composer's focus into its frame (#4076): the frame
+  // is click-to-activate (or Tab into it), and one that takes focus on its own is quarantined —
+  // see frameFocusGuard.ts. Keyed like the live slot, so the quarantine survives a re-render.
+  const guard = useFrameFocusGuard(frameRef, `artifact:${key}`, mounted && live);
 
   // Hand the embed the bearer + theme after it navigates (never a token in the URL). The DS
   // plugin-kit registers its listener asynchronously, so re-post on a short schedule; the
@@ -499,21 +501,26 @@ function InlineArtifactHost({
       </div>
       {!mounted ? (
         <div className="artifact-ref-inline__body" style={{ height: shownHeight }} />
+      ) : live && guard.quarantined ? (
+        <FrameQuarantineNotice what="artifact" height={shownHeight} onRun={guard.run} />
       ) : live ? (
         // sandbox/allow mirror PluginView's plugin frame: same-origin so the DS kit + the gated
         // history poll work, pointer-lock delegated so a nested canvas/3D answer can capture the
         // mouse. The NESTED artifact frame the shell builds keeps its own stricter sandbox.
-        <iframe
-          ref={frameRef}
-          className="artifact-ref-inline__frame"
-          data-testid="artifact-inline-frame"
-          src={apiUrl(src)}
-          title={name}
-          sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
-          allow="clipboard-read; clipboard-write; pointer-lock"
-          style={{ height: shownHeight }}
-          onLoad={handleLoad}
-        />
+        <div className="frame-guard" data-active={guard.active ? "true" : undefined}>
+          <iframe
+            ref={frameRef}
+            className="artifact-ref-inline__frame"
+            data-testid="artifact-inline-frame"
+            src={apiUrl(src)}
+            title={name}
+            sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
+            allow="clipboard-read; clipboard-write; pointer-lock"
+            style={{ height: shownHeight }}
+            onLoad={handleLoad}
+          />
+          <FrameActivationShield guard={guard} />
+        </div>
       ) : (
         <button
           type="button"
