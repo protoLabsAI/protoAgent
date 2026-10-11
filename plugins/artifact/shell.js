@@ -123,6 +123,18 @@
   // cascade order. No `</` inside: rides a srcdoc <style>.
   var EMBED_FLOW_CSS = 'html,body{height:auto !important;min-height:0 !important}';
   var EMBED_FILL_CSS = 'html,body{height:clamp(260px,62vw,760px) !important;min-height:0 !important}';
+  // Themed defaults for UNSTYLED elements, at zero specificity (:where), so an artifact that
+  // writes plain <input>/<button>/<select> still looks like the console in either theme — and
+  // any rule the author writes wins outright. Every value is a --pl-* token.
+  var DEFAULTS = ':where(html,body){font-family:var(--pl-font-sans,system-ui,sans-serif);line-height:1.5}'
+    + ':where(input,select,textarea){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-inset,transparent);'
+    + 'border:1px solid var(--pl-color-border);border-radius:var(--pl-radius,6px);padding:6px 8px}'
+    + ':where(input,select,textarea):focus{outline:2px solid var(--pl-color-accent);outline-offset:1px}'
+    + ':where(button){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-raised,transparent);'
+    + 'border:1px solid var(--pl-color-border);border-radius:var(--pl-radius,6px);padding:6px 12px;cursor:pointer}'
+    + ':where(button):hover{background:var(--pl-color-bg-hover,var(--pl-color-bg-raised))}'
+    + ':where(a){color:var(--pl-color-accent)}'
+    + ':where(table){border-collapse:collapse}:where(th,td){border-bottom:1px solid var(--pl-color-border);padding:6px 8px;text-align:left}';
   function base(kind){
     var cs = getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n) || d).trim(); }
@@ -134,8 +146,16 @@
     // reaches them by updating the tokens alone — never by inline styles that would override the
     // author's own body colours (#4124). This rule precedes the author's CSS, so theirs wins.
     // __artKind lets ERRBOOT decide how to confirm a clean render (on-load vs react mount).
-    return '<style>:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+'}'
-      + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}</style>'
+    // Every theme token the console defines (themeTokens), not just the four above, so .pl-*
+    // classes and var(--pl-…) in the artifact resolve to the operator's live palette.
+    var all=themeTokens(), decl="";
+    Object.keys(all).forEach(function(k){ decl+=k+':'+all[k]+';'; });
+    // color-scheme follows the console, so native controls (inputs, scrollbars, date pickers) are
+    // dark on a dark theme instead of glaring white.
+    var scheme=(cs.colorScheme||"").indexOf("light")===0?"light":((cs.colorScheme||"").indexOf("dark")===0?"dark":"dark light");
+    return '<style>:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+';'+decl+'color-scheme:'+scheme+'}'
+      + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}'
+      + DEFAULTS + '</style>'
       + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT;
   }
   // Artifact libs are VENDORED + served same-origin (/plugins/artifact/vendor/…), so
@@ -1169,8 +1189,17 @@
   // tokens are the design system's own data-viz palette (--pl-color-chart-axis / -grid /
   // -series1…8), so a chart is drawn in the active theme's colours, dark or light. Pushed into
   // every frame on a re-theme (pushTheme) and baked into a chart's srcdoc (vegaDoc).
+  // The FULL semantic palette (not just bg/fg/accent/border): an artifact styled with the kit's
+  // .pl-* classes or var(--pl-…) must get the operator's theme for raised/inset surfaces, muted
+  // text and status colours too — otherwise those fall back to the kit's default palette and the
+  // artifact half-matches the console. "" = carry only when the console defines it.
   var THEME_TOKENS={"--pl-color-bg":"#0a0a0c","--pl-color-fg":"#ededed","--pl-color-fg-muted":"#9aa0aa",
     "--pl-color-accent":"#9b87f2","--pl-color-border":"rgba(255,255,255,.08)","--pl-font-sans":"",
+    "--pl-color-bg-raised":"","--pl-color-bg-subtle":"","--pl-color-bg-hover":"","--pl-color-bg-inset":"",
+    "--pl-color-fg-subtle":"","--pl-color-fg-on-accent":"","--pl-color-accent-hover":"","--pl-color-accent-fg":"",
+    "--pl-color-border-strong":"","--pl-color-status-error":"","--pl-color-status-info":"",
+    "--pl-color-status-success":"","--pl-color-status-warning":"","--pl-font-mono":"",
+    "--pl-radius":"","--pl-radius-lg":"",
     "--pl-color-chart-axis":"","--pl-color-chart-grid":""};
   for(var _s=1;_s<=8;_s++) THEME_TOKENS["--pl-color-chart-series"+_s]="";
   function themeTokens(){

@@ -376,3 +376,18 @@ console.log(JSON.stringify({ props, inline }));
     base = _js_function(js, "base")
     assert "html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}" in base
     assert "return htmlDoc(im.code, dsLink() + base(kind) + (im.map ? " in js
+
+
+def test_frames_get_the_full_theme_palette_and_themed_defaults(monkeypatch, tmp_path):
+    """An artifact sits in the operator's theme (dark or light). The frame must receive the FULL
+    semantic palette — not just bg/fg/accent/border — so `.pl-*` classes and `var(--pl-…)` resolve
+    to the live theme, a color-scheme so native controls match, and zero-specificity themed
+    defaults so plain <input>/<button> look native while author CSS still wins."""
+    art = _load(monkeypatch, tmp_path)
+    js = _js(art)
+    for tok in ("--pl-color-bg-raised", "--pl-color-bg-inset", "--pl-color-fg-muted", "--pl-color-border-strong",
+                "--pl-color-status-success", "--pl-radius", "--pl-font-mono"):
+        assert f'"{tok}"' in js, tok  # carried by themeTokens()
+    base = _js_function(js, "base")
+    assert "var all=themeTokens()" in base and "color-scheme:" in base and "DEFAULTS" in base
+    assert ":where(input,select,textarea)" in js and ":where(button)" in js  # zero specificity: author wins
