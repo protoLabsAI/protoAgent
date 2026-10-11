@@ -414,3 +414,81 @@ def test_the_frame_embeds_url_columns_and_refuses_deep_specs(monkeypatch, tmp_pa
     assert out["errs"] == [] and len(out["calls"]) == 1
     deep = _run_frame(art, _nested(700))
     assert deep["calls"] == [] and any("too deeply nested" in e for e in deep["errs"]), deep["errs"]
+
+
+# ── #4076: a re-theme never suppresses or delays the render verdict ─────────────
+
+_RACE = r"""
+const calls = [], errs = [], listeners = [];
+let oks = 0;
+const parent = {};
+global.window = {
+  parent,
+  __artErr: (m) => errs.push(String(m)),
+  __artOk: () => { oks++; },
+  addEventListener: (t, f) => { if (t === "message") listeners.push(f); },
+  vega: { Warn: 2, logger: () => ({ level() { return 2; }, warn() {}, error() {}, info() {}, debug() {} }) },
+  vegaLite: {},
+  // Each embed stays PENDING until the test settles it — a real draw takes ~100 ms, and a theme
+  // push can land inside it.
+  vegaEmbed: (el, spec, opts) => new Promise((res, rej) => {
+    calls.push({ bg: opts.config.background, res: () => res({ finalize() {} }), rej });
+  }),
+};
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const theme = (bg) => listeners.forEach((f) => f({ source: parent, data: { type: "protoArtifact:theme",
+  tokens: Object.assign({}, __CFG__.tokens, { "--pl-color-bg": bg }) } }));
+(__SRC__)(__CFG__);
+(async () => {
+  const out = {};
+  // Theme pushes land while the FIRST draw is still in flight (two of them, a storm).
+  theme("#111111"); theme("#222222"); theme("#333333");
+  await tick();
+  out.inFlight = calls.length;              // no restart: still the one draw
+  calls[0].res(); await tick();
+  out.oksAfterFirst = oks;                  // the first draw's verdict, before any redraw settles
+  out.calls = calls.length;                 // ONE coalesced redraw, in the newest palette
+  out.redrawBg = calls[calls.length - 1].bg;
+  calls[calls.length - 1].res(); await tick();
+  out.oksAfterRedraw = oks; out.errs = errs;
+  console.log(JSON.stringify(out));
+})();
+"""
+
+
+def test_a_retheme_mid_draw_never_delays_the_render_verdict(monkeypatch, tmp_path):
+    """The verdict for an inline chart is the FIRST draw's (``__artOk``, once-only in ERRBOOT). A
+    theme push that lands while that draw is in flight used to RESTART it — the superseded draw
+    finalized without reporting, so the verdict waited on the redraw, and a run of pushes could
+    keep deferring it. Now a mid-draw re-theme is coalesced into one redraw after the in-flight
+    draw settles, and every settled draw reports."""
+    art = _load(monkeypatch, tmp_path)
+    if not NODE:
+        pytest.skip("node not on PATH")
+    src = _js_function(art._SHELL_JS, "artVega")
+    js = _RACE.replace("__SRC__", src).replace("__CFG__", json.dumps({"spec": json.dumps(SPEC), "tokens": DARK}))
+    out = subprocess.run([NODE, "-e", js], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    r = json.loads(out.stdout)
+    assert r["inFlight"] == 1, "a re-theme must not restart the in-flight draw"
+    assert r["oksAfterFirst"] == 1, "the first successful draw reports at once"
+    assert r["calls"] == 2 and r["redrawBg"] == "#333333", "pushes coalesce into one redraw, newest palette"
+    assert r["errs"] == []
+
+
+def test_a_failed_first_draw_reports_even_when_a_retheme_is_pending(monkeypatch, tmp_path):
+    """A spec that fails to draw reports its failure from the first draw too, not only after a
+    pending re-theme's redraw."""
+    art = _load(monkeypatch, tmp_path)
+    if not NODE:
+        pytest.skip("node not on PATH")
+    src = _js_function(art._SHELL_JS, "artVega")
+    js = (
+        _RACE.replace("__SRC__", src)
+        .replace("__CFG__", json.dumps({"spec": json.dumps(SPEC), "tokens": DARK}))
+        .replace("calls[0].res(); await tick();", "calls[0].rej(new Error('bad encoding')); await tick(); out.errsAfterFirst = errs.slice();")
+    )
+    out = subprocess.run([NODE, "-e", js], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    r = json.loads(out.stdout)
+    assert r["errsAfterFirst"] == ["⚠ bad encoding"] and r["oksAfterFirst"] == 0

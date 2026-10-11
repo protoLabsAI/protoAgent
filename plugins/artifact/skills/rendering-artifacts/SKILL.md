@@ -112,6 +112,14 @@ A themed calculator skeleton:
   it fills the panel width. Reach for this over `react` + chart.js whenever the chart is a
   standard mark (bar/line/area/point/arc/rect heat-map) over a table of rows. With the data
   plugin on, `data_chart(sql, spec, title)` runs the query and inlines the rows for you.
+
+**Every standard chart is a `vega-lite` artifact — no exceptions for "add it to the tool".**
+A bar, line, area, point, arc (pie/donut) or heat-map chart is ALWAYS its own `vega-lite`
+artifact, **even when the user asks you to "add a chart" to an existing calculator or tool**.
+Show it as a separate inline `vega-lite` artifact right next to that tool, with the tool's
+values in `data.values`. **Never hand-build bars or lines out of `<div>`s, CSS widths or SVG
+rects/paths** inside an `html`/`react`/`svg` artifact. Only an animated or highly custom
+visual (one Vega-Lite genuinely can't express) justifies a hand-built one.
 - `react` — a self-contained component script that renders into `#root`; React, ReactDOM, and
   Babel are provided. Easiest: **name your top-level component `App`** and it **auto-mounts** — you
   don't have to write the mount call. (You still can: `ReactDOM.createRoot(...).render(...)`; an
@@ -298,12 +306,21 @@ rules:
 
 ```js
 // a "Ask about this scenario" button, after the user picks values
-btn.addEventListener("click", () => {
+btn.addEventListener("click", async () => {
   const msg = `Split a $${bill} bill ${people} ways with a ${tip}% tip.`;
-  if (typeof window.protoArtifact?.send === "function") window.protoArtifact.send(msg);
-  else showResult(msg); // degrade: keep the answer visible when the bridge is off
+  if (typeof window.protoArtifact?.send !== "function") return showResult(msg); // bridge off: keep it readable
+  try {
+    await window.protoArtifact.send(msg);
+    status.textContent = "Sent";                       // only once it actually went out
+  } catch (err) {
+    status.textContent = `Not sent: ${err.message}`;   // busy / dismissed / rate-limited: a quiet note, never an error
+  }
 });
 ```
+
+**Always handle the Promise** `send()` returns, as above: say "Sent" only after it resolves,
+and on a refusal show a quiet inline status ("Not sent: the agent is busy") — a refusal is a
+normal outcome, not an error, so never surface it as one.
 
 ## Authoring order for `html` (so it previews while you write it)
 
