@@ -2299,15 +2299,19 @@
   // The request waits for the store mirror: the panel may still be booting (a collapsed dock
   // mounts it on this very open), or its last poll may predate the artifact the agent just
   // made. Applied after every poll until it resolves; an id still absent after a fresh poll
-  // was deleted/evicted, so the request is dropped and the panel keeps what it showed.
-  var pendingSel=null;
+  // was deleted/evicted, so the request is dropped and the panel keeps what it showed. "Fresh"
+  // means a poll ISSUED after the request arrived (`after` = the polls issued by then): a poll
+  // already in flight when the agent's new artifact was announced can answer with the store from
+  // before it, and must not drop the request for an id it couldn't have seen yet.
+  var pendingSel=null, pollSeq=0, appliedSeq=0;
   // Resolve the pending deep-link into the selection state; true when it resolved. Kept apart from
   // the render so a fresh poll can fold it in BEFORE its one render — the frame never shows the
   // remembered selection first and is never re-targeted mid-load (see frameNavigator).
-  function takePendingSel(fresh){
+  // seq = the number of the poll whose store mirror this runs against (0 = not after a poll).
+  function takePendingSel(seq){
     if(!pendingSel) return false;
     var a=null; for(var i=0;i<arts.length;i++) if(arts[i].id===pendingSel.id){ a=arts[i]; break; }
-    if(!a){ if(fresh) pendingSel=null; return false; }
+    if(!a){ if(seq>pendingSel.after) pendingSel=null; return false; }
     var want=pendingSel.ver; pendingSel=null;
     var vtot=total(a), idx=want-(vtot-a.versions.length)-1;
     selId=a.id;
@@ -2321,15 +2325,15 @@
     saveSel();
     return true;
   }
-  function applyPendingSel(fresh){ if(takePendingSel(fresh)){ rebuildArtSelect(); render(); } }
+  function applyPendingSel(seq){ if(takePendingSel(seq)){ rebuildArtSelect(); render(); } }
   window.addEventListener("message", function(e){
     var m=e.data;
     if(!m || m.type!=="protoArtifact:select" || !fromEmbedder(e) || EMBED) return;  // embed shows a fixed version
     var id=typeof m.id==="string" ? m.id.slice(0,64) : "";
     var ver=(typeof m.ver==="number" && isFinite(m.ver)) ? Math.floor(m.ver) : 0;
     if(!id || ver<1) return;
-    pendingSel={id:id, ver:ver};
-    if(booted){ applyPendingSel(false); if(pendingSel) kickPoll(); }
+    pendingSel={id:id, ver:ver, after:pollSeq};
+    if(booted){ applyPendingSel(0); if(pendingSel) kickPoll(); }
   });
 
   // Adaptive cadence + conditional requests (#2256): fast (1.5s) while the store is
@@ -2355,23 +2359,32 @@
   }
   function pollFailed(status){ if(++pollFails >= POLL_FAIL_LIMIT) showPollError(status); }
   function pollOk(){ pollFails=0; var el=document.getElementById("pollerr"); if(el) el.remove(); }
+  // Polls can overlap (kickPoll — a deep-link, a tab coming back — starts one while the timer's
+  // may still be in flight) and their answers can land out of order. Each poll is numbered and
+  // an answer older than the store mirror already applied is dropped: applying it would roll the
+  // mirror (and the follow head) back, so the panel would jump to an older artifact and back.
   async function poll() {
     if (document.hidden) return;  // don't poll while the window is hidden/minimized (desktop perf)
+    var my = ++pollSeq;
     try {
       var r = await kit.apiFetch("/api/plugins/artifact/history",
         lastEtag ? {headers:{"If-None-Match": lastEtag}} : undefined);
-      if (r.status === 304) { pollOk(); applyPendingSel(true); return; }  // unchanged — no parse, no DOM churn
+      if (my < appliedSeq) return;  // a newer poll already landed
+      if (r.status === 304) { pollOk(); applyPendingSel(my); return; }  // unchanged — no parse, no DOM churn
       // A non-2xx parses as JSON too ({"detail":…} → arts=[]) — the exact empty-state
       // lie #2885 fixes. Count it as a failure instead of feeding it to the store mirror.
       if (!r.ok) { pollFailed(r.status + (r.statusText ? " " + r.statusText : "")); return; }
+      var d = await r.json();
+      if (my < appliedSeq) return;
+      appliedSeq = my;
       lastEtag = (r.headers && r.headers.get && r.headers.get("ETag")) || "";
       storeChangedAt = Date.now();   // fresh payload ⇒ stay on the fast cadence for a bit
-      var d = await r.json(); arts = (d && d.artifacts) || []; curId = (d && d.current) || null;
+      arts = (d && d.artifacts) || []; curId = (d && d.current) || null;
       var n = nextSel(arts, curId, {selId:selId, selVer:selVer, followNewest:followNewest, head:panelHead});
       selId = n.selId; selVer = n.selVer; followNewest = n.followNewest;
       if (n.head !== panelHead) { panelHead = n.head; saveHead(); }
       if (n.save) saveSel();
-      takePendingSel(true);  // a chip's deep-link (#3617) — after the follow rules, so it wins
+      takePendingSel(my);  // a chip's deep-link (#3617) — after the follow rules, so it wins
       rebuildArtSelect(); render();
       pollOk();
     } catch (e) { pollFailed(""); /* network-level — no HTTP status to name */ }

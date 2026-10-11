@@ -506,6 +506,8 @@ def test_shell_select_is_embedder_only_and_versioned_by_lifetime_number(monkeypa
     # Lifetime numbering, older version pins (auto-follow off), newest follows.
     assert "idx=want-(vtot-a.versions.length)-1" in js
     assert "selVer=Math.max(0,idx); followNewest=false;" in js
-    # A request that can't resolve after a FRESH poll (deleted/evicted) is dropped.
-    assert "if(!a){ if(fresh) pendingSel=null; return false; }" in js
+    # A request that can't resolve after a FRESH poll — one issued after it arrived — (deleted/
+    # evicted) is dropped; a poll already in flight when it arrived can't drop it.
+    assert "if(!a){ if(seq>pendingSel.after) pendingSel=null; return false; }" in js
+    assert "pendingSel={id:id, ver:ver, after:pollSeq};" in js
     assert '" of "+vtot' in js
