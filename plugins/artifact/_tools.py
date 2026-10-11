@@ -157,8 +157,10 @@ def _renders_ui(state: Any) -> bool:
 # text instead of pointing at a chat view this client doesn't have — or looping check_artifact.
 _TEXT_ONLY_NOTE = (
     " This client renders text only: it can't display the artifact, and its render can't be "
-    "checked (don't call check_artifact). Answer in text, and offer the source (get_artifact) "
-    "if the user wants it."
+    "checked (don't call check_artifact). Answer in text, quote the artifact id above so the user "
+    "can open it later in the console, and offer the source (get_artifact) if the user wants it. "
+    "Don't describe its buttons or other interactive controls as usable from here — this client "
+    "can't click them."
 )
 
 
@@ -442,7 +444,8 @@ def show_artifact(
     "mermaid" (a Mermaid diagram definition), "markdown" (a Markdown document — rendered with
     design-system prose styling; ```mermaid fences become live diagrams), "vega-lite" (a CHART: a
     JSON Vega-Lite spec with its rows inline in ``data.values`` — themed to the console
-    automatically, so leave colours/background out; ``data.url`` is never loaded — EVERY standard
+    automatically, so leave colours/background out, and omit ``$schema`` (the renderer is always
+    Vega-Lite v6); ``data.url`` is never loaded — EVERY standard
     bar/line/area/point/arc/heat-map chart is one, even one "added" to an existing tool: show it as
     its own inline vega-lite artifact beside the tool, never bars/lines hand-built from divs, CSS
     or SVG), or "react" (a
@@ -459,7 +462,13 @@ def show_artifact(
     an optional label. Runs sandboxed — it can't access the console.
 
     After creating it, CHECK IT RENDERED: this reply carries the render verdict when the panel is
-    open; otherwise call ``check_artifact``. Fix any reported error before moving on.
+    open; otherwise — always for an INLINE artifact, whose chat frame mounts only after this reply —
+    call ``check_artifact(<id>)`` before telling the user it works. Fix any reported error.
+
+    A STANDALONE DOCUMENT the user will keep or edit (a README, spec, report, letter) is
+    ``kind="markdown"`` here — it opens in the panel — with a short summary in chat, not the whole
+    document pasted into the reply. Short answers stay text. A DIAGRAM is ``kind="mermaid"``
+    (inline by default): a ```mermaid fence in chat text shows as plain code, not a drawing.
 
     To EDIT what you just made, use ``update_artifact`` (a small targeted change) or
     ``rewrite_artifact`` (a full replacement) — they iterate the SAME artifact as a new
@@ -871,8 +880,9 @@ def check_artifact(artifact_id: str = "", state: Annotated[Any, InjectedState] =
     Defaults to the current artifact; pass ``artifact_id`` (see ``list_artifacts``) to target
     another. Read-only.
 
-    Safe to call right after creating/editing: if a result isn't in yet but the panel is live,
-    it waits briefly for the verdict rather than returning "no result yet"."""
+    Safe to call right after creating/editing: if a result isn't in yet, it waits briefly for the
+    verdict rather than returning "no result yet" — for an INLINE artifact always (its chat frame
+    mounts after the create reply), for a panel artifact while the panel is live."""
     store = _store._read_store()
     art = _store._find(store, artifact_id or store["current"])
     if art is None:
@@ -890,7 +900,11 @@ def check_artifact(artifact_id: str = "", state: Annotated[Any, InjectedState] =
             f"Artifact {art['id']} v{v}: no viewer on this client (it renders text only), so the "
             "render can't be checked. Don't re-check — answer in text."
         )
-    r = r or _render_status._await_render(art["id"], v, key)
+    # An INLINE artifact waits the full window whatever the panel is doing (#4076): this client
+    # renders UI (the text-only case returned above), so its chat frame WILL mount during the turn
+    # — the hidden-tab eager mount (S22) covers a backgrounded tab — but after a reload nothing has
+    # polled yet, and the panel-poll gate alone answered "no result yet" before the frame loaded.
+    r = r or _render_status._await_render(art["id"], v, key, inline_viewer=_store._is_inline(art))
     if r is None:
         if _store._is_inline(art):
             # An inline artifact renders in the chat's own frame (ADR 0118 D2), mounted lazily as

@@ -49,7 +49,9 @@ def _version_render(art: dict | None, version: int, key: tuple[int, int] | None 
     return None
 
 
-def _await_render(art_id: str, version: int, key: tuple[int, int] | None = None) -> dict | None:
+def _await_render(
+    art_id: str, version: int, key: tuple[int, int] | None = None, *, inline_viewer: bool = False
+) -> dict | None:
     """Block up to ``_RENDER_WAIT_MS`` for the sandbox to report version ``version``'s render
     result — but ONLY when a renderer is live, else return immediately. Checks the store
     BEFORE each sleep, so an already-recorded result returns instantly. Runs in the tool's
@@ -58,8 +60,14 @@ def _await_render(art_id: str, version: int, key: tuple[int, int] | None = None)
     With ``key`` it waits for THAT version, and gives up ("no verdict") as soon as it has been
     trimmed away or superseded by a newer version: the panel renders the newest, so a verdict
     for this one isn't coming — and borrowing the newer version's would report its errors
-    against this edit."""
-    if not art_id or not _renderer_live():
+    against this edit.
+
+    ``inline_viewer`` (#4076): the caller knows an INLINE artifact has a console viewer that will
+    mount its chat frame during the turn — so wait the full window even though no panel has
+    polled. ``_renderer_live`` only sees PANEL polls; after a reload or reattach nothing has
+    polled until the inline frame itself mounts, and ``check_artifact`` used to answer "no
+    render result yet" in milliseconds while that frame was still loading."""
+    if not art_id or not (inline_viewer or _renderer_live()):
         return None
     deadline = _store._now() + _RENDER_WAIT_MS
     while True:
@@ -78,11 +86,27 @@ def _await_render(art_id: str, version: int, key: tuple[int, int] | None = None)
         time.sleep(_RENDER_POLL_MS / 1000)
 
 
+def _inline_pending(art_id: str) -> str:
+    """The create/edit tail for an INLINE artifact with no verdict yet (#4076): its chat frame
+    mounts only AFTER this reply reaches the console, so no verdict can ride the reply itself —
+    point the model at the check that will see it, before it tells the user the thing works."""
+    return (
+        f" The render result arrives once the chat frame mounts — call check_artifact({art_id!r}) "
+        "before telling the user it works."
+    )
+
+
+def _is_inline_id(art_id: str) -> bool:
+    art = _store._find(_store._read_store(), art_id) if art_id else None
+    return bool(art) and _store._is_inline(art)
+
+
 def _render_suffix(art_id: str, version: int, key: tuple[int, int] | None = None) -> str:
-    """The inline render verdict appended to a create/edit reply, or '' when unknown."""
+    """The inline render verdict appended to a create/edit reply; for an inline artifact with no
+    verdict yet, the check_artifact pointer (#4076); else ''."""
     r = _await_render(art_id, version, key)
     if r is None:
-        return ""
+        return _inline_pending(art_id) if _is_inline_id(art_id) else ""
     if r.get("ok"):
         return " It rendered cleanly."
     err = str(r.get("error") or "render failed").strip()

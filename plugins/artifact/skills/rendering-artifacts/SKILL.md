@@ -1,6 +1,6 @@
 ---
 name: rendering-artifacts
-description: When the user wants to SEE, render, visualize, preview, or "show me" a chart, diagram, mock-up, table, or interactive widget — render it with the show_artifact tool instead of writing files to disk.
+description: When the user wants to SEE, render, visualize, preview, or "show me" a chart, diagram, mock-up, table, or interactive widget — render it with the show_artifact tool instead of writing files to disk. Also when you write a standalone document the user will keep or edit (a README, spec, report, letter) — put it in the panel with show_artifact(kind="markdown") and a short summary in chat, not a long markdown block in the reply.
 ---
 
 # Rendering artifacts (generative UI)
@@ -18,10 +18,20 @@ a work product.**
 
 | Tier | Mechanism | Runs code? | Reach for it when… |
 |---|---|---|---|
-| **Text** | markdown (prose, code, mermaid fences, KaTeX, GFM tables) | no | a fact, a short explanation, code, or a small static table — the answer is just *words and numbers* |
+| **Text** | markdown (prose, code, KaTeX, GFM tables) | no | a fact, a short explanation, code, or a small static table — the answer is just *words and numbers* |
 | **Data component** | `show_component` → `component-v1` | no | exact values, a record, ordered steps, a code pointer — structured data you want rendered natively, not a widget |
 | **Inline artifact** | `show_artifact(…)` (the default) | yes (artifact sandbox) | an answer the user **interacts with right in the conversation** — a calculator, a what-if explainer, a chart, a small tool — that belongs beside your prose in scrollback |
 | **Panel artifact** | `show_artifact(…, placement="panel")` | yes (same sandbox) | a **work product** carried across turns — a document, a deck, a PDF, a large app — that the user opens, edits and returns to |
+
+**A diagram is never a chat-text fence.** The chat shows a ` ```mermaid ` fence in your reply as
+a plain code block, not a drawing. To show a diagram, call `show_artifact(kind="mermaid", code=…)`
+(inline by default). Live mermaid fences render only inside a `markdown` **artifact**.
+
+**A standalone document goes in the panel.** When the answer *is* a document the user will keep,
+edit or hand on (a README, a spec, a report, a letter), call
+`show_artifact(kind="markdown", code=…)`. It opens in the panel. Reply in chat with a short
+summary of what you wrote, not the whole document as a markdown block. Short answers, snippets
+and explanations stay text.
 
 `placement` is a real argument on the tool (`show_artifact(kind, code, title="", links=None,
 placement=…)`). It **defaults to `"inline"`**, so a plain `show_artifact(kind, code)` renders the
@@ -51,6 +61,8 @@ renders inline or in the panel.
 - "show me…", "render…", "visualize…", "draw…", "make a chart/diagram/flowchart of…",
   "build a little widget/demo to see…", "preview…"
 - → call `show_artifact(kind, code)`; it renders sandboxed and the user sees it immediately.
+- "write a README / spec / report / letter / doc for…" → `show_artifact(kind="markdown", code)`
+  in the panel, with a short summary in chat.
 
 Reach for `show_artifact` **before** writing files. Writing `.jsx`/`.html` to the workspace gives
 the user files to wire up themselves — not what they asked for when they want to *see* it.
@@ -101,7 +113,7 @@ A themed calculator skeleton:
 - `mermaid` — flowcharts, sequence/ER/gantt diagrams. `code` is the Mermaid definition. The
   panel lets the user zoom and pan it. A diagram **of the code** can link its nodes and messages
   to the exact lines (`links=`) — see the `diagramming-code` skill.
-- `markdown` — a Markdown document (notes, a README, a write-up). Rendered with design-system
+- `markdown` — a Markdown document (notes, a README, a spec, a report, a letter). Rendered with design-system
   prose styling; GitHub-style tables/lists/code work, and a ` ```mermaid ` fence becomes a live
   diagram. Reach for this over `html` when you just want **formatted text**.
 - `html` — a full or partial HTML document (with inline `<style>`/`<script>` as needed).
@@ -112,6 +124,8 @@ A themed calculator skeleton:
   it fills the panel width. Reach for this over `react` + chart.js whenever the chart is a
   standard mark (bar/line/area/point/arc/rect heat-map) over a table of rows. With the data
   plugin on, `data_chart(sql, spec, title)` runs the query and inlines the rows for you.
+  **Leave `$schema` out.** The renderer is always the bundled Vega-Lite v6, so a `$schema` line
+  adds nothing (a v5 one only logs a version warning).
 
 **Every standard chart is a `vega-lite` artifact — no exceptions for "add it to the tool".**
 A bar, line, area, point, arc (pie/donut) or heat-map chart is ALWAYS its own `vega-lite`
@@ -219,6 +233,9 @@ optional one** — confirm it worked before you tell the user it's done:
 - When the panel is open, `show_artifact` / `update_artifact` / `rewrite_artifact` wait briefly and
   **append the render verdict to their reply** — e.g. *"⚠ But it FAILED to render: Icon is not
   defined"* or *"It rendered cleanly."* Read it.
+- An **inline** artifact's chat frame mounts only after the tool replies, so its create/edit reply
+  can't carry a verdict. It says so, and names the `check_artifact(<id>)` call to make. **Make that
+  call before you tell the user it works.** `check_artifact` waits for the inline frame to report.
 - If the reply didn't carry a clean verdict (it came back before the render finished, or said "no
   result yet"), **call `check_artifact` to confirm** — it waits briefly for the verdict. Make this
   your default after creating or editing an artifact.

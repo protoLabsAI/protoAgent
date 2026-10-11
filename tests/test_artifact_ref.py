@@ -286,6 +286,9 @@ def test_inline_show_result_says_inline_in_the_chat(monkeypatch, tmp_path):
     assert strip_component(out) == (
         f"Created html artifact {aid} ({len(code)} chars) — now showing inline in the chat. "
         "Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
+        # #4076: no verdict can ride an inline create — the reply names the check to make.
+        f" The render result arrives once the chat frame mounts — call check_artifact('{aid}') "
+        "before telling the user it works."
     )
     assert "panel" not in strip_component(out).lower()
 
