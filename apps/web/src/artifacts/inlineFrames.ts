@@ -217,6 +217,65 @@ export function createLatestVersionRegistry(): LatestVersionRegistry {
   };
 }
 
+// ── the live turn's newest inline frame mounts eagerly (S22) ───────────────────────────
+
+/** Which inline frame the LIVE turn just produced, per chat (ADR 0118 / S22, #4147). Inline
+ *  frames lazy-mount near the viewport, so when the operator's chat isn't on screen during the
+ *  turn (background window, another chat tab in front, scrolled up) the newest artifact's frame
+ *  never loads — and no render verdict reaches the agent's `check_artifact`. The live-stream
+ *  hook (componentRegistry `onLive`, which never fires for history hydration, reattach or
+ *  replay) marks the ref here; the inline host that renders it mounts its frame at once instead
+ *  of waiting for the IntersectionObserver, then consumes the mark.
+ *
+ *  ONE mark per scope (chat session): a newer live inline ref in the same chat replaces it, so
+ *  only the turn's newest artifact is forced. Consumed on mount, so a later remount (or a
+ *  replay of the same ref) lazy-mounts like any history frame. Every entry is deleted when
+ *  consumed or replaced — at most one entry per chat, no unbounded growth. */
+export type LiveRefRegistry = {
+  /** Mark `key` as the live turn's newest inline frame in `scope` (replacing any earlier mark). */
+  mark(scope: string, key: string): void;
+  /** Is `key` the pending eager frame for `scope`? */
+  isMarked(scope: string, key: string): boolean;
+  /** Clear the mark if it is still `key` (a newer mark is left alone). */
+  consume(scope: string, key: string): void;
+  /** Subscribe to mark changes; returns an unsubscribe. */
+  subscribe(listener: () => void): () => void;
+  /** How many chats hold a pending mark — for leak checks. */
+  size(): number;
+};
+
+export function createLiveRefRegistry(): LiveRefRegistry {
+  const marks = new Map<string, string>();
+  const listeners = new Set<() => void>();
+  const emit = () => {
+    for (const fn of listeners) fn();
+  };
+  return {
+    mark(scope, key) {
+      if (marks.get(scope) === key) return;
+      marks.set(scope, key);
+      emit();
+    },
+    isMarked(scope, key) {
+      return marks.get(scope) === key;
+    },
+    consume(scope, key) {
+      if (marks.get(scope) !== key) return;
+      marks.delete(scope);
+      emit();
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    size() {
+      return marks.size;
+    },
+  };
+}
+
 // ── lazy mount ───────────────────────────────────────────────────────────────────────
 
 /** How near the viewport a frame must scroll before it mounts. A positive margin mounts it
@@ -261,16 +320,27 @@ export function observeLazyMount(
 
 /** React hook form of {@link observeLazyMount}: attach `ref` to the frame's placeholder and
  *  render the real frame only once `mounted` flips true. Mounting is sticky — once true it
- *  stays true, even if the frame later scrolls away (the registry, not this hook, evicts). */
-export function useLazyMount<T extends Element = HTMLElement>(rootMargin: string = LAZY_MOUNT_ROOT_MARGIN) {
+ *  stays true, even if the frame later scrolls away (the registry, not this hook, evicts).
+ *
+ *  `eager` skips the wait: true on the first render mounts at once, and flipping true later
+ *  mounts on the next commit — wherever the placeholder is, on screen or not (S22: the live
+ *  turn's newest inline frame must load so it can report a render verdict). */
+export function useLazyMount<T extends Element = HTMLElement>(
+  rootMargin: string = LAZY_MOUNT_ROOT_MARGIN,
+  eager: boolean = false,
+) {
   const ref = useRef<T | null>(null);
-  const [mounted, setMounted] = useState(false);
+  const [mounted, setMounted] = useState(eager);
   useEffect(() => {
     if (mounted) return;
+    if (eager) {
+      setMounted(true);
+      return;
+    }
     const el = ref.current;
     if (!el) return;
     const handle = observeLazyMount(el, () => setMounted(true), rootMargin);
     return () => handle.disconnect();
-  }, [mounted, rootMargin]);
+  }, [mounted, rootMargin, eager]);
   return { ref, mounted };
 }

@@ -4,6 +4,7 @@ import {
   clampHeight,
   createFrameRegistry,
   createLatestVersionRegistry,
+  createLiveRefRegistry,
   LAZY_MOUNT_ROOT_MARGIN,
   MAX_FRAME_HEIGHT,
   MAX_LIVE_FRAMES,
@@ -266,5 +267,42 @@ describe("createLatestVersionRegistry", () => {
     off();
     reg.announce("s", "a", 7);
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createLiveRefRegistry (S22, #4147)", () => {
+  it("holds ONE mark per chat: a newer mark replaces it, and marks are per chat", () => {
+    const reg = createLiveRefRegistry();
+    reg.mark("s1", "a");
+    expect(reg.isMarked("s1", "a")).toBe(true);
+    reg.mark("s1", "b"); // the turn's newer inline artifact
+    expect(reg.isMarked("s1", "a")).toBe(false);
+    expect(reg.isMarked("s1", "b")).toBe(true);
+    expect(reg.isMarked("s2", "b")).toBe(false);
+    expect(reg.size()).toBe(1);
+  });
+
+  it("consume clears only a matching mark and leaks nothing", () => {
+    const reg = createLiveRefRegistry();
+    reg.mark("s1", "b");
+    reg.consume("s1", "a"); // a stale consume never drops the newer mark
+    expect(reg.isMarked("s1", "b")).toBe(true);
+    reg.consume("s1", "b");
+    expect(reg.isMarked("s1", "b")).toBe(false);
+    expect(reg.size()).toBe(0);
+  });
+
+  it("notifies subscribers on a change only", () => {
+    const reg = createLiveRefRegistry();
+    const fn = vi.fn();
+    const off = reg.subscribe(fn);
+    reg.mark("s1", "a");
+    reg.mark("s1", "a"); // unchanged
+    expect(fn).toHaveBeenCalledTimes(1);
+    reg.consume("s1", "a");
+    expect(fn).toHaveBeenCalledTimes(2);
+    off();
+    reg.mark("s1", "b");
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 });
