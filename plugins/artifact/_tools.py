@@ -146,13 +146,11 @@ def _chat_session(state: Any) -> str:
 
 
 def _renders_ui(state: Any) -> bool:
-    """Whether this turn's client can display an artifact at all (#4144), from the injected
-    graph state's ``renders_ui`` — stamped every turn by the server from the turn's origin
-    (False for a plain API client: ``/v1``, ``/api/chat``). Absent → True: today's behaviour
-    for any host or caller that doesn't stamp it (an ACP tool process, a direct call)."""
-    if isinstance(state, dict) and state.get("renders_ui") is False:
-        return False
-    return True
+    """Whether this turn's client can display an artifact at all (#4144) — the SDK's reading of
+    the injected graph state's ``renders_ui``, so the plugin and every other caller agree."""
+    from graph.sdk import renders_ui
+
+    return renders_ui(state)
 
 
 # The text-only client's tail (#4144): said once, on every create/edit, so the model answers in
