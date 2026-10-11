@@ -82,6 +82,21 @@ _AUTONOMOUS_ORIGINS = frozenset(
     {"scheduler", "watch", "inbox", "webhook", "background", "background-resume", "delegate-result"}
 )
 
+# Origins (#4144) whose client receives only the reply TEXT: the OpenAI-compatible ``/v1`` endpoint,
+# ``POST /api/chat``, and ``plugin`` — the ADR 0018 ``HOST.invoke`` seam
+# (``plugin_wiring._plugin_agent_invoke``), which hands a relay plugin (Discord and the other
+# ``register_chat_surface`` adapters) only the joined assistant text, so no caller of it can
+# receive a component. Nothing in their response can show an artifact, so their turns stamp
+# ``renders_ui: False`` and the artifact tools answer honestly ("saved; this client can't display
+# it", "no viewer to check") instead of pointing at a chat that isn't there.
+_TEXT_ONLY_ORIGINS = frozenset({"v1", "api-chat", "plugin"})
+
+
+def renders_ui(origin: str | None) -> bool:
+    """Whether a turn from ``origin`` reaches a client that can display rendered UI (#4144)."""
+    return str(origin or "").strip().lower() not in _TEXT_ONLY_ORIGINS
+
+
 # The immutable provenance of a result-delivery nudge (kept in _AUTONOMOUS_ORIGINS above)
 # is distinct from whether a human is *currently* attending its origin session (#3110).
 # These are the origins whose autonomy is conditional on live attendance rather than fixed.

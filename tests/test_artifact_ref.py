@@ -291,15 +291,16 @@ def test_inline_show_result_says_inline_in_the_chat(monkeypatch, tmp_path):
 
 
 def test_check_artifact_is_inline_aware_without_a_verdict(monkeypatch, tmp_path):
-    # #4124: with no render verdict yet, an INLINE artifact's check says it's rendering inline in
-    # the chat (or not scrolled into view) — it never tells anyone to open the panel. A PANEL
-    # artifact keeps the open-the-panel hint, since that's where it renders.
+    # #4124: with no render verdict yet, an INLINE artifact's check says it's inline in the chat —
+    # it never tells anyone to open the panel. #4144/#4147: and never invites a re-check loop.
+    # A PANEL artifact keeps the open-the-panel hint, since that's where it renders.
     art = _load(monkeypatch, tmp_path)
     art.show_artifact.invoke({"kind": "html", "code": "<p>a</p>"})
     inline_id = art._read_store()["artifacts"][0]["id"]
     out = art.check_artifact.invoke({"artifact_id": inline_id})
     assert "no render result yet" in out
-    assert "inline in the chat" in out and "scrolled into view" in out
+    assert "inline in the chat" in out and "can't be confirmed" in out
+    assert "check again" not in out.lower() and "Don't keep re-checking" in out
     assert "panel" not in out.lower()
 
     art.show_artifact.invoke({"kind": "html", "code": "<p>b</p>", "placement": "panel"})

@@ -178,6 +178,21 @@ async def run_subagent(
     )
 
 
+def renders_ui(state: Any) -> bool:
+    """Whether the client of the turn a tool runs in can display rendered UI — an artifact,
+    a component chip — read from the tool's injected graph state (#4144).
+
+    ``False`` for a plain API client that receives only the reply text (``/v1/chat/completions``,
+    ``POST /api/chat``, a relay plugin's ``HOST.invoke`` turn such as Discord); ``True`` for the
+    console and A2A, and whenever the state doesn't say (a host that predates the flag, a direct
+    call). Read it the way you read the session id — from ``state: Annotated[Any,
+    InjectedState]``, since per-turn contextvars are empty inside a tool body — and pass it on to
+    a provider that shapes its reply by it, e.g. ``sdk.service("artifact.show")(...,
+    renders_ui=sdk.renders_ui(state))``. A text-only reply should say what was made and that
+    this client can't show it, never point at a view the client doesn't have."""
+    return not (isinstance(state, dict) and state.get("renders_ui") is False)
+
+
 def turn_stop_reason() -> str:
     """Why the turn this code runs under was stopped from above, or ``""``.
 

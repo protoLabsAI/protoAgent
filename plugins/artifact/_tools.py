@@ -145,6 +145,25 @@ def _chat_session(state: Any) -> str:
         return (state.get("session_id") or "").strip() if isinstance(state, dict) else ""
 
 
+def _renders_ui(state: Any) -> bool:
+    """Whether this turn's client can display an artifact at all (#4144), from the injected
+    graph state's ``renders_ui`` — stamped every turn by the server from the turn's origin
+    (False for a plain API client: ``/v1``, ``/api/chat``). Absent → True: today's behaviour
+    for any host or caller that doesn't stamp it (an ACP tool process, a direct call)."""
+    if isinstance(state, dict) and state.get("renders_ui") is False:
+        return False
+    return True
+
+
+# The text-only client's tail (#4144): said once, on every create/edit, so the model answers in
+# text instead of pointing at a chat view this client doesn't have — or looping check_artifact.
+_TEXT_ONLY_NOTE = (
+    " This client renders text only: it can't display the artifact, and its render can't be "
+    "checked (don't call check_artifact). Answer in text, and offer the source (get_artifact) "
+    "if the user wants it."
+)
+
+
 def _stamp_ref(art: dict, session_id: str) -> None:
     """Record that this call's ``artifact-ref`` goes out in ``session_id``'s chat, so eviction
     keeps ``art`` while that chat exists (#4138). Only when the chip is emitted at all — on a
@@ -386,7 +405,7 @@ _RenderTarget = tuple[str, int, tuple[int, int]]
 _LockedResult = tuple[str, None] | tuple[str, _RenderTarget, str]
 
 
-def _then_render(result: _LockedResult) -> str:
+def _then_render(result: _LockedResult, renders_ui: bool = True) -> str:
     """A locked create/edit's reply plus the inline render verdict for the version it wrote,
     then the ``artifact-ref`` chip pointing at that version (#3617).
 
@@ -402,6 +421,10 @@ def _then_render(result: _LockedResult) -> str:
     msg, target, *rest = result
     if target is None:
         return msg
+    if not renders_ui:
+        # A text-only client (#4144): no viewer will ever post a verdict for it, and no chip can
+        # reach it — so neither the render wait nor the component tail, just the honest note.
+        return msg + _TEXT_ONLY_NOTE
     return msg + _render_status._render_suffix(*target) + (rest[0] if rest else "")
 
 
@@ -480,11 +503,19 @@ def show_artifact(
     pl-btn--primary``, ``pl-stats``, ``pl-table``). See the ``rendering-artifacts`` skill.
     """
     checked = _links.check(links)
-    return _then_render(_show(kind, code, title, checked, placement, session_id=_chat_session(state)))
+    ui = _renders_ui(state)
+    return _then_render(
+        _show(kind, code, title, checked, placement, session_id=_chat_session(state), renders_ui=ui), ui
+    )
 
 
 def show_service(
-    kind: str, code: str, title: str = "", placement: str | None = None, session_id: str = ""
+    kind: str,
+    code: str,
+    title: str = "",
+    placement: str | None = None,
+    session_id: str = "",
+    renders_ui: bool = True,
 ) -> dict:
     """The ``artifact.show`` plugin service (ADR 0116): create an artifact for ANOTHER plugin.
 
@@ -501,13 +532,19 @@ def show_service(
     ``message`` only when ``placement="inline"`` is explicit. ``session_id`` is the chat the
     caller's reply goes out in (``tools.session._session_id_from`` of the caller's injected
     state): pass it when you append ``ref``, so eviction keeps the artifact while that chat
-    exists (#4138); omitted, the artifact is evictable oldest-first. Returns a dict —
+    exists (#4138); omitted, the artifact is evictable oldest-first. ``renders_ui`` is whether
+    the caller's turn reaches a client that can display the artifact (#4144) — pass
+    ``graph.sdk.renders_ui(state)`` from the caller's injected state. ``False`` (a plain API
+    client: ``/v1``, ``/api/chat``, a relay plugin's turn) returns the honest text-only reply —
+    saved, with its id, but this client can't display it — with no render-verdict wait and an
+    empty ``ref``. Defaults to ``True``: the console reply, as before. Returns a dict —
     never raises for a refusal:
 
     - ``ok`` — False when nothing was created (``message`` says why);
     - ``id`` / ``version`` — the new artifact and its version (``""`` / ``0`` on a refusal);
     - ``message`` — the model-facing reply, render verdict included when a panel is open;
-    - ``ref`` — the ``artifact-ref`` chat-chip tail ("" when the host can't lift it). Append it
+    - ``ref`` — the ``artifact-ref`` chat-chip tail ("" when the host can't lift it, or the
+      client renders text only). Append it
       LAST, verbatim, to your tool's return string: the server lifts it into a chip that opens
       the panel on this version.
 
@@ -516,12 +553,15 @@ def show_service(
     it from a sync tool body, or from async code via ``asyncio.to_thread`` — never directly on an
     event loop."""
     try:
-        result = _show(kind, code, title, placement=placement, session_id=session_id)
+        result = _show(kind, code, title, placement=placement, session_id=session_id, renders_ui=renders_ui)
     except _store.StoreLockTimeout as e:
         return {"ok": False, "id": "", "version": 0, "message": str(e), "ref": ""}
     msg, target, *rest = result
     if target is None:
         return {"ok": False, "id": "", "version": 0, "message": msg, "ref": ""}
+    if not renders_ui:
+        # Same as show_artifact on a text-only client (#4144): no viewer, so no wait and no chip.
+        return {"ok": True, "id": target[0], "version": target[1], "message": msg + _TEXT_ONLY_NOTE, "ref": ""}
     return {
         "ok": True,
         "id": target[0],
@@ -539,6 +579,7 @@ def _show(
     checked: _links.Checked | None = None,
     placement: str | None = None,
     session_id: str = "",
+    renders_ui: bool = True,
 ) -> _LockedResult:
     k = (kind or "").strip().lower()
     if k not in _KINDS:
@@ -574,6 +615,16 @@ def _show(
     # Say where it ACTUALLY shows: an inline artifact renders in the chat, not the panel (#4124) —
     # a "now showing in the Artifact panel" reply sends the model telling the user to open it.
     where = "now showing inline in the chat" if inline else "now showing in the Artifact panel"
+    if not renders_ui:
+        # A text-only client (#4144) has no chat view and no panel: say it was SAVED, with its id
+        # and what it is, and no placement note (inline vs panel means nothing to this client).
+        label = f' "{title}"' if title else ""
+        return (
+            f"Saved {k} artifact {art['id']}{label} ({len(code)} chars) — this client can't display it."
+            + report,
+            (art["id"], 1, _store._version_key(art)),
+            "",
+        )
     msg = (
         f"Created {k} artifact {art['id']} ({len(code)} chars) — {where}. "
         f"Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
@@ -638,7 +689,9 @@ def update_artifact(
     If your edit renumbers sequence messages (msg:<n>), pass the corrected map.
     """
     checked = _links.check(links)
-    return _then_render(_update(old_string, new_string, artifact_id, checked, session_id=_chat_session(state)))
+    return _then_render(
+        _update(old_string, new_string, artifact_id, checked, session_id=_chat_session(state)), _renders_ui(state)
+    )
 
 
 @_store.serialized
@@ -705,7 +758,9 @@ def rewrite_artifact(
     the new source is a new diagram, so pass the ``links`` for it (the old version keeps its own).
     """
     checked = _links.check(links)
-    return _then_render(_rewrite(code, title, artifact_id, checked, session_id=_chat_session(state)))
+    return _then_render(
+        _rewrite(code, title, artifact_id, checked, session_id=_chat_session(state)), _renders_ui(state)
+    )
 
 
 @_store.serialized
@@ -805,15 +860,16 @@ def get_artifact(artifact_id: str = "") -> str:
 
 
 @tool
-def check_artifact(artifact_id: str = "") -> str:
+def check_artifact(artifact_id: str = "", state: Annotated[Any, InjectedState] = None) -> str:
     """Check whether an artifact's latest version actually RENDERED — the feedback channel for
     the code→render→fix loop. Rendering happens async in the browser, so a create/edit can
     return before the result is known; call this (or just iterate) to see how it went.
 
     Returns the render verdict: rendered cleanly, FAILED with the captured error message, or
     "no result yet" — for a panel artifact, the panel is closed / not showing this version (open
-    the Artifact panel); for an INLINE artifact, its frame in the chat hasn't rendered yet (it
-    renders when scrolled into view) — never a reason to open the panel.
+    the Artifact panel); for an INLINE artifact, the operator's chat isn't showing it yet, so the
+    render can't be confirmed — don't keep re-checking, and never open the panel for it. On a
+    client that renders text only, there is no viewer and nothing to check.
     Defaults to the current artifact; pass ``artifact_id`` (see ``list_artifacts``) to target
     another. Read-only.
 
@@ -828,14 +884,25 @@ def check_artifact(artifact_id: str = "") -> str:
     # (so an immediate post-render check returns the real result, not a premature "no result yet").
     # By identity, not position: an edit committed during the wait must not lend v its verdict.
     key = _store._version_key(art)
-    r = _render_status._version_render(art, v, key) or _render_status._await_render(art["id"], v, key)
+    r = _render_status._version_render(art, v, key)
+    if r is None and not _renders_ui(state):
+        # A text-only client (#4144): no viewer will ever post a verdict, so waiting or
+        # re-checking can only burn turns — answer at once, and say so.
+        return (
+            f"Artifact {art['id']} v{v}: no viewer on this client (it renders text only), so the "
+            "render can't be checked. Don't re-check — answer in text."
+        )
+    r = r or _render_status._await_render(art["id"], v, key)
     if r is None:
         if _store._is_inline(art):
             # An inline artifact renders in the chat's own frame (ADR 0118 D2), mounted lazily as
-            # it scrolls into view — the panel has nothing to do with it, so never point there (#4124).
+            # it scrolls into view — the panel has nothing to do with it, so never point there
+            # (#4124). And no "check again": a frame that isn't on screen posts nothing, so a
+            # re-check loop only burns context (#4144/#4147).
             return (
-                f"Artifact {art['id']} v{v}: no render result yet — it's shown inline in the chat "
-                "and is still rendering, or hasn't been scrolled into view yet. Check again shortly."
+                f"Artifact {art['id']} v{v}: no render result yet — it's inline in the chat, but the "
+                "operator's chat isn't showing it yet, so the render can't be confirmed. Don't keep "
+                "re-checking; carry on, and fix it if the operator reports a problem."
             )
         return (
             f"Artifact {art['id']} v{v}: no render result yet — the Artifact panel may be "
