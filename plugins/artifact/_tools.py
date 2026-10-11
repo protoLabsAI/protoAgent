@@ -507,7 +507,12 @@ def show_artifact(
 
 
 def show_service(
-    kind: str, code: str, title: str = "", placement: str | None = None, session_id: str = ""
+    kind: str,
+    code: str,
+    title: str = "",
+    placement: str | None = None,
+    session_id: str = "",
+    renders_ui: bool = True,
 ) -> dict:
     """The ``artifact.show`` plugin service (ADR 0116): create an artifact for ANOTHER plugin.
 
@@ -524,13 +529,19 @@ def show_service(
     ``message`` only when ``placement="inline"`` is explicit. ``session_id`` is the chat the
     caller's reply goes out in (``tools.session._session_id_from`` of the caller's injected
     state): pass it when you append ``ref``, so eviction keeps the artifact while that chat
-    exists (#4138); omitted, the artifact is evictable oldest-first. Returns a dict —
+    exists (#4138); omitted, the artifact is evictable oldest-first. ``renders_ui`` is whether
+    the caller's turn reaches a client that can display the artifact (#4144) — pass
+    ``graph.sdk.renders_ui(state)`` from the caller's injected state. ``False`` (a plain API
+    client: ``/v1``, ``/api/chat``, a relay plugin's turn) returns the honest text-only reply —
+    saved, with its id, but this client can't display it — with no render-verdict wait and an
+    empty ``ref``. Defaults to ``True``: the console reply, as before. Returns a dict —
     never raises for a refusal:
 
     - ``ok`` — False when nothing was created (``message`` says why);
     - ``id`` / ``version`` — the new artifact and its version (``""`` / ``0`` on a refusal);
     - ``message`` — the model-facing reply, render verdict included when a panel is open;
-    - ``ref`` — the ``artifact-ref`` chat-chip tail ("" when the host can't lift it). Append it
+    - ``ref`` — the ``artifact-ref`` chat-chip tail ("" when the host can't lift it, or the
+      client renders text only). Append it
       LAST, verbatim, to your tool's return string: the server lifts it into a chip that opens
       the panel on this version.
 
@@ -539,12 +550,15 @@ def show_service(
     it from a sync tool body, or from async code via ``asyncio.to_thread`` — never directly on an
     event loop."""
     try:
-        result = _show(kind, code, title, placement=placement, session_id=session_id)
+        result = _show(kind, code, title, placement=placement, session_id=session_id, renders_ui=renders_ui)
     except _store.StoreLockTimeout as e:
         return {"ok": False, "id": "", "version": 0, "message": str(e), "ref": ""}
     msg, target, *rest = result
     if target is None:
         return {"ok": False, "id": "", "version": 0, "message": msg, "ref": ""}
+    if not renders_ui:
+        # Same as show_artifact on a text-only client (#4144): no viewer, so no wait and no chip.
+        return {"ok": True, "id": target[0], "version": target[1], "message": msg + _TEXT_ONLY_NOTE, "ref": ""}
     return {
         "ok": True,
         "id": target[0],

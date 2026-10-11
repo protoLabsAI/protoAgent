@@ -39,14 +39,27 @@ def _live(art):
 # ── the origin → flag mapping ────────────────────────────────────────────────────────
 
 
-def test_only_the_plain_api_origins_are_text_only():
+def test_only_the_plain_api_and_plugin_relay_origins_are_text_only():
     from server.turn_control import renders_ui
 
     assert renders_ui("v1") is False
     assert renders_ui("api-chat") is False
     assert renders_ui(" API-Chat ") is False
-    for origin in ("local", "", None, "a2a", "scheduler", "plugin"):
+    # HOST.invoke (Discord and the other chat-surface relays) hands back only the joined
+    # assistant text, so no caller of it can receive a component.
+    assert renders_ui("plugin") is False
+    for origin in ("local", "", None, "a2a", "scheduler", "task", "delegate_to"):
         assert renders_ui(origin) is True
+
+
+def test_sdk_reads_the_flag_from_injected_state():
+    from graph import sdk
+
+    assert sdk.renders_ui({"renders_ui": False}) is False
+    assert sdk.renders_ui({"renders_ui": True}) is True
+    # A host that never stamps it, or no state at all: today's behaviour.
+    assert sdk.renders_ui({"session_id": "s1"}) is True
+    assert sdk.renders_ui(None) is True
 
 
 # ── the tools, text-only ─────────────────────────────────────────────────────────────
@@ -106,6 +119,50 @@ def test_check_on_a_text_only_client_answers_at_once_without_a_loop(monkeypatch,
         "be checked. Don't re-check — answer in text."
     )
     assert "check again" not in out.lower()
+
+
+# ── the artifact.show service (ADR 0116) honours the flag too ────────────────────────
+
+
+def test_show_service_text_only_returns_the_honest_reply_and_no_chip(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+
+    def boom(*_a, **_k):
+        raise AssertionError("a text-only caller must not wait on a viewer")
+
+    monkeypatch.setattr(art._render_status, "_render_suffix", boom)
+    r = art.show_service(kind="html", code="<p>x</p>", title="Chart", renders_ui=False)
+    aid = art._read_store()["artifacts"][0]["id"]
+    assert r["ok"] is True and r["id"] == aid and r["version"] == 1
+    assert r["ref"] == ""
+    assert r["message"].startswith(f'Saved html artifact {aid} "Chart" (8 chars) — this client can\'t display it.')
+    assert "renders text only" in r["message"] and "inline in the chat" not in r["message"]
+
+
+def test_show_service_defaults_to_the_console_reply(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    r = art.show_service(kind="html", code="<p>x</p>", title="Chart")
+    assert r["ok"] is True
+    assert "now showing inline in the chat" in r["message"] and "renders text only" not in r["message"]
+    assert extract_component(r["ref"])["props"]["artifact_id"] == r["id"]
+
+
+def test_show_service_is_resolved_with_the_flag_through_the_sdk(monkeypatch, tmp_path):
+    """The path a caller like the data plugin's ``data_chart`` takes: resolve the provider via
+    ``sdk.service`` and pass ``sdk.renders_ui(state)`` from its own injected state."""
+    from graph import plugin_services, sdk
+
+    art = _load(monkeypatch, tmp_path)
+    plugin_services.set_plugin_services({"artifact.show": art.show_service}, None)
+    try:
+        r = sdk.service("artifact.show")(
+            kind="svg", code="<svg/>", session_id="s1", renders_ui=sdk.renders_ui(TEXT_ONLY)
+        )
+    finally:
+        plugin_services.set_plugin_services(None, None)
+    assert r["ok"] is True and r["ref"] == "" and "can't display it" in r["message"]
 
 
 # ── the tools, console: unchanged except the non-looping inline wording ─────────────
@@ -209,3 +266,23 @@ async def test_api_chat_turn_reaches_the_tools_as_text_only_and_a_later_turn_res
     assert snap.values.get("renders_ui") is True
     last = [m.content for m in snap.values["messages"] if isinstance(m, ToolMessage)][-1]
     assert "no viewer" not in last and "inline in the chat" in last
+
+
+@pytest.mark.asyncio
+async def test_a_relay_plugin_turn_reaches_the_tools_as_text_only(monkeypatch, tmp_path):
+    """The ADR 0018 ``HOST.invoke`` seam (Discord and the other chat-surface relays) runs
+    ``chat(..., origin="plugin")`` and returns only the joined assistant text — so its turn is
+    text-only, and the artifact tools say so."""
+    import server.agent_init as ai
+
+    art = _load(monkeypatch, tmp_path)
+    g = _install_graph(
+        monkeypatch,
+        [_call("show_artifact", {"kind": "html", "code": "<p>x</p>"}, "c1"), AIMessage(content="done")],
+        [art.show_artifact, art.check_artifact],
+    )
+    assert await ai._plugin_agent_invoke("make a thing", "discord:42") == "done"
+    snap = await _snapshot(g, "discord:42")
+    assert snap.values.get("renders_ui") is False
+    (tool_out,) = [m.content for m in snap.values["messages"] if isinstance(m, ToolMessage)]
+    assert tool_out.startswith("Saved html artifact") and "can't display it" in tool_out

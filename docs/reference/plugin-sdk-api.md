@@ -25,7 +25,7 @@ the module's own.
 
 **Plugin services (the plugin↔plugin call seam, ADR 0116)** — [`service()`](#sdk-service)
 
-**Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types), [`turn_stop_reason()`](#sdk-turn-stop-reason)
+**Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`renders_ui()`](#sdk-renders-ui), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types), [`turn_stop_reason()`](#sdk-turn-stop-reason)
 
 **Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)** — [`llm_lanes()`](#sdk-llm-lanes), [`llm_priority()`](#sdk-llm-priority)
 
@@ -141,6 +141,24 @@ chat drivers), so a workflow step follows the model the operator picked for the
 turn — under the one precedence: the subagent's pin > the override >
 `routing.aux_model` > the main model ([#3944](https://github.com/protoLabsAI/protoAgent/issues/3944), [#3955](https://github.com/protoLabsAI/protoAgent/issues/3955)). Outside a turn there is
 none and the step resolves pin > aux > main, as before.
+
+### `sdk.renders_ui` {#sdk-renders-ui}
+
+```python
+sdk.renders_ui(state: Any) -> bool
+```
+
+Whether the client of the turn a tool runs in can display rendered UI — an artifact,
+a component chip — read from the tool's injected graph state ([#4144](https://github.com/protoLabsAI/protoAgent/issues/4144)).
+
+`False` for a plain API client that receives only the reply text (`/v1/chat/completions`,
+`POST /api/chat`, a relay plugin's `HOST.invoke` turn such as Discord); `True` for the
+console and A2A, and whenever the state doesn't say (a host that predates the flag, a direct
+call). Read it the way you read the session id — from `state: Annotated[Any,
+InjectedState]`, since per-turn contextvars are empty inside a tool body — and pass it on to
+a provider that shapes its reply by it, e.g. `sdk.service("artifact.show")(...,
+renders_ui=sdk.renders_ui(state))`. A text-only reply should say what was made and that
+this client can't show it, never point at a view the client doesn't have.
 
 ### `sdk.turn_stop_reason` {#sdk-turn-stop-reason}
 

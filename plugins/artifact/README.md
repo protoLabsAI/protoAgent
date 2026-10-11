@@ -182,7 +182,10 @@ makes a chart fast to produce. The panel draws it with the vendored `vega` 6.4.0
 - **From another plugin.** The `artifact.show` plugin service creates one without importing this
   plugin — `graph.sdk.service("artifact.show")(kind="vega-lite", code=spec_json, title=…)` → `{ok,
   id, version, message, ref}`; append `ref` (the chat chip) last. The data plugin's `data_chart`
-  runs a query and hands its rows here this way.
+  runs a query and hands its rows here this way. Pass `renders_ui=graph.sdk.renders_ui(state)`
+  from your tool's injected state: on a client that renders text only (`/v1`, `/api/chat`, a relay
+  plugin's turn) the reply then says the artifact was saved but can't be displayed, and `ref` is
+  empty (#4144).
 
 ```json
 {"title": "Revenue by weekday", "mark": {"type": "bar", "tooltip": true},
