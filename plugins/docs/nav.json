@@ -1008,6 +1008,10 @@
           "title": "0117 — Subagent-only tools: a domain's tools live in the subagent that owns it"
         },
         {
+          "path": "adr/0118-interactive-answers-inline-artifacts-and-frame-components.md",
+          "title": "0118 — Interactive answers: inline artifacts in chat, streamed previews, a send-to-chat bridge, and frame-rendered plugin components"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
