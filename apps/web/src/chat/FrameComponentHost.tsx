@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 
 import { consoleTheme, INIT_REPOST_DELAYS } from "../app/pluginFrameHandshake";
 import { InlineFrameBridgeContext } from "../artifacts/ArtifactRefChip";
+import { BridgeNoticeView, useFrameSendGate } from "../artifacts/SendConfirmChip";
 import { createFrameRegistry, useLazyMount, type FrameRegistry } from "../artifacts/inlineFrames";
 import { apiUrl } from "../lib/api";
 
@@ -46,10 +47,11 @@ import { apiUrl } from "../lib/api";
 //     `protoComponent:send|openLink` message carrying a correlation id (`cid`); the host runs it
 //     through the SAME frameBridge gates artifacts use (reused via InlineFrameBridgeContext) and
 //     posts the verdict back down as `protoComponent:bridgeResult`.
-//   • The TRUST decision is the host's, never the model/plugin-authored frame: the gates check
-//     the HOST's own `navigator.userActivation` (User Activation v2 propagates a child frame's
-//     gesture to its ancestors, so a frame can't fake it by posting on its own), the 1-per-2s
-//     rate window, the content length, and whether the target chat is busy.
+//   • The TRUST decision is the host's, never the model/plugin-authored frame. A send is a
+//     PROPOSAL (S19 / #4137): it shows an inline confirm chip in console DOM and posts only when
+//     the operator clicks Send — unless they ticked "Always allow from this component" (keyed by
+//     plugin + kind, per browser). Either way the content length, busy, 1-per-2s send rate and
+//     proposal rate gates apply. Shared with the artifact host via SendConfirmChip.
 //   • An accepted send goes through the EXACT send path S10b wired (ComponentChatSend.send →
 //     ChatSessionSlot runTurn), tagged with the origin `{via:"component", kind, plugin}` so the
 //     turn is a normal, visible, auditable user message with a "from ‹title›" label.
@@ -107,13 +109,6 @@ export type ComponentChatSend = {
   send: (text: string, origin: { kind: string; plugin: string | null; title?: string }) => void;
 };
 export const ComponentChatSendContext = createContext<ComponentChatSend | null>(null);
-
-/** The host's inline verdict on a send/openLink (ADR 0118 D4): the needs-confirm prompt (the
- *  runtime lacks the User Activation API, so the host asks before posting) or a rejection the
- *  operator sees in place ("the agent is busy", a bad gesture, rate-limited, a refused link). */
-type BridgeNotice =
-  | { kind: "confirm"; cid: number; text: string; message: string }
-  | { kind: "rejected"; message: string };
 
 // A per-registry subscriber set so every host sharing a registry re-renders when the live set
 // changes — a sibling registering past the cap evicts one of them, and the evicted host must
@@ -184,9 +179,6 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
   // the model/plugin-authored frame.
   const chat = useContext(ComponentChatSendContext);
   const bridge = useContext(InlineFrameBridgeContext);
-  // The host's inline verdict (needs-confirm prompt or a rejection); cleared when the operator
-  // answers or a fresh request arrives.
-  const [bridgeNotice, setBridgeNotice] = useState<BridgeNotice | null>(null);
 
   // Near-viewport lazy mount: the placeholder carries the observer ref; `mounted` sticks true
   // once the frame has scrolled within range.
@@ -244,6 +236,10 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     postToFrame(frameRef.current?.contentWindow, { type: "protoComponent:bridgeResult", cid, ...result });
   }, []);
 
+  // The send gate + confirm chip (ADR 0118 D4 / S19, #4137) — the same one the artifact host uses.
+  // Trust is per component KIND (plugin + kind, from the host's own props), not per occurrence.
+  const gate = useFrameSendGate({ bridge, frameId: id, trustKey: `component:${plugin ?? ""}:${kind ?? ""}`, reply: replyToFrame });
+
   // The send/openLink bridge (ADR 0118 D4 / S12b). Gated on `e.source` being THIS frame's own
   // window — a sibling frame or the page can't drive another component's chat — the strong
   // guarantee, since an opaque-origin frame's `origin` is "null". Only live frames carry a window
@@ -265,10 +261,9 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
         const verdict = bridge.checkOpenLink({ url: String(m.url ?? "") });
         if (verdict.status === "ok") {
           window.open(verdict.url, "_blank", "noopener,noreferrer");
-          setBridgeNotice(null);
           replyToFrame(cid, { ok: true });
         } else {
-          setBridgeNotice({ kind: "rejected", message: verdict.message });
+          gate.showRejection(verdict.message);
           replyToFrame(cid, { ok: false, error: verdict.message });
         }
         return;
@@ -277,56 +272,18 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
       // send: a visible user turn into THIS chat. Refuse up front when no chat is wired.
       if (!chat) {
         const message = "This component can't send to chat here.";
-        setBridgeNotice({ kind: "rejected", message });
+        gate.showRejection(message);
         replyToFrame(cid, { ok: false, error: message });
         return;
       }
-      // The host checks its OWN user activation (User Activation v2 propagates a child frame's
-      // gesture to its ancestors, so a frame can't fake it by posting on its own). A runtime
-      // missing the API yields needs-confirm, not a silent trust. And the gesture must have landed
-      // IN this frame — a click inside the iframe moves focus to it, so requiring
-      // document.activeElement === our frame rejects a click on console chrome or one meant for a
-      // sibling frame (#4122).
-      const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
-      const verdict = bridge.checkSend({
-        frameId: id,
-        text: String(m.text ?? ""),
-        userActivation: ua,
-        isBusy: chat.isBusy,
-        focusInFrame: () => document.activeElement === frameRef.current,
-      });
+      // A PROPOSAL, never a post: the shared gate shows the confirm chip (untrusted) or posts a
+      // trusted kind's text through the normal origin-tagged path, after the gates either way.
       const origin = { kind: kind ?? "", plugin: plugin ?? null };
-      if (verdict.status === "ok") {
-        setBridgeNotice(null);
-        chat.send(verdict.text, origin);
-        replyToFrame(cid, { ok: true, text: verdict.text });
-      } else if (verdict.status === "rejected") {
-        setBridgeNotice({ kind: "rejected", message: verdict.message });
-        replyToFrame(cid, { ok: false, error: verdict.message });
-      } else {
-        // needs-confirm: ask the operator inline, resolve the frame's Promise once they answer.
-        setBridgeNotice({ kind: "confirm", cid, text: verdict.text, message: verdict.message });
-      }
+      gate.propose(cid, String(m.text ?? ""), { isBusy: chat.isBusy, post: (text) => chat.send(text, origin) });
     }
     window.addEventListener("message", onBridge);
     return () => window.removeEventListener("message", onBridge);
-  }, [live, id, kind, plugin, chat, bridge, replyToFrame]);
-
-  // Answer the needs-confirm prompt (reads this render's notice, so it's always the live one). On
-  // "send" the request goes out now, so advance the frame's rate window (checkSend never did — it
-  // returned needs-confirm) and post the user turn; either way settle the frame's Promise so
-  // send() doesn't hang to its timeout.
-  function resolveConfirm(accept: boolean) {
-    if (!bridgeNotice || bridgeNotice.kind !== "confirm") return;
-    if (accept && chat) {
-      bridge.noteSend(id);
-      chat.send(bridgeNotice.text, { kind: kind ?? "", plugin: plugin ?? null });
-      replyToFrame(bridgeNotice.cid, { ok: true, text: bridgeNotice.text });
-    } else {
-      replyToFrame(bridgeNotice.cid, { ok: false, error: "Send cancelled." });
-    }
-    setBridgeNotice(null);
-  }
+  }, [live, id, kind, plugin, chat, bridge, replyToFrame, gate.propose, gate.showRejection]);
 
   // Clear any pending init re-posts when the frame unmounts / re-points.
   useEffect(() => {
@@ -389,44 +346,20 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
       {/* The host's send/openLink verdict (ADR 0118 D4): the needs-confirm prompt, or a rejection
           shown in place. The frame also learns the verdict on its send()/openLink() Promise; this
           makes the decision visible to the operator, where their click landed. */}
-      {bridgeNotice?.kind === "confirm" ? (
-        <div className="frame-component-host__bridge" data-testid="component-send-confirm" role="alertdialog">
-          <span className="frame-component-host__bridge-msg">{bridgeNotice.message}</span>
-          <button
-            type="button"
-            className="frame-component-host__bridge-btn"
-            data-testid="component-send-confirm-ok"
-            onClick={() => resolveConfirm(true)}
-          >
-            Send
-          </button>
-          <button
-            type="button"
-            className="frame-component-host__bridge-btn"
-            data-testid="component-send-confirm-cancel"
-            onClick={() => resolveConfirm(false)}
-          >
-            Cancel
-          </button>
-        </div>
-      ) : bridgeNotice?.kind === "rejected" ? (
-        <div
-          className="frame-component-host__bridge frame-component-host__bridge--rejected"
-          data-testid="component-send-rejected"
-          role="status"
-        >
-          <span className="frame-component-host__bridge-msg">{bridgeNotice.message}</span>
-          <button
-            type="button"
-            className="frame-component-host__bridge-btn"
-            data-testid="component-send-rejected-dismiss"
-            aria-label="Dismiss"
-            onClick={() => setBridgeNotice(null)}
-          >
-            Dismiss
-          </button>
-        </div>
-      ) : null}
+      <BridgeNoticeView
+        notice={gate.notice}
+        classPrefix="frame-component-host__bridge"
+        testIdPrefix="component"
+        source="component"
+        onSend={(alwaysAllow) =>
+          gate.resolve(true, alwaysAllow, chat && {
+            isBusy: chat.isBusy,
+            post: (text) => chat.send(text, { kind: kind ?? "", plugin: plugin ?? null }),
+          })
+        }
+        onDismiss={() => gate.resolve(false, false, null)}
+        onClearRejection={gate.clear}
+      />
     </div>
   );
 }

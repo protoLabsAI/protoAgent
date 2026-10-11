@@ -12,7 +12,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { InlineFrameBridgeContext } from "../artifacts/ArtifactRefChip";
-import { createFrameBridge } from "../artifacts/frameBridge";
+import { createFrameBridge, SEND_TRUST_STORAGE_KEY, type FrameBridge } from "../artifacts/frameBridge";
 import { createFrameRegistry } from "../artifacts/inlineFrames";
 import {
   ComponentChatSendContext,
@@ -231,21 +231,15 @@ describe("FrameComponentHost", () => {
   });
 });
 
-// The send-to-chat / openLink bridge (ADR 0118 D4 / S12b): a frame calls
+// The send-to-chat / openLink bridge (ADR 0118 D4 / S12b, amended by S19 / #4137): a frame calls
 // window.protoComponent.send()/openLink(); the shim relays it UP to this host as a
-// protoComponent:send|openLink message (correlation id `cid`), the host runs the frameBridge
-// gates (reused from the artifact inline frames) and posts the verdict back as
-// protoComponent:bridgeResult. Trust is the host's, never the plugin-authored frame — so these
-// drive the gates end to end through the host.
-describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b)", () => {
-  function setActivation(value: { isActive: boolean } | undefined) {
-    if (value === undefined) {
-      delete (navigator as unknown as { userActivation?: unknown }).userActivation;
-    } else {
-      Object.defineProperty(navigator, "userActivation", { value, configurable: true });
-    }
-  }
-  afterEach(() => setActivation(undefined));
+// protoComponent:send|openLink message (correlation id `cid`). The host reuses the artifact
+// host's gate + confirm chip (SendConfirmChip): a send is a PROPOSAL the operator confirms in
+// console DOM, unless they chose "Always allow from this component" (per plugin + kind).
+describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b / S19)", () => {
+  const q = <T extends Element = HTMLElement>(id: string) => container.querySelector<T>(`[data-testid="${id}"]`);
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
 
   function chatStub(over: Partial<ComponentChatSend> = {}): ComponentChatSend & { send: ReturnType<typeof vi.fn> } {
     return { sessionId: "s-1", isBusy: () => false, send: vi.fn(), ...over } as ComponentChatSend & {
@@ -253,14 +247,17 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b)", () 
     };
   }
 
-  function mountBridge(chat: ComponentChatSend | null, extra: Partial<FrameComponentHostProps> = {}) {
-    // A fresh bridge per mount so one test's rate window can't rate-limit the next (busy/rate
-    // gates precede the gesture gate).
+  function mountBridge(
+    chat: ComponentChatSend | null,
+    extra: Partial<FrameComponentHostProps> = {},
+    bridge: FrameBridge = createFrameBridge(),
+  ) {
+    // A fresh bridge per mount (unless shared on purpose) so rate windows can't leak across tests.
     act(() =>
       root.render(
         h(
           InlineFrameBridgeContext.Provider,
-          { value: createFrameBridge() },
+          { value: bridge },
           h(
             ComponentChatSendContext.Provider,
             { value: chat },
@@ -289,65 +286,97 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b)", () 
       window.dispatchEvent(ev);
     });
   }
+  const click = (id: string) => act(() => q<HTMLElement>(id)!.click());
 
-  const bridgeResult = (ok: boolean, extra: Record<string, unknown> = {}) =>
-    [expect.objectContaining({ type: "protoComponent:bridgeResult", cid: 7, ok, ...extra }), "*"];
+  const bridgeResult = (ok: boolean, extra: Record<string, unknown> = {}, cid = 7) =>
+    [expect.objectContaining({ type: "protoComponent:bridgeResult", cid, ok, ...extra }), "*"];
 
-  it("a gesture-backed send posts an origin-tagged user turn and resolves the frame's promise", () => {
-    setActivation({ isActive: true });
+  it("a send shows the confirm chip; Send posts the origin-tagged turn exactly once", () => {
     const chat = chatStub();
     const { frame, post } = mountBridge(chat);
-    frame.focus(); // the gesture landed IN this frame (#4122) — an in-frame click focuses the iframe
+    frame.focus(); // self-focus no longer means anything (#4137)
     dispatch(frame, { type: "protoComponent:send", cid: 7, text: "  run the report  " });
+    expect(chat.send).not.toHaveBeenCalled();
+    const chip = q("component-send-confirm")!;
+    expect(chip.getAttribute("role")).toBe("alertdialog");
+    expect(q("component-send-confirm-text")?.textContent).toBe("run the report");
+    expect(chip.textContent).toContain("Always allow from this component");
+    act(() => {
+      q<HTMLButtonElement>("component-send-confirm-ok")!.click();
+      q<HTMLButtonElement>("component-send-confirm-ok")?.click();
+    });
     // The NORMAL send path, tagged {via:"component", kind, plugin} (via lives in ChatSessionSlot).
     expect(chat.send).toHaveBeenCalledTimes(1);
     expect(chat.send).toHaveBeenCalledWith("run the report", { kind: "pl-demo", plugin: "demo" });
     expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "run the report" }));
-    expect(container.querySelector('[data-testid="component-send-rejected"]')).toBeNull();
-  });
-
-  it("a send with NO user activation is rejected — no turn, and no bearer leaks in any reply", () => {
-    setActivation({ isActive: false });
-    const chat = chatStub();
-    const { frame, post } = mountBridge(chat);
-    dispatch(frame, { type: "protoComponent:send", cid: 7, text: "do it" });
-    expect(chat.send).not.toHaveBeenCalled();
-    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("click or key press") }));
-    expect(container.querySelector('[data-testid="component-send-rejected"]')?.textContent).toContain("click or key press");
     // Every message the host posts on this path is bearer-free (BEARER is planted in beforeEach).
-    expect(post.mock.calls.length).toBeGreaterThan(0);
     for (const [message] of post.mock.calls) expect(JSON.stringify(message)).not.toContain(BEARER);
   });
 
-  // The gesture must land IN this frame too (ADR 0118 S16 / #4122): navigator.userActivation is
-  // live for a click ANYWHERE in the console, so the host also requires document.activeElement ===
-  // its own iframe. A click on console chrome leaves focus off the frame; an in-frame click moves
-  // focus to it. The gate is reused from the artifact host, so this proves it holds here too.
-  it("rejects a send after a click on console chrome, accepts one with focus in the frame (#4122)", () => {
-    setActivation({ isActive: true });
+  it("no post without a chip click — load, console click, self-focus, polling (#4137)", () => {
+    let clock = 0;
     const chat = chatStub();
-    const { frame, post } = mountBridge(chat);
-    // Active user activation, but focus is on a console-chrome element, not the frame → rejected.
+    const { frame } = mountBridge(chat, {}, createFrameBridge({ now: () => clock }));
+    dispatch(frame, { type: "protoComponent:send", cid: 1, text: "on load" });
     const chrome = document.createElement("button");
     document.body.appendChild(chrome);
     chrome.focus();
-    expect(document.activeElement).toBe(chrome);
-    dispatch(frame, { type: "protoComponent:send", cid: 7, text: "chrome click" });
-    expect(chat.send).not.toHaveBeenCalled();
-    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("click or key press") }));
-    expect(container.querySelector('[data-testid="component-send-rejected"]')?.textContent).toContain("click or key press");
+    clock += 5000;
+    dispatch(frame, { type: "protoComponent:send", cid: 2, text: "after console click" });
     chrome.remove();
-    // Now the gesture lands IN the frame (focus moves to the iframe) → accepted.
-    post.mockClear();
     frame.focus();
-    expect(document.activeElement).toBe(frame);
-    dispatch(frame, { type: "protoComponent:send", cid: 7, text: "in-frame click" });
-    expect(chat.send).toHaveBeenCalledWith("in-frame click", { kind: "pl-demo", plugin: "demo" });
-    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "in-frame click" }));
+    clock += 5000;
+    dispatch(frame, { type: "protoComponent:send", cid: 3, text: "self focus" });
+    for (let i = 0; i < 9; i++) {
+      clock += 300;
+      dispatch(frame, { type: "protoComponent:send", cid: 10 + i, text: `poll ${i}` });
+    }
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(container.querySelectorAll('[data-testid="component-send-confirm"]').length).toBe(1);
+  });
+
+  it("Dismiss sends nothing and rejects the frame's promise", () => {
+    const chat = chatStub();
+    const { frame, post } = mountBridge(chat);
+    dispatch(frame, { type: "protoComponent:send", cid: 7, text: "run it" });
+    click("component-send-confirm-dismiss");
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("dismissed") }));
+  });
+
+  it("'Always allow' trusts the component kind: the next send skips the chip, gates still apply", () => {
+    let clock = 0;
+    let busy = false;
+    const chat = chatStub({ isBusy: () => busy });
+    const { frame, post } = mountBridge(chat, {}, createFrameBridge({ now: () => clock }));
+    dispatch(frame, { type: "protoComponent:send", cid: 1, text: "first" });
+    click("component-send-confirm-trust");
+    click("component-send-confirm-ok");
+    expect(chat.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(localStorage.getItem(SEND_TRUST_STORAGE_KEY)!)).toEqual(["component:demo:pl-demo"]);
+    clock += 5000;
+    dispatch(frame, { type: "protoComponent:send", cid: 2, text: "second" });
+    expect(q("component-send-confirm")).toBeNull();
+    expect(chat.send).toHaveBeenCalledTimes(2);
+    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "second" }, 2));
+    // Busy still refuses a trusted kind.
+    clock += 5000;
+    busy = true;
+    dispatch(frame, { type: "protoComponent:send", cid: 3, text: "third" });
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: "the agent is busy" }, 3));
+    expect(chat.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("a different component kind still prompts", () => {
+    localStorage.setItem(SEND_TRUST_STORAGE_KEY, JSON.stringify(["component:demo:pl-demo"]));
+    const chat = chatStub();
+    const { frame } = mountBridge(chat, { kind: "pl-other" });
+    dispatch(frame, { type: "protoComponent:send", cid: 7, text: "hi" });
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(q("component-send-confirm")).not.toBeNull();
   });
 
   it("a send while the agent is busy is rejected with 'the agent is busy'", () => {
-    setActivation({ isActive: true });
     const chat = chatStub({ isBusy: () => true });
     const { frame, post } = mountBridge(chat);
     dispatch(frame, { type: "protoComponent:send", cid: 7, text: "do it" });
@@ -355,45 +384,18 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b)", () 
     expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: "the agent is busy" }));
   });
 
-  it("with no User Activation API it asks first, then posts the turn when the operator confirms", () => {
-    setActivation(undefined); // runtime without navigator.userActivation
-    const chat = chatStub();
-    const { frame, post } = mountBridge(chat);
-    dispatch(frame, { type: "protoComponent:send", cid: 7, text: "run it" });
-    expect(chat.send).not.toHaveBeenCalled();
-    expect(container.querySelector('[data-testid="component-send-confirm"]')?.textContent).toContain('Send "run it" to chat?');
-    act(() => {
-      container.querySelector<HTMLButtonElement>('[data-testid="component-send-confirm-ok"]')!.click();
-    });
-    expect(chat.send).toHaveBeenCalledWith("run it", { kind: "pl-demo", plugin: "demo" });
-    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "run it" }));
-  });
-
-  it("cancelling the confirm prompt sends nothing and rejects the frame's promise", () => {
-    setActivation(undefined);
-    const chat = chatStub();
-    const { frame, post } = mountBridge(chat);
-    dispatch(frame, { type: "protoComponent:send", cid: 7, text: "run it" });
-    act(() => {
-      container.querySelector<HTMLButtonElement>('[data-testid="component-send-confirm-cancel"]')!.click();
-    });
-    expect(chat.send).not.toHaveBeenCalled();
-    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("cancelled") }));
-  });
-
   it("with no chat wired a send is refused rather than left hanging", () => {
-    setActivation({ isActive: true });
     const { frame, post } = mountBridge(null);
     dispatch(frame, { type: "protoComponent:send", cid: 7, text: "do it" });
     expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("can't send to chat") }));
   });
 
   it("a send from SOME OTHER window is ignored (e.source is the gate)", () => {
-    setActivation({ isActive: true });
     const chat = chatStub();
     const { frame } = mountBridge(chat);
     dispatch(frame, { type: "protoComponent:send", cid: 7, text: "do it" }, window);
     expect(chat.send).not.toHaveBeenCalled();
+    expect(q("component-send-confirm")).toBeNull();
   });
 
   it("openLink opens an https link in a new tab with noopener,noreferrer, through the host", () => {

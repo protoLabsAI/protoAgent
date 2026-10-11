@@ -1,57 +1,56 @@
-// ADR 0118 D4 — the send-to-chat / openLink bridge GATES, enforced in the CONSOLE HOST and
-// never in untrusted frame code. An artifact (or frame-component, S12) frame calls
-// window.protoArtifact.send(text) / .openLink(url); the shell relays the request up to the
+// ADR 0118 D4 (amended by S19 / #4137) — the send-to-chat / openLink bridge GATES, enforced in
+// the CONSOLE HOST and never in untrusted frame code. An artifact (or frame-component, S12) frame
+// calls window.protoArtifact.send(text) / .openLink(url); the shell relays the request up to the
 // host, and the host runs these gates before it ever starts a turn or opens a tab.
 //
-// This module is framework-free pure logic plus a tiny per-frame rate-limit registry. It
-// returns typed verdicts and does NOT touch chat state, window.open or the DOM — S10b wires
-// the verdicts into the chat send path and the openLink window. Keeping the trust decision
-// here (not in the frame, which is model-authored) is the whole point of D4.
+// "The frame proposes; the user decides." A send() is a PROPOSAL: unless the operator has chosen
+// "Always allow" for that artifact (or component kind), it never posts on its own — the host shows
+// an inline confirm chip in CONSOLE DOM, which the frame cannot click. The earlier gesture gate
+// (navigator.userActivation + focus-in-frame) is gone: an artifact satisfied it by calling
+// .focus() on itself after any console click (#4137). Trusted sources skip the chip but still pass
+// the content, busy and rate gates.
+//
+// This module is framework-free logic plus a tiny per-frame rate registry and the per-browser
+// trust store. It returns typed verdicts and does NOT touch chat state, window.open or the DOM —
+// the hosts wire the verdicts into the chat send path and the confirm chip.
 
 /** Max characters a send() may carry — the D4 length gate (mirrors the artifact ask cap). */
 export const SEND_MAX_CHARS = 4000;
 /** The D4 rate gate: at most one ACCEPTED send per this many ms, per frame. */
 export const SEND_RATE_LIMIT_MS = 2000;
+/** The proposal rate gate: at most one send() PROPOSAL shown per this many ms, per frame. A
+ *  frame that polls send() can't churn the confirm chip (or flood its own error path). */
+export const PROPOSAL_RATE_LIMIT_MS = 1000;
 /** The window.open feature string every openLink the host opens must carry (D4). A frame can
  *  never reach the opener window or the referrer through it. */
 export const OPEN_LINK_FEATURES = "noopener,noreferrer";
-/** How much of the text the needs-confirm prompt previews before eliding. */
-const CONFIRM_PREVIEW_CHARS = 80;
+/** localStorage key holding the trusted send sources ("Always allow from this artifact"). */
+export const SEND_TRUST_STORAGE_KEY = "protoagent:frame-send-trust:v1";
 
-export type SendRejectReason = "empty" | "too-long" | "no-gesture" | "busy" | "rate-limited";
+export type SendRejectReason = "empty" | "too-long" | "busy" | "rate-limited";
 
-/** The outcome of a send() request, as judged by the host:
- *  - `ok`            — allowed; `text` is the normalized message to post as the user turn.
- *  - `needs-confirm` — the gesture API is missing on this runtime, so the host cannot trust a
- *                      silent activation; it must ask the user (`message`) before posting `text`.
- *  - `rejected`      — refused; `message` is shown IN the frame (e.g. "the agent is busy"). */
+/** The outcome of a send() proposal, as judged by the host:
+ *  - `ok`            — the source is trusted ("Always allow"); `text` is the normalized message to
+ *                      post as the user turn now. The frame's send-rate window has been advanced.
+ *  - `needs-confirm` — show the confirm chip; post `text` only when the operator clicks Send.
+ *  - `rejected`      — refused; `message` goes back to the frame (e.g. "the agent is busy"). */
 export type SendVerdict =
   | { status: "ok"; text: string }
-  | { status: "needs-confirm"; text: string; message: string }
+  | { status: "needs-confirm"; text: string }
   | { status: "rejected"; reason: SendRejectReason; message: string };
 
 export interface SendCheck {
-  /** Identifies the originating frame, for the per-frame rate window. */
+  /** Identifies the originating frame OCCURRENCE, for the per-frame rate windows. */
   frameId: string;
+  /** Identifies the trust SOURCE — `artifact:<id>` (every version of one artifact) or
+   *  `component:<plugin>:<kind>`. Derived by the host from its own props, never from the frame's
+   *  message. Omitted ⇒ never trusted (always needs-confirm). */
+  trustKey?: string;
   /** The text the frame asked to send. */
   text: string;
-  /** The host's OWN `navigator.userActivation`. `undefined`/`null` means the API is missing on
-   *  this runtime — the host must confirm with the user rather than trust a silent gesture.
-   *  (User Activation v2 propagates a child frame's activation to its ancestors, so a frame
-   *  can't fake `isActive` by posting a message on its own.) */
-  userActivation?: { isActive: boolean } | null;
   /** Injected predicate — true when the TARGET session already has a turn running. The bridge
    *  owns no session state, so the host answers this. Omitted ⇒ treated as idle. */
   isBusy?: () => boolean;
-  /** Injected predicate — true when the gesture landed INSIDE this frame (the host answers
-   *  `document.activeElement === <this frame's iframe>`). `userActivation.isActive` is true for a
-   *  recent gesture ANYWHERE on the page, so on its own it lets a click on console chrome (a resume
-   *  card, a tab, "Open in panel") — or a click meant for a SIBLING frame — drive a send from a
-   *  frame that was never touched (#4122). A click inside an iframe moves focus to that iframe; a
-   *  click on chrome does not, so this pins the gesture to THIS frame. Checked only when the
-   *  User Activation API is present (the needs-confirm path already asks the operator). Omitted ⇒
-   *  not enforced (direct unit use); the real hosts always pass it. */
-  focusInFrame?: () => boolean;
 }
 
 export type OpenLinkRejectReason = "invalid-url" | "not-https" | "origin-not-allowed";
@@ -68,23 +67,17 @@ export interface OpenLinkCheck {
   allowOrigins?: readonly string[];
 }
 
-/** A short, single-line preview of `text` for the needs-confirm prompt. */
-function previewText(text: string): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > CONFIRM_PREVIEW_CHARS ? oneLine.slice(0, CONFIRM_PREVIEW_CHARS) + "…" : oneLine;
-}
-
 /**
- * The pure core of the send gate. `lastSentAt` is the frame's last ACCEPTED send time (or
- * null if it has never sent), `now` the current time — both injected so this stays pure. The
- * caller owns the per-frame state; {@link createFrameBridge} supplies it.
+ * The pure core of the send gate. `lastSentAt` is the frame's last ACCEPTED send time (or null if
+ * it has never sent), `now` the current time, `trusted` whether the operator has chosen "Always
+ * allow" for this source — all injected so this stays pure. The proposal rate window is the
+ * stateful bridge's concern ({@link createFrameBridge}).
  *
- * Gate order is deliberate: content validity (empty / too-long), then whether a send is
- * possible right now (busy, rate), then the gesture decision LAST — so needs-confirm only ever
- * fires for a send that would otherwise be allowed, and the host never asks the user to confirm
- * a message it would reject anyway.
+ * Gate order: content validity (empty / too-long), then whether a send is possible right now
+ * (busy, rate), then trust LAST — so the chip only ever asks about a message that would otherwise
+ * go out, and a trusted source is held to exactly the same content/busy/rate gates.
  */
-export function evaluateSend(check: SendCheck, lastSentAt: number | null, now: number): SendVerdict {
+export function evaluateSend(check: SendCheck, lastSentAt: number | null, now: number, trusted = false): SendVerdict {
   const text = String(check.text ?? "").trim();
 
   if (text.length < 1) {
@@ -108,25 +101,7 @@ export function evaluateSend(check: SendCheck, lastSentAt: number | null, now: n
       message: "Only one message can be sent to chat every 2 seconds.",
     };
   }
-  const ua = check.userActivation;
-  if (ua === undefined || ua === null) {
-    // No User Activation API on this runtime — can't trust a silent gesture, so ask first.
-    // (Focus-in-frame is not consulted here: the operator confirms the send explicitly.)
-    return { status: "needs-confirm", text, message: `Send "${previewText(text)}" to chat?` };
-  }
-  // A trusted gesture must be BOTH active AND delivered inside THIS frame. `isActive` alone is
-  // true for a recent click ANYWHERE on the page, which let a click on console chrome or a
-  // sibling frame drive this frame's send (#4122); `focusInFrame` pins it to this frame. Omitted
-  // ⇒ not enforced (direct unit use); the hosts always inject it.
-  const inFrame = check.focusInFrame ? check.focusInFrame() : true;
-  if (!ua.isActive || !inFrame) {
-    return {
-      status: "rejected",
-      reason: "no-gesture",
-      message: "A message can only be sent to chat from a click or key press.",
-    };
-  }
-  return { status: "ok", text };
+  return trusted ? { status: "ok", text } : { status: "needs-confirm", text };
 }
 
 /**
@@ -182,38 +157,111 @@ function toOrigin(entry: string): string | null {
   }
 }
 
+/** Where "Always allow" lives: a set of trust keys, per browser. */
+export interface SendTrustStore {
+  isTrusted(key: string): boolean;
+  trust(key: string): void;
+}
+
+type KeyValueStorage = Pick<Storage, "getItem" | "setItem">;
+
+function defaultStorage(): KeyValueStorage | null {
+  try {
+    return typeof window !== "undefined" ? window.localStorage : null;
+  } catch {
+    return null; // storage blocked (privacy mode, sandboxed host) — session-only trust
+  }
+}
+
+/**
+ * A trust store persisted in `storage` (localStorage by default) under
+ * {@link SEND_TRUST_STORAGE_KEY}. Every storage access is try/catch-wrapped: when storage is
+ * missing, blocked, full or holds garbage, the store degrades to an in-memory set, so "Always
+ * allow" still holds for this session and nothing throws into the host.
+ */
+export function createSendTrustStore(storage: KeyValueStorage | null = defaultStorage()): SendTrustStore {
+  const session = new Set<string>();
+  function load(): Set<string> {
+    const out = new Set(session);
+    try {
+      const raw = storage?.getItem(SEND_TRUST_STORAGE_KEY);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) for (const k of parsed) if (typeof k === "string" && k) out.add(k);
+    } catch {
+      /* unreadable / corrupt — fall back to the session set */
+    }
+    return out;
+  }
+  return {
+    isTrusted(key) {
+      return !!key && load().has(key);
+    },
+    trust(key) {
+      if (!key) return;
+      session.add(key);
+      try {
+        const all = load();
+        all.add(key);
+        storage?.setItem(SEND_TRUST_STORAGE_KEY, JSON.stringify([...all]));
+      } catch {
+        /* quota / blocked — the session set still holds it */
+      }
+    },
+  };
+}
+
 export interface FrameBridge {
-  /** Judge a send() request. On an `ok` verdict the frame's rate window is advanced (the send
-   *  is approved and goes out now); `needs-confirm` and `rejected` leave it untouched. Call
-   *  once per attempt. */
+  /** Judge a send() PROPOSAL. `ok` (trusted source) advances the frame's send-rate window — the
+   *  host posts now. `needs-confirm` advances only the proposal-rate window — the host shows the
+   *  chip and calls {@link FrameBridge.noteSend} if the operator clicks Send. Call once per
+   *  attempt. A proposal inside the proposal window is `rejected` / `rate-limited`. */
   checkSend(check: SendCheck): SendVerdict;
-  /** Advance `frameId`'s rate window because a send actually went out — used for the
-   *  needs-confirm path, where the send happens only after the user confirms (so `checkSend`
-   *  could not have advanced it). */
+  /** Advance `frameId`'s send-rate window because a send actually went out — the chip path,
+   *  where the send happens only after the operator confirms. */
   noteSend(frameId: string): void;
+  /** Whether the operator chose "Always allow" for this source. */
+  isTrusted(trustKey: string): boolean;
+  /** Record "Always allow" for this source (persisted per browser where storage allows). */
+  trust(trustKey: string): void;
   /** Judge an openLink() request (stateless). */
   checkOpenLink(check: OpenLinkCheck): OpenLinkVerdict;
 }
 
 /**
- * A stateful host bridge holding the per-frame rate windows. `now` is injectable for tests;
- * it defaults to the wall clock.
+ * A stateful host bridge holding the per-frame rate windows and the trust store. `now` and
+ * `trust` are injectable for tests; they default to the wall clock and a localStorage store.
  */
-export function createFrameBridge(opts: { now?: () => number } = {}): FrameBridge {
+export function createFrameBridge(opts: { now?: () => number; trust?: SendTrustStore } = {}): FrameBridge {
   const now = opts.now ?? (() => Date.now());
-  // frameId → last accepted send time. Scoped to one host; a frame that never sends never
-  // appears here, so this can't grow without a send.
+  const trustStore = opts.trust ?? createSendTrustStore();
+  // frameId → last accepted send time / last shown proposal time. Scoped to one host; a frame
+  // that never sends never appears here, so these can't grow without a send.
   const lastSent = new Map<string, number>();
+  const lastProposed = new Map<string, number>();
 
   return {
     checkSend(check) {
-      const verdict = evaluateSend(check, lastSent.get(check.frameId) ?? null, now());
-      if (verdict.status === "ok") lastSent.set(check.frameId, now());
+      const t = now();
+      const trusted = !!check.trustKey && trustStore.isTrusted(check.trustKey);
+      const verdict = evaluateSend(check, lastSent.get(check.frameId) ?? null, t, trusted);
+      if (verdict.status === "rejected") return verdict;
+      const lastP = lastProposed.get(check.frameId);
+      if (lastP !== undefined && t - lastP < PROPOSAL_RATE_LIMIT_MS) {
+        return {
+          status: "rejected",
+          reason: "rate-limited",
+          message: "This frame is sending to chat too often — try again in a moment.",
+        };
+      }
+      lastProposed.set(check.frameId, t);
+      if (verdict.status === "ok") lastSent.set(check.frameId, t);
       return verdict;
     },
     noteSend(frameId) {
       lastSent.set(frameId, now());
     },
+    isTrusted: (key) => trustStore.isTrusted(key),
+    trust: (key) => trustStore.trust(key),
     checkOpenLink,
   };
 }

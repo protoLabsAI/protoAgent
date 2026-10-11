@@ -247,8 +247,10 @@ rules:
   `typeof window.protoArtifact?.send === "function"` — and keep a plain fallback (show the
   result as text the user can read or copy) for when it isn't. An artifact that calls `send`
   unconditionally throws where the bridge is absent.
-- **Only from a labelled button** — never on load, a timer, or an input change; it needs a real
-  user gesture.
+- **Only from a labelled button** — never on load, a timer, or an input change. Each `send` is
+  a *proposal*: the console shows the user a "Send to chat" confirm under the artifact, and the
+  message goes out only if they approve it (or earlier chose "Always allow" for this artifact).
+  If they dismiss it, the Promise rejects — handle that quietly.
 - **Put the selected values into the text,** because the agent sees only that text — the
   artifact's control state is never synced to the agent.
 

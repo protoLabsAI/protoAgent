@@ -287,6 +287,28 @@
   outline: 2px solid var(--pl-color-accent);
   outline-offset: 1px;
 }
+/* The S19 confirm chip (#4137): `Send to chat: "…"` [Send] [Dismiss] + an "Always allow" box.
+   Wraps on a narrow column; the proposed text is capped and scrolls so a long send stays fully
+   reviewable before the operator approves it. */
+.artifact-ref-inline__bridge--confirm {
+  flex-wrap: wrap;
+}
+.artifact-ref-inline__bridge-text {
+  display: inline-block;
+  max-height: 6em;
+  overflow-y: auto;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.artifact-ref-inline__bridge-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  flex: 1 0 100%;
+  color: var(--pl-color-fg-muted);
+  cursor: pointer;
+}
 /* The frame-component host's send-to-chat / openLink verdict (ADR 0118 D4 / S12b): the same
    needs-confirm prompt / in-place rejection the inline artifact frame shows, under the component
    frame. Mirrors .artifact-ref-inline__bridge so the two read identically. */
@@ -322,6 +344,28 @@
 .frame-component-host__bridge-btn:focus-visible {
   outline: 2px solid var(--pl-color-accent);
   outline-offset: 1px;
+}
+/* The S19 confirm chip (#4137): `Send to chat: "…"` [Send] [Dismiss] + an "Always allow" box.
+   Wraps on a narrow column; the proposed text is capped and scrolls so a long send stays fully
+   reviewable before the operator approves it. */
+.frame-component-host__bridge--confirm {
+  flex-wrap: wrap;
+}
+.frame-component-host__bridge-text {
+  display: inline-block;
+  max-height: 6em;
+  overflow-y: auto;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.frame-component-host__bridge-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  flex: 1 0 100%;
+  color: var(--pl-color-fg-muted);
+  cursor: pointer;
 }
 /* "from ‹title›" label on a user turn an artifact's send bridge started (ADR 0118 D4). Block-level
    `flex` (not `inline-flex`) so the label sits on its OWN line above the message text, rather than
