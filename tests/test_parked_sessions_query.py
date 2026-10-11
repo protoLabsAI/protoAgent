@@ -134,7 +134,7 @@ async def _old_parked_sessions(engine, limit):
             out.append(
                 {
                     "session_id": row.context_id,
-                    "last_updated": last.isoformat() if last else None,
+                    "last_updated": cr._utc_iso(last),
                     "turn_count": count,
                     "last_state": last_state,
                 }
@@ -239,7 +239,7 @@ def test_session_summary_reads_the_store_once_and_matches(store, monkeypatch):
         count, last, state = asyncio.run(_old(sid))
         assert (body["turn_count"], body["last_updated"], body["last_state"]) == (
             count,
-            last.isoformat() if last else None,
+            cr._utc_iso(last),
             state,
         )
     assert asyncio.run(cr.session_summary("chat-never-seen")) is None
