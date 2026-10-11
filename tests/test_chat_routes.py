@@ -655,6 +655,42 @@ def test_session_summary_route_reports_known_unknown_and_deleted(monkeypatch, tm
     assert running["active"] is True and running["turn_count"] == 0
 
 
+def test_session_routes_emit_zoned_utc_timestamps(monkeypatch, tmp_path):
+    """#4145: the task store keeps ``last_updated`` as a NAIVE UTC datetime; every chat
+    session/turn route must send it with its zone, or a browser reads it as local time (an
+    operator at UTC-7 saw 11:11 PM as 6:11 AM). The index, the parked index, the summary and
+    the turns all agree on the same zoned instant."""
+    from datetime import datetime, timezone
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+
+    naive_utc = datetime(2026, 10, 10, 6, 11, 4)  # the SDK's spelling: UTC, no tzinfo
+    engine = _seeded_task_engine(
+        tmp_path,
+        "zoned",
+        [{"id": "t1", "context_id": "chat-tz", "state": "TASK_STATE_INPUT_REQUIRED", "at": naive_utc}],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    stamps = [
+        client.get("/api/chat/sessions").json()["sessions"][0]["last_updated"],
+        client.get("/api/chat/sessions?parked=true").json()["sessions"][0]["last_updated"],
+        client.get("/api/chat/sessions/chat-tz").json()["last_updated"],
+        client.get("/api/chat/sessions/chat-tz/turns").json()["turns"][0]["last_updated"],
+    ]
+    assert stamps == ["2026-10-10T06:11:04+00:00"] * 4
+    for stamp in stamps:
+        assert datetime.fromisoformat(stamp) == naive_utc.replace(tzinfo=timezone.utc)
+
+    # The helper: naive is UTC, an aware value is converted, a stored string is normalized.
+    assert cr._utc_iso(None) is None
+    assert cr._utc_iso(naive_utc) == "2026-10-10T06:11:04+00:00"
+    assert cr._utc_iso(datetime.fromisoformat("2026-10-09T23:11:04-07:00")) == "2026-10-10T06:11:04+00:00"
+    assert cr._utc_iso("2026-10-10 06:11:04") == "2026-10-10T06:11:04+00:00"
+
+
 def test_session_summary_route_without_a_task_store_reports_known(monkeypatch):
     import runtime.state as rs
 
@@ -1385,7 +1421,7 @@ def test_session_index_is_bounded_recent_and_grouped(monkeypatch, tmp_path):
         "sessions": [
             {
                 "session_id": "chat-a",
-                "last_updated": "2026-08-19T12:03:00",
+                "last_updated": "2026-08-19T12:03:00+00:00",
                 "turn_count": 2,
             }
         ]
@@ -1466,13 +1502,13 @@ def test_session_index_parked_lists_sessions_whose_newest_turn_waits(monkeypatch
     assert body["sessions"] == [
         {
             "session_id": "chat-auth",
-            "last_updated": "2026-09-01T12:02:00",
+            "last_updated": "2026-09-01T12:02:00+00:00",
             "turn_count": 1,
             "last_state": "TASK_STATE_AUTH_REQUIRED",
         },
         {
             "session_id": "chat-old-parked",
-            "last_updated": "2026-09-01T12:01:00",
+            "last_updated": "2026-09-01T12:01:00+00:00",
             "turn_count": 2,
             "last_state": "TASK_STATE_INPUT_REQUIRED",
         },

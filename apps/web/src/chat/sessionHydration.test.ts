@@ -15,6 +15,7 @@ import {
   SESSION_PARKED_LIMIT,
   hydrateDurableChatSessions,
   messagesFromDurableTurn,
+  parseServerInstant,
   pinParkedSessions,
   sessionFromDurableTurns,
 } from "./sessionHydration";
@@ -23,6 +24,7 @@ import { applyText, applyToolEvent } from "./turnReducers";
 import { foldPlan, textRuns } from "./parts";
 import { utf16Fnv1a } from "../lib/api/a2aStream";
 import { applyCanonicalTurnText } from "./turnText";
+import { sentTimestamp } from "./ChatMessageView";
 
 const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
 const COST = "https://proto-labs.ai/a2a/ext/cost-v1";
@@ -55,6 +57,37 @@ function deferred<T>() {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("server timestamps are UTC, zoned or not (#4145)", () => {
+  // 23:11 on Oct 9 at UTC-7 (PDT) is 06:11 UTC on Oct 10. Read as LOCAL time, the zoneless
+  // spelling an older server sent showed that chat at "6:11 AM".
+  const INSTANT = Date.UTC(2026, 9, 10, 6, 11, 4);
+  const SPELLINGS = ["2026-10-10T06:11:04", "2026-10-10T06:11:04Z", "2026-10-10T06:11:04+00:00", "2026-10-10 06:11:04"];
+  // A fixed operator zone (Node re-reads TZ when it changes), restored after each case.
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("parses a zoneless and a zoned timestamp as the same instant", () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    for (const value of SPELLINGS) expect(parseServerInstant(value)).toBe(INSTANT);
+    expect(parseServerInstant("2026-10-10T08:11:04+02:00")).toBe(INSTANT); // an explicit zone is kept
+    expect(parseServerInstant(null)).toBeNaN();
+    expect(parseServerInstant("not a date")).toBeNaN();
+  });
+
+  it("renders a hydrated answer and session in the operator's local zone, for either spelling", () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    for (const value of ["2026-10-10T06:11:04", "2026-10-10T06:11:04+00:00"]) {
+      const answer = messagesFromDurableTurn(turn({ last_updated: value })).find((m) => m.role === "assistant");
+      expect(answer?.createdAt).toBe(INSTANT);
+      const local = new Date(answer!.createdAt!);
+      expect([local.getDate(), local.getHours(), local.getMinutes()]).toEqual([9, 23, 11]);
+      expect(sentTimestamp(answer!.createdAt)?.label).toMatch(/11:11/);
+
+      const session = sessionFromDurableTurns({ ...summary(), last_updated: value }, [turn({ last_updated: value })]);
+      expect([session?.createdAt, session?.updatedAt]).toEqual([INSTANT, INSTANT]);
+    }
+  });
+});
 
 describe("durable turn sent times (the chat footer's sent-time widget reads createdAt)", () => {
   const LANDED = Date.parse("2026-08-20T12:00:00Z");
