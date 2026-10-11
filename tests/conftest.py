@@ -222,3 +222,21 @@ def _reset_a2a_auth_guard():
     auth._FLEET[0] = None
     auth._API_KEY[0] = ""
     auth._API_KEY_DEPRECATION_LOGGED[0] = False
+
+
+@pytest.fixture(autouse=True)
+def _reset_sse_shutdown_flag():
+    """Clear sse-starlette's process-global shutdown flag after each test.
+
+    Importing ``sse_starlette`` (a2a-sdk's SSE response) rebinds ``uvicorn.Server.handle_exit``
+    to ``AppStatus.handle_exit``, which sets ``AppStatus.should_exit = True`` — and nothing
+    ever sets it back. From then on every ``EventSourceResponse`` in the process cancels
+    itself on start, before its final ``more_body: False`` body message, so httpx's
+    ``ASGITransport`` fails with a bare ``assert response_complete.is_set()``. One test that
+    calls the real ``handle_exit`` (the production server's exit-signal wiring) therefore
+    broke whichever A2A streaming test the xdist scheduler put after it on the same worker.
+    Not imported here: it is only reset if some test already loaded it."""
+    yield
+    sse = sys.modules.get("sse_starlette.sse")
+    if sse is not None:
+        sse.AppStatus.should_exit = False
