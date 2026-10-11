@@ -138,16 +138,13 @@ export function previewGateOpen(html: string): boolean {
   return firstStyleClosed(html) || bodyBytesWithoutStyle(html) >= PREVIEW_BODY_BYTE_THRESHOLD;
 }
 
-/** A fresh random nonce per frame — hex of 16 random bytes. Falls back to `Math.random` only where
- *  the Web Crypto API is unavailable (it is present in every supported browser and in jsdom). */
+/** A fresh random nonce per frame — hex of 16 cryptographically random bytes. The nonce is a
+ *  CSP gate (only the host's morph script may run in the preview), so there is NO weak fallback:
+ *  Web Crypto is present in every supported browser and in jsdom, and without it we refuse to
+ *  build a preview rather than mint a predictable nonce. */
 function randomNonce(): string {
   const bytes = new Uint8Array(16);
-  const webCrypto = typeof crypto !== "undefined" ? crypto : undefined;
-  if (webCrypto && typeof webCrypto.getRandomValues === "function") {
-    webCrypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
+  crypto.getRandomValues(bytes);
   let out = "";
   for (const b of bytes) out += b.toString(16).padStart(2, "0");
   return out;
