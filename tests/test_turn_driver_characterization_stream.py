@@ -194,6 +194,7 @@ async def test_golden_answer_with_a_tool_round_trip(env):
         "model": "",  # stamped every turn: "" = the default, never the thread's last pick (#3957)
         "incognito": False,
         "subagent_fence": [],
+        "renders_ui": True,  # the console / A2A stream renders artifacts (#4144)
     }
     assert config == {
         "configurable": {"thread_id": "a2a:s-golden"},
@@ -536,6 +537,7 @@ async def test_request_metadata_threads_into_the_graph_input(env):
         "model": "gpt-x",
         "reasoning_effort": "high",
         "subagent_fence": ["read_file", "3"],
+        "renders_ui": True,
     }
     # Incognito: the trace keeps its structure but no content preview.
     assert "message_preview" not in env.trace.sessions[0]["metadata"]

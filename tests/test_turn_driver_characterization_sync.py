@@ -115,6 +115,7 @@ async def test_golden_plain_answer(env):
         "model": "",
         "incognito": False,
         "subagent_fence": [],
+        "renders_ui": False,  # a `/v1` client gets only the reply text (#4144)
     }
     assert config["configurable"] == _cfg("s1")
     assert config["recursion_limit"] == LangGraphConfig().max_iterations
@@ -146,6 +147,7 @@ async def test_overrides_are_stamped_into_the_graph_input(env):
         "model": "gpt-x",
         "incognito": True,
         "subagent_fence": ["read_file"],
+        "renders_ui": True,
     }
     assert second["model"] == ""  # a blank override is no override — stamped, not inherited (#3957)
     assert "message_preview" not in env.trace.sessions[0]["metadata"]  # incognito trace
@@ -370,6 +372,7 @@ async def test_goal_kickoff_continuation_and_done_note(env, monkeypatch):
         "model": "",
         "incognito": False,
         "subagent_fence": [],
+        "renders_ui": True,  # the default origin: not a text-only client (#4144)
     }
     assert cont_config["configurable"] == _cfg("s1")
     assert cont_config["callbacks"] == g.invoke_calls[0][1]["callbacks"]  # usage keeps counting

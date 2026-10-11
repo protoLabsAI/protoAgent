@@ -1058,6 +1058,10 @@ async def _run_turn_stream(
             # leave an ordinary operator turn fenced. ``[]`` = no fence. A server-fired
             # turn that must keep its origin's fence carries it in its metadata.
             "subagent_fence": [str(t) for t in (subagent_fence or [])],
+            # The streaming driver serves the console and A2A clients, which render artifacts
+            # (#4144). Always stamped: a `/v1` or `/api/chat` turn on this session stamped False,
+            # and the checkpointed channel would otherwise carry that into this one.
+            "renders_ui": True,
         }
     )
     from observability import metrics
