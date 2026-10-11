@@ -256,13 +256,13 @@ async def test_tool_args_frames_ride_working_dataframes_never_the_terminal_artif
     """Through the real a2a-sdk: a ``tool_args`` frame becomes a tool-args-v1 DataPart on a
     WORKING status message (the console's preview channel), and never rides the terminal
     answer artifact — so a plain re-fetch sees only the finished answer."""
-    import asyncio
     import json
 
     import httpx
 
     from a2a_impl.executor import TOOL_ARGS_MIME, set_progress_hook, set_terminal_hook
-    from tests.test_a2a_handler import A2A_HEADERS, _HANDLERS, _build_app
+    from tests._a2a_app import A2A_HEADERS, drain_handlers
+    from tests._a2a_app import build_app as _build_app
 
     monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     set_terminal_hook(None)
@@ -301,12 +301,7 @@ async def test_tool_args_frames_ride_working_dataframes_never_the_terminal_artif
                         if (part.get("metadata") or {}).get("mimeType") == TOOL_ARGS_MIME:
                             artifact_previews.append(part)
     finally:
-        for handler in _HANDLERS:
-            reg = getattr(handler, "_active_task_registry", None)
-            tasks = set(getattr(reg, "_cleanup_tasks", ()) or ())
-            if tasks:
-                await asyncio.wait(tasks, timeout=5)
-        _HANDLERS.clear()
+        await drain_handlers()
         set_terminal_hook(None)
         set_progress_hook(None)
 

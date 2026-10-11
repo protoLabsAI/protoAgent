@@ -27,26 +27,21 @@ import asyncio
 
 import httpx
 import pytest
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.routes.agent_card_routes import create_agent_card_routes
-from a2a.server.routes.fastapi_routes import add_a2a_routes_to_fastapi
-from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
-from a2a.server.tasks import InMemoryPushNotificationConfigStore, InMemoryTaskStore
-from a2a.types import AgentSkill
-from fastapi import FastAPI
 from google.protobuf.json_format import MessageToDict
 
 import protolabs_a2a as pa
 from a2a_impl.executor import (
     _CONTEXT_MIME,
-    ProtoAgentExecutor,
     TurnOutcome,
     set_progress_hook,
     set_terminal_hook,
 )
 from a2a_impl.registry import OwnedProducerActiveTaskRegistry, harden_active_task_registry
-
-A2A_HEADERS = {"A2A-Version": "1.0"}
+from tests._a2a_app import A2A_HEADERS, drain_handlers
+from tests._a2a_app import build_app as _build_app
+from tests._a2a_app import poll_terminal as _poll_terminal
+from tests._a2a_app import send_msg as _send_msg
+from tests._a2a_app import skill as _skill
 
 
 # ── protolabs_a2a: parts ──────────────────────────────────────────────────────
@@ -150,10 +145,6 @@ def test_merge_extension_metadata_folds_fragments_into_one_map():
 # ── protolabs_a2a: agent card ─────────────────────────────────────────────────
 
 
-def _skill() -> AgentSkill:
-    return AgentSkill(id="chat", name="Chat", description="general chat", tags=["t"])
-
-
 def test_build_agent_card_applies_conventions():
     card = pa.build_agent_card(
         name="protoagent",
@@ -189,77 +180,6 @@ def test_build_agent_card_omits_bearer_when_not_configured():
 # ── ProtoAgentExecutor end-to-end (through a2a-sdk) ───────────────────────────
 
 
-def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None, task_store=None, **executor_kwargs):
-    """Mount a real a2a-sdk app driven by ProtoAgentExecutor(stream_fn, **executor_kwargs)."""
-    card = pa.build_agent_card(
-        name="test",
-        description="d",
-        url="http://test/a2a",
-        version="0.0.0",
-        skills=[_skill()],
-        bearer=bool(bearer),
-    )
-    handler = DefaultRequestHandler(
-        agent_executor=ProtoAgentExecutor(stream_fn, **executor_kwargs),
-        task_store=task_store if task_store is not None else InMemoryTaskStore(),
-        agent_card=card,
-        push_config_store=InMemoryPushNotificationConfigStore(),
-    )
-    # Mirror production wiring (#1713): every test turn runs through the
-    # owned-producer registry, exactly like server/__init__.py mounts it.
-    assert harden_active_task_registry(handler)
-    _HANDLERS.append(handler)
-    app = FastAPI()
-    app.state.a2a_handler = handler
-    if bearer is not None or api_key or allowed_origins is not None:
-        from a2a_impl import auth
-
-        auth.install(
-            app,
-            bearer_token=bearer or "",
-            api_key=api_key,
-            allowed_origins_raw=allowed_origins or "",
-        )
-    add_a2a_routes_to_fastapi(
-        app,
-        agent_card_routes=create_agent_card_routes(card),
-        jsonrpc_routes=create_jsonrpc_routes(handler, rpc_url="/a2a"),
-    )
-    return app
-
-
-def _send_msg(client, text="hi", rpc_id="r1"):
-    return client.post(
-        "/a2a",
-        headers=A2A_HEADERS,
-        json={
-            "jsonrpc": "2.0",
-            "id": rpc_id,
-            "method": "SendMessage",
-            "params": {"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": text}]}},
-        },
-    )
-
-
-async def _poll_terminal(client, task_id, *, tries=60):
-    for _ in range(tries):
-        g = await client.post(
-            "/a2a",
-            headers=A2A_HEADERS,
-            json={"jsonrpc": "2.0", "id": "g", "method": "GetTask", "params": {"id": task_id}},
-        )
-        t = g.json()["result"]
-        if t["status"]["state"] in (
-            "TASK_STATE_COMPLETED",
-            "TASK_STATE_FAILED",
-            "TASK_STATE_CANCELED",
-            "TASK_STATE_INPUT_REQUIRED",
-        ):
-            return t
-        await asyncio.sleep(0.03)
-    raise AssertionError(f"task {task_id} never reached terminal")
-
-
 @pytest.fixture(autouse=True)
 def _clear_terminal_hook():
     set_terminal_hook(None)
@@ -274,12 +194,6 @@ def _clear_progress_hook():
     set_progress_hook(None)
 
 
-# Handlers built by _build_app during the current test — drained at teardown so
-# their retire-then-remove cleanup tasks (#1713) finish inside the test's event
-# loop instead of being destroyed pending when pytest closes it.
-_HANDLERS: list = []
-
-
 @pytest.fixture(autouse=True)
 def _fast_retire(monkeypatch):
     """Shrink the producer flush grace so teardown drains stay fast in tests."""
@@ -289,12 +203,7 @@ def _fast_retire(monkeypatch):
 @pytest.fixture(autouse=True)
 async def _drain_a2a_cleanup():
     yield
-    for handler in _HANDLERS:
-        reg = getattr(handler, "_active_task_registry", None)
-        tasks = set(getattr(reg, "_cleanup_tasks", ()) or ())
-        if tasks:
-            await asyncio.wait(tasks, timeout=5)
-    _HANDLERS.clear()
+    await drain_handlers()
 
 
 @pytest.mark.asyncio

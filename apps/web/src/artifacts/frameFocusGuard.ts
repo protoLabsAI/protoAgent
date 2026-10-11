@@ -10,7 +10,8 @@
 //   • a pointer press into the frame: the pointer is over the frame element (pointerenter/leave
 //     on the iframe in THIS document — presses inside it are the frame's own events, but hover
 //     is ours) AND the page has transient user activation, which a press inside a child frame
-//     propagates up to its ancestors; or a pointerdown on the frame element itself;
+//     propagates up to its ancestors; or a pointerdown on the frame element itself. Without the
+//     UserActivation API hover never counts — see hasTransientActivation;
 //   • or a keyboard Tab / Shift+Tab that just moved focus along the page.
 // Focus arriving any other way — the frame focusing itself — is handed straight back to the
 // element that held it before (typically the composer), or, if that is gone, dropped off the
@@ -48,11 +49,26 @@ function installTrackers(): void {
   );
 }
 
-/** Whether the page has transient user activation right now. Where the API is missing, a hover
- *  alone has to stand in (older engines). */
+/** Whether the page has transient user activation right now — i.e. whether a hover-time focus
+ *  move into the frame came with a real press.
+ *
+ *  Where the UserActivation API is missing (Safari before 16.4, Firefox before 120) this answers
+ *  `false`: there, focus may enter a hosted frame only by Tab or a pointerdown the PAGE itself sees
+ *  on the frame element. Why not a heuristic stand-in (option "a" in the #4154 review)? A press
+ *  inside a cross-origin frame is delivered to the frame's own document — this page sees no
+ *  pointerdown/mousedown/click for it, only pointerenter/leave at the frame's edge and the window
+ *  `blur` that ANY focus move into the frame causes, a self-`focus()` included. So "pointer over
+ *  the frame + window blur (+ a recent pointerenter)" is exactly what an artifact waiting under a
+ *  resting pointer produces too: every such signal still admits hover-only theft, just inside a
+ *  timing window. Denying is the only airtight answer. The cost, on those old engines only: a
+ *  click inside an artifact still LANDS (the press and click are dispatched to the frame before
+ *  focus is handed back), so buttons, links and pointer UI keep working; what doesn't stick is
+ *  KEYBOARD focus from that click — typing into an artifact's own field there needs Tab into the
+ *  frame. That trade (a rare engine loses click-to-type) beats an artifact silently capturing the
+ *  next thing the operator types into the composer. */
 function hasTransientActivation(): boolean {
   const ua = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation;
-  return ua ? ua.isActive : true;
+  return ua ? ua.isActive : false;
 }
 
 /** Hand focus back from `frame` after a theft: to the element that held it before, else off the

@@ -73,3 +73,41 @@ describe("useFrameFocusGuard", () => {
     expect(document.activeElement).toBe(frame());
   });
 });
+
+// Engines without the UserActivation API (Safari < 16.4, Firefox < 120): hover must never stand
+// in for a press (#4154 review). The guard denies hover-time focus there; only Tab or a press the
+// page itself sees on the frame element counts.
+describe("useFrameFocusGuard without navigator.userActivation", () => {
+  beforeEach(() => {
+    Reflect.deleteProperty(navigator, "userActivation");
+    expect("userActivation" in navigator).toBe(false);
+  });
+
+  it("a hover with no click never keeps a self-focus", () => {
+    frame().dispatchEvent(new Event("pointerenter"));
+    focusIntoFrame();
+    expect(document.activeElement).toBe(composer());
+  });
+
+  it("a long rest over the frame (pointer still inside) never licenses a later self-focus", () => {
+    frame().dispatchEvent(new Event("pointerenter"));
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    focusIntoFrame();
+    expect(document.activeElement).toBe(composer());
+  });
+
+  it("a real click the page sees (pointerdown on the frame element) still focuses it", () => {
+    frame().dispatchEvent(new Event("pointerenter"));
+    frame().dispatchEvent(new Event("pointerdown"));
+    focusIntoFrame();
+    expect(document.activeElement).toBe(frame());
+  });
+
+  it("Tab into the frame still works", () => {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    focusIntoFrame();
+    expect(document.activeElement).toBe(frame());
+  });
+});
