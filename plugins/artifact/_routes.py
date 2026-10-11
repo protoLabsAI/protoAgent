@@ -131,6 +131,7 @@ _VENDOR_FILES = {
     "lucide.mjs",
     "marked.mjs",
     "three.module.min.js",  # three.js r170 self-contained ESM build — 3D `html`/`react` artifacts
+    "anime.esm.min.js",  # anime.js 4.5.0 self-contained ESM build — animation for `html`/`react` artifacts
     # … React shims + authored design-system wrappers
     "react.shim.mjs",
     "react-dom-client.shim.mjs",
