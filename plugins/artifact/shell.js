@@ -143,6 +143,22 @@
     + ':where(button):hover{background:var(--pl-color-bg-hover,var(--pl-color-bg-raised))}'
     + ':where(a){color:var(--pl-color-accent)}'
     + ':where(table){border-collapse:collapse}:where(th,td){border-bottom:1px solid var(--pl-color-border);padding:6px 8px;text-align:left}';
+  // Is the CONSOLE's ground dark? Decides the frame's color-scheme (native scrollbars, date
+  // pickers, form controls). Read from the console's own --pl-color-bg — never the shell page's
+  // computed color-scheme, which follows the OS and so drew light scrollbars on a dark console
+  // whenever the OS was light (and the reverse). Themes are often oklch(), so a 1px canvas
+  // resolves any CSS colour; hex/rgb are parsed directly as a fallback.
+  function bgIsDark(bg){
+    var m, l;
+    try{ var cv=document.createElement("canvas"), x; cv.width=cv.height=1; x=cv.getContext("2d");
+      x.fillStyle="#000"; x.fillStyle=bg; x.fillRect(0,0,1,1); var px=x.getImageData(0,0,1,1).data;
+      return (0.299*px[0]+0.587*px[1]+0.114*px[2])/255<=0.5; }catch(_){}
+    if((m=/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(bg||""))){ var h=m[1].length===3?m[1].replace(/./g,"$&$&"):m[1];
+      l=(0.299*parseInt(h.slice(0,2),16)+0.587*parseInt(h.slice(2,4),16)+0.114*parseInt(h.slice(4,6),16))/255; }
+    else if((m=/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(bg||""))) l=(0.299*m[1]+0.587*m[2]+0.114*m[3])/255;
+    else return true;
+    return l<=0.5;
+  }
   function base(kind){
     var cs = getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n) || d).trim(); }
@@ -160,7 +176,7 @@
     Object.keys(all).forEach(function(k){ decl+=k+':'+all[k]+';'; });
     // color-scheme follows the console, so native controls (inputs, scrollbars, date pickers) are
     // dark on a dark theme instead of glaring white.
-    var scheme=(cs.colorScheme||"").indexOf("light")===0?"light":((cs.colorScheme||"").indexOf("dark")===0?"dark":"dark light");
+    var scheme=bgIsDark(bg)?"dark":"light";
     return '<style>:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+';'+decl+'color-scheme:'+scheme+'}'
       + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}'
       + DEFAULTS + '</style>'

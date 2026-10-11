@@ -456,3 +456,22 @@ const reasonOf = (p) => p.then(() => null, (e) => e);
     # A real unhandled rejection still surfaces, and still reports the failure.
     assert out["afterReal"]["overlays"] == 1 and "boom" in out["afterReal"]["text"]
     assert out["afterReal"]["renders"] == [{"type": "protoArtifact:render", "ok": False, "error": "⚠ boom"}]
+
+
+def test_frame_color_scheme_follows_the_console_ground_not_the_os(monkeypatch, tmp_path):
+    """color-scheme (native scrollbars/date pickers) comes from the console's --pl-color-bg
+    luminance — never the shell page's computed color-scheme, which follows the OS (a light OS
+    drew light scrollbars on a dark console)."""
+    art = _load(monkeypatch, tmp_path)
+    js = _js(art)
+    base = _js_function(js, "base")
+    assert 'var scheme=bgIsDark(bg)?"dark":"light";' in base
+    assert "cs.colorScheme" not in base
+    if not NODE:
+        pytest.skip("node not on PATH")
+    fn = _js_function(js, "bgIsDark")
+    harness = "var document={createElement:function(){throw new Error('no canvas')}};\n" + fn + (
+        "\nconsole.log(JSON.stringify([bgIsDark('#0a0a0c'), bgIsDark('#f6f7f9'), bgIsDark('rgb(250,250,250)'),"
+        " bgIsDark('rgb(10, 10, 12)'), bgIsDark('#000')]));"
+    )
+    assert _node(harness) == [True, False, False, True, True]
