@@ -144,6 +144,79 @@ export function createFrameRegistry(cap: number = MAX_LIVE_FRAMES): FrameRegistr
   };
 }
 
+// ── newest version per artifact (S18d) ─────────────────────────────────────────────────
+
+/** Which version of each artifact is the newest one rendered inline in a chat (ADR 0118 / S18d,
+ *  #4124). The backend re-emits an inline ref on every edit, so parallel `update_artifact` calls
+ *  in one turn leave v2..v6 in the transcript; only the newest should stay a live frame, the rest
+ *  collapse to a "superseded" line that holds no slot. Each inline host announces its (scope, id,
+ *  version) while mounted and withdraws on unmount; `latest` is the max announced version.
+ *
+ *  Reference-counted per (scope, id, version) — two mounts of one ref share a version — and every
+ *  map entry is deleted at zero, so the registry empties when the transcript does (no leak). The
+ *  `scope` is the chat session, so the same artifact in two chats doesn't collapse across them.
+ *  Pure bookkeeping, derived from what is rendered — history replay reaches the same state. */
+export type LatestVersionRegistry = {
+  /** Record one holder of (scope, id, version); returns its idempotent withdraw. */
+  announce(scope: string, id: string, version: number): () => void;
+  /** The newest version announced for (scope, id), or 0 when none is. */
+  latest(scope: string, id: string): number;
+  /** Subscribe to changes of any `latest`; returns an unsubscribe. */
+  subscribe(listener: () => void): () => void;
+  /** How many (scope, id) pairs are tracked — for leak checks. */
+  size(): number;
+};
+
+export function createLatestVersionRegistry(): LatestVersionRegistry {
+  // (scope, id) → version → holder count. The key joins with NUL, which neither part carries.
+  const entries = new Map<string, Map<number, number>>();
+  const listeners = new Set<() => void>();
+  const keyOf = (scope: string, id: string) => `${scope}\u0000${id}`;
+  const maxOf = (versions: Map<number, number> | undefined) => {
+    let max = 0;
+    if (versions) for (const v of versions.keys()) if (v > max) max = v;
+    return max;
+  };
+  const emit = () => {
+    for (const fn of listeners) fn();
+  };
+  return {
+    announce(scope, id, version) {
+      const key = keyOf(scope, id);
+      let versions = entries.get(key);
+      if (!versions) entries.set(key, (versions = new Map()));
+      const before = maxOf(versions);
+      versions.set(version, (versions.get(version) ?? 0) + 1);
+      if (maxOf(versions) !== before) emit();
+      let withdrawn = false;
+      return () => {
+        if (withdrawn) return;
+        withdrawn = true;
+        const vs = entries.get(key);
+        if (!vs) return;
+        const prev = maxOf(vs);
+        const left = (vs.get(version) ?? 0) - 1;
+        if (left > 0) vs.set(version, left);
+        else vs.delete(version);
+        if (vs.size === 0) entries.delete(key);
+        if (maxOf(entries.get(key)) !== prev) emit();
+      };
+    },
+    latest(scope, id) {
+      return maxOf(entries.get(keyOf(scope, id)));
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    size() {
+      return entries.size;
+    },
+  };
+}
+
 // ── lazy mount ───────────────────────────────────────────────────────────────────────
 
 /** How near the viewport a frame must scroll before it mounts. A positive margin mounts it
