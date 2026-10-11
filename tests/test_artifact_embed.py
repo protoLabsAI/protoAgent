@@ -386,7 +386,7 @@ def test_frames_get_the_full_theme_palette_and_themed_defaults(monkeypatch, tmp_
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
     for tok in ("--pl-color-bg-raised", "--pl-color-bg-inset", "--pl-color-fg-muted", "--pl-color-border-strong",
-                "--pl-color-status-success", "--pl-radius-md", "--pl-font-mono"):
+                "--pl-color-status-success", "--pl-radius", "--pl-font-mono"):
         assert f'"{tok}"' in js, tok  # carried by themeTokens()
     base = _js_function(js, "base")
     assert "var all=themeTokens()" in base and "color-scheme:" in base and "DEFAULTS" in base

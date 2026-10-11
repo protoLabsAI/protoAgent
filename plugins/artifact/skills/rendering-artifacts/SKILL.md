@@ -78,7 +78,7 @@ look like part of the app, not like a stock web page. The frame already has the 
 
   Plain `<input>`/`<button>`/`<select>`/`<table>` are themed by default too, so if you're unsure,
   write the plain element and don't style its colours.
-- **Spacing, shape and type:** use `var(--pl-space-2…6)`, `var(--pl-radius-md)` and
+- **Spacing, shape and type:** use `var(--pl-space-2…6)`, `var(--pl-radius)` and
   `var(--pl-font-sans)` / `var(--pl-font-mono)`. Keep it compact; the answer sits in a chat column.
   No hero headers, gradients, drop shadows or emoji decoration.
 

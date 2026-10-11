@@ -128,10 +128,10 @@
   // any rule the author writes wins outright. Every value is a --pl-* token.
   var DEFAULTS = ':where(html,body){font-family:var(--pl-font-sans,system-ui,sans-serif);line-height:1.5}'
     + ':where(input,select,textarea){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-inset,transparent);'
-    + 'border:1px solid var(--pl-color-border);border-radius:var(--pl-radius-md,6px);padding:6px 8px}'
+    + 'border:1px solid var(--pl-color-border);border-radius:var(--pl-radius,6px);padding:6px 8px}'
     + ':where(input,select,textarea):focus{outline:2px solid var(--pl-color-accent);outline-offset:1px}'
     + ':where(button){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-raised,transparent);'
-    + 'border:1px solid var(--pl-color-border);border-radius:var(--pl-radius-md,6px);padding:6px 12px;cursor:pointer}'
+    + 'border:1px solid var(--pl-color-border);border-radius:var(--pl-radius,6px);padding:6px 12px;cursor:pointer}'
     + ':where(button):hover{background:var(--pl-color-bg-hover,var(--pl-color-bg-raised))}'
     + ':where(a){color:var(--pl-color-accent)}'
     + ':where(table){border-collapse:collapse}:where(th,td){border-bottom:1px solid var(--pl-color-border);padding:6px 8px;text-align:left}';
@@ -1199,7 +1199,7 @@
     "--pl-color-fg-subtle":"","--pl-color-fg-on-accent":"","--pl-color-accent-hover":"","--pl-color-accent-fg":"",
     "--pl-color-border-strong":"","--pl-color-status-error":"","--pl-color-status-info":"",
     "--pl-color-status-success":"","--pl-color-status-warning":"","--pl-font-mono":"",
-    "--pl-radius":"","--pl-radius-md":"","--pl-radius-lg":"",
+    "--pl-radius":"","--pl-radius-lg":"",
     "--pl-color-chart-axis":"","--pl-color-chart-grid":""};
   for(var _s=1;_s<=8;_s++) THEME_TOKENS["--pl-color-chart-series"+_s]="";
   function themeTokens(){

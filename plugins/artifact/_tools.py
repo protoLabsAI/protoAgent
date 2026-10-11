@@ -472,7 +472,7 @@ def show_artifact(
     (≤ 280 chars).
 
     Style ``html``/``react`` with the injected design system, which is required: colours ONLY from
-    ``var(--pl-color-…)`` tokens (never ``#fff``/``white``/hex/rgb; the operator's theme may be dark
+    the theme tokens (``var(--pl-color-fg)``, ``var(--pl-color-bg-raised)``, ``var(--pl-color-accent)`` …) (never ``#fff``/``white``/hex/rgb; the operator's theme may be dark
     or light), and the ``.pl-*`` classes (``pl-card``, ``pl-field`` + ``pl-input``, ``pl-btn
     pl-btn--primary``, ``pl-stats``, ``pl-table``). See the ``rendering-artifacts`` skill.
     """
