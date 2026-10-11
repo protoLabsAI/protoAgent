@@ -167,7 +167,10 @@ async def test_tool_args_frames_carry_the_sibling_string_args_written_first(env)
     # tell from the first slice whether the call can render inline (#4076).
     env.install(_artifact_script(env.clock), tools=[_tool("show_artifact", stream_args="code")])
     targs = [p for k, p in [f async for f in _stream()] if k == "tool_args"]
-    assert targs and all(p.get("hints") == {"kind": "html"} for p in targs)
+    assert len(targs) >= 2
+    # Sent once, on the first frame; later frames don't repeat unchanged hints (#4154 review).
+    assert targs[0].get("hints") == {"kind": "html"}
+    assert all("hints" not in p for p in targs[1:])
 
 
 def test_leading_string_args_reads_only_complete_strings_before_the_streamed_arg():
@@ -177,6 +180,16 @@ def test_leading_string_args_reads_only_complete_strings_before_the_streamed_arg
     # Keys AFTER the streamed arg are never read; an incomplete value stops the scan.
     assert lead('{"code": "a", "kind": "html"}', "code") == {}
     assert lead('{"kind": "mark', "code") == {}
+
+
+def test_leading_string_args_never_echoes_an_unlisted_key():
+    # #4154 review: hint keys are ALLOWLISTED — a 100 KB model-written key name is never echoed.
+    lead = turn_stream._leading_string_args
+    big = "k" * 100_000
+    raw = '{"' + big + '": "v", "kind": "html", "extra": "x", "title": "T", "code": "<p'
+    out = lead(raw, "code")
+    assert out == {"kind": "html", "title": "T"}
+    assert all(len(k) < 100 for k in out)
 
 
 @pytest.mark.asyncio

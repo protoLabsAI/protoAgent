@@ -124,6 +124,21 @@ export function pauseBubble(m: ChatMessage): ChatMessage {
  *  flight settles as STOPPED, not done. Flipping those to plain done painted a ✓ on a call
  *  that never returned — after a reload, a cancelled `show_artifact` read as a success with
  *  empty args. A card that already settled keeps its own status. */
+/** One bubble, settled off the durable task (the stream watchdog's finalize): done or error,
+ *  in-flight cards done with their client-measured duration, and the footer time stamped at the
+ *  task's OWN settle instant (`settledAt`, its status timestamp = the `last_updated` a reload
+ *  shows) — never the watchdog's "now", which runs ≥45s behind the real end (#4154). `now` is
+ *  the fallback for a server that sent no timestamp. */
+export function settleBubbleFromTask(
+  m: ChatMessage,
+  opts: { failed: boolean; settledAt?: number; now: number },
+): ChatMessage {
+  const toolCalls = m.toolCalls?.map((c) =>
+    c.status === "running" ? { ...c, status: "done" as const, durationMs: c.durationMs ?? elapsedSince(c, opts.now) } : c,
+  );
+  return { ...m, status: opts.failed ? "error" : "done", toolCalls, createdAt: opts.settledAt ?? opts.now };
+}
+
 export function stopBubble(m: ChatMessage, opts: { at?: number } = {}): ChatMessage {
   return {
     ...m,

@@ -30,6 +30,9 @@ type A2AArtifact = { parts?: A2APart[]; metadata?: Record<string, unknown> };
 type A2AStatus = {
   state?: string;
   message?: A2AMessage;
+  /** When the status was set (proto-JSON RFC 3339). The task store's `last_updated` — what a
+   *  reload shows as a turn's time — is rewritten from it on every save. */
+  timestamp?: string;
 };
 export type A2AFrame = {
   jsonrpc?: string;

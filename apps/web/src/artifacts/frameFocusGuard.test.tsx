@@ -72,6 +72,73 @@ describe("useFrameFocusGuard", () => {
     focusIntoFrame();
     expect(document.activeElement).toBe(frame());
   });
+
+  // #4154 review (MAJOR): the operator's own keydown on the page grants transient activation,
+  // so typing in the composer with the pointer parked over a frame must not license a self-focus.
+  it("typing in the composer with the pointer over the frame never licenses a self-focus", () => {
+    frame().dispatchEvent(new Event("pointerenter"));
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    Object.defineProperty(navigator, "userActivation", { configurable: true, value: { isActive: true } });
+    focusIntoFrame();
+    expect(document.activeElement).toBe(composer());
+  });
+
+  it("a page click elsewhere moments ago doesn't license a hover-time self-focus either", () => {
+    composer().dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    frame().dispatchEvent(new Event("pointerenter"));
+    Object.defineProperty(navigator, "userActivation", { configurable: true, value: { isActive: true } });
+    focusIntoFrame();
+    expect(document.activeElement).toBe(composer());
+  });
+
+  it("a click into the frame well after the last page keydown still focuses it", () => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+    frame().dispatchEvent(new Event("pointerenter"));
+    Object.defineProperty(navigator, "userActivation", { configurable: true, value: { isActive: true } });
+    focusIntoFrame();
+    expect(document.activeElement).toBe(frame());
+  });
+
+  // #4154 review: a Tab only licenses the frame its traversal actually lands in.
+  it("a Tab the composer consumed (preventDefault, slash autocomplete) never licenses a self-focus", () => {
+    const consume = (e: KeyboardEvent) => e.preventDefault();
+    composer().addEventListener("keydown", consume);
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    composer().removeEventListener("keydown", consume);
+    focusIntoFrame();
+    expect(document.activeElement).toBe(composer());
+  });
+
+  it("a Tab that landed on a page element is spent — a later self-focus is refused", () => {
+    const button = document.createElement("button");
+    container.appendChild(button);
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    button.focus(); // the Tab's default action: focus moves to the next page element
+    focusIntoFrame();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("a Tab whose traversal didn't reach a frame by the next task is spent", () => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    focusIntoFrame();
+    expect(document.activeElement).toBe(composer());
+  });
+
+  it("one Tab admits one frame: a second frame self-focusing after it is refused", () => {
+    composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    focusIntoFrame();
+    expect(document.activeElement).toBe(frame());
+    // The frame (licensed) now drops focus back and self-focuses again, same Tab window.
+    composer().focus();
+    focusIntoFrame();
+    expect(document.activeElement).toBe(composer());
+  });
 });
 
 // Engines without the UserActivation API (Safari < 16.4, Firefox < 120): hover must never stand

@@ -11,7 +11,15 @@ import type { ChatMessage } from "../lib/types";
 import { reattachKeyForMessages, settleAnsweredPause, shouldReattach } from "./reattach";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import { makeA2ADispatcher } from "../lib/api/a2aStream";
-import { applyToolEvent, createParkTracker, isParkedState, settleStreamEnd, stopBubble, unpauseBubble } from "./turnReducers";
+import {
+  applyToolEvent,
+  createParkTracker,
+  isParkedState,
+  settleBubbleFromTask,
+  settleStreamEnd,
+  stopBubble,
+  unpauseBubble,
+} from "./turnReducers";
 
 const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
 
@@ -214,5 +222,41 @@ describe("tool durations and the settled footer time (#4076)", () => {
     expect(stopBubble(base(), { at: 77_000 }).createdAt).toBe(77_000);
     // A replayed stop (no instant given) keeps its own.
     expect(stopBubble(base()).createdAt).toBe(1000);
+  });
+});
+
+// The stream watchdog finalizes ≥45s after the real end — it must stamp the task's OWN settle
+// instant (its status timestamp = the `last_updated` a reload shows), not its "now" (#4154).
+describe("settleBubbleFromTask — the watchdog's finalize", () => {
+  const LAST_UPDATED = "2026-10-11T09:03:21Z";
+  const running: ChatMessage = {
+    id: "a1",
+    role: "assistant",
+    content: "the answer",
+    status: "streaming",
+    createdAt: Date.parse("2026-10-11T09:00:00Z"),
+    toolCalls: [{ id: "t1", name: "shell", input: "", status: "running" }],
+  };
+
+  it("stamps the task's settle time — the same footer time a reload of that turn shows", () => {
+    const now = Date.parse(LAST_UPDATED) + 46_000; // the watchdog fired 46s later
+    const live = settleBubbleFromTask(running, { failed: false, settledAt: Date.parse(LAST_UPDATED), now });
+    const durable: DurableChatTurn = {
+      task_id: "task-1",
+      state: "TASK_STATE_COMPLETED",
+      last_updated: LAST_UPDATED,
+      text: "the answer",
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [],
+      history: [{ role: "ROLE_USER", parts: [{ text: "go" }] }],
+    };
+    const reloaded = messagesFromDurableTurn(durable).find((m) => m.role === "assistant")!;
+    expect(live.createdAt).toBe(reloaded.createdAt);
+    expect(live).toMatchObject({ status: "done" });
+    expect(live.toolCalls?.[0].status).toBe("done");
+  });
+
+  it("falls back to now only when the server sent no timestamp; failed settles as error", () => {
+    expect(settleBubbleFromTask(running, { failed: true, now: 1234 })).toMatchObject({ status: "error", createdAt: 1234 });
   });
 });

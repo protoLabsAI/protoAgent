@@ -523,7 +523,11 @@ export const chatApi = {
   //
   // `supersededBy` (#3963): the task that took this one's pause over — the reattach
   // follows it there instead of settling the turn as over.
-  async getTask(taskId: string): Promise<{ state: string; text: string; supersededBy?: string }> {
+  //
+  // `settledAt` (#4154): epoch ms of the task's status `timestamp` — the instant the store
+  // writes as `last_updated`, which a reload shows as the turn's footer time — so a live
+  // settle off GetTask stamps the SAME time a reload will. Absent when the server sent none.
+  async getTask(taskId: string): Promise<{ state: string; text: string; supersededBy?: string; settledAt?: number }> {
     const res = await request<A2AFrame>("/a2a", {
       method: "POST",
       headers: { "A2A-Version": "1.0" },
@@ -533,7 +537,13 @@ export const chatApi = {
     if (!task) return { state: "", text: "" };
     const state = (task.status?.state || "").toString();
     const supersededBy = supersededByFromStatus(task.status);
-    return { state, text: textFromTerminalTask(task), ...(supersededBy ? { supersededBy } : {}) };
+    const settledAt = task.status?.timestamp ? Date.parse(task.status.timestamp) : NaN;
+    return {
+      state,
+      text: textFromTerminalTask(task),
+      ...(supersededBy ? { supersededBy } : {}),
+      ...(Number.isFinite(settledAt) ? { settledAt } : {}),
+    };
   },
 
   /** One task as a durable turn — the row shape `GET …/turns` serves (ADR 0104) — so a

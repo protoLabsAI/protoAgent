@@ -11,8 +11,14 @@
 //     on the iframe in THIS document — presses inside it are the frame's own events, but hover
 //     is ours) AND the page has transient user activation, which a press inside a child frame
 //     propagates up to its ancestors; or a pointerdown on the frame element itself. Without the
-//     UserActivation API hover never counts — see hasTransientActivation;
-//   • or a keyboard Tab / Shift+Tab that just moved focus along the page.
+//     UserActivation API hover never counts — see hasTransientActivation. Transient activation is
+//     ALSO granted by the operator's own keydown/pointerdown on THIS page (typing in the composer
+//     with the pointer resting over a frame), so the hover path is refused whenever the page
+//     itself saw a keydown or pointerdown within the activation window — a press inside the
+//     cross-origin frame never reaches this document, so a genuine click-in still qualifies;
+//   • or a keyboard Tab / Shift+Tab whose focus traversal landed in THIS frame: not
+//     `defaultPrevented` (the composer consumes Tab for slash autocomplete), not spent on a
+//     non-frame element first, and used by the first frame that takes focus after it.
 // Focus arriving any other way — the frame focusing itself — is handed straight back to the
 // element that held it before (typically the composer), or, if that is gone, dropped off the
 // frame.
@@ -23,19 +29,46 @@ import { useEffect, type RefObject } from "react";
  *  operator's own. */
 const INTENT_WINDOW_MS = 1000;
 
+/** How long a page keydown/pointerdown keeps the page's transient user activation alive — the
+ *  HTML spec's "transient activation duration", which Chromium sets to 5s. While one is that
+ *  recent, `navigator.userActivation.isActive` may be the operator's own typing/clicking on THIS
+ *  page, not a press inside the frame, so it can't vouch for a hover-time focus move. */
+const ACTIVATION_WINDOW_MS = 5000;
+
 let installed = false;
-let lastTabAt = -Infinity;
+/** The last Tab keydown whose traversal hasn't landed yet (see `tabLicenses`). */
+let pendingTab: { event: KeyboardEvent; at: number } | null = null;
+/** The last keydown / pointerdown THIS document saw (never one inside a cross-origin frame). */
+let lastPageInputAt = -Infinity;
 let lastOutsideFocus: HTMLElement | null = null;
 
-/** Page-wide trackers, installed once: the last Tab keydown, and the last element OUTSIDE any
- *  iframe that held focus — the one focus is returned to after a theft. */
+const isFrame = (el: Element | null): boolean => !!el && el.tagName === "IFRAME";
+
+/** Page-wide trackers, installed once: the last page keydown/pointerdown, the pending Tab, and
+ *  the last element OUTSIDE any iframe that held focus — the one focus is returned to after a
+ *  theft. */
 function installTrackers(): void {
   if (installed || typeof document === "undefined") return;
   installed = true;
   document.addEventListener(
     "keydown",
     (e) => {
-      if (e.key === "Tab") lastTabAt = Date.now();
+      lastPageInputAt = Date.now();
+      if (e.key !== "Tab") return;
+      const rec = { event: e, at: Date.now() };
+      pendingTab = rec;
+      // The Tab's default action moves focus synchronously, after this dispatch. If by the next
+      // task focus is not in a frame, the traversal landed elsewhere (or nowhere): spend it.
+      setTimeout(() => {
+        if (pendingTab === rec && !isFrame(document.activeElement)) pendingTab = null;
+      }, 0);
+    },
+    true,
+  );
+  document.addEventListener(
+    "pointerdown",
+    () => {
+      lastPageInputAt = Date.now();
     },
     true,
   );
@@ -43,10 +76,23 @@ function installTrackers(): void {
     "focusin",
     (e) => {
       const t = e.target;
-      if (t instanceof HTMLElement && t.tagName !== "IFRAME") lastOutsideFocus = t;
+      if (t instanceof HTMLElement && !isFrame(t)) {
+        lastOutsideFocus = t;
+        pendingTab = null; // the Tab's traversal landed on a page element, not a frame
+      }
     },
     true,
   );
+}
+
+/** Whether a pending Tab licenses `frame` taking focus now — and if so, consume it, so a Tab
+ *  admits only the one frame its traversal landed in. A Tab the page consumed (`preventDefault`,
+ *  e.g. slash autocomplete in the composer) never counts. */
+function tabLicenses(now: number): boolean {
+  const tab = pendingTab;
+  if (!tab || tab.event.defaultPrevented || now - tab.at >= INTENT_WINDOW_MS) return false;
+  pendingTab = null;
+  return true;
 }
 
 /** Whether the page has transient user activation right now — i.e. whether a hover-time focus
@@ -118,9 +164,9 @@ export function useFrameFocusGuard(frameRef: RefObject<HTMLIFrameElement | null>
       if (document.activeElement !== frame) return;
       const now = Date.now();
       const operatorMoved =
-        now - lastTabAt < INTENT_WINDOW_MS ||
         now - pressedAt < INTENT_WINDOW_MS ||
-        (hovering && hasTransientActivation());
+        tabLicenses(now) ||
+        (hovering && now - lastPageInputAt >= ACTIVATION_WINDOW_MS && hasTransientActivation());
       if (!operatorMoved) returnFocus(frame);
     };
     const onBlur = () => {
@@ -144,6 +190,7 @@ export function useFrameFocusGuard(frameRef: RefObject<HTMLIFrameElement | null>
 
 /** Test seam: reset the page-wide trackers. */
 export function resetFrameFocusGuardForTest(): void {
-  lastTabAt = -Infinity;
+  pendingTab = null;
+  lastPageInputAt = -Infinity;
   lastOutsideFocus = null;
 }

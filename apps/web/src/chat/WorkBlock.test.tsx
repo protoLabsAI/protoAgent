@@ -126,6 +126,16 @@ describe("inlineArtifactPreview — kinds that can never be inline (#4076)", () 
     }
   });
 
+  it("kind/placement normalise like the plugin (.strip().lower(); empty placement = inline)", () => {
+    expect(inlineArtifactPreview(call, buf({ kind: "HTML", title: "T" }))).toMatchObject({ kind: "html" });
+    expect(inlineArtifactPreview(call, buf({ kind: " Svg ", placement: "Inline" }))).toMatchObject({ kind: "svg" });
+    expect(inlineArtifactPreview(call, buf({ kind: "html", placement: "" }))).toMatchObject({ kind: "html" });
+    expect(inlineArtifactPreview(call, buf({ kind: "html", placement: " PANEL " }))).toBeNull();
+    expect(inlineArtifactPreview(call, buf({ kind: "Markdown" }))).toBeNull();
+    const landed: ToolCall = { ...call, input: JSON.stringify({ kind: "HTML", placement: "Inline", code: "x" }) };
+    expect(inlineArtifactPreview(landed, buf())).toMatchObject({ kind: "html" });
+  });
+
   it("the full args win over the hints once they land", () => {
     const landed: ToolCall = { ...call, input: JSON.stringify({ kind: "markdown", code: "x" }) };
     expect(inlineArtifactPreview(landed, buf({ kind: "html" }))).toBeNull();

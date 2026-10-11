@@ -18,7 +18,7 @@
 
 import { isTaskStateUnknown, isTaskTerminal } from "./taskState";
 
-export type WatchdogTaskState = { state: string; text: string };
+export type WatchdogTaskState = { state: string; text: string; settledAt?: number };
 
 /**
  * True when a task should be treated as settled (taskState.ts, shared with reattach.ts).

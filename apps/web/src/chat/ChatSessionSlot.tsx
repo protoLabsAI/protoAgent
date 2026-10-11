@@ -61,7 +61,7 @@ import {
   applyToolEvent,
   createParkTracker,
   createToolArgsTracker,
-  elapsedSince,
+  settleBubbleFromTask,
   settleStreamEnd,
   stopBubble,
 } from "./turnReducers";
@@ -1122,7 +1122,7 @@ export function ChatSessionSlot({
     // legitimately quiet (a slow tool) → keep waiting.
     const WATCHDOG_IDLE_MS = 45_000;
     let settledByWatchdog = false;
-    const finalizeFromTask = (state: string, text: string) => {
+    const finalizeFromTask = (state: string, text: string, settledAt?: number) => {
       const failed = isTaskFailed(state);
       const latest = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
       if (latest) {
@@ -1134,16 +1134,8 @@ export function ChatSessionSlot({
         chatStore.updateMessages(
           session.id,
           settleTurnBubbles(
-            reconciled.map((m) => {
-              if (m.id !== assistantId) return m;
-              const toolCalls = m.toolCalls?.map((c) =>
-                c.status === "running"
-                  ? { ...c, status: "done" as const, durationMs: c.durationMs ?? elapsedSince(c, now) }
-                  : c,
-              );
-              // Footer time = when the reply landed, as a reload reads it (#4076).
-              return { ...m, status: failed ? "error" : "done", toolCalls, createdAt: now };
-            }),
+            // Footer time = the task's own settle instant, as a reload reads it (#4076, #4154).
+            reconciled.map((m) => (m.id !== assistantId ? m : settleBubbleFromTask(m, { failed, settledAt, now }))),
             assistantId,
           ),
         );
@@ -1163,7 +1155,7 @@ export function ChatSessionSlot({
         // Reveal the withheld tail first so the finalize compares the task text
         // against the COMPLETE client accumulation.
         reveal.flush();
-        finalizeFromTask(task.state, task.text);
+        finalizeFromTask(task.state, task.text, task.settledAt);
         controller.abort(); // release the stalled socket; unwinds via catch → finally
       },
     });

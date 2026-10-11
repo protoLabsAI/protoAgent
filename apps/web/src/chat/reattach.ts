@@ -189,7 +189,12 @@ function updateMessage(sessionId: string, assistantId: string, fn: (m: any) => a
   );
 }
 
-function finalize(sessionId: string, assistantId: string, state: string, text: string) {
+/** `settledAt`: the task's own settle instant (GetTask's status timestamp — the `last_updated` a
+ *  reload shows as the footer time), else the moment this reattach saw it end. The bubble's
+ *  hydration-time `createdAt` (when the turn was still WORKING) is never kept: live and reload
+ *  must show the same time (#4154). */
+function finalize(sessionId: string, assistantId: string, state: string, text: string, settledAt?: number) {
+  const at = settledAt ?? Date.now();
   // failed / canceled / rejected — the one failure set every settling surface shares
   // (#3957: this read `/fail|cancel/`, so a REJECTED turn settled as done).
   const failed = isTaskFailed(state);
@@ -214,11 +219,18 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
         reconciled.map((m) => {
           if (m.id !== assistantId) return m;
           // A stopped turn settles neutral, its unfinished cards STOPPED (#4076).
-          if (canceled) return { ...stopBubble(m), durableSnapshotFallback: undefined };
+          if (canceled) return { ...stopBubble(m, { at }), durableSnapshotFallback: undefined };
           const toolCalls = m.toolCalls?.map((c) =>
             c.status === "running" ? { ...c, status: "done" as const, paused: undefined } : c,
           );
-          return { ...m, status: failed ? "error" : "done", paused: undefined, toolCalls, durableSnapshotFallback: undefined };
+          return {
+            ...m,
+            status: failed ? "error" : "done",
+            paused: undefined,
+            toolCalls,
+            createdAt: at,
+            durableSnapshotFallback: undefined,
+          };
         }),
         assistantId,
       ),
@@ -395,11 +407,11 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       // will ever move it on, so settle now rather than holding the session "streaming"
       // for the whole MAX_POLLS budget (#3957).
       if (!sawTask || !state || isTaskTerminal(state) || isTaskStateUnknown(state)) {
-        const { state: s2, text, supersededBy } = await api
+        const { state: s2, text, supersededBy, settledAt } = await api
           .getTask(taskId)
-          .catch(() => ({ state: "", text: "", supersededBy: undefined }));
+          .catch(() => ({ state: "", text: "", supersededBy: undefined, settledAt: undefined }));
         if (cancelled) return; // a late answer must not settle over a turn started since the cancel
-        await settle(s2 || state, text, supersededBy);
+        await settle(s2 || state, text, supersededBy, settledAt);
         return;
       }
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
@@ -431,10 +443,10 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
   /** The turn is over: finalize it — and when its pause was taken over by another task,
    *  draw that task after it (fetched FIRST: once the bubble settles the slot cancels this
    *  reattach, so both land in one synchronous step). */
-  async function settle(state: string, text: string, supersededBy: string | undefined) {
+  async function settle(state: string, text: string, supersededBy: string | undefined, settledAt?: number) {
     const successors = supersededBy ? await successorTurns(supersededBy, () => cancelled) : [];
     if (cancelled) return;
-    finalize(sessionId, assistantId, state, text);
+    finalize(sessionId, assistantId, state, text, settledAt);
     appendSuccessorTurns(sessionId, successors);
   }
 
@@ -464,9 +476,9 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         }
         // Stream closed = the turn is over (terminal-by-state, A2A 1.0). Confirm
         // and finalize off the durable task.
-        const { state, text, supersededBy } = await api
+        const { state, text, supersededBy, settledAt } = await api
           .getTask(taskId)
-          .catch(() => ({ state: "completed", text: "", supersededBy: undefined }));
+          .catch(() => ({ state: "completed", text: "", supersededBy: undefined, settledAt: undefined }));
         // Cancelled while GetTask was out: the cancel already handed the session back, and a
         // turn started since owns it now — finalize would set it idle mid-turn (Stop gone,
         // Send live), inviting a second concurrent turn into this slot.
@@ -477,7 +489,7 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
           settlePaused();
           return;
         }
-        await settle(state || "completed", text, supersededBy);
+        await settle(state || "completed", text, supersededBy, settledAt);
         return;
       } catch (err) {
         if (cancelled) return;

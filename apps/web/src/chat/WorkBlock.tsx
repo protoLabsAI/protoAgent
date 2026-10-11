@@ -63,11 +63,15 @@ export function inlineArtifactPreview(
   // wrote BEFORE `code` — `kind` first, by the tool's signature — so the kind and placement are
   // usually known from the very first slice (#4076). The full args win once they land.
   const hints = buffer.hints ?? {};
-  const placement = typeof args.placement === "string" ? args.placement : hints.placement;
-  const declaredKind = (typeof args.kind === "string" && args.kind) || hints.kind || "";
-  // Drop the preview once placement is KNOWN and not inline; an absent placement (the whole
-  // stream, until model end) keeps the preview up so the operator watches the artifact being written.
-  if (typeof placement === "string" && placement !== "inline") return null;
+  // Normalised exactly as the plugin does (`plugins/artifact/_tools.py`: `.strip().lower()`, and
+  // an empty placement means the inline default) — so "HTML" / "Inline" / "" read the same here.
+  const rawPlacement = typeof args.placement === "string" ? args.placement : hints.placement;
+  const placement = typeof rawPlacement === "string" ? rawPlacement.trim().toLowerCase() : undefined;
+  const rawKind = (typeof args.kind === "string" && args.kind) || hints.kind || "";
+  const declaredKind = rawKind.trim().toLowerCase();
+  // Drop the preview once placement is KNOWN and not inline; an absent (or empty) placement keeps
+  // the preview up so the operator watches the artifact being written.
+  if (placement && placement !== "inline") return null;
   // A kind that can never render inline (markdown, a deck, a file…) opens in the panel — never
   // flash the inline "Preparing…" card for it (#4076).
   if (declaredKind && !INLINE_ARTIFACT_KINDS.has(declaredKind)) return null;

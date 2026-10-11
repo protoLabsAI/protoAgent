@@ -357,33 +357,50 @@ export function StreamingPreview({ buffer, kind = "", title = "", renderFinal }:
     }
   }, [showPreview, frameLoaded, processed, buffer.text, buffer.done]);
 
-  // Theme (#4076): the srcdoc inlines the console theme as it is at mount, plus the DS kit CSS if
-  // it is cached. Once the frame is loaded, post the kit in when its one-time fetch settles (a
-  // first preview on the page mounts before it has), and re-post the theme on a live console
-  // re-theme (`protoagent:theme`, agentTheme.ts) so the preview never drifts from the console.
+  // Theme (#4076): the srcdoc inlines the console theme as it is when the frame first SHOWS, plus
+  // the DS kit CSS if it is cached. Once the frame is loaded, post the kit in when its one-time
+  // fetch settles (a first preview on the page mounts before it has), and re-post the theme on a
+  // live console re-theme (`protoagent:theme`, agentTheme.ts) so the preview never drifts from the
+  // console. The re-theme listener is attached from MOUNT: a re-theme between the srcdoc build and
+  // the frame's load can't be posted yet (the receiver isn't wired), so it is queued and the
+  // LATEST theme is posted on load — never lost (#4154).
+  const postStyle = (id: string, css: string) => {
+    const win = frameRef.current?.contentWindow;
+    if (!win) return;
+    try {
+      win.postMessage({ type: PREVIEW_STYLE_TYPE, id, css, scheme: consoleScheme() }, "*");
+    } catch {
+      /* detached — best effort */
+    }
+  };
+  const frameLiveRef = useRef(false);
+  const themeQueuedRef = useRef(false);
   useEffect(() => {
+    const onTheme = () => {
+      if (frameLiveRef.current) postStyle(PREVIEW_THEME_STYLE_ID, previewThemeCss());
+      else themeQueuedRef.current = true;
+    };
+    window.addEventListener("protoagent:theme", onTheme);
+    return () => window.removeEventListener("protoagent:theme", onTheme);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- postStyle reads only refs
+  }, []);
+  useEffect(() => {
+    frameLiveRef.current = showPreview && frameLoaded;
     if (!showPreview || !frameLoaded) return;
     let cancelled = false;
-    const post = (id: string, css: string) => {
-      const win = frameRef.current?.contentWindow;
-      if (!win) return;
-      try {
-        win.postMessage({ type: PREVIEW_STYLE_TYPE, id, css, scheme: consoleScheme() }, "*");
-      } catch {
-        /* detached — best effort */
-      }
-    };
+    if (themeQueuedRef.current) {
+      themeQueuedRef.current = false;
+      postStyle(PREVIEW_THEME_STYLE_ID, previewThemeCss()); // the latest theme, read now
+    }
     if (!srcdocHadKit) {
       void loadPluginKitCss().then((css) => {
-        if (!cancelled && css) post(PREVIEW_KIT_STYLE_ID, css);
+        if (!cancelled && css) postStyle(PREVIEW_KIT_STYLE_ID, css);
       });
     }
-    const onTheme = () => post(PREVIEW_THEME_STYLE_ID, previewThemeCss());
-    window.addEventListener("protoagent:theme", onTheme);
     return () => {
       cancelled = true;
-      window.removeEventListener("protoagent:theme", onTheme);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- postStyle reads only refs
   }, [showPreview, frameLoaded, srcdocHadKit]);
 
   // Never leave a trailing post timer behind on unmount.
