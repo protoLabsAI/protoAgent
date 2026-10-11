@@ -55,6 +55,47 @@ renders inline or in the panel.
 Reach for `show_artifact` **before** writing files. Writing `.jsx`/`.html` to the workspace gives
 the user files to wire up themselves — not what they asked for when they want to *see* it.
 
+## Style with the design system: required for `html` and `react`
+
+An artifact sits inside the console, in **the operator's theme, which may be dark or light**. It must
+look like part of the app, not like a stock web page. The frame already has the design system's
+`.pl-*` classes and every `--pl-*` theme token, so build on them:
+
+- **Colours come only from tokens.** Use `var(--pl-color-fg)`, `var(--pl-color-fg-muted)`,
+  `var(--pl-color-bg-raised)` (cards and surfaces), `var(--pl-color-bg-inset)` (inputs and wells),
+  `var(--pl-color-border)`, `var(--pl-color-accent)` (the one emphasis colour) and the
+  `--pl-color-status-*` colours.
+  **Never hardcode a colour** (`#fff`, `white`, `#333`, `rgb(…)`, a blue button). A hardcoded
+  light card or dark-grey text breaks on the other theme.
+- **Leave the page background and base text colour alone.** They're themed already.
+- **Use the kit's classes for controls and layout:**
+  - `pl-card` for a surface;
+  - `pl-field` with a `<label>` and a `pl-input` / `pl-select` / `pl-textarea` for inputs;
+  - `pl-btn`, plus `pl-btn--primary` for the main action;
+  - `pl-segmented` for a few mutually exclusive choices;
+  - `pl-stats` / `pl-stat` for computed results;
+  - `pl-table`, `pl-heading`, `pl-eyebrow`, and `pl-badge` / `pl-callout` for status.
+
+  Plain `<input>`/`<button>`/`<select>`/`<table>` are themed by default too, so if you're unsure,
+  write the plain element and don't style its colours.
+- **Spacing, shape and type:** use `var(--pl-space-2…6)`, `var(--pl-radius-md)` and
+  `var(--pl-font-sans)` / `var(--pl-font-mono)`. Keep it compact; the answer sits in a chat column.
+  No hero headers, gradients, drop shadows or emoji decoration.
+
+A themed calculator skeleton:
+
+```html
+<style>
+  .calc { display: grid; gap: var(--pl-space-3); max-width: 420px; }
+  .out  { color: var(--pl-color-fg-muted); }
+</style>
+<div class="calc pl-card">
+  <div class="pl-field"><label for="t">Bill total</label><input id="t" class="pl-input" type="number" value="84.50"></div>
+  <div class="pl-stats"><div class="pl-stat"><span class="out">Each pays</span> <strong id="each">—</strong></div></div>
+  <button class="pl-btn pl-btn--primary" id="go">Recalculate</button>
+</div>
+```
+
 ## Kinds
 
 - `mermaid` — flowcharts, sequence/ER/gantt diagrams. `code` is the Mermaid definition. The
@@ -136,9 +177,9 @@ function App() {
 createRoot(document.getElementById('root')).render(<App />);
 ```
 
-You can also style plain elements with the design system's `.pl-*` classes (e.g.
-`className="pl-btn pl-btn--primary"`) and `--pl-*` CSS tokens in **any** `html`/`react`/`markdown`
-artifact — they're injected so artifacts match the console's live theme. Only these libraries are
+The design system's `.pl-*` classes (e.g. `className="pl-btn pl-btn--primary"`) and `--pl-*`
+tokens are available in **every** `html`/`react`/`markdown` artifact, and using them is required (see
+"Style with the design system" above). Only these libraries are
 available; for anything else, write the code inline (the sandbox has no other network access).
 
 **`html` artifacts get the same import map.** Inside a `<script type="module">`,

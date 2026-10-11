@@ -470,6 +470,11 @@ def show_artifact(
     anchor isn't in the file. The reply echoes each target's first line and every snap. Bad
     links are dropped with a reason (the diagram still renders). ``note`` is one sentence
     (≤ 280 chars).
+
+    Style ``html``/``react`` with the injected design system, which is required: colours ONLY from
+    ``var(--pl-color-…)`` tokens (never ``#fff``/``white``/hex/rgb; the operator's theme may be dark
+    or light), and the ``.pl-*`` classes (``pl-card``, ``pl-field`` + ``pl-input``, ``pl-btn
+    pl-btn--primary``, ``pl-stats``, ``pl-table``). See the ``rendering-artifacts`` skill.
     """
     checked = _links.check(links)
     return _then_render(_show(kind, code, title, checked, placement, session_id=_chat_session(state)))
