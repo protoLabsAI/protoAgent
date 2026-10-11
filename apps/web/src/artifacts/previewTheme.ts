@@ -26,15 +26,17 @@ const SHELL_THEME_TOKENS: readonly string[] = [
   ...Array.from({ length: 8 }, (_, i) => `--pl-color-chart-series${i + 1}`),
 ];
 
-/** The shell's themed defaults for UNSTYLED elements (shell.js `DEFAULTS`), verbatim: zero
+/** The shell's themed defaults for UNSTYLED elements (shell.js `DEFAULTS`), minus its literal
+ *  fallbacks — the preview always carries the full token set (and the console bans `var(--pl-…,
+ *  <literal>)` fallbacks, tokenNameGuard). Zero
  *  specificity, so any rule the artifact writes wins outright. */
 export const PREVIEW_CONTROL_DEFAULTS =
-  ":where(html,body){font-family:var(--pl-font-sans,system-ui,sans-serif);line-height:1.5}" +
-  ":where(input,select,textarea){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-inset,transparent);" +
-  "border:1px solid var(--pl-color-border);border-radius:var(--pl-radius,6px);padding:6px 8px}" +
+  ":where(html,body){font-family:var(--pl-font-sans);line-height:1.5}" +
+  ":where(input,select,textarea){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-inset);" +
+  "border:1px solid var(--pl-color-border);border-radius:var(--pl-radius);padding:6px 8px}" +
   ":where(input,select,textarea):focus{outline:2px solid var(--pl-color-accent);outline-offset:1px}" +
-  ":where(button){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-raised,transparent);" +
-  "border:1px solid var(--pl-color-border);border-radius:var(--pl-radius,6px);padding:6px 12px;cursor:pointer}" +
+  ":where(button){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-raised);" +
+  "border:1px solid var(--pl-color-border);border-radius:var(--pl-radius);padding:6px 12px;cursor:pointer}" +
   ":where(button):hover{background:var(--pl-color-bg-hover,var(--pl-color-bg-raised))}" +
   ":where(a){color:var(--pl-color-accent)}" +
   ":where(table){border-collapse:collapse}:where(th,td){border-bottom:1px solid var(--pl-color-border);padding:6px 8px;text-align:left}";
