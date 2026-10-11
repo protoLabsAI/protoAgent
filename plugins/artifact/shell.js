@@ -1388,34 +1388,38 @@
       $estat=document.getElementById("estat"), $dlstat=document.getElementById("dlstat");
   var editing=false;
 
-  // Every srcdoc swap of the artifact frame goes through ONE navigator. Chrome drops a srcdoc
-  // assigned while the frame's previous srcdoc navigation is still committing: the frame keeps the
-  // FIRST document (or, when both are lost, stays on its blank initial page) while the attribute
-  // says the second. A freshly mounted panel hits that window every time a chip's "Open in panel"
-  // re-targets it: boot renders the remembered selection, and the deep-link renders the asked-for
-  // artifact ~2ms later. The panel then showed a stale or black frame under the right picker label
-  // until a reload (#4076). So a swap requested mid-navigation waits for that navigation's load
-  // and then assigns only the NEWEST doc; a load that never comes is covered by a timer.
-  var FRAME_NAV_MAX_MS = 3000;
-  function frameNavigator(frame, later, cancel){
-    var busy=false, queued=null, timer=0;
-    function settle(){
-      if(!busy) return;
-      busy=false; cancel(timer);
-      if(queued!==null){ var d=queued; queued=null; assign(d); }
-    }
-    function assign(doc){
-      busy=true; frame.srcdoc=doc;
-      cancel(timer); timer=later(settle, FRAME_NAV_MAX_MS);
-    }
-    frame.addEventListener("load", settle);
+  // Every srcdoc swap of the artifact frame goes through ONE navigator (#4076). Chrome drops a
+  // srcdoc assigned while a FRESH frame (one that has never finished loading) is still committing
+  // its first srcdoc: the frame keeps that first document, or stays on its blank initial page,
+  // while the attribute and the picker say the second. A frame that has loaded once swaps
+  // reliably. So the navigator:
+  //   • never re-navigates to the document it already holds (identical content keeps its state);
+  //   • assigns a loaded frame directly, at once, so a later swap never lands on top of something
+  //     the operator has started using;
+  //   • on a fresh frame with a navigation in flight, swaps in a NEW iframe element (same
+  //     attributes, same load listeners) and assigns there, so the newest document always wins
+  //     without waiting for the abandoned one to load.
+  // `replaced(el)` hands the new element back so `$frame` follows it.
+  function frameNavigator(frame, replaced){
+    var el=frame, doc=null, inFlight=false, loadedOnce=false, listeners=[];
+    function onLoad(){ inFlight=false; loadedOnce=true; }
+    function attach(n){ n.addEventListener("load", onLoad); listeners.forEach(function(fn){ n.addEventListener("load", fn); }); }
+    attach(el);
     return {
-      set: function(doc){ if(busy) queued=doc; else assign(doc); },
-      // Drop a queued swap (the frame is being blanked / hidden), so it can't land afterwards.
-      clear: function(){ queued=null; }
+      set: function(next){
+        if(next===doc) return;
+        if(inFlight && !loadedOnce){
+          var n=el.cloneNode(false); n.removeAttribute("srcdoc");
+          el.replaceWith(n); el=n; attach(n); replaced(n);
+        }
+        doc=next; inFlight=true; el.srcdoc=next;
+      },
+      // The frame was blanked (srcdoc removed) — the next set must navigate even to the same doc.
+      clear: function(){ doc=null; },
+      onLoad: function(fn){ listeners.push(fn); el.addEventListener("load", fn); }
     };
   }
-  var frameNav = frameNavigator($frame, function(fn, ms){ return setTimeout(fn, ms); }, function(t){ clearTimeout(t); });
+  var frameNav = frameNavigator($frame, function(n){ $frame=n; });
 
   // Embed placement (ADR 0118 D2): /plugins/artifact/view?embed=<id>&v=<version> renders ONE
   // version with no panel chrome. EMBED is {id, ver} (ver = the LIFETIME version number the
@@ -1598,10 +1602,10 @@
   }
   new MutationObserver(pushTheme).observe(document.documentElement,{attributes:true,attributeFilter:["style","class","data-theme"]});
   // A theme switch can race a render — re-push once the fresh srcdoc has loaded.
-  $frame.addEventListener("load", pushTheme);
+  frameNav.onLoad(pushTheme);
   // Embed only: wake the frame's dormant height reporter (HEIGHTJS) so it starts posting its
   // content height up on every size change. A no-op in the panel (never sent).
-  $frame.addEventListener("load", function(){
+  frameNav.onLoad(function(){
     if(!EMBED) return;
     try{ $frame.contentWindow.postMessage({type:"protoArtifact:measure"}, "*"); }catch(_){}
   });
