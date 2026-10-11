@@ -275,6 +275,40 @@ def test_explicit_panel_show_emits_no_inline_or_height(monkeypatch, tmp_path):
     )
 
 
+def test_inline_show_result_says_inline_in_the_chat(monkeypatch, tmp_path):
+    # #4124: an inline artifact's reply says where it ACTUALLY shows — inline in the chat — never
+    # "now showing in the Artifact panel", which sends the model telling the user to open the panel.
+    art = _load(monkeypatch, tmp_path)
+    _live(art)
+    code = "<h1>Hi</h1>"
+    out = art.show_artifact.invoke({"kind": "html", "code": code, "title": "Doc"})
+    aid = art._read_store()["artifacts"][0]["id"]
+    assert strip_component(out) == (
+        f"Created html artifact {aid} ({len(code)} chars) — now showing inline in the chat. "
+        "Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
+    )
+    assert "panel" not in strip_component(out).lower()
+
+
+def test_check_artifact_is_inline_aware_without_a_verdict(monkeypatch, tmp_path):
+    # #4124: with no render verdict yet, an INLINE artifact's check says it's rendering inline in
+    # the chat (or not scrolled into view) — it never tells anyone to open the panel. A PANEL
+    # artifact keeps the open-the-panel hint, since that's where it renders.
+    art = _load(monkeypatch, tmp_path)
+    art.show_artifact.invoke({"kind": "html", "code": "<p>a</p>"})
+    inline_id = art._read_store()["artifacts"][0]["id"]
+    out = art.check_artifact.invoke({"artifact_id": inline_id})
+    assert "no render result yet" in out
+    assert "inline in the chat" in out and "scrolled into view" in out
+    assert "panel" not in out.lower()
+
+    art.show_artifact.invoke({"kind": "html", "code": "<p>b</p>", "placement": "panel"})
+    panel_id = art._read_store()["artifacts"][0]["id"]
+    out = art.check_artifact.invoke({"artifact_id": panel_id})
+    assert "no render result yet" in out and "Artifact panel may be closed" in out
+    assert "inline" not in out
+
+
 @pytest.mark.parametrize(
     "kind,code",
     [
