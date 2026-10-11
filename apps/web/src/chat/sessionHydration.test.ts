@@ -1502,3 +1502,25 @@ describe("durable replay keeps stream order — the pre-tool sentence stays the 
     expect(assistant.parts?.map((p) => p.kind)).toEqual(["reasoning", "tools", "text"]);
   });
 });
+
+describe("hydrated tool durations (#4076)", () => {
+  const withTools = (completedMeta: Record<string, unknown>) =>
+    turn({
+      history: [
+        { role: "ROLE_USER", parts: [{ text: "go" }] },
+        { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "c1", name: "load_skill", phase: "started", args: "{}" } } },
+        { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "c1", name: "load_skill", phase: "completed", result: "ok", ...completedMeta } } },
+      ],
+    });
+
+  it("restores the server-measured duration the end frame carries", () => {
+    const assistant = messagesFromDurableTurn(withTools({ durationMs: 1234 })).find((m) => m.role === "assistant");
+    expect(assistant?.toolCalls?.[0].durationMs).toBe(1234);
+  });
+
+  it("shows NO duration — never a fake 0ms — when the stored frame carries none", () => {
+    const assistant = messagesFromDurableTurn(withTools({})).find((m) => m.role === "assistant");
+    expect(assistant?.toolCalls?.[0].status).toBe("done");
+    expect(assistant?.toolCalls?.[0].durationMs).toBeUndefined();
+  });
+});

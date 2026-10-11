@@ -319,3 +319,36 @@ describe("vendored Idiomorph (r4)", () => {
     );
   });
 });
+
+// #4154 review: a console re-theme that lands after the srcdoc was built but before the frame
+// loaded can't be posted yet — it is queued and the LATEST theme is posted on load.
+describe("StreamingPreview — a re-theme before the frame loads is not lost", () => {
+  function themePostsOf(spy: ReturnType<typeof vi.spyOn>): unknown[][] {
+    return (spy.mock.calls as unknown[][]).filter(
+      (c) => (c[0] as { type?: string; id?: string })?.id === "proto-preview-theme",
+    );
+  }
+
+  it("queues a pre-load re-theme and posts it once the frame loads", () => {
+    render({ buffer: { text: GATE_OPEN, done: false }, kind: "html" });
+    const frame = theFrame()!;
+    const spy = vi.spyOn(frame.contentWindow as Window, "postMessage");
+    act(() => void window.dispatchEvent(new Event("protoagent:theme"))); // before load
+    expect(themePostsOf(spy)).toHaveLength(0); // the receiver isn't wired yet
+    act(() => void frame.dispatchEvent(new Event("load")));
+    expect(themePostsOf(spy)).toHaveLength(1);
+    // A later re-theme posts straight away; the queue is spent (no repeat on re-render).
+    act(() => void window.dispatchEvent(new Event("protoagent:theme")));
+    expect(themePostsOf(spy)).toHaveLength(2);
+    render({ buffer: { text: GATE_OPEN + "<p>more</p>", done: false }, kind: "html" });
+    expect(themePostsOf(spy)).toHaveLength(2);
+  });
+
+  it("no re-theme before load → no extra theme post on load (the srcdoc already has it)", () => {
+    render({ buffer: { text: GATE_OPEN, done: false }, kind: "html" });
+    const frame = theFrame()!;
+    const spy = vi.spyOn(frame.contentWindow as Window, "postMessage");
+    act(() => void frame.dispatchEvent(new Event("load")));
+    expect(themePostsOf(spy)).toHaveLength(0);
+  });
+});

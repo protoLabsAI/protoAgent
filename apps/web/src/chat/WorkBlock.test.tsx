@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ChatPart, ToolCall } from "../lib/types";
 import type { ToolArgsBuffer } from "./toolArgsBuffer";
-import { WorkBlock } from "./WorkBlock";
+import { inlineArtifactPreview, WorkBlock } from "./WorkBlock";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -101,5 +101,43 @@ describe("WorkBlock — handover forwards renderFinal (r2)", () => {
     expect(final).not.toBeNull();
     // No frame ever reported a height, so the handover uses the preview's fixed starting height.
     expect(final!.getAttribute("data-height")).toBe("240");
+  });
+});
+
+describe("inlineArtifactPreview — kinds that can never be inline (#4076)", () => {
+  const call: ToolCall = { id: "art-i", name: "show_artifact", input: "", status: "running" };
+  const buf = (hints?: Record<string, string>): Record<string, ToolArgsBuffer> => ({
+    "art-i": { arg: "code", text: "# Notes\n\nSome markdown", done: false, ...(hints ? { hints } : {}) },
+  });
+
+  it("no inline card for a markdown (panel-only) artifact, known from the streamed hints", () => {
+    expect(inlineArtifactPreview(call, buf({ kind: "markdown" }))).toBeNull();
+    render({ parts: PARTS, toolCalls: [call], toolArgs: buf({ kind: "markdown" }), streaming: true });
+    expect(byTestId("streaming-preview")).toBeNull();
+  });
+
+  it("no inline card when the streamed hints say placement is panel", () => {
+    expect(inlineArtifactPreview(call, buf({ kind: "html", placement: "panel" }))).toBeNull();
+  });
+
+  it("an inline-capable kind from the hints keeps the card, with the hinted title", () => {
+    for (const kind of ["html", "svg", "mermaid", "react", "vega-lite"]) {
+      expect(inlineArtifactPreview(call, buf({ kind, title: "Bill" })), kind).toMatchObject({ kind, title: "Bill" });
+    }
+  });
+
+  it("kind/placement normalise like the plugin (.strip().lower(); empty placement = inline)", () => {
+    expect(inlineArtifactPreview(call, buf({ kind: "HTML", title: "T" }))).toMatchObject({ kind: "html" });
+    expect(inlineArtifactPreview(call, buf({ kind: " Svg ", placement: "Inline" }))).toMatchObject({ kind: "svg" });
+    expect(inlineArtifactPreview(call, buf({ kind: "html", placement: "" }))).toMatchObject({ kind: "html" });
+    expect(inlineArtifactPreview(call, buf({ kind: "html", placement: " PANEL " }))).toBeNull();
+    expect(inlineArtifactPreview(call, buf({ kind: "Markdown" }))).toBeNull();
+    const landed: ToolCall = { ...call, input: JSON.stringify({ kind: "HTML", placement: "Inline", code: "x" }) };
+    expect(inlineArtifactPreview(landed, buf())).toMatchObject({ kind: "html" });
+  });
+
+  it("the full args win over the hints once they land", () => {
+    const landed: ToolCall = { ...call, input: JSON.stringify({ kind: "markdown", code: "x" }) };
+    expect(inlineArtifactPreview(landed, buf({ kind: "html" }))).toBeNull();
   });
 });

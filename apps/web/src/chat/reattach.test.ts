@@ -1162,3 +1162,50 @@ describe("reattach: a mid-turn snapshot replays text in stream order", () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// footer time: a reattach settles at the task's OWN settle instant (#4154 review)
+// ---------------------------------------------------------------------------
+
+describe("reattach footer time matches a reload", () => {
+  const HYDRATED_AT = Date.parse("2026-10-11T09:00:00Z"); // when the WORKING turn was hydrated
+  const SETTLED_AT = Date.parse("2026-10-11T09:03:21Z"); // the task's status timestamp = last_updated
+
+  function seedHydrated(): string {
+    const sessionId = seedStuckSession();
+    const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
+    chatStore.updateMessages(
+      sessionId,
+      cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, createdAt: HYDRATED_AT } : m)),
+    );
+    return sessionId;
+  }
+
+  it("a completed turn stamps the task's settle time, not the hydration-time createdAt", async () => {
+    const sessionId = seedHydrated();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "completed", text: "done", settledAt: SETTLED_AT });
+    attach(sessionId);
+    await settle();
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "done", createdAt: SETTLED_AT });
+  });
+
+  it("a cancelled turn (stopped) stamps the task's settle time too", async () => {
+    const sessionId = seedHydrated();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "TASK_STATE_CANCELED", text: "", settledAt: SETTLED_AT });
+    attach(sessionId);
+    await settle();
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "done", stopped: true, createdAt: SETTLED_AT });
+  });
+
+  it("with no server timestamp it stamps when the reattach saw the end — never the hydration time", async () => {
+    const sessionId = seedHydrated();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "completed", text: "done" });
+    const before = Date.now();
+    attach(sessionId);
+    await settle();
+    expect(assistantMessage(sessionId)!.createdAt).toBeGreaterThanOrEqual(before);
+  });
+});

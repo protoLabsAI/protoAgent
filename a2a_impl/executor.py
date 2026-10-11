@@ -1505,6 +1505,12 @@ def _tool_call_frame(event_type: str, payload: Any) -> tuple[Part | None, dict[s
         # extra-key lane as parentToolCallId.
         if event_type == "tool_end" and isinstance(payload.get("output_chars"), int):
             meta[pa.TOOL_CALL_EXT_URI]["outputChars"] = payload["output_chars"]
+        # The call's measured execution time (on_tool_start→on_tool_end, #2697). Riding the
+        # end frame — which the durable store keeps — lets a reload or reattach show the REAL
+        # duration instead of the ~0ms between two replayed frames (#4076).
+        duration_ms = payload.get("duration_ms")
+        if event_type == "tool_end" and isinstance(duration_ms, int) and not isinstance(duration_ms, bool) and duration_ms > 0:
+            meta[pa.TOOL_CALL_EXT_URI]["durationMs"] = duration_ms
         return None, meta
     if payload:
         return _text_part(str(payload)), None
