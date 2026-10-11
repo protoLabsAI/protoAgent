@@ -108,6 +108,24 @@ export function pauseBubble(m: ChatMessage): ChatMessage {
   };
 }
 
+/** One bubble, STOPPED (#4076): the turn was cancelled before it finished — an operator Stop
+ *  or a `canceled` task state on hydration / reattach. Settles the bubble done (no spinner)
+ *  but says so: the bubble gets the footer's "Stopped" marker, and every card still in
+ *  flight settles as STOPPED, not done. Flipping those to plain done painted a ✓ on a call
+ *  that never returned — after a reload, a cancelled `show_artifact` read as a success with
+ *  empty args. A card that already settled keeps its own status. */
+export function stopBubble(m: ChatMessage): ChatMessage {
+  return {
+    ...m,
+    status: "done",
+    paused: undefined,
+    stopped: true,
+    toolCalls: m.toolCalls?.map((c) =>
+      c.status === "running" ? { ...c, status: "done" as const, paused: undefined, stopped: true } : c,
+    ),
+  };
+}
+
 /** One bubble, resumed: the pause cleared off it and its cards (the turn continues). */
 export function unpauseBubble(m: ChatMessage): ChatMessage {
   if (!m.paused && !m.toolCalls?.some((c) => c.paused)) return m;

@@ -2,7 +2,7 @@ import { Button } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, X } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, CircleSlash, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, X } from "lucide-react";
 import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
@@ -149,6 +149,9 @@ export function ChatMessageView({
     showChatUsage && message.role === "assistant" && !streaming && Boolean(message.usage || message.contextWindow);
   const sentStamp =
     !streaming && message.role === "assistant" ? sentTimestamp(message.createdAt) : null;
+  // A turn the operator STOPPED (#4076) says so on replay too — a quiet marker in the same
+  // footer row, so a transcript that ends mid-thought reads as stopped, not as finished.
+  const stoppedMark = !streaming && message.role === "assistant" && message.stopped === true;
   return (
     <Message
       role={message.role}
@@ -362,8 +365,14 @@ export function ChatMessageView({
       ) : null}
       {/* Footer meta row (#3458): usage stats and the sent time on one line (see showUsage and
           sentStamp above). System notes and the specialized cards (returned above) never get here. */}
-      {showUsage || sentStamp ? (
+      {showUsage || sentStamp || stoppedMark ? (
         <div className="chat-msg-meta">
+          {stoppedMark ? (
+            <span className="chat-stopped-mark" data-testid="chat-stopped-mark">
+              <CircleSlash size={13} aria-hidden />
+              <span>Stopped</span>
+            </span>
+          ) : null}
           {showUsage ? <UsageFooter usage={message.usage} context={message.contextWindow} /> : null}
           {sentStamp ? <SentTimestamp stamp={sentStamp} /> : null}
         </div>

@@ -301,13 +301,26 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* The checkbox + "Always allow from this …" are ONE unit: never split, never wrapped inside.
+   `flex: 0 0 auto` + nowrap keeps it beside the buttons when the row has room and wraps the whole
+   control below them when it doesn't. The input override beats theme.css's global
+   `input { width: 100% }`, which otherwise stretched the box across the row and pushed the
+   label to the far edge (#4076). */
 .artifact-ref-inline__bridge-trust {
   display: inline-flex;
   align-items: center;
   gap: var(--pl-space-1);
-  flex: 1 0 100%;
+  flex: 0 0 auto;
+  max-width: 100%;
+  white-space: nowrap;
   color: var(--pl-color-fg-muted);
   cursor: pointer;
+}
+.artifact-ref-inline__bridge-trust input[type="checkbox"] {
+  flex: none;
+  width: auto;
+  margin: 0;
+  padding: 0;
 }
 /* The frame-component host's send-to-chat / openLink verdict (ADR 0118 D4 / S12b): the same
    needs-confirm prompt / in-place rejection the inline artifact frame shows, under the component
@@ -359,13 +372,26 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+/* The checkbox + "Always allow from this …" are ONE unit: never split, never wrapped inside.
+   `flex: 0 0 auto` + nowrap keeps it beside the buttons when the row has room and wraps the whole
+   control below them when it doesn't. The input override beats theme.css's global
+   `input { width: 100% }`, which otherwise stretched the box across the row and pushed the
+   label to the far edge (#4076). */
 .frame-component-host__bridge-trust {
   display: inline-flex;
   align-items: center;
   gap: var(--pl-space-1);
-  flex: 1 0 100%;
+  flex: 0 0 auto;
+  max-width: 100%;
+  white-space: nowrap;
   color: var(--pl-color-fg-muted);
   cursor: pointer;
+}
+.frame-component-host__bridge-trust input[type="checkbox"] {
+  flex: none;
+  width: auto;
+  margin: 0;
+  padding: 0;
 }
 /* "from ‹title›" label on a user turn an artifact's send bridge started (ADR 0118 D4). Block-level
    `flex` (not `inline-flex`) so the label sits on its OWN line above the message text, rather than

@@ -49,8 +49,9 @@ import {
   applyToolEvent,
   applyUsage,
   pauseBubble,
+  stopBubble,
 } from "./turnReducers";
-import { isTaskFailed, isTaskPaused, isTaskStateUnknown, isTaskTerminal } from "./taskState";
+import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskStateUnknown, isTaskTerminal } from "./taskState";
 import { applyCanonicalTurnText, resetTurnForSnapshot, settleTurnBubbles } from "./turnText";
 
 export { pauseBubble, unpauseBubble } from "./turnReducers";
@@ -192,6 +193,7 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
   // failed / canceled / rejected — the one failure set every settling surface shares
   // (#3957: this read `/fail|cancel/`, so a REJECTED turn settled as done).
   const failed = isTaskFailed(state);
+  const canceled = isTaskCanceled(state);
   const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   if (cur) {
     // Reconcile the ORDERED parts against the authoritative full-turn text, not
@@ -211,6 +213,8 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
       settleTurnBubbles(
         reconciled.map((m) => {
           if (m.id !== assistantId) return m;
+          // A stopped turn settles neutral, its unfinished cards STOPPED (#4076).
+          if (canceled) return { ...stopBubble(m), durableSnapshotFallback: undefined };
           const toolCalls = m.toolCalls?.map((c) =>
             c.status === "running" ? { ...c, status: "done" as const, paused: undefined } : c,
           );
@@ -220,7 +224,7 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
       ),
     );
   }
-  chatStore.setSessionStatus(sessionId, failed ? "error" : "idle");
+  chatStore.setSessionStatus(sessionId, failed && !canceled ? "error" : "idle");
 }
 
 // ── a pause another task took over (#3963) ─────────────────────────────────────────────

@@ -1183,11 +1183,46 @@ describe("boot hydration", () => {
 });
 
 describe("a rejected durable turn (#3957)", () => {
-  it("rebuilds as an error, like failed and canceled — not as a clean answer", () => {
-    for (const state of ["TASK_STATE_REJECTED", "TASK_STATE_FAILED", "TASK_STATE_CANCELED"]) {
+  it("rebuilds as an error, like failed — not as a clean answer", () => {
+    for (const state of ["TASK_STATE_REJECTED", "TASK_STATE_FAILED"]) {
       const assistant = messagesFromDurableTurn(turn({ state, status: { state } })).find((m) => m.role === "assistant");
       expect(assistant?.status, state).toBe("error");
     }
+  });
+});
+
+describe("a stopped (canceled) durable turn (#4076)", () => {
+  const stoppedTurn = (state: string) =>
+    turn({
+      state,
+      status: { state },
+      text: "",
+      artifacts: [],
+      history: [
+        { role: "ROLE_USER", parts: [{ text: "Make me a mortgage table" }] },
+        { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "c1", name: "load_skill", phase: "started", args: "{}" } } },
+        { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "c1", name: "load_skill", phase: "completed", result: "ok" } } },
+        // Cancelled mid-call: a start frame, never a completion.
+        { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "c2", name: "show_artifact", phase: "started", args: "" } } },
+      ],
+    });
+
+  it("rebuilds neutral and marked stopped; the unfinished call reads stopped, not ✓ done", () => {
+    for (const state of ["TASK_STATE_CANCELED", "canceled", "TASK_STATE_CANCELLED"]) {
+      const assistant = messagesFromDurableTurn(stoppedTurn(state)).find((m) => m.role === "assistant");
+      expect(assistant, state).toMatchObject({ status: "done", stopped: true });
+      expect(assistant?.toolCalls, state).toMatchObject([
+        { id: "c1", name: "load_skill", status: "done" },
+        { id: "c2", name: "show_artifact", status: "done", stopped: true },
+      ]);
+      // The call that DID return is not tarred as stopped.
+      expect(assistant?.toolCalls?.[0].stopped, state).toBeUndefined();
+    }
+  });
+
+  it("a completed turn never carries the stopped marker", () => {
+    const assistant = messagesFromDurableTurn(turn()).find((m) => m.role === "assistant");
+    expect(assistant?.stopped).toBeUndefined();
   });
 });
 

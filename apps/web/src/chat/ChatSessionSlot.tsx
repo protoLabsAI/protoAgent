@@ -48,7 +48,7 @@ import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
 import { registerSlashDispatcher } from "./slashDispatch";
-import { isTaskFailed } from "./taskState";
+import { isTaskCanceled, isTaskFailed } from "./taskState";
 import { resolveComposerUp } from "./queuedRecall";
 import { isDuplicateRiskActive, nextDuplicateRisk, type DuplicateRisk } from "./duplicateRisk";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
@@ -62,6 +62,7 @@ import {
   createParkTracker,
   createToolArgsTracker,
   settleStreamEnd,
+  stopBubble,
 } from "./turnReducers";
 import { applyDelegateProgress, settleDelegateProgress } from "./delegateProgress";
 import { onLiveComponent, onLiveToolEvent } from "../codeviewer/live";
@@ -1069,6 +1070,9 @@ export function ChatSessionSlot({
     // form rides the same frame but parks no graph (its redeem completes the task
     // server-side), so it settles as before.
     const park = createParkTracker();
+    // The turn ended CANCELED (a Stop from another surface, a CancelTask over A2A): it settles
+    // stopped, not done — its unfinished cards must not read ✓ (#4076).
+    let canceledByServer = false;
 
     // Live streamed tool-argument previews (ADR 0118 D3, S3): the server decodes one tool's
     // declared string arg incrementally; `onToolArgs` folds each slice into this tracker and
@@ -1224,6 +1228,7 @@ export function ChatSessionSlot({
           );
         },
         onTaskState: (state) => {
+          canceledByServer = isTaskCanceled(state);
           // The latest state wins: a turn that parks is marked paused at once, so its
           // in-flight card reads "waiting for you" while the form is up (#3956).
           // A working state after a park un-parks the bubble (the turn is producing again).
@@ -1508,7 +1513,11 @@ export function ChatSessionSlot({
             settleTurnBubbles(
               settleDelegateProgress(
                 latest.messages.map((message) =>
-                  message.id === assistantId ? settleStreamEnd(message, { parked: false }) : message,
+                  message.id !== assistantId
+                    ? message
+                    : canceledByServer
+                      ? stopBubble(message)
+                      : settleStreamEnd(message, { parked: false }),
                 ),
               ),
               assistantId,

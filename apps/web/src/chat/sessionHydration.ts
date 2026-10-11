@@ -21,8 +21,8 @@ import {
 import { applyDelegateProgressTo } from "./delegateProgress";
 import { rendersText, replaceText, textRuns } from "./parts";
 import { isEmptyPlaceholder } from "./roomBubble";
-import { isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
-import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble } from "./turnReducers";
+import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
+import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble, stopBubble } from "./turnReducers";
 
 function timestamp(value: string | null): number {
   const parsed = value ? Date.parse(value) : NaN;
@@ -176,14 +176,18 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     },
   });
   if (terminal) {
-    assistant = {
-      ...assistant,
-      ...(repliedAt !== undefined ? { createdAt: repliedAt } : {}),
-      status: isTaskFailed(turn.state) ? "error" : "done",
-      toolCalls: assistant.toolCalls?.map((call) =>
-        call.status === "running" ? { ...call, status: "done" as const } : call,
-      ),
-    };
+    assistant = isTaskCanceled(turn.state)
+      ? // A STOPPED turn (#4076): a neutral "Stopped" bubble whose unfinished cards read
+        // stopped — not an error, and not a ✓ on a call that never returned.
+        { ...stopBubble(assistant), ...(repliedAt !== undefined ? { createdAt: repliedAt } : {}) }
+      : {
+          ...assistant,
+          ...(repliedAt !== undefined ? { createdAt: repliedAt } : {}),
+          status: isTaskFailed(turn.state) ? "error" : "done",
+          toolCalls: assistant.toolCalls?.map((call) =>
+            call.status === "running" ? { ...call, status: "done" as const } : call,
+          ),
+        };
     // ChatMessageView draws a parts-bearing bubble FROM its ordered parts and only
     // falls back to `content` when there are none — so a completed multi-part turn
     // (tool cards/components + reply) whose answer text landed only in flat

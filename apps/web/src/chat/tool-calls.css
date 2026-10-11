@@ -70,6 +70,21 @@
 .tool-waiting svg {
   vertical-align: -1px;
 }
+/* A call still in flight when its turn was STOPPED (#4076): settled, but it never returned —
+   so no ✓. Same move as .tool-paused: hide the DS glyph (the summary chip's too, when the
+   fold holds a stopped call) and let the header's neutral "stopped" chip carry the state.
+   Scoped to the card's / chip's OWN head so a folded sibling that did finish keeps its ✓. */
+.pl-toolcard.tool-stopped > .pl-toolcard__head-row .pl-toolcard__status,
+.pl-toolcard-summary.tool-stopped > .pl-toolcard-summary__head > .pl-toolcard__status {
+  display: none;
+}
+.tool-stopped-label {
+  color: var(--pl-color-fg-subtle);
+  white-space: nowrap;
+}
+.tool-stopped-label svg {
+  vertical-align: -1px;
+}
 
 /* Estimated context cost on a SETTLED card (toolCost.ts, #2282). Like .tool-elapsed it
    only appears past a threshold, so its presence is itself the signal — the operator is

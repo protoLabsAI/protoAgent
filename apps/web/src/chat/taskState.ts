@@ -16,6 +16,7 @@
 
 const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
 const FAILED = /failed|canceled|cancelled|rejected/i;
+const CANCELED = /canceled|cancelled/i;
 const PAUSED = /input.required|auth.required/i;
 const UNKNOWN = /^(?:task_state_)?(?:unknown|unspecified)$/i;
 
@@ -25,6 +26,12 @@ export function isTaskTerminal(state: string | undefined): boolean {
 
 export function isTaskFailed(state: string | undefined): boolean {
   return FAILED.test(state ?? "");
+}
+
+/** The turn was STOPPED (operator Stop / CancelTask) — a failed-set state, but one the
+ *  console renders neutral ("Stopped"), not as an error (#4076). */
+export function isTaskCanceled(state: string | undefined): boolean {
+  return CANCELED.test(state ?? "");
 }
 
 export function isTaskPaused(state: string | undefined): boolean {
