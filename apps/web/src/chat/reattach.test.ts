@@ -918,7 +918,7 @@ describe("reattach: terminal turns are unchanged", () => {
     expect(sessionStatus(sessionId)).toBe("error");
   });
 
-  it("canceled (via the poller) → message error, session error", async () => {
+  it("canceled (via the poller) → a neutral STOPPED message, session idle (#4076)", async () => {
     const sessionId = seedStuckSession();
     resumeTask.mockRejectedValue(new Error("task is not running (UnsupportedOperationError)"));
     replayTask.mockResolvedValue("TASK_STATE_CANCELLED");
@@ -928,8 +928,10 @@ describe("reattach: terminal turns are unchanged", () => {
     await settle();
 
     expect(replayTask).toHaveBeenCalledTimes(1);
-    expect(assistantMessage(sessionId)?.status).toBe("error");
-    expect(sessionStatus(sessionId)).toBe("error");
+    // A stop is not a failure: settled, marked stopped — not an error bubble.
+    expect(assistantMessage(sessionId)?.status).toBe("done");
+    expect(assistantMessage(sessionId)?.stopped).toBe(true);
+    expect(sessionStatus(sessionId)).toBe("idle");
   });
 });
 

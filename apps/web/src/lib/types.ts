@@ -823,6 +823,12 @@ export type ToolCall = {
    *  waiting on a human, not working — rendered as waiting (no spinner, no climbing
    *  timer). Cleared when the turn resumes or the card settles. */
   paused?: boolean;
+  /** Still in flight when its turn was STOPPED (operator Stop / CancelTask, #4076): the call
+   *  never completed, so it settles with `status: "done"` (no spinner) but renders neutral
+   *  "stopped" — never the ✓ a call that actually returned gets. Survives reload: the live
+   *  Stop stamps it on the persisted bubble, and durable hydration / reattach stamp it off a
+   *  `canceled` task state. */
+  stopped?: boolean;
   /** Client wall-clock when the start frame arrived (ms epoch). */
   startedAt?: number;
   /** Elapsed start→end, stamped client-side when the end frame arrives. */
@@ -1195,6 +1201,9 @@ export type ChatMessage = {
    *  it — but nothing is being produced, so the bubble renders as waiting: no streaming
    *  spinner, no running-card timers. Cleared when the turn resumes or settles. */
   paused?: boolean;
+  /** The turn was STOPPED before it finished (operator Stop / a `canceled` task, #4076) —
+   *  the footer carries a quiet "Stopped" marker so a reload still says why it ends early. */
+  stopped?: boolean;
   /** A2A task id for this turn — persisted so a stuck `streaming` message can be
    *  reconciled against the server's task state on reload (self-heal). */
   taskId?: string;
