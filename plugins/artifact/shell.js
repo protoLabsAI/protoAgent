@@ -2054,9 +2054,10 @@
 
   // ── send-to-chat / openLink bridge (ADR 0118 D4) ───────────────────────────────────────
   // The in-frame shim's send()/openLink() post up here; the shell SANITY-checks and relays the
-  // request to the console host (its embedder), which owns the real gates — a user gesture,
-  // length, "the agent is busy", the 1-per-2s rate (send) / https + origin allowlist
-  // (openLink) — in S10. The host posts its verdict back down (`protoArtifact:bridgeResult`)
+  // request to the console host (its embedder), which owns the real gates — the operator's
+  // confirm chip (S19 / #4137: a send is a proposal the user approves in console DOM, unless
+  // they chose "Always allow"), length, "the agent is busy", the 1-per-2s rate (send) / https +
+  // origin allowlist (openLink). The host posts its verdict back down (`protoArtifact:bridgeResult`)
   // and we relay it into the frame as a `protoArtifact:result`, resolving/rejecting the frame's
   // Promise. Trust lives in the host: the shell never decides whether a send is allowed; it
   // only tags the request with which artifact/version it came from (D4 origin metadata) and

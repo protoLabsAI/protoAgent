@@ -17,7 +17,7 @@ import {
   InlineFrameHostContext,
   type ArtifactChatSend,
 } from "./ArtifactRefChip";
-import { createFrameBridge } from "./frameBridge";
+import { createFrameBridge, SEND_TRUST_STORAGE_KEY, type FrameBridge } from "./frameBridge";
 import { ARTIFACT_VIEW_KEY } from "./artifactRef";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -697,12 +697,14 @@ describe("ArtifactRefChip", () => {
   });
 });
 
-// The send-to-chat / openLink bridge (ADR 0118 D4 / S10b): the inline host relays an in-frame
-// protoArtifact.send()/openLink() request UP from ITS embed frame, runs it through the frameBridge
-// gates, and posts the verdict (protoArtifact:bridgeResult) back down. Trust is the host's —
-// never the model-authored frame — so these drive the gates end to end through the host.
-describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b)", () => {
+// The send-to-chat / openLink bridge (ADR 0118 D4 / S10b, amended by S19 / #4137): the inline
+// host relays an in-frame protoArtifact.send()/openLink() request UP from ITS embed frame. A send
+// is a PROPOSAL — the host shows a confirm chip in console DOM and posts only on its Send button,
+// unless the operator ticked "Always allow from this artifact". These drive it end to end.
+describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b / S19)", () => {
   const frame = () => container.querySelector<HTMLIFrameElement>('[data-testid="artifact-inline-frame"]');
+  const q = <T extends Element = HTMLElement>(id: string) => container.querySelector<T>(`[data-testid="${id}"]`);
+  const chipEl = () => q("artifact-send-confirm");
 
   function setActivation(value: { isActive: boolean } | undefined) {
     if (value === undefined) {
@@ -711,7 +713,11 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b)", () => 
       Object.defineProperty(navigator, "userActivation", { value, configurable: true });
     }
   }
-  afterEach(() => setActivation(undefined));
+  beforeEach(() => localStorage.clear());
+  afterEach(() => {
+    setActivation(undefined);
+    localStorage.clear();
+  });
 
   function chatStub(over: Partial<ArtifactChatSend> = {}): ArtifactChatSend & { send: ReturnType<typeof vi.fn> } {
     return { sessionId: "s-1", isBusy: () => false, send: vi.fn(), ...over } as ArtifactChatSend & {
@@ -719,10 +725,14 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b)", () => 
     };
   }
 
-  async function mountInline(chat: ArtifactChatSend | null, props: Record<string, unknown> = { ...REF, inline: true }) {
+  async function mountInline(
+    chat: ArtifactChatSend | null,
+    props: Record<string, unknown> = { ...REF, inline: true },
+    bridge: FrameBridge = createFrameBridge(),
+  ) {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    // A fresh bridge per mount so the module default's rate window from one test can't
-    // rate-limit the next (the busy/rate gates precede the gesture gate).
+    // A fresh bridge per mount (unless a test shares one on purpose) so one test's rate windows
+    // can't leak into the next.
     act(() =>
       root.render(
         h(
@@ -730,7 +740,7 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b)", () => 
           { client: qc },
           h(
             InlineFrameBridgeContext.Provider,
-            { value: createFrameBridge() },
+            { value: bridge },
             h(ArtifactChatSendContext.Provider, { value: chat }, h(ArtifactRefChip, { props })),
           ),
         ),
@@ -750,89 +760,205 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b)", () => 
       window.dispatchEvent(new MessageEvent("message", { data, source: f.contentWindow }));
     });
   }
+  const sendMsg = (text: string, cid = 7, version = 2) => ({ type: "protoArtifact:send", cid, text, artifact_id: "a-1", version });
+  async function click(id: string) {
+    await act(async () => {
+      q<HTMLElement>(id)!.click();
+    });
+  }
 
-  const bridgeResult = (ok: boolean, extra: Record<string, unknown> = {}) =>
-    [expect.objectContaining({ type: "protoArtifact:bridgeResult", cid: 7, ok, ...extra }), "*"];
+  const bridgeResult = (ok: boolean, extra: Record<string, unknown> = {}, cid = 7) =>
+    [expect.objectContaining({ type: "protoArtifact:bridgeResult", cid, ok, ...extra }), "*"];
 
-  it("a gesture-backed send posts a labelled user turn and resolves the frame's promise", async () => {
+  it("a send shows the confirm chip and posts NOTHING until the operator clicks Send — then exactly once", async () => {
     meta({ version_count: 2, oldest: 1 });
-    setActivation({ isActive: true });
     const chat = chatStub();
     const { f, post } = await mountInline(chat);
-    f.focus(); // the gesture landed IN this frame (#4122) — focus moves to the iframe on an in-frame click
-    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "  Recompute at 42  ", artifact_id: "a-1", version: 2 });
-    // The NORMAL send path is used, tagged with the D4 origin metadata + title for the label.
+    await dispatch(f, sendMsg("  Recompute at 42  "));
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled(); // the frame's promise is pending on the operator
+    const c = chipEl()!;
+    expect(c.getAttribute("role")).toBe("alertdialog");
+    expect(c.textContent).toContain("Send to chat:");
+    expect(q("artifact-send-confirm-text")?.textContent).toBe("Recompute at 42");
+    expect(c.textContent).toContain("Always allow from this artifact");
+    // Every control is a real focusable control.
+    for (const id of ["artifact-send-confirm-ok", "artifact-send-confirm-dismiss", "artifact-send-confirm-trust"]) {
+      const el = q<HTMLElement>(id)!;
+      el.focus();
+      expect(document.activeElement).toBe(el);
+    }
+    const ok = q<HTMLButtonElement>("artifact-send-confirm-ok")!;
+    await act(async () => {
+      ok.click();
+      ok.click(); // a double click can't double-post
+    });
+    // The NORMAL send path, tagged with the D4 origin metadata + title for the "from" label.
     expect(chat.send).toHaveBeenCalledTimes(1);
     expect(chat.send).toHaveBeenCalledWith("Recompute at 42", { artifact_id: "a-1", version: 2, title: "Chart" });
+    expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "Recompute at 42" }));
-    expect(container.querySelector('[data-testid="artifact-send-rejected"]')).toBeNull();
+    expect(chipEl()).toBeNull();
   });
 
-  it("a send with NO user activation is rejected — no turn starts", async () => {
+  it("no post without a chip click — on load, after a resume/console click, after self-focus, or polling (#4137)", async () => {
     meta({ version_count: 2, oldest: 1 });
-    setActivation({ isActive: false });
+    let clock = 0;
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat, { ...REF, inline: true }, createFrameBridge({ now: () => clock }));
+    // On load (no activation at all).
+    await dispatch(f, sendMsg("autosend on load", 1));
+    // After a click on console chrome (the resume card): activation live, focus on chrome.
+    setActivation({ isActive: true });
+    const chrome = document.createElement("button");
+    document.body.appendChild(chrome);
+    chrome.focus();
+    clock += 5000;
+    await dispatch(f, sendMsg("after resume", 2));
+    chrome.remove();
+    // The artifact focuses ITSELF (the #4137 bypass of the old gesture gate).
+    f.focus();
+    expect(document.activeElement).toBe(f);
+    clock += 5000;
+    await dispatch(f, sendMsg("self-focused", 3));
+    // A polling artifact.
+    for (let i = 0; i < 9; i++) {
+      clock += 300;
+      await dispatch(f, sendMsg(`poll ${i}`, 10 + i));
+    }
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ ok: true }), "*");
+    // Exactly one chip, never stacked; it shows the latest proposal it accepted.
+    expect(container.querySelectorAll('[data-testid="artifact-send-confirm"]').length).toBe(1);
+  });
+
+  it("a new proposal replaces the open chip's text and rejects the superseded promise", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    let clock = 0;
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat, { ...REF, inline: true }, createFrameBridge({ now: () => clock }));
+    await dispatch(f, sendMsg("first", 1));
+    clock += 5000;
+    await dispatch(f, sendMsg("second", 2));
+    expect(container.querySelectorAll('[data-testid="artifact-send-confirm"]').length).toBe(1);
+    expect(q("artifact-send-confirm-text")?.textContent).toBe("second");
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("Replaced") }, 1));
+    // A proposal inside the proposal window is refused but leaves the chip alone.
+    clock += 10;
+    await dispatch(f, sendMsg("third", 3));
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("too often") }, 3));
+    expect(q("artifact-send-confirm-text")?.textContent).toBe("second");
+    await click("artifact-send-confirm-ok");
+    expect(chat.send).toHaveBeenCalledTimes(1);
+    expect(chat.send).toHaveBeenCalledWith("second", expect.objectContaining({ artifact_id: "a-1" }));
+    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "second" }, 2));
+  });
+
+  it("Dismiss sends nothing and rejects the frame's promise with a clear error", async () => {
+    meta({ version_count: 2, oldest: 1 });
     const chat = chatStub();
     const { f, post } = await mountInline(chat);
-    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "do it", artifact_id: "a-1", version: 2 });
+    await dispatch(f, sendMsg("run it"));
+    await click("artifact-send-confirm-dismiss");
     expect(chat.send).not.toHaveBeenCalled();
-    // The frame learns why, and the operator sees the refusal in place.
-    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("click or key press") }));
-    const notice = container.querySelector('[data-testid="artifact-send-rejected"]');
-    expect(notice?.textContent).toContain("click or key press");
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("dismissed") }));
+    expect(chipEl()).toBeNull();
+    // Dismiss never records trust, even with the box ticked.
+    expect(localStorage.getItem(SEND_TRUST_STORAGE_KEY)).toBeNull();
   });
 
-  it("a send while the agent is busy is rejected with 'the agent is busy' — no turn starts", async () => {
+  it("'Always allow' persists and skips the chip for later sends — across versions of the same artifact", async () => {
+    let clock = 0;
+    const bridge = createFrameBridge({ now: () => clock });
+    vi.spyOn(api, "artifactRefs").mockResolvedValue({
+      artifacts: { "a-1": { title: "Chart", kind: "html", version_count: 3, oldest: 1 } },
+    });
+    const chat = chatStub();
+    const first = await mountInline(chat, { ...REF, inline: true }, bridge);
+    await dispatch(first.f, sendMsg("trust me"));
+    await click("artifact-send-confirm-trust");
+    await click("artifact-send-confirm-ok");
+    expect(chat.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(localStorage.getItem(SEND_TRUST_STORAGE_KEY)!)).toEqual(["artifact:a-1"]);
+
+    // v3 of the SAME artifact, with a FRESH bridge reading the same storage (a reload): straight through.
+    clock += 5000;
+    act(() => root.unmount());
+    root = createRoot(container);
+    const v3 = await mountInline(chat, { ...REF, version: 3, versions_total: 3, inline: true }, createFrameBridge({ now: () => clock }));
+    await dispatch(v3.f, sendMsg("no chip now", 8, 3));
+    expect(chipEl()).toBeNull();
+    expect(chat.send).toHaveBeenCalledTimes(2);
+    expect(chat.send).toHaveBeenLastCalledWith("no chip now", { artifact_id: "a-1", version: 3, title: "Chart" });
+    expect(v3.post).toHaveBeenCalledWith(...bridgeResult(true, { text: "no chip now" }, 8));
+  });
+
+  it("a trusted artifact still passes the busy, length and rate gates", async () => {
     meta({ version_count: 2, oldest: 1 });
-    setActivation({ isActive: true });
+    localStorage.setItem(SEND_TRUST_STORAGE_KEY, JSON.stringify(["artifact:a-1"]));
+    let clock = 0;
+    let busy = true;
+    const chat = chatStub({ isBusy: () => busy });
+    const { f, post } = await mountInline(chat, { ...REF, inline: true }, createFrameBridge({ now: () => clock }));
+    await dispatch(f, sendMsg("while busy", 1));
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: "the agent is busy" }, 1));
+    busy = false;
+    await dispatch(f, sendMsg("x".repeat(4001), 2));
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("4000") }, 2));
+    await dispatch(f, sendMsg("ok now", 3));
+    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "ok now" }, 3));
+    clock += 1500; // past the proposal window, inside the 2 s send window
+    await dispatch(f, sendMsg("too soon", 4));
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("2 seconds") }, 4));
+    expect(chat.send).toHaveBeenCalledTimes(1);
+    expect(chipEl()).toBeNull();
+  });
+
+  it("a different artifact still prompts after another was trusted", async () => {
+    vi.spyOn(api, "artifactRefs").mockResolvedValue({
+      artifacts: { "a-2": { title: "Other", kind: "html", version_count: 1, oldest: 1 } },
+    });
+    localStorage.setItem(SEND_TRUST_STORAGE_KEY, JSON.stringify(["artifact:a-1"]));
+    const chat = chatStub();
+    const { f } = await mountInline(chat, { artifact_id: "a-2", version: 1, title: "Other", kind: "html", inline: true });
+    // Even a frame CLAIMING to be a-1 in its message: trust keys off the host's own ref.
+    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "hi", artifact_id: "a-1", version: 1 });
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(chipEl()).not.toBeNull();
+  });
+
+  it("a send while the agent is busy is rejected with 'the agent is busy' — no chip, no turn", async () => {
+    meta({ version_count: 2, oldest: 1 });
     const chat = chatStub({ isBusy: () => true });
     const { f, post } = await mountInline(chat);
-    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "do it", artifact_id: "a-1", version: 2 });
+    await dispatch(f, sendMsg("do it"));
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(chipEl()).toBeNull();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: "the agent is busy" }));
+    expect(q("artifact-send-rejected")?.textContent).toContain("the agent is busy");
+  });
+
+  it("clicking Send after the chat became busy refuses instead of posting", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    let busy = false;
+    const chat = chatStub({ isBusy: () => busy });
+    const { f, post } = await mountInline(chat);
+    await dispatch(f, sendMsg("later"));
+    busy = true;
+    await click("artifact-send-confirm-ok");
     expect(chat.send).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: "the agent is busy" }));
-    expect(container.querySelector('[data-testid="artifact-send-rejected"]')?.textContent).toContain("the agent is busy");
-  });
-
-  it("with no User Activation API it asks first, then posts the turn when the operator confirms", async () => {
-    meta({ version_count: 2, oldest: 1 });
-    setActivation(undefined); // runtime without navigator.userActivation
-    const chat = chatStub();
-    const { f, post } = await mountInline(chat);
-    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "run it", artifact_id: "a-1", version: 2 });
-    // Nothing posted yet — the host asks inline.
-    expect(chat.send).not.toHaveBeenCalled();
-    const confirm = container.querySelector('[data-testid="artifact-send-confirm"]');
-    expect(confirm?.textContent).toContain('Send "run it" to chat?');
-    await act(async () => {
-      container.querySelector<HTMLButtonElement>('[data-testid="artifact-send-confirm-ok"]')!.click();
-    });
-    expect(chat.send).toHaveBeenCalledWith("run it", { artifact_id: "a-1", version: 2, title: "Chart" });
-    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "run it" }));
-  });
-
-  it("cancelling the confirm prompt sends nothing and rejects the frame's promise", async () => {
-    meta({ version_count: 2, oldest: 1 });
-    setActivation(undefined);
-    const chat = chatStub();
-    const { f, post } = await mountInline(chat);
-    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "run it", artifact_id: "a-1", version: 2 });
-    await act(async () => {
-      container.querySelector<HTMLButtonElement>('[data-testid="artifact-send-confirm-cancel"]')!.click();
-    });
-    expect(chat.send).not.toHaveBeenCalled();
-    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("cancelled") }));
   });
 
   it("with no chat wired the send is refused rather than left hanging", async () => {
     meta({ version_count: 2, oldest: 1 });
-    setActivation({ isActive: true });
     const { f, post } = await mountInline(null);
-    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "do it", artifact_id: "a-1", version: 2 });
+    await dispatch(f, sendMsg("do it"));
     expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("can't send to chat") }));
   });
 
   it("a send from SOME OTHER window is ignored (e.source is the gate)", async () => {
     meta({ version_count: 2, oldest: 1 });
-    setActivation({ isActive: true });
     const chat = chatStub();
     await mountInline(chat);
     await act(async () => {
@@ -841,92 +967,7 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b)", () => 
       );
     });
     expect(chat.send).not.toHaveBeenCalled();
-  });
-
-  // ── the gesture must land IN this frame (ADR 0118 S16 / #4122) ───────────────────────────────
-  // navigator.userActivation.isActive is true for a recent click ANYWHERE in the console, so the
-  // send gate also requires document.activeElement === this frame's own iframe. A click inside an
-  // iframe moves focus to it; a click on console chrome (the resume card, a tab, "Open in panel")
-  // does not, and a click in a sibling frame focuses the SIBLING. These guard the holes the
-  // pre-handoff walk found: autosend-on-load riding the resume-card click, and cross-frame theft.
-
-  it("a send that follows a click on console chrome is rejected, even with active user activation (#4122)", async () => {
-    meta({ version_count: 2, oldest: 1 });
-    setActivation({ isActive: true });
-    const chat = chatStub();
-    const { f, post } = await mountInline(chat);
-    // The operator just clicked something in the console (a resume card / tab / button), not the
-    // frame: user activation is live, but focus is on that chrome element, not this iframe.
-    const chrome = document.createElement("button");
-    document.body.appendChild(chrome);
-    chrome.focus();
-    expect(document.activeElement).toBe(chrome);
-    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "AUTOSEND ON LOAD", artifact_id: "a-1", version: 2 });
-    expect(chat.send).not.toHaveBeenCalled();
-    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("click or key press") }));
-    expect(container.querySelector('[data-testid="artifact-send-rejected"]')?.textContent).toContain("click or key press");
-    chrome.remove();
-  });
-
-  it("a send that follows a click INSIDE the frame (focus on the iframe) is accepted (#4122)", async () => {
-    meta({ version_count: 2, oldest: 1 });
-    setActivation({ isActive: true });
-    const chat = chatStub();
-    const { f, post } = await mountInline(chat);
-    f.focus(); // a click inside the iframe moves focus to it
-    expect(document.activeElement).toBe(f);
-    await dispatch(f, { type: "protoArtifact:send", cid: 7, text: "run it now", artifact_id: "a-1", version: 2 });
-    expect(chat.send).toHaveBeenCalledWith("run it now", { artifact_id: "a-1", version: 2, title: "Chart" });
-    expect(post).toHaveBeenCalledWith(...bridgeResult(true, { text: "run it now" }));
-  });
-
-  it("a sibling frame cannot use another frame's click (#4122)", async () => {
-    vi.spyOn(api, "artifactRefs").mockImplementation(async (ids: string[]) => {
-      const artifacts: Record<string, { title: string; kind: string; version_count: number; oldest: number }> = {};
-      for (const id of ids) artifacts[id] = { title: "Chart", kind: "html", version_count: 1, oldest: 1 };
-      return { artifacts };
-    });
-    setActivation({ isActive: true });
-    const chat = chatStub();
-    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    act(() =>
-      root.render(
-        h(
-          QueryClientProvider,
-          { client: qc },
-          h(
-            InlineFrameHostContext.Provider,
-            { value: createInlineFrameHost(6) }, // room for both frames, so neither is evicted
-            h(
-              InlineFrameBridgeContext.Provider,
-              { value: createFrameBridge() },
-              h(
-                ArtifactChatSendContext.Provider,
-                { value: chat },
-                ["a-1", "a-2"].map((id) =>
-                  h(ArtifactRefChip, { key: id, props: { artifact_id: id, version: 1, title: "Chart", kind: "html", inline: true } }),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-    await flush();
-    const frames = [...container.querySelectorAll<HTMLIFrameElement>('[data-testid="artifact-inline-frame"]')];
-    expect(frames.length).toBe(2);
-    const [a, b] = frames;
-    vi.spyOn(a.contentWindow as Window, "postMessage").mockImplementation(() => {});
-    const postB = vi.spyOn(b.contentWindow as Window, "postMessage").mockImplementation(() => {});
-    // The click landed in frame A — focus is on A's iframe. Frame B tries to ride that activation.
-    a.focus();
-    expect(document.activeElement).toBe(a);
-    await dispatch(b, { type: "protoArtifact:send", cid: 7, text: "steal the click", artifact_id: "a-2", version: 1 });
-    expect(chat.send).not.toHaveBeenCalled();
-    expect(postB).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("click or key press") }));
-    // The frame that actually holds focus (A) sends fine — the gate is per-frame, not global.
-    await dispatch(a, { type: "protoArtifact:send", cid: 7, text: "my own click", artifact_id: "a-1", version: 1 });
-    expect(chat.send).toHaveBeenCalledWith("my own click", { artifact_id: "a-1", version: 1, title: "Chart" });
+    expect(chipEl()).toBeNull();
   });
 
   it("openLink opens an https link in a new tab with noopener,noreferrer, through the host", async () => {
