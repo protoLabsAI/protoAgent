@@ -144,9 +144,6 @@ export function BridgeNoticeView({
   onDismiss: () => void;
   onClearRejection: () => void;
 }) {
-  const [alwaysAllow, setAlwaysAllow] = useState(false);
-  const labelId = useId();
-  const textId = useId();
   if (!notice) return null;
   if (notice.kind === "rejected") {
     return (
@@ -164,6 +161,39 @@ export function BridgeNoticeView({
       </div>
     );
   }
+  // Keyed by the proposal id: every new proposal gets a fresh, UNTICKED "Always allow" box, so
+  // trust ticked for one message never carries over to the next one the frame proposes.
+  return (
+    <ConfirmChip
+      key={notice.cid}
+      text={notice.text}
+      classPrefix={classPrefix}
+      testIdPrefix={testIdPrefix}
+      source={source}
+      onSend={onSend}
+      onDismiss={onDismiss}
+    />
+  );
+}
+
+function ConfirmChip({
+  text,
+  classPrefix,
+  testIdPrefix,
+  source,
+  onSend,
+  onDismiss,
+}: {
+  text: string;
+  classPrefix: string;
+  testIdPrefix: string;
+  source: string;
+  onSend: (alwaysAllow: boolean) => void;
+  onDismiss: () => void;
+}) {
+  const [alwaysAllow, setAlwaysAllow] = useState(false);
+  const labelId = useId();
+  const textId = useId();
   // Not modal and it does NOT steal focus (the operator may be typing in the composer, and a
   // frame must not be able to yank focus by proposing) — alertdialog makes assistive tech
   // announce it; the buttons and checkbox are ordinary focusable controls.
@@ -179,7 +209,7 @@ export function BridgeNoticeView({
       <span className={`${classPrefix}-msg`}>
         <span id={labelId}>Send to chat: </span>
         <q id={textId} className={`${classPrefix}-text`} data-testid={`${testIdPrefix}-send-confirm-text`}>
-          {notice.text}
+          {text}
         </q>
       </span>
       <button

@@ -893,6 +893,31 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b / S19)", 
     expect(v3.post).toHaveBeenCalledWith(...bridgeResult(true, { text: "no chip now" }, 8));
   });
 
+  it("a trusted artifact's send is tagged with the HOST's ref, never the artifact id/version the frame claims", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    localStorage.setItem(SEND_TRUST_STORAGE_KEY, JSON.stringify(["artifact:a-1"]));
+    const chat = chatStub();
+    const { f } = await mountInline(chat, { ...REF, inline: true }, createFrameBridge({ now: () => 0 }));
+    // The frame lies about which artifact (and version) it is.
+    await dispatch(f, { type: "protoArtifact:send", cid: 9, text: "spoofed", artifact_id: "other-artifact", version: 99 });
+    expect(chat.send).toHaveBeenCalledTimes(1);
+    expect(chat.send).toHaveBeenCalledWith("spoofed", { artifact_id: "a-1", version: 2, title: "Chart" });
+  });
+
+  it("'Always allow' starts unticked for every new proposal — a tick never carries over", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    let clock = 0;
+    const chat = chatStub();
+    const { f } = await mountInline(chat, { ...REF, inline: true }, createFrameBridge({ now: () => clock }));
+    await dispatch(f, sendMsg("first", 7));
+    await click("artifact-send-confirm-trust");
+    expect(q<HTMLInputElement>("artifact-send-confirm-trust")!.checked).toBe(true);
+    clock += 5000;
+    await dispatch(f, sendMsg("second", 8)); // supersedes the open chip
+    expect(q("artifact-send-confirm-text")?.textContent).toBe("second");
+    expect(q<HTMLInputElement>("artifact-send-confirm-trust")!.checked).toBe(false);
+  });
+
   it("a trusted artifact still passes the busy, length and rate gates", async () => {
     meta({ version_count: 2, oldest: 1 });
     localStorage.setItem(SEND_TRUST_STORAGE_KEY, JSON.stringify(["artifact:a-1"]));

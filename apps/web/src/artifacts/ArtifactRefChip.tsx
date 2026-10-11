@@ -390,11 +390,9 @@ function InlineArtifactHost({
       // A PROPOSAL, never a post: the shared gate either shows the confirm chip (untrusted) or
       // — for an "Always allow" artifact — posts through the normal origin-tagged send path,
       // after the content/busy/rate gates either way.
-      const origin = {
-        artifact_id: typeof m.artifact_id === "string" ? m.artifact_id : artifact.id,
-        version: typeof m.version === "number" ? m.version : artifact.version,
-        title: name,
-      };
+      // The origin tag is the HOST's own ref, never what the frame claims: a trusted artifact
+      // must not be able to label its turn as coming from another artifact or version.
+      const origin = { artifact_id: artifact.id, version: artifact.version, title: name };
       gate.propose(cid, String(m.text ?? ""), { isBusy: chat.isBusy, post: (text) => chat.send(text, origin) });
     };
     window.addEventListener("message", onBridge);
