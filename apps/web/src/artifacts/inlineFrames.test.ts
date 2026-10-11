@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clampHeight,
   createFrameRegistry,
+  createLatestVersionRegistry,
   LAZY_MOUNT_ROOT_MARGIN,
   MAX_FRAME_HEIGHT,
   MAX_LIVE_FRAMES,
@@ -211,5 +212,59 @@ describe("observeLazyMount", () => {
     const handle = observeLazyMount(document.createElement("div"), onEnter);
     expect(onEnter).toHaveBeenCalledTimes(1);
     expect(() => handle.disconnect()).not.toThrow();
+  });
+});
+
+// One live inline card per artifact (ADR 0118 / S18d, #4124): the newest version of an artifact
+// in a chat supersedes its earlier inline cards. Reference-counted per (scope, id, version), so a
+// duplicate mount never strands a version and the map empties when every holder withdraws.
+describe("createLatestVersionRegistry", () => {
+  it("reports the newest announced version per (scope, artifact id)", () => {
+    const reg = createLatestVersionRegistry();
+    expect(reg.latest("s", "a")).toBe(0);
+    reg.announce("s", "a", 2);
+    reg.announce("s", "a", 6);
+    reg.announce("s", "a", 4);
+    expect(reg.latest("s", "a")).toBe(6);
+    // Different artifacts and different chats are independent.
+    reg.announce("s", "b", 1);
+    expect(reg.latest("s", "b")).toBe(1);
+    expect(reg.latest("other", "a")).toBe(0);
+  });
+
+  it("withdrawing the newest falls back to the next newest; the last withdraw empties it", () => {
+    const reg = createLatestVersionRegistry();
+    const w2 = reg.announce("s", "a", 2);
+    const w6 = reg.announce("s", "a", 6);
+    w6();
+    expect(reg.latest("s", "a")).toBe(2);
+    w2();
+    expect(reg.latest("s", "a")).toBe(0);
+    expect(reg.size()).toBe(0); // no leaked scope/id entries
+  });
+
+  it("is reference-counted: two holders of one version keep it until both withdraw; withdraw is idempotent", () => {
+    const reg = createLatestVersionRegistry();
+    reg.announce("s", "a", 2);
+    const w6a = reg.announce("s", "a", 6);
+    const w6b = reg.announce("s", "a", 6);
+    w6a();
+    w6a(); // a double withdraw must not drop the other holder's claim
+    expect(reg.latest("s", "a")).toBe(6);
+    w6b();
+    expect(reg.latest("s", "a")).toBe(2);
+  });
+
+  it("notifies subscribers only when a latest version changes", () => {
+    const reg = createLatestVersionRegistry();
+    const fn = vi.fn();
+    const off = reg.subscribe(fn);
+    reg.announce("s", "a", 6);
+    expect(fn).toHaveBeenCalledTimes(1);
+    reg.announce("s", "a", 2); // older — latest unchanged
+    expect(fn).toHaveBeenCalledTimes(1);
+    off();
+    reg.announce("s", "a", 7);
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

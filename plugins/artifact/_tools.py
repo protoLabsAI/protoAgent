@@ -513,9 +513,12 @@ def _show(
     store["current"] = art["id"]
     _store._write_store(store)
     _store._emit("created", {"id": art["id"], "kind": k, "title": title or ""})
+    # Say where it ACTUALLY shows: an inline artifact renders in the chat, not the panel (#4124) —
+    # a "now showing in the Artifact panel" reply sends the model telling the user to open it.
+    where = "now showing inline in the chat" if inline else "now showing in the Artifact panel"
     msg = (
-        f"Created {k} artifact {art['id']} ({len(code)} chars) — now showing in the Artifact "
-        f"panel. Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
+        f"Created {k} artifact {art['id']} ({len(code)} chars) — {where}. "
+        f"Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
     ) + placement_note + report
     return msg, (art["id"], 1, _store._version_key(art)), _ref.ref_tail(art, inline=inline)
 
@@ -719,7 +722,9 @@ def check_artifact(artifact_id: str = "") -> str:
     return before the result is known; call this (or just iterate) to see how it went.
 
     Returns the render verdict: rendered cleanly, FAILED with the captured error message, or
-    "no result yet" (the panel is closed / not showing this version — open the Artifact panel).
+    "no result yet" — for a panel artifact, the panel is closed / not showing this version (open
+    the Artifact panel); for an INLINE artifact, its frame in the chat hasn't rendered yet (it
+    renders when scrolled into view) — never a reason to open the panel.
     Defaults to the current artifact; pass ``artifact_id`` (see ``list_artifacts``) to target
     another. Read-only.
 
@@ -736,6 +741,13 @@ def check_artifact(artifact_id: str = "") -> str:
     key = _store._version_key(art)
     r = _render_status._version_render(art, v, key) or _render_status._await_render(art["id"], v, key)
     if r is None:
+        if _store._is_inline(art):
+            # An inline artifact renders in the chat's own frame (ADR 0118 D2), mounted lazily as
+            # it scrolls into view — the panel has nothing to do with it, so never point there (#4124).
+            return (
+                f"Artifact {art['id']} v{v}: no render result yet — it's shown inline in the chat "
+                "and is still rendering, or hasn't been scrolled into view yet. Check again shortly."
+            )
         return (
             f"Artifact {art['id']} v{v}: no render result yet — the Artifact panel may be "
             "closed or not showing this version. Open it to render."
