@@ -29,6 +29,7 @@ answer, panel for a work product**.
 | 14 | Write up the design doc for the new billing flow so I can edit it. | panel | a document the user opens, edits and returns to |
 | 15 | Build a multi-page budgeting app with tabs and saved scenarios. | panel | a large app worked on over many turns |
 | 16 | Turn the quarterly numbers into a polished one-page report I can download. | panel | a file-shaped deliverable, not an in-line answer |
+| 17 | Write a README for this project. | panel | a standalone document the user keeps → `show_artifact(kind="markdown")`, short summary in chat |
 
 Notes for whoever scores these:
 
@@ -38,4 +39,4 @@ Notes for whoever scores these:
   *interact*.
 - Rows 7–12 are **inline**: the answer is a small thing the user pokes at, and it belongs in
   scrollback next to the explanation.
-- Rows 13–16 are **panel**: a work product the user keeps editing, not a one-shot answer.
+- Rows 13–17 are **panel**: a work product the user keeps editing, not a one-shot answer.

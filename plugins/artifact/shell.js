@@ -1317,6 +1317,9 @@
     function prep(){
       var s=JSON.parse(JSON.stringify(spec));
       if(s.usermeta && typeof s.usermeta==="object") delete s.usermeta.embedOptions;
+      // The renderer is the vendored Vega-Lite (v6) whatever the spec claims: a `$schema` pinning
+      // v5 out of habit only logs a version-mismatch warning on every draw (#4076), so drop it.
+      delete s["$schema"];
       var single=!!(s.mark || s.layer) && !s.facet && !s.repeat;
       if(single && s.width===undefined) s.width="container";
       if(single && s.autosize===undefined) s.autosize={type:"fit-x", contains:"padding"};
@@ -2054,6 +2057,32 @@
     }
   }
 
+  // Render-status de-dup (#4076): ONE report per (artifact, version, verdict). A frame can post
+  // its verdict more than once (a re-srcdoc of the same version, the hidden-tab eager mount and
+  // then the visible mount, a remount after scroll or reload) and each used to re-POST — the
+  // same verdict, stamped again. Skip when the store mirror already holds this exact verdict for
+  // this version, or when this shell — or a sibling shell frame in this tab (sessionStorage is
+  // shared across same-origin frames, and survives a remount) — already relayed it. A DIFFERENT
+  // verdict for the same version (it failed, then a reload rendered it) still goes through.
+  var relayedRenders = {};
+  var RENDER_SEEN_KEY = "protoagent.artifact.renderSeen:";
+  function relayRenderOnce(list, mem, id, n, ts, ok, err){
+    var key = id + "@" + n + "@" + ts, sig = (ok ? "ok" : "err") + ":" + (ok ? "" : err);
+    for(var i=0;i<(list||[]).length;i++){
+      var a=list[i]; if(!a || a.id!==id) continue;
+      var vs=a.versions||[];
+      for(var j=0;j<vs.length;j++){
+        var r=vs[j] && vs[j].ts===ts ? vs[j].render : null;
+        if(r && typeof r==="object" && !!r.ok===ok && (ok || String(r.error||"")===err)) return false;
+      }
+    }
+    if(mem[key]===sig) return false;
+    try{ if(window.sessionStorage.getItem(RENDER_SEEN_KEY+key)===sig) return false; }catch(_){}
+    mem[key]=sig;
+    try{ window.sessionStorage.setItem(RENDER_SEEN_KEY+key, sig); }catch(_){}
+    return true;
+  }
+
   // Agent-callback bridge: an artifact's window.protoArtifact.ask(prompt) posts here;
   // we call the bearer-gated /ask endpoint (a bare agent completion) and post the
   // answer back INTO the artifact frame. e.source-guarded to only our artifact frame —
@@ -2069,7 +2098,7 @@
     // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,
     // not user-facing data, so there's no lying empty state to correct.
     if(m.type==="protoArtifact:render"){
-      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,n:renderingN,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} if(!EMBED) kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256); embed has no standing poll */ }
+      if(renderingId && relayRenderOnce(arts, relayedRenders, renderingId, renderingN, renderingTs, !!m.ok, String(m.error||"").slice(0,2000))){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,n:renderingN,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} if(!EMBED) kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256); embed has no standing poll */ }
       return;
     }
     // A click on a linked diagram element (ADR 0038 amendment). Only the KEY is read from the

@@ -1538,7 +1538,7 @@ def test_parallel_update_artifact_calls_both_land(monkeypatch, tmp_path):
     # (The artifact-ref chip tail after the text is stripped, as the server does — #3617.)
     from graph.components import strip_component
 
-    assert sorted(strip_component(r).split("version ")[1].rstrip(".") for r in results) == ["2", "3"]
+    assert sorted(strip_component(r).split("version ")[1].split(".")[0] for r in results) == ["2", "3"]
 
 
 # ── html artifacts keep their document prologue first ────────────────────────────────
