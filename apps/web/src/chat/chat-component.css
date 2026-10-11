@@ -172,6 +172,11 @@
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
 }
+/* An earlier inline version superseded by a newer one in the same chat (ADR 0118 / S18d): a
+   compact, muted pointer — no live frame. */
+.artifact-ref-chip--superseded {
+  color: var(--pl-color-fg-muted);
+}
 .artifact-ref-chip__kind {
   margin-left: var(--pl-space-1);
   padding: 0 var(--pl-space-1_5);

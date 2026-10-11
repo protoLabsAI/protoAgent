@@ -277,34 +277,121 @@ describe("ArtifactRefChip", () => {
     );
   };
 
-  it("the live-frame cap counts each VERSION of one artifact separately — siblings don't share a slot", async () => {
-    metaMany(3);
-    const host = createInlineFrameHost(2); // cap 2, so a third version frame forces one eviction
-    renderInline([1, 2, 3], host);
+  // ── one live card per artifact (ADR 0118 / S18d, #4124) ─────────────────────────────────
+  // Parallel update_artifact calls in one turn emitted v2..v6, each its own live inline frame —
+  // five frames for one answer, eating the 6-frame cap. The newest version in the chat stays live;
+  // earlier versions collapse to a compact "superseded by vN" chip that holds no slot.
+  const liveFrames = () => container.querySelectorAll('[data-testid="artifact-inline-frame"]');
+  const superseded = () => [...container.querySelectorAll<HTMLElement>('[data-testid="artifact-ref-superseded"]')];
+
+  it("several versions of one artifact (v2..v6): only v6 is a live frame, v2–v5 are superseded and hold no slot", async () => {
+    metaMany(6);
+    const host = createInlineFrameHost(6);
+    renderInline([2, 3, 4, 5, 6], host);
     await flush();
-    // Three inline hosts of the one artifact; keyed by id alone they'd all share a slot and the
-    // cap wouldn't bite (three live frames). Keyed by (id, version) the cap holds: two frames, one
-    // resume card — and the two live frames point at distinct versions.
-    expect(container.querySelectorAll('[data-testid="artifact-ref-inline"]').length).toBe(3);
-    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
-    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(1);
-    const srcs = [...container.querySelectorAll('[data-testid="artifact-inline-frame"]')].map((f) => f.getAttribute("src"));
-    expect(new Set(srcs).size).toBe(2);
+    expect(liveFrames().length).toBe(1);
+    expect(liveFrames()[0].getAttribute("src")).toContain("v=6");
+    expect(host.liveCount()).toBe(1);
+    expect(host.isLive("v6 a-1")).toBe(true);
+    for (const v of [2, 3, 4, 5]) expect(host.isLive(`v${v} a-1`)).toBe(false);
+    const lines = superseded();
+    expect(lines.map((el) => el.dataset.version)).toEqual(["2", "3", "4", "5"]);
+    expect(lines[0].textContent).toContain("superseded by v6");
+    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(0);
+    // The superseded line still opens ITS version in the panel.
+    act(() => lines[0].click());
+    expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:select", id: "a-1", ver: 2 }]);
   });
 
-  it("unmounting one version's host leaves its sibling versions' frames live — release is per (id, version)", async () => {
+  it("a newer version arriving live supersedes the earlier card and frees its slot", async () => {
     metaMany(2);
-    const host = createInlineFrameHost(6); // room for both, so neither is evicted
-    renderInline([1, 2], host);
-    await flush();
-    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
-    // Drop version 1's host. Keyed by id alone, its release would delete the shared slot and flip
-    // version 2 to a resume card; keyed by (id, version) it only frees its own slot.
+    const host = createInlineFrameHost(6);
     renderInline([2], host);
     await flush();
-    expect(container.querySelectorAll('[data-testid="artifact-ref-inline"]').length).toBe(1);
-    expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(1);
+    expect(host.isLive("v2 a-1")).toBe(true);
+    renderInline([2, 3], host);
+    await flush();
+    expect(host.isLive("v2 a-1")).toBe(false);
+    expect(host.isLive("v3 a-1")).toBe(true);
+    expect(host.liveCount()).toBe(1);
+    expect(superseded().map((el) => el.dataset.version)).toEqual(["2"]);
+    // Everything unmounted → nothing stays live and no version claim lingers (no leak).
+    renderInline([], host);
+    await flush();
+    expect(host.liveCount()).toBe(0);
+    expect(host.latestVersion("", "a-1")).toBe(0);
+  });
+
+  it("dropping the newest version's card brings the previous version back live", async () => {
+    metaMany(2);
+    const host = createInlineFrameHost(6);
+    renderInline([1, 2], host);
+    await flush();
+    expect(liveFrames().length).toBe(1);
+    renderInline([1], host);
+    await flush();
+    expect(superseded().length).toBe(0);
+    expect(liveFrames().length).toBe(1);
+    expect(host.isLive("v1 a-1")).toBe(true);
+  });
+
+  it("different artifacts are unaffected — each keeps its own newest version live", async () => {
+    metaMany(3);
+    const host = createInlineFrameHost(2); // superseded versions don't count, so two slots suffice
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const refs = [
+      { artifact_id: "a-1", version: 2 },
+      { artifact_id: "b-1", version: 1 },
+      { artifact_id: "a-1", version: 3 },
+    ];
+    act(() =>
+      root.render(
+        h(
+          QueryClientProvider,
+          { client: qc },
+          h(
+            InlineFrameHostContext.Provider,
+            { value: host },
+            refs.map((r) =>
+              h(ArtifactRefChip, { key: `${r.artifact_id}@${r.version}`, props: { ...r, title: "Chart", kind: "html", inline: true } }),
+            ),
+          ),
+        ),
+      ),
+    );
+    await flush();
+    expect(host.isLive("v1 b-1")).toBe(true);
+    expect(host.isLive("v3 a-1")).toBe(true);
+    expect(host.isLive("v2 a-1")).toBe(false);
+    expect(host.liveCount()).toBe(2);
     expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(0);
+    expect(superseded().map((el) => el.dataset.version)).toEqual(["2"]);
+  });
+
+  it("supersession is per chat: the same artifact's v2 in one chat isn't collapsed by v6 in another", async () => {
+    metaMany(6);
+    const host = createInlineFrameHost(6);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const chatFor = (sessionId: string): ArtifactChatSend => ({ sessionId, isBusy: () => false, send: () => {} });
+    const chip = (v: number) => h(ArtifactRefChip, { props: { artifact_id: "a-1", version: v, title: "Chart", kind: "html", inline: true } });
+    act(() =>
+      root.render(
+        h(
+          QueryClientProvider,
+          { client: qc },
+          h(
+            InlineFrameHostContext.Provider,
+            { value: host },
+            h(ArtifactChatSendContext.Provider, { value: chatFor("chat-x") }, chip(2)),
+            h(ArtifactChatSendContext.Provider, { value: chatFor("chat-y") }, chip(6)),
+          ),
+        ),
+      ),
+    );
+    await flush();
+    expect(host.isLive("v2 a-1")).toBe(true);
+    expect(host.isLive("v6 a-1")).toBe(true);
+    expect(superseded().length).toBe(0);
   });
 
   // ── slot leak on resume + resume-card flash + remount height (ADR 0118 D2 / S7c, #4111) ──────

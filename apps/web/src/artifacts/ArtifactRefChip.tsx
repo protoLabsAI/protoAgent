@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,6 +30,7 @@ import { createFrameBridge, type FrameBridge } from "./frameBridge";
 import {
   clampHeight,
   createFrameRegistry,
+  createLatestVersionRegistry,
   MAX_LIVE_FRAMES,
   MIN_FRAME_HEIGHT,
   useLazyMount,
@@ -110,16 +112,26 @@ export type InlineFrameHost = {
   heightOf(id: string): number;
   /** Is `id` a live frame right now? */
   isLive(id: string): boolean;
-  /** Subscribe to live-set changes; returns an unsubscribe. */
+  /** How many frames are live right now. */
+  liveCount(): number;
+  /** Announce that an inline ref for (`scope` chat, artifact `id`, `version`) is rendered;
+   *  returns its withdraw. The newest announced version per (scope, id) is the only one that
+   *  hosts a live frame — earlier ones render superseded and claim no slot (S18d, #4124). */
+  announceVersion(scope: string, id: string, version: number): () => void;
+  /** The newest version announced for (scope, id), or 0. */
+  latestVersion(scope: string, id: string): number;
+  /** Subscribe to live-set AND newest-version changes; returns an unsubscribe. */
   subscribe(listener: () => void): () => void;
 };
 
 export function createInlineFrameHost(cap: number = MAX_LIVE_FRAMES): InlineFrameHost {
   const reg = createFrameRegistry(cap);
+  const versions = createLatestVersionRegistry();
   const listeners = new Set<() => void>();
   const emit = () => {
     for (const fn of listeners) fn();
   };
+  versions.subscribe(emit);
   return {
     register(id) {
       reg.register(id);
@@ -138,6 +150,9 @@ export function createInlineFrameHost(cap: number = MAX_LIVE_FRAMES): InlineFram
     },
     heightOf: (id) => reg.heightOf(id),
     isLive: (id) => reg.isLive(id),
+    liveCount: () => reg.size(),
+    announceVersion: (scope, id, version) => versions.announce(scope, id, version),
+    latestVersion: (scope, id) => versions.latest(scope, id),
     subscribe(listener) {
       listeners.add(listener);
       return () => {
@@ -545,6 +560,56 @@ function InlineArtifactHost({
   );
 }
 
+// One live card per artifact (ADR 0118 / S18d, #4124). The backend re-emits an inline ref on
+// every edit, so parallel update_artifact calls in one turn leave v2..v6 in the transcript — five
+// live frames for one answer, eating the 6-frame cap. Each inline ref announces its version to
+// the host's per-chat newest-version registry; only the newest version in THIS chat hosts the
+// live frame. An earlier one renders a compact "superseded by vN" chip (still opening its own
+// version in the panel) and mounts no InlineArtifactHost, so it claims no slot — and a ref that
+// becomes superseded mid-stream unmounts its host, whose cleanup releases the slot. Derived from
+// what is rendered, so history replay reaches the same state; scoped by chat session, so the same
+// artifact in another (possibly hidden) chat tab never collapses this one.
+function InlineArtifactRef({
+  artifact,
+  name,
+  label,
+  older,
+}: {
+  artifact: ArtifactRef;
+  name: string;
+  label: string;
+  older: boolean;
+}) {
+  const host = useContext(InlineFrameHostContext);
+  const scope = useContext(ArtifactChatSendContext)?.sessionId ?? "";
+  // Layout effect: announce before paint, so a replayed transcript never flashes earlier versions
+  // as live frames before they collapse.
+  useLayoutEffect(() => host.announceVersion(scope, artifact.id, artifact.version), [host, scope, artifact.id, artifact.version]);
+  const newest = useSyncExternalStore(host.subscribe, () => host.latestVersion(scope, artifact.id));
+  if (newest > artifact.version) {
+    return (
+      <button
+        type="button"
+        className="code-ref-chip artifact-ref-chip artifact-ref-chip--superseded"
+        data-testid="artifact-ref-superseded"
+        data-version={artifact.version}
+        title={`Open ${name} v${artifact.version} in the Artifact panel — superseded by v${newest}`}
+        onClick={() => openArtifactRef(artifact)}
+      >
+        <Sparkles size={14} aria-hidden className="code-ref-chip__icon" />
+        <span className="code-ref-chip__body">
+          <span className="artifact-ref-chip__head">
+            <span className="artifact-ref-chip__title">{name}</span>
+            <span className="code-ref-chip__sep"> · </span>
+            <span className="artifact-ref-chip__version">{`v${artifact.version} → superseded by v${newest}`}</span>
+          </span>
+        </span>
+      </button>
+    );
+  }
+  return <InlineArtifactHost artifact={artifact} name={name} label={label} older={older} />;
+}
+
 export function ArtifactRefChip({ props }: { props: Record<string, unknown> }) {
   const available = useArtifactViewAvailable();
   const ref = artifactRefFromProps(props);
@@ -569,7 +634,7 @@ export function ArtifactRefChip({ props }: { props: Record<string, unknown> }) {
   // reattach reach this exact path, so an inline answer renders identically after a reload; a
   // ref WITHOUT `inline` falls through to the unchanged chip below.
   if (ref.inline) {
-    return <InlineArtifactHost artifact={ref} name={name} label={label} older={older} />;
+    return <InlineArtifactRef artifact={ref} name={name} label={label} older={older} />;
   }
   return (
     <button
