@@ -185,9 +185,10 @@ guess; read the error and make the targeted edit.
   an edit, pin or delete).
 - **`check_artifact(artifact_id?)`** — the latest render verdict (see above).
 - **`pin_artifact(artifact_id, pinned=True)`** — keep a **long-lived** artifact (a master resume, a
-  reference doc, a plan you'll revisit) from being evicted. Only the most recent ~20 unpinned
-  artifacts are kept, counting everything rendered on this agent, so an unpinned one silently
-  disappears after enough unrelated renders — and any id you wrote down then points at nothing.
+  reference doc, a plan you'll revisit) from being evicted. Only the most recent ~200 unpinned
+  artifacts are kept, counting everything rendered on this agent; an unpinned one survives while a
+  chat that shows it still exists, but once that chat is deleted (or it was never shown in a chat)
+  it disappears after enough unrelated renders — and any id you wrote down then points at nothing.
   Pin it as soon as you know it will outlive the conversation. Pins are capped: if it refuses, unpin
   one you no longer need (`pinned=False`). A cap of 0 means the operator turned new pins off —
   artifacts already pinned stay protected until unpinned. A pin keeps the latest versions, not

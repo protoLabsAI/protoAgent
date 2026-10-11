@@ -315,7 +315,7 @@ environment variable of the same knob overrides the UI for headless / ACP setups
 | **Interactive artifacts** | `ARTIFACT_ASK_ENABLED` | _off_ | Let artifacts call back to the agent via `window.protoArtifact.ask()` (below). |
 | **Ask system instruction** | `ARTIFACT_ASK_SYSTEM` | _(none)_ | Optional system prompt wrapping every `ask()`. |
 | **Ask prompt limit (chars)** | `ARTIFACT_ASK_MAX_CHARS` | `4000` | Max prompt length for an `ask()`. |
-| **Artifacts kept** | `ARTIFACT_HISTORY` | `20` | How many unpinned artifacts to keep (oldest evicted; pinned ones don't count). |
+| **Artifacts kept** | `ARTIFACT_HISTORY` | `200` | How many unpinned artifacts to keep. Past it, the oldest artifact that **no surviving chat still shows** is evicted: an artifact whose `artifact-ref` (an inline answer or a chip) went out in a console chat stays until every such chat is deleted (#4138). When every one is still shown, the store keeps them all and logs a warning rather than delete a live answer. Pinned ones don't count. |
 | **Versions per artifact** | `ARTIFACT_MAX_VERSIONS` | `50` | Max versions kept per artifact, pinned or not (oldest edits trimmed). |
 | **Pinned artifacts** | `ARTIFACT_MAX_PINNED` | `10` | Max pinned artifacts; a pin past this is refused. `0` refuses all new pins. Lowering it (to `0` included) doesn't unpin anything: existing pins stay protected until unpinned. |
 | **Max artifact size (KB)** | `ARTIFACT_MAX_CODE_KB` | `512` | Max source size per version (a larger render is rejected). |

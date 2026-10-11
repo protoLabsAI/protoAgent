@@ -226,7 +226,7 @@ def test_legacy_flat_history_migrates_to_versioned(monkeypatch, tmp_path):
 def test_bad_history_env_falls_back_to_default(monkeypatch, tmp_path):
     monkeypatch.setenv("ARTIFACT_HISTORY", "not-a-number")
     art = _load(monkeypatch, tmp_path)  # must not raise at import
-    assert art._max_history() == 20  # bad value → default, never crashes
+    assert art._max_history() == 200  # bad value → default, never crashes (200 since #4138)
 
 
 def test_config_layer_precedence_env_then_ui_then_default(monkeypatch, tmp_path):
@@ -236,7 +236,7 @@ def test_config_layer_precedence_env_then_ui_then_default(monkeypatch, tmp_path)
 
     # default (no env, no host config — _plugin_cfg() returns {} without a host).
     assert art._ask_enabled() is False
-    assert art._max_history() == 20
+    assert art._max_history() == 200  # was 20 before #4138 raised it for inline answers
 
     # host/UI config drives it (simulate Settings ▸ Plugins → artifact.ask_enabled).
     monkeypatch.setattr(art._config, "_plugin_cfg", lambda: {"ask_enabled": True, "history": 7})
@@ -1670,7 +1670,8 @@ def _ids(art):
 
 
 def test_pinned_artifact_survives_30_unrelated_artifacts(monkeypatch, tmp_path):
-    art = _load(monkeypatch, tmp_path)  # default history = 20
+    monkeypatch.setenv("ARTIFACT_HISTORY", "20")  # the pre-#4138 default these cases were written at
+    art = _load(monkeypatch, tmp_path)
     resume = _show(art, "<h1>Resume</h1>", "Master resume")
     assert "Pinned artifact" in art.pin_artifact.invoke({"artifact_id": resume})
     unrelated = [_show(art, f"<p>{i}</p>") for i in range(30)]
@@ -1750,7 +1751,8 @@ def test_pinned_artifacts_are_stored_first_so_a_downgrade_keeps_them(monkeypatch
     ``artifacts[:history]``. A long-lived pinned artifact is usually the OLDEST touched, so in
     recency order that first old write would evict it (and GC a file artifact's blobs). Stored
     pins-first, the old slice keeps them until `history` newer artifacts push them out."""
-    art = _load(monkeypatch, tmp_path)  # default history = 20
+    monkeypatch.setenv("ARTIFACT_HISTORY", "20")  # the pre-#4138 default these cases were written at
+    art = _load(monkeypatch, tmp_path)
     pins = [_show(art, f"<p>pin {i}</p>", f"P{i}") for i in range(3)]
     for p in pins:
         art.pin_artifact.invoke({"artifact_id": p})
@@ -1839,7 +1841,8 @@ def test_list_get_and_history_report_pinned_state(monkeypatch, tmp_path):
     listing = art.list_artifacts.invoke({})
     rows = {ln.split()[0]: ln for ln in listing.splitlines() if ln.startswith("a-")}
     assert "· pinned" in rows[resume] and "· pinned" not in rows[plain]
-    assert "1/10 pins used" in listing and "20 most recently touched unpinned" in listing
+    assert "1/10 pins used" in listing and "up to 200 unpinned artifacts are kept" in listing
+    assert "over that cap" not in listing
     assert "· pinned" in art.get_artifact.invoke({"artifact_id": resume}).splitlines()[0]
     assert "pinned" not in art.get_artifact.invoke({"artifact_id": plain}).splitlines()[0]
     # The panel's /history payload (the raw store) carries it as well.
