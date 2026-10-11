@@ -692,9 +692,10 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
         "pdfjs.min.mjs",
         "pdfjs-worker.min.mjs",
         "three.module.min.js",  # r170 self-contained ESM, import-map resolved (ADR 0118 D6)
+        "anime.esm.min.js",  # anime.js 4.5.0 self-contained ESM, import-map resolved (ADR 0118 D6)
     ):
         assert lib in html
-    assert html.count("sha512-") == 13 and 'integrity="' in html
+    assert html.count("sha512-") == 14 and 'integrity="' in html
     # crossorigin is REQUIRED even same-origin: the sandbox is an opaque origin, so
     # the lib load is cross-origin and SRI needs the CORS fetch to validate.
     assert 'crossorigin="anonymous"' in html
@@ -766,6 +767,37 @@ def test_three_js_is_vendored_sri_pinned_and_served(monkeypatch, tmp_path):
     assert "cdnjs.cloudflare.com" not in html and "unpkg.com" not in html
     assert b"three.core" not in served  # single-file build — nothing else to fetch
     assert b"export{" in served  # it is an ES module, importable as-is
+
+
+def test_animejs_is_vendored_sri_pinned_and_served(monkeypatch, tmp_path):
+    """anime.js (ADR 0118 D6, operator decision 2026-10-10: the MIT animation library in place of
+    GSAP, whose license prohibits no-code animation tools): the 4.5.0 self-contained minified ESM
+    bundle is vendored same-origin, importable via the bare `animejs` specifier, and SRI-pinned to
+    the exact bytes the vendor route serves."""
+    import base64
+    import hashlib
+
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    c = TestClient(_app(art))
+
+    r = c.get("/plugins/artifact/vendor/anime.esm.min.js")
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]
+    assert "immutable" in r.headers.get("cache-control", "")
+    assert r.headers.get("access-control-allow-origin") == "*"
+    served = r.content
+
+    js = art._SHELL_JS
+    want = "sha512-" + base64.b64encode(hashlib.sha512(served).digest()).decode()
+    assert want in js, "shell anime SRI does not match sha512 of the served vendored bytes"
+
+    html = art._SHELL_HTML + js
+    assert '"animejs":' in html and "anime.esm.min.js" in html
+    assert "cdnjs.cloudflare.com" not in html and "unpkg.com" not in html
+    assert b'from"' not in served and b"from \"" not in served  # self-contained: nothing else to fetch
+    assert b"export{" in served and b" as animate" in served  # an ES module exporting animate()
 
 
 # ── the new kinds: markdown + the react import map + the DS surface ──────────────

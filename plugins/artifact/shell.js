@@ -187,6 +187,13 @@
     // vendored module. Notices in vendor/three.LICENSES.txt.
     three: ["three.module.min.js",
       "sha512-zTnt1Hf43YVf2to5DC6GE6cPRSC/xgPJDf3PLQussTsaDak1uHdbnWtIYnOQiL40AIa2OZfFkayQXVdzL1/DqA=="],
+    // anime.js 4.5.0 (MIT): the package's own self-contained minified ESM bundle
+    // (dist/bundles/anime.esm.min.js), byte-for-byte. Resolved via the `animejs` import-map
+    // specifier for animated `html`/`react` artifacts (`import { animate } from "animejs"`);
+    // the MIT-licensed choice in place of GSAP, whose license prohibits no-code animation tools.
+    // SRI-pinned like every vendored module. Notices in vendor/anime.LICENSES.txt.
+    anime: ["anime.esm.min.js",
+      "sha512-Wr0/JdMQ70ZcJuGM00/sVJDfzeCWRFL+H7A8zTi1gIH6t5KwIFBi5yGyXAb1EV81yyJfOAC5cBMR56NZNC5a0g=="],
   };
   // crossorigin="anonymous" is REQUIRED even though the lib is same-origin to the
   // shell: the artifact runs in a no-same-origin sandbox (opaque origin), so its
@@ -204,7 +211,7 @@
   // Curated ESM import map for `react` artifacts (offline-vendored, served same-origin with
   // CORS). Bare specifiers resolve to the vendored modules: react/react-dom via tiny shims that
   // re-export the UMD globals (so the artifact, the @pl/ui wrappers, and any lib share ONE
-  // React instance), plus d3 / chart.js / lucide / three and the authored @pl/ui DS wrappers.
+  // React instance), plus d3 / chart.js / lucide / three / animejs and the authored @pl/ui DS wrappers.
   var V = ORIGIN + "/plugins/artifact/vendor/";
   var IMPORTMAP = JSON.stringify({ imports: {
     "react": V + "react.shim.mjs",
@@ -215,7 +222,8 @@
     "chart.js": V + "chartjs.mjs",
     "chart.js/auto": V + "chartjs.mjs",
     "lucide": V + "lucide.mjs",
-    "three": V + "three.module.min.js"
+    "three": V + "three.module.min.js",
+    "animejs": V + "anime.esm.min.js"
   }});
   // Prose styling for markdown, keyed to --pl-* tokens (the DS link supplies component classes).
   var MD_CSS = '#md{max-width:50rem;margin:0 auto;padding:20px;line-height:1.6}'
