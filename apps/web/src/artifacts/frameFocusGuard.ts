@@ -25,9 +25,9 @@
 //   • Focus moving from the page into an INACTIVE frame with no such gesture is a theft. In the
 //     same task the host blanks the frame (src → about:blank, which stops its scripts, so a 1 ms
 //     loop dies on its first steal) and QUARANTINES it: the host renders "This artifact tried to
-//     take keyboard focus." with a "Run it" button in its place; one task later it hands focus
-//     back to the element that held it (usually the composer — see returnFocus for why not in
-//     the same task). The quarantine is kept in memory per frame key, so a re-render of the same
+//     take keyboard focus." with a "Run it" button in its place, and hands focus back to the
+//     element that held it (usually the composer) at once and again a task later — see
+//     returnFocus for why both. The quarantine is kept in memory per frame key, so a re-render of the same
 //     message keeps it; "Run it" remounts the frame already active (that click is the gesture).
 //
 // Limits: Escape can't deactivate (a key pressed inside a cross-origin frame never reaches this
@@ -85,24 +85,42 @@ function deactivateAll(): void {
 }
 
 /** Hand focus back from `frame` after a theft, to the element that held it before (usually the
- *  composer). One task later, not in the window `blur` dispatch that reported the theft: every
- *  engine measured (Chromium in- and out-of-process, WebKit) silently overrides a focus() made
- *  during that dispatch with the in-flight move into the frame, so keys keep going to the frame
- *  while `activeElement` claims the composer — and in headed Chrome a microtask is still too
- *  early. A task later the move has settled and the hand-back sticks. */
+ *  composer). Twice:
+ *   1. NOW, inside the window `blur` dispatch that reported the theft. In headed Chrome (frames
+ *      out of process) this is what closes the gap: waiting a task first left the keyboard with
+ *      the frame for ~10 ms after every steal — every key typed in that window was lost (#4076
+ *      F4, measured: a 1 ms self-focus loop after "Run it" + a composer click lost 0–24 keys
+ *      per run at full synthetic speed; with this, 0).
+ *   2. Again one task later. Some engines (WebKit, Chromium in-process) override a focus() made
+ *      during that dispatch with the in-flight move into the frame, so keys keep going to the
+ *      frame while `activeElement` already claims the composer — and in headed Chrome a
+ *      microtask is still too early. A task later the move has settled; if the page still
+ *      doesn't have focus, blur + focus forces a real move (focus() on the element that is
+ *      already `activeElement` is a no-op). */
 function returnFocus(frame: HTMLIFrameElement): void {
+  const prev = lastOutsideFocus;
+  const restore = () => {
+    if (!prev || !prev.isConnected) return;
+    try {
+      prev.focus({ preventScroll: true });
+    } catch {
+      /* best effort */
+    }
+  };
+  restore();
   setTimeout(() => {
     const ae = document.activeElement;
     // Focus already moved on to something real (the operator clicked elsewhere): leave it.
-    if (ae && ae !== frame && ae !== document.body) return;
-    const prev = lastOutsideFocus;
-    if (prev && prev.isConnected) {
+    if (ae && ae !== frame && ae !== document.body && ae !== prev) return;
+    if (ae === prev) {
+      if (document.hasFocus()) return; // the immediate hand-back stuck
       try {
-        prev.focus({ preventScroll: true });
+        prev?.blur();
       } catch {
         /* best effort */
       }
     }
+    restore();
   }, 0);
 }
 

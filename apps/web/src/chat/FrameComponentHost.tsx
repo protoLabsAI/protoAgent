@@ -258,16 +258,11 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
       if (Number.isNaN(cid)) return;
 
       if (m.type === "protoComponent:openLink") {
-        // https-only, narrowed by the operator's optional origin allowlist (wired in a later
-        // slice); on accept the HOST opens the tab with the mandatory noopener,noreferrer.
-        const verdict = bridge.checkOpenLink({ url: String(m.url ?? "") });
-        if (verdict.status === "ok") {
-          window.open(verdict.url, "_blank", "noopener,noreferrer");
-          replyToFrame(cid, { ok: true });
-        } else {
-          gate.showRejection(verdict.message);
-          replyToFrame(cid, { ok: false, error: verdict.message });
-        }
+        // A PROPOSAL like send (#4076 F1): https only, narrowed by the operator's
+        // `artifact.open_link_origins`, rate-gated, then the "Open ‹host› in a new tab?" chip
+        // unless this source's LINKS are trusted. The tab opens from the chip's click with
+        // noopener/noreferrer, and the frame hears success only if it really opened.
+        void gate.proposeOpen(cid, String(m.url ?? ""));
         return;
       }
 
@@ -285,7 +280,7 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     }
     window.addEventListener("message", onBridge);
     return () => window.removeEventListener("message", onBridge);
-  }, [live, id, kind, plugin, chat, bridge, replyToFrame, gate.propose, gate.showRejection]);
+  }, [live, id, kind, plugin, chat, bridge, replyToFrame, gate.propose, gate.proposeOpen, gate.showRejection]);
 
   // A self-focusing component must not pull the composer's focus into its frame (#4076): the
   // frame is click-to-activate (or Tab into it), and one that takes focus on its own is
@@ -363,7 +358,7 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
         classPrefix="frame-component-host__bridge"
         testIdPrefix="component"
         source="component"
-        onSend={(alwaysAllow) =>
+        onAccept={(alwaysAllow) =>
           gate.resolve(true, alwaysAllow, chat && {
             isBusy: chat.isBusy,
             post: (text) => chat.send(text, { kind: kind ?? "", plugin: plugin ?? null }),

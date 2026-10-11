@@ -18,7 +18,13 @@ import {
   onLiveInlineArtifactRef,
   type ArtifactChatSend,
 } from "./ArtifactRefChip";
-import { createFrameBridge, SEND_TRUST_STORAGE_KEY, type FrameBridge } from "./frameBridge";
+import {
+  createFrameBridge,
+  OPEN_LINK_TRUST_STORAGE_KEY,
+  SEND_TRUST_STORAGE_KEY,
+  type FrameBridge,
+} from "./frameBridge";
+import { resetOpenLinkOriginsCacheForTest } from "./openLinkOrigins";
 import { ARTIFACT_VIEW_KEY } from "./artifactRef";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -996,14 +1002,122 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b / S19)", 
     expect(chipEl()).toBeNull();
   });
 
-  it("openLink opens an https link in a new tab with noopener,noreferrer, through the host", async () => {
+  // #4076 F1: openLink is a proposal behind the same chip — "Open ‹host› in a new tab?" — with
+  // its OWN "Always allow links" trust, and the frame hears success only if the tab opened.
+  function fakeTab() {
+    const doc = document.implementation.createHTMLDocument("blank");
+    const navigated: string[] = [];
+    doc.addEventListener("click", (e) => {
+      navigated.push((e.target as HTMLAnchorElement).href);
+      e.preventDefault();
+    });
+    return { tab: { opener: {} as unknown, document: doc, close: vi.fn() }, navigated };
+  }
+  const linkMsg = (url = "https://docs.example.com/guide?x=1", cid = 7) => ({ type: "protoArtifact:openLink", cid, url });
+  const openChipEl = () => q("artifact-open-confirm");
+  beforeEach(() => {
+    resetOpenLinkOriginsCacheForTest();
+    vi.spyOn(api, "config").mockResolvedValue({ config: {} as never, soul: "" });
+  });
+
+  it("openLink shows the open chip naming the host and opens NOTHING until the operator clicks Open", async () => {
     meta({ version_count: 2, oldest: 1 });
-    const chat = chatStub();
-    const { f, post } = await mountInline(chat);
-    const open = vi.spyOn(window, "open").mockImplementation(() => null);
-    await dispatch(f, { type: "protoArtifact:openLink", cid: 7, url: "https://example.com/docs" });
-    expect(open).toHaveBeenCalledWith("https://example.com/docs", "_blank", "noopener,noreferrer");
+    const { f, post } = await mountInline(chatStub());
+    const { tab, navigated } = fakeTab();
+    const open = vi.spyOn(window, "open").mockImplementation(() => tab as unknown as Window);
+    await dispatch(f, linkMsg());
+    expect(open).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+    const c = openChipEl()!;
+    expect(c.getAttribute("role")).toBe("alertdialog");
+    expect(c.textContent).toContain("Open docs.example.com in a new tab?");
+    expect(q("artifact-open-confirm-text")?.textContent).toBe("https://docs.example.com/guide?x=1");
+    expect(c.textContent).toContain("Always allow links from this artifact");
+    expect(q("artifact-open-confirm-ok")?.textContent).toBe("Open");
+
+    const ok = q<HTMLButtonElement>("artifact-open-confirm-ok")!;
+    await act(async () => {
+      ok.click();
+      ok.click(); // a double click can't open twice
+    });
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(tab.opener).toBeNull(); // noopener
+    expect(navigated).toEqual(["https://docs.example.com/guide?x=1"]);
+    expect(post).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledWith(...bridgeResult(true));
+    expect(openChipEl()).toBeNull();
+  });
+
+  it("a blocked pop-up REJECTS the frame's openLink with the reason — never a false success", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    const { f, post } = await mountInline(chatStub());
+    vi.spyOn(window, "open").mockImplementation(() => null);
+    await dispatch(f, linkMsg());
+    await click("artifact-open-confirm-ok");
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringMatching(/blocked/i) }));
+    expect(q("artifact-send-rejected")?.textContent).toMatch(/blocked/i);
+  });
+
+  it("Dismiss rejects the frame's openLink and opens nothing", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    const { f, post } = await mountInline(chatStub());
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    await dispatch(f, linkMsg());
+    await click("artifact-open-confirm-dismiss");
+    expect(open).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringMatching(/dismissed/i) }));
+    expect(openChipEl()).toBeNull();
+  });
+
+  it("send trust never trusts links; 'Always allow links' skips the chip next time but not send's", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    localStorage.setItem(SEND_TRUST_STORAGE_KEY, JSON.stringify(["artifact:a-1"]));
+    let now = 0;
+    const bridge = createFrameBridge({ now: () => now });
+    const chat = chatStub();
+    const { f, post } = await mountInline(chat, { ...REF, inline: true }, bridge);
+    const { tab } = fakeTab();
+    const open = vi.spyOn(window, "open").mockImplementation(() => tab as unknown as Window);
+    // Sends are trusted, links are not: the link still asks.
+    await dispatch(f, linkMsg());
+    expect(openChipEl()).not.toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    await act(async () => {
+      q<HTMLInputElement>("artifact-open-confirm-trust")!.click();
+    });
+    await click("artifact-open-confirm-ok");
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(localStorage.getItem(OPEN_LINK_TRUST_STORAGE_KEY) ?? "[]")).toEqual(["artifact:a-1"]);
+    // Next link (past the 2 s open window) goes straight through; the frame hears success.
+    now = 5_000;
+    post.mockClear();
+    await dispatch(f, linkMsg("https://docs.example.com/next", 8));
+    expect(openChipEl()).toBeNull();
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(post).toHaveBeenCalledWith(...bridgeResult(true, {}, 8));
+  });
+
+  it("the operator's artifact.open_link_origins narrows openLink; an unreadable setting refuses", async () => {
+    meta({ version_count: 2, oldest: 1 });
+    vi.spyOn(api, "config").mockResolvedValue({
+      config: { artifact: { open_link_origins: ["https://allowed.example.com"] } } as never,
+      soul: "",
+    });
+    const { f, post } = await mountInline(chatStub());
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    await dispatch(f, linkMsg());
+    expect(openChipEl()).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("allowed list") }));
+
+    resetOpenLinkOriginsCacheForTest();
+    vi.spyOn(api, "config").mockRejectedValue(new Error("offline"));
+    post.mockClear();
+    await dispatch(f, linkMsg("https://allowed.example.com/x", 9));
+    expect(openChipEl()).toBeNull();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringMatching(/allowed link origins/) }, 9));
   });
 
   it("openLink refuses a non-https link and opens nothing", async () => {
