@@ -421,7 +421,10 @@ def show_artifact(
     "mermaid" (a Mermaid diagram definition), "markdown" (a Markdown document — rendered with
     design-system prose styling; ```mermaid fences become live diagrams), "vega-lite" (a CHART: a
     JSON Vega-Lite spec with its rows inline in ``data.values`` — themed to the console
-    automatically, so leave colours/background out; ``data.url`` is never loaded), or "react" (a
+    automatically, so leave colours/background out; ``data.url`` is never loaded — EVERY standard
+    bar/line/area/point/arc/heat-map chart is one, even one "added" to an existing tool: show it as
+    its own inline vega-lite artifact beside the tool, never bars/lines hand-built from divs, CSS
+    or SVG), or "react" (a
     self-contained React component script; name your top-level component ``App`` and it
     AUTO-MOUNTS into ``#root`` (no manual ``createRoot(...).render`` needed — though an explicit
     render still works). React, ReactDOM and Babel are provided, and it can ``import`` from a
@@ -626,6 +629,9 @@ def update_artifact(
     Defaults to the most-recent artifact; pass ``artifact_id`` to target another (see
     ``list_artifacts``). Prefer this over ``rewrite_artifact`` for small changes — it's the fast
     path and keeps the version history clean.
+
+    Asked to ADD A CHART to an existing tool? Don't edit bars/lines into it — a standard chart is
+    its own inline ``vega-lite`` artifact (``show_artifact(kind="vega-lite", …)``) beside the tool.
 
     A mermaid diagram's code ``links`` (see ``show_artifact``) CARRY OVER to the new version
     unless you pass ``links`` — the full new map, replacing the old one (``{}`` clears them).

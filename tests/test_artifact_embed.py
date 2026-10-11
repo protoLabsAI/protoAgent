@@ -391,3 +391,68 @@ def test_frames_get_the_full_theme_palette_and_themed_defaults(monkeypatch, tmp_
     base = _js_function(js, "base")
     assert "var all=themeTokens()" in base and "color-scheme:" in base and "DEFAULTS" in base
     assert ":where(input,select,textarea)" in js and ":where(button)" in js  # zero specificity: author wins
+
+
+# ── #4076: a refused send()/openLink() is a quiet outcome, not a red error overlay ──
+
+
+def test_a_refused_send_never_covers_the_artifact_with_the_error_overlay(monkeypatch, tmp_path):
+    """The host can refuse ``protoArtifact.send()`` (agent busy, dismissed, rate-limited) — an
+    expected outcome the artifact should show quietly. An artifact that didn't catch the Promise
+    used to get ERRBOOT's red "⚠ the agent is busy" overlay over its UI, plus a FAILED render
+    verdict. The shim now tags bridge refusals (``protoArtifactRefusal``) and ERRBOOT's
+    unhandledrejection hook logs them instead; a real unhandled rejection still shows. Run under
+    node against the real SHIM + ERRBOOT source."""
+    art = _load(monkeypatch, tmp_path)
+    js = _js(art)
+    harness = (
+        _assignment(js, "SHIM")
+        + "\n"
+        + _assignment(js, "ERRBOOT")
+        + r"""
+const listeners = {}, posted = [], infos = [], appended = [];
+global.addEventListener = (t, f) => { (listeners[t] = listeners[t] || []).push(f); };
+global.window = global;
+global.parent = { postMessage: (m) => posted.push(m) };
+console.info = (m) => infos.push(String(m));
+global.document = {
+  getElementById: () => null,
+  createElement: () => ({ style: {} }),
+  body: { appendChild: (d) => appended.push(d) },
+};
+const run = (src) => eval(src.replace(/^<script>/, "").replace(/<\\?\/script>$/, ""));
+run(SHIM); run(ERRBOOT);
+const fire = (t, ev) => (listeners[t] || []).forEach((f) => f(ev));
+const reasonOf = (p) => p.then(() => null, (e) => e);
+(async () => {
+  const out = {};
+  const sent = reasonOf(window.protoArtifact.send("ping"));
+  const linked = reasonOf(window.protoArtifact.openLink("http://x"));
+  const asked = reasonOf(window.protoArtifact.ask("q"));
+  fire("message", { data: { type: "protoArtifact:result", id: 1, error: "the agent is busy" } });
+  fire("message", { data: { type: "protoArtifact:result", id: 2, error: "links must be https" } });
+  fire("message", { data: { type: "protoArtifact:result", id: 3, error: "ask is disabled" } });
+  const [s, l, a] = await Promise.all([sent, linked, asked]);
+  out.tags = [s.protoArtifactRefusal === true, l.protoArtifactRefusal === true, a.protoArtifactRefusal === true];
+  out.sendMsg = s.message;
+  fire("unhandledrejection", { reason: s });
+  fire("unhandledrejection", { reason: l });
+  out.afterRefusals = { overlays: appended.length, renders: posted.filter((m) => m.type === "protoArtifact:render") };
+  out.infos = infos;
+  fire("unhandledrejection", { reason: new Error("boom") });
+  out.afterReal = { overlays: appended.length, text: appended[0] && appended[0].textContent,
+    renders: posted.filter((m) => m.type === "protoArtifact:render") };
+  console.log(JSON.stringify(out));
+  process.exit(0);  // the shim's 60 s bridge timeouts would otherwise hold node open
+})();
+"""
+    )
+    out = _node(harness)
+    # send/openLink refusals are tagged; ask (opt-in, not a bridge refusal) is unchanged.
+    assert out["tags"] == [True, True, False]
+    assert out["sendMsg"] == "the agent is busy"  # the reason still reaches the artifact
+    assert out["afterRefusals"] == {"overlays": 0, "renders": []}, "a refusal is no overlay and no failed verdict"
+    assert any("the agent is busy" in m for m in out["infos"])
+    # A real unhandled rejection still surfaces, and still reports the failure.
+    assert out["afterReal"]["overlays"] == 1 and "boom" in out["afterReal"]["text"]
+    assert out["afterReal"]["renders"] == [{"type": "protoArtifact:render", "ok": False, "error": "⚠ boom"}]

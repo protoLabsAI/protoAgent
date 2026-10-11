@@ -39,7 +39,11 @@
   // openLink) and posts a verdict back down. Each returns a Promise that resolves on accept
   // and rejects with the host's reason (e.g. "the agent is busy"), so the frame can show it.
   // ask stays opt-in and unchanged; send is on by default (D4).
+  // A send/openLink refusal (busy, dismissed, rate-limited, timed out, not https…) is an EXPECTED
+  // outcome, not a crash: nay() tags its Error protoArtifactRefusal so ERRBOOT's
+  // unhandledrejection hook logs it quietly instead of covering the artifact with the red overlay.
   var SHIM = '<script>(function(){var s=0,w={};'
+    + 'function nay(m){var er=new Error(m);er.protoArtifactRefusal=true;return er;}'
     + 'window.addEventListener("message",function(e){var m=e.data||{};'
     // Live re-theme (#1872): the shell pushes fresh tokens on every frame load and app-theme
     // switch; update the --pl-* custom properties on :root in place (no re-render, so
@@ -53,16 +57,16 @@
     + 'for(var k in m.tokens){if(k.indexOf("--pl-")===0)st.setProperty(k,String(m.tokens[k]));}'
     + 'return;}'
     + 'if(m.type!=="protoArtifact:result")return;'
-    + 'var p=w[m.id];if(!p)return;delete w[m.id];m.error?p.reject(new Error(m.error)):p.resolve(m.text);});'
+    + 'var p=w[m.id];if(!p)return;delete w[m.id];m.error?p.reject(p.b?nay(m.error):new Error(m.error)):p.resolve(m.text);});'
     + 'window.protoArtifact={ask:function(prompt){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej};'
     + 'parent.postMessage({type:"protoArtifact:ask",id:id,prompt:String(prompt)},"*");'
     + 'setTimeout(function(){if(w[id]){delete w[id];rej(new Error("ask timed out"));}},60000);});},'
-    + 'send:function(text){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej};'
+    + 'send:function(text){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej,b:1};'
     + 'parent.postMessage({type:"protoArtifact:send",id:id,text:String(text)},"*");'
-    + 'setTimeout(function(){if(w[id]){delete w[id];rej(new Error("send timed out"));}},60000);});},'
-    + 'openLink:function(url){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej};'
+    + 'setTimeout(function(){if(w[id]){delete w[id];rej(nay("send timed out"));}},60000);});},'
+    + 'openLink:function(url){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej,b:1};'
     + 'parent.postMessage({type:"protoArtifact:openLink",id:id,url:String(url)},"*");'
-    + 'setTimeout(function(){if(w[id]){delete w[id];rej(new Error("openLink timed out"));}},60000);});}};'
+    + 'setTimeout(function(){if(w[id]){delete w[id];rej(nay("openLink timed out"));}},60000);});}};'
     + '})();<\/script>';
   // Design-system surface: link the same-origin DS plugin-kit stylesheet (host-served at
   // /_ds/, min_protoagent_version 0.34.0) into html/react/markdown artifacts so they can use
@@ -88,7 +92,11 @@
     + '(document.body||document.documentElement).appendChild(d);}d.textContent=String(m);rep(false,m);}'
     + 'W.__artErr=show;W.__artOk=function(){rep(true,"");};'
     + 'addEventListener("error",function(e){show("⚠ "+(e.message||(e.error&&e.error.message)||"Script error")+(e.lineno?" (line "+e.lineno+")":""));},true);'
-    + 'addEventListener("unhandledrejection",function(e){show("⚠ "+((e.reason&&e.reason.message)||e.reason));});'
+    // A send()/openLink() refusal the artifact didn't catch is not a render failure: log it
+    // quietly (no overlay, no failed verdict). Every other unhandled rejection still shows.
+    + 'addEventListener("unhandledrejection",function(e){var r=e.reason;'
+    + 'if(r&&r.protoArtifactRefusal){try{console.info("protoArtifact: not sent \u2014 "+r.message);}catch(_){}return;}'
+    + 'show("⚠ "+((r&&r.message)||r));});'
     + 'addEventListener("load",function(){if(W.__artKind!=="react"&&W.__artKind!=="vega-lite")setTimeout(function(){if(!W.__artRep)W.__artOk();},80);});'
     + '})();<\/script>';
   // Height reporting for the embed placement (ADR 0118 D2). Injected ONLY into embed frames
@@ -1238,7 +1246,7 @@
   // The in-frame controller. Authored as a real function and injected via toString(), like
   // artGraphics / artSlides — so it must carry no literal script-close or comment-open sequence.
   function artVega(cfg){
-    var W=window, tok=cfg.tokens||{}, spec=null, view=null, gen=0;
+    var W=window, tok=cfg.tokens||{}, spec=null, view=null, busy=false, again=false;
     function fail(m){ if(W.__artErr) W.__artErr("⚠ "+m); }
     function t(k, d){ var v=tok[k]; return (typeof v==="string" && v.trim()) ? v.trim() : d; }
     // Luminance of the ground, for the tooltip theme. Themes are often oklch(), so the browser
@@ -1314,13 +1322,24 @@
       if(single && s.autosize===undefined) s.autosize={type:"fit-x", contains:"padding"};
       return s;
     }
+    // ONE draw in flight at a time. A re-theme that lands mid-draw is coalesced into a single
+    // redraw AFTER the current one settles, never a restart of it: restarting threw away the
+    // in-flight draw's result, so its render verdict (__artOk, once-only) waited on the redraw —
+    // and a run of theme pushes could keep pushing it back. Every settled draw reports, so the
+    // FIRST successful draw confirms the render (the spec is the same in every palette).
     function draw(){
-      var my=++gen;
+      if(busy){ again=true; return; }
+      busy=true; again=false;
       if(view){ view.finalize(); view=null; }
-      return W.vegaEmbed("#vis", prep(), {mode:"vega-lite", renderer:"svg", actions:false, ast:true,
-          loader:LOADER, logger:logger, config:theme(), tooltip:{theme:isDark()?"dark":"light"}})
-        .then(function(res){ if(my!==gen){ res.finalize(); return; } view=res; if(W.__artOk) W.__artOk(); })
-        .catch(function(e){ if(my===gen) fail((e && e.message) || String(e)); });
+      var p;
+      try{
+        p=W.vegaEmbed("#vis", prep(), {mode:"vega-lite", renderer:"svg", actions:false, ast:true,
+          loader:LOADER, logger:logger, config:theme(), tooltip:{theme:isDark()?"dark":"light"}});
+      }catch(e){ p=Promise.reject(e); }
+      Promise.resolve(p)
+        .then(function(res){ view=res; if(W.__artOk) W.__artOk(); },
+              function(e){ fail((e && e.message) || String(e)); })
+        .then(function(){ busy=false; if(again) draw(); });
     }
     W.addEventListener("message", function(e){
       if(e.source!==W.parent) return;
