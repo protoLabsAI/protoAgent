@@ -15,6 +15,7 @@ import {
   createInlineFrameHost,
   InlineFrameBridgeContext,
   InlineFrameHostContext,
+  onLiveInlineArtifactRef,
   type ArtifactChatSend,
 } from "./ArtifactRefChip";
 import { createFrameBridge, SEND_TRUST_STORAGE_KEY, type FrameBridge } from "./frameBridge";
@@ -1014,5 +1015,156 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b / S19)", 
     expect(open).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("https") }));
     expect(container.querySelector('[data-testid="artifact-send-rejected"]')?.textContent).toContain("https");
+  });
+});
+
+// ── the live turn's newest inline artifact mounts eagerly (ADR 0118 / S22, #4147) ───────────
+// When the operator's chat isn't on screen during the turn, a lazy frame never loads, so no
+// render verdict reaches check_artifact. The live-stream hook marks the ref; its frame mounts
+// at once, with the IntersectionObserver never firing. Replayed history stays lazy.
+describe("ArtifactRefChip — eager live inline frame (S22, #4147)", () => {
+  // An IntersectionObserver that NEVER reports an intersection unless a test fires it — the chat
+  // is off screen (background window, hidden chat tab, scrolled away).
+  class OffscreenIO {
+    static instances: OffscreenIO[] = [];
+    cb: (entries: Array<{ isIntersecting: boolean }>) => void;
+    observed = new Set<Element>();
+    constructor(cb: (entries: Array<{ isIntersecting: boolean }>) => void) {
+      this.cb = cb;
+      OffscreenIO.instances.push(this);
+    }
+    observe(el: Element) {
+      this.observed.add(el);
+    }
+    unobserve(el: Element) {
+      this.observed.delete(el);
+    }
+    disconnect() {
+      this.observed.clear();
+    }
+  }
+  const fireVisible = (els: Element[]) => {
+    const want = new Set(els);
+    for (const io of OffscreenIO.instances) {
+      const hit = [...io.observed].filter((el) => want.has(el));
+      if (hit.length) io.cb(hit.map(() => ({ isIntersecting: true })));
+    }
+  };
+  beforeEach(() => {
+    OffscreenIO.instances = [];
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = OffscreenIO;
+    vi.spyOn(api, "artifactRefs").mockImplementation(async (ids: string[]) => {
+      const artifacts: Record<string, { title: string; kind: string; version_count: number; oldest: number }> = {};
+      for (const id of ids) artifacts[id] = { title: "Chart", kind: "html", version_count: 1, oldest: 1 };
+      return { artifacts };
+    });
+  });
+  afterEach(() => {
+    (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver = undefined;
+  });
+
+  const SESSION = "s-live";
+  const chat: ArtifactChatSend = { sessionId: SESSION, isBusy: () => false, send: () => {} };
+  const props = (id: string) => ({ artifact_id: id, version: 1, title: "Chart", kind: "html", inline: true, height: 240 });
+  const spec = (id: string, extra: Record<string, unknown> = {}) => ({ component: "artifact-ref", props: { ...props(id), ...extra } });
+  const frames = () => [...container.querySelectorAll<HTMLIFrameElement>('[data-testid="artifact-inline-frame"]')];
+  const slots = () => [...container.querySelectorAll<HTMLElement>('[data-testid="artifact-ref-inline"]')];
+  const frameIds = () => frames().map((f) => new URL(f.getAttribute("src")!, "http://x").searchParams.get("embed"));
+
+  const renderChips = (ids: string[], host: ReturnType<typeof createInlineFrameHost>, qc?: QueryClient) => {
+    const client = qc ?? new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() =>
+      root.render(
+        h(
+          QueryClientProvider,
+          { client },
+          h(
+            InlineFrameHostContext.Provider,
+            { value: host },
+            h(
+              ArtifactChatSendContext.Provider,
+              { value: chat },
+              ids.map((id) => h(ArtifactRefChip, { key: id, props: props(id) })),
+            ),
+          ),
+        ),
+      ),
+    );
+    return client;
+  };
+
+  it("a LIVE inline ref mounts its frame while off screen — the observer never fires", async () => {
+    const host = createInlineFrameHost();
+    onLiveInlineArtifactRef(spec("a-1"), { sessionId: SESSION }, host);
+    renderChips(["a-1"], host);
+    await flush();
+    expect(frameIds()).toEqual(["a-1"]);
+    expect(host.liveCount()).toBe(1); // it holds a slot like any frame
+    // The mark did its job and is cleared, so a later remount behaves like history.
+    expect(host.isLiveRef(SESSION, "a-1", 1)).toBe(false);
+  });
+
+  it("a REPLAYED inline ref (no live mark) stays lazy until it scrolls into view", async () => {
+    const host = createInlineFrameHost();
+    renderChips(["a-1"], host);
+    await flush();
+    expect(slots().length).toBe(1);
+    expect(frames().length).toBe(0);
+    await act(async () => fireVisible(slots()));
+    expect(frames().length).toBe(1);
+  });
+
+  it("a live mark that lands after the chip rendered still mounts it", async () => {
+    const host = createInlineFrameHost();
+    renderChips(["a-1"], host);
+    await flush();
+    expect(frames().length).toBe(0);
+    await act(async () => onLiveInlineArtifactRef(spec("a-1"), { sessionId: SESSION }, host));
+    await flush();
+    expect(frameIds()).toEqual(["a-1"]);
+  });
+
+  it("only the turn's NEWEST live inline artifact is forced; other chats and panel refs are not", async () => {
+    const host = createInlineFrameHost();
+    onLiveInlineArtifactRef(spec("a-1"), { sessionId: SESSION }, host);
+    onLiveInlineArtifactRef(spec("a-2"), { sessionId: SESSION }, host); // newer in the same turn
+    onLiveInlineArtifactRef(spec("a-3"), { sessionId: "another-chat" }, host);
+    onLiveInlineArtifactRef(spec("a-4", { inline: false }), { sessionId: SESSION }, host); // panel ref
+    onLiveInlineArtifactRef({ component: "code-ref", props: props("a-5") }, { sessionId: SESSION }, host);
+    renderChips(["a-1", "a-2", "a-3", "a-5"], host);
+    await flush();
+    expect(frameIds()).toEqual(["a-2"]);
+  });
+
+  it("the eager frame counts toward the cap and evicts the least-recently-seen frame", async () => {
+    const host = createInlineFrameHost(2);
+    const qc = renderChips(["a-1", "a-2"], host);
+    await flush();
+    await act(async () => fireVisible([slots()[0]]));
+    await act(async () => fireVisible([slots()[1]]));
+    expect(frameIds().sort()).toEqual(["a-1", "a-2"]);
+    // The live turn adds a-3 off screen: it mounts at once, and the cap holds at 2 by evicting
+    // a-1, the least recently seen — which becomes a resume card.
+    onLiveInlineArtifactRef(spec("a-3"), { sessionId: SESSION }, host);
+    renderChips(["a-1", "a-2", "a-3"], host, qc);
+    await flush();
+    expect(host.liveCount()).toBe(2);
+    expect(frameIds().sort()).toEqual(["a-2", "a-3"]);
+    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(1);
+  });
+
+  it("once consumed, a remount of the same ref lazy-mounts, and unmount frees its slot (no leak)", async () => {
+    const host = createInlineFrameHost();
+    onLiveInlineArtifactRef(spec("a-1"), { sessionId: SESSION }, host);
+    const qc = renderChips(["a-1"], host);
+    await flush();
+    expect(frames().length).toBe(1);
+    renderChips([], host, qc); // e.g. the transcript re-renders without it
+    await flush();
+    expect(host.liveCount()).toBe(0);
+    renderChips(["a-1"], host, qc);
+    await flush();
+    expect(frames().length).toBe(0); // history now — waits for the viewport
+    expect(host.liveCount()).toBe(0);
   });
 });

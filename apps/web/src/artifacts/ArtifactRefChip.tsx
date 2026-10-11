@@ -17,6 +17,7 @@ import { postInit, scheduleInitReposts, usePluginFrameThemeSync } from "../app/p
 import { api, apiUrl } from "../lib/api";
 import { onTopic } from "../lib/events";
 import {
+  ARTIFACT_REF_COMPONENT,
   artifactRefFromProps,
   openArtifactRef,
   refName,
@@ -32,6 +33,7 @@ import {
   clampHeight,
   createFrameRegistry,
   createLatestVersionRegistry,
+  createLiveRefRegistry,
   MAX_LIVE_FRAMES,
   MIN_FRAME_HEIGHT,
   useLazyMount,
@@ -121,18 +123,28 @@ export type InlineFrameHost = {
   announceVersion(scope: string, id: string, version: number): () => void;
   /** The newest version announced for (scope, id), or 0. */
   latestVersion(scope: string, id: string): number;
-  /** Subscribe to live-set AND newest-version changes; returns an unsubscribe. */
+  /** Mark (`scope` chat, artifact `id`, `version`) as the inline ref the LIVE turn just produced
+   *  there (S22, #4147): its host mounts the frame at once — on screen or not — so it loads and
+   *  reports a render verdict during the turn. One mark per chat; a newer one replaces it. */
+  markLiveRef(scope: string, id: string, version: number): void;
+  /** Is (scope, id, version) the live turn's pending eager frame? */
+  isLiveRef(scope: string, id: string, version: number): boolean;
+  /** Clear that mark once its frame mounted, so a later remount lazy-mounts like history. */
+  consumeLiveRef(scope: string, id: string, version: number): void;
+  /** Subscribe to live-set, newest-version AND live-ref changes; returns an unsubscribe. */
   subscribe(listener: () => void): () => void;
 };
 
 export function createInlineFrameHost(cap: number = MAX_LIVE_FRAMES): InlineFrameHost {
   const reg = createFrameRegistry(cap);
   const versions = createLatestVersionRegistry();
+  const liveRefs = createLiveRefRegistry();
   const listeners = new Set<() => void>();
   const emit = () => {
     for (const fn of listeners) fn();
   };
   versions.subscribe(emit);
+  liveRefs.subscribe(emit);
   return {
     register(id) {
       reg.register(id);
@@ -154,6 +166,9 @@ export function createInlineFrameHost(cap: number = MAX_LIVE_FRAMES): InlineFram
     liveCount: () => reg.size(),
     announceVersion: (scope, id, version) => versions.announce(scope, id, version),
     latestVersion: (scope, id) => versions.latest(scope, id),
+    markLiveRef: (scope, id, version) => liveRefs.mark(scope, frameKey({ id, version })),
+    isLiveRef: (scope, id, version) => liveRefs.isMarked(scope, frameKey({ id, version })),
+    consumeLiveRef: (scope, id, version) => liveRefs.consume(scope, frameKey({ id, version })),
     subscribe(listener) {
       listeners.add(listener);
       return () => {
@@ -168,6 +183,25 @@ export function createInlineFrameHost(cap: number = MAX_LIVE_FRAMES): InlineFram
 // own via the context Provider.
 const sharedInlineFrameHost = createInlineFrameHost();
 export const InlineFrameHostContext = createContext<InlineFrameHost>(sharedInlineFrameHost);
+
+/** The live-stream hook for INLINE artifact refs (ADR 0118 / S22, #4147), registered beside
+ *  onLiveArtifactRef through the component registry's `onLive` — which fires only for a
+ *  component arriving on the LIVE turn stream, never for history hydration, reattach or replay.
+ *  It marks the ref on the host so its frame mounts eagerly even when the chat isn't on screen
+ *  (background window, hidden chat tab, scrolled away): the frame loads, reports its render
+ *  verdict, and the agent's check_artifact can confirm the artifact works within the turn.
+ *  `sessionId` is the chat the turn belongs to — the same id the transcript's
+ *  ArtifactChatSendContext scopes its inline refs by. Takes the host so tests can scope one. */
+export function onLiveInlineArtifactRef(
+  spec: { component: string; props: Record<string, unknown> },
+  ctx: { sessionId?: string },
+  host: InlineFrameHost = sharedInlineFrameHost,
+): void {
+  if (spec.component !== ARTIFACT_REF_COMPONENT) return;
+  const ref = artifactRefFromProps(spec.props);
+  if (!ref || !ref.inline) return;
+  host.markLiveRef(ctx.sessionId ?? "", ref.id, ref.version);
+}
 
 // ── send-to-chat / openLink host bridge (ADR 0118 D4 / S10b) ────────────────────────────────
 
@@ -233,7 +267,17 @@ function InlineArtifactHost({
   // fresh ref per version, and keying by id alone would collapse the versions into one.
   const key = frameKey(artifact);
   const src = useMemo(() => embedSrc(artifact), [artifact.id, artifact.version]);
-  const { ref: slotRef, mounted } = useLazyMount<HTMLDivElement>();
+  // The LIVE turn's newest inline ref mounts its frame at once, wherever it is (S22, #4147): a
+  // lazy frame off screen never loads, so no render verdict would reach check_artifact during
+  // the turn. Only the live-stream hook marks a ref, so history replay stays lazy. The eager
+  // frame registers like any other — it counts toward the cap and evicts least-recently-seen.
+  const scope = chat?.sessionId ?? "";
+  const eager = useSyncExternalStore(host.subscribe, () => host.isLiveRef(scope, artifact.id, artifact.version));
+  const { ref: slotRef, mounted } = useLazyMount<HTMLDivElement>(undefined, eager);
+  // Mounted → the mark has done its job; clear it so a later remount lazy-mounts like history.
+  useEffect(() => {
+    if (mounted && eager) host.consumeLiveRef(scope, artifact.id, artifact.version);
+  }, [mounted, eager, host, scope, artifact.id, artifact.version]);
   // Whether THIS host currently holds its one live-slot claim on the registry (taken on mount,
   // dropped on unmount). An eviction drops our live slot but NOT this claim — inlineFrames
   // reference-counts holders — so this ref lets `resume` re-register without taking a second
