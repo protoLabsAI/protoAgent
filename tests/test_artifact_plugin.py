@@ -1032,7 +1032,7 @@ def test_live_theme_repush_is_wired(monkeypatch, tmp_path):
     assert "st.setProperty(k,String(m.tokens[k]))" in html
     # shell side: observe the kit re-theme + re-push after a fresh srcdoc load.
     assert "new MutationObserver(pushTheme).observe(document.documentElement" in html
-    assert '$frame.addEventListener("load", pushTheme)' in html
+    assert 'frameNav.onLoad(pushTheme)' in html  # follows a replaced frame element (#4076)
 
 
 # ── file artifacts (ADR 0092 D2): save_file_artifact + sidecar blobs + blob route ─

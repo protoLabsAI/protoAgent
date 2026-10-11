@@ -507,5 +507,5 @@ def test_shell_select_is_embedder_only_and_versioned_by_lifetime_number(monkeypa
     assert "idx=want-(vtot-a.versions.length)-1" in js
     assert "selVer=Math.max(0,idx); followNewest=false;" in js
     # A request that can't resolve after a FRESH poll (deleted/evicted) is dropped.
-    assert "if(!a){ if(fresh) pendingSel=null; return; }" in js
+    assert "if(!a){ if(fresh) pendingSel=null; return false; }" in js
     assert '" of "+vtot' in js
