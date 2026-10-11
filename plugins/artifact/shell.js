@@ -1388,6 +1388,35 @@
       $estat=document.getElementById("estat"), $dlstat=document.getElementById("dlstat");
   var editing=false;
 
+  // Every srcdoc swap of the artifact frame goes through ONE navigator. Chrome drops a srcdoc
+  // assigned while the frame's previous srcdoc navigation is still committing: the frame keeps the
+  // FIRST document (or, when both are lost, stays on its blank initial page) while the attribute
+  // says the second. A freshly mounted panel hits that window every time a chip's "Open in panel"
+  // re-targets it: boot renders the remembered selection, and the deep-link renders the asked-for
+  // artifact ~2ms later. The panel then showed a stale or black frame under the right picker label
+  // until a reload (#4076). So a swap requested mid-navigation waits for that navigation's load
+  // and then assigns only the NEWEST doc; a load that never comes is covered by a timer.
+  var FRAME_NAV_MAX_MS = 3000;
+  function frameNavigator(frame, later, cancel){
+    var busy=false, queued=null, timer=0;
+    function settle(){
+      if(!busy) return;
+      busy=false; cancel(timer);
+      if(queued!==null){ var d=queued; queued=null; assign(d); }
+    }
+    function assign(doc){
+      busy=true; frame.srcdoc=doc;
+      cancel(timer); timer=later(settle, FRAME_NAV_MAX_MS);
+    }
+    frame.addEventListener("load", settle);
+    return {
+      set: function(doc){ if(busy) queued=doc; else assign(doc); },
+      // Drop a queued swap (the frame is being blanked / hidden), so it can't land afterwards.
+      clear: function(){ queued=null; }
+    };
+  }
+  var frameNav = frameNavigator($frame, function(fn, ms){ return setTimeout(fn, ms); }, function(t){ clearTimeout(t); });
+
   // Embed placement (ADR 0118 D2): /plugins/artifact/view?embed=<id>&v=<version> renders ONE
   // version with no panel chrome. EMBED is {id, ver} (ver = the LIFETIME version number the
   // artifact-ref chip carries; 0/absent = latest) or null for the normal panel. Parsed off the
@@ -1429,7 +1458,7 @@
   function render(){
     $bar.style.display = arts.length ? "flex" : "none";
     var a=selArt();
-    if(!a){ $empty.style.display="flex"; $frame.style.display="none"; lastRendered=""; return; }
+    if(!a){ frameNav.clear(); $empty.style.display="flex"; $frame.style.display="none"; lastRendered=""; return; }
     var vi=verIdx(a), v=a.versions[vi];
     // LIFETIME numbers (#3617) — the ones the chat's artifact-ref chips carry. Past the
     // max_versions cap the oldest versions are trimmed, so a position would drift from the
@@ -1452,7 +1481,7 @@
       // A deck's / PDF's frame asks for its bytes once it boots (pptxNeed) — remember which version it is.
       pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)||docxOk(v))
         ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"} : null);
-      $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks); $frame.style.display="block";
+      frameNav.set(a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks)); $frame.style.display="block";
       renderLinks(); }
   }
 
@@ -2039,7 +2068,7 @@
   function pptxFallback(ctx, note){
     if(pptxCtx!==ctx) return;  // the panel moved on to another version
     pptxCtx=null; clearTimeout(pptxWatch);
-    $frame.srcdoc=fileCard(ctx.v, note);
+    frameNav.set(fileCard(ctx.v, note));
   }
   // One byte feed serves every in-frame renderer; each kind brings its own caps.
   function feedCaps(kind){ return kind==="pdf" ? PDF_CAPS : kind==="docx" ? DOCX_CAPS : PPTX_CAPS; }
@@ -2209,10 +2238,13 @@
   // made. Applied after every poll until it resolves; an id still absent after a fresh poll
   // was deleted/evicted, so the request is dropped and the panel keeps what it showed.
   var pendingSel=null;
-  function applyPendingSel(fresh){
-    if(!pendingSel) return;
+  // Resolve the pending deep-link into the selection state; true when it resolved. Kept apart from
+  // the render so a fresh poll can fold it in BEFORE its one render — the frame never shows the
+  // remembered selection first and is never re-targeted mid-load (see frameNavigator).
+  function takePendingSel(fresh){
+    if(!pendingSel) return false;
     var a=null; for(var i=0;i<arts.length;i++) if(arts[i].id===pendingSel.id){ a=arts[i]; break; }
-    if(!a){ if(fresh) pendingSel=null; return; }
+    if(!a){ if(fresh) pendingSel=null; return false; }
     var want=pendingSel.ver; pendingSel=null;
     var vtot=total(a), idx=want-(vtot-a.versions.length)-1;
     selId=a.id;
@@ -2223,8 +2255,10 @@
     if(idx>=a.versions.length-1){ selVer=null; followNewest=(a.id===(curId||(arts[0]&&arts[0].id))); }
     else { selVer=Math.max(0,idx); followNewest=false; }
     if(editing) exitEdit();
-    saveSel(); rebuildArtSelect(); render();
+    saveSel();
+    return true;
   }
+  function applyPendingSel(fresh){ if(takePendingSel(fresh)){ rebuildArtSelect(); render(); } }
   window.addEventListener("message", function(e){
     var m=e.data;
     if(!m || m.type!=="protoArtifact:select" || !fromEmbedder(e) || EMBED) return;  // embed shows a fixed version
@@ -2276,9 +2310,9 @@
       else if (selId && !arts.some(function(a){ return a.id===selId; })) {
         followNewest = true; selId = curId || (arts[0] && arts[0].id) || null; selVer = null; saveSel();
       }
+      takePendingSel(true);  // a chip's deep-link (#3617) — after the follow rules, so it wins
       rebuildArtSelect(); render();
       pollOk();
-      applyPendingSel(true);  // a chip's deep-link (#3617) — after the follow rules, so it wins
     } catch (e) { pollFailed(""); /* network-level — no HTTP status to name */ }
   }
   function schedulePoll(){
@@ -2309,7 +2343,7 @@
   }
   function showUnavail(){
     var el=document.getElementById("unavail"); if(el) el.style.display="flex";
-    if($frame){ $frame.style.display="none"; $frame.removeAttribute("srcdoc"); }
+    if($frame){ frameNav.clear(); $frame.style.display="none"; $frame.removeAttribute("srcdoc"); }
     lastRendered=""; embedPostParent({type:"protoArtifact:height", height:EMBED_MIN_H});
   }
   function hideUnavail(){ var el=document.getElementById("unavail"); if(el) el.style.display="none"; }
@@ -2372,7 +2406,7 @@
       // SAME builder as the panel; the embed-only tail (height reporter + sizing CSS) is appended
       // AFTER it, so the frame's own doc — its CSP, vendored libs and SRI — is byte-identical.
       var doc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks);
-      $frame.srcdoc = doc + embedSuffix(doc, embedFill(a, v)); $frame.style.display="block";
+      frameNav.set(doc + embedSuffix(doc, embedFill(a, v))); $frame.style.display="block";
     }
     return true;
   }
