@@ -301,6 +301,55 @@ def _decode_value_delta(s: str, i: int) -> tuple[str, int, bool]:
     return "".join(out), i, False
 
 
+# Sibling-arg hints (ADR 0118 D3): the short top-level STRING args a model writes BEFORE the
+# streamed one (e.g. show_artifact's ``kind``/``placement``/``title`` ahead of ``code``) ride
+# each tool_args frame as ``hints`` — so the console can tell, from the first slice, whether
+# the call can render inline at all (a markdown/panel artifact never shows an inline card).
+# Bounded: only ALLOWLISTED keys (the ones the console reads — ``WorkBlock.inlineArtifactPreview``
+# uses ``kind``/``placement``/``title``), so a model-written key name of any size is never echoed;
+# only complete string values, each capped short; at most a few leading keys scanned. Sent only
+# when they CHANGE (the console keeps the last hints per call — ``toolArgsBuffer.ts``), not on
+# every frame.
+_TOOL_ARGS_HINT_KEYS = frozenset({"kind", "placement", "title"})
+_TOOL_ARGS_HINT_MAX_KEYS = 8
+_TOOL_ARGS_HINT_MAX_CHARS = 200
+
+
+def _leading_string_args(s: str, stop_key: str) -> dict[str, str]:
+    """The complete top-level string values of the allowlisted hint keys that precede
+    ``stop_key`` in the (still streaming) object ``s``. Other keys, non-string and over-long
+    values are skipped; stops at ``stop_key``, at the first incomplete value, or after
+    scanning the key cap."""
+    out: dict[str, str] = {}
+    i = _skip_ws(s, 0)
+    if i >= len(s) or s[i] != "{":
+        return out
+    i = _skip_ws(s, i + 1)
+    n = len(s)
+    scanned = 0
+    while i < n and s[i] == '"' and scanned < _TOOL_ARGS_HINT_MAX_KEYS:
+        scanned += 1
+        name, j = _read_json_string(s, i)
+        if name is None or name == stop_key:
+            break
+        j = _skip_ws(s, j)
+        if j >= n or s[j] != ":":
+            break
+        j = _skip_ws(s, j + 1)
+        k = _skip_json_value(s, j)
+        if k is None:
+            break
+        if s[j] == '"':
+            value, _ = _read_json_string(s, j)
+            if name in _TOOL_ARGS_HINT_KEYS and isinstance(value, str) and len(value) <= _TOOL_ARGS_HINT_MAX_CHARS:
+                out[name] = value
+        k = _skip_ws(s, k)
+        if k >= n or s[k] != ",":
+            break
+        i = _skip_ws(s, k + 1)
+    return out
+
+
 @dataclasses.dataclass
 class _ArgStream:
     """Incremental extraction of one tool call's declared string arg (ADR 0118 D3)."""
@@ -314,6 +363,8 @@ class _ArgStream:
     last_flush: float = 0.0  # monotonic of the last flush (0.0 ⇒ the first chunk flushes now)
     done: bool = False  # the value's closing quote was seen
     dead: bool = False  # not-a-string, overflowed, or already finalized ⇒ no more frames
+    hints: dict[str, str] = dataclasses.field(default_factory=dict)  # sibling args written first
+    hints_sent: dict[str, str] | None = None  # the hints last put on a frame (resend only on change)
 
     def feed(self, fragment: str) -> None:
         """Append raw arg JSON and decode as much of the value as is now unambiguous."""
@@ -329,6 +380,8 @@ class _ArgStream:
                 return
             self.content_start = located
             self.pos = located
+            # Every key ahead of the streamed arg is complete by now — read them once.
+            self.hints = _leading_string_args(self.raw, self.arg)
         delta, self.pos, self.done = _decode_value_delta(self.raw, self.pos)
         if delta:
             self.pending += delta
@@ -387,7 +440,11 @@ def _arg_stream_frames(scanner_id: str, stream: _ArgStream, *, force: bool):
     stream.last_flush = time.monotonic()
     if final:
         stream.dead = True  # the terminal frame is the last one
-    yield ("tool_args", {"id": scanner_id, "arg": stream.arg, "offset": offset, "chunk": chunk, "done": final})
+    frame = {"id": scanner_id, "arg": stream.arg, "offset": offset, "chunk": chunk, "done": final}
+    if stream.hints and stream.hints != stream.hints_sent:
+        frame["hints"] = dict(stream.hints)
+        stream.hints_sent = dict(stream.hints)
+    yield ("tool_args", frame)
 
 
 def _feed_arg_streams(st: _TurnStreamState, tccs) -> _Frames:

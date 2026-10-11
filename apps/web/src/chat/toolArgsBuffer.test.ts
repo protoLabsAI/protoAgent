@@ -211,3 +211,20 @@ describe("live-only — never rebuilt on hydration/reattach (r2)", () => {
     expect(tracker.size).toBe(0);
   });
 });
+
+describe("tool-args hints — the sibling args written before the streamed one (#4076)", () => {
+  it("decodes string hints off the DataPart and keeps them on the buffer", () => {
+    const evt = toolArgsFromParts([
+      {
+        data: { id: "tc1", arg: "code", offset: 0, chunk: "# hi", done: false, hints: { kind: "markdown", n: 3 } },
+        metadata: { mimeType: TOOL_ARGS_MIME },
+      },
+    ] as never);
+    expect(evt?.hints).toEqual({ kind: "markdown" }); // non-string values dropped
+    const buffers = appendToolArgs(emptyToolArgs(), evt!);
+    expect(toToolArgsBuffer(buffers, "tc1")?.hints).toEqual({ kind: "markdown" });
+    // A later frame without hints keeps the ones already known.
+    const next = appendToolArgs(buffers, { id: "tc1", arg: "code", offset: 4, chunk: "!", done: true });
+    expect(toToolArgsBuffer(next, "tc1")).toMatchObject({ text: "# hi!", done: true, hints: { kind: "markdown" } });
+  });
+});

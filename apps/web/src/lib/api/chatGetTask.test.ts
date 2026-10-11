@@ -40,6 +40,13 @@ describe("GetTask result shapes (#3957)", () => {
     expect(await api.getTask("task-1")).toMatchObject({ state: "completed", text: "the answer" });
   });
 
+  it("surfaces the status timestamp as settledAt — the instant a reload shows (#4154)", async () => {
+    serveGetTask({ ...TASK, status: { state: "TASK_STATE_COMPLETED", timestamp: "2026-10-11T09:03:21.500Z" } });
+    expect(await api.getTask("task-1")).toMatchObject({ settledAt: Date.parse("2026-10-11T09:03:21.500Z") });
+    serveGetTask(TASK);
+    expect(await api.getTask("task-1")).not.toHaveProperty("settledAt");
+  });
+
   it("reads a {task} wrapper", async () => {
     serveGetTask({ task: TASK });
     expect(await api.getTask("task-1")).toMatchObject({ state: "TASK_STATE_COMPLETED", text: "the answer" });

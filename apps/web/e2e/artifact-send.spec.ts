@@ -102,6 +102,13 @@ async function openInline(page: Page) {
   await expect(sendButton(page)).toBeVisible();
 }
 
+/** Activate the inline frame the way an operator does: a press on it (ADR 0118 / #4154 — an
+ *  inactive frame sits under a click-to-activate shield). Then clicks inside it land. */
+async function activateFrame(page: Page) {
+  await page.getByTestId("artifact-ref-inline").getByTestId("frame-guard-shield").click();
+  await expect(page.getByTestId("artifact-ref-inline").getByTestId("frame-guard-shield")).toHaveCount(0);
+}
+
 /** The model's send button, inside the embed's nested artifact frame. */
 function sendButton(page: Page) {
   return page.getByTestId("artifact-inline-frame").contentFrame().frameLocator("#frame").locator("#send-btn");
@@ -116,6 +123,7 @@ test("a send button shows the host confirm chip; clicking Send posts a labelled 
   await withInlineArtifact(page);
   await openInline(page);
 
+  await activateFrame(page);
   await sendButton(page).click();
 
   // The frame only PROPOSED: a chip in console DOM shows exactly what would be sent, and nothing
@@ -144,6 +152,7 @@ test("Dismiss rejects the frame's promise and no turn starts", async ({ page }) 
   await withInlineArtifact(page);
   await openInline(page);
 
+  await activateFrame(page);
   await sendButton(page).click();
   await page.getByTestId("artifact-send-confirm-dismiss").click();
 
@@ -154,7 +163,25 @@ test("Dismiss rejects the frame's promise and no turn starts", async ({ page }) 
   await expect(page.locator(".pl-message--user")).toHaveCount(1);
 });
 
-test("a self-focusing, polling artifact never posts on its own — even after console clicks (#4137)", async ({ page }) => {
+test("a self-focusing artifact is quarantined; the composer keeps focus and every key typed (#4154)", async ({ page }) => {
+  await withInlineArtifact(page, AUTOSEND_CODE);
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+  await composer.fill("ARTIFACTREF INLINE please");
+  await composer.press("Enter");
+  // The frame focuses itself on load with no operator gesture: focus is handed straight back
+  // and the frame is replaced by the quarantine notice — it never got to propose a send.
+  const notice = page.getByTestId("artifact-ref-inline").getByTestId("frame-quarantine");
+  await expect(notice).toContainText("This artifact tried to take keyboard focus.");
+  await expect(page.getByTestId("artifact-inline-frame")).toHaveCount(0);
+  await expect(composer).toBeFocused();
+  await page.keyboard.type("still mine");
+  await expect(composer).toHaveValue("still mine");
+  await expect(page.getByTestId("artifact-send-confirm")).toHaveCount(0);
+});
+
+test("a self-focusing, polling artifact the operator ran anyway never posts on its own (#4137)", async ({ page }) => {
   await withInlineArtifact(page, AUTOSEND_CODE);
   await page.goto("/app/", { waitUntil: "load" });
   const composer = page.getByPlaceholder(/Message protoAgent/i);
@@ -163,11 +190,18 @@ test("a self-focusing, polling artifact never posts on its own — even after co
   await composer.press("Enter");
   await expect(page.getByTestId("artifact-ref-inline")).toBeVisible();
   await expect(page.locator(".pl-message--assistant .spin")).toHaveCount(0);
-  // Give the user activation every chance: click console chrome, then let the artifact poll.
-  await page.getByTestId("artifact-ref-inline").locator(".artifact-ref-inline__head").click();
+  // Quarantined on its first self-focus; "Run it" remounts it ACTIVE, so its focus() now sticks
+  // and it polls send() freely — the send gate is what stands between it and the chat.
+  await page.getByTestId("frame-quarantine-run").click();
+  await expect(page.getByTestId("artifact-inline-frame")).toHaveCount(1);
   await page.waitForTimeout(2_500);
   // It only ever proposes: one chip, no turn.
   await expect(page.getByTestId("artifact-send-confirm")).toHaveCount(1);
+  await expect(userTurns(page)).toHaveCount(0);
+  // A console click puts focus back on the page, so the frame goes inactive — and its next
+  // self-focus quarantines it again. Still no turn.
+  await page.getByTestId("artifact-ref-inline").locator(".artifact-ref-inline__head").click();
+  await expect(page.getByTestId("artifact-ref-inline").getByTestId("frame-quarantine")).toBeVisible();
   await expect(userTurns(page)).toHaveCount(0);
   await expect(page.locator(".pl-message--user")).toHaveCount(1);
 });
@@ -176,6 +210,7 @@ test("'Always allow' skips the chip for the next send from the same artifact", a
   await withInlineArtifact(page);
   await openInline(page);
 
+  await activateFrame(page);
   await sendButton(page).click();
   await page.getByTestId("artifact-send-confirm-trust").check();
   await page.getByTestId("artifact-send-confirm-ok").click();
@@ -187,6 +222,8 @@ test("'Always allow' skips the chip for the next send from the same artifact", a
 
   // Trusted now: the next send goes straight through (past the 2 s rate window), no chip.
   await page.waitForTimeout(2_100);
+  // Clicking the confirm chip put focus back on the console, so the frame is inactive again.
+  await activateFrame(page);
   await sendButton(page).click();
   await expect(userTurns(page)).toHaveCount(2);
   await expect(page.getByTestId("artifact-send-confirm")).toHaveCount(0);

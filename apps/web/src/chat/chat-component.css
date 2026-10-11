@@ -251,6 +251,64 @@
 .artifact-ref-inline__resume:hover {
   color: var(--pl-color-fg);
 }
+/* Frame focus guard (ADR 0118, #4076; frameFocusGuard.ts). An inactive hosted frame keeps
+   running under a transparent click-catcher; the first press activates it. A frame that took
+   keyboard focus on its own is replaced by the quarantine notice. */
+.frame-guard {
+  position: relative;
+}
+.frame-guard__shield {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+}
+.frame-guard__hint {
+  position: absolute;
+  top: var(--pl-space-1);
+  right: var(--pl-space-1);
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: var(--pl-color-bg-raised);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.frame-guard__shield:hover .frame-guard__hint {
+  opacity: 1;
+}
+.frame-guard__quarantine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-2);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-inset);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
+.frame-guard__run {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.frame-guard__run:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.frame-guard__run:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
+}
 /* The host's send-to-chat verdict (ADR 0118 D4): the needs-confirm prompt / an in-place
    rejection ("the agent is busy", a refused link). Sits under the frame so the operator sees
    where their click landed. */

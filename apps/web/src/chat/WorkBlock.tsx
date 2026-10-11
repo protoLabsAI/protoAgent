@@ -28,6 +28,11 @@ function sniffArtifactKind(code: string): string {
   return "";
 }
 
+/** The artifact kinds that can EVER render inline — mirrors the artifact plugin's
+ *  `_INLINE_KINDS` (plugins/artifact/_tools.py). Every other kind (markdown, decks, files, …)
+ *  always opens in the panel, so it never gets the inline streaming card (#4076). */
+const INLINE_ARTIFACT_KINDS = new Set(["html", "svg", "mermaid", "react", "vega-lite"]);
+
 /** A streaming `show_artifact` call whose declared `code` is arriving live (S3): the one tool call
  *  that gets a LIVE PREVIEW in the spotlight instead of the plain running card (ADR 0118 D3, S8c).
  *  Returns the preview's inputs, or null for a non-artifact tool / one with no buffered args yet /
@@ -54,11 +59,24 @@ export function inlineArtifactPreview(
       args = {}; // still mid-stream / not valid JSON yet — fall back to the buffer
     }
   }
-  // Drop the preview only once placement is KNOWN and not inline; an absent placement (the whole
-  // stream, until model end) keeps the preview up so the operator watches the artifact being written.
-  if (typeof args.placement === "string" && args.placement !== "inline") return null;
-  const kind = (typeof args.kind === "string" && args.kind) || sniffArtifactKind(buffer.text);
-  const title = typeof args.title === "string" ? args.title : "";
+  // While `input` is still empty, the server's decoded `hints` carry the short args the model
+  // wrote BEFORE `code` — `kind` first, by the tool's signature — so the kind and placement are
+  // usually known from the very first slice (#4076). The full args win once they land.
+  const hints = buffer.hints ?? {};
+  // Normalised exactly as the plugin does (`plugins/artifact/_tools.py`: `.strip().lower()`, and
+  // an empty placement means the inline default) — so "HTML" / "Inline" / "" read the same here.
+  const rawPlacement = typeof args.placement === "string" ? args.placement : hints.placement;
+  const placement = typeof rawPlacement === "string" ? rawPlacement.trim().toLowerCase() : undefined;
+  const rawKind = (typeof args.kind === "string" && args.kind) || hints.kind || "";
+  const declaredKind = rawKind.trim().toLowerCase();
+  // Drop the preview once placement is KNOWN and not inline; an absent (or empty) placement keeps
+  // the preview up so the operator watches the artifact being written.
+  if (placement && placement !== "inline") return null;
+  // A kind that can never render inline (markdown, a deck, a file…) opens in the panel — never
+  // flash the inline "Preparing…" card for it (#4076).
+  if (declaredKind && !INLINE_ARTIFACT_KINDS.has(declaredKind)) return null;
+  const kind = declaredKind || sniffArtifactKind(buffer.text);
+  const title = typeof args.title === "string" ? args.title : (hints.title ?? "");
   return { buffer, kind, title };
 }
 

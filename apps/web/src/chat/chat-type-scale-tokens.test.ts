@@ -82,9 +82,11 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     // label (2xs) → 15.
     // Then two more from the frame-component host's bridge notice (ADR 0118 S12b, #4088): the
     // notice (xs) and its button (2xs) → 17.
+    // Then three more from the frame focus guard (ADR 0118, #4154): the click-to-activate hint
+    // (2xs), the quarantine notice (xs) and its Run-it button (2xs) → 20.
     expect(tokenCount(chatCss)).toBe(34);
     expect(tokenCount(promptviewerCss)).toBe(12);
-    expect(tokenCount(chatComponentCss)).toBe(17);
+    expect(tokenCount(chatComponentCss)).toBe(20);
     expect(tokenCount(hitlCss)).toBe(7);
   });
 

@@ -35,7 +35,9 @@ from langchain_core.runnables import RunnableLambda
 
 from plugins.delegates.adapters import ADAPTERS, _peer_usage_row
 from plugins.delegates.registry import DelegateRegistry
-from tests.test_a2a_handler import _build_app, _poll_terminal, _send_msg
+from tests._a2a_app import build_app as _build_app
+from tests._a2a_app import poll_terminal as _poll_terminal
+from tests._a2a_app import send_msg as _send_msg
 from tests.test_telemetry import _run_turn_outcome
 
 

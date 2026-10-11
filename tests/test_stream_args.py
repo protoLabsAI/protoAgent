@@ -162,6 +162,37 @@ async def test_stream_args_tool_yields_ordered_frames_concatenating_to_the_value
 
 
 @pytest.mark.asyncio
+async def test_tool_args_frames_carry_the_sibling_string_args_written_first(env):
+    # `kind` precedes `code`, so every frame says it is an html artifact — the console can
+    # tell from the first slice whether the call can render inline (#4076).
+    env.install(_artifact_script(env.clock), tools=[_tool("show_artifact", stream_args="code")])
+    targs = [p for k, p in [f async for f in _stream()] if k == "tool_args"]
+    assert len(targs) >= 2
+    # Sent once, on the first frame; later frames don't repeat unchanged hints (#4154 review).
+    assert targs[0].get("hints") == {"kind": "html"}
+    assert all("hints" not in p for p in targs[1:])
+
+
+def test_leading_string_args_reads_only_complete_strings_before_the_streamed_arg():
+    lead = turn_stream._leading_string_args
+    raw = '{"kind": "markdown", "n": 3, "placement": "panel", "title": "' + "x" * 300 + '", "code": "# hi'
+    assert lead(raw, "code") == {"kind": "markdown", "placement": "panel"}
+    # Keys AFTER the streamed arg are never read; an incomplete value stops the scan.
+    assert lead('{"code": "a", "kind": "html"}', "code") == {}
+    assert lead('{"kind": "mark', "code") == {}
+
+
+def test_leading_string_args_never_echoes_an_unlisted_key():
+    # #4154 review: hint keys are ALLOWLISTED — a 100 KB model-written key name is never echoed.
+    lead = turn_stream._leading_string_args
+    big = "k" * 100_000
+    raw = '{"' + big + '": "v", "kind": "html", "extra": "x", "title": "T", "code": "<p'
+    out = lead(raw, "code")
+    assert out == {"kind": "html", "title": "T"}
+    assert all(len(k) < 100 for k in out)
+
+
+@pytest.mark.asyncio
 async def test_tool_without_stream_args_metadata_yields_no_tool_args_frames(env):
     # Same stream, but the tool declares no stream_args (empty bound_tools).
     env.install(_artifact_script(env.clock), tools=[])
@@ -238,13 +269,13 @@ async def test_tool_args_frames_ride_working_dataframes_never_the_terminal_artif
     """Through the real a2a-sdk: a ``tool_args`` frame becomes a tool-args-v1 DataPart on a
     WORKING status message (the console's preview channel), and never rides the terminal
     answer artifact — so a plain re-fetch sees only the finished answer."""
-    import asyncio
     import json
 
     import httpx
 
     from a2a_impl.executor import TOOL_ARGS_MIME, set_progress_hook, set_terminal_hook
-    from tests.test_a2a_handler import A2A_HEADERS, _HANDLERS, _build_app
+    from tests._a2a_app import A2A_HEADERS, drain_handlers
+    from tests._a2a_app import build_app as _build_app
 
     monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     set_terminal_hook(None)
@@ -283,12 +314,7 @@ async def test_tool_args_frames_ride_working_dataframes_never_the_terminal_artif
                         if (part.get("metadata") or {}).get("mimeType") == TOOL_ARGS_MIME:
                             artifact_previews.append(part)
     finally:
-        for handler in _HANDLERS:
-            reg = getattr(handler, "_active_task_registry", None)
-            tasks = set(getattr(reg, "_cleanup_tasks", ()) or ())
-            if tasks:
-                await asyncio.wait(tasks, timeout=5)
-        _HANDLERS.clear()
+        await drain_handlers()
         set_terminal_hook(None)
         set_progress_hook(None)
 

@@ -26,7 +26,9 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from tests.test_a2a_handler import A2A_HEADERS, _build_app, _poll_terminal
+from tests._a2a_app import A2A_HEADERS
+from tests._a2a_app import build_app as _build_app
+from tests._a2a_app import poll_terminal as _poll_terminal
 
 
 @pytest.fixture(autouse=True)
@@ -35,17 +37,13 @@ async def _a2a_hygiene(monkeypatch):
     leftover executor hooks, fast producer retirement, and each handler's cleanup
     tasks drained inside this test's loop."""
     from a2a_impl.executor import set_progress_hook, set_terminal_hook
-    from tests import test_a2a_handler as h
+    from tests._a2a_app import drain_handlers
 
     set_terminal_hook(None)
     set_progress_hook(None)
     monkeypatch.setattr("a2a_impl.registry.FLUSH_GRACE_S", 0.02)
     yield
-    for handler in h._HANDLERS:
-        tasks = set(getattr(getattr(handler, "_active_task_registry", None), "_cleanup_tasks", ()) or ())
-        if tasks:
-            await asyncio.wait(tasks, timeout=5)
-    h._HANDLERS.clear()
+    await drain_handlers()
     set_terminal_hook(None)
     set_progress_hook(None)
 

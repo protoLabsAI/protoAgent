@@ -36,6 +36,14 @@ export function applyReasoning(message: ChatMessage, delta: string): ChatMessage
   };
 }
 
+/** A card's elapsed time at `now`, or undefined when it cannot be known: the call never had
+ *  a start stamp, or that stamp is a snapshot REPLAY's clock rather than the call's own
+ *  (#4076) — `now - startedAt` would then show a fake "0ms" (or the time since a reload). */
+export function elapsedSince(call: ToolCall, now: number): number | undefined {
+  if (call.startedAt === undefined || call.startReplayed) return undefined;
+  return now - call.startedAt;
+}
+
 export function applyToolEvent(message: ChatMessage, evt: ToolEvent): ChatMessage {
   const calls = [...(message.toolCalls || [])];
   const idx = calls.findIndex((c) => c.id === evt.id);
@@ -62,6 +70,7 @@ export function applyToolEvent(message: ChatMessage, evt: ToolEvent): ChatMessag
       input: evt.input,
       status: "running",
       startedAt: now,
+      ...(evt.replayed ? { startReplayed: true } : {}),
       parentId: evt.parentId ?? openTask?.id,
     };
     calls.push(card);
@@ -69,15 +78,16 @@ export function applyToolEvent(message: ChatMessage, evt: ToolEvent): ChatMessag
   } else {
     // end — flip the matching card to done/error (or create one if the start
     // frame was missed). A failed end (e.g. a declined run_command) closes the
-    // card as an error (X). Stamp elapsed when we saw the start.
-    const startedAt = idx >= 0 ? calls[idx].startedAt : undefined;
-    const durationMs = startedAt !== undefined ? now - startedAt : undefined;
+    // card as an error (X). The duration is the server's measured one when the frame carries
+    // it; else the client's own start→end, but ONLY when both frames were seen live — a
+    // replayed pair is microseconds apart and would read a fake "0ms" (#4076).
+    const durationMs = evt.durationMs ?? (idx >= 0 && !evt.replayed ? elapsedSince(calls[idx], now) : undefined);
     const endStatus = evt.error ? ("error" as const) : ("done" as const);
     if (idx >= 0) {
       calls[idx] = { ...calls[idx], output: evt.output, outputChars: evt.outputChars, status: endStatus, durationMs, paused: undefined };
     } else {
       // Missed start — treat as a fresh top-level call so it still renders.
-      calls.push({ id: evt.id, name: evt.name, output: evt.output, outputChars: evt.outputChars, status: endStatus });
+      calls.push({ id: evt.id, name: evt.name, output: evt.output, outputChars: evt.outputChars, status: endStatus, durationMs });
       nextParts = addToolRef(message.parts, evt.id);
     }
   }
@@ -114,9 +124,28 @@ export function pauseBubble(m: ChatMessage): ChatMessage {
  *  flight settles as STOPPED, not done. Flipping those to plain done painted a ✓ on a call
  *  that never returned — after a reload, a cancelled `show_artifact` read as a success with
  *  empty args. A card that already settled keeps its own status. */
-export function stopBubble(m: ChatMessage): ChatMessage {
+/** One bubble, settled off the durable task (the stream watchdog's finalize): done or error,
+ *  in-flight cards done with their client-measured duration, and the footer time stamped at the
+ *  task's OWN settle instant (`settledAt`, its status timestamp = the `last_updated` a reload
+ *  shows) — never the watchdog's "now", which runs ≥45s behind the real end (#4154). `now` is
+ *  the fallback for a server that sent no timestamp. */
+export function settleBubbleFromTask(
+  m: ChatMessage,
+  opts: { failed: boolean; settledAt?: number; now: number },
+): ChatMessage {
+  const toolCalls = m.toolCalls?.map((c) =>
+    c.status === "running" ? { ...c, status: "done" as const, durationMs: c.durationMs ?? elapsedSince(c, opts.now) } : c,
+  );
+  return { ...m, status: opts.failed ? "error" : "done", toolCalls, createdAt: opts.settledAt ?? opts.now };
+}
+
+export function stopBubble(m: ChatMessage, opts: { at?: number } = {}): ChatMessage {
   return {
     ...m,
+    // A LIVE stop stamps the footer time at the stop — when the turn ended, the same instant a
+    // reload reads off the durable turn's `last_updated` — instead of keeping the turn's start
+    // time, which made live and reload disagree (#4076). A replayed stop keeps its own.
+    ...(opts.at !== undefined ? { createdAt: opts.at } : {}),
     status: "done",
     paused: undefined,
     stopped: true,
@@ -166,13 +195,15 @@ export function settleStreamEnd(message: ChatMessage, opts: { parked: boolean; n
           ...c,
           status: "done" as const,
           paused: undefined,
-          durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined),
+          durationMs: c.durationMs ?? elapsedSince(c, now),
         }
       : c.paused
         ? { ...c, paused: undefined }
         : c,
   );
-  return { ...message, status: "done", paused: undefined, toolCalls };
+  // The bubble's footer time is when the REPLY landed — the instant a reload reads off the
+  // durable turn's `last_updated` — not when the turn started, so live and reload agree (#4076).
+  return { ...message, status: "done", paused: undefined, toolCalls, createdAt: now };
 }
 
 /** Tracks whether a LIVE stream's turn is parked on the operator (#3956), off the frame

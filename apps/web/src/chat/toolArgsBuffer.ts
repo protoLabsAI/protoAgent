@@ -16,6 +16,9 @@ export type ToolArgsBuffer = {
   text: string;
   /** The final frame for this arg has arrived (its closing quote, or the model call ended). */
   done: boolean;
+  /** The short sibling string args the model wrote before this one (e.g. `kind`, `placement`,
+   *  `title`), when the server sent them (#4076). Latest frame's set wins. */
+  hints?: Record<string, string>;
 };
 
 /** A buffer plus the bookkeeping needed to reassemble out-of-order frames. `pending` holds
@@ -36,7 +39,7 @@ export function emptyToolArgs(): ToolArgsBuffers {
 /** The public view of one tool call's preview, or undefined — with `pending` stripped. */
 export function toToolArgsBuffer(buffers: ToolArgsBuffers, id: string): ToolArgsBuffer | undefined {
   const acc = buffers[id];
-  return acc ? { arg: acc.arg, text: acc.text, done: acc.done } : undefined;
+  return acc ? { arg: acc.arg, text: acc.text, done: acc.done, ...(acc.hints ? { hints: acc.hints } : {}) } : undefined;
 }
 
 /** Number of Unicode code points in `s`. The server measures `offset`/`chunk` length in
@@ -99,6 +102,7 @@ export function appendToolArgs(buffers: ToolArgsBuffers, evt: ToolArgsEvent): To
       text,
       done: (prev?.done ?? false) || evt.done,
       pending,
+      ...(evt.hints || prev?.hints ? { hints: evt.hints ?? prev?.hints } : {}),
     },
   };
 }

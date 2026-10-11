@@ -3,6 +3,8 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { consoleTheme, INIT_REPOST_DELAYS } from "../app/pluginFrameHandshake";
 import { InlineFrameBridgeContext } from "../artifacts/ArtifactRefChip";
 import { BridgeNoticeView, useFrameSendGate } from "../artifacts/SendConfirmChip";
+import { useFrameFocusGuard } from "../artifacts/frameFocusGuard";
+import { FrameActivationShield, FrameQuarantineNotice } from "../artifacts/FrameGuardViews";
 import { createFrameRegistry, useLazyMount, type FrameRegistry } from "../artifacts/inlineFrames";
 import { apiUrl } from "../lib/api";
 
@@ -285,6 +287,11 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     return () => window.removeEventListener("message", onBridge);
   }, [live, id, kind, plugin, chat, bridge, replyToFrame, gate.propose, gate.showRejection]);
 
+  // A self-focusing component must not pull the composer's focus into its frame (#4076): the
+  // frame is click-to-activate (or Tab into it), and one that takes focus on its own is
+  // quarantined — the same guard the inline artifact host uses (frameFocusGuard.ts).
+  const guard = useFrameFocusGuard(frameRef, `component:${plugin ?? ""}:${kind ?? ""}:${id}`, live);
+
   // Clear any pending init re-posts when the frame unmounts / re-points.
   useEffect(() => {
     return () => {
@@ -324,18 +331,23 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
       style={{ height, minHeight: height }}
       data-frame-id={id}
     >
-      {live ? (
-        <iframe
-          ref={frameRef}
-          className="frame-component-host__frame"
-          src={src}
-          title={title ?? "Plugin component"}
-          // allow-scripts ONLY — deliberately NO allow-same-origin (see the trust note above),
-          // so the frame runs on an opaque origin with no access to the console's credentials.
-          sandbox="allow-scripts"
-          onLoad={handleLoad}
-          style={{ width: "100%", height: "100%", border: 0 }}
-        />
+      {live && guard.quarantined ? (
+        <FrameQuarantineNotice what="component" height={height} onRun={guard.run} />
+      ) : live ? (
+        <div className="frame-guard" data-active={guard.active ? "true" : undefined} style={{ height: "100%" }}>
+          <iframe
+            ref={frameRef}
+            className="frame-component-host__frame"
+            src={src}
+            title={title ?? "Plugin component"}
+            // allow-scripts ONLY — deliberately NO allow-same-origin (see the trust note above),
+            // so the frame runs on an opaque origin with no access to the console's credentials.
+            sandbox="allow-scripts"
+            onLoad={handleLoad}
+            style={{ width: "100%", height: "100%", border: 0 }}
+          />
+          <FrameActivationShield guard={guard} />
+        </div>
       ) : mounted ? (
         // Evicted to stay within the six-live-frame cap: a static card at the frame's last
         // measured height, so the transcript layout holds. (Resume interaction is S12b.)
