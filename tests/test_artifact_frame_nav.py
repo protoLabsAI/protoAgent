@@ -122,6 +122,6 @@ def test_a_fresh_poll_resolves_the_deep_link_before_its_render(monkeypatch, tmp_
     poll = _js_function(js, "poll")
     # On a 200 the pending select is folded into the selection first, so the poll renders ONCE —
     # never the remembered artifact followed by a mid-navigation re-target.
-    take, render = poll.index("takePendingSel(true)"), poll.index("render();")
+    take, render = poll.index("takePendingSel(my)"), poll.index("render();")
     assert take < render
     assert poll.count("render();") == 1

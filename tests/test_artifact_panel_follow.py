@@ -127,6 +127,115 @@ def test_head_is_the_newest_panel_artifact_and_a_pinned_selection_survives(monke
     assert out[3] == {"selId": "new", "follow": True, "head": "new"}
 
 
+def _stamped(a: dict) -> dict:
+    """``a`` after the render-status stamp — the write a mounted frame makes after a create."""
+    b = json.loads(json.dumps(a))
+    b["versions"][-1]["render"] = {"ok": True, "error": "", "ts": b["versions"][-1]["ts"] + 1}
+    return b
+
+
+def test_the_f2_sequence_never_moves_the_panel_at_any_store_write(monkeypatch, tmp_path):
+    """The headed-Chrome F2 confirmation, replayed write by write: a panel doc; a same-chat inline
+    svg; another session's (/v1) inline html; each one's render-status stamp. A poll can land after
+    ANY of those writes, and none of them moves the panel off the doc; the next panel doc does."""
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    doc, tile, intr, doc2 = _art("doc", 100), _art("tile", 200, True), _art("intr", 300, True), _art("doc2", 400)
+    writes = [
+        {"arts": [doc], "current": "doc"},
+        {"arts": [_stamped(doc)], "current": "doc"},
+        {"arts": [tile, _stamped(doc)], "current": "tile"},
+        {"arts": [_stamped(tile), _stamped(doc)], "current": "tile"},
+        {"arts": [intr, _stamped(tile), _stamped(doc)], "current": "intr"},
+        {"arts": [_stamped(intr), _stamped(tile), _stamped(doc)], "current": "intr"},
+    ]
+    # Every subsequence a poller could observe (it always sees the first write: the doc opened it).
+    for mask in range(1 << (len(writes) - 1)):
+        seen = [writes[0]] + [w for i, w in enumerate(writes[1:]) if mask >> i & 1]
+        out = _follow(js, [*seen, {"arts": [doc2, *seen[-1]["arts"]], "current": "doc2"}])
+        assert [o["selId"] for o in out[:-1]] == ["doc"] * len(seen), f"polled writes {mask:05b}"
+        assert out[-1]["selId"] == "doc2"
+
+
+def _poll_harness(js: str, script: str) -> dict:
+    """Run the shell's real ``poll`` + deep-link resolution with a hand-driven fetch: each
+    ``kit.apiFetch`` parks in ``Q`` until ``script`` answers it, in whatever order it likes."""
+    fns = "\n".join(
+        _js_function(js, n) for n in ("headOf", "nextSel", "atNewest", "total", "takePendingSel", "applyPendingSel")
+    )
+    return _node(
+        r"""
+var document = {hidden: false}, Q = [];
+var kit = {apiFetch: function () { return new Promise(function (res) { Q.push(res); }); }};
+var lastEtag = "", storeChangedAt = 0, arts = [], curId = null, selId = null, selVer = null;
+var followNewest = true, panelHead = null, editing = false, pendingSel = null, pollSeq = 0, appliedSeq = 0;
+function pollOk() {} function pollFailed() {} function saveHead() {} function saveSel() {} function exitEdit() {}
+function rebuildArtSelect() {} function render() {}
+function A(id, ts) { return {id: id, kind: "markdown", versions: [{code: "x", ts: ts}]}; }
+function ok(store) { return {status: 200, ok: true, headers: {get: function () { return "e" + store.artifacts.length; }},
+  json: function () { return Promise.resolve(store); }}; }
+var NOT_MODIFIED = {status: 304, ok: true, headers: {get: function () { return ""; }}};
+function select(id, ver) { pendingSel = {id: id, ver: ver, after: pollSeq}; applyPendingSel(0); }
+"""
+        + fns
+        + "\nasync "
+        + _js_function(js, "poll")
+        + "\n(async function () {\n"
+        + script
+        + "\nconsole.log(JSON.stringify({selId: selId, follow: followNewest, ids: arts.map(function (a) { return a.id; }),"
+        + " pending: pendingSel && pendingSel.id}));\n})();"
+    )
+
+
+def test_an_older_poll_answering_last_never_rolls_the_panel_back(monkeypatch, tmp_path):
+    """Two polls overlap (a deep-link or a tab coming back kicks one while the timer's is in
+    flight) and the OLDER one's answer lands last: it must not roll the store mirror — and the
+    panel — back to the artifact the newer answer already moved it off."""
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    out = _poll_harness(
+        js,
+        """
+var s0 = {artifacts: [A("doc", 100)], current: "doc"};
+var s1 = {artifacts: [A("doc2", 200), A("doc", 100)], current: "doc2"};
+var p = poll(); Q.shift()(ok(s0)); await p;
+var older = poll(), newer = poll();
+var answerOlder = Q.shift(), answerNewer = Q.shift();
+answerNewer(ok(s1)); await newer;
+answerOlder(ok(s0)); await older;
+""",
+    )
+    assert out["selId"] == "doc2" and out["ids"] == ["doc2", "doc"]
+
+
+def test_a_deep_link_survives_a_poll_that_was_already_in_flight(monkeypatch, tmp_path):
+    """The agent's new panel artifact is announced (``protoArtifact:select``) while a poll sent
+    BEFORE the artifact existed is still in flight. Its answer can't contain the id, and must not
+    drop the request as "deleted": the next poll resolves it — even over a pinned selection."""
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    for stale in ("NOT_MODIFIED", 'ok({artifacts: [A("doc", 100)], current: "doc"})'):
+        out = _poll_harness(
+            js,
+            f"""
+var p = poll(); Q.shift()(ok({{artifacts: [A("doc", 100)], current: "doc"}})); await p;
+followNewest = false;  // the operator pinned the doc
+var inflight = poll();
+select("doc2", 1);
+Q.shift()({stale}); await inflight;
+var next = poll(); Q.shift()(ok({{artifacts: [A("doc2", 200), A("doc", 100)], current: "doc2"}})); await next;
+""",
+        )
+        assert out == {"selId": "doc2", "follow": True, "ids": ["doc2", "doc"], "pending": None}, stale
+    # A request still unresolved after a poll issued AFTER it arrived is dropped (deleted/evicted).
+    out = _poll_harness(
+        js,
+        """
+var p = poll(); Q.shift()(ok({artifacts: [A("doc", 100)], current: "doc"})); await p;
+select("gone", 1);
+var next = poll(); Q.shift()(NOT_MODIFIED); await next;
+""",
+    )
+    assert out["pending"] is None and out["selId"] == "doc"
+
+
 def test_poll_and_picker_use_the_panel_follow_rules(monkeypatch, tmp_path):
     js = _load(monkeypatch, tmp_path)._SHELL_JS
     poll = _js_function(js, "poll")

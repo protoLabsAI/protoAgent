@@ -441,7 +441,7 @@ def test_shell_surfaces_persistent_poll_failures(monkeypatch, tmp_path):
     # empty-state lie — the exact bug this guards against.
     assert "if (!r.ok) { pollFailed(" in js
     # both success shapes reset the streak and remove the strip; 304 short-circuits first.
-    assert "if (r.status === 304) { pollOk(); applyPendingSel(true); return; }" in js
+    assert "if (r.status === 304) { pollOk(); applyPendingSel(my); return; }" in js
     assert "pollFails=0" in js
     # network-level errors (fetch threw — no response) count too; the bare swallow is gone.
     assert 'pollFailed("")' in js
