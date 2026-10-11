@@ -24,8 +24,20 @@ import { isEmptyPlaceholder } from "./roomBubble";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble, stopBubble } from "./turnReducers";
 
+// A date-time with no zone designator: `2026-10-09T23:11:04` / `2026-10-09 23:11:04.123`.
+const ZONELESS_DATE_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
+
+/** Epoch ms for a server timestamp, or NaN. The task store records `last_updated` in UTC;
+ *  older servers sent it with no zone, which `Date.parse` reads as LOCAL time — an operator
+ *  at UTC-7 saw a chat stamped seven hours early (#4145). A zoneless value is UTC. */
+export function parseServerInstant(value: string | null | undefined): number {
+  if (!value) return NaN;
+  const text = value.trim();
+  return Date.parse(ZONELESS_DATE_TIME.test(text) ? `${text.replace(" ", "T")}Z` : text);
+}
+
 function timestamp(value: string | null): number {
-  const parsed = value ? Date.parse(value) : NaN;
+  const parsed = parseServerInstant(value);
   return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
@@ -33,7 +45,7 @@ function timestamp(value: string | null): number {
  *  is shown to the operator as when it was sent, so it is never the hydration-time "now"
  *  `timestamp` falls back to for session ordering. */
 function recordedAt(value: string | null): number | undefined {
-  const parsed = value ? Date.parse(value) : NaN;
+  const parsed = parseServerInstant(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

@@ -187,6 +187,26 @@ def _newest_turn_ranked(task_model, dialect_name: str, where):
     )
 
 
+def _utc_iso(value) -> str | None:
+    """A stored ``last_updated`` as zoned ISO-8601 UTC (``...+00:00``), or ``None`` (#4145).
+
+    The A2A task store writes ``last_updated`` as a NAIVE UTC datetime, and a zoneless
+    ISO string is parsed as LOCAL time by every browser (``Date.parse``), so an operator
+    at UTC-7 saw a chat stamped seven hours early. Naive values are UTC by that contract;
+    an aware one is converted. Every session/turn timestamp on the chat routes goes
+    through here so they all agree."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return value
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 def _status_state(status) -> str | None:
     return ((status or {}).get("state") or None) if isinstance(status, dict) else None
 
@@ -248,7 +268,7 @@ async def _parked_sessions(engine, limit: int) -> list[dict]:
         out.append(
             {
                 "session_id": row.context_id,
-                "last_updated": row.last_updated.isoformat() if row.last_updated else None,
+                "last_updated": _utc_iso(row.last_updated),
                 "turn_count": int(row.turn_count or 0),
                 "last_state": last_state,
             }
@@ -298,7 +318,7 @@ async def session_summary(session_id: str) -> dict | None:
     return {
         **base,
         "turn_count": count,
-        "last_updated": last.isoformat() if last else None,
+        "last_updated": _utc_iso(last),
         "last_state": last_state,
     }
 
@@ -920,7 +940,7 @@ def register_chat_routes(app, ui: str) -> None:
             "sessions": [
                 {
                     "session_id": r.context_id,
-                    "last_updated": r.last_updated.isoformat() if r.last_updated else None,
+                    "last_updated": _utc_iso(r.last_updated),
                     "turn_count": r.turn_count,
                 }
                 for r in rows
@@ -1023,7 +1043,7 @@ def register_chat_routes(app, ui: str) -> None:
             {
                 "task_id": r.id,
                 "state": ((r.status or {}).get("state") or "") if isinstance(r.status, dict) else "",
-                "last_updated": r.last_updated.isoformat() if r.last_updated else None,
+                "last_updated": _utc_iso(r.last_updated),
                 "text": _text(r.artifacts),
                 "status": r.status,
                 "artifacts": r.artifacts or [],
