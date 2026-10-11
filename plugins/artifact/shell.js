@@ -41,15 +41,17 @@
   // ask stays opt-in and unchanged; send is on by default (D4).
   var SHIM = '<script>(function(){var s=0,w={};'
     + 'window.addEventListener("message",function(e){var m=e.data||{};'
-    // Live re-theme (#1872): base() bakes the tokens in as literals at render time,
-    // so a later app-theme switch left the frame in the stale palette. The shell
-    // pushes fresh tokens; update :root + html/body in place (no re-render, so
-    // interactive artifact state survives).
+    // Live re-theme (#1872): the shell pushes fresh tokens on every frame load and app-theme
+    // switch; update the --pl-* custom properties on :root in place (no re-render, so
+    // interactive artifact state survives). ONLY the custom properties: base()'s html/body
+    // colours read them through var(), so an unstyled artifact follows the theme, while the
+    // author's own body/html colours keep winning. Writing INLINE body/html background + color
+    // here (as this once did) beat the author's `body{...}` rule, so every element inheriting
+    // the author's text colour flipped to the console's at handover: a dark card's title and
+    // buttons went near-black on a light console (#4124).
     + 'if(m.type==="protoArtifact:theme"&&m.tokens){var st=document.documentElement.style;'
     + 'for(var k in m.tokens){if(k.indexOf("--pl-")===0)st.setProperty(k,String(m.tokens[k]));}'
-    + 'var bg=m.tokens["--pl-color-bg"],fg=m.tokens["--pl-color-fg"];'
-    + 'if(bg){st.background=bg;if(document.body)document.body.style.background=bg;}'
-    + 'if(fg&&document.body)document.body.style.color=fg;return;}'
+    + 'return;}'
     + 'if(m.type!=="protoArtifact:result")return;'
     + 'var p=w[m.id];if(!p)return;delete w[m.id];m.error?p.reject(new Error(m.error)):p.resolve(m.text);});'
     + 'window.protoArtifact={ask:function(prompt){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej};'
@@ -127,10 +129,13 @@
     var bg=tok("--pl-color-bg","#0a0a0c"), fg=tok("--pl-color-fg","#ededed"),
         accent=tok("--pl-color-accent","#9b87f2"), border=tok("--pl-color-border","rgba(255,255,255,.08)");
     // Carry the live theme's key tokens into the nested frame (plugin-kit.css ships only the
-    // DEFAULT palette); inline bg = no white flash; SHIM = the protoArtifact.ask bridge.
+    // DEFAULT palette); bg in the first style = no white flash; SHIM = the protoArtifact.ask bridge.
+    // html/body read the tokens through var() (literal fallback) so the SHIM's live re-theme
+    // reaches them by updating the tokens alone — never by inline styles that would override the
+    // author's own body colours (#4124). This rule precedes the author's CSS, so theirs wins.
     // __artKind lets ERRBOOT decide how to confirm a clean render (on-load vs react mount).
     return '<style>:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+'}'
-      + 'html,body{margin:0;background:'+bg+';color:'+fg+'}</style>'
+      + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}</style>'
       + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT;
   }
   // Artifact libs are VENDORED + served same-origin (/plugins/artifact/vendor/…), so

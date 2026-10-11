@@ -330,3 +330,49 @@ def test_shell_js_has_no_premature_script_close(monkeypatch, tmp_path):
     assert "</script>" not in _js(art)
     assert "<\\/script>" in _assignment(_js(art), "HEIGHTJS")
     assert "</" not in _assignment(_js(art), "HEIGHTJS").replace("<\\/script>", "")
+
+
+# ── #4124 item 1: the author's colours survive the handover (live re-theme) ─────
+
+
+def test_live_retheme_updates_tokens_only_never_the_authors_body_colours(monkeypatch, tmp_path):
+    """The shell pushes ``protoArtifact:theme`` into every frame on load (and on each app-theme
+    switch). The SHIM used to write the tokens AND inline ``background``/``color`` on
+    ``<html>``/``<body>``; an inline style beats the author's ``body{...}`` rule, so every element
+    inheriting the author's text colour flipped to the console's at handover — a dark card's
+    title, preset buttons and Reset went near-black on a light console (#4124). Now the push sets
+    ONLY the ``--pl-*`` custom properties, and base()'s html/body rule reads them through
+    ``var()`` (ahead of the author's CSS, so theirs wins) — an unstyled artifact still follows
+    the theme live. Run under node against the real SHIM source; the real-browser render is in
+    the PR."""
+    art = _load(monkeypatch, tmp_path)
+    js = _js(art)
+    harness = (
+        _assignment(js, "SHIM")
+        + r"""
+const props = {}, inline = { html: {}, body: {} };
+let onMsg = null;
+function styleOf(bag) {
+  return new Proxy({ setProperty: (k, v) => { props[k] = v; } }, {
+    set: (o, k, v) => { bag[k] = v; return true; },
+    get: (o, k) => (k in o ? o[k] : bag[k]),
+  });
+}
+global.window = { addEventListener: (t, f) => { if (t === "message") onMsg = f; } };
+global.parent = { postMessage: () => {} };
+global.document = { documentElement: { style: styleOf(inline.html) }, body: { style: styleOf(inline.body) } };
+eval(SHIM.replace(/^<script>/, "").replace(/<\\?\/script>$/, ""));
+onMsg({ data: { type: "protoArtifact:theme", tokens: {
+  "--pl-color-bg": "#f6f7f9", "--pl-color-fg": "#18181b", "not-a-token": "x" } } });
+console.log(JSON.stringify({ props, inline }));
+"""
+    )
+    out = _node(harness)
+    assert out["props"] == {"--pl-color-bg": "#f6f7f9", "--pl-color-fg": "#18181b"}, "the tokens update in place"
+    assert out["inline"] == {"html": {}, "body": {}}, "no inline html/body colour may override the author's CSS"
+
+    # base(): html/body read the live tokens through var() (literal fallback = no white flash),
+    # in a rule that precedes the author's markup, so an author's body colours win.
+    base = _js_function(js, "base")
+    assert "html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}" in base
+    assert "return htmlDoc(im.code, dsLink() + base(kind) + (im.map ? " in js
