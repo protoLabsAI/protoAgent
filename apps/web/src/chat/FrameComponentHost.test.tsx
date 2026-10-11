@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InlineFrameBridgeContext } from "../artifacts/ArtifactRefChip";
 import { createFrameBridge, SEND_TRUST_STORAGE_KEY, type FrameBridge } from "../artifacts/frameBridge";
 import { createFrameRegistry } from "../artifacts/inlineFrames";
+import { resetOpenLinkOriginsCacheForTest } from "../artifacts/openLinkOrigins";
+import { api } from "../lib/api";
 import {
   ComponentChatSendContext,
   FrameComponentHost,
@@ -398,20 +400,55 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b / S19)
     expect(q("component-send-confirm")).toBeNull();
   });
 
-  it("openLink opens an https link in a new tab with noopener,noreferrer, through the host", () => {
-    const chat = chatStub();
-    const { frame, post } = mountBridge(chat);
-    const open = vi.spyOn(window, "open").mockImplementation(() => null);
-    dispatch(frame, { type: "protoComponent:openLink", cid: 7, url: "https://example.com/docs" });
-    expect(open).toHaveBeenCalledWith("https://example.com/docs", "_blank", "noopener,noreferrer");
+  // #4076 F1: openLink goes through the same chip, with its own "Always allow links" trust.
+  async function dispatchLink(frame: HTMLIFrameElement, url: string, cid = 7) {
+    await act(async () => {
+      const ev = new MessageEvent("message", { data: { type: "protoComponent:openLink", cid, url } });
+      Object.defineProperty(ev, "source", { value: frame.contentWindow, configurable: true });
+      window.dispatchEvent(ev);
+    });
+  }
+  beforeEach(() => {
+    resetOpenLinkOriginsCacheForTest();
+    vi.spyOn(api, "config").mockResolvedValue({ config: {} as never, soul: "" });
+  });
+
+  it("openLink asks first ('Open ‹host› in a new tab?') and reports success only once the tab opened", async () => {
+    // Trusting this kind's SENDS must not trust its links.
+    localStorage.setItem(SEND_TRUST_STORAGE_KEY, JSON.stringify(["component:demo:pl-demo"]));
+    const { frame, post } = mountBridge(chatStub());
+    const doc = document.implementation.createHTMLDocument("blank");
+    doc.addEventListener("click", (e) => e.preventDefault());
+    const tab = { opener: {} as unknown, document: doc, close: vi.fn() };
+    const open = vi.spyOn(window, "open").mockImplementation(() => tab as unknown as Window);
+    await dispatchLink(frame, "https://example.com/docs");
+    expect(open).not.toHaveBeenCalled();
+    expect(q("component-open-confirm")?.textContent).toContain("Open example.com in a new tab?");
+    expect(q("component-open-confirm")?.textContent).toContain("Always allow links from this component");
+    click("component-open-confirm-ok");
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(tab.opener).toBeNull();
     expect(post).toHaveBeenCalledWith(...bridgeResult(true));
   });
 
-  it("openLink refuses a non-https link and opens nothing", () => {
+  it("a blocked pop-up or a dismiss rejects openLink with the reason", async () => {
+    let now = 0;
+    const { frame, post } = mountBridge(chatStub(), {}, createFrameBridge({ now: () => now }));
+    vi.spyOn(window, "open").mockImplementation(() => null);
+    await dispatchLink(frame, "https://example.com/docs");
+    click("component-open-confirm-ok");
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringMatching(/blocked/i) }));
+    now = 5_000;
+    await dispatchLink(frame, "https://example.com/docs", 8);
+    click("component-open-confirm-dismiss");
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringMatching(/dismissed/i) }, 8));
+  });
+
+  it("openLink refuses a non-https link and opens nothing", async () => {
     const chat = chatStub();
     const { frame, post } = mountBridge(chat);
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
-    dispatch(frame, { type: "protoComponent:openLink", cid: 7, url: "http://example.com" });
+    await dispatchLink(frame, "http://example.com");
     expect(open).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("https") }));
     expect(container.querySelector('[data-testid="component-send-rejected"]')?.textContent).toContain("https");

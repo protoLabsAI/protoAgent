@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   checkOpenLink,
   createFrameBridge,
+  createOpenLinkTrustStore,
   createSendTrustStore,
   OPEN_LINK_FEATURES,
+  OPEN_LINK_RATE_LIMIT_MS,
+  OPEN_LINK_TRUST_STORAGE_KEY,
   PROPOSAL_RATE_LIMIT_MS,
   SEND_MAX_CHARS,
   SEND_RATE_LIMIT_MS,
@@ -12,6 +15,7 @@ import {
   type SendCheck,
   type SendTrustStore,
 } from "./frameBridge";
+import { openLinkInNewTab } from "./openLinkInNewTab";
 
 // ADR 0118 D4 as amended by S19 (#4137) — "the frame proposes; the user decides." The gates are
 // pure; a mutable `clock` drives the injected `now` so the rate windows are deterministic without
@@ -234,5 +238,135 @@ describe("openLink gate", () => {
     // The blank entry does not widen the list to everything.
     const blocked = checkOpenLink({ url: "https://other.example.com/x", allowOrigins });
     expect(blocked.status).toBe("rejected");
+  });
+});
+
+// #4076 F1: openLink is a PROPOSAL behind the same chip as send, with its OWN trust store.
+describe("openLink proposal — the same chip, separate trust (#4076 F1)", () => {
+  function linkBridge(clock: { t: number }, storage = memStorage()) {
+    return createFrameBridge({
+      now: () => clock.t,
+      trust: createSendTrustStore(storage),
+      linkTrust: createOpenLinkTrustStore(storage),
+    });
+  }
+  const proposal = (over: Record<string, unknown> = {}) => ({
+    frameId: "frame-1",
+    trustKey: "artifact:a-1",
+    url: "https://docs.example.com/page",
+    ...over,
+  });
+
+  it("an untrusted source always needs the operator's confirm", () => {
+    const clock = { t: 0 };
+    const bridge = linkBridge(clock);
+    expect(bridge.checkOpenLinkProposal(proposal())).toEqual({
+      status: "needs-confirm",
+      url: "https://docs.example.com/page",
+    });
+    clock.t = PROPOSAL_RATE_LIMIT_MS;
+    expect(bridge.checkOpenLinkProposal(proposal({ trustKey: undefined })).status).toBe("needs-confirm");
+  });
+
+  it("trusting SENDS does not trust links, and trusting links does not trust sends", () => {
+    const clock = { t: 0 };
+    const storage = memStorage();
+    const bridge = linkBridge(clock, storage);
+    bridge.trust("artifact:a-1");
+    expect(bridge.isLinkTrusted("artifact:a-1")).toBe(false);
+    expect(bridge.checkOpenLinkProposal(proposal()).status).toBe("needs-confirm");
+
+    bridge.trustLink("artifact:a-2");
+    expect(bridge.isTrusted("artifact:a-2")).toBe(false);
+    clock.t = PROPOSAL_RATE_LIMIT_MS;
+    expect(bridge.checkSend(sendCheck({ frameId: "frame-2", trustKey: "artifact:a-2" })).status).toBe("needs-confirm");
+    // Two different keys in storage.
+    expect(JSON.parse(storage.data.get(SEND_TRUST_STORAGE_KEY)!)).toEqual(["artifact:a-1"]);
+    expect(JSON.parse(storage.data.get(OPEN_LINK_TRUST_STORAGE_KEY)!)).toEqual(["artifact:a-2"]);
+  });
+
+  it("a link-trusted source skips the chip but not the URL gate or the open-rate window", () => {
+    const clock = { t: 0 };
+    const bridge = linkBridge(clock);
+    bridge.trustLink("artifact:a-1");
+    expect(bridge.checkOpenLinkProposal(proposal())).toEqual({ status: "ok", url: "https://docs.example.com/page" });
+    clock.t = PROPOSAL_RATE_LIMIT_MS; // past the proposal window, inside the open window
+    const again = bridge.checkOpenLinkProposal(proposal());
+    expect(again.status).toBe("rejected");
+    if (again.status === "rejected") expect(again.reason).toBe("rate-limited");
+    clock.t = OPEN_LINK_RATE_LIMIT_MS;
+    expect(bridge.checkOpenLinkProposal(proposal()).status).toBe("ok");
+    clock.t = OPEN_LINK_RATE_LIMIT_MS * 3;
+    expect(bridge.checkOpenLinkProposal(proposal({ url: "http://docs.example.com" })).status).toBe("rejected");
+  });
+
+  it("honours the operator's origin allowlist", () => {
+    const clock = { t: 0 };
+    const bridge = linkBridge(clock);
+    const v = bridge.checkOpenLinkProposal(proposal({ allowOrigins: ["https://other.example.com"] }));
+    expect(v.status).toBe("rejected");
+    if (v.status === "rejected") expect(v.reason).toBe("origin-not-allowed");
+  });
+
+  it("shares the proposal window with send, so alternating can't churn the chip", () => {
+    const clock = { t: 0 };
+    const bridge = linkBridge(clock);
+    expect(bridge.checkSend(sendCheck()).status).toBe("needs-confirm");
+    const v = bridge.checkOpenLinkProposal(proposal());
+    expect(v.status).toBe("rejected");
+    if (v.status === "rejected") expect(v.reason).toBe("rate-limited");
+  });
+
+  it("noteOpen (the chip path) advances the open-rate window", () => {
+    const clock = { t: 0 };
+    const bridge = linkBridge(clock);
+    expect(bridge.checkOpenLinkProposal(proposal()).status).toBe("needs-confirm");
+    bridge.noteOpen("frame-1");
+    clock.t = PROPOSAL_RATE_LIMIT_MS;
+    expect(bridge.checkOpenLinkProposal(proposal()).status).toBe("rejected");
+  });
+});
+
+describe("openLinkInNewTab — reports whether the tab really opened (#4076 F1)", () => {
+  it("returns false when the pop-up blocker refuses the tab", () => {
+    expect(openLinkInNewTab("https://example.com/", { open: () => null, desktopShell: false })).toBe(false);
+  });
+
+  it("opens a blank tab, severs opener, then navigates with no referrer from inside it", () => {
+    const doc = document.implementation.createHTMLDocument("blank");
+    const clicks: HTMLAnchorElement[] = [];
+    doc.addEventListener("click", (e) => {
+      clicks.push(e.target as HTMLAnchorElement);
+      e.preventDefault();
+    });
+    const tab = { opener: {} as unknown, document: doc, close: () => {} };
+    const calls: unknown[][] = [];
+    const ok = openLinkInNewTab("https://example.com/docs", {
+      open: ((...a: unknown[]) => {
+        calls.push(a);
+        return tab as unknown as Window;
+      }) as Window["open"],
+      desktopShell: false,
+    });
+    expect(ok).toBe(true);
+    expect(calls).toEqual([["about:blank", "_blank"]]);
+    expect(tab.opener).toBeNull();
+    expect(clicks).toHaveLength(1);
+    expect(clicks[0].href).toBe("https://example.com/docs");
+    expect(clicks[0].referrerPolicy).toBe("no-referrer");
+    expect(clicks[0].rel).toContain("noreferrer");
+  });
+
+  it("in the desktop shell hands the URL straight over with noopener,noreferrer", () => {
+    const calls: unknown[][] = [];
+    const ok = openLinkInNewTab("https://example.com/", {
+      open: ((...a: unknown[]) => {
+        calls.push(a);
+        return null; // the shell denies the webview's window after opening the system browser
+      }) as Window["open"],
+      desktopShell: true,
+    });
+    expect(ok).toBe(true);
+    expect(calls).toEqual([["https://example.com/", "_blank", OPEN_LINK_FEATURES]]);
   });
 });

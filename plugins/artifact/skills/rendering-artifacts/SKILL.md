@@ -339,6 +339,15 @@ btn.addEventListener("click", async () => {
 and on a refusal show a quiet inline status ("Not sent: the agent is busy") — a refusal is a
 normal outcome, not an error, so never surface it as one.
 
+To send the user to a web page, use **`window.protoArtifact.openLink(url)`** (feature-detect it the
+same way) — a plain `<a target="_blank">` can't leave the sandbox. It is a *proposal* too: the
+console asks "Open ‹host› in a new tab?" under the artifact, and the tab opens only if the user
+clicks Open (or earlier chose "Always allow links" for this artifact — a separate choice from
+sends). It accepts `https:` links only, and the operator may narrow that to a list of origins.
+Call it only from a labelled button. The Promise resolves once the tab **actually opened** and
+rejects if the user dismissed it, the browser blocked the pop-up, or the link isn't allowed —
+show a quiet "Not opened: …" note, plus the URL as text they can copy.
+
 ## Authoring order for `html` (so it previews while you write it)
 
 An inline `html` artifact streams into a live preview as you write it, so author it top to

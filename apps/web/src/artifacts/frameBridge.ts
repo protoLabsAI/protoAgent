@@ -10,6 +10,11 @@
 // .focus() on itself after any console click (#4137). Trusted sources skip the chip but still pass
 // the content, busy and rate gates.
 //
+// openLink(url) is a proposal in exactly the same way (#4076 F1): https only, narrowed by
+// `artifact.open_link_origins`, then an "Open ‹host› in a new tab?" chip unless the operator chose
+// "Always allow links" for that source. Link trust lives in its OWN store — trusting an artifact's
+// sends never lets it open tabs unasked.
+//
 // This module is framework-free logic plus a tiny per-frame rate registry and the per-browser
 // trust store. It returns typed verdicts and does NOT touch chat state, window.open or the DOM —
 // the hosts wire the verdicts into the chat send path and the confirm chip.
@@ -26,6 +31,11 @@ export const PROPOSAL_RATE_LIMIT_MS = 1000;
 export const OPEN_LINK_FEATURES = "noopener,noreferrer";
 /** localStorage key holding the trusted send sources ("Always allow from this artifact"). */
 export const SEND_TRUST_STORAGE_KEY = "protoagent:frame-send-trust:v1";
+/** localStorage key holding the trusted openLink sources — a SEPARATE store, so trusting an
+ *  artifact's sends never lets it open tabs unasked (and vice versa). */
+export const OPEN_LINK_TRUST_STORAGE_KEY = "protoagent:frame-openlink-trust:v1";
+/** The openLink rate gate: at most one link OPENED per this many ms, per frame (mirrors send). */
+export const OPEN_LINK_RATE_LIMIT_MS = SEND_RATE_LIMIT_MS;
 
 export type SendRejectReason = "empty" | "too-long" | "busy" | "rate-limited";
 
@@ -55,10 +65,28 @@ export interface SendCheck {
 
 export type OpenLinkRejectReason = "invalid-url" | "not-https" | "origin-not-allowed";
 
-/** The outcome of an openLink() request. On `ok`, S10b opens `url` with `features`. */
+/** The outcome of the pure URL gate ({@link checkOpenLink}): the link is openable at all. */
 export type OpenLinkVerdict =
   | { status: "ok"; url: string; features: string }
   | { status: "rejected"; reason: OpenLinkRejectReason; message: string };
+
+/** The outcome of an openLink() PROPOSAL, judged like a send (ADR 0118 D4, #4076 F1):
+ *  - `ok`            — the source is trusted for links ("Always allow"); open `url` now. The
+ *                      frame's open-rate window has been advanced.
+ *  - `needs-confirm` — show the "Open ‹host› in a new tab?" chip; open only on its Open button.
+ *  - `rejected`      — refused (bad URL, not https, origin not allowed, rate-limited). */
+export type OpenLinkProposalVerdict =
+  | { status: "ok"; url: string }
+  | { status: "needs-confirm"; url: string }
+  | { status: "rejected"; reason: OpenLinkRejectReason | "rate-limited"; message: string };
+
+export interface OpenLinkProposal extends OpenLinkCheck {
+  /** The originating frame occurrence, for the per-frame rate windows (shared with send's
+   *  proposal window, so a frame can't churn the one chip by alternating send and openLink). */
+  frameId: string;
+  /** The trust source, as for send — looked up in the LINK trust store, never the send one. */
+  trustKey?: string;
+}
 
 export interface OpenLinkCheck {
   url: string;
@@ -158,7 +186,7 @@ function toOrigin(entry: string): string | null {
 }
 
 /** Where "Always allow" lives: a set of trust keys, per browser. */
-export interface SendTrustStore {
+export interface TrustStore {
   isTrusted(key: string): boolean;
   trust(key: string): void;
 }
@@ -173,18 +201,21 @@ function defaultStorage(): KeyValueStorage | null {
   }
 }
 
+/** The send trust store's type (kept for existing callers). */
+export type SendTrustStore = TrustStore;
+
 /**
- * A trust store persisted in `storage` (localStorage by default) under
- * {@link SEND_TRUST_STORAGE_KEY}. Every storage access is try/catch-wrapped: when storage is
- * missing, blocked, full or holds garbage, the store degrades to an in-memory set, so "Always
- * allow" still holds for this session and nothing throws into the host.
+ * A trust store persisted in `storage` (localStorage by default) under `storageKey`. Every
+ * storage access is try/catch-wrapped: when storage is missing, blocked, full or holds garbage,
+ * the store degrades to an in-memory set, so "Always allow" still holds for this session and
+ * nothing throws into the host.
  */
-export function createSendTrustStore(storage: KeyValueStorage | null = defaultStorage()): SendTrustStore {
+export function createTrustStore(storageKey: string, storage: KeyValueStorage | null = defaultStorage()): TrustStore {
   const session = new Set<string>();
   function load(): Set<string> {
     const out = new Set(session);
     try {
-      const raw = storage?.getItem(SEND_TRUST_STORAGE_KEY);
+      const raw = storage?.getItem(storageKey);
       const parsed: unknown = raw ? JSON.parse(raw) : [];
       if (Array.isArray(parsed)) for (const k of parsed) if (typeof k === "string" && k) out.add(k);
     } catch {
@@ -202,12 +233,22 @@ export function createSendTrustStore(storage: KeyValueStorage | null = defaultSt
       try {
         const all = load();
         all.add(key);
-        storage?.setItem(SEND_TRUST_STORAGE_KEY, JSON.stringify([...all]));
+        storage?.setItem(storageKey, JSON.stringify([...all]));
       } catch {
         /* quota / blocked — the session set still holds it */
       }
     },
   };
+}
+
+/** "Always allow" for send(), under {@link SEND_TRUST_STORAGE_KEY}. */
+export function createSendTrustStore(storage: KeyValueStorage | null = defaultStorage()): TrustStore {
+  return createTrustStore(SEND_TRUST_STORAGE_KEY, storage);
+}
+
+/** "Always allow" for openLink(), under {@link OPEN_LINK_TRUST_STORAGE_KEY} — separate from send. */
+export function createOpenLinkTrustStore(storage: KeyValueStorage | null = defaultStorage()): TrustStore {
+  return createTrustStore(OPEN_LINK_TRUST_STORAGE_KEY, storage);
 }
 
 export interface FrameBridge {
@@ -223,21 +264,44 @@ export interface FrameBridge {
   isTrusted(trustKey: string): boolean;
   /** Record "Always allow" for this source (persisted per browser where storage allows). */
   trust(trustKey: string): void;
-  /** Judge an openLink() request (stateless). */
+  /** The pure URL gate (https only, origin allowlist) — stateless. */
   checkOpenLink(check: OpenLinkCheck): OpenLinkVerdict;
+  /** Judge an openLink() PROPOSAL: the URL gate, then the open-rate and proposal-rate windows,
+   *  then LINK trust. `ok` advances the open-rate window (the host opens now); `needs-confirm`
+   *  advances only the proposal window — call {@link FrameBridge.noteOpen} when the chip opens. */
+  checkOpenLinkProposal(check: OpenLinkProposal): OpenLinkProposalVerdict;
+  /** Advance `frameId`'s open-rate window because a link was actually opened (the chip path). */
+  noteOpen(frameId: string): void;
+  /** Whether the operator chose "Always allow" LINKS for this source (separate from send). */
+  isLinkTrusted(trustKey: string): boolean;
+  /** Record "Always allow" links for this source. */
+  trustLink(trustKey: string): void;
 }
 
 /**
  * A stateful host bridge holding the per-frame rate windows and the trust store. `now` and
  * `trust` are injectable for tests; they default to the wall clock and a localStorage store.
  */
-export function createFrameBridge(opts: { now?: () => number; trust?: SendTrustStore } = {}): FrameBridge {
+export function createFrameBridge(
+  opts: { now?: () => number; trust?: TrustStore; linkTrust?: TrustStore } = {},
+): FrameBridge {
   const now = opts.now ?? (() => Date.now());
   const trustStore = opts.trust ?? createSendTrustStore();
+  const linkTrustStore = opts.linkTrust ?? createOpenLinkTrustStore();
   // frameId → last accepted send time / last shown proposal time. Scoped to one host; a frame
   // that never sends never appears here, so these can't grow without a send.
   const lastSent = new Map<string, number>();
   const lastProposed = new Map<string, number>();
+  const lastOpened = new Map<string, number>();
+
+  /** The proposal window (shared by send and openLink): true — and the window advanced — when
+   *  a new proposal may be shown now. */
+  function takeProposalSlot(frameId: string, t: number): boolean {
+    const lastP = lastProposed.get(frameId);
+    if (lastP !== undefined && t - lastP < PROPOSAL_RATE_LIMIT_MS) return false;
+    lastProposed.set(frameId, t);
+    return true;
+  }
 
   return {
     checkSend(check) {
@@ -245,15 +309,13 @@ export function createFrameBridge(opts: { now?: () => number; trust?: SendTrustS
       const trusted = !!check.trustKey && trustStore.isTrusted(check.trustKey);
       const verdict = evaluateSend(check, lastSent.get(check.frameId) ?? null, t, trusted);
       if (verdict.status === "rejected") return verdict;
-      const lastP = lastProposed.get(check.frameId);
-      if (lastP !== undefined && t - lastP < PROPOSAL_RATE_LIMIT_MS) {
+      if (!takeProposalSlot(check.frameId, t)) {
         return {
           status: "rejected",
           reason: "rate-limited",
           message: "This frame is sending to chat too often — try again in a moment.",
         };
       }
-      lastProposed.set(check.frameId, t);
       if (verdict.status === "ok") lastSent.set(check.frameId, t);
       return verdict;
     },
@@ -263,5 +325,35 @@ export function createFrameBridge(opts: { now?: () => number; trust?: SendTrustS
     isTrusted: (key) => trustStore.isTrusted(key),
     trust: (key) => trustStore.trust(key),
     checkOpenLink,
+    checkOpenLinkProposal(check) {
+      const t = now();
+      const verdict = checkOpenLink(check);
+      if (verdict.status === "rejected") return verdict;
+      const lastO = lastOpened.get(check.frameId);
+      if (lastO !== undefined && t - lastO < OPEN_LINK_RATE_LIMIT_MS) {
+        return {
+          status: "rejected",
+          reason: "rate-limited",
+          message: "Only one link can be opened every 2 seconds.",
+        };
+      }
+      if (!takeProposalSlot(check.frameId, t)) {
+        return {
+          status: "rejected",
+          reason: "rate-limited",
+          message: "This frame is asking too often — try again in a moment.",
+        };
+      }
+      if (check.trustKey && linkTrustStore.isTrusted(check.trustKey)) {
+        lastOpened.set(check.frameId, t);
+        return { status: "ok", url: verdict.url };
+      }
+      return { status: "needs-confirm", url: verdict.url };
+    },
+    noteOpen(frameId) {
+      lastOpened.set(frameId, now());
+    },
+    isLinkTrusted: (key) => linkTrustStore.isTrusted(key),
+    trustLink: (key) => linkTrustStore.trust(key),
   };
 }

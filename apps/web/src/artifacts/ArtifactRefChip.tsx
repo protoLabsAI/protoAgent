@@ -413,16 +413,11 @@ function InlineArtifactHost({
       if (Number.isNaN(cid)) return;
 
       if (m.type === "protoArtifact:openLink") {
-        // https-only, narrowed by the operator's optional origin allowlist (wired in a later
-        // slice); on accept the HOST opens the tab with the mandatory noopener,noreferrer.
-        const verdict = bridge.checkOpenLink({ url: String(m.url ?? "") });
-        if (verdict.status === "ok") {
-          window.open(verdict.url, "_blank", "noopener,noreferrer");
-          replyToFrame(cid, { ok: true });
-        } else {
-          gate.showRejection(verdict.message);
-          replyToFrame(cid, { ok: false, error: verdict.message });
-        }
+        // A PROPOSAL like send (#4076 F1): https only, narrowed by the operator's
+        // `artifact.open_link_origins`, rate-gated, then the "Open ‹host› in a new tab?" chip
+        // unless this source's LINKS are trusted. The tab opens from the chip's click with
+        // noopener/noreferrer, and the frame hears success only if it really opened.
+        void gate.proposeOpen(cid, String(m.url ?? ""));
         return;
       }
 
@@ -444,7 +439,7 @@ function InlineArtifactHost({
     window.addEventListener("message", onBridge);
     return () => window.removeEventListener("message", onBridge);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- frameRef/replyToFrame are stable; re-bind on live/key/chat
-  }, [live, key, chat, artifact.id, artifact.version, name, replyToFrame, gate.propose, gate.showRejection]);
+  }, [live, key, chat, artifact.id, artifact.version, name, replyToFrame, gate.propose, gate.proposeOpen, gate.showRejection]);
 
   // The live re-theme PluginView performs (ADR 0026 / S6), reused verbatim so the embed repaints
   // on a console theme switch without a reload.
@@ -505,8 +500,9 @@ function InlineArtifactHost({
         <FrameQuarantineNotice what="artifact" height={shownHeight} onRun={guard.run} />
       ) : live ? (
         // sandbox/allow mirror PluginView's plugin frame: same-origin so the DS kit + the gated
-        // history poll work, pointer-lock delegated so a nested canvas/3D answer can capture the
-        // mouse. The NESTED artifact frame the shell builds keeps its own stricter sandbox.
+        // history poll work, allow-pointer-lock (a sandbox token, not a permissions-policy feature)
+        // so a nested canvas/3D answer can capture the mouse. The NESTED artifact frame the shell
+        // builds keeps its own stricter sandbox.
         <div className="frame-guard" data-active={guard.active ? "true" : undefined}>
           <iframe
             ref={frameRef}
@@ -515,7 +511,7 @@ function InlineArtifactHost({
             src={apiUrl(src)}
             title={name}
             sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
-            allow="clipboard-read; clipboard-write; pointer-lock"
+            allow="clipboard-read; clipboard-write"
             style={{ height: shownHeight }}
             onLoad={handleLoad}
           />
@@ -541,7 +537,7 @@ function InlineArtifactHost({
         classPrefix="artifact-ref-inline__bridge"
         testIdPrefix="artifact"
         source="artifact"
-        onSend={(alwaysAllow) =>
+        onAccept={(alwaysAllow) =>
           gate.resolve(true, alwaysAllow, chat && {
             isBusy: chat.isBusy,
             post: (text) => chat.send(text, { artifact_id: artifact.id, version: artifact.version, title: name }),

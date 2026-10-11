@@ -140,6 +140,34 @@ describe("useFrameFocusGuard — quarantine", () => {
   });
 });
 
+describe("useFrameFocusGuard — the hand-back (#4076 F4)", () => {
+  it("hands focus back IN the blur dispatch, not only a task later (no keys lost in the gap)", () => {
+    const f = frame()!;
+    act(() => {
+      f.focus();
+      window.dispatchEvent(new Event("blur"));
+      // Before any timer: headed Chrome routes keys to the frame until this lands.
+      expect(document.activeElement).toBe(composer());
+    });
+  });
+
+  it("retries a task later with blur + focus when the page still doesn't have focus", () => {
+    const f = frame()!;
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    const blur = vi.spyOn(composer(), "blur");
+    act(() => {
+      f.focus();
+      window.dispatchEvent(new Event("blur"));
+    });
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(blur).toHaveBeenCalled(); // forces a real move: focus() on activeElement is a no-op
+    expect(document.activeElement).toBe(composer());
+    hasFocus.mockRestore();
+  });
+});
+
 describe("useFrameFocusGuard — activation", () => {
   it("an inactive frame sits under the click-catcher; a press on it activates and focuses the frame", () => {
     expect(shield()).not.toBeNull();

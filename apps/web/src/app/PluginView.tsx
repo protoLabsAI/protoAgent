@@ -539,13 +539,13 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
             {reachable ? (
               // sandbox: allow-popups (+ -to-escape-sandbox) so links / window.open inside
               // a plugin open as normal un-sandboxed pages instead of being blocked.
-              // Pointer lock needs BOTH the allow-pointer-lock sandbox token AND the
-              // pointer-lock Permissions-Policy in `allow=` — and the policy has to be
-              // delegated at EVERY nesting level, so the nested artifact iframe (which sets
-              // its own allow="pointer-lock") can capture the mouse for games / canvas / 3D.
-              // Esc always releases it.
-              // allow: clipboard + pointer-lock via Permissions-Policy (no sandbox token
-              // exists for clipboard) so copy/paste + pointer capture work in plugin UIs.
+              // Pointer lock is gated by the allow-pointer-lock SANDBOX token alone — it is not a
+              // Permissions-Policy feature (Chrome warns "Unrecognized feature: 'pointer-lock'"
+              // on an allow="pointer-lock"), so there is nothing to delegate in `allow=`. The
+              // nested artifact iframe carries the same token, so games / canvas / 3D can
+              // capture the mouse. Esc always releases it.
+              // allow: clipboard via Permissions-Policy (no sandbox token exists for clipboard)
+              // so copy/paste work in plugin UIs.
               // allow-downloads: a sandboxed frame cannot start a download without it, so
               // the artifact panel's Download button (ADR 0092 D2/D3 file artifacts — a
               // plain <a download>.click()) was refused outright: "Not allowed to download
@@ -558,7 +558,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
                 src={apiUrl(src)}
                 title={view.label}
                 sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock allow-downloads"
-                allow="clipboard-read; clipboard-write; pointer-lock"
+                allow="clipboard-read; clipboard-write"
                 onLoad={handleLoad}
                 onError={() => setError(`The plugin page at ${src} didn’t respond.`)}
                 style={{ visibility: loaded ? "visible" : "hidden" }}
