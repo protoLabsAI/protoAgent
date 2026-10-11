@@ -386,8 +386,13 @@ def show_artifact(
     self-contained React component script; name your top-level component ``App`` and it
     AUTO-MOUNTS into ``#root`` (no manual ``createRoot(...).render`` needed — though an explicit
     render still works). React, ReactDOM and Babel are provided, and it can ``import`` from a
-    curated offline set — ``d3``, ``chart.js``, ``lucide``, and ``@pl/ui`` design-system
-    components like ``Button``/``Card``/``Stat``/``Icon``). ``code`` is the source; ``title`` is
+    curated offline set — ``three`` (3D: ``import * as THREE from "three"``), ``d3``
+    (``import * as d3 from "d3"``), ``animejs`` (animation: ``import { animate } from "animejs"``,
+    then ``animate(el, { translateX: 100, duration: 400 })``), ``chart.js``, ``lucide``, and
+    ``@pl/ui`` design-system components like ``Button``/``Card``/``Stat``/``Icon``). An ``html``
+    artifact can import ``three`` / ``d3`` / ``animejs`` / ``chart.js`` / ``lucide`` the same way
+    from a ``<script type="module">``; its own import map, if it ships one, is merged with these
+    (its entries win). ``code`` is the source; ``title`` is
     an optional label. Runs sandboxed — it can't access the console.
 
     After creating it, CHECK IT RENDERED: this reply carries the render verdict when the panel is

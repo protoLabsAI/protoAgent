@@ -104,7 +104,12 @@ the user files to wire up themselves — not what they asked for when they want 
   element with `className="pl-…"` for anything not wrapped here.
 - **`chart.js`** — `import { Chart } from 'chart.js'` (controllers pre-registered) for quick
   bar/line/pie/etc. charts onto a `<canvas>`.
-- **`d3`** — `import * as d3 from 'd3'` for bespoke/data-driven SVG visualisations.
+- **`d3`** — `import * as d3 from 'd3'` for bespoke/data-driven SVG visualisations, e.g.
+  `const x = d3.scaleLinear().domain([0, 10]).range([0, 320])`.
+- **`three`** — `import * as THREE from 'three'` for 3D scenes (three.js r170) on a `<canvas>`,
+  e.g. `new THREE.WebGLRenderer({ canvas: ref.current }).render(scene, camera)`.
+- **`animejs`** — `import { animate } from 'animejs'` for animation (anime.js v4 API), e.g.
+  `animate(el, { translateX: 100, duration: 400 })`.
 - **`lucide`** — the raw icon library, if you're not using `@pl/ui`'s `Icon`.
 - **`react`** / **`react-dom/client`** — also importable (`import { createRoot } from
   'react-dom/client'`); they resolve to the same React the globals use.
@@ -135,6 +140,11 @@ You can also style plain elements with the design system's `.pl-*` classes (e.g.
 `className="pl-btn pl-btn--primary"`) and `--pl-*` CSS tokens in **any** `html`/`react`/`markdown`
 artifact — they're injected so artifacts match the console's live theme. Only these libraries are
 available; for anything else, write the code inline (the sandbox has no other network access).
+
+**`html` artifacts get the same import map.** Inside a `<script type="module">`,
+`import * as THREE from "three"`, `import * as d3 from "d3"` and
+`import { animate } from "animejs"` (and `chart.js` / `lucide`) resolve to the same offline modules — no CDN URL needed. If your `html` artifact ships its own
+`<script type="importmap">`, it's merged with the shell's into one map, and your entries win.
 
 ## Editing an artifact (don't re-create it)
 

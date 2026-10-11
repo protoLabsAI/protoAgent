@@ -138,13 +138,18 @@ show_artifact(kind="mermaid", code="sequenceDiagram\n  C->>A: ask(q)\n  A->>T: r
 
 `react` artifacts can `import` from a curated, **fully-offline** set (resolved by an
 [import map](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script/type/importmap) to the
-same-origin `vendor/` modules — no network):
+same-origin `vendor/` modules — no network). `html` artifacts get the same import map, so a
+`<script type="module">` in one can `import * as THREE from "three"`, `import * as d3 from "d3"`
+or `import { animate } from "animejs"` too. An `html` artifact that ships its own `<script type="importmap">` keeps it: the shell merges
+the two into one map, and the author's entries win.
 
 | Specifier | What |
 |---|---|
 | `@pl/ui` | protoLabs **design-system** wrappers that match the console theme — enough to prototype real **layouts** + **components**, not just widgets. Layout: `AppShell` · `Header` · `SideNav`/`SideNavItem` · `Container` · `Section` · `Panel` · `Grid` · `Row` · `Hero` · `Divider`. Nav: `Tabs`/`Tab` · `Segmented`/`SegmentedButton` · `Menu`/`MenuItem`/`MenuSeparator`. Data: `Table` · `Board` · `Stats`/`Stat` · `Steps`/`Step` · `Progress` · `Accordion`/`AccordionItem` · `Avatar` · `Empty`. Overlays: `Dialog` · `Drawer` · `Callout` · `Tip`. Forms: `Field` · `Input` · `Textarea` · `Select` · `Switch` · `Checkbox`. Primitives/type: `Button` · `IconButton` · `Card` · `Badge` · `Tag` · `Kbd` · `Link` · `Dot` · `Spinner` · `Skeleton` · `Alert` · `Heading` · `Eyebrow` · `Lead` · `Prose` · `Icon` (lucide by `name`). |
 | `chart.js` | `import { Chart } from 'chart.js'` (controllers pre-registered) — quick charts onto a `<canvas>`. |
 | `d3` | `import * as d3 from 'd3'` — bespoke data-driven SVG. |
+| `three` | `import * as THREE from 'three'` — 3D scenes onto a `<canvas>` (three.js r170, MIT; notices in `vendor/three.LICENSES.txt`). |
+| `animejs` | `import { animate } from 'animejs'` — animation, e.g. `animate(el, { translateX: 100, duration: 400 })` (anime.js 4.5.0 v4 API, MIT; notices in `vendor/anime.LICENSES.txt`). |
 | `lucide` | the raw icon library (if not using `@pl/ui`'s `Icon`). |
 | `react`, `react-dom/client` | resolve to the same React the UMD globals use (one shared instance). |
 
@@ -378,8 +383,9 @@ the page announces it is listening (`protoagent:ready`), targeted at the page's 
 >   Integrity** (`integrity` + `crossorigin="anonymous"` — required because the sandbox is an opaque
 >   origin, so the load is cross-origin); a tampered served file won't execute. To bump one, replace
 >   the file, recompute its `sha512`, and update the `LIB` map in the shell page.
-> - **ESM modules** (the `react` import map) — `d3.mjs`, `chartjs.mjs`, `lucide.mjs`, `marked.mjs`
->   (esbuild-bundled, self-contained) plus the authored `pl-ui.mjs` + `react*.shim.mjs`. These are
+> - **ESM modules** (the `react` / `html` import map) — `d3.mjs`, `chartjs.mjs`, `lucide.mjs`, `marked.mjs`
+>   (esbuild-bundled, self-contained), three.js's own `three.module.min.js` and anime.js's own
+>   `anime.esm.min.js` builds (byte-for-byte, also SRI-pinned in the `LIB` map), plus the authored `pl-ui.mjs` + `react*.shim.mjs`. These are
 >   same-origin and **install-pinned** (the `plugins.lock` commit sha pins the exact bytes) rather
 >   than SRI-pinned — import-map `integrity` isn't yet broadly supported. To bump a curated lib,
 >   re-bundle it into `vendor/` (`esbuild --bundle --format=esm --minify`).
