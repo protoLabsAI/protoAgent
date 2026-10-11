@@ -55,8 +55,15 @@ def _cfg_int(key: str, env: str, default: int, minimum: int = 1) -> int:
 
 # History/version/size caps — Settings ▸ Plugins number fields (env override).
 # Read live via functions so a config change applies at once.
+#
+# `history` was 20 until inline answers became the default placement (ADR 0118): every inline
+# answer is an artifact, so a busy session pushed its own older answers out of chat history.
+# 200 now, and eviction skips any artifact a surviving chat still shows (_store._evict, #4138).
+HISTORY_DEFAULT = 200
+
+
 def _max_history() -> int:
-    return _cfg_int("history", "ARTIFACT_HISTORY", 20)
+    return _cfg_int("history", "ARTIFACT_HISTORY", HISTORY_DEFAULT)
 
 
 def _max_versions() -> int:

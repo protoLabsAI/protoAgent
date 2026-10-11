@@ -507,6 +507,61 @@ def build_a2a_stores() -> tuple[
     return task_store, push_store, task_db, push_db
 
 
+#: The durable chat-deletion marker table, beside the task store in ``a2a-tasks.db``.
+#: ``operator_api.chat_routes`` owns its schema and every write (one row per RETIRED console
+#: chat, never count-evicted); :func:`tombstoned_chat_sessions` is its synchronous reader.
+CHAT_TOMBSTONE_TABLE = "chat_session_tombstones"
+_TOMBSTONE_QUERY_CHUNK = 500  # below SQLite's oldest bound-parameter limit (999)
+
+
+def tombstoned_chat_sessions(session_ids) -> set[str] | None:
+    """Which of ``session_ids`` the operator has DELETED (retired) — read from the chat
+    tombstone table, synchronously, with stdlib ``sqlite3``.
+
+    ``None`` means *unknown* (no task DB at this instance's path, or it can't be read): a caller
+    deciding whether a chat still exists must then assume it does. A DB without the table is a
+    truthful empty set — the table is created on the first retirement, so no chat was ever
+    deleted. Synchronous on purpose: its caller (the artifact store's eviction, #4138) runs
+    under a cross-process file lock in sync code, sometimes in a process with no task engine
+    (the ACP tool process). A plain open, not ``mode=ro``: a read-only URI open fails on a
+    live WAL database."""
+    ids = sorted({s for s in session_ids if isinstance(s, str) and s})
+    if not ids:
+        return set()
+    import sqlite3
+
+    from infra.paths import instance_paths
+
+    try:
+        path = instance_paths().store("a2a-tasks.db")
+        if not path.is_file():  # never create it: a reader must not conjure an empty store
+            return None
+        conn = sqlite3.connect(str(path), timeout=2.0)
+    except Exception as exc:  # noqa: BLE001 — unknown, never a guess
+        log.warning("[a2a] chat tombstones unreadable: %s", exc)
+        return None
+    try:
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (CHAT_TOMBSTONE_TABLE,)
+        ).fetchone()
+        if not has_table:
+            return set()
+        found: set[str] = set()
+        for i in range(0, len(ids), _TOMBSTONE_QUERY_CHUNK):
+            chunk = ids[i : i + _TOMBSTONE_QUERY_CHUNK]
+            marks = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT context_id FROM {CHAT_TOMBSTONE_TABLE} WHERE context_id IN ({marks})", chunk
+            )
+            found.update(r[0] for r in rows)
+        return found
+    except sqlite3.Error as exc:
+        log.warning("[a2a] chat tombstones unreadable: %s", exc)
+        return None
+    finally:
+        conn.close()
+
+
 def build_push_sender(
     push_config_store: ValidatingPushNotificationConfigStore,
     httpx_client: httpx.AsyncClient,
