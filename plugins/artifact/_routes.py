@@ -141,6 +141,14 @@ _VENDOR_FILES = {
     # source. Not SRI-pinned in the LIB map: the shell load is same-origin, not an opaque-sandbox
     # subresource. Verbatim-vendored; tests/test_artifact_vega.py guards it against DS drift.
     "pl-design-vega.mjs",
+    # The DS embed theme-handoff module (@protolabsai/design /embed — themeTokenSnapshot /
+    # snapshotToCss). Verbatim-vendored like pl-design-vega.mjs; same entry shape, same header.
+    # embed.js is NOT self-contained — it does `import … from "./tokens.js"`, so tokens.js is
+    # vendored beside it and MUST stay allowlisted too: the /vendor/{name} route is flat, and the
+    # browser resolves that relative import against this module. tests/test_artifact_plugin.py
+    # guards the closure and the DS drift.
+    "pl-design-embed.mjs",
+    "tokens.js",  # the embed module's relative dependency (./tokens.js) — must resolve same-origin
 }
 
 
