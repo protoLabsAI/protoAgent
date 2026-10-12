@@ -448,6 +448,26 @@ def test_missing_tokens_fall_back_to_a_usable_palette(monkeypatch, tmp_path):
         assert all(re.fullmatch(r"#[0-9a-f]{6}", s) for s in cfg["range"][k]), (k, cfg["range"][k])
 
 
+def test_a_partial_series_set_fills_the_rest_with_the_accent(monkeypatch, tmp_path):
+    """DELIBERATE behaviour change over the old hand-rolled `theme()` (named in the changelog):
+    the DS builder always emits `range.category`, with every undefined `--pl-color-chart-series*`
+    slot filled by `--pl-color-accent`. The old theme added only the series tokens that were set
+    and left Vega's own category palette unless two or more were defined. The shipped console
+    themes (and the DS defaults) carry all eight tokens, so this only reshapes a custom theme that
+    omits some of them — pinned here so the collapse-to-accent is by contract, not by accident."""
+    art = _load(monkeypatch, tmp_path)
+    # Only series1 + series2 defined; 3–8 absent, so the accent backfills them.
+    tokens = {
+        "--pl-color-bg": "#0d0f14",
+        "--pl-color-accent": "#9b87f2",
+        "--pl-color-chart-series1": "#111111",
+        "--pl-color-chart-series2": "#222222",
+    }
+    cfg = _run_frame(art, SPEC, tokens=tokens)["calls"][0]["config"]
+    assert cfg["range"]["category"] == ["#111111", "#222222"] + ["#9b87f2"] * 6
+    assert "category" in cfg["range"]  # always set, even with a single defined series
+
+
 def test_a_spec_cannot_re_option_the_embed(monkeypatch, tmp_path):
     """vega-embed merges a spec's usermeta.embedOptions OVER the caller's — a loader with
     network access included. The frame strips it before embedding."""

@@ -7,5 +7,11 @@
   with the package. Visible changes: legends move to the bottom (horizontal, four columns, no
   symbol cap, so 8+ series wrap), axis/legend labels get more room, and sequential / heatmap /
   diverging ranges are emitted as hex — so heat maps use the console palette instead of Vega's
-  default blues. The loader deny, `ast:true` interpreter, `prep()` autosize, and live re-theme
-  are unchanged.
+  default blues. The categorical palette also changes: the DS builder fills every one of the
+  eight `--pl-color-chart-series*` slots (missing ones fall back to `--pl-color-accent`) and
+  always sets `range.category`, where the old `theme()` added only the series tokens that were
+  defined and left Vega's own category palette in place unless two or more were set. The shipped
+  console themes (and the DS defaults) define all eight series tokens, so their multi-series
+  charts are unaffected; a custom theme that omits some of them will now draw those series in the
+  accent instead of Vega's defaults. The loader deny, `ast:true` interpreter, `prep()` autosize,
+  and live re-theme are unchanged.
