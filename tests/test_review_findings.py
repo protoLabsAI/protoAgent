@@ -14,6 +14,9 @@ from graph.review.findings import (
     Finding,
     findings_delivered,
     parse_findings,
+    _candidate_arrays,
+    _coerce,
+    _fenced_blocks,
     render_findings_markdown,
 )
 
@@ -225,3 +228,48 @@ def test_a_line_closed_and_a_same_line_closed_fence_can_share_a_text():
 def test_a_fence_holding_no_json_closes_at_its_first_fence_and_hides_nothing_after_it():
     text = "```\ndiff --git a/x b/x\n```\n\n" + _FINDINGS_BLOCK
     assert len(parse_findings(text)) == 1 and findings_delivered(text)
+
+
+# ── the parsing internals, directly (#4166 review: _fenced_blocks / _candidate_arrays /
+#    _coerce) — the public-API tests above exercise them end to end; these pin each
+#    seam's own edge cases so a regression names the function that broke. ────────────
+
+
+def test_fenced_blocks_returns_bodies_in_order_and_drops_an_unclosed_fence():
+    text = 'a\n```json\n[1]\n```\nb\n```\n{"x": 2}\n```\nc\n```json\n[3'
+    assert [b.strip() for b in _fenced_blocks(text)] == ["[1]", '{"x": 2}']
+    assert _fenced_blocks("") == [] and _fenced_blocks(None) == []
+
+
+def test_fenced_blocks_skips_a_triple_backtick_inside_a_json_string():
+    body = json.dumps([{"claim": "quotes ```py``` mid-string", "file": "a.py"}])
+    blocks = _fenced_blocks("```json\n" + body + "\n```\ntrailing")
+    assert len(blocks) == 1 and json.loads(blocks[0])[0]["claim"] == "quotes ```py``` mid-string"
+
+
+def test_candidate_arrays_prefers_fenced_arrays_and_ignores_fenced_non_arrays():
+    text = 'bare [9] then\n```json\n{"not": "an array"}\n```\n```json\n[1, 2]\n```'
+    assert _candidate_arrays(text) == [[1, 2]]
+
+
+def test_candidate_arrays_bare_scan_is_string_aware():
+    # `]` and an escaped quote inside a string must not end the array early.
+    text = 'prose ["a]b", "c\\"]d"] more [1, [2, 3]] end'
+    assert _candidate_arrays(text) == [["a]b", 'c"]d'], [1, [2, 3]]]
+
+
+def test_candidate_arrays_bare_scan_finds_an_array_nested_in_an_object():
+    assert _candidate_arrays('{"findings": [{"claim": "x"}]}') == [[{"claim": "x"}]]
+
+
+def test_candidate_arrays_skips_unparseable_spans_and_stops_at_an_unclosed_one():
+    assert _candidate_arrays("[not json] then [1] then [2") == [[1]]
+
+
+def test_coerce_aliases_and_defaults():
+    f = _coerce({"summary": " a claim ", "line": "x", "severity": "CRITICAL", "verdict": "Supported"})
+    assert f is not None
+    assert (f.claim, f.line, f.severity, f.verdict) == ("a claim", 0, "minor", "confirmed")
+    assert _coerce({"claim": "c", "verdict": "false positive"}).verdict == "refuted"
+    assert _coerce({"claim": "c", "verdict": "who knows"}).verdict == ""
+    assert _coerce({"file": "a.py"}) is None

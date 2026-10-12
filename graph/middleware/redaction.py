@@ -12,69 +12,94 @@ from typing import Any
 
 # Patterns are compiled once at module load for performance.
 #
-# FORMAT-PRESERVING (#3816, and the bearer/delimiter follow-up): a match covers the
-# secret's own characters and NOTHING after them. Redaction runs over tool output
-# before the model reads it (AuditMiddleware), so a pattern that swallows a closing
-# quote, bracket, comma or semicolon hands a code reviewer source that no longer
-# parses — `"Authorization: Bearer <jwt>",` became `"Authorization: Bearer [REDACTED]`
-# and the review panel FAILed a PR on a SyntaxError that wasn't on disk
-# (projectBoard-plugin#523). So every value class below either is a token's exact
-# alphabet or stops at `_VALUE_STOP`; never `\S+`.
-_VALUE_STOP = "\\s\"'`()\\[\\]{}<>,;&"
-# A free-form secret value: one or more characters up to the first whitespace,
-# quote, bracket, or list/statement separator. A secret that itself contains one of
-# those characters is redacted only up to it — the price of keeping the
-# surrounding syntax intact (exact-match scrubbing of manager-sourced values,
-# below, still covers those whole).
-_VALUE = f"[^{_VALUE_STOP}]+"
-# RFC 6750 b64token — the whole alphabet a Bearer/Basic credential can use.
-_B64TOKEN = r"[A-Za-z0-9\-._~+/]+=*"
+# Two invariants, in priority order:
+#
+# 1. LEAK-FREE. A match never leaves part of a secret visible. Narrowing a value class
+#    to "stop at the first comma" turned `API_KEY=abc,def` into `API_KEY=[REDACTED],def`
+#    — a partial leak, worse than any mangled delimiter.
+# 2. SYNTAX-PRESERVING (#3816, #4166). Redaction runs over tool output before the model
+#    reads it (AuditMiddleware), so a match that swallows the closing quote after a token
+#    hands a code reviewer source that no longer parses: `"Authorization: Bearer <jwt>",`
+#    became `"Authorization: Bearer [REDACTED]` and the review panel FAILed
+#    projectBoard-plugin#523 on a SyntaxError that wasn't on disk.
+#
+# Both hold by making the CONTEXTUAL patterns (an Authorization header, a `KEY=value`
+# assignment, `api_key: …`, `client_secret: …`) quote-aware: the regex below matches
+# only the PREFIX, and `_value_end` decides where the value stops —
+#   * inside a quoted string (the value's own opening quote, or the quote the whole
+#     `KEY=value` / header text sits in): everything up to the MATCHING closing quote on
+#     that line, and the quote is kept — so `"KEY=a,b;c d",` → `"KEY=[REDACTED]",`;
+#   * unquoted: up to whitespace, a quote character, or a closing bracket `) ] } >` —
+#     never at `, ; & ( [ { <`, which can sit inside a secret.
+# Token SHAPES (sk-, ghp_, npm_, a JWT, …) match their provider's exact alphabet, which
+# cannot contain a quote or bracket.
+
+# The unquoted value: anything up to whitespace, a quote, or a closing bracket.
+_UNQUOTED_STOP = re.compile(r"[\s\"'`)\]}>]")
+# A bare template/variable reference (`${TOKEN}`, `$TOKEN`, `{token}`, `{{ secrets.X }}`)
+# in the value position is not a secret — leave it, so `f"Authorization: Bearer {tok}"`
+# and `Authorization: Bearer ${TOKEN}` read as written.
+_TEMPLATE_REF = re.compile(r"\$\{[A-Za-z_]\w*\}|\$[A-Za-z_]\w*|\{\{\s*[\w.]+\s*\}\}|\{[A-Za-z_][\w.]*\}")
+
+# An unquoted value that is a call/subscript on a dotted name whose argument opens with a
+# quote or closes at once (`os.environ.get('X')`, `os.environ["X"]`, `getenv()`) is code
+# reading a secret, not one: redacting `os.environ.get(` would leave `[REDACTED]'X')`, the
+# unparseable artefact this module exists to avoid. (An unquoted secret could never
+# carry the quote that follows anyway — the unquoted scan stops there.)
+_CODE_REF = re.compile(r"[A-Za-z_][\w.]*[(\[][\"'`)\]]")
+
+_ENV_KEYS = (
+    r"OPENAI_API_KEY|LANGFUSE_SECRET_KEY|LANGFUSE_PUBLIC_KEY|"
+    r"A2A_AUTH_TOKEN|API_KEY|SECRET_KEY|PUBLIC_KEY|AUTH_TOKEN|ACCESS_TOKEN|"
+    r"PRIVATE_KEY|DISCORD_BOT_TOKEN|BOT_TOKEN|GATEWAY_API_KEY|GH_PAT|"
+    r"AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AWS_ACCESS_KEY_ID|NPM_TOKEN|"
+    r"CLIENT_SECRET|INFISICAL_CLIENT_SECRET"
+)
 
 PATTERNS: dict[str, re.Pattern] = {
-    # `Authorization: Bearer x`, plus the JSON/dict spelling (`"Authorization":
-    # "Bearer x"`) and the Basic/token schemes. The credential is RFC 6750's
-    # b64token alphabet, so it can never run into a closing quote or comma.
+    # Contextual PREFIXES — each ends where the value begins; `_redact_values` finds the
+    # value's end. `q1` = a quote immediately before the key (the whole thing sits in a
+    # string), `sep` = the separator, whose trailing quote (if any) opens the value.
+    #
+    # `Authorization: Bearer x`, the JSON/dict spelling (`"Authorization": "Bearer x"`),
+    # and the Basic/token schemes.
     "bearer_token": re.compile(
-        r"(Authorization[\"']?\s*[:=]\s*[\"']?(?:Bearer|Basic|token)\s+)" + _B64TOKEN,
-        re.IGNORECASE,
-    ),
-    "openai_key": re.compile(
-        r"\bsk-[A-Za-z0-9_\-]{20,}\b",
-    ),
-    "generic_api_key": re.compile(
-        r"(?i)(?:api[_\-]?key|apikey)(?:[\"'\s:=]+)([A-Za-z0-9_\-]{16,})",
-    ),
-    # Provider token shapes a tool error / payload might echo into the audit log.
-    "google_oauth": re.compile(r"\bya29\.[A-Za-z0-9_\-]+"),
-    "google_api_key": re.compile(r"\bAIza[A-Za-z0-9_\-]{20,}\b"),
-    "github_token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),
-    "github_pat": re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}"),
-    "npm_token": re.compile(r"\bnpm_[A-Za-z0-9]{36,}"),
-    "jwt": re.compile(r"\beyJ[A-Za-z0-9_\-]{5,}\.eyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]+"),
-    "slack_token": re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
-    "aws_access_key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
-    "discord_token": re.compile(r"\b[MNO][A-Za-z0-9_\-]{23}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}\b"),
-    # The password half of URL userinfo (`https://user:pass@host`) — group 1 keeps
-    # the scheme and user, the `@` stays.
-    "url_userinfo": re.compile(r"(?i)(\b[a-z][a-z0-9+.\-]*://[^\s/:@\"'`<>]+:)(?!\[REDACTED\])[^\s/@\"'`<>]+(?=@)"),
-    "client_secret": re.compile(
-        r"(?i)client[_\-]?secret(?:[\"'\s:=]+)([A-Za-z0-9_\-]{12,})",
+        r"(?i)(?P<q1>[\"'`])?\bAuthorization(?P<sep>[\"'`]?\s*[:=]\s*[\"'`]?)(?:Bearer|Basic|token)[ \t]+",
     ),
     # `PUBLIC_KEY` bare, not just `LANGFUSE_PUBLIC_KEY`: #3017 gave that key a config
     # home, and `secrets.yaml` spells it `public_key`, so a tool that echoes the file
     # would leak it while its `secret_key` sibling one line down was scrubbed. The
     # leading `\b` keeps the bare alternative from matching inside a longer name.
     "env_var_assignment": re.compile(
-        r"(?i)\b(OPENAI_API_KEY|LANGFUSE_SECRET_KEY|LANGFUSE_PUBLIC_KEY|"
-        r"A2A_AUTH_TOKEN|API_KEY|SECRET_KEY|PUBLIC_KEY|AUTH_TOKEN|ACCESS_TOKEN|"
-        r"PRIVATE_KEY|DISCORD_BOT_TOKEN|BOT_TOKEN|GATEWAY_API_KEY|GH_PAT|"
-        r"AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|NPM_TOKEN|"
-        r"CLIENT_SECRET|INFISICAL_CLIENT_SECRET)\s*[=:]\s*"
-        # The value, format-preserving (#3816): an optional opening quote, then the
-        # value up to `_VALUE_STOP`. Already-redacted values (an earlier pattern got
-        # there first) are left alone rather than re-wrapped.
-        r"[\"'`]?(?!\[REDACTED\])" + _VALUE,
+        r"(?i)(?P<q1>[\"'`])?\b(?P<key>" + _ENV_KEYS + r")(?P<sep>[\"'`]?[ \t]*[=:][ \t]*[\"'`]?)",
     ),
+    # Value must open with a 16+ char key-shaped run (keeps `api_key = os.environ[…]`
+    # alone); once it does, the WHOLE value goes, not just that run.
+    "generic_api_key": re.compile(
+        r"(?i)(?P<q1>[\"'`])?(?:api[_\-]?key|apikey)(?P<sep>[\"'\s:=]+)",
+    ),
+    "client_secret": re.compile(
+        r"(?i)(?P<q1>[\"'`])?client[_\-]?secret(?P<sep>[\"'\s:=]+)",
+    ),
+    # Token shapes — the provider's exact alphabet, so a match is the secret and only it.
+    "openai_key": re.compile(
+        r"\bsk-[A-Za-z0-9_\-]{20,}\b",
+    ),
+    "google_oauth": re.compile(r"\bya29\.[A-Za-z0-9_\-]+"),
+    "google_api_key": re.compile(r"\bAIza[A-Za-z0-9_\-]{20,}\b"),
+    "github_token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),
+    "github_pat": re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}"),
+    # npm tokens are base64url — `_` and `-` included.
+    "npm_token": re.compile(r"\bnpm_[A-Za-z0-9_\-]{36,}"),
+    "jwt": re.compile(r"\beyJ[A-Za-z0-9_\-]{5,}\.eyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]+"),
+    "slack_token": re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
+    # AKIA = long-lived, ASIA = temporary (STS) access key ids.
+    "aws_access_key": re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
+    "discord_token": re.compile(r"\b[MNO][A-Za-z0-9_\-]{23}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}\b"),
+    # The password half of URL userinfo (`https://user:pass@host`) — group 1 keeps the
+    # scheme and user; the password runs to the LAST `@` before the host (a raw `@` in a
+    # password must not leave its tail visible), and the `@host` stays.
+    "url_userinfo": re.compile(r"(?i)(\b[a-z][a-z0-9+.\-]*://[^\s/:@\"'`<>]+:)(?!\[REDACTED\]@)[^\s/\"'`<>]+(?=@)"),
 }
 
 # Known environment variable key names whose dict values should be redacted.
@@ -112,6 +137,10 @@ _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
         "refresh_token",
         "REFRESH_TOKEN",
         "INFISICAL_CLIENT_SECRET",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_ACCESS_KEY_ID",
+        "NPM_TOKEN",
     }
 )
 
@@ -132,37 +161,89 @@ def _known_secret_values() -> frozenset[str]:
         return frozenset()
 
 
+_QUOTES = "\"'`"
+
+
+def _active_quote(m: re.Match) -> str | None:
+    """The quote the value sits in, if any. A quote ending the separator opens the value
+    (`"KEY": "v"`); otherwise a quote right before the key wraps the whole text
+    (`"KEY=v"`) — unless the separator already closed it (`'KEY': v`)."""
+    sep = m.group("sep") or ""
+    if sep and sep[-1] in _QUOTES:
+        return sep[-1]
+    q1 = m.group("q1")
+    if q1 and not any(c in _QUOTES for c in sep):
+        return q1
+    return None
+
+
+def _value_end(s: str, start: int, quote: str | None) -> int:
+    """Where the value starting at ``start`` ends (exclusive). Quoted: at the matching,
+    unescaped closing quote on the same line (the quote itself survives). Unquoted — or
+    a quote that never closes on this line — at whitespace, a quote, or `) ] } >`."""
+    if quote:
+        i, n = start, len(s)
+        while i < n:
+            c = s[i]
+            if c == "\\":
+                i += 2
+                continue
+            if c == quote:
+                return i
+            if c == "\n":
+                break
+            i += 1
+    m = _UNQUOTED_STOP.search(s, start)
+    return m.start() if m else len(s)
+
+
+def _redact_values(s: str, prefix: re.Pattern, min_run: int = 0) -> str:
+    """Replace the value after each ``prefix`` match with the placeholder, quote-aware.
+
+    ``min_run`` > 0: only when the value opens with that many key-shaped characters
+    (the heuristic patterns' false-positive guard) — but then the whole value goes."""
+    out: list[str] = []
+    pos = 0
+    for m in prefix.finditer(s):
+        if m.start() < pos:
+            continue
+        start = m.end()
+        quote = _active_quote(m)
+        if s.startswith(_PLACEHOLDER, start):
+            # Already redacted by an earlier pattern: only a tail it left behind goes.
+            if _value_end(s, start + len(_PLACEHOLDER), quote) == start + len(_PLACEHOLDER):
+                continue
+        end = _value_end(s, start, quote)
+        span = s[start:end]
+        if not span or (quote is None and _CODE_REF.match(s, start)):
+            continue
+        # A bare variable reference standing alone as the value (its `}` may be what
+        # stopped the unquoted scan) is code, not a credential.
+        ref = _TEMPLATE_REF.match(s, start)
+        if ref and (ref.end() >= end) and (ref.end() == len(s) or _UNQUOTED_STOP.match(s, ref.end())):
+            continue
+        if min_run and not re.match(r"[A-Za-z0-9_\-]{%d,}" % min_run, span):
+            continue
+        out.append(s[pos:start])
+        out.append(_PLACEHOLDER)
+        pos = end
+    if not out:
+        return s
+    out.append(s[pos:])
+    return "".join(out)
+
+
 def _redact_string_simple(value: str) -> str:
-    """Simplified string redaction using direct substitution."""
-    # Bearer token
-    value = PATTERNS["bearer_token"].sub(r"\1[REDACTED]", value)
-    # OpenAI-style key
-    value = PATTERNS["openai_key"].sub(_PLACEHOLDER, value)
-
-    # Generic api_key — redact the captured credential value group
-    def _replace_api_key(m: re.Match) -> str:
-        full = m.group(0)
-        cred = m.group(1)
-        return full[: len(full) - len(cred)] + _PLACEHOLDER
-
-    value = PATTERNS["generic_api_key"].sub(_replace_api_key, value)
-
-    # env var assignment — keep the key name, redact value after =/:
-    def _replace_env_var(m: re.Match) -> str:
-        full = m.group(0)
-        key = m.group(1)
-        # find the separator and everything after
-        rest = full[len(key) :]
-        sep_match = re.match(r"\s*[=:]\s*[\"'`]?", rest)  # keep an opening quote too
-        if sep_match:
-            return key + sep_match.group(0) + _PLACEHOLDER
-        return key + _PLACEHOLDER
-
-    value = PATTERNS["env_var_assignment"].sub(_replace_env_var, value)
+    """Contextual values first (quote-aware), then token shapes, then exact values."""
+    value = _redact_values(value, PATTERNS["bearer_token"])
+    value = _redact_values(value, PATTERNS["env_var_assignment"])
+    value = _redact_values(value, PATTERNS["generic_api_key"], min_run=16)
+    value = _redact_values(value, PATTERNS["client_secret"], min_run=12)
 
     # Provider token shapes — full-match redaction.
     for _name in (
         "jwt",
+        "openai_key",
         "google_oauth",
         "google_api_key",
         "github_token",
@@ -176,13 +257,6 @@ def _redact_string_simple(value: str) -> str:
 
     # URL userinfo — keep scheme://user:, redact the password, keep the @host.
     value = PATTERNS["url_userinfo"].sub(r"\1[REDACTED]", value)
-
-    # client_secret — redact the captured credential value group.
-    def _replace_client_secret(m: re.Match) -> str:
-        full, cred = m.group(0), m.group(1)
-        return full[: len(full) - len(cred)] + _PLACEHOLDER
-
-    value = PATTERNS["client_secret"].sub(_replace_client_secret, value)
 
     # Manager-sourced values (ADR 0080) — exact-match scrub, shape-agnostic.
     for secret_value in _known_secret_values():
