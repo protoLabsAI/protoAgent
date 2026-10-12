@@ -40,14 +40,15 @@ function Title({ props }: { props: Record<string, unknown> }) {
 function TableComponent({ props }: { props: Record<string, unknown> }) {
   const columns = Array.isArray(props.columns) ? (props.columns as unknown[]).map(asString) : [];
   const rows = Array.isArray(props.rows) ? (props.rows as Row[]) : [];
-  // Optional attribution caption (ADR 0118). props are untrusted: ignore a non-string source,
-  // cap it at 200 chars, and render it as plain text — JSX escapes it, so never as HTML. A
+  // Optional attribution (ADR 0118), rendered by the DS Table's `source` prop as a native
+  // `<caption>` ("Source: …", pinned under the table). props are untrusted: ignore a non-string
+  // source, cap it at 200 chars, and render it as plain text — JSX escapes it, so never as HTML. A
   // missing/empty source renders nothing, leaving the table markup identical to before.
   const source = typeof props.source === "string" ? props.source.slice(0, 200) : "";
   return (
     <div className="chat-comp chat-comp-table">
       <Title props={props} />
-      <Table>
+      <Table source={source || undefined}>
         {columns.length > 0 ? (
           <THead>
             <Tr>
@@ -67,7 +68,6 @@ function TableComponent({ props }: { props: Record<string, unknown> }) {
           ))}
         </TBody>
       </Table>
-      {source ? <div className="chat-comp-source">Source: {source}</div> : null}
     </div>
   );
 }

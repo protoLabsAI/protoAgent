@@ -15,6 +15,7 @@
 // portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
 // See the OIU LICENSE for the full text.
 
+import { InlineFrameCard } from "@protolabsai/ui/ai";
 import { Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -417,6 +418,12 @@ export function StreamingPreview({ buffer, kind = "", title = "", renderFinal }:
     return <>{renderFinal(lastHeight)}</>;
   }
 
+  // The card chrome is the DS InlineFrameCard (@protolabsai/ui/ai) — the SAME surface the final
+  // inline frame (ArtifactRefChip) renders in, so the handover swaps like for like. Before the gate
+  // opens (and for every non-previewable kind) it is the `building` state: a skeleton plus the
+  // kind-aware status line in an aria-live region. Once the preview frame shows it is `live`, hosting
+  // the sandboxed preview; the frame itself is then the progress, so the status line steps aside.
+  const status = statusLine(kind, buffer.done);
   return (
     <div
       className="artifact-ref-inline artifact-ref-inline--streaming"
@@ -424,34 +431,27 @@ export function StreamingPreview({ buffer, kind = "", title = "", renderFinal }:
       data-kind={kind || undefined}
       data-preview={showPreview ? "true" : undefined}
     >
-      <div className="artifact-ref-inline__head">
-        <Sparkles size={14} aria-hidden className="code-ref-chip__icon" />
-        <span className="artifact-ref-chip__title">{name}</span>
-        <span className="artifact-ref-inline__spacer" />
-        <span className="artifact-ref-inline__status" data-testid="streaming-preview-status" role="status">
-          {statusLine(kind, buffer.done)}
-        </span>
-      </div>
-      {showPreview ? (
-        <iframe
-          ref={frameRef}
-          className="artifact-ref-inline__frame artifact-ref-inline__preview-frame"
-          data-testid="streaming-preview-frame"
-          title={name}
-          // allow-scripts ONLY — never allow-same-origin, so the frame is opaque-origin and cannot
-          // read the console's credentials. The markup is injected via postMessage, never the URL.
-          sandbox="allow-scripts"
-          srcDoc={srcdoc}
-          style={{ height: lastHeight, width: "100%", border: 0 }}
-          onLoad={() => setFrameLoaded(true)}
-        />
-      ) : (
-        <div
-          className="artifact-ref-inline__body artifact-ref-inline__placeholder"
-          data-testid="streaming-preview-placeholder"
-          style={{ height: MIN_FRAME_HEIGHT }}
-        />
-      )}
+      <InlineFrameCard
+        title={name}
+        icon={<Sparkles size={14} />}
+        state={showPreview ? "live" : "building"}
+        height={showPreview ? lastHeight : MIN_FRAME_HEIGHT}
+        status={<span data-testid="streaming-preview-status">{status}</span>}
+      >
+        {showPreview ? (
+          <iframe
+            ref={frameRef}
+            data-testid="streaming-preview-frame"
+            title={name}
+            // allow-scripts ONLY — never allow-same-origin, so the frame is opaque-origin and cannot
+            // read the console's credentials. The markup is injected via postMessage, never the URL.
+            sandbox="allow-scripts"
+            srcDoc={srcdoc}
+            style={{ height: lastHeight }}
+            onLoad={() => setFrameLoaded(true)}
+          />
+        ) : null}
+      </InlineFrameCard>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { InlineFrameCard, type InlineFrameCardState } from "@protolabsai/ui/ai";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Sparkles } from "lucide-react";
 import {
@@ -302,6 +303,11 @@ function InlineArtifactHost({
   });
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const navigatedRef = useRef(false);
+  // Has the embed frame loaded (its load event, the kit's ready ping, or its first height report —
+  // whichever comes first)? Until then the card shows its loading skeleton over the (already
+  // mounted) frame. Reset whenever the frame goes away (evicted / unmounted), since a
+  // resumed frame is a fresh iframe that has to load again.
+  const [loaded, setLoaded] = useState(false);
   const initTimers = useRef<number[]>([]);
 
   // Bring this frame (back) live holding EXACTLY one claim. The eviction that drops our live slot
@@ -363,10 +369,12 @@ function InlineArtifactHost({
       if (!win || e.source !== win) return;
       const m = (e.data || {}) as { type?: unknown; height?: unknown };
       if (m.type === "protoagent:ready") {
+        setLoaded(true); // the kit is up — no need to wait for every subresource's load
         postInit(win, src);
         return;
       }
       if (m.type !== "protoArtifact:height") return;
+      setLoaded(true); // a measured render is a loaded frame, even if a subresource still hangs
       const h = typeof m.height === "number" ? m.height : NaN;
       setMeasured(host.measure(key, h));
     };
@@ -455,6 +463,7 @@ function InlineArtifactHost({
   // ready-ping path above makes it exact when the kit announces itself.
   function handleLoad(e: SyntheticEvent<HTMLIFrameElement>) {
     navigatedRef.current = true;
+    setLoaded(true);
     const win = e.currentTarget.contentWindow;
     if (!win) return;
     initTimers.current.forEach(clearTimeout);
@@ -468,8 +477,30 @@ function InlineArtifactHost({
     [],
   );
 
+  // A frame that goes away (evicted to a resume card, or not yet mounted) must load again.
+  const frameUp = mounted && live;
+  useEffect(() => {
+    if (!frameUp) setLoaded(false);
+  }, [frameUp]);
+
   const shownHeight = measured ?? MIN_FRAME_HEIGHT;
 
+  // The card chrome is the DS InlineFrameCard (@protolabsai/ui/ai): one root + one body box held at
+  // `shownHeight` across every state, so mount → load → evict → resume never jumps the transcript.
+  //   • not yet mounted (lazy, off screen) → `live` with an empty body at the remembered height;
+  //   • mounted, frame not yet loaded      → `loading` (a skeleton over the still-mounted frame);
+  //   • live                               → the frame (or the quarantine notice, #4076);
+  //   • evicted past the 6-frame cap       → `resume`: the whole body is the "Click to resume" button.
+  // The older-version state keeps its "v2 of 5" label in the title, since the DS version badge is a
+  // bare `v{n}`. The outer div stays OURS: it carries the lazy-mount/visibility observer ref, which a
+  // DS component can't take.
+  const cardState: InlineFrameCardState = !mounted
+    ? "live"
+    : !live
+      ? "resume"
+      : !loaded && !guard.quarantined
+        ? "loading"
+        : "live";
   return (
     <div
       ref={slotRef}
@@ -478,63 +509,42 @@ function InlineArtifactHost({
       data-version={artifact.version}
       data-older={older ? "true" : undefined}
     >
-      <div className="artifact-ref-inline__head">
-        <Sparkles size={14} aria-hidden className="code-ref-chip__icon" />
-        <span className="artifact-ref-chip__title">{name}</span>
-        <span className="code-ref-chip__sep"> · </span>
-        <span className="artifact-ref-chip__version">{label}</span>
-        <span className="artifact-ref-inline__spacer" />
-        <button
-          type="button"
-          className="artifact-ref-inline__open"
-          data-testid="artifact-inline-open"
-          title={`Open ${name} (${label}) in the Artifact panel`}
-          onClick={() => openArtifactRef(artifact)}
-        >
-          Open in panel
-        </button>
-      </div>
-      {!mounted ? (
-        <div className="artifact-ref-inline__body" style={{ height: shownHeight }} />
-      ) : live && guard.quarantined ? (
-        <FrameQuarantineNotice what="artifact" height={shownHeight} onRun={guard.run} />
-      ) : live ? (
-        // sandbox/allow mirror PluginView's plugin frame: same-origin so the DS kit + the gated
-        // history poll work, allow-pointer-lock (a sandbox token, not a permissions-policy feature)
-        // so a nested canvas/3D answer can capture the mouse. The NESTED artifact frame the shell
-        // builds keeps its own stricter sandbox.
-        <div className="frame-guard" data-active={guard.active ? "true" : undefined}>
-          <iframe
-            ref={frameRef}
-            className="artifact-ref-inline__frame"
-            data-testid="artifact-inline-frame"
-            src={apiUrl(src)}
-            title={name}
-            sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
-            allow="clipboard-read; clipboard-write"
-            style={{ height: shownHeight }}
-            onLoad={handleLoad}
-          />
-          <FrameActivationShield guard={guard} />
-        </div>
-      ) : (
-        <button
-          type="button"
-          className="artifact-ref-inline__resume"
-          data-testid="artifact-inline-resume"
-          style={{ height: shownHeight }}
-          title={`Resume ${name}`}
-          onClick={resume}
-        >
-          Click to resume
-        </button>
-      )}
+      <InlineFrameCard
+        title={older ? `${name} · ${label}` : name}
+        version={older ? undefined : artifact.version}
+        icon={<Sparkles size={14} />}
+        state={cardState}
+        height={shownHeight}
+        onOpen={() => openArtifactRef(artifact)}
+        onResume={resume}
+      >
+        {!mounted ? null : guard.quarantined ? (
+          <FrameQuarantineNotice what="artifact" height={shownHeight} onRun={guard.run} />
+        ) : (
+          // sandbox/allow mirror PluginView's plugin frame: same-origin so the DS kit + the gated
+          // history poll work, allow-pointer-lock (a sandbox token, not a permissions-policy feature)
+          // so a nested canvas/3D answer can capture the mouse. The NESTED artifact frame the shell
+          // builds keeps its own stricter sandbox.
+          <div className="frame-guard" data-active={guard.active ? "true" : undefined}>
+            <iframe
+              ref={frameRef}
+              data-testid="artifact-inline-frame"
+              src={apiUrl(src)}
+              title={name}
+              sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
+              allow="clipboard-read; clipboard-write"
+              style={{ height: shownHeight }}
+              onLoad={handleLoad}
+            />
+            <FrameActivationShield guard={guard} />
+          </div>
+        )}
+      </InlineFrameCard>
       {/* The host's send/openLink verdict (ADR 0118 D4): the needs-confirm prompt, or a
           rejection shown in place. The frame also gets the verdict on its send()/openLink()
           Promise; this makes the decision visible to the operator, where their click landed. */}
       <BridgeNoticeView
         notice={gate.notice}
-        classPrefix="artifact-ref-inline__bridge"
         testIdPrefix="artifact"
         source="artifact"
         onAccept={(alwaysAllow) =>

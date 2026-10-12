@@ -160,7 +160,7 @@ describe("ArtifactRefChip", () => {
     expect(chip()).toBeNull();
     const f = frame();
     expect(f).not.toBeNull();
-    expect(container.querySelector('[data-testid="artifact-inline-open"]')).not.toBeNull();
+    expect(container.querySelector('.pl-frame-card__open')).not.toBeNull();
     // The embed URL names the artifact + version (S5 ?embed=<id>&v=<n>).
     expect(f!.getAttribute("src")).toContain("embed=a-1");
     expect(f!.getAttribute("src")).toContain("v=2");
@@ -240,7 +240,7 @@ describe("ArtifactRefChip", () => {
     // (the first mounted) is swapped for a resume card at its last height.
     expect(container.querySelectorAll('[data-testid="artifact-ref-inline"]').length).toBe(3);
     expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
-    const resume = container.querySelector<HTMLButtonElement>('[data-testid="artifact-inline-resume"]');
+    const resume = container.querySelector<HTMLButtonElement>('.pl-frame-card__resume');
     expect(resume).not.toBeNull();
     expect(resume!.textContent).toContain("Click to resume");
     expect(resume!.style.height).toBe("240px"); // keeps its height so the layout doesn't jump
@@ -250,7 +250,7 @@ describe("ArtifactRefChip", () => {
     });
     await flush();
     expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(2);
-    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(1);
+    expect(container.querySelectorAll('.pl-frame-card__resume').length).toBe(1);
   });
 
   // The backend re-emits an inline ref for EVERY version of an inline artifact
@@ -304,7 +304,7 @@ describe("ArtifactRefChip", () => {
     const lines = superseded();
     expect(lines.map((el) => el.dataset.version)).toEqual(["2", "3", "4", "5"]);
     expect(lines[0].textContent).toContain("superseded by v6");
-    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(0);
+    expect(container.querySelectorAll('.pl-frame-card__resume').length).toBe(0);
     // The superseded line still opens ITS version in the panel.
     act(() => lines[0].click());
     expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:select", id: "a-1", ver: 2 }]);
@@ -371,7 +371,7 @@ describe("ArtifactRefChip", () => {
     expect(host.isLive("v3 a-1")).toBe(true);
     expect(host.isLive("v2 a-1")).toBe(false);
     expect(host.liveCount()).toBe(2);
-    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(0);
+    expect(container.querySelectorAll('.pl-frame-card__resume').length).toBe(0);
     expect(superseded().map((el) => el.dataset.version)).toEqual(["2"]);
   });
 
@@ -434,7 +434,7 @@ describe("ArtifactRefChip", () => {
     await flush();
     // Cap 2: the first-mounted frame (a-1) is the least-recently-visible, so it is evicted to a
     // resume card and is no longer live.
-    const resume = container.querySelector<HTMLButtonElement>('[data-testid="artifact-inline-resume"]');
+    const resume = container.querySelector<HTMLButtonElement>('.pl-frame-card__resume');
     expect(resume).not.toBeNull();
     expect(host.isLive("v1 a-1")).toBe(false);
     // Click to resume: a-1 re-registers (evicting a sibling to hold the cap) and goes live again.
@@ -471,8 +471,8 @@ describe("ArtifactRefChip", () => {
     const seenResume: Node[] = [];
     const hasResume = (n: Node) =>
       n.nodeType === 1 &&
-      ((n as HTMLElement).dataset?.testid === "artifact-inline-resume" ||
-        !!(n as HTMLElement).querySelector?.('[data-testid="artifact-inline-resume"]'));
+      ((n as HTMLElement).classList?.contains("pl-frame-card__resume") ||
+        !!(n as HTMLElement).querySelector?.('.pl-frame-card__resume'));
     const mo = new MutationObserver((records) => {
       for (const r of records) for (const n of r.addedNodes) if (hasResume(n)) seenResume.push(n);
     });
@@ -630,7 +630,7 @@ describe("ArtifactRefChip", () => {
       expect(container.querySelectorAll('[data-testid="artifact-inline-frame"]').length).toBe(6);
       expect(host.isLive("v1 b-1")).toBe(false);
       expect(host.isLive("v1 b-2")).toBe(false);
-      for (const d of bSlots) expect(d.querySelector('[data-testid="artifact-inline-resume"]')).not.toBeNull();
+      for (const d of bSlots) expect(d.querySelector('.pl-frame-card__resume')).not.toBeNull();
       // Switch back to chat B: its frames scroll into view again. The visibility observer
       // re-registers them (a plain touch is a no-op once evicted), reclaiming slots from A's
       // now-hidden frames — without any click on the resume card.
@@ -638,7 +638,7 @@ describe("ArtifactRefChip", () => {
       await flush();
       for (const d of bSlots) {
         expect(d.querySelector('[data-testid="artifact-inline-frame"]')).not.toBeNull();
-        expect(d.querySelector('[data-testid="artifact-inline-resume"]')).toBeNull();
+        expect(d.querySelector('.pl-frame-card__resume')).toBeNull();
       }
       expect(host.isLive("v1 b-1")).toBe(true);
       expect(host.isLive("v1 b-2")).toBe(true);
@@ -710,7 +710,19 @@ describe("ArtifactRefChip", () => {
 // unless the operator ticked "Always allow from this artifact". These drive it end to end.
 describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b / S19)", () => {
   const frame = () => container.querySelector<HTMLIFrameElement>('[data-testid="artifact-inline-frame"]');
-  const q = <T extends Element = HTMLElement>(id: string) => container.querySelector<T>(`[data-testid="${id}"]`);
+  // The confirm chip is the DS ConfirmChip: its controls carry DS classes, not test ids, so the
+  // legacy part ids (`…-confirm-ok|dismiss|trust`, `…-rejected-dismiss`) map onto those classes
+  // under the host's wrapper test id.
+  const CHIP_PARTS: Record<string, string> = {
+    ok: ".pl-confirm-chip__confirm",
+    dismiss: ".pl-confirm-chip__dismiss",
+    trust: ".pl-confirm-chip__trust input",
+  };
+  const sel = (id: string) => {
+    const m = /^(.*-(?:confirm|rejected))-(ok|dismiss|trust)$/.exec(id);
+    return m ? `[data-testid="${m[1]}"] ${CHIP_PARTS[m[2]]}` : `[data-testid="${id}"]`;
+  };
+  const q = <T extends Element = HTMLElement>(id: string) => container.querySelector<T>(sel(id));
   const chipEl = () => q("artifact-send-confirm");
 
   function setActivation(value: { isActive: boolean } | undefined) {
@@ -785,7 +797,9 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b / S19)", 
     expect(chat.send).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled(); // the frame's promise is pending on the operator
     const c = chipEl()!;
-    expect(c.getAttribute("role")).toBe("alertdialog");
+    // The DS ConfirmChip inside the host's wrapper: announced, but NOT modal.
+    expect(c.querySelector(".pl-confirm-chip")?.getAttribute("role")).toBe("alertdialog");
+    expect(c.querySelector(".pl-confirm-chip")?.getAttribute("aria-modal")).toBe("false");
     expect(c.textContent).toContain("Send to chat:");
     expect(q("artifact-send-confirm-text")?.textContent).toBe("Recompute at 42");
     expect(c.textContent).toContain("Always allow from this artifact");
@@ -1029,7 +1043,9 @@ describe("ArtifactRefChip — send/openLink bridge (ADR 0118 D4 / S10b / S19)", 
     expect(open).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
     const c = openChipEl()!;
-    expect(c.getAttribute("role")).toBe("alertdialog");
+    // The DS ConfirmChip inside the host's wrapper: announced, but NOT modal.
+    expect(c.querySelector(".pl-confirm-chip")?.getAttribute("role")).toBe("alertdialog");
+    expect(c.querySelector(".pl-confirm-chip")?.getAttribute("aria-modal")).toBe("false");
     expect(c.textContent).toContain("Open docs.example.com in a new tab?");
     expect(q("artifact-open-confirm-text")?.textContent).toBe("https://docs.example.com/guide?x=1");
     expect(c.textContent).toContain("Always allow links from this artifact");
@@ -1264,7 +1280,7 @@ describe("ArtifactRefChip — eager live inline frame (S22, #4147)", () => {
     await flush();
     expect(host.liveCount()).toBe(2);
     expect(frameIds().sort()).toEqual(["a-2", "a-3"]);
-    expect(container.querySelectorAll('[data-testid="artifact-inline-resume"]').length).toBe(1);
+    expect(container.querySelectorAll('.pl-frame-card__resume').length).toBe(1);
   });
 
   it("once consumed, a remount of the same ref lazy-mounts, and unmount frees its slot (no leak)", async () => {

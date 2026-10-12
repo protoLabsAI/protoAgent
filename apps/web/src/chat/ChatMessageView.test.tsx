@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { registerChatComponent } from "../ext/componentRegistry";
 import type { ChatMessage, ChatPart, ToolCall } from "../lib/types";
-import chatComponentCss from "./chat-component.css?raw";
 import { ChatMessageView } from "./ChatMessageView";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -269,7 +268,7 @@ describe("ChatMessageView — a send-to-chat user turn shows a 'from ‹title›
       sentVia: { via: "artifact", artifact_id: "art-inline", version: 2, title: "Inline calc" },
     };
     render(message);
-    const label = container.querySelector('[data-testid="chat-from-artifact"]');
+    const label = container.querySelector(".pl-message__origin");
     expect(label?.textContent).toContain("from Inline calc");
     // The text itself still renders as an ordinary, visible user turn.
     expect(container.querySelector(".pl-message--user")?.textContent).toContain("Recompute at 42");
@@ -284,7 +283,7 @@ describe("ChatMessageView — a send-to-chat user turn shows a 'from ‹title›
       sentVia: { via: "artifact", artifact_id: "art-xyz", version: 1, title: '<img src=x onerror="window.__pwned=1">' },
     };
     render(message);
-    expect(container.querySelector('[data-testid="chat-from-artifact"]')?.textContent).toContain(
+    expect(container.querySelector(".pl-message__origin")?.textContent).toContain(
       '<img src=x',
     );
     expect(container.querySelector("img")).toBeNull();
@@ -293,17 +292,23 @@ describe("ChatMessageView — a send-to-chat user turn shows a 'from ‹title›
 
   it("an ordinary typed user turn has no from-label", () => {
     render({ id: "u3", role: "user", content: "hello", status: "done" });
-    expect(container.querySelector('[data-testid="chat-from-artifact"]')).toBeNull();
+    expect(container.querySelector(".pl-message__origin")).toBeNull();
   });
 
-  it("the label sits on its own line — block-level flex, not inline-flex (#4124)", () => {
-    // `inline-flex` ran the chip into the message text ("from Bill SplitterI am splitting…"); a
-    // block-level `flex` puts it on its own line above the text. Assert the rule on the CSS source
-    // (jsdom does not apply stylesheets), scoped to the .chat-from-artifact block.
-    const rule = chatComponentCss.match(/\.chat-from-artifact\s*\{([^}]*)\}/);
-    expect(rule).not.toBeNull();
-    const body = rule![1];
-    expect(body).toMatch(/display:\s*flex\s*;/);
-    expect(body).not.toMatch(/display:\s*inline-flex/);
+  it("the label sits on its own line, outside the message text (#4124)", () => {
+    // `inline-flex` once ran the chip into the message text ("from Bill SplitterI am splitting…").
+    // The DS Message `origin` slot renders it as its OWN block above the content (its CSS is
+    // block-level flex), so the label must be a sibling of the content, never inside it.
+    render({
+      id: "u4",
+      role: "user",
+      content: "I am splitting the bill",
+      status: "done",
+      sentVia: { via: "artifact", artifact_id: "art-bill", version: 1, title: "Bill Splitter" },
+    });
+    const origin = container.querySelector(".pl-message__origin");
+    expect(origin).not.toBeNull();
+    expect(origin!.closest(".pl-message__content")).toBeNull();
+    expect(container.querySelector(".pl-message__content")?.textContent).not.toContain("Bill Splitter");
   });
 });

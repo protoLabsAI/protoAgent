@@ -72,7 +72,7 @@ test("an inline html artifact renders in the transcript and survives a reload", 
   // The inline host renders instead of the chip button, with Open-in-panel in its head.
   await expect(page.getByTestId("artifact-ref-inline")).toBeVisible();
   await expect(page.getByTestId("artifact-ref-chip")).toHaveCount(0);
-  await expect(page.getByTestId("artifact-inline-open")).toBeVisible();
+  await expect(page.locator(".pl-frame-card__open")).toBeVisible();
 
   // The embed frame points at this artifact + version, and mounts the model's html.
   const embed = page.getByTestId("artifact-inline-frame");
@@ -96,7 +96,7 @@ test("an inline html artifact renders in the transcript and survives a reload", 
 test("Open in panel from an inline host opens the Artifact panel on that version", async ({ page }) => {
   await send(page, "ARTIFACTREF INLINE please");
   await expect(page.getByTestId("artifact-inline-frame")).toBeVisible();
-  await page.getByTestId("artifact-inline-open").click();
+  await page.locator(".pl-frame-card__open").click();
   const panel = page.locator('iframe[title="Artifact"]');
   await expect(panel).toBeVisible();
   await expect(panel.contentFrame().locator("#art")).toHaveValue("art-inline");
@@ -112,7 +112,7 @@ test("Open in panel restores a usable width when the right dock was stored at 0 
   });
   await send(page, "ARTIFACTREF INLINE please");
   await expect(page.getByTestId("artifact-inline-frame")).toBeVisible();
-  await page.getByTestId("artifact-inline-open").click();
+  await page.locator(".pl-frame-card__open").click();
   const panel = page.locator('iframe[title="Artifact"]');
   await expect(panel).toBeVisible();
   await expect.poll(async () => (await panel.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(280);

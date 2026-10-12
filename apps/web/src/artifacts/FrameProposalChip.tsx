@@ -16,9 +16,10 @@
 // gesture, so pop-up blockers allow it), and the frame's Promise resolves only if it really
 // opened: a blocked pop-up or a dismiss rejects with the reason.
 // The hosts own the message plumbing (e.source checks, origin tags, replying to their frame);
-// this owns the decision state and the chip UI.
+// this owns the decision state; the chip itself is the DS ConfirmChip (@protolabsai/ui/ai).
 
-import { useCallback, useId, useRef, useState } from "react";
+import { ConfirmChip, ConfirmChipRejected } from "@protolabsai/ui/ai";
+import { useCallback, useRef, useState } from "react";
 
 import type { FrameBridge } from "./frameBridge";
 import { loadOpenLinkOrigins } from "./openLinkOrigins";
@@ -208,14 +209,17 @@ export function useFrameProposalGate({
 }
 
 /**
- * The inline notice under a frame. `classPrefix` keeps each host's existing styling
- * (`artifact-ref-inline__bridge` / `frame-component-host__bridge`); `testIdPrefix` namespaces the
- * test ids (`artifact` / `component`). `source` names what is asking ("artifact" / "component")
- * in the trust checkbox label.
+ * The inline notice under a frame: the DS {@link ConfirmChip} for a pending proposal, or the DS
+ * {@link ConfirmChipRejected} for a refusal shown in place. The DS chip owns the S19 invariants —
+ * `role="alertdialog"` + `aria-modal="false"`, no focus steal (no autoFocus, no `.focus()`), the
+ * "Always allow" box resetting to unticked whenever `proposalKey` changes, and a one-shot latch so a
+ * double click can't confirm twice. Keyed by the proposal's `cid`, so trust ticked for one message
+ * never carries over to the next one the frame proposes. `testIdPrefix` namespaces the wrapper's
+ * test id (`artifact` / `component`); `source` names what is asking ("artifact" / "component") in
+ * the trust checkbox label.
  */
 export function BridgeNoticeView({
   notice,
-  classPrefix,
   testIdPrefix,
   source,
   onAccept,
@@ -223,7 +227,6 @@ export function BridgeNoticeView({
   onClearRejection,
 }: {
   notice: BridgeNotice | null;
-  classPrefix: string;
   testIdPrefix: string;
   source: string;
   /** The chip's Send / Open button (with the "Always allow" box's state). */
@@ -234,33 +237,37 @@ export function BridgeNoticeView({
   if (!notice) return null;
   if (notice.kind === "rejected") {
     return (
-      <div className={`${classPrefix} ${classPrefix}--rejected`} data-testid={`${testIdPrefix}-send-rejected`} role="status">
-        <span className={`${classPrefix}-msg`}>{notice.message}</span>
-        <button
-          type="button"
-          className={`${classPrefix}-btn`}
-          data-testid={`${testIdPrefix}-send-rejected-dismiss`}
-          aria-label="Dismiss"
-          onClick={onClearRejection}
-        >
-          Dismiss
-        </button>
+      <div className="frame-bridge-notice" data-testid={`${testIdPrefix}-send-rejected`}>
+        <ConfirmChipRejected onDismiss={onClearRejection}>{notice.message}</ConfirmChipRejected>
       </div>
     );
   }
-  // Keyed by the proposal id: every new proposal gets a fresh, UNTICKED "Always allow" box, so
-  // trust ticked for one message never carries over to the next one the frame proposes.
+  const open = notice.action === "open";
+  // Test ids: `<prefix>-send-confirm*` for a message, `<prefix>-open-confirm*` for a link.
+  const tid = `${testIdPrefix}-${open ? "open" : "send"}-confirm`;
   return (
-    <ConfirmChip
-      key={notice.cid}
-      action={notice.action}
-      text={notice.text}
-      classPrefix={classPrefix}
-      testIdPrefix={testIdPrefix}
-      source={source}
-      onAccept={onAccept}
-      onDismiss={onDismiss}
-    />
+    <div className="frame-bridge-notice" data-testid={tid}>
+      <ConfirmChip
+        proposalKey={notice.cid}
+        title={
+          open ? (
+            // The host is the decision ("Open docs.example.com in a new tab?"); the full URL
+            // follows as the chip's content so nothing about where it goes is hidden.
+            <>
+              Open <strong data-testid={`${tid}-host`}>{linkHost(notice.text)}</strong> in a new tab?
+            </>
+          ) : (
+            "Send to chat:"
+          )
+        }
+        confirmLabel={open ? "Open" : "Send"}
+        trustLabel={open ? `Always allow links from this ${source}` : `Always allow from this ${source}`}
+        onConfirm={onAccept}
+        onDismiss={onDismiss}
+      >
+        <span data-testid={`${tid}-text`}>{notice.text}</span>
+      </ConfirmChip>
+    </div>
   );
 }
 
@@ -271,82 +278,4 @@ function linkHost(url: string): string {
   } catch {
     return url;
   }
-}
-
-function ConfirmChip({
-  action,
-  text,
-  classPrefix,
-  testIdPrefix,
-  source,
-  onAccept,
-  onDismiss,
-}: {
-  action: ProposalAction;
-  text: string;
-  classPrefix: string;
-  testIdPrefix: string;
-  source: string;
-  onAccept: (alwaysAllow: boolean) => void;
-  onDismiss: () => void;
-}) {
-  const [alwaysAllow, setAlwaysAllow] = useState(false);
-  const labelId = useId();
-  const textId = useId();
-  const open = action === "open";
-  // Test ids: `<prefix>-send-confirm*` for a message, `<prefix>-open-confirm*` for a link.
-  const tid = `${testIdPrefix}-${open ? "open" : "send"}-confirm`;
-  // Not modal and it does NOT steal focus (the operator may be typing in the composer, and a
-  // frame must not be able to yank focus by proposing) — alertdialog makes assistive tech
-  // announce it; the buttons and checkbox are ordinary focusable controls.
-  return (
-    <div
-      className={`${classPrefix} ${classPrefix}--confirm`}
-      data-testid={tid}
-      role="alertdialog"
-      aria-modal="false"
-      aria-labelledby={labelId}
-      aria-describedby={textId}
-    >
-      {open ? (
-        // The host is the decision ("Open docs.example.com in a new tab?"); the full URL follows
-        // so nothing about where it goes is hidden.
-        <span className={`${classPrefix}-msg`}>
-          <span id={labelId}>
-            Open <strong data-testid={`${tid}-host`}>{linkHost(text)}</strong> in a new tab?{" "}
-          </span>
-          <q id={textId} className={`${classPrefix}-text`} data-testid={`${tid}-text`}>
-            {text}
-          </q>
-        </span>
-      ) : (
-        <span className={`${classPrefix}-msg`}>
-          <span id={labelId}>Send to chat: </span>
-          <q id={textId} className={`${classPrefix}-text`} data-testid={`${tid}-text`}>
-            {text}
-          </q>
-        </span>
-      )}
-      <button
-        type="button"
-        className={`${classPrefix}-btn`}
-        data-testid={`${tid}-ok`}
-        onClick={() => onAccept(alwaysAllow)}
-      >
-        {open ? "Open" : "Send"}
-      </button>
-      <button type="button" className={`${classPrefix}-btn`} data-testid={`${tid}-dismiss`} onClick={onDismiss}>
-        Dismiss
-      </button>
-      <label className={`${classPrefix}-trust`}>
-        <input
-          type="checkbox"
-          data-testid={`${tid}-trust`}
-          checked={alwaysAllow}
-          onChange={(e) => setAlwaysAllow(e.currentTarget.checked)}
-        />
-        {open ? `Always allow links from this ${source}` : `Always allow from this ${source}`}
-      </label>
-    </div>
-  );
 }

@@ -133,12 +133,12 @@ test("a send button shows the host confirm chip; clicking Send posts a labelled 
   await expect(page.getByTestId("artifact-send-confirm-text")).toHaveText("Add five and seven");
   await expect(userTurns(page)).toHaveCount(0);
 
-  await page.getByTestId("artifact-send-confirm-ok").click();
+  await page.getByTestId("artifact-send-confirm").locator(".pl-confirm-chip__confirm").click();
 
   // The sent text lands as an ordinary, VISIBLE user message…
   await expect(userTurns(page)).toHaveCount(1);
   // …tagged "from ‹title›" so the operator can tell it from one they typed.
-  await expect(page.getByTestId("chat-from-artifact")).toContainText("from Inline calc");
+  await expect(page.locator(".pl-message__origin")).toContainText("from Inline calc");
   // …and a normal turn runs (the mock's default answer), proving the send started one.
   await expect(page.locator(".pl-message--assistant").last()).toContainText("Done — found 8 results.", {
     timeout: 15_000,
@@ -154,7 +154,7 @@ test("Dismiss rejects the frame's promise and no turn starts", async ({ page }) 
 
   await activateFrame(page);
   await sendButton(page).click();
-  await page.getByTestId("artifact-send-confirm-dismiss").click();
+  await page.getByTestId("artifact-send-confirm").locator(".pl-confirm-chip__dismiss").click();
 
   await expect(sendStatus(page)).toContainText(/rejected: .*dismissed/i);
   await expect(page.getByTestId("artifact-send-confirm")).toHaveCount(0);
@@ -200,7 +200,7 @@ test("a self-focusing, polling artifact the operator ran anyway never posts on i
   await expect(userTurns(page)).toHaveCount(0);
   // A console click puts focus back on the page, so the frame goes inactive — and its next
   // self-focus quarantines it again. Still no turn.
-  await page.getByTestId("artifact-ref-inline").locator(".artifact-ref-inline__head").click();
+  await page.getByTestId("artifact-ref-inline").locator(".pl-frame-card__head").click();
   await expect(page.getByTestId("artifact-ref-inline").getByTestId("frame-quarantine")).toBeVisible();
   await expect(userTurns(page)).toHaveCount(0);
   await expect(page.locator(".pl-message--user")).toHaveCount(1);
@@ -212,8 +212,8 @@ test("'Always allow' skips the chip for the next send from the same artifact", a
 
   await activateFrame(page);
   await sendButton(page).click();
-  await page.getByTestId("artifact-send-confirm-trust").check();
-  await page.getByTestId("artifact-send-confirm-ok").click();
+  await page.getByTestId("artifact-send-confirm").locator(".pl-confirm-chip__trust").check();
+  await page.getByTestId("artifact-send-confirm").locator(".pl-confirm-chip__confirm").click();
   await expect(userTurns(page)).toHaveCount(1);
   await expect(page.locator(".pl-message--assistant").last()).toContainText("Done — found 8 results.", {
     timeout: 15_000,

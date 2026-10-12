@@ -156,6 +156,24 @@ export function ChatMessageView({
     <Message
       role={message.role}
       streaming={streaming}
+      // A user turn a frame's send-to-chat bridge started (ADR 0118 D4): the DS Message `origin`
+      // slot renders a small "from ‹title›" line on its own block above the text, so the operator
+      // can tell it apart from one they typed. It is still a normal, visible user message; the
+      // label is the only thing that changes. Both frame origins — an inline artifact (S10b) and a
+      // plugin component (S12b) — render the same line; the label falls back to the artifact id
+      // or the component kind when no title was supplied. Title/kind are model/plugin-authored →
+      // React text, never markup.
+      origin={
+        message.role === "user" && message.sentVia
+          ? {
+              icon: <Sparkles size={12} />,
+              label: `from ${
+                message.sentVia.title ||
+                (message.sentVia.via === "component" ? message.sentVia.kind : message.sentVia.artifact_id)
+              }`,
+            }
+          : undefined
+      }
       className={
         // Any system message here is a local note → compact .chat-note card; the tone
         // modifier is appended only when set, so neutral notes still get the styling.
@@ -168,22 +186,6 @@ export function ChatMessageView({
             : undefined
       }
     >
-      {/* A user turn a frame's send-to-chat bridge started (ADR 0118 D4): a small "from ‹title›"
-          label so the operator can tell it apart from one they typed. It is still a normal,
-          visible user message; the label is the only thing that changes. Both frame origins —
-          an inline artifact (S10b) and a plugin component (S12b) — render the same chip; the
-          label falls back to the artifact id or the component kind when no title was supplied.
-          Title/kind are model/plugin-authored → render as React text, never markup. */}
-      {message.role === "user" && message.sentVia ? (
-        <div className="chat-from-artifact" data-testid="chat-from-artifact">
-          <Sparkles size={12} aria-hidden />
-          <span>
-            from{" "}
-            {message.sentVia.title ||
-              (message.sentVia.via === "component" ? message.sentVia.kind : message.sentVia.artifact_id)}
-          </span>
-        </div>
-      ) : null}
       {/* An `@<name>`-addressed answer (#3042) is this participant's own words, not the
           lead agent's paraphrase of them — say whose. The role stays "assistant" so every
           other renderer is untouched; the chip is the only thing that changes. */}
