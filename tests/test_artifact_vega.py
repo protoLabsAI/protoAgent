@@ -303,10 +303,14 @@ def test_the_error_boot_waits_for_the_embed_not_the_load_event(monkeypatch, tmp_
 def test_theme_tokens_carry_the_chart_palette(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
     js = art._SHELL_JS
-    block = js[js.index("var THEME_TOKENS=") : js.index("function themeTokens(")]
-    for tok in ("--pl-color-chart-axis", "--pl-color-chart-grid", "--pl-color-fg-muted", "--pl-font-sans"):
-        assert tok in block, tok
-    assert '"--pl-color-chart-series"+_s' in block
+    # themeTokens() now delegates to the DS embed's themeTokenSnapshot, which captures
+    # ALL --pl-* tokens (including chart-axis/-grid/-series etc.) from the live root;
+    # the old hand-written THEME_TOKENS list is gone.
+    tok_fn = _js_function(js, "themeTokens")
+    assert "themeTokenSnapshot(document.documentElement)" in tok_fn
+    # chartConfig still reads the series-colour range from the snapshot record.
+    chart_fn = _js_function(js, "chartConfig")
+    assert '"--pl-color-chart-series"' in chart_fn
     # every frame's live re-theme pushes the same set the chart was drawn with
     push = _js_function(js, "pushTheme")
     assert "var tokens=themeTokens()" in push and "tokens:tokens" in push
