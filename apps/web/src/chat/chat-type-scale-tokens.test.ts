@@ -84,9 +84,12 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     // notice (xs) and its button (2xs) → 17.
     // Then three more from the frame focus guard (ADR 0118, #4154): the click-to-activate hint
     // (2xs), the quarantine notice (xs) and its Run-it button (2xs) → 20.
+    // Then nine fewer when the hand-rolled frame chrome moved onto the DS (ADR 0118, ui 0.67): the
+    // source caption → DS Table `source`, the inline head/Open/resume → InlineFrameCard, both
+    // bridge notices + buttons → ConfirmChip, and the from-‹title› label → Message `origin` → 11.
     expect(tokenCount(chatCss)).toBe(34);
     expect(tokenCount(promptviewerCss)).toBe(12);
-    expect(tokenCount(chatComponentCss)).toBe(20);
+    expect(tokenCount(chatComponentCss)).toBe(11);
     expect(tokenCount(hitlCss)).toBe(7);
   });
 

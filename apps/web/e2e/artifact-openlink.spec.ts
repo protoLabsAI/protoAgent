@@ -90,7 +90,7 @@ test("openLink asks first; Open opens the tab and only then resolves the frame's
   expect(popups).toBe(0);
   await expect(linkStatus(page)).toHaveText("");
 
-  const [tab] = await Promise.all([page.context().waitForEvent("page"), page.getByTestId("artifact-open-confirm-ok").click()]);
+  const [tab] = await Promise.all([page.context().waitForEvent("page"), page.getByTestId("artifact-open-confirm").locator(".pl-confirm-chip__confirm").click()]);
   await tab.waitForURL(LINK);
   // noopener + no Referer: the new tab can't reach the console.
   expect(await tab.evaluate(() => window.opener)).toBeNull();
@@ -104,7 +104,7 @@ test("Dismiss rejects openLink and opens nothing", async ({ page }) => {
   let popups = 0;
   page.context().on("page", () => popups++);
   await linkButton(page).click();
-  await page.getByTestId("artifact-open-confirm-dismiss").click();
+  await page.getByTestId("artifact-open-confirm").locator(".pl-confirm-chip__dismiss").click();
   await expect(linkStatus(page)).toContainText(/rejected: .*dismissed/i);
   await expect(page.getByTestId("artifact-open-confirm")).toHaveCount(0);
   expect(popups).toBe(0);
@@ -117,7 +117,7 @@ test("a blocked pop-up rejects openLink instead of reporting success", async ({ 
   });
   await openInlineLinkArtifact(page);
   await linkButton(page).click();
-  await page.getByTestId("artifact-open-confirm-ok").click();
+  await page.getByTestId("artifact-open-confirm").locator(".pl-confirm-chip__confirm").click();
   await expect(linkStatus(page)).toContainText(/rejected: .*blocked/i);
   await expect(page.getByTestId("artifact-send-rejected")).toContainText(/blocked/i);
 });

@@ -1,36 +1,56 @@
-// #4076: the send confirm chip's "Always allow" checkbox sat alone mid-row while its label wrapped
-// onto two lines at the far right. theme.css's global `input { width: 100% }` stretched the
-// checkbox across the trust row, centring the box and squeezing the text. jsdom does no layout,
-// so this pins the CSS contract instead (the browser check lives in the PR's screenshots): for
-// BOTH chip hosts (the inline artifact frame and the frame-component host), the trust control is
-// one unwrapped inline-flex unit that wraps as a whole, and its checkbox opts out of the global
-// full-width input rule.
-import { describe, expect, it } from "vitest";
+// #4076: the send confirm chip's "Always allow" checkbox once sat alone mid-row while its label
+// wrapped onto two lines at the far right — theme.css's global `input { width: 100% }` stretched a
+// bare checkbox across the trust row. The chip is now the DS ConfirmChip, whose trust control is
+// the DS Checkbox: ONE <label class="pl-checkbox"> holding a visually-hidden input (class-scoped
+// `width: 0`, which outranks the global element rule) plus a drawn box and the label text. jsdom
+// does no layout, so this pins that structure for BOTH chip hosts' sources (the browser check
+// lives in the PR's screenshots).
+import { act, createElement as h } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import css from "../chat/chat-component.css?raw";
+import { BridgeNoticeView } from "./FrameProposalChip";
 
-function rule(selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`).exec(css);
-  if (!match) throw new Error(`no rule for ${selector}`);
-  return match[1];
-}
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+let container: HTMLElement;
+let root: Root;
+beforeEach(() => {
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+});
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
 
 describe("frame proposal chip: the trust checkbox stays with its label (#4076)", () => {
-  for (const prefix of ["artifact-ref-inline", "frame-component-host"]) {
-    it(`${prefix}: the trust control is one inline-flex unit that never wraps inside`, () => {
-      const trust = rule(`.${prefix}__bridge-trust`);
-      expect(trust).toMatch(/display:\s*inline-flex/);
-      expect(trust).toMatch(/gap:/);
-      expect(trust).toMatch(/white-space:\s*nowrap/);
-      // Sized to its content (not a forced 100% row), so it wraps below the buttons as a whole.
-      expect(trust).toMatch(/flex:\s*0 0 auto/);
-    });
-
-    it(`${prefix}: the checkbox opts out of the global input { width: 100% }`, () => {
-      const box = rule(`.${prefix}__bridge-trust input[type="checkbox"]`);
-      expect(box).toMatch(/width:\s*auto/);
-      expect(box).toMatch(/flex:\s*none/);
-    });
+  for (const [prefix, source] of [["artifact", "artifact"], ["component", "component"]] as const) {
+    for (const action of ["send", "open"] as const) {
+      it(`${prefix} ${action}: the checkbox and its label are one DS Checkbox unit`, () => {
+        const text = action === "open" ? "https://docs.example.com/x" : "hello";
+        act(() =>
+          root.render(
+            h(BridgeNoticeView, {
+              notice: { kind: "confirm", action, cid: 1, text },
+              testIdPrefix: prefix,
+              source,
+              onAccept: () => {},
+              onDismiss: () => {},
+              onClearRejection: () => {},
+            }),
+          ),
+        );
+        const input = container.querySelector<HTMLInputElement>(".pl-confirm-chip__trust input[type='checkbox']");
+        expect(input).not.toBeNull();
+        expect(input!.className).toBe("pl-checkbox__input");
+        const label = input!.closest("label");
+        expect(label?.classList.contains("pl-checkbox")).toBe(true);
+        const trust = action === "open" ? `Always allow links from this ${source}` : `Always allow from this ${source}`;
+        expect(label?.textContent).toContain(trust);
+        expect(input!.checked).toBe(false);
+      });
+    }
   }
 });

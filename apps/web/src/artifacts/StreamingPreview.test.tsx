@@ -120,12 +120,12 @@ describe("StreamingPreview — gating + non-preview kinds (r3)", () => {
     // Style-less body below the 1.5 KB threshold → no frame yet, placeholder instead.
     render({ buffer: { text: "<p>hi</p>", done: false }, kind: "html" });
     expect(theFrame()).toBeNull();
-    expect(byTestId("streaming-preview-placeholder")).not.toBeNull();
+    expect(container.querySelector(".pl-frame-card--building")).not.toBeNull();
 
     // A closed <style> opens the gate → the preview frame appears, placeholder gone.
     render({ buffer: { text: GATE_OPEN, done: false }, kind: "html" });
     expect(theFrame()).not.toBeNull();
-    expect(byTestId("streaming-preview-placeholder")).toBeNull();
+    expect(container.querySelector(".pl-frame-card--building")).toBeNull();
   });
 
   it("opens the gate on 1.5 KB of style-less body markup", () => {
@@ -174,7 +174,7 @@ describe("StreamingPreview — gating + non-preview kinds (r3)", () => {
     // Even with gate-opening HTML in the buffer, a non-preview kind never mounts a frame.
     render({ buffer: { text: GATE_OPEN, done: false }, kind });
     expect(theFrame()).toBeNull();
-    expect(byTestId("streaming-preview-placeholder")).not.toBeNull();
+    expect(container.querySelector(".pl-frame-card--building")).not.toBeNull();
     expect(byTestId("streaming-preview-status")?.textContent).toBeTruthy();
   });
 

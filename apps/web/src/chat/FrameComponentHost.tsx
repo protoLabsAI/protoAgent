@@ -355,7 +355,6 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
           makes the decision visible to the operator, where their click landed. */}
       <BridgeNoticeView
         notice={gate.notice}
-        classPrefix="frame-component-host__bridge"
         testIdPrefix="component"
         source="component"
         onAccept={(alwaysAllow) =>

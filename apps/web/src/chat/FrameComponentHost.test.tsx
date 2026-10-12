@@ -239,7 +239,19 @@ describe("FrameComponentHost", () => {
 // host's gate + confirm chip (FrameProposalChip): a send is a PROPOSAL the operator confirms in
 // console DOM, unless they chose "Always allow from this component" (per plugin + kind).
 describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b / S19)", () => {
-  const q = <T extends Element = HTMLElement>(id: string) => container.querySelector<T>(`[data-testid="${id}"]`);
+  // The confirm chip is the DS ConfirmChip: its controls carry DS classes, not test ids, so the
+  // legacy part ids (`…-confirm-ok|dismiss|trust`, `…-rejected-dismiss`) map onto those classes
+  // under the host's wrapper test id.
+  const CHIP_PARTS: Record<string, string> = {
+    ok: ".pl-confirm-chip__confirm",
+    dismiss: ".pl-confirm-chip__dismiss",
+    trust: ".pl-confirm-chip__trust input",
+  };
+  const sel = (id: string) => {
+    const m = /^(.*-(?:confirm|rejected))-(ok|dismiss|trust)$/.exec(id);
+    return m ? `[data-testid="${m[1]}"] ${CHIP_PARTS[m[2]]}` : `[data-testid="${id}"]`;
+  };
+  const q = <T extends Element = HTMLElement>(id: string) => container.querySelector<T>(sel(id));
   beforeEach(() => localStorage.clear());
   afterEach(() => localStorage.clear());
 
@@ -300,7 +312,9 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b / S19)
     dispatch(frame, { type: "protoComponent:send", cid: 7, text: "  run the report  " });
     expect(chat.send).not.toHaveBeenCalled();
     const chip = q("component-send-confirm")!;
-    expect(chip.getAttribute("role")).toBe("alertdialog");
+    // The DS ConfirmChip inside the host's wrapper: announced, but NOT modal.
+    expect(chip.querySelector(".pl-confirm-chip")?.getAttribute("role")).toBe("alertdialog");
+    expect(chip.querySelector(".pl-confirm-chip")?.getAttribute("aria-modal")).toBe("false");
     expect(q("component-send-confirm-text")?.textContent).toBe("run the report");
     expect(chip.textContent).toContain("Always allow from this component");
     act(() => {

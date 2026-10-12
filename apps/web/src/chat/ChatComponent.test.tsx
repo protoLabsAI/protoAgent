@@ -41,7 +41,7 @@ function table(props: Record<string, unknown>): ComponentSpec {
 }
 
 function caption(): HTMLElement | null {
-  return container.querySelector(".chat-comp-source");
+  return container.querySelector(".pl-table__source");
 }
 
 beforeEach(() => {
@@ -68,10 +68,10 @@ describe("ChatComponent table — source caption (ADR 0118 S1)", () => {
     const without = container.querySelector(".chat-comp-table")!.innerHTML;
     expect(caption()).toBeNull();
 
-    // Same props plus a source: the ONLY added node is the caption. Strip it and the markup
-    // must match the no-source render byte-for-byte.
+    // Same props plus a source: the ONLY added node is the DS Table's native <caption>. Strip it
+    // and the markup must match the no-source render byte-for-byte.
     render(table({ source: "somewhere" }));
-    caption()!.remove();
+    container.querySelector(".pl-table__caption")!.remove();
     expect(container.querySelector(".chat-comp-table")!.innerHTML).toBe(without);
   });
 
