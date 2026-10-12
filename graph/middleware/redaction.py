@@ -11,10 +11,31 @@ import re
 from typing import Any
 
 # Patterns are compiled once at module load for performance.
-# Each entry is (pattern_name, compiled_regex, replacement).
+#
+# FORMAT-PRESERVING (#3816, and the bearer/delimiter follow-up): a match covers the
+# secret's own characters and NOTHING after them. Redaction runs over tool output
+# before the model reads it (AuditMiddleware), so a pattern that swallows a closing
+# quote, bracket, comma or semicolon hands a code reviewer source that no longer
+# parses — `"Authorization: Bearer <jwt>",` became `"Authorization: Bearer [REDACTED]`
+# and the review panel FAILed a PR on a SyntaxError that wasn't on disk
+# (projectBoard-plugin#523). So every value class below either is a token's exact
+# alphabet or stops at `_VALUE_STOP`; never `\S+`.
+_VALUE_STOP = "\\s\"'`()\\[\\]{}<>,;&"
+# A free-form secret value: one or more characters up to the first whitespace,
+# quote, bracket, or list/statement separator. A secret that itself contains one of
+# those characters is redacted only up to it — the price of keeping the
+# surrounding syntax intact (exact-match scrubbing of manager-sourced values,
+# below, still covers those whole).
+_VALUE = f"[^{_VALUE_STOP}]+"
+# RFC 6750 b64token — the whole alphabet a Bearer/Basic credential can use.
+_B64TOKEN = r"[A-Za-z0-9\-._~+/]+=*"
+
 PATTERNS: dict[str, re.Pattern] = {
+    # `Authorization: Bearer x`, plus the JSON/dict spelling (`"Authorization":
+    # "Bearer x"`) and the Basic/token schemes. The credential is RFC 6750's
+    # b64token alphabet, so it can never run into a closing quote or comma.
     "bearer_token": re.compile(
-        r"(Authorization\s*:\s*Bearer\s+)\S+",
+        r"(Authorization[\"']?\s*[:=]\s*[\"']?(?:Bearer|Basic|token)\s+)" + _B64TOKEN,
         re.IGNORECASE,
     ),
     "openai_key": re.compile(
@@ -27,9 +48,15 @@ PATTERNS: dict[str, re.Pattern] = {
     "google_oauth": re.compile(r"\bya29\.[A-Za-z0-9_\-]+"),
     "google_api_key": re.compile(r"\bAIza[A-Za-z0-9_\-]{20,}\b"),
     "github_token": re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b"),
+    "github_pat": re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}"),
+    "npm_token": re.compile(r"\bnpm_[A-Za-z0-9]{36,}"),
+    "jwt": re.compile(r"\beyJ[A-Za-z0-9_\-]{5,}\.eyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]+"),
     "slack_token": re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
     "aws_access_key": re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     "discord_token": re.compile(r"\b[MNO][A-Za-z0-9_\-]{23}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,}\b"),
+    # The password half of URL userinfo (`https://user:pass@host`) — group 1 keeps
+    # the scheme and user, the `@` stays.
+    "url_userinfo": re.compile(r"(?i)(\b[a-z][a-z0-9+.\-]*://[^\s/:@\"'`<>]+:)(?!\[REDACTED\])[^\s/@\"'`<>]+(?=@)"),
     "client_secret": re.compile(
         r"(?i)client[_\-]?secret(?:[\"'\s:=]+)([A-Za-z0-9_\-]{12,})",
     ),
@@ -41,13 +68,12 @@ PATTERNS: dict[str, re.Pattern] = {
         r"(?i)\b(OPENAI_API_KEY|LANGFUSE_SECRET_KEY|LANGFUSE_PUBLIC_KEY|"
         r"A2A_AUTH_TOKEN|API_KEY|SECRET_KEY|PUBLIC_KEY|AUTH_TOKEN|ACCESS_TOKEN|"
         r"PRIVATE_KEY|DISCORD_BOT_TOKEN|BOT_TOKEN|GATEWAY_API_KEY|GH_PAT|"
+        r"AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|NPM_TOKEN|"
         r"CLIENT_SECRET|INFISICAL_CLIENT_SECRET)\s*[=:]\s*"
-        # The value, format-preserving (#3816): an optional opening quote, then up to the
-        # first whitespace or closing delimiter. `\S+` swallowed a closing quote/backtick
-        # too, so redacted source stopped parsing and a reviewer reading through this
-        # layer FAILed a PR on a syntax error that wasn't on disk. Already-redacted values
-        # (an earlier pattern got there first) are left alone rather than re-wrapped.
-        r"[\"'`]?(?!\[REDACTED\])[^\s\"'`)\]}>]+",
+        # The value, format-preserving (#3816): an optional opening quote, then the
+        # value up to `_VALUE_STOP`. Already-redacted values (an earlier pattern got
+        # there first) are left alone rather than re-wrapped.
+        r"[\"'`]?(?!\[REDACTED\])" + _VALUE,
     ),
 }
 
@@ -135,8 +161,21 @@ def _redact_string_simple(value: str) -> str:
     value = PATTERNS["env_var_assignment"].sub(_replace_env_var, value)
 
     # Provider token shapes — full-match redaction.
-    for _name in ("google_oauth", "google_api_key", "github_token", "slack_token", "aws_access_key", "discord_token"):
+    for _name in (
+        "jwt",
+        "google_oauth",
+        "google_api_key",
+        "github_token",
+        "github_pat",
+        "npm_token",
+        "slack_token",
+        "aws_access_key",
+        "discord_token",
+    ):
         value = PATTERNS[_name].sub(_PLACEHOLDER, value)
+
+    # URL userinfo — keep scheme://user:, redact the password, keep the @host.
+    value = PATTERNS["url_userinfo"].sub(r"\1[REDACTED]", value)
 
     # client_secret — redact the captured credential value group.
     def _replace_client_secret(m: re.Match) -> str:
