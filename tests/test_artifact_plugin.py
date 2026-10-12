@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -798,6 +799,75 @@ def test_animejs_is_vendored_sri_pinned_and_served(monkeypatch, tmp_path):
     assert "cdnjs.cloudflare.com" not in html and "unpkg.com" not in html
     assert b'from"' not in served and b"from \"" not in served  # self-contained: nothing else to fetch
     assert b"export{" in served and b" as animate" in served  # an ES module exporting animate()
+
+
+# ── the DS embed module pair (embed.js + its ./tokens.js relative dep) ───────────
+
+_VENDOR = ROOT / "vendor"
+# @protolabsai/design is installed under the console workspace (apps/web). ROOT is
+# <repo>/plugins/artifact, so ROOT.parent.parent is the repo root; DS resolution walks up
+# from apps/web/src, so the pinned 0.12.0 copy lives here (mirrors test_artifact_vega.py).
+_DESIGN_PKG = ROOT.parent.parent / "apps" / "web" / "node_modules" / "@protolabsai" / "design"
+
+
+def _strip_vendor_header(text: str) -> str:
+    """The vendored copy is a leading `/** … */` header comment + the verbatim package source.
+    The header is the file's FIRST block comment, so everything after its first `*/` (newlines
+    trimmed) is the source byte-for-byte — what the drift test compares to the installed package."""
+    return text.split("*/", 1)[1].lstrip("\n")
+
+
+def test_the_embed_module_relative_imports_are_all_vendored_and_allowlisted(monkeypatch, tmp_path):
+    """The gotcha guard (no node_modules needed): embed.js is NOT self-contained — it imports
+    `./tokens.js`. Every relative import specifier in the vendored module must name a FLAT sibling
+    that is vendored on disk AND in _VENDOR_FILES, or the sandbox 404s that subresource at load
+    time (the flat /vendor/{name} route can't serve a nested path)."""
+    art = _load(monkeypatch, tmp_path)
+    mod = (_VENDOR / "pl-design-embed.mjs").read_text(encoding="utf-8")
+    # static `… from "./x"` and dynamic `import("./x")` specifiers that are relative (start with `.`)
+    specs = re.findall(r"""(?:from|import)\s*\(?\s*["'](\.[^"']+)["']""", mod)
+    assert "./tokens.js" in specs  # the known dependency is actually present (guard isn't vacuous)
+    for spec in specs:
+        assert spec.startswith("./") and "/" not in spec[2:], f"{spec} is not a flat sibling"
+        name = spec[2:]
+        assert (_VENDOR / name).exists(), f"{spec} not vendored in plugins/artifact/vendor/"
+        assert name in art._VENDOR_FILES, f"{spec} not in _VENDOR_FILES"
+
+
+def test_the_embed_module_pair_is_vendored_and_served_same_origin(monkeypatch, tmp_path):
+    """Both the embed module and its ./tokens.js dep are allowlisted and served 200 as JavaScript
+    with the vendor route's CORS header (the shell loads them same-origin, like pl-design-vega.mjs).
+    Not SRI-pinned in the LIB map — a same-origin load, not an opaque-sandbox subresource."""
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    c = TestClient(_app(art))
+    for name in ("pl-design-embed.mjs", "tokens.js"):
+        assert name in art._VENDOR_FILES
+        r = c.get(f"/plugins/artifact/vendor/{name}")
+        assert r.status_code == 200, name
+        assert "javascript" in r.headers["content-type"], name
+        assert r.headers.get("access-control-allow-origin") == "*", name
+        assert "@protolabsai/design@" in r.text, name  # the header names the package + version
+    # neither is SRI-pinned in the shell's LIB map (same-origin shell load, not a frame subresource)
+    lib_map = art._SHELL_JS.split("var LIB")[1].split("}", 1)[0]
+    assert "pl-design-embed.mjs" not in lib_map and "tokens.js" not in lib_map
+
+
+def test_the_vendored_embed_pair_matches_the_installed_package():
+    """Drift guard: pl-design-embed.mjs / tokens.js are a VERBATIM copy of @protolabsai/design's
+    src/embed.js / src/tokens.js. Where the package is installed (apps/web/node_modules), each
+    vendored file must be byte-identical to the package source once the vendored header is stripped,
+    and the headers must name the installed version — a DS bump that touches embed/tokens has to be
+    re-vendored here. Skips cleanly on the web-less lanes that don't install the console deps."""
+    if not (_DESIGN_PKG / "src" / "embed.js").exists():
+        pytest.skip("@protolabsai/design not installed (apps/web/node_modules)")
+    version = json.loads((_DESIGN_PKG / "package.json").read_text(encoding="utf-8"))["version"]
+    for vend_name, src_name in (("pl-design-embed.mjs", "embed.js"), ("tokens.js", "tokens.js")):
+        vend = (_VENDOR / vend_name).read_text(encoding="utf-8")
+        src = (_DESIGN_PKG / "src" / src_name).read_text(encoding="utf-8")
+        assert _strip_vendor_header(vend) == src, f"{vend_name} drifted from @protolabsai/design"
+        assert f"@protolabsai/design@{version}" in vend, f"{vend_name} header must name design@{version}"
 
 
 # ── the new kinds: markdown + the react import map + the DS surface ──────────────
