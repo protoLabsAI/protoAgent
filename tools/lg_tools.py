@@ -193,7 +193,11 @@ def show_component(component: str, props: dict, title: str = "") -> str:
     Args:
         component: one of ``"table"``, ``"keyvalue"``, ``"timeline"``.
         props: the component's data:
-            - table:    ``{"columns": ["A","B"], "rows": [["a1","b1"], ...]}``
+            - table:    ``{"columns": ["A","B"], "rows": [["a1","b1"], ...]}``.
+                        Whenever the rows are NOT the user's own input — a web search, a
+                        fetched page, a file, a tool result — also pass ``"source"``: a short
+                        string (≤200 chars) naming where the rows came from, shown as a
+                        provenance caption so the user can see what they're trusting.
             - keyvalue: ``{"items": [{"label": "Credits", "value": "183k"}, ...]}``
             - timeline: ``{"steps": [{"label": "Buy hauler", "state": "done|active|todo",
                           "detail": "…"}, ...]}``

@@ -124,6 +124,8 @@ def test_every_pinned_lib_is_served_byte_exact_to_its_sri(monkeypatch, tmp_path)
         "docx-preview.min.js",
         "pdfjs.min.mjs",
         "pdfjs-worker.min.mjs",
+        "three.module.min.js",
+        "anime.esm.min.js",
     }
     c = TestClient(_app(art))
     for name, pin in pins.items():

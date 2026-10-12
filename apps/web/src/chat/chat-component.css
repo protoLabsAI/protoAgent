@@ -15,6 +15,11 @@
 
 /* table — chrome comes from the DS `Table` primitives (.pl-table); this wrapper
    only owns the surrounding card layout (.chat-comp / .chat-comp-table). */
+.chat-comp-source {
+  margin-top: var(--pl-space-2);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
 
 /* key-value */
 .chat-comp-kv dl {
@@ -167,6 +172,11 @@
   font-family: var(--pl-font-mono);
   font-size: var(--pl-font-size-xs);
 }
+/* An earlier inline version superseded by a newer one in the same chat (ADR 0118 / S18d): a
+   compact, muted pointer — no live frame. */
+.artifact-ref-chip--superseded {
+  color: var(--pl-color-fg-muted);
+}
 .artifact-ref-chip__kind {
   margin-left: var(--pl-space-1);
   padding: 0 var(--pl-space-1_5);
@@ -175,4 +185,282 @@
   color: var(--pl-color-fg-muted);
   font-size: var(--pl-font-size-2xs);
   line-height: 16px;
+}
+
+/* inline artifact host (ADR 0118 D2 / S7b) — the artifact's own embed frame rendered right in
+   the transcript, under a small head with the title · version and an Open-in-panel button. */
+.artifact-ref-inline {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  margin: var(--pl-space-1) 0;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-md);
+  overflow: hidden;
+  background: var(--pl-color-bg-raised);
+}
+.artifact-ref-inline__head {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  padding: var(--pl-space-1) var(--pl-space-2);
+  border-bottom: 1px solid var(--pl-color-border);
+  font-size: var(--pl-font-size-xs);
+}
+.artifact-ref-inline__spacer {
+  flex: 1 1 auto;
+}
+.artifact-ref-inline__open {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.artifact-ref-inline__open:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.artifact-ref-inline__open:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
+}
+.artifact-ref-inline__frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+}
+.artifact-ref-inline__body {
+  width: 100%;
+}
+.artifact-ref-inline__resume {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  border: 0;
+  background: var(--pl-color-bg-inset, var(--pl-color-bg));
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+  cursor: pointer;
+}
+.artifact-ref-inline__resume:hover {
+  color: var(--pl-color-fg);
+}
+/* Frame focus guard (ADR 0118, #4076; frameFocusGuard.ts). An inactive hosted frame keeps
+   running under a transparent click-catcher; the first press activates it. A frame that took
+   keyboard focus on its own is replaced by the quarantine notice. */
+.frame-guard {
+  position: relative;
+}
+.frame-guard__shield {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+}
+.frame-guard__hint {
+  position: absolute;
+  top: var(--pl-space-1);
+  right: var(--pl-space-1);
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: var(--pl-color-bg-raised);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.frame-guard__shield:hover .frame-guard__hint {
+  opacity: 1;
+}
+.frame-guard__quarantine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-2);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-inset);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
+.frame-guard__run {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.frame-guard__run:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.frame-guard__run:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
+}
+/* The host's send-to-chat verdict (ADR 0118 D4): the needs-confirm prompt / an in-place
+   rejection ("the agent is busy", a refused link). Sits under the frame so the operator sees
+   where their click landed. */
+.artifact-ref-inline__bridge {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-1) var(--pl-space-2);
+  border-top: 1px solid var(--pl-color-border);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg);
+}
+.artifact-ref-inline__bridge--rejected {
+  color: var(--pl-color-fg-muted);
+}
+.artifact-ref-inline__bridge-msg {
+  flex: 1 1 auto;
+}
+.artifact-ref-inline__bridge-btn {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.artifact-ref-inline__bridge-btn:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.artifact-ref-inline__bridge-btn:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
+}
+/* The S19 confirm chip (#4137): `Send to chat: "…"` [Send] [Dismiss] + an "Always allow" box.
+   Wraps on a narrow column; the proposed text is capped and scrolls so a long send stays fully
+   reviewable before the operator approves it. */
+.artifact-ref-inline__bridge--confirm {
+  flex-wrap: wrap;
+}
+.artifact-ref-inline__bridge-text {
+  display: inline-block;
+  max-height: 6em;
+  overflow-y: auto;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* The checkbox + "Always allow from this …" are ONE unit: never split, never wrapped inside.
+   `flex: 0 0 auto` + nowrap keeps it beside the buttons when the row has room and wraps the whole
+   control below them when it doesn't. The input override beats theme.css's global
+   `input { width: 100% }`, which otherwise stretched the box across the row and pushed the
+   label to the far edge (#4076). */
+.artifact-ref-inline__bridge-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  flex: 0 0 auto;
+  max-width: 100%;
+  white-space: nowrap;
+  color: var(--pl-color-fg-muted);
+  cursor: pointer;
+}
+.artifact-ref-inline__bridge-trust input[type="checkbox"] {
+  flex: none;
+  width: auto;
+  margin: 0;
+  padding: 0;
+}
+/* The frame-component host's send-to-chat / openLink verdict (ADR 0118 D4 / S12b): the same
+   needs-confirm prompt / in-place rejection the inline artifact frame shows, under the component
+   frame. Mirrors .artifact-ref-inline__bridge so the two read identically. */
+.frame-component-host__bridge {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-1) var(--pl-space-2);
+  border-top: 1px solid var(--pl-color-border);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg);
+}
+.frame-component-host__bridge--rejected {
+  color: var(--pl-color-fg-muted);
+}
+.frame-component-host__bridge-msg {
+  flex: 1 1 auto;
+}
+.frame-component-host__bridge-btn {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.frame-component-host__bridge-btn:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.frame-component-host__bridge-btn:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
+}
+/* The S19 confirm chip (#4137): `Send to chat: "…"` [Send] [Dismiss] + an "Always allow" box.
+   Wraps on a narrow column; the proposed text is capped and scrolls so a long send stays fully
+   reviewable before the operator approves it. */
+.frame-component-host__bridge--confirm {
+  flex-wrap: wrap;
+}
+.frame-component-host__bridge-text {
+  display: inline-block;
+  max-height: 6em;
+  overflow-y: auto;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* The checkbox + "Always allow from this …" are ONE unit: never split, never wrapped inside.
+   `flex: 0 0 auto` + nowrap keeps it beside the buttons when the row has room and wraps the whole
+   control below them when it doesn't. The input override beats theme.css's global
+   `input { width: 100% }`, which otherwise stretched the box across the row and pushed the
+   label to the far edge (#4076). */
+.frame-component-host__bridge-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  flex: 0 0 auto;
+  max-width: 100%;
+  white-space: nowrap;
+  color: var(--pl-color-fg-muted);
+  cursor: pointer;
+}
+.frame-component-host__bridge-trust input[type="checkbox"] {
+  flex: none;
+  width: auto;
+  margin: 0;
+  padding: 0;
+}
+/* "from ‹title›" label on a user turn an artifact's send bridge started (ADR 0118 D4). Block-level
+   `flex` (not `inline-flex`) so the label sits on its OWN line above the message text, rather than
+   running on into it — "from Bill Splitter" then "I am splitting…", not "from Bill SplitterI am…"
+   (#4124). `align-self: flex-start` keeps the chip tight to its content inside a column layout. */
+.chat-from-artifact {
+  display: flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: var(--pl-space-1);
+  margin-bottom: var(--pl-space-1);
+  font-size: var(--pl-font-size-2xs);
+  color: var(--pl-color-fg-muted);
 }

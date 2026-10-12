@@ -8,6 +8,7 @@ import {
   Network,
   PauseCircle,
   Search,
+  CircleSlash,
   SlidersHorizontal,
   Square,
   Wrench,
@@ -159,6 +160,8 @@ export function ToolCalls({
 
   const settled = fg.filter((c) => c.status !== "running");
   const failedCount = fg.filter((c) => c.status === "error").length;
+  // A stopped call (#4076) never returned: the fold's ✓ would claim the block succeeded.
+  const anyStopped = fg.some((c) => c.stopped);
 
   // Only TOP-LEVEL `task` groups get the cancel callback (the Stop affordance only shows
   // for a running task); nested children and settled cards never need it. The dismiss
@@ -188,6 +191,7 @@ export function ToolCalls({
       label={count === 1 ? "tool" : "tools"}
       status={failedCount > 0 ? "error" : "done"}
       failedCount={failedCount || undefined}
+      className={failedCount === 0 && anyStopped ? "tool-stopped" : undefined}
     >
       {folded.map(group)}
     </ToolCardSummary>
@@ -477,6 +481,12 @@ function ToolGroup({
           <PauseCircle size={11} aria-hidden /> waiting for you
         </span>
       ) : null}
+      {call.stopped ? (
+        <span className="tool-stopped-label" title="The turn was stopped before this call finished">
+          {" · "}
+          <CircleSlash size={11} aria-hidden /> stopped
+        </span>
+      ) : null}
       {costTokens !== null ? (
         <span
           className="tool-ctx-cost"
@@ -500,8 +510,10 @@ function ToolGroup({
       name={name}
       // The DS has no paused glyph: a waiting card drops the spinner (done frame, glyph
       // hidden by .tool-paused) and says "waiting for you" in its header instead.
-      status={waiting ? "done" : call.status}
-      className={waiting ? "tool-paused" : undefined}
+      // A STOPPED call (#4076) is the same shape: settled (no spinner) but it never returned,
+      // so no ✓ either — .tool-stopped hides the glyph and the header says "stopped".
+      status={waiting || call.stopped ? "done" : call.status}
+      className={waiting ? "tool-paused" : call.stopped ? "tool-stopped" : undefined}
       icon={<Icon size={13} />}
       duration={call.durationMs}
       actions={actions}

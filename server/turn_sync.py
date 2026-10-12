@@ -391,6 +391,9 @@ async def _chat_langgraph_impl(
     # fenced — and an unfenced turn must not inherit a fence. Empty list = no
     # fence (SubagentFenceMiddleware treats falsy as "untouched").
     _state_extra["subagent_fence"] = [str(t) for t in tool_fence] if tool_fence else []
+    # Whether the client can display an artifact (#4144) — stamped every turn for the same
+    # reason: a `/v1` turn must not leave a later console turn on the session text-only.
+    _state_extra["renders_ui"] = _turn_control.renders_ui(origin)
 
     from graph.config_io import soul_revision
 

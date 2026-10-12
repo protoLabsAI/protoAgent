@@ -178,6 +178,21 @@ async def run_subagent(
     )
 
 
+def renders_ui(state: Any) -> bool:
+    """Whether the client of the turn a tool runs in can display rendered UI — an artifact,
+    a component chip — read from the tool's injected graph state (#4144).
+
+    ``False`` for a plain API client that receives only the reply text (``/v1/chat/completions``,
+    ``POST /api/chat``, a relay plugin's ``HOST.invoke`` turn such as Discord); ``True`` for the
+    console and A2A, and whenever the state doesn't say (a host that predates the flag, a direct
+    call). Read it the way you read the session id — from ``state: Annotated[Any,
+    InjectedState]``, since per-turn contextvars are empty inside a tool body — and pass it on to
+    a provider that shapes its reply by it, e.g. ``sdk.service("artifact.show")(...,
+    renders_ui=sdk.renders_ui(state))``. A text-only reply should say what was made and that
+    this client can't show it, never point at a view the client doesn't have."""
+    return not (isinstance(state, dict) and state.get("renders_ui") is False)
+
+
 def turn_stop_reason() -> str:
     """Why the turn this code runs under was stopped from above, or ``""``.
 
@@ -1139,6 +1154,26 @@ def cancel_plugin_jobs(plugin_id: str) -> int:
 # cutover — its feature has been silently dead ever since), one hardcodes `~/.protoagent`
 # and re-implements instance scoping by hand, and one gets it right. Four attempts at four
 # lines of code, with no seam to copy. This is the seam.
+
+
+def deleted_chat_sessions(session_ids) -> set[str] | None:
+    """Which of these console chat session ids the operator has DELETED.
+
+    A deleted chat leaves a durable tombstone (ADR 0104; never count-evicted), so a session id
+    in the returned set is gone for good: no transcript of it survives to point at anything a
+    plugin keeps for it. Use it to retire per-session state only once its chat is gone — e.g.
+    the artifact store keeps an inline answer while any chat that shows it still exists (#4138).
+
+    Returns ``None`` when it can't tell (no task store at this instance, or it can't be read).
+    Treat ``None`` as "every one may still exist" — never delete on a guess. Synchronous and
+    cheap (one indexed read); safe from sync code in any runtime process."""
+    try:
+        from a2a_impl.stores import tombstoned_chat_sessions
+
+        return tombstoned_chat_sessions(session_ids)
+    except Exception as exc:  # noqa: BLE001 — unknown, never a guess
+        log.warning("[sdk] deleted_chat_sessions unavailable: %s", exc)
+        return None
 
 
 def plugin_store(subdir: str = "", *, plugin_id: str) -> Path:

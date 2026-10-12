@@ -28,6 +28,9 @@ import { insertRoomBubble } from "./roomBubble";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatTranscript } from "./ChatTranscript";
+import { ArtifactChatSendContext, type ArtifactChatSend } from "../artifacts/ArtifactRefChip";
+import { ComponentChatSendContext, ComponentFrameRegistryContext, type ComponentChatSend } from "./FrameComponentHost";
+import { createFrameRegistry } from "../artifacts/inlineFrames";
 import { ComposerModelSelect } from "./ComposerModelSelect";
 import {
   noteTurnFinished,
@@ -45,7 +48,7 @@ import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
 import { registerSlashDispatcher } from "./slashDispatch";
-import { isTaskFailed } from "./taskState";
+import { isTaskCanceled, isTaskFailed } from "./taskState";
 import { resolveComposerUp } from "./queuedRecall";
 import { isDuplicateRiskActive, nextDuplicateRisk, type DuplicateRisk } from "./duplicateRisk";
 import { finalizeStoppedMessages, resolveStopTarget } from "./stopTurn";
@@ -57,7 +60,10 @@ import {
   applyText,
   applyToolEvent,
   createParkTracker,
+  createToolArgsTracker,
+  settleBubbleFromTask,
   settleStreamEnd,
+  stopBubble,
 } from "./turnReducers";
 import { applyDelegateProgress, settleDelegateProgress } from "./delegateProgress";
 import { onLiveComponent, onLiveToolEvent } from "../codeviewer/live";
@@ -970,6 +976,10 @@ export function ChatSessionSlot({
       resumeMessageId?: string;
       // This message answers the pending HITL interrupt (#1560) — see resumeHitl.
       hitlResume?: boolean;
+      // This turn was started by an artifact's send-to-chat bridge (ADR 0118 D4), not typed
+      // into the composer. It is still a NORMAL, visible user turn — this only tags where the
+      // click came from so the bubble shows a "from ‹title›" label and the turn stays audited.
+      sentVia?: ChatMessage["sentVia"];
     } = {},
   ) {
     if (!session || !content) return;
@@ -982,6 +992,7 @@ export function ChatSessionSlot({
       content,
       createdAt: Date.now(),
       status: "done",
+      ...(opts.sentVia ? { sentVia: opts.sentVia } : {}),
     };
     // On an approval resume, CONTINUE the original assistant message (`resumeMessageId`) instead of
     // minting a fresh bubble — so the pre- and post-approval tool cards extend ONE message / one
@@ -1060,6 +1071,15 @@ export function ChatSessionSlot({
     // form rides the same frame but parks no graph (its redeem completes the task
     // server-side), so it settles as before.
     const park = createParkTracker();
+    // The turn ended CANCELED (a Stop from another surface, a CancelTask over A2A): it settles
+    // stopped, not done — its unfinished cards must not read ✓ (#4076).
+    let canceledByServer = false;
+
+    // Live streamed tool-argument previews (ADR 0118 D3, S3): the server decodes one tool's
+    // declared string arg incrementally; `onToolArgs` folds each slice into this tracker and
+    // stamps the whole set onto the live bubble so the WorkBlock can preview it. Live-only — the
+    // `finally` drops it so a reload never shows a stale partial.
+    const toolArgsTracker = createToolArgsTracker();
 
     // Reveal queue (#2993): streamed answer deltas don't render the instant
     // their frame arrives — they drip out at a steady ~word cadence. Diagnosis
@@ -1102,7 +1122,7 @@ export function ChatSessionSlot({
     // legitimately quiet (a slow tool) → keep waiting.
     const WATCHDOG_IDLE_MS = 45_000;
     let settledByWatchdog = false;
-    const finalizeFromTask = (state: string, text: string) => {
+    const finalizeFromTask = (state: string, text: string, settledAt?: number) => {
       const failed = isTaskFailed(state);
       const latest = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
       if (latest) {
@@ -1114,15 +1134,8 @@ export function ChatSessionSlot({
         chatStore.updateMessages(
           session.id,
           settleTurnBubbles(
-            reconciled.map((m) => {
-              if (m.id !== assistantId) return m;
-              const toolCalls = m.toolCalls?.map((c) =>
-                c.status === "running"
-                  ? { ...c, status: "done" as const, durationMs: c.durationMs ?? (c.startedAt !== undefined ? now - c.startedAt : undefined) }
-                  : c,
-              );
-              return { ...m, status: failed ? "error" : "done", toolCalls };
-            }),
+            // Footer time = the task's own settle instant, as a reload reads it (#4076, #4154).
+            reconciled.map((m) => (m.id !== assistantId ? m : settleBubbleFromTask(m, { failed, settledAt, now }))),
             assistantId,
           ),
         );
@@ -1142,7 +1155,7 @@ export function ChatSessionSlot({
         // Reveal the withheld tail first so the finalize compares the task text
         // against the COMPLETE client accumulation.
         reveal.flush();
-        finalizeFromTask(task.state, task.text);
+        finalizeFromTask(task.state, task.text, task.settledAt);
         controller.abort(); // release the stalled socket; unwinds via catch → finally
       },
     });
@@ -1209,6 +1222,7 @@ export function ChatSessionSlot({
           );
         },
         onTaskState: (state) => {
+          canceledByServer = isTaskCanceled(state);
           // The latest state wins: a turn that parks is marked paused at once, so its
           // in-flight card reads "waiting for you" while the form is up (#3956).
           // A working state after a park un-parks the bubble (the turn is producing again).
@@ -1292,6 +1306,20 @@ export function ChatSessionSlot({
           // …and any registered kind's live hook (#3617 — the artifact-ref chip opens the
           // Artifact panel on the version the agent just wrote). Same rule: live stream only.
           dispatchLiveComponent(spec, session.id);
+        },
+        onToolArgs: (evt) => {
+          // A streamed tool-argument slice (ADR 0118 D3): fold it into the tracker and stamp the
+          // full preview set onto the live bubble. No reveal.flush — this is a SEPARATE surface
+          // (the tool's own live preview), not part of the text↔tool ordering.
+          bumpWatchdog();
+          toolArgsTracker.push(evt);
+          const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+          if (!latest) return;
+          const previews = toolArgsTracker.all();
+          chatStore.updateMessages(
+            session.id,
+            latest.messages.map((message) => (message.id === assistantId ? { ...message, toolArgs: previews } : message)),
+          );
         },
         onRoomReply: (reply) => {
           // A delegation rendered inline as a mini-conversation (#3042): the lead's
@@ -1479,7 +1507,11 @@ export function ChatSessionSlot({
             settleTurnBubbles(
               settleDelegateProgress(
                 latest.messages.map((message) =>
-                  message.id === assistantId ? settleStreamEnd(message, { parked: false }) : message,
+                  message.id !== assistantId
+                    ? message
+                    : canceledByServer
+                      ? stopBubble(message, { at: Date.now() })
+                      : settleStreamEnd(message, { parked: false }),
                 ),
               ),
               assistantId,
@@ -1581,6 +1613,18 @@ export function ChatSessionSlot({
     } finally {
       // First, so nothing below can throw past it and leak the claim.
       endLocalTurn();
+      // Drop the live tool-arg previews: they never outlive their turn (ADR 0118 D3), so a reload
+      // shows the finished tool card, not a stale partial. The durable store already omits them.
+      if (toolArgsTracker.size > 0) {
+        toolArgsTracker.clear();
+        const withPreviews = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
+        if (withPreviews) {
+          chatStore.updateMessages(
+            session.id,
+            withPreviews.messages.map((m) => (m.id === assistantId && m.toolArgs ? { ...m, toolArgs: undefined } : m)),
+          );
+        }
+      }
       // Whatever path unwound (done / error / abort / watchdog), never strand
       // withheld text in the reveal queue. Already-settled bubbles keep their
       // terminal status (the apply's status guard).
@@ -1688,22 +1732,81 @@ export function ChatSessionSlot({
     ],
   );
 
+  // Send-to-chat bridge target (ADR 0118 D4 / S10b): an inline artifact frame rendered in THIS
+  // session's transcript reaches its chat through here. `send` reuses the NORMAL turn path so the
+  // message is an ordinary, visible user turn — just tagged (`sentVia`) with the artifact it came
+  // from, for the "from ‹title›" label and the audit trail. `isBusy` is the D4 "the agent is
+  // busy" gate: a streaming / attended-server / HITL-parked turn refuses a fresh artifact send.
+  // Both are latest-closures so the stable context value always reads current state; the memo
+  // only re-keys on the session id so inline hosts don't re-subscribe every render. (The panel
+  // can provide the same shape to reach the active chat tab.) These MUST stay above the
+  // `if (!session) return null;` early return so the hook count is stable when the slot's
+  // session flips null↔present (mounts before sessions load, or is deleted while mounted);
+  // the null guards below are therefore live, not dead code.
+  const artifactIsBusy = useLatestCallback(
+    () => status === "streaming" || Boolean(serverTurnControl) || Boolean(hitl),
+  );
+  const sendFromArtifact = useLatestCallback(
+    (text: string, origin: { artifact_id: string; version: number; title?: string }) => {
+      if (!session) return;
+      void runTurn(text, { sentVia: { via: "artifact", ...origin } });
+    },
+  );
+  const artifactSessionId = session?.id ?? null;
+  const artifactChatSend = useMemo<ArtifactChatSend | null>(
+    () =>
+      artifactSessionId
+        ? { sessionId: artifactSessionId, isBusy: artifactIsBusy, send: sendFromArtifact }
+        : null,
+    [artifactSessionId, artifactIsBusy, sendFromArtifact],
+  );
+
+  // Send-to-chat bridge target for a FRAME-rendered plugin component (ADR 0118 D5 / S12b): the
+  // exact same NORMAL turn path as the artifact bridge above, tagged with a component-shaped
+  // origin ({via:"component", kind, plugin}) for the "from ‹title›" label + audit trail. The
+  // busy gate is shared. Same stable-closure + session-keyed-memo discipline, and the same
+  // reasoning for sitting above the `if (!session)` return (hook count stays stable).
+  const sendFromComponent = useLatestCallback(
+    (text: string, origin: { kind: string; plugin: string | null; title?: string }) => {
+      if (!session) return;
+      void runTurn(text, { sentVia: { via: "component", ...origin } });
+    },
+  );
+  const componentChatSend = useMemo<ComponentChatSend | null>(
+    () =>
+      artifactSessionId
+        ? { sessionId: artifactSessionId, isBusy: artifactIsBusy, send: sendFromComponent }
+        : null,
+    [artifactSessionId, artifactIsBusy, sendFromComponent],
+  );
+
+  // One frame-component registry PER CHAT VIEW (ADR 0118 D2 / S12b): every FrameComponentHost in
+  // this transcript shares it, so the six-live-frame cap bounds them together and one tab's
+  // components can't evict another's. Created once per slot (the slot outlives individual turns).
+  const [componentFrameRegistry] = useState(() => createFrameRegistry());
+
   if (!session) return null;
 
   return (
     <div className="chat-session-slot" hidden={!visible}>
-      <ChatTranscript
-        sessionId={sessionId}
-        messages={messages}
-        dismissedToolCalls={dismissedToolCalls}
-        actions={transcriptActions}
-        steerQueue={steerQueue}
-        serverTurnLabel={serverTurnLabel}
-        status={status}
-        onCancelDelegation={transcriptCancelDelegation}
-        onDismissToolCall={transcriptDismissToolCall}
-        onCancelSteer={transcriptCancelSteer}
-      />
+      <ArtifactChatSendContext.Provider value={artifactChatSend}>
+        <ComponentChatSendContext.Provider value={componentChatSend}>
+          <ComponentFrameRegistryContext.Provider value={componentFrameRegistry}>
+            <ChatTranscript
+              sessionId={sessionId}
+              messages={messages}
+              dismissedToolCalls={dismissedToolCalls}
+              actions={transcriptActions}
+              steerQueue={steerQueue}
+              serverTurnLabel={serverTurnLabel}
+              status={status}
+              onCancelDelegation={transcriptCancelDelegation}
+              onDismissToolCall={transcriptDismissToolCall}
+              onCancelSteer={transcriptCancelSteer}
+            />
+          </ComponentFrameRegistryContext.Provider>
+        </ComponentChatSendContext.Provider>
+      </ArtifactChatSendContext.Provider>
 
       <div
         className="composer-wrap"

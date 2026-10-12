@@ -32,6 +32,11 @@ COMPONENT_TYPES = ("table", "keyvalue", "timeline", "code-ref")
 CODE_REF_NOTE_MAX = 280
 _CODE_REF_STR_MAX = {"project": 200, "path": 4096, "note": CODE_REF_NOTE_MAX}
 
+# table `source` cap (ADR 0118): an optional provenance caption — a short string naming
+# where the rows came from. Unlike code-ref, the table has no strict schema; the source is
+# the ONLY vetted prop, and an invalid one is dropped without failing the table.
+TABLE_SOURCE_MAX = 200
+
 
 # ── Plugin-contributed component types (#3617) ─────────────────────────────────────────
 # A plugin can add its OWN component-v1 kind — a pointer chip into its console view, say —
@@ -67,6 +72,43 @@ def plugin_component_types() -> tuple[str, ...]:
     return tuple(_plugin_components)
 
 
+# ── Plugin component frames (ADR 0118 D5, #4087) ───────────────────────────────────────
+# A plugin kind may declare a ``frame`` — a plugin-served page that renders it instead of a
+# compiled console renderer. The loader validates the frame against the manifest's public
+# paths, then carries ``kind -> {"plugin", "frame_url"}`` (the owning plugin + the public
+# ``/plugins/<id>/<frame>`` URL, or ``frame_url`` None for a kind with no frame) through
+# ``PluginLoadResult.component_frames``; the server rebinds it here on every (re)load, beside
+# ``set_plugin_components``. Read ONLY by the GET /api/components catalog — never a render gate.
+_plugin_component_frames: dict[str, dict] = {}
+
+
+def set_plugin_component_frames(frames: Mapping[str, Mapping] | None) -> None:
+    """Replace the live plugin component frame map (called at init + every plugin reload, so a
+    disabled plugin's frame kind leaves the catalog). Entries whose name isn't a valid plugin
+    kind, or whose value isn't a mapping, are skipped."""
+    global _plugin_component_frames
+    fresh: dict[str, dict] = {}
+    for name, info in (frames or {}).items():
+        if is_plugin_component_name(name) and isinstance(info, Mapping):
+            fresh[name] = {"plugin": info.get("plugin"), "frame_url": info.get("frame_url")}
+    _plugin_component_frames = fresh  # one GIL-atomic rebind, like the other plugin registries
+
+
+def component_catalog() -> list[dict]:
+    """The live component-v1 kinds a renderer can receive (ADR 0118 D5, #4087), as
+    ``[{name, plugin, frame_url}]`` — the core widgets plus every plugin-contributed kind.
+
+    ``plugin`` is ``None`` for a core widget; ``frame_url`` is the public
+    ``/plugins/<id>/<frame>`` page a frame kind renders in, else ``None``. The plugin rows
+    track the live validator set (``plugin_component_types``), so a disabled plugin's kinds
+    drop out on the next reload — the frame map is rebound in the same step."""
+    rows: list[dict] = [{"name": name, "plugin": None, "frame_url": None} for name in COMPONENT_TYPES]
+    for name in plugin_component_types():
+        info = _plugin_component_frames.get(name) or {}
+        rows.append({"name": name, "plugin": info.get("plugin"), "frame_url": info.get("frame_url")})
+    return rows
+
+
 def is_known_component(component: object) -> bool:
     """A core widget or a live plugin-contributed kind."""
     return isinstance(component, str) and (component in COMPONENT_TYPES or component in _plugin_components)
@@ -90,6 +132,16 @@ def validate_component_props(component: str, props: dict) -> str | None:
             log.warning("[components] %s validator raised: %s", component, exc)
             return f"{component} validator failed"
         return None if why is None else str(why)
+    if component == "table":
+        # ADR 0118: `source` is an optional provenance caption. A source that isn't a
+        # string ≤ TABLE_SOURCE_MAX chars is dropped — the prop only; the table stays
+        # valid. A table with no `source` key is left untouched, so it validates exactly
+        # as before this prop existed.
+        if isinstance(props, dict) and "source" in props:
+            src = props["source"]
+            if not isinstance(src, str) or len(src) > TABLE_SOURCE_MAX:
+                del props["source"]
+        return None
     if component != "code-ref":
         return None
     if not isinstance(props, dict):

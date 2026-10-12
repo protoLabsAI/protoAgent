@@ -377,10 +377,54 @@ def prune_superseded_progress(task: Task) -> int:
     return removed
 
 
+# Duplicated for the same import-chain reason as above; locked together by
+# tests/test_stream_args.py.
+_TOOL_ARGS_MIME = "application/vnd.protolabs.tool-args-v1+json"
+
+
+def drop_tool_args_history(task: Task) -> int:
+    """Remove every streamed tool-args-v1 Message from ``task.history``, in place.
+    Returns the number removed.
+
+    Streamed tool arguments (ADR 0118 D3) are a LIVE-ONLY preview: the executor emits them
+    as tool-args-v1 DataParts on WORKING frames so the console can render an artifact as the
+    model writes it, but the finished artifact replaces the preview the moment the tool
+    runs. The a2a-sdk ``TaskManager`` would otherwise move each one into durable history
+    (like reasoning), so a reattach or a reload would replay stale partial args. They carry
+    nothing a durable task needs — drop them entirely. Only agent messages whose parts are
+    ALL tool-args DataParts are touched; a message mixing one with other parts is kept."""
+    from a2a.types import Role
+
+    def _is_tool_args(msg) -> bool:
+        if msg.role != Role.ROLE_AGENT or not msg.parts:
+            return False
+        for part in msg.parts:
+            if part.WhichOneof("content") != "data":
+                return False
+            mime = part.metadata.fields["mimeType"].string_value if "mimeType" in part.metadata.fields else ""
+            if mime != _TOOL_ARGS_MIME:
+                return False
+        return True
+
+    keep = [m for m in task.history if not _is_tool_args(m)]
+    removed = len(task.history) - len(keep)
+    if removed:
+        # `keep` holds references into task.history — copy before clearing.
+        kept = []
+        for m in keep:
+            c = type(m)()
+            c.CopyFrom(m)
+            kept.append(c)
+        del task.history[:]
+        task.history.extend(kept)
+    return removed
+
+
 class ReasoningCoalescingTaskStore(DatabaseTaskStore):
     """Durable task store that coalesces contiguous reasoning-v1 history runs
-    into one Message per run on every save (#1710), and keeps only the latest
-    delegate-progress snapshot per delegation (#3979). Streaming frames are
+    into one Message per run on every save (#1710), keeps only the latest
+    delegate-progress snapshot per delegation (#3979), and drops live-only
+    tool-args-v1 previews entirely (ADR 0118 D3). Streaming frames are
     untouched — this is persistence-shape only, so the wire contract and the
     live thinking bubble are unchanged."""
 
@@ -393,6 +437,10 @@ class ReasoningCoalescingTaskStore(DatabaseTaskStore):
             prune_superseded_progress(task)
         except Exception:  # noqa: BLE001 — pruning must never lose a save
             log.exception("[a2a] delegate-progress pruning failed; saving unpruned")
+        try:
+            drop_tool_args_history(task)
+        except Exception:  # noqa: BLE001 — dropping previews must never lose a save
+            log.exception("[a2a] tool-args history drop failed; saving with previews")
         await super().save(task, context)
 
 
@@ -457,6 +505,61 @@ def build_a2a_stores() -> tuple[
     task_store = ReasoningCoalescingTaskStore(make_sqlite_engine(task_db))
     push_store = ValidatingPushNotificationConfigStore(make_sqlite_engine(push_db))
     return task_store, push_store, task_db, push_db
+
+
+#: The durable chat-deletion marker table, beside the task store in ``a2a-tasks.db``.
+#: ``operator_api.chat_routes`` owns its schema and every write (one row per RETIRED console
+#: chat, never count-evicted); :func:`tombstoned_chat_sessions` is its synchronous reader.
+CHAT_TOMBSTONE_TABLE = "chat_session_tombstones"
+_TOMBSTONE_QUERY_CHUNK = 500  # below SQLite's oldest bound-parameter limit (999)
+
+
+def tombstoned_chat_sessions(session_ids) -> set[str] | None:
+    """Which of ``session_ids`` the operator has DELETED (retired) — read from the chat
+    tombstone table, synchronously, with stdlib ``sqlite3``.
+
+    ``None`` means *unknown* (no task DB at this instance's path, or it can't be read): a caller
+    deciding whether a chat still exists must then assume it does. A DB without the table is a
+    truthful empty set — the table is created on the first retirement, so no chat was ever
+    deleted. Synchronous on purpose: its caller (the artifact store's eviction, #4138) runs
+    under a cross-process file lock in sync code, sometimes in a process with no task engine
+    (the ACP tool process). A plain open, not ``mode=ro``: a read-only URI open fails on a
+    live WAL database."""
+    ids = sorted({s for s in session_ids if isinstance(s, str) and s})
+    if not ids:
+        return set()
+    import sqlite3
+
+    from infra.paths import instance_paths
+
+    try:
+        path = instance_paths().store("a2a-tasks.db")
+        if not path.is_file():  # never create it: a reader must not conjure an empty store
+            return None
+        conn = sqlite3.connect(str(path), timeout=2.0)
+    except Exception as exc:  # noqa: BLE001 — unknown, never a guess
+        log.warning("[a2a] chat tombstones unreadable: %s", exc)
+        return None
+    try:
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (CHAT_TOMBSTONE_TABLE,)
+        ).fetchone()
+        if not has_table:
+            return set()
+        found: set[str] = set()
+        for i in range(0, len(ids), _TOMBSTONE_QUERY_CHUNK):
+            chunk = ids[i : i + _TOMBSTONE_QUERY_CHUNK]
+            marks = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT context_id FROM {CHAT_TOMBSTONE_TABLE} WHERE context_id IN ({marks})", chunk
+            )
+            found.update(r[0] for r in rows)
+        return found
+    except sqlite3.Error as exc:
+        log.warning("[a2a] chat tombstones unreadable: %s", exc)
+        return None
+    finally:
+        conn.close()
 
 
 def build_push_sender(

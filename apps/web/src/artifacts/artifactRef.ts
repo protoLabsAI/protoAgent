@@ -4,6 +4,7 @@ import { openView } from "../app/palette/nav";
 import { chatStore } from "../chat/chat-store";
 import { postToPluginView } from "../lib/pluginViewInbox";
 import { useUI } from "../state/uiStore";
+import { clampHeight } from "./inlineFrames";
 
 // The `artifact-ref` chat component (#3617) — what the artifact plugin's create/revise tools
 // emit: a POINTER to one artifact version, `{artifact_id, version, versions_total?, title,
@@ -17,7 +18,20 @@ export const ARTIFACT_VIEW_KEY = "plugin:artifact:artifact";
 
 const KINDS = new Set(["html", "svg", "mermaid", "react", "markdown", "vega-lite", "file"]);
 
-export type ArtifactRef = { id: string; version: number; title: string; kind: string };
+// `inline`/`height` (ADR 0118 D2, S4): an inline ref hosts the artifact's own frame right in
+// the transcript instead of pointing at the panel. `height` is an OPTIONAL initial sizing hint
+// (the frame reports its real content height after it measures); 0 means "no hint — start at
+// the floor". Both are untrusted props off the wire, so `inline` is an exact boolean check and
+// `height` is a finite positive number run through the same [80,1200] clamp the host applies to
+// the frame's reported height — never cast.
+export type ArtifactRef = {
+  id: string;
+  version: number;
+  title: string;
+  kind: string;
+  inline: boolean;
+  height: number;
+};
 
 export function artifactRefFromProps(props: Record<string, unknown> | undefined): ArtifactRef | null {
   if (!props) return null;
@@ -27,7 +41,10 @@ export function artifactRefFromProps(props: Record<string, unknown> | undefined)
   if (!id || !version) return null;
   const title = typeof props.title === "string" ? props.title.replace(/\s+/g, " ").trim().slice(0, 200) : "";
   const kind = typeof props.kind === "string" && KINDS.has(props.kind) ? props.kind : "";
-  return { id, version, title, kind };
+  const inline = props.inline === true;
+  const h = props.height;
+  const height = typeof h === "number" && Number.isFinite(h) && h > 0 ? clampHeight(Math.round(h)) : 0;
+  return { id, version, title, kind, inline, height };
 }
 
 /** The chip's name for an artifact: its title, else "<kind> artifact". */
@@ -140,12 +157,16 @@ export function openArtifactRef(ref: Pick<ArtifactRef, "id" | "version">, opts: 
 
 /** The live-stream hook (registered with the chip): the agent just created or revised an
  *  artifact → open the panel on that version. Live turn only — history hydration and
- *  reattach never call it, so a reload never reopens the panel. */
+ *  reattach never call it, so a reload never reopens the panel.
+ *
+ *  An INLINE ref is skipped (ADR 0118 D2): the answer already renders in the transcript, so
+ *  auto-opening the panel on top of it would be a redundant, jarring second surface. */
 export function onLiveArtifactRef(
   spec: { component: string; props: Record<string, unknown> },
   ctx: { sessionId?: string },
 ): void {
   if (spec.component !== ARTIFACT_REF_COMPONENT) return;
   const ref = artifactRefFromProps(spec.props);
-  if (ref) openArtifactRef(ref, { auto: true, sessionId: ctx.sessionId });
+  if (!ref || ref.inline) return;
+  openArtifactRef(ref, { auto: true, sessionId: ctx.sessionId });
 }

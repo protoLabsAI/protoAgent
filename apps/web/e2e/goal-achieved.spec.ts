@@ -27,6 +27,10 @@ test("a goal transitions driving → achieved and the card turns green live", as
     max_iterations: 8,
     started_at: Date.now() / 1000 - 120,
   };
+  // ONE finish instant, like the server's stored goal. The dismiss key is session + finished_at,
+  // and the mock re-pushes `goal.changed` every 600ms; a finished_at recomputed per fetch gave
+  // every refetch a NEW key, so a dismissed row came straight back (flaky line "Dismiss hides it").
+  const finishedAt = Date.now() / 1000 - 5;
   await page.route("**/api/goals", (route) =>
     route.fulfill({
       json: {
@@ -37,7 +41,7 @@ test("a goal transitions driving → achieved and the card turns green live", as
                 ...base,
                 status: "achieved",
                 iteration: 1,
-                finished_at: Date.now() / 1000 - 5,
+                finished_at: finishedAt,
                 last_reason: "command exited 0",
               }
             : { ...base, status: "active", iteration: 1 },

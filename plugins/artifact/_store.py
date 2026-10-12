@@ -637,25 +637,142 @@ def _is_pinned(art: dict) -> bool:
     return art.get("pinned") is True
 
 
+def _is_inline(art: dict) -> bool:
+    """Inline placement (ADR 0118 D2): the artifact renders in the conversation, not the panel.
+    Persisted on the ARTIFACT so update_artifact/rewrite_artifact keep every later version's chip
+    inline — an inline artifact IS an artifact. Strictly the string ``"inline"``; the key is
+    ABSENT on a panel artifact (not ``"panel"``), so a store that never created an inline artifact
+    is byte-for-byte the pre-0118 shape (the same downgrade-safe rule ``pinned`` follows)."""
+    return art.get("placement") == "inline"
+
+
 def _pinned(store: dict) -> list[dict]:
     """The pinned artifacts, in store (most-recently-touched first) order."""
     return [a for a in store.get("artifacts", []) if _is_pinned(a)]
 
 
+# ── chat references (#4138) ─────────────────────────────────────────────────────────
+# An artifact whose ``artifact-ref`` went out in a console chat (an inline answer, or a chip) is
+# SHOWN by that chat's transcript for as long as the chat exists — evicting it turns the answer
+# into "no longer available" in history. So each create/revise tool stamps the calling chat's
+# session id onto the artifact (``chat_sessions``, the ids in first-seen order), and eviction
+# skips an artifact while any of its chats survives. A chat is gone only when the operator
+# DELETED it — a durable tombstone core keeps (``graph.sdk.deleted_chat_sessions``, ADR 0104).
+# The key is ABSENT on an artifact no chat has shown (the downgrade-safe rule ``pinned``
+# follows); an older plugin ignores it and just evicts by position, as it always did.
+#
+# Only console chats count (``chat-`` ids — the console and the Zed shim): they are the
+# transcripts that persist a chip to re-render. Activity, delegation, API and A2A peer contexts
+# keep no such transcript, so an artifact made only there stays evictable as before.
+_CHAT_PREFIX = "chat-"
+
+# Warned once per over-cap episode (reset when the store falls back under the cap), so a busy
+# session doesn't log the same warning on every write.
+_over_cap_warned = False
+
+
+def _chat_sessions(art: dict) -> list[str]:
+    """The chat session ids recorded on ``art`` (a hand-edited non-list reads as none)."""
+    cs = art.get("chat_sessions")
+    return [s for s in cs if isinstance(s, str) and s] if isinstance(cs, list) else []
+
+
+def _stamp_chat_session(art: dict, session_id: str | None) -> None:
+    """Record that ``session_id``'s chat now shows ``art`` (its ref was just emitted there).
+    A no-op for a non-chat (or empty) session id. Deduped, first-seen order kept."""
+    sid = (session_id or "").strip()
+    if not sid.startswith(_CHAT_PREFIX):
+        return
+    cs = _chat_sessions(art)
+    if sid not in cs:
+        art["chat_sessions"] = [*cs, sid]
+
+
+def _deleted_chat_sessions(session_ids: set[str]) -> set[str] | None:
+    """The subset of ``session_ids`` whose chats were deleted, or ``None`` when that can't be
+    told (no host, no task store, an unreadable one) — the caller must then keep every one."""
+    try:
+        from graph.sdk import deleted_chat_sessions
+
+        return deleted_chat_sessions(session_ids)
+    except Exception as exc:  # noqa: BLE001 — no host / older core → unknown, never a guess
+        log.debug("[artifact] deleted_chat_sessions unavailable: %s", exc)
+        return None
+
+
+def _referenced(arts: list[dict]) -> set[str]:
+    """The ids of those ``arts`` still shown by a chat that exists. Prunes each artifact's
+    ``chat_sessions`` of the deleted chats as it goes (the key goes when none is left), so a
+    chat's deletion is read once. FAIL SAFE: when deletions can't be read, every artifact that
+    carries a chat id counts as referenced — a possibly-live answer is never deleted."""
+    stamped = [a for a in arts if _chat_sessions(a)]
+    if not stamped:
+        return set()
+    deleted = _deleted_chat_sessions({s for a in stamped for s in _chat_sessions(a)})
+    if deleted is None:
+        return {a["id"] for a in stamped}
+    live_ids: set[str] = set()
+    for a in stamped:
+        cs = _chat_sessions(a)
+        live = [s for s in cs if s not in deleted]
+        if live != cs:
+            if live:
+                a["chat_sessions"] = live
+            else:
+                a.pop("chat_sessions", None)
+        if live:
+            live_ids.add(a["id"])
+    return live_ids
+
+
 def _evict(arts: list[dict], keep: int) -> list[dict]:
-    """Keep every PINNED artifact plus the ``keep`` most-recently-touched unpinned ones. Pins
-    don't count toward ``keep``: with nothing pinned this is exactly ``arts[:keep]``, the
-    eviction point the store has always had. The number of pins is bounded separately
-    (``_config._max_pinned``, enforced by pin_artifact).
+    """Keep every PINNED artifact plus ``keep`` unpinned ones, evicting the oldest unpinned
+    artifact that NO SURVIVING CHAT SHOWS first (#4138). Pins don't count toward ``keep``; the
+    number of pins is bounded separately (``_config._max_pinned``, enforced by pin_artifact).
+
+    Under the cap nothing is looked up. Over it, artifacts still shown in a chat (see
+    ``_referenced``) are skipped and the oldest unreferenced ones go, survivors keeping their
+    order; the newest (the one this write touched) is never evicted. With no chat references this is exactly ``arts[:keep]`` over the unpinned group, the
+    eviction point the store has always had. When too few are unreferenced, the store stays
+    OVER the cap — keeping a live answer beats honouring the number — and that is logged.
 
     Pinned artifacts go FIRST (a stable partition, so each group keeps its most-recently-touched-
     first order; pin_artifact moves a new pin to the front) as a downgrade guard:
     a pre-0.18 plugin knows nothing of pins and keeps just ``artifacts[:history]``, so pins at
     the front survive its writes until ``history`` newer artifacts push them out — at the back,
     where a long-lived artifact usually sits, its first write would evict them."""
+    global _over_cap_warned
     pinned = [a for a in arts if _is_pinned(a)]
     unpinned = [a for a in arts if not _is_pinned(a)]
-    return pinned + unpinned[:keep]
+    excess = len(unpinned) - keep
+    if excess <= 0:
+        _over_cap_warned = False
+        return pinned + unpinned
+    referenced = _referenced(unpinned)
+    drop: set[str] = set()
+    # Oldest first, and never the newest: it is the artifact this write just created or touched
+    # (``_touch`` moves it to the front), and its tool is about to reply with a ref to it.
+    for a in reversed(unpinned[1:]):
+        if len(drop) >= excess:
+            break
+        if a["id"] not in referenced:
+            drop.add(a["id"])
+    kept = [a for a in unpinned if a["id"] not in drop]
+    over = len(kept) - keep
+    if over > 0:
+        if not _over_cap_warned:
+            log.warning(
+                "[artifact] store is %d over its cap (%d unpinned kept, 'Artifacts kept' = %d): every "
+                "remaining artifact is still shown in a chat that exists, so none was evicted. Delete "
+                "old chats, or raise the setting.",
+                over,
+                len(kept),
+                keep,
+            )
+            _over_cap_warned = True
+    else:
+        _over_cap_warned = False
+    return pinned + kept
 
 
 _WIN_DENIED_RETRY_S = 2.0  # Windows: how long a store read/replace rides out a sharing violation

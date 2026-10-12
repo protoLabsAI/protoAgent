@@ -823,9 +823,21 @@ export type ToolCall = {
    *  waiting on a human, not working — rendered as waiting (no spinner, no climbing
    *  timer). Cleared when the turn resumes or the card settles. */
   paused?: boolean;
+  /** Still in flight when its turn was STOPPED (operator Stop / CancelTask, #4076): the call
+   *  never completed, so it settles with `status: "done"` (no spinner) but renders neutral
+   *  "stopped" — never the ✓ a call that actually returned gets. Survives reload: the live
+   *  Stop stamps it on the persisted bubble, and durable hydration / reattach stamp it off a
+   *  `canceled` task state. */
+  stopped?: boolean;
   /** Client wall-clock when the start frame arrived (ms epoch). */
   startedAt?: number;
-  /** Elapsed start→end, stamped client-side when the end frame arrives. */
+  /** `startedAt` is NOT when the call started: the start frame was REPLAYED from a task
+   *  snapshot (reload / reattach), so `now - startedAt` would measure the replay, not the
+   *  call (#4076). A duration is then taken only from the wire's measured `durationMs`. */
+  startReplayed?: boolean;
+  /** Elapsed start→end: the server-measured execution time off the end frame when it
+   *  carries one, else stamped client-side when the end frame arrives. Absent when unknown —
+   *  the card then shows no duration rather than a fake one. */
   durationMs?: number;
   /** id of the enclosing `task` tool, if this call ran inside a subagent. */
   parentId?: string;
@@ -922,6 +934,11 @@ export type ToolEvent = {
   /** True pre-truncation result size in chars, from the wire fragment (#2775). */
   outputChars?: number;
   error?: boolean; // an "end" that failed (phase "failed" on the wire) → card shows the X
+  /** The server-measured execution time, on an end frame (#4076). */
+  durationMs?: number;
+  /** Replayed from a task snapshot (reload / reattach), not seen live — so the client's
+   *  clock between this frame and its pair measures nothing (#4076). */
+  replayed?: boolean;
   /** id of the enclosing `task` delegation when this is a subagent's own tool call —
    *  set server-side so nesting is explicit (by id), not inferred from frame order. */
   parentId?: string;
@@ -1179,6 +1196,12 @@ export type ChatMessage = {
    *  text/tool-call order is preserved. Absent on history-loaded messages, which fall
    *  back to the grouped reasoning→toolCalls→content layout. */
   parts?: ChatPart[];
+  /** LIVE-ONLY streamed tool-argument previews (ADR 0118 D3), keyed by tool-call id — the
+   *  per-tool-call buffer the console decodes off working frames (`chat/toolArgsBuffer`,
+   *  structurally the `ToolArgsBuffer` view). Stamped while the turn streams so the WorkBlock can
+   *  render a live artifact preview, and DROPPED when the turn settles: never persisted, never
+   *  rebuilt on hydration/reattach (a reload shows the finished tool card, never a stale partial). */
+  toolArgs?: Record<string, { arg: string; text: string; done: boolean }>;
   /** Streamed scratch_pad reasoning ("thinking") — rendered as a collapsible block
    *  above the answer; never part of `content`. */
   reasoning?: string;
@@ -1189,6 +1212,9 @@ export type ChatMessage = {
    *  it — but nothing is being produced, so the bubble renders as waiting: no streaming
    *  spinner, no running-card timers. Cleared when the turn resumes or settles. */
   paused?: boolean;
+  /** The turn was STOPPED before it finished (operator Stop / a `canceled` task, #4076) —
+   *  the footer carries a quiet "Stopped" marker so a reload still says why it ends early. */
+  stopped?: boolean;
   /** A2A task id for this turn — persisted so a stuck `streaming` message can be
    *  reconciled against the server's task state on reload (self-heal). */
   taskId?: string;
@@ -1207,6 +1233,18 @@ export type ChatMessage = {
    *  instead of a full-size assistant bubble. Persisted, so the card treatment survives reload;
    *  absent on operator-initiated turns, which stay full-size. */
   origin?: string;
+  /** Origin tag for a user turn a frame's send-to-chat bridge started (ADR 0118 D4), instead of
+   *  the operator typing it. The turn is a NORMAL, visible user message — this only records WHERE
+   *  the click came from, so the bubble can show a small "from ‹title›" label and the turn stays
+   *  auditable as the user's. Two frame origins carry it:
+   *    - an inline ARTIFACT frame (S10b): `{via, artifact_id, version}` — exactly the D4 metadata;
+   *    - a plugin COMPONENT frame (S12b): `{via, kind, plugin}` — the component-v1 kind and the
+   *      plugin that owns the frame (`plugin` null for a core frame kind).
+   *  `title` is a display convenience the host supplies for the label. Absent on a normally-typed
+   *  turn. */
+  sentVia?:
+    | { via: "artifact"; artifact_id: string; version: number; title?: string }
+    | { via: "component"; kind: string; plugin: string | null; title?: string };
   /** A server turn's result that `chat.resumed` APPENDED, because this transcript had no
    *  preview of that turn to replace: a scheduled fire or a watch reaction that landed while
    *  some other turn here was still running. It is not that running turn's row. So the

@@ -18,9 +18,9 @@
   }
   // Store mirror: arts = [{id,kind,title,versions:[{code,ts,by}]}], curId = focused.
   // selId/selVer = the artifact + version the USER is viewing (selVer null = latest, so
-  // it auto-follows new versions). followNewest jumps to the newest artifact on create
-  // unless the user navigated to an older one.
-  var arts = [], curId = null, selId = null, selVer = null, followNewest = true, lastRendered = "";
+  // it auto-follows new versions). followNewest jumps to the newest PANEL artifact on create
+  // unless the user navigated to an older one; panelHead is that artifact (see headOf).
+  var arts = [], curId = null, selId = null, selVer = null, followNewest = true, lastRendered = "", panelHead = null;
   // The version in the frame, for render-status (#1458): its id, 1-based position, and its identity —
   // lifetime number + ts — which the route resolves even after a trim has shifted the position.
   var renderingId = null, renderingVer = 0, renderingN = 0, renderingTs = 0;
@@ -33,22 +33,45 @@
   // (postMessage) to the gated /ask endpoint → the agent → back. parent.postMessage
   // works from the sandbox; the shell validates e.source and calls the bearer-gated
   // endpoint. ask() rejects if the operator hasn't enabled it (ARTIFACT_ASK_ENABLED).
+  // send(text) / openLink(url) (ADR 0118 D4) sit next to ask: the shim posts them up to the
+  // shell, which SANITY-checks and relays them to the console host (its embedder); the HOST
+  // owns the gates (gesture / length / busy / rate for send, https + origin allowlist for
+  // openLink) and posts a verdict back down. Each returns a Promise that resolves on accept
+  // and rejects with the host's reason (e.g. "the agent is busy"), so the frame can show it.
+  // ask stays opt-in and unchanged; send is on by default (D4).
+  // A send/openLink refusal (busy, dismissed, rate-limited, timed out, not https…) is an EXPECTED
+  // outcome, not a crash: nay() tags its Error protoArtifactRefusal so ERRBOOT's
+  // unhandledrejection hook logs it quietly instead of covering the artifact with the red overlay.
   var SHIM = '<script>(function(){var s=0,w={};'
+    + 'function nay(m){var er=new Error(m);er.protoArtifactRefusal=true;return er;}'
     + 'window.addEventListener("message",function(e){var m=e.data||{};'
-    // Live re-theme (#1872): base() bakes the tokens in as literals at render time,
-    // so a later app-theme switch left the frame in the stale palette. The shell
-    // pushes fresh tokens; update :root + html/body in place (no re-render, so
-    // interactive artifact state survives).
+    // Live re-theme (#1872): the shell pushes fresh tokens on every frame load and app-theme
+    // switch; update the --pl-* custom properties on :root in place (no re-render, so
+    // interactive artifact state survives). ONLY the custom properties: base()'s html/body
+    // colours read them through var(), so an unstyled artifact follows the theme, while the
+    // author's own body/html colours keep winning. Writing INLINE body/html background + color
+    // here (as this once did) beat the author's `body{...}` rule, so every element inheriting
+    // the author's text colour flipped to the console's at handover: a dark card's title and
+    // buttons went near-black on a light console (#4124).
     + 'if(m.type==="protoArtifact:theme"&&m.tokens){var st=document.documentElement.style;'
     + 'for(var k in m.tokens){if(k.indexOf("--pl-")===0)st.setProperty(k,String(m.tokens[k]));}'
-    + 'var bg=m.tokens["--pl-color-bg"],fg=m.tokens["--pl-color-fg"];'
-    + 'if(bg){st.background=bg;if(document.body)document.body.style.background=bg;}'
-    + 'if(fg&&document.body)document.body.style.color=fg;return;}'
+    // The scheme rides along (the shell reads it off the new --pl-color-bg) and is written into
+    // base()'s own :root rule — not inline — so native controls and scrollbars flip with the
+    // theme while an author's own :root{color-scheme} still wins, exactly as at first render.
+    + 'if(m.scheme==="dark"||m.scheme==="light"){var b=document.getElementById("__artbase");'
+    + 'try{b.sheet.cssRules[0].style.setProperty("color-scheme",m.scheme);}catch(_){}}'
+    + 'return;}'
     + 'if(m.type!=="protoArtifact:result")return;'
-    + 'var p=w[m.id];if(!p)return;delete w[m.id];m.error?p.reject(new Error(m.error)):p.resolve(m.text);});'
+    + 'var p=w[m.id];if(!p)return;delete w[m.id];m.error?p.reject(p.b?nay(m.error):new Error(m.error)):p.resolve(m.text);});'
     + 'window.protoArtifact={ask:function(prompt){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej};'
     + 'parent.postMessage({type:"protoArtifact:ask",id:id,prompt:String(prompt)},"*");'
-    + 'setTimeout(function(){if(w[id]){delete w[id];rej(new Error("ask timed out"));}},60000);});}};'
+    + 'setTimeout(function(){if(w[id]){delete w[id];rej(new Error("ask timed out"));}},60000);});},'
+    + 'send:function(text){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej,b:1};'
+    + 'parent.postMessage({type:"protoArtifact:send",id:id,text:String(text)},"*");'
+    + 'setTimeout(function(){if(w[id]){delete w[id];rej(nay("send timed out"));}},60000);});},'
+    + 'openLink:function(url){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej,b:1};'
+    + 'parent.postMessage({type:"protoArtifact:openLink",id:id,url:String(url)},"*");'
+    + 'setTimeout(function(){if(w[id]){delete w[id];rej(nay("openLink timed out"));}},60000);});}};'
     + '})();<\/script>';
   // Design-system surface: link the same-origin DS plugin-kit stylesheet (host-served at
   // /_ds/, min_protoagent_version 0.34.0) into html/react/markdown artifacts so they can use
@@ -74,19 +97,95 @@
     + '(document.body||document.documentElement).appendChild(d);}d.textContent=String(m);rep(false,m);}'
     + 'W.__artErr=show;W.__artOk=function(){rep(true,"");};'
     + 'addEventListener("error",function(e){show("⚠ "+(e.message||(e.error&&e.error.message)||"Script error")+(e.lineno?" (line "+e.lineno+")":""));},true);'
-    + 'addEventListener("unhandledrejection",function(e){show("⚠ "+((e.reason&&e.reason.message)||e.reason));});'
+    // A send()/openLink() refusal the artifact didn't catch is not a render failure: log it
+    // quietly (no overlay, no failed verdict) and preventDefault() it, so the browser doesn't also
+    // report it as an "Uncaught (in promise)" error. Every other unhandled rejection still shows.
+    + 'addEventListener("unhandledrejection",function(e){var r=e.reason;'
+    + 'if(r&&r.protoArtifactRefusal){try{e.preventDefault();}catch(_){}try{console.info("protoArtifact: not sent \u2014 "+r.message);}catch(_){}return;}'
+    + 'show("⚠ "+((r&&r.message)||r));});'
     + 'addEventListener("load",function(){if(W.__artKind!=="react"&&W.__artKind!=="vega-lite")setTimeout(function(){if(!W.__artRep)W.__artOk();},80);});'
     + '})();<\/script>';
+  // Height reporting for the embed placement (ADR 0118 D2). Injected ONLY into embed frames
+  // (by embedSuffix below) — the panel carries no reporter, so its frames are untouched. A
+  // ResizeObserver posts the frame's CONTENT height up to the shell on every size change (plus on
+  // load and when the shell asks via protoArtifact:measure); the shell sizes the frame to it and
+  // relays it to the console host, which clamps it to [80,1200].
+  // Measures the BOX height of <html>/<body> — which embedSuffix's CSS frees to size to content
+  // (flow kinds) or pins to a width-proportional box (fill kinds) — NOT
+  // documentElement.scrollHeight, which is floored at the viewport (the frame's OWN height) and so
+  // could only ever GROW, never shrink, and left the overflow:hidden svg/mermaid frames reporting
+  // their own squashed height. Deduped so an unchanged measure doesn't thrash the host. No `</`
+  // inside: rides a srcdoc <script>.
+  var HEIGHTJS = '<script>(function(){var W=window,D=document,last=-1;'
+    + 'function h(){var d=D.documentElement,b=D.body,'
+    + 'dh=d&&d.getBoundingClientRect?d.getBoundingClientRect().height:0,'
+    + 'bh=b?Math.max(b.scrollHeight||0,b.getBoundingClientRect?b.getBoundingClientRect().height:0):0;'
+    + 'return Math.ceil(Math.max(dh,bh));}'
+    + 'function send(){var v=h();if(v===last)return;last=v;'
+    + 'try{W.parent.postMessage({type:"protoArtifact:height",height:v},"*");}catch(_){}}'
+    + 'if(W.ResizeObserver){var ro=new W.ResizeObserver(send);ro.observe(D.documentElement);if(D.body)ro.observe(D.body);}'
+    + 'W.addEventListener("load",send);'
+    + 'W.addEventListener("message",function(ev){if(((ev.data)||{}).type==="protoArtifact:measure")send();});'
+    + 'send();'
+    + '})();<\/script>';
+  // The CSS reset embedSuffix pairs with HEIGHTJS (ADR 0118 D2). FLOW kinds (html, markdown, react,
+  // charts, .md file previews) size to their content, so <html>/<body> are freed to shrink-wrap.
+  // FILL kinds (navigable svg/mermaid diagrams, paged decks/PDF/Word, and the scroll-box file
+  // cards) have no intrinsic content height — their panel CSS deliberately fills the stage — so
+  // they get a width-proportional box clamped to a sane range instead of being squashed to the
+  // 150px iframe default. !important so it wins over the kind's own html,body rule regardless of
+  // cascade order. No `</` inside: rides a srcdoc <style>.
+  var EMBED_FLOW_CSS = 'html,body{height:auto !important;min-height:0 !important}';
+  var EMBED_FILL_CSS = 'html,body{height:clamp(260px,62vw,760px) !important;min-height:0 !important}';
+  // Themed defaults for UNSTYLED elements, at zero specificity (:where), so an artifact that
+  // writes plain <input>/<button>/<select> still looks like the console in either theme — and
+  // any rule the author writes wins outright. Every value is a --pl-* token.
+  var DEFAULTS = ':where(html,body){font-family:var(--pl-font-sans,system-ui,sans-serif);line-height:1.5}'
+    + ':where(input,select,textarea){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-inset,transparent);'
+    + 'border:1px solid var(--pl-color-border);border-radius:var(--pl-radius,6px);padding:6px 8px}'
+    + ':where(input,select,textarea):focus{outline:2px solid var(--pl-color-accent);outline-offset:1px}'
+    + ':where(button){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-raised,transparent);'
+    + 'border:1px solid var(--pl-color-border);border-radius:var(--pl-radius,6px);padding:6px 12px;cursor:pointer}'
+    + ':where(button):hover{background:var(--pl-color-bg-hover,var(--pl-color-bg-raised))}'
+    + ':where(a){color:var(--pl-color-accent)}'
+    + ':where(table){border-collapse:collapse}:where(th,td){border-bottom:1px solid var(--pl-color-border);padding:6px 8px;text-align:left}';
+  // Is the CONSOLE's ground dark? Decides the frame's color-scheme (native scrollbars, date
+  // pickers, form controls). Read from the console's own --pl-color-bg — never the shell page's
+  // computed color-scheme, which follows the OS and so drew light scrollbars on a dark console
+  // whenever the OS was light (and the reverse). Themes are often oklch(), so a 1px canvas
+  // resolves any CSS colour; hex/rgb are parsed directly as a fallback.
+  function bgIsDark(bg){
+    var m, l;
+    try{ var cv=document.createElement("canvas"), x; cv.width=cv.height=1; x=cv.getContext("2d");
+      x.fillStyle="#000"; x.fillStyle=bg; x.fillRect(0,0,1,1); var px=x.getImageData(0,0,1,1).data;
+      return (0.299*px[0]+0.587*px[1]+0.114*px[2])/255<=0.5; }catch(_){}
+    if((m=/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(bg||""))){ var h=m[1].length===3?m[1].replace(/./g,"$&$&"):m[1];
+      l=(0.299*parseInt(h.slice(0,2),16)+0.587*parseInt(h.slice(2,4),16)+0.114*parseInt(h.slice(4,6),16))/255; }
+    else if((m=/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(bg||""))) l=(0.299*m[1]+0.587*m[2]+0.114*m[3])/255;
+    else return true;
+    return l<=0.5;
+  }
   function base(kind){
     var cs = getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n) || d).trim(); }
     var bg=tok("--pl-color-bg","#0a0a0c"), fg=tok("--pl-color-fg","#ededed"),
         accent=tok("--pl-color-accent","#9b87f2"), border=tok("--pl-color-border","rgba(255,255,255,.08)");
     // Carry the live theme's key tokens into the nested frame (plugin-kit.css ships only the
-    // DEFAULT palette); inline bg = no white flash; SHIM = the protoArtifact.ask bridge.
+    // DEFAULT palette); bg in the first style = no white flash; SHIM = the protoArtifact.ask bridge.
+    // html/body read the tokens through var() (literal fallback) so the SHIM's live re-theme
+    // reaches them by updating the tokens alone — never by inline styles that would override the
+    // author's own body colours (#4124). This rule precedes the author's CSS, so theirs wins.
     // __artKind lets ERRBOOT decide how to confirm a clean render (on-load vs react mount).
-    return '<style>:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+'}'
-      + 'html,body{margin:0;background:'+bg+';color:'+fg+'}</style>'
+    // Every theme token the console defines (themeTokens), not just the four above, so .pl-*
+    // classes and var(--pl-…) in the artifact resolve to the operator's live palette.
+    var all=themeTokens(), decl="";
+    Object.keys(all).forEach(function(k){ decl+=k+':'+all[k]+';'; });
+    // color-scheme follows the console, so native controls (inputs, scrollbars, date pickers) are
+    // dark on a dark theme instead of glaring white.
+    var scheme=bgIsDark(bg)?"dark":"light";
+    return '<style id="__artbase">:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+';'+decl+'color-scheme:'+scheme+'}'
+      + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}'
+      + DEFAULTS + '</style>'
       + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT;
   }
   // Artifact libs are VENDORED + served same-origin (/plugins/artifact/vendor/…), so
@@ -132,6 +231,19 @@
       "sha512-CToErkDzmSle4BCcUm0qqqWrjXJuUd2g0On8SLez8p9Bf6rZHE7oxMdgARb0dOYKeZkH9wblI+J5PF6fxRttYQ=="],
     pdfjsWorker: ["pdfjs-worker.min.mjs",
       "sha512-cgsoOrm2N2zEbj1vccst4py/Wf4vyUBwoMXCSaT7WI/vGKCYc33zBWj2TPeYFpdtESAOHCvzzxKe+lxMDatk9Q=="],
+    // three.js r170 (MIT): the package's own self-contained minified ESM build
+    // (build/three.module.min.js), byte-for-byte. Resolved via the `three` import-map
+    // specifier below for 3D `html`/`react` artifacts; SRI-pinned here like every other
+    // vendored module. Notices in vendor/three.LICENSES.txt.
+    three: ["three.module.min.js",
+      "sha512-zTnt1Hf43YVf2to5DC6GE6cPRSC/xgPJDf3PLQussTsaDak1uHdbnWtIYnOQiL40AIa2OZfFkayQXVdzL1/DqA=="],
+    // anime.js 4.5.0 (MIT): the package's own self-contained minified ESM bundle
+    // (dist/bundles/anime.esm.min.js), byte-for-byte. Resolved via the `animejs` import-map
+    // specifier for animated `html`/`react` artifacts (`import { animate } from "animejs"`);
+    // the MIT-licensed choice in place of GSAP, whose license prohibits no-code animation tools.
+    // SRI-pinned like every vendored module. Notices in vendor/anime.LICENSES.txt.
+    anime: ["anime.esm.min.js",
+      "sha512-Wr0/JdMQ70ZcJuGM00/sVJDfzeCWRFL+H7A8zTi1gIH6t5KwIFBi5yGyXAb1EV81yyJfOAC5cBMR56NZNC5a0g=="],
   };
   // crossorigin="anonymous" is REQUIRED even though the lib is same-origin to the
   // shell: the artifact runs in a no-same-origin sandbox (opaque origin), so its
@@ -149,7 +261,7 @@
   // Curated ESM import map for `react` artifacts (offline-vendored, served same-origin with
   // CORS). Bare specifiers resolve to the vendored modules: react/react-dom via tiny shims that
   // re-export the UMD globals (so the artifact, the @pl/ui wrappers, and any lib share ONE
-  // React instance), plus d3 / chart.js / lucide and the authored @pl/ui DS wrappers.
+  // React instance), plus d3 / chart.js / lucide / three / animejs and the authored @pl/ui DS wrappers.
   var V = ORIGIN + "/plugins/artifact/vendor/";
   var IMPORTMAP = JSON.stringify({ imports: {
     "react": V + "react.shim.mjs",
@@ -159,7 +271,9 @@
     "d3": V + "d3.mjs",
     "chart.js": V + "chartjs.mjs",
     "chart.js/auto": V + "chartjs.mjs",
-    "lucide": V + "lucide.mjs"
+    "lucide": V + "lucide.mjs",
+    "three": V + "three.module.min.js",
+    "animejs": V + "anime.esm.min.js"
   }});
   // Prose styling for markdown, keyed to --pl-* tokens (the DS link supplies component classes).
   var MD_CSS = '#md{max-width:50rem;margin:0 auto;padding:20px;line-height:1.6}'
@@ -555,8 +669,36 @@
     return m[0] + inject + code.slice(m[0].length);
   }
 
+  // An html artifact may ship its OWN <script type="importmap">. Only the first import map in a
+  // document takes effect, so stacking the shell's ahead of it would silently shadow the
+  // author's. Merge instead: the author's entries win, the shell's fill in the curated
+  // specifiers the author didn't name, and the author's tag is lifted out so ONE map remains.
+  // An author map that isn't valid JSON is left exactly as written and the shell's is not
+  // injected, which is the pre-ADR-0118 behavior for that artifact.
+  var AUTHOR_IMPORTMAP = /<script\b[^>]*\btype\s*=\s*["']?importmap["']?[^>]*>([\s\S]*?)<\/script\s*>/i;
+  function htmlImportMap(code){
+    var m = AUTHOR_IMPORTMAP.exec(code);
+    if (!m) return {code: code, map: IMPORTMAP};
+    var own;
+    try { own = JSON.parse(m[1]); } catch (e) { return {code: code, map: null}; }
+    if (!own || typeof own !== "object" || Array.isArray(own)) return {code: code, map: null};
+    var merged = {imports: Object.assign({}, JSON.parse(IMPORTMAP).imports, own.imports || {})};
+    if (own.scopes) merged.scopes = own.scopes;
+    if (own.integrity) merged.integrity = own.integrity;
+    return {code: code.slice(0, m.index) + code.slice(m.index + m[0].length), map: JSON.stringify(merged)};
+  }
+
   function srcdoc(kind, code, links) {
-    if (kind === "html") return htmlDoc(code, dsLink() + base(kind));
+    // `html` gets the SAME curated ESM import map as `react` (injected ahead of the author's
+    // own markup by htmlDoc, so it precedes any `<script type="module">` the artifact ships):
+    // a plain html artifact can then `import * as THREE from "three"` (or d3 / chart.js / lucide)
+    // and the bare specifier resolves to the same-origin vendored module — the three.js (ADR 0118
+    // D6) support promised in the changelog/LICENSES only works because of this map, not base().
+    // An author's own import map is merged into it, never shadowed (htmlImportMap).
+    if (kind === "html") {
+      var im = htmlImportMap(code);
+      return htmlDoc(im.code, dsLink() + base(kind) + (im.map ? '<script type="importmap">' + im.map + '<\/script>' : ''));
+    }
     if (kind === "svg") return '<!doctype html>' + base(kind) + viewport(code) + gfxScript({}) +
       '<script>__artVP.full();<\/script></body>';
     // mermaid.run() is async: the viewport + code links mount once the <svg> exists. A rejected
@@ -1077,8 +1219,17 @@
   // tokens are the design system's own data-viz palette (--pl-color-chart-axis / -grid /
   // -series1…8), so a chart is drawn in the active theme's colours, dark or light. Pushed into
   // every frame on a re-theme (pushTheme) and baked into a chart's srcdoc (vegaDoc).
+  // The FULL semantic palette (not just bg/fg/accent/border): an artifact styled with the kit's
+  // .pl-* classes or var(--pl-…) must get the operator's theme for raised/inset surfaces, muted
+  // text and status colours too — otherwise those fall back to the kit's default palette and the
+  // artifact half-matches the console. "" = carry only when the console defines it.
   var THEME_TOKENS={"--pl-color-bg":"#0a0a0c","--pl-color-fg":"#ededed","--pl-color-fg-muted":"#9aa0aa",
     "--pl-color-accent":"#9b87f2","--pl-color-border":"rgba(255,255,255,.08)","--pl-font-sans":"",
+    "--pl-color-bg-raised":"","--pl-color-bg-subtle":"","--pl-color-bg-hover":"","--pl-color-bg-inset":"",
+    "--pl-color-fg-subtle":"","--pl-color-fg-on-accent":"","--pl-color-accent-hover":"","--pl-color-accent-fg":"",
+    "--pl-color-border-strong":"","--pl-color-status-error":"","--pl-color-status-info":"",
+    "--pl-color-status-success":"","--pl-color-status-warning":"","--pl-font-mono":"",
+    "--pl-radius":"","--pl-radius-lg":"",
     "--pl-color-chart-axis":"","--pl-color-chart-grid":""};
   for(var _s=1;_s<=8;_s++) THEME_TOKENS["--pl-color-chart-series"+_s]="";
   function themeTokens(){
@@ -1117,7 +1268,7 @@
   // The in-frame controller. Authored as a real function and injected via toString(), like
   // artGraphics / artSlides — so it must carry no literal script-close or comment-open sequence.
   function artVega(cfg){
-    var W=window, tok=cfg.tokens||{}, spec=null, view=null, gen=0;
+    var W=window, tok=cfg.tokens||{}, spec=null, view=null, busy=false, again=false;
     function fail(m){ if(W.__artErr) W.__artErr("⚠ "+m); }
     function t(k, d){ var v=tok[k]; return (typeof v==="string" && v.trim()) ? v.trim() : d; }
     // Luminance of the ground, for the tooltip theme. Themes are often oklch(), so the browser
@@ -1188,18 +1339,32 @@
     function prep(){
       var s=JSON.parse(JSON.stringify(spec));
       if(s.usermeta && typeof s.usermeta==="object") delete s.usermeta.embedOptions;
+      // The renderer is the vendored Vega-Lite (v6) whatever the spec claims: a `$schema` pinning
+      // v5 out of habit only logs a version-mismatch warning on every draw (#4076), so drop it.
+      delete s["$schema"];
       var single=!!(s.mark || s.layer) && !s.facet && !s.repeat;
       if(single && s.width===undefined) s.width="container";
       if(single && s.autosize===undefined) s.autosize={type:"fit-x", contains:"padding"};
       return s;
     }
+    // ONE draw in flight at a time. A re-theme that lands mid-draw is coalesced into a single
+    // redraw AFTER the current one settles, never a restart of it: restarting threw away the
+    // in-flight draw's result, so its render verdict (__artOk, once-only) waited on the redraw —
+    // and a run of theme pushes could keep pushing it back. Every settled draw reports, so the
+    // FIRST successful draw confirms the render (the spec is the same in every palette).
     function draw(){
-      var my=++gen;
+      if(busy){ again=true; return; }
+      busy=true; again=false;
       if(view){ view.finalize(); view=null; }
-      return W.vegaEmbed("#vis", prep(), {mode:"vega-lite", renderer:"svg", actions:false, ast:true,
-          loader:LOADER, logger:logger, config:theme(), tooltip:{theme:isDark()?"dark":"light"}})
-        .then(function(res){ if(my!==gen){ res.finalize(); return; } view=res; if(W.__artOk) W.__artOk(); })
-        .catch(function(e){ if(my===gen) fail((e && e.message) || String(e)); });
+      var p;
+      try{
+        p=W.vegaEmbed("#vis", prep(), {mode:"vega-lite", renderer:"svg", actions:false, ast:true,
+          loader:LOADER, logger:logger, config:theme(), tooltip:{theme:isDark()?"dark":"light"}});
+      }catch(e){ p=Promise.reject(e); }
+      Promise.resolve(p)
+        .then(function(res){ view=res; if(W.__artOk) W.__artOk(); },
+              function(e){ fail((e && e.message) || String(e)); })
+        .then(function(){ busy=false; if(again) draw(); });
     }
     W.addEventListener("message", function(e){
       if(e.source!==W.parent) return;
@@ -1229,6 +1394,53 @@
       $estat=document.getElementById("estat"), $dlstat=document.getElementById("dlstat");
   var editing=false;
 
+  // Every srcdoc swap of the artifact frame goes through ONE navigator (#4076). Chrome drops a
+  // srcdoc assigned while a FRESH frame (one that has never finished loading) is still committing
+  // its first srcdoc: the frame keeps that first document, or stays on its blank initial page,
+  // while the attribute and the picker say the second. A frame that has loaded once swaps
+  // reliably. So the navigator:
+  //   • never re-navigates to the document it already holds (identical content keeps its state);
+  //   • assigns a loaded frame directly, at once, so a later swap never lands on top of something
+  //     the operator has started using;
+  //   • on a fresh frame with a navigation in flight, swaps in a NEW iframe element (same
+  //     attributes, same load listeners) and assigns there, so the newest document always wins
+  //     without waiting for the abandoned one to load.
+  // `replaced(el)` hands the new element back so `$frame` follows it.
+  function frameNavigator(frame, replaced){
+    var el=frame, doc=null, inFlight=false, loadedOnce=false, listeners=[];
+    function onLoad(){ inFlight=false; loadedOnce=true; }
+    function attach(n){ n.addEventListener("load", onLoad); listeners.forEach(function(fn){ n.addEventListener("load", fn); }); }
+    attach(el);
+    return {
+      set: function(next){
+        if(next===doc) return;
+        if(inFlight && !loadedOnce){
+          var n=el.cloneNode(false); n.removeAttribute("srcdoc");
+          el.replaceWith(n); el=n; attach(n); replaced(n);
+        }
+        doc=next; inFlight=true; el.srcdoc=next;
+      },
+      // The frame was blanked (srcdoc removed) — the next set must navigate even to the same doc.
+      clear: function(){ doc=null; },
+      onLoad: function(fn){ listeners.push(fn); el.addEventListener("load", fn); }
+    };
+  }
+  var frameNav = frameNavigator($frame, function(n){ $frame=n; });
+
+  // Embed placement (ADR 0118 D2): /plugins/artifact/view?embed=<id>&v=<version> renders ONE
+  // version with no panel chrome. EMBED is {id, ver} (ver = the LIFETIME version number the
+  // artifact-ref chip carries; 0/absent = latest) or null for the normal panel. Parsed off the
+  // query the browser keeps — the view route serves the same static page either way.
+  function embedParams(search){
+    var m=/[?&]embed=([^&]*)/.exec(search||""); if(!m) return null;
+    var id=""; try{ id=decodeURIComponent(m[1]||""); }catch(_){ id=m[1]||""; }
+    if(!id) return null;
+    var vm=/[?&]v=([^&]*)/.exec(search||""), ver=0;
+    if(vm){ var raw=vm[1]; try{ raw=decodeURIComponent(raw); }catch(_){} ver=parseInt(raw,10); }
+    return {id:id, ver:(isFinite(ver)&&ver>0)?ver:0};
+  }
+  var EMBED = embedParams(location.search);
+
   // Persist the user's selection (artifact + version + whether to auto-follow the newest) so it
   // STICKS across a tab-away/back — the plugin-view iframe unmounts on tab switch, so the shell
   // reloads fresh; without this it snapped back to the latest artifact. Same-origin page → plain
@@ -1237,6 +1449,51 @@
   function saveSel(){ try{ localStorage.setItem(SEL_KEY, JSON.stringify({selId:selId, selVer:selVer, followNewest:followNewest})); }catch(_){} }
   function loadSel(){ try{ var s=JSON.parse(localStorage.getItem(SEL_KEY)||"null");
     if(s&&typeof s==="object"){ selId=s.selId||null; selVer=(s.selVer==null?null:s.selVer); followNewest=(s.followNewest!==false); } }catch(_){} }
+
+  // The head follow-newest tracks persists beside the selection (its own key, so the selection's
+  // stored shape is unchanged): without it a reload couldn't tell "a new panel artifact arrived"
+  // from "the head I was already following".
+  var HEAD_KEY = "protoartifact.head";
+  function saveHead(){ try{ localStorage.setItem(HEAD_KEY, panelHead||""); }catch(_){} }
+  function loadHead(){ try{ panelHead=localStorage.getItem(HEAD_KEY)||null; }catch(_){} }
+
+  // Follow-newest follows PANEL artifacts only (ADR 0118 D2: an inline answer has no side effect
+  // on the panel). The store's `current` moves to every new artifact — inline answers included,
+  // and ones another session made — so the panel can't just chase it. headOf picks the panel
+  // artifact to follow: `current` when it is panel-placed, else the most recently written panel
+  // artifact (only a write moves `current`, so that is the last panel artifact it pointed at);
+  // null when there is none. The poll moves the selection only when the head CHANGES, so an
+  // inline answer (which leaves the head where it was) never moves the panel, and a selection
+  // the operator opened from an inline chip stays put until a new panel artifact arrives.
+  function headOf(list, cur){
+    var i, a, best=null, bestTs=-1;
+    for(i=0;i<list.length;i++) if(list[i].id===cur && list[i].placement!=="inline") return cur;
+    for(i=0;i<list.length;i++){
+      a=list[i]; if(a.placement==="inline") continue;
+      var vs=a.versions||[], ts=+((vs.length && vs[vs.length-1].ts) || a.updated || a.created || 0);
+      if(ts>bestTs){ bestTs=ts; best=a; }
+    }
+    return best ? best.id : null;
+  }
+  // The follow rules a fresh poll applies, pure so they can be tested: s is the selection state
+  // {selId, selVer, followNewest, head} before the poll; returns the new one (+ save: re-persist).
+  //   • Following: jump only when a new panel artifact became the head — an inline answer or a
+  //     write to a non-panel artifact leaves the panel where it is. With nothing selected yet (or
+  //     the selection deleted) it lands on the head, or the newest anything when no panel artifact
+  //     exists, so the panel never sits blank over a non-empty store.
+  //   • A pinned selection whose artifact was deleted would strand the panel on a dead id — fall
+  //     back to auto-follow + the head and re-persist so it doesn't linger.
+  function nextSel(list, cur, s){
+    var head=headOf(list, cur), moved=head!==s.head, fallback=head || (list[0] && list[0].id) || null;
+    var gone=!s.selId || !list.some(function(a){ return a.id===s.selId; });
+    var o={selId:s.selId, selVer:s.selVer, followNewest:s.followNewest, head:head, save:false};
+    if(s.followNewest){ if((moved && head) || gone) o.selId=fallback; o.selVer=null; }
+    else if(s.selId && gone){ o.followNewest=true; o.selId=fallback; o.selVer=null; o.save=true; }
+    return o;
+  }
+  // Whether picking `id` leaves the panel on the newest thing (so it keeps following): the panel
+  // head, or the store's current artifact itself (an inline answer opened in the panel just now).
+  function atNewest(id){ return !!id && (id===panelHead || id===curId); }
 
   function total(a){ return (a && (a.version_count||a.versions.length)) || 0; }
   function selArt(){ for(var i=0;i<arts.length;i++) if(arts[i].id===selId) return arts[i]; return arts[0]||null; }
@@ -1256,7 +1513,7 @@
   function render(){
     $bar.style.display = arts.length ? "flex" : "none";
     var a=selArt();
-    if(!a){ $empty.style.display="flex"; $frame.style.display="none"; lastRendered=""; return; }
+    if(!a){ frameNav.clear(); $empty.style.display="flex"; $frame.style.display="none"; lastRendered=""; return; }
     var vi=verIdx(a), v=a.versions[vi];
     // LIFETIME numbers (#3617) — the ones the chat's artifact-ref chips carry. Past the
     // max_versions cap the oldest versions are trimmed, so a position would drift from the
@@ -1279,7 +1536,7 @@
       // A deck's / PDF's frame asks for its bytes once it boots (pptxNeed) — remember which version it is.
       pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)||docxOk(v))
         ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"} : null);
-      $frame.srcdoc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks); $frame.style.display="block";
+      frameNav.set(a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks)); $frame.style.display="block";
       renderLinks(); }
   }
 
@@ -1390,16 +1647,30 @@
   // palette. The DS plugin-kit re-themes THIS page by rewriting the --pl-* tokens on
   // the root element; observe that and push the fresh tokens into the frame (the
   // SHIM applies them in place — no re-srcdoc, so interactive artifact state survives).
+  // The scheme travels with the tokens (a live switch flips the frame's native controls too,
+  // not only its colours), and this page's own color-scheme follows the console's ground the
+  // same way — the kit's :root default otherwise tracks the OS, so the shell's scrollbars stayed
+  // light on a dark console whenever the OS was light. Written only on a change: the observer
+  // below watches this very style attribute.
   function pushTheme(){
+    var tokens=themeTokens(), scheme=bgIsDark(tokens["--pl-color-bg"])?"dark":"light";
+    if(document.documentElement.style.colorScheme!==scheme) document.documentElement.style.colorScheme=scheme;
     if(!$frame || !$frame.contentWindow || $frame.style.display==="none") return;
-    try{ $frame.contentWindow.postMessage({type:"protoArtifact:theme",tokens:themeTokens()},"*"); }catch(_){}
+    try{ $frame.contentWindow.postMessage({type:"protoArtifact:theme",tokens:tokens,scheme:scheme},"*"); }catch(_){}
   }
   new MutationObserver(pushTheme).observe(document.documentElement,{attributes:true,attributeFilter:["style","class","data-theme"]});
+  pushTheme();  // this page's own color-scheme from the first paint's ground (no frame yet)
   // A theme switch can race a render — re-push once the fresh srcdoc has loaded.
-  $frame.addEventListener("load", pushTheme);
+  frameNav.onLoad(pushTheme);
+  // Embed only: wake the frame's dormant height reporter (HEIGHTJS) so it starts posting its
+  // content height up on every size change. A no-op in the panel (never sent).
+  frameNav.onLoad(function(){
+    if(!EMBED) return;
+    try{ $frame.contentWindow.postMessage({type:"protoArtifact:measure"}, "*"); }catch(_){}
+  });
 
   $art.addEventListener("change", function(e){
-    selId=e.target.value; selVer=null; followNewest=(selId===(curId||(arts[0]&&arts[0].id)));
+    selId=e.target.value; selVer=null; followNewest=atNewest(selId);
     saveSel(); render();
   });
   $vprev.addEventListener("click", function(){ var a=selArt(); if(!a)return; var vi=verIdx(a);
@@ -1860,7 +2131,7 @@
   function pptxFallback(ctx, note){
     if(pptxCtx!==ctx) return;  // the panel moved on to another version
     pptxCtx=null; clearTimeout(pptxWatch);
-    $frame.srcdoc=fileCard(ctx.v, note);
+    frameNav.set(fileCard(ctx.v, note));
   }
   // One byte feed serves every in-frame renderer; each kind brings its own caps.
   function feedCaps(kind){ return kind==="pdf" ? PDF_CAPS : kind==="docx" ? DOCX_CAPS : PPTX_CAPS; }
@@ -1894,6 +2165,32 @@
     }
   }
 
+  // Render-status de-dup (#4076): ONE report per (artifact, version, verdict). A frame can post
+  // its verdict more than once (a re-srcdoc of the same version, the hidden-tab eager mount and
+  // then the visible mount, a remount after scroll or reload) and each used to re-POST — the
+  // same verdict, stamped again. Skip when the store mirror already holds this exact verdict for
+  // this version, or when this shell — or a sibling shell frame in this tab (sessionStorage is
+  // shared across same-origin frames, and survives a remount) — already relayed it. A DIFFERENT
+  // verdict for the same version (it failed, then a reload rendered it) still goes through.
+  var relayedRenders = {};
+  var RENDER_SEEN_KEY = "protoagent.artifact.renderSeen:";
+  function relayRenderOnce(list, mem, id, n, ts, ok, err){
+    var key = id + "@" + n + "@" + ts, sig = (ok ? "ok" : "err") + ":" + (ok ? "" : err);
+    for(var i=0;i<(list||[]).length;i++){
+      var a=list[i]; if(!a || a.id!==id) continue;
+      var vs=a.versions||[];
+      for(var j=0;j<vs.length;j++){
+        var r=vs[j] && vs[j].ts===ts ? vs[j].render : null;
+        if(r && typeof r==="object" && !!r.ok===ok && (ok || String(r.error||"")===err)) return false;
+      }
+    }
+    if(mem[key]===sig) return false;
+    try{ if(window.sessionStorage.getItem(RENDER_SEEN_KEY+key)===sig) return false; }catch(_){}
+    mem[key]=sig;
+    try{ window.sessionStorage.setItem(RENDER_SEEN_KEY+key, sig); }catch(_){}
+    return true;
+  }
+
   // Agent-callback bridge: an artifact's window.protoArtifact.ask(prompt) posts here;
   // we call the bearer-gated /ask endpoint (a bare agent completion) and post the
   // answer back INTO the artifact frame. e.source-guarded to only our artifact frame —
@@ -1902,12 +2199,14 @@
     if(!$frame || e.source!==$frame.contentWindow) return;
     var m=e.data||{};
     if(m.type==="protoArtifact:pptx"||m.type==="protoArtifact:pdf"||m.type==="protoArtifact:docx"){ pptxMessage(m); return; }
+    // Embed only: the frame's measured content height → size the frame and relay it to the host.
+    if(m.type==="protoArtifact:height"){ if(EMBED) embedHeight(m.height); return; }
     // Render verdict from the sandbox (#1458) → relay to /render-status so the agent's
     // create/edit reply + check_artifact can surface a render failure. Best-effort POST —
     // intentionally silent on error (#2885 exempts it): a fire-and-forget status report,
     // not user-facing data, so there's no lying empty state to correct.
     if(m.type==="protoArtifact:render"){
-      if(renderingId){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,n:renderingN,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256) */ }
+      if(renderingId && relayRenderOnce(arts, relayedRenders, renderingId, renderingN, renderingTs, !!m.ok, String(m.error||"").slice(0,2000))){ try{ kit.apiFetch("/api/plugins/artifact/render-status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:renderingId,version:renderingVer,n:renderingN,ts:renderingTs,ok:!!m.ok,error:String(m.error||"").slice(0,2000)})}); }catch(_){} if(!EMBED) kickPoll(); /* the verdict rewrites the store — pick it up from idle promptly (#2256); embed has no standing poll */ }
       return;
     }
     // A click on a linked diagram element (ADR 0038 amendment). Only the KEY is read from the
@@ -1926,6 +2225,8 @@
       linkLabels=keep; renderLinks();
       return;
     }
+    // send-to-chat / openLink (ADR 0118 D4) — relayed UP to the console host, which gates them.
+    if(m.type==="protoArtifact:send" || m.type==="protoArtifact:openLink"){ relayBridge(m); return; }
     if(m.type!=="protoArtifact:ask") return;
     function reply(p){ try{ $frame.contentWindow.postMessage(Object.assign({type:"protoArtifact:result",id:m.id},p),"*"); }catch(_){} }
     try{
@@ -1934,6 +2235,51 @@
       if(!r.ok){ var t=""; try{ t=await r.text(); }catch(_){} reply({error:("ask failed ("+r.status+") "+t).slice(0,300)}); return; }
       var d=await r.json(); reply({text:(d&&d.text)||""});
     }catch(err){ reply({error:String(err).slice(0,300)}); }
+  });
+
+  // ── send-to-chat / openLink bridge (ADR 0118 D4) ───────────────────────────────────────
+  // The in-frame shim's send()/openLink() post up here; the shell SANITY-checks and relays the
+  // request to the console host (its embedder), which owns the real gates — the operator's
+  // confirm chip (S19 / #4137: a send is a proposal the user approves in console DOM, unless
+  // they chose "Always allow"), length, "the agent is busy", the 1-per-2s rate (send) / https +
+  // origin allowlist (openLink). The host posts its verdict back down (`protoArtifact:bridgeResult`)
+  // and we relay it into the frame as a `protoArtifact:result`, resolving/rejecting the frame's
+  // Promise. Trust lives in the host: the shell never decides whether a send is allowed; it
+  // only tags the request with which artifact/version it came from (D4 origin metadata) and
+  // correlates the reply. Works in panel AND embed mode — the embedder is the console host
+  // either way.
+  var bridgeSeq = 0, bridgePending = {};  // host-correlation id (cid) → the frame's own call id
+  function relayBridge(m){
+    var frameId = m.id, kind = (m.type === "protoArtifact:send") ? "send" : "openLink";
+    function deny(msg){ if(!$frame) return; try{ $frame.contentWindow.postMessage({type:"protoArtifact:result", id:frameId, error:msg}, "*"); }catch(_){} }
+    // No embedder to gate the request (a standalone page load, not embedded in the console) →
+    // refuse locally so the frame's Promise doesn't hang until its timeout. The host is the
+    // only thing trusted to allow it, so without one the answer is no.
+    if(window.parent === window){ deny(kind + " is unavailable here"); return; }
+    var cid = ++bridgeSeq;
+    bridgePending[cid] = frameId;
+    var payload = {type:m.type, cid:cid, via:"artifact", artifact_id:renderingId||null, version:renderingN||0};
+    // Coarse sanity bound only — the host enforces the real 1–4000 / https limits. Kept well
+    // above 4000 so a too-long send still reaches the host and is rejected there, not silently
+    // trimmed into range here.
+    if(kind === "send") payload.text = String(m.text||"").slice(0, 16384);
+    else payload.url = String(m.url||"").slice(0, 4096);
+    try{ window.parent.postMessage(payload, "*"); }
+    catch(_){ delete bridgePending[cid]; deny(kind + " failed"); }
+  }
+  // The host's verdict for a relayed send/openLink. Trusted only from the embedder (fromEmbedder,
+  // defined below) — never from the nested artifact frame (model code) or a sibling — and matched
+  // to a pending request by its correlation id, so a stray post can't resolve an unrelated call.
+  window.addEventListener("message", function(e){
+    var m = e.data;
+    if(!m || m.type !== "protoArtifact:bridgeResult" || !fromEmbedder(e)) return;
+    var frameId = bridgePending[m.cid];
+    if(frameId === undefined) return;  // unknown / already-settled correlation id
+    delete bridgePending[m.cid];
+    if(!$frame) return;
+    var reply = {type:"protoArtifact:result", id:frameId};
+    if(m.ok) reply.text = String(m.text||""); else reply.error = String(m.error||"rejected").slice(0,300);
+    try{ $frame.contentWindow.postMessage(reply, "*"); }catch(_){}
   });
 
   // Deep-link from the console (#3617): a chat `artifact-ref` chip asks the panel to show ONE
@@ -1953,32 +2299,41 @@
   // The request waits for the store mirror: the panel may still be booting (a collapsed dock
   // mounts it on this very open), or its last poll may predate the artifact the agent just
   // made. Applied after every poll until it resolves; an id still absent after a fresh poll
-  // was deleted/evicted, so the request is dropped and the panel keeps what it showed.
-  var pendingSel=null;
-  function applyPendingSel(fresh){
-    if(!pendingSel) return;
+  // was deleted/evicted, so the request is dropped and the panel keeps what it showed. "Fresh"
+  // means a poll ISSUED after the request arrived (`after` = the polls issued by then): a poll
+  // already in flight when the agent's new artifact was announced can answer with the store from
+  // before it, and must not drop the request for an id it couldn't have seen yet.
+  var pendingSel=null, pollSeq=0, appliedSeq=0;
+  // Resolve the pending deep-link into the selection state; true when it resolved. Kept apart from
+  // the render so a fresh poll can fold it in BEFORE its one render — the frame never shows the
+  // remembered selection first and is never re-targeted mid-load (see frameNavigator).
+  // seq = the number of the poll whose store mirror this runs against (0 = not after a poll).
+  function takePendingSel(seq){
+    if(!pendingSel) return false;
     var a=null; for(var i=0;i<arts.length;i++) if(arts[i].id===pendingSel.id){ a=arts[i]; break; }
-    if(!a){ if(fresh) pendingSel=null; return; }
+    if(!a){ if(seq>pendingSel.after) pendingSel=null; return false; }
     var want=pendingSel.ver; pendingSel=null;
     var vtot=total(a), idx=want-(vtot-a.versions.length)-1;
     selId=a.id;
     // The newest version → follow it (selVer null), and follow newest ARTIFACTS only when this
-    // is also the panel's current one (the picker's own rule). An older version pins it: auto-
+    // is also the newest one (the picker's own rule, atNewest). An older version pins it: auto-
     // follow off, so the next agent edit doesn't yank the operator off the version they asked
     // for. A version trimmed at the cap falls back to the oldest one still kept.
-    if(idx>=a.versions.length-1){ selVer=null; followNewest=(a.id===(curId||(arts[0]&&arts[0].id))); }
+    if(idx>=a.versions.length-1){ selVer=null; followNewest=atNewest(a.id); }
     else { selVer=Math.max(0,idx); followNewest=false; }
     if(editing) exitEdit();
-    saveSel(); rebuildArtSelect(); render();
+    saveSel();
+    return true;
   }
+  function applyPendingSel(seq){ if(takePendingSel(seq)){ rebuildArtSelect(); render(); } }
   window.addEventListener("message", function(e){
     var m=e.data;
-    if(!m || m.type!=="protoArtifact:select" || !fromEmbedder(e)) return;
+    if(!m || m.type!=="protoArtifact:select" || !fromEmbedder(e) || EMBED) return;  // embed shows a fixed version
     var id=typeof m.id==="string" ? m.id.slice(0,64) : "";
     var ver=(typeof m.ver==="number" && isFinite(m.ver)) ? Math.floor(m.ver) : 0;
     if(!id || ver<1) return;
-    pendingSel={id:id, ver:ver};
-    if(booted){ applyPendingSel(false); if(pendingSel) kickPoll(); }
+    pendingSel={id:id, ver:ver, after:pollSeq};
+    if(booted){ applyPendingSel(0); if(pendingSel) kickPoll(); }
   });
 
   // Adaptive cadence + conditional requests (#2256): fast (1.5s) while the store is
@@ -2004,27 +2359,34 @@
   }
   function pollFailed(status){ if(++pollFails >= POLL_FAIL_LIMIT) showPollError(status); }
   function pollOk(){ pollFails=0; var el=document.getElementById("pollerr"); if(el) el.remove(); }
+  // Polls can overlap (kickPoll — a deep-link, a tab coming back — starts one while the timer's
+  // may still be in flight) and their answers can land out of order. Each poll is numbered and
+  // an answer older than the store mirror already applied is dropped: applying it would roll the
+  // mirror (and the follow head) back, so the panel would jump to an older artifact and back.
   async function poll() {
     if (document.hidden) return;  // don't poll while the window is hidden/minimized (desktop perf)
+    var my = ++pollSeq;
     try {
       var r = await kit.apiFetch("/api/plugins/artifact/history",
         lastEtag ? {headers:{"If-None-Match": lastEtag}} : undefined);
-      if (r.status === 304) { pollOk(); applyPendingSel(true); return; }  // unchanged — no parse, no DOM churn
+      if (my < appliedSeq) return;  // a newer poll already landed
+      if (r.status === 304) { pollOk(); applyPendingSel(my); return; }  // unchanged — no parse, no DOM churn
       // A non-2xx parses as JSON too ({"detail":…} → arts=[]) — the exact empty-state
       // lie #2885 fixes. Count it as a failure instead of feeding it to the store mirror.
       if (!r.ok) { pollFailed(r.status + (r.statusText ? " " + r.statusText : "")); return; }
+      var d = await r.json();
+      if (my < appliedSeq) return;
+      appliedSeq = my;
       lastEtag = (r.headers && r.headers.get && r.headers.get("ETag")) || "";
       storeChangedAt = Date.now();   // fresh payload ⇒ stay on the fast cadence for a bit
-      var d = await r.json(); arts = (d && d.artifacts) || []; curId = (d && d.current) || null;
-      if (followNewest) { selId = curId || (arts[0] && arts[0].id) || null; selVer = null; }
-      // A pinned selection whose artifact was deleted (not in arts) would strand the panel on a
-      // dead id — fall back to auto-follow + newest and re-persist so it doesn't linger.
-      else if (selId && !arts.some(function(a){ return a.id===selId; })) {
-        followNewest = true; selId = curId || (arts[0] && arts[0].id) || null; selVer = null; saveSel();
-      }
+      arts = (d && d.artifacts) || []; curId = (d && d.current) || null;
+      var n = nextSel(arts, curId, {selId:selId, selVer:selVer, followNewest:followNewest, head:panelHead});
+      selId = n.selId; selVer = n.selVer; followNewest = n.followNewest;
+      if (n.head !== panelHead) { panelHead = n.head; saveHead(); }
+      if (n.save) saveSel();
+      takePendingSel(my);  // a chip's deep-link (#3617) — after the follow rules, so it wins
       rebuildArtSelect(); render();
       pollOk();
-      applyPendingSel(true);  // a chip's deep-link (#3617) — after the follow rules, so it wins
     } catch (e) { pollFailed(""); /* network-level — no HTTP status to name */ }
   }
   function schedulePoll(){
@@ -2033,13 +2395,127 @@
     pollTimer = setTimeout(async function(){ await poll(); schedulePoll(); }, idle ? POLL_IDLE_MS : POLL_FAST_MS);
   }
   function kickPoll(){ storeChangedAt = Date.now(); clearTimeout(pollTimer); poll().then(schedulePoll, schedulePoll); }
+
+  // ── embed placement (ADR 0118 D2) ───────────────────────────────────────────────────────
+  // renders exactly ONE version with no panel chrome, through the SAME srcdoc()/fileCard()
+  // builder render() uses — so its nonce CSP, vendored SRI LIB map, theme tokens + live
+  // re-theme, loader lockdown and render-verdict reporting are all inherited (there is no
+  // second frame builder). The frame reports its content height (HEIGHTJS, woken by the
+  // protoArtifact:measure below) and the shell relays it to the console host, which clamps it.
+  var EMBED_TRIES = 8, EMBED_RETRY_MS = 1200, EMBED_MIN_H = 80, EMBED_MAX_H = 1200;
+  // Resolve {art, idx, v} for id + LIFETIME version in the store mirror, or null when the
+  // artifact is absent or the version is out of range / trimmed at the cap → the inert
+  // "unavailable" state. ver 0/absent follows the latest.
+  function embedLocate(list, id, ver){
+    var a=null, i;
+    for(i=0;i<list.length;i++) if(list[i].id===id){ a=list[i]; break; }
+    if(!a || !a.versions || !a.versions.length) return null;
+    var n=a.versions.length, vtot=total(a), idx;
+    if(!ver) idx=n-1;
+    else { idx=ver-(vtot-n)-1; if(idx<0 || idx>n-1) return null; }
+    return {art:a, idx:idx, v:a.versions[idx]};
+  }
+  function showUnavail(){
+    var el=document.getElementById("unavail"); if(el) el.style.display="flex";
+    if($frame){ frameNav.clear(); $frame.style.display="none"; $frame.removeAttribute("srcdoc"); }
+    lastRendered=""; embedPostParent({type:"protoArtifact:height", height:EMBED_MIN_H});
+  }
+  function hideUnavail(){ var el=document.getElementById("unavail"); if(el) el.style.display="none"; }
+  // The content height the frame measured → size the frame to it and relay it to the host.
+  function embedHeight(h){
+    h=Math.floor(+h||0); if(h<=0) return;
+    // Clamp to the console host's own [EMBED_MIN_H, EMBED_MAX_H] range so a frame whose content is
+    // sized in viewport units (e.g. 100vh + padding) can't drive the frame — and the measurement
+    // that follows it — upward without bound; it converges at the cap instead of growing forever.
+    h=Math.max(EMBED_MIN_H, Math.min(EMBED_MAX_H, h));
+    if($frame) $frame.style.height=h+"px";
+    embedPostParent({type:"protoArtifact:height", height:h});
+  }
+  // Which embed sizing a kind gets: FILL (a width-proportional box) for the navigable svg/mermaid
+  // viewports, the paged deck/PDF/Word frames, and the scroll-box file cards — none has a content
+  // height to follow; FLOW (size-to-content) for html, markdown, react, charts, and .md previews.
+  function embedFill(a, v){
+    if(a.kind==="svg" || a.kind==="mermaid") return true;
+    if(a.kind!=="file") return false;   // html, markdown, react, vega-lite
+    return previewKind((v.file||{}).filename, (v.file||{}).mime) !== "md";  // .md renders as flowing prose
+  }
+  // Append the height reporter + its CSS reset to a built frame doc WITHOUT touching the doc the
+  // panel builder produced (so there is no second builder and the panel stays byte-identical). The
+  // reporter is injected here, in the embed path only — NOT in base() — so it rides EVERY embed
+  // frame, including the script-free file cards (table/json/text/sheets) and the nonce-CSP
+  // decks/PDF/Word frames that never call base(). Its inline <script> reuses the doc's existing CSP
+  // nonce when it has one (vega / slides / PDF / Word run under a nonce CSP, which would otherwise
+  // block a bare inline script and leave those embeds never reporting); the nonce-free kinds take a
+  // bare <script>.
+  function embedSuffix(doc, fill){
+    var m = /script-src 'nonce-([A-Za-z0-9]+)'/.exec(doc);
+    var tag = m ? '<script nonce="' + m[1] + '">' : '<script>';
+    return '<style>' + (fill ? EMBED_FILL_CSS : EMBED_FLOW_CSS) + '</style>'
+      + HEIGHTJS.replace('<script>', tag);
+  }
+  // Post UP to the embedder (the console host). Targeted at its origin where the browser tells
+  // us (ancestorOrigins), like openTarget — a height int is low-stakes, but stay a good citizen.
+  function embedPostParent(msg){
+    if(window.parent===window) return;
+    var anc=location.ancestorOrigins, origin=(anc && anc.length) ? anc[0] : "*";
+    try{ window.parent.postMessage(msg, origin); }catch(_){}
+  }
+  // Render the one requested version through the shared builder; returns false when it isn't in
+  // the store mirror yet (the caller retries, then settles on the unavailable state).
+  function renderEmbed(){
+    var r = EMBED && embedLocate(arts, EMBED.id, EMBED.ver);
+    if(!r) return false;
+    hideUnavail();
+    var a=r.art, vi=r.idx, v=r.v;
+    // Same render-verdict plumbing as render() so a failed inline render still reaches the agent.
+    renderingId=a.id; renderingVer=vi+1; renderingTs=v.ts;
+    renderingN=(a.version_count||a.versions.length)-a.versions.length+vi+1;
+    renderingLinks = (a.kind==="mermaid" && v.links && typeof v.links==="object" && !Array.isArray(v.links)) ? v.links : null;
+    linkLabels = null;
+    var key="embed:"+a.id+"@"+vi+"@"+v.ts;
+    if(key!==lastRendered){
+      lastRendered=key;
+      pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)||docxOk(v))
+        ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"} : null);
+      // SAME builder as the panel; the embed-only tail (height reporter + sizing CSS) is appended
+      // AFTER it, so the frame's own doc — its CSP, vendored libs and SRI — is byte-identical.
+      var doc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks);
+      frameNav.set(doc + embedSuffix(doc, embedFill(a, v))); $frame.style.display="block";
+    }
+    return true;
+  }
+  // One bounded fetch of the gated store (the kit's bearer arrives with the handshake, so an
+  // early try before it lands retries rather than stranding). A fixed inline version never
+  // changes, so there's no standing poll — stop once rendered, settle on "unavailable" if the
+  // id/version never appears.
+  function embedBoot(){
+    var tries=0;
+    (function attempt(){
+      tries++;
+      kit.apiFetch("/api/plugins/artifact/history").then(function(r){
+        if(!r.ok) throw new Error(String(r.status));
+        return r.json();
+      }).then(function(d){
+        arts=(d && d.artifacts) || []; curId=(d && d.current) || null;
+        if(renderEmbed()) return;
+        if(tries<EMBED_TRIES){ setTimeout(attempt, EMBED_RETRY_MS); return; }
+        showUnavail();
+      }).catch(function(){
+        if(tries<EMBED_TRIES){ setTimeout(attempt, EMBED_RETRY_MS); return; }
+        showUnavail();
+      });
+    })();
+  }
+
   // Boot ONCE, on whichever fires first: the handshake (the bearer arrives with
   // protoagent:init, so the gated history poll authenticates) or a short timer
   // for the no-handshake case (standalone page / older host).
   var booted = false;
   // loadSel() restores the operator's last selection — a pending deep-link (#3617) that arrived
   // before boot still wins, applied by the first poll right after.
-  function boot(){ if (booted) return; booted = true; loadSel(); poll(); schedulePoll(); }
+  function boot(){ if (booted) return; booted = true;
+    if (EMBED) { embedBoot(); return; }   // one version, no chrome, no standing poll
+    loadSel(); loadHead(); poll(); schedulePoll(); }
   kit.initPluginView(boot);
   setTimeout(boot, 800);
-  document.addEventListener("visibilitychange", function(){ if(!document.hidden && booted) kickPoll(); }); // refresh on return
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden && booted && !EMBED) kickPoll(); }); // refresh on return (panel only)

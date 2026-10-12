@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../lib/types";
+import { stopBubble } from "./turnReducers";
 
 /** Which A2A task a Stop press should cancel (#1617).
  *
@@ -22,13 +23,10 @@ export function resolveStopTarget(messages: ChatMessage[], liveTaskId: string): 
 /** Settle every bubble a stop leaves behind: no message may stay `streaming`
  *  after the user pressed Stop. The send-loop only finalizes turns it owns —
  *  a re-attached turn has no owner in this slot, so its bubble (and any
- *  `running` tool cards) would spin forever. Partial content is kept. */
-export function finalizeStoppedMessages(messages: ChatMessage[]): ChatMessage[] {
-  return messages.map((m) => {
-    if (m.role !== "assistant" || m.status !== "streaming") return m;
-    const toolCalls = m.toolCalls?.map((c) =>
-      c.status === "running" ? { ...c, status: "done" as const } : c,
-    );
-    return { ...m, status: "done" as const, toolCalls };
-  });
+ *  `running` tool cards) would spin forever. Partial content is kept; the bubble
+ *  and its unfinished cards are marked STOPPED (#4076), so neither the live view
+ *  nor the persisted copy a reload restores paints a ✓ on a call that never returned. */
+export function finalizeStoppedMessages(messages: ChatMessage[], at: number = Date.now()): ChatMessage[] {
+  // Stamped with the stop instant: the footer reads when the turn ENDED, as a reload does (#4076).
+  return messages.map((m) => (m.role !== "assistant" || m.status !== "streaming" ? m : stopBubble(m, { at })));
 }

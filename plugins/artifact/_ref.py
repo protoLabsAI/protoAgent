@@ -28,7 +28,12 @@ EMIT = True
 _KINDS = frozenset({"html", "svg", "mermaid", "react", "markdown", "vega-lite", "file"})
 _ID_MAX = 64
 TITLE_MAX = 200
-_PROPS = {"artifact_id", "version", "versions_total", "title", "kind"}
+# `inline`/`height` are the inline-placement hints (ADR 0118 D2): a chip rendered as the
+# artifact's own embedded frame, clamped to [HEIGHT_MIN, HEIGHT_MAX] px. Both are optional —
+# an older payload (and every default panel call) simply has neither.
+_PROPS = {"artifact_id", "version", "versions_total", "title", "kind", "inline", "height"}
+HEIGHT_MIN = 80
+HEIGHT_MAX = 1200
 
 
 def _pos_int(v: object) -> bool:
@@ -57,30 +62,51 @@ def validate_artifact_ref(props: dict) -> str | None:
         return f"artifact-ref title must be a string of at most {TITLE_MAX} chars"
     if props.get("kind") not in _KINDS:
         return f"artifact-ref kind must be one of: {', '.join(sorted(_KINDS))}"
+    # The inline-placement hints are optional and advisory: a malformed one is DROPPED, never a
+    # reason to reject the whole pointer (the chip still opens the panel). `inline` must be a bool;
+    # `height` must be a plain int, clamped into the frame's [HEIGHT_MIN, HEIGHT_MAX] px range.
+    if "inline" in props and not isinstance(props["inline"], bool):
+        props.pop("inline")
+    if "height" in props:
+        h = props["height"]
+        if isinstance(h, int) and not isinstance(h, bool):
+            props["height"] = max(HEIGHT_MIN, min(HEIGHT_MAX, h))
+        else:
+            props.pop("height")
     return None
 
 
-def ref_props(art: dict) -> dict:
-    """The ``artifact-ref`` props for ``art``'s LATEST version (the one a tool just wrote)."""
+def ref_props(art: dict, *, inline: bool = False, height: int | None = None) -> dict:
+    """The ``artifact-ref`` props for ``art``'s LATEST version (the one a tool just wrote).
+
+    ``inline`` adds the inline-placement flag (ADR 0118 D2); ``height`` adds a clamped px hint.
+    The defaults emit neither, so a plain panel call's props are byte-for-byte as before."""
     n = _store._version_key(art)[0]
     title = " ".join(str(art.get("title") or "").split())  # one line — it's a chip label
     if len(title) > TITLE_MAX:
         title = title[: TITLE_MAX - 1] + "…"
-    return {
+    props = {
         "artifact_id": str(art["id"]),
         "version": int(n),
         "versions_total": int(n),
         "title": title,
         "kind": str(art.get("kind") or ""),
     }
+    if inline:
+        props["inline"] = True
+    if height is not None:
+        props["height"] = max(HEIGHT_MIN, min(HEIGHT_MAX, int(height)))
+    return props
 
 
-def ref_tail(art: dict) -> str:
+def ref_tail(art: dict, *, inline: bool = False, height: int | None = None) -> str:
     """The component tail a tool appends to its reply: ``"\\n" + <sentinel payload>``, or
-    ``""`` when the props wouldn't validate (never let a pointer break the reply)."""
+    ``""`` when the props wouldn't validate (never let a pointer break the reply).
+
+    ``inline``/``height`` carry the inline-placement hints (ADR 0118 D2) into the props."""
     if not EMIT:
         return ""
-    props = ref_props(art)
+    props = ref_props(art, inline=inline, height=height)
     if validate_artifact_ref(props) is not None:
         return ""
     from graph.sdk import encode_component

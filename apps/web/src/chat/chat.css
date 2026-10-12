@@ -432,7 +432,9 @@
 /* Sent-time chip (#3458): the full local sent date-and-time lives in the DS Tooltip on hover or
    focus. Same muted monospace tone and size as the usage stats so the row reads as one strip of
    metadata; the chip stays tight around icon and time so the hover target is not the whole row. */
-.chat-sent-time {
+/* The "Stopped" marker on a turn the operator stopped (#4076) shares the chip's quiet look. */
+.chat-sent-time,
+.chat-stopped-mark {
   display: inline-flex;
   align-items: center;
   gap: var(--pl-space-1);
@@ -444,7 +446,8 @@
   border-radius: var(--pl-radius);
   cursor: default;
 }
-.chat-sent-time svg {
+.chat-sent-time svg,
+.chat-stopped-mark svg {
   opacity: 0.8;
 }
 .chat-sent-time:focus-visible {

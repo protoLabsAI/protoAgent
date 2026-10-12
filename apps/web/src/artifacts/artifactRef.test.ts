@@ -42,6 +42,8 @@ describe("artifactRefFromProps", () => {
       version: 2,
       title: "My page",
       kind: "html",
+      inline: false,
+      height: 0,
     });
     expect(artifactRefFromProps({ artifact_id: "", version: 1 })).toBeNull();
     expect(artifactRefFromProps({ artifact_id: "a", version: 0 })).toBeNull();
@@ -57,6 +59,19 @@ describe("artifactRefFromProps", () => {
   it("names an untitled artifact by its kind", () => {
     expect(refName({ title: "", kind: "svg" })).toBe("svg artifact");
     expect(refName({ title: "", kind: "" })).toBe("Artifact");
+  });
+
+  it("reads inline + a clamped height hint off untrusted props (ADR 0118 D2)", () => {
+    // `inline` is an exact boolean — a truthy non-true value does not opt in.
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true })).toMatchObject({ inline: true });
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: 1 as unknown })).toMatchObject({ inline: false });
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1 })?.inline).toBe(false);
+    // `height` is a finite positive int run through the [80,1200] clamp; junk/≤0 → 0 (no hint).
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: 300 })?.height).toBe(300);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: 5000 })?.height).toBe(1200);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: 10 })?.height).toBe(80);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: -4 })?.height).toBe(0);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: "big" as unknown })?.height).toBe(0);
   });
 });
 
@@ -113,6 +128,22 @@ describe("openArtifactRef", () => {
     onLiveArtifactRef({ component: "artifact-ref", props: { artifact_id: "a-9", version: 3, kind: "svg" } }, { sessionId: "s-1" });
     expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:select", id: "a-9", ver: 3 }]);
     expect(useUI.getState().rightPanel).toBe(ARTIFACT_VIEW_KEY);
+  });
+
+  it("auto: does NOT open the panel for an inline ref — the answer is already in the transcript", () => {
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ ...chatStore.getSnapshot(), currentSessionId: "s-1" });
+    onLiveArtifactRef(
+      { component: "artifact-ref", props: { artifact_id: "a-inline", version: 1, kind: "html", inline: true } },
+      { sessionId: "s-1" },
+    );
+    expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([]);
+    expect(useUI.getState().rightCollapsed).toBe(true);
+    // The same ref WITHOUT inline still auto-opens, so this is the inline gate, not a dead hook.
+    onLiveArtifactRef(
+      { component: "artifact-ref", props: { artifact_id: "a-inline", version: 1, kind: "html" } },
+      { sessionId: "s-1" },
+    );
+    expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:select", id: "a-inline", ver: 1 }]);
   });
 
   it("the ext module wires the live hook through the component registry", () => {

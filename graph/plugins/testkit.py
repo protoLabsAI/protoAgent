@@ -30,7 +30,7 @@ import importlib.util
 import re
 import sys
 import types
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 __all__ = ["plugin_module_name", "load_plugin", "install_host_stubs", "FakeRegistry"]
 
@@ -230,6 +230,35 @@ def _slugify_slash(raw: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (raw or "").strip().lower()).strip("-")
 
 
+# ``<plugin_id>.<name>`` service name (ADR 0116) — duplicates
+# ``graph.plugin_services.SERVICE_NAME_RE`` / ``is_service_name`` rather than importing them,
+# because this file is host-free by contract (vendored verbatim into standalone plugin CI); a
+# parity test keeps the copies in sync — same reasoning as ``_slugify_slash`` above.
+_SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*\.[a-z][a-z0-9_]*$")
+
+
+def _is_service_name(name) -> bool:
+    """True for a well-formed ``<plugin_id>.<name>`` service name — mirrors
+    ``graph.plugin_services.is_service_name``."""
+    return isinstance(name, str) and len(name) <= 128 and bool(_SERVICE_NAME_RE.match(name))
+
+
+def _accept_component_frame(plugin_id: str, frame, public_paths) -> str | None:
+    """Validate a component ``frame`` exactly as ``PluginRegistry`` does (ADR 0118 D5):
+    a path relative to ``/plugins/<id>`` that is safe (no leading ``/``, no ``..``) and
+    covered by the manifest's ``public_paths``. Returns the cleaned path or ``None`` to
+    refuse. Host-free by contract, so this duplicates
+    ``graph.plugins.registry._accept_component_frame`` rather than importing it (a parity
+    test keeps the copies in sync — same reasoning as ``_slugify_slash`` above)."""
+    s = str(frame).strip()
+    if not s or s.startswith("/") or ".." in PurePosixPath(s).parts:
+        return None
+    full = f"/plugins/{plugin_id}/{s}"
+    if not any(full.startswith(pp) for pp in (public_paths or [])):
+        return None
+    return s
+
+
 class FakeRegistry:
     """Records what ``register(registry)`` contributes, with no host — mirrors the real
     ``graph.plugins.registry.PluginRegistry`` surface so a plugin's ``register()`` runs
@@ -251,7 +280,13 @@ class FakeRegistry:
     """
 
     def __init__(
-        self, config: dict | None = None, *, plugin_id: str = "test-plugin", plugin_dir=None, config_section=None
+        self,
+        config: dict | None = None,
+        *,
+        plugin_id: str = "test-plugin",
+        plugin_dir=None,
+        config_section=None,
+        public_paths=None,
     ):
         # The registry attributes a plugin reads in register() (host is None — like the
         # real registry docstring says, "guard for None (e.g. in tests)").
@@ -259,6 +294,9 @@ class FakeRegistry:
         self.plugin_dir = Path(plugin_dir) if plugin_dir is not None else Path(".")
         self.config = config or {}
         self.config_section = config_section or plugin_id
+        # Manifest auth-exempt prefixes (ADR 0118 D5) — a component ``frame`` must live under
+        # one of these. Pass them to exercise frame validation in a smoke test.
+        self.public_paths = list(public_paths or [])
         self.host = None
         self.tools: list = []
         self.routers: list = []
@@ -281,6 +319,7 @@ class FakeRegistry:
         self.embedders: dict = {}
         self.chat_commands: dict = {}  # slugified token -> handler
         self.components: dict = {}  # component-v1 kind -> props validator (#3617)
+        self.component_frames: dict = {}  # kind -> frame page path (ADR 0118 D5, #4087)
         self.services: dict = {}  # "<plugin_id>.<name>" -> callable (ADR 0116)
         self.service_meta: dict = {}  # name -> {plugin_id, description}
         self.late_tool_factories: list = []
@@ -329,10 +368,24 @@ class FakeRegistry:
     def register_tools(self, tools) -> None:
         self.tools.extend(tools)
 
-    def register_component(self, name: str, validator) -> None:
+    def register_component(self, name: str, validator, frame: str | None = None) -> None:
         """Capture a component-v1 kind (``self.components[name] = validator``) so a plugin
         test can run its validator the way the host does. Same signature as the host method;
-        the host also refuses a core/invalid name."""
+        the host also refuses a core/invalid name.
+
+        A ``frame`` (ADR 0118 D5) is validated the SAME way the host does — a relative path
+        under ``/plugins/<id>`` listed in ``public_paths``. A frame the host would refuse (an
+        absolute path, a ``..`` segment, or one not in ``public_paths``) raises ``ValueError``
+        here, where the host warns + skips (see the class docstring); an accepted frame is
+        captured on ``self.component_frames[name]``."""
+        if frame is not None:
+            accepted = _accept_component_frame(self.plugin_id, frame, self.public_paths)
+            if accepted is None:
+                raise ValueError(
+                    f"component {name!r} frame {frame!r} would be refused by the host "
+                    f"(absolute, contains '..', or not under public_paths)"
+                )
+            self.component_frames[name] = accepted
         self.components[name] = validator
 
     def register_service(self, name: str, fn, description: str = "") -> None:
@@ -341,11 +394,9 @@ class FakeRegistry:
         being dropped with a warning, so a registration the host would refuse fails the test.
         To exercise a CONSUMER, put fakes in the live table instead:
         ``graph.plugin_services.set_plugin_services({"artifact.show": fake})``."""
-        from graph.plugin_services import is_service_name
-
         pid = self.plugin_id
         key = name if isinstance(name, str) and name.startswith(f"{pid}.") else f"{pid}.{name}"
-        if not is_service_name(key) or not callable(fn):
+        if not _is_service_name(key) or not callable(fn):
             raise ValueError(f"service {name!r} would be refused by the host (bad name or non-callable)")
         if key in self.services:
             raise ValueError(f"service {key} registered twice — the host keeps only the first")

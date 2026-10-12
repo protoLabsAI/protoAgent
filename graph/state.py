@@ -43,5 +43,12 @@ class ProtoAgentState(AgentState):
     # tool call outside it. Unset → no fence (ordinary turns).
     subagent_fence: NotRequired[list[str]]
 
+    # Whether this turn's client can display rendered UI — artifacts, components (#4144).
+    # Stamped every turn by the chat entry paths from the turn's origin: False for a plain
+    # API client (``/v1``, ``/api/chat``), True for the console / A2A stream. Read by tools
+    # from injected state (``current_session_id()``-style contextvars are empty in tool
+    # bodies); absent → True, the behaviour before the flag existed.
+    renders_ui: NotRequired[bool]
+
     # Captured message() tool content
     captured_messages: Annotated[list[str], operator.add]

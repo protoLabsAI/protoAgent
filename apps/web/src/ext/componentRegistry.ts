@@ -71,3 +71,42 @@ export function dispatchLiveComponent(
 export function registeredChatComponents(): Record<string, ChatComponentRenderer> {
   return _renderers;
 }
+
+/** The frame a component-v1 kind resolves to when neither the TS registry nor a built-in
+ *  claims it (ADR 0118 D5 / S12b): a plugin-served `/plugins/<id>/<frame>` page plus the id of
+ *  the plugin that owns it (for the origin tag on a send). `plugin` may be null for a core
+ *  frame kind. Shaped as the subset of a catalog row the resolver needs, so componentRegistry
+ *  stays free of a `lib/api` import. */
+export type ComponentFrame = { frame_url: string | null; plugin: string | null };
+
+/** How ChatComponent should render a component-v1 kind (ADR 0118 D5 / S12b). */
+export type ChatComponentResolution =
+  | { via: "renderer"; render: ChatComponentRenderer }
+  | { via: "frame"; frameUrl: string; plugin: string | null }
+  | { via: "unsupported" };
+
+/**
+ * Resolve a component-v1 kind to how it renders, in the fixed order (ADR 0118 D5 / S12b):
+ *   1. a TS-registered renderer (a fork/plugin drop-in) — ALWAYS wins, so a registered kind
+ *      can re-skin a built-in OR override a frame kind without a console rebuild;
+ *   2. a core BUILT-IN renderer;
+ *   3. a catalog FRAME (a plugin's `frame_url` page) — the host renders it in a sandboxed
+ *      iframe, so a plugin ships a component with NO console rebuild at all;
+ *   4. otherwise unsupported.
+ *
+ * `builtins` and `frame` are injected (not imported) so this stays a pure function with no
+ * dependency on ChatComponent's built-in table or the `lib/api` catalog module — which keeps
+ * the resolution order testable on its own and free of an import cycle.
+ */
+export function resolveChatComponent(
+  name: string,
+  builtins: Record<string, ChatComponentRenderer>,
+  frame: ComponentFrame | null,
+): ChatComponentResolution {
+  const registered = _renderers[name];
+  if (registered) return { via: "renderer", render: registered };
+  const builtin = builtins[name];
+  if (builtin) return { via: "renderer", render: builtin };
+  if (frame?.frame_url) return { via: "frame", frameUrl: frame.frame_url, plugin: frame.plugin };
+  return { via: "unsupported" };
+}

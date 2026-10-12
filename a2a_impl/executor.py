@@ -23,6 +23,9 @@ The producer-event contract (unchanged from the hand-rolled handler) is::
     input_required  HITL pause {question}
     steer_consumed  queued operator input folded before the next model call
     delegate_progress  a running coding-agent delegation's live snapshot {id,target,…}
+    tool_args       streamed preview of a tool's declared string arg (ADR 0118 D3),
+                    {id,arg,offset,chunk,done}; relayed as a LIVE-ONLY tool-args-v1
+                    DataPart on WORKING frames — never persisted, never replayed
     done            terminal; payload is the final text
     error           terminal; payload is the error string
 
@@ -93,6 +96,13 @@ DELEGATE_PROGRESS_MIME = "application/vnd.protolabs.delegate-progress-v1+json"
 # A typed DataPart, NOT a plain-string tool_start: that became WORKING text a delegator's
 # card committed as content, and counted as a tool call.
 GOAL_STATUS_MIME = "application/vnd.protolabs.goal-status-v1+json"
+# Streamed tool arguments (ADR 0118 D3) — a tool's declared string arg, extracted
+# incrementally server-side and relayed on WORKING frames so the console can preview an
+# artifact as the model writes it. LIVE-ONLY: never persisted to task history and never
+# replayed on resubscribe/hydration (``a2a_impl.stores.drop_tool_args_history`` drops it on
+# save); once the tool runs, the finished artifact replaces the preview. Plain consumers
+# ignore it. Template-local, so it is NOT declared on the agent card.
+TOOL_ARGS_MIME = "application/vnd.protolabs.tool-args-v1+json"
 
 # A renderable UI component (ADR 0051 Slice 2) — a typed, data-only widget the console
 # renders inline ({component, props}). Same DataPart contract as the HITL/tool-call parts.
@@ -1085,6 +1095,18 @@ class ProtoAgentExecutor(AgentExecutor):
                             ),
                         )
 
+                elif event_type == "tool_args":
+                    # Streamed preview of a tool's declared string arg (ADR 0118 D3): a
+                    # tool-args-v1 DataPart on a WORKING frame so the console can render an
+                    # artifact as the model writes it. LIVE-ONLY — the durable store drops
+                    # these from history (a2a_impl/stores.py), so a reattach or reload never
+                    # replays a stale partial; the finished artifact replaces the preview.
+                    if isinstance(payload, dict) and payload.get("id"):
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([_data_part_proto(payload, TOOL_ARGS_MIME)]),
+                        )
+
                 elif event_type == "reasoning":
                     # Live "thinking" — a reasoning DataPart on a WORKING frame,
                     # separate from the answer artifact (plain consumers ignore it).
@@ -1483,6 +1505,12 @@ def _tool_call_frame(event_type: str, payload: Any) -> tuple[Part | None, dict[s
         # extra-key lane as parentToolCallId.
         if event_type == "tool_end" and isinstance(payload.get("output_chars"), int):
             meta[pa.TOOL_CALL_EXT_URI]["outputChars"] = payload["output_chars"]
+        # The call's measured execution time (on_tool_start→on_tool_end, #2697). Riding the
+        # end frame — which the durable store keeps — lets a reload or reattach show the REAL
+        # duration instead of the ~0ms between two replayed frames (#4076).
+        duration_ms = payload.get("duration_ms")
+        if event_type == "tool_end" and isinstance(duration_ms, int) and not isinstance(duration_ms, bool) and duration_ms > 0:
+            meta[pa.TOOL_CALL_EXT_URI]["durationMs"] = duration_ms
         return None, meta
     if payload:
         return _text_part(str(payload)), None

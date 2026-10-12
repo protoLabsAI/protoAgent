@@ -28,7 +28,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 
-from a2a_impl.stores import task_newest_first
+from a2a_impl.stores import CHAT_TOMBSTONE_TABLE, task_newest_first
 from infra.publish import list_published_links
 from runtime.session_ids import SessionId, require_session_id, session_id_problem
 from runtime.state import STATE
@@ -101,7 +101,7 @@ def _chat_tombstone_table():
 
         metadata = MetaData()
         table = Table(
-            "chat_session_tombstones",
+            CHAT_TOMBSTONE_TABLE,
             metadata,
             Column("context_id", String(255), primary_key=True),
             Column("deleted_at", DateTime(timezone=True), nullable=False),
