@@ -1391,6 +1391,41 @@ const server = createServer(async (req, res) => {
           }],
         });
       }
+      // A chat this browser cached at its FIRST turn, after which another client ran two
+      // more (the second stopped). The index counts all three; …/turns serves them in
+      // creation order. Header-gated, so no other spec grows the session.
+      if (req.headers["x-e2e-session-behind"] === "1" && pathname === "/api/chat/sessions") {
+        return sendJson(res, {
+          sessions: [{ session_id: "chat-behind", last_updated: "2026-10-11T20:20:00Z", turn_count: 3 }],
+        });
+      }
+      if (req.headers["x-e2e-session-behind"] === "1" && pathname === "/api/chat/sessions/chat-behind/turns") {
+        const done = (n, prompt, answer, at) => ({
+          task_id: `task-behind-${n}`,
+          state: "TASK_STATE_COMPLETED",
+          last_updated: at,
+          text: answer,
+          status: { state: "TASK_STATE_COMPLETED" },
+          artifacts: [{ parts: [{ text: answer }] }],
+          history: [{ role: "ROLE_USER", parts: [{ text: prompt }] }],
+        });
+        return sendJson(res, {
+          turns: [
+            done(1, "First question", "The server copy of the first answer.", "2026-10-11T20:18:00Z"),
+            done(2, "Second question from the other browser", "Second answer, from the other browser.", "2026-10-11T20:19:00Z"),
+            {
+              task_id: "task-behind-3",
+              state: "TASK_STATE_CANCELED",
+              last_updated: "2026-10-11T20:20:00Z",
+              text: "",
+              status: { state: "TASK_STATE_CANCELED" },
+              artifacts: [],
+              history: [{ role: "ROLE_USER", parts: [{ text: "Third question, stopped" }] }],
+            },
+          ],
+          live_task_id: null,
+        });
+      }
       if (req.headers["x-e2e-session-history"] === "1" && pathname === "/api/chat/sessions") {
         return sendJson(res, {
           sessions: [{ session_id: "chat-recovered", last_updated: "2026-08-20T12:00:00Z", turn_count: 1 }],

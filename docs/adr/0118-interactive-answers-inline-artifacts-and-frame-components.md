@@ -40,7 +40,7 @@ We want its *patterns*, implemented on our existing seams.
 - **The answer lives in the transcript.** An interactive answer scrolls, replays and reattaches with the conversation, like text does.
 - **One sandbox, one fence.** Inline UI must not open a second, weaker iframe security model. The artifact frame's nonce CSP, vendored SRI-pinned libraries and deny-everything loader (ADR 0116 D5) are the fence. No kind's CSP is widened by this ADR.
 - **The operator watches it being built.** The time to the first visible pixel should be close to the time the model starts writing markup, not the time it finishes.
-- **The user's click, the user's turn.** UI may start an agent turn only from a real user gesture, and the result must be indistinguishable in audit from the user typing. It never runs on load, on a timer or on input changes.
+- **The user's click, the user's turn.** UI may start an agent turn only when the user confirms it (amended: a host confirm chip, D4), and the result must be indistinguishable in audit from the user typing. It never runs on load, on a timer or on input changes.
 - **A2A stays clean.** Everything new is an optional DataPart or a prop. A client that ignores it still gets the text and the chip.
 - **Plugins extend without forking or rebuilding** (the ADR 0038/0061 promise, kept for inline rendering too).
 
@@ -81,6 +81,9 @@ An inline artifact **is** an artifact. It has the same store, versions, render v
   - At most **6** live inline frames exist per chat view. An older frame that scrolls away is replaced by a static "Click to resume" card, which remembers its last height so the layout doesn't jump.
   - Hydration and reattach render inline refs the same way. History replays the stored version, and a deleted artifact or a disabled plugin degrades to today's inert chip.
 - **Live-only side effects stay live-only.** The chip's `onLive` hook (it opens the panel today) does **not** fire for an inline ref, because the answer is already in view.
+- **Panel auto-follow ignores inline artifacts and is scoped to the active chat** *(amended 2026-10-11, #4158/#4160, #4163)*. The panel follows the newest **panel-placed** artifact only, so an inline answer never moves it. It follows only artifacts the active chat tab made or revised (their `chat_sessions`, told to the panel by `protoArtifact:context`), so another chat's, a `/v1`/A2A/ACP client's or a legacy artifact never takes it over. Those stay in the picker. Explicit "Open in panel" always works.
+- **Focus: click-to-activate** *(amended 2026-10-11, #4154/#4159)*. An inline frame runs live but starts inactive. A click or Tab activates it, and focus returning to the page deactivates it. A frame that takes focus without a gesture is quarantined: unloaded and replaced by "This artifact tried to take keyboard focus" with **Run it**, with focus handed straight back to the composer. See Amendments for why `inert` was rejected.
+- **Store cap** *(amended 2026-10-11)*. The artifact store keeps 200 artifacts by default (`artifact.history`). An artifact still referenced by a live chat is never evicted.
 
 ### D3 — Streamed preview: opt-in streaming of one string argument
 
@@ -106,20 +109,20 @@ Streaming stops silently once the value passes the artifact size cap. The execut
 - **Other kinds.** `react`, `mermaid` and `vega-lite` show the placeholder only, because a partial program or spec has nothing safe to preview.
 - **Handover.** When the tool ends, the preview frame is swapped for the real inline frame (D2), keeping the last measured height so the layout doesn't jump.
 
-### D4 — The send-to-chat bridge: UI starts a visible turn, only on a user gesture
+### D4 — The send-to-chat bridge: UI proposes a visible turn, the user confirms it
 
 Inside every artifact frame, inline or panel, the shell's shim adds two calls next to the existing `ask`:
 
 - **`window.protoArtifact.send(text)`** puts `text` into the chat **as a user message** and starts a normal turn.
   - **Where it goes.** An inline frame sends to the session it is rendered in. The panel sends to the active chat tab.
   - **Gates.** Every hop checks the request: shim → shell → console host. The console host enforces all of these:
-    - **A user gesture.** The host checks its *own* `navigator.userActivation.isActive`, because User Activation v2 propagates a child frame's activation to its ancestors. A frame can't fake that by posting a message directly. Where the API is missing, the host asks first with an inline "Send '…' to chat?" confirmation.
+    - **The user confirms it** *(amended 2026-10-11, #4137)*. A send is a **proposal**: the host shows a confirm chip (`Send to chat: "…"` with **Send**, **Dismiss** and **Always allow from this artifact**) and posts only on Send. The chip never takes focus. "Always allow" is per artifact (per plugin kind for components) in this browser and still keeps the length, busy and rate gates. *This replaces the original user-activation gate, which an artifact could satisfy by focusing itself after any console click.*
     - **Length.** 1–4000 characters.
     - **Busy.** Not while the target session has a turn running. The call is rejected with "the agent is busy" and the frame shows it.
     - **Rate.** At most 1 send per 2 s per frame.
   - **Visibility.** The message is posted with origin metadata `{via: "artifact", artifact_id, version}`. It shows the user's text with a small "from *‹title›*" label and is audited as a user turn. Nothing is hidden: the operator sees exactly what was sent.
   - **Default.** **On by default**, unlike `ask`. It costs exactly what typing costs and is just as visible. `ask` (a bare, invisible completion) stays opt-in and unchanged.
-- **`window.protoArtifact.openLink(url)`** opens the link in a new tab with `noopener,noreferrer`, through the host. It accepts `https:` only, and an operator setting `artifact.open_link_origins` can narrow that to a list of origins.
+- **`window.protoArtifact.openLink(url)`** opens the link in a new tab with no opener and no referrer, through the host. It accepts `https:` only, and an operator setting `artifact.open_link_origins` can narrow that to a list of origins. *(Amended 2026-10-11, #4159.)* It goes through the same confirm chip ("Open ‹host› in a new tab?") with its **own** "Always allow links" trust, separate from send trust. A dismissal or a blocked pop-up rejects the frame's Promise.
 - **Explicit values.** Frame control state is **not** synced to the agent. A UI that wants the agent to see a selection must put it in the `send` text. The skill teaches this (D7).
 
 ### D5 — Frame-rendered plugin components: kinds render without a console rebuild
@@ -142,7 +145,7 @@ Inline frames, previews and frame components get only what ADR 0116 D5 set up:
 - **Libraries.** Vendored, SRI-pinned libraries served same-origin from the artifact vendor route.
 - **Theme.** The `--pl-*` tokens: `--pl-color-chart-series1…8`, axis/grid, fg/bg and fonts. Frames **re-theme live** when the console theme changes.
 
-There is no import map pointing at a CDN. Besides **Idiomorph** (0BSD, for D3's preview), **three.js, d3 and gsap join the vendored LIB map** (operator decision, 2026-10-10). Each is vendored byte-for-byte as its UMD/ESM build, SRI-pinned, served same-origin from the artifact vendor route, and noted in the vendor LICENSES file. Each loads only when an artifact asks for it. The skill documents them as available.
+There is no import map pointing at a CDN. Besides **Idiomorph** (0BSD, for D3's preview), **three.js, d3 and anime.js join the vendored LIB map** (operator decision, 2026-10-10; anime.js replaced gsap on 2026-10-10 over gsap's licence, #4133). Each is vendored byte-for-byte as its UMD/ESM build, SRI-pinned, served same-origin from the artifact vendor route, and noted in the vendor LICENSES file. Each loads only when an artifact asks for it. The skill documents them as available.
 
 ### D7 — Choosing the presentation is a skill, not a router (for now)
 
@@ -170,7 +173,7 @@ The core `table` component gains an optional `source` prop: a string of at most 
 - **G1–G5 close on existing seams.** A2A clients that ignore the new DataPart, the new props and `/api/components` see exactly what they see today.
 - **Inline UI depends on the artifact plugin.** With the plugin off, `placement` doesn't exist and the model has tiers 1–2 only, which is today's floor.
 - **`tool-args-v1` is new wire surface,** live-only and capped. It also starts to close ADR 0111 D3: the ACP shim can later use it for streaming edit diffs.
-- **The `send` bridge is a new way to start turns.** Its gates are enforced in the host, not in untrusted frame code, and every send is visible and audited as a user turn. The threat it adds is "a frame makes the user's click send something they didn't read". The visible label and the gesture requirement bound it, and HITL-gated tools still park as usual.
+- **The `send` bridge is a new way to start turns.** Its gates are enforced in the host, not in untrusted frame code, and every send is visible and audited as a user turn. The threat it adds is "a frame makes the user's click send something they didn't read". The visible label and the confirm chip bound it, and HITL-gated tools still park as usual.
 - **Frame components trade capability for portability.** They get no bearer, props only and a public page. That is the intended boundary.
 - **Performance.** Lazy mounting plus the 6-live-frame cap bounds memory on long transcripts. The preview throttle bounds CPU while streaming.
 - **OIU code taken under MIT** (`processPartialHtml`, the throttle and flush rules, the height clamp, and the authoring guidance) is attributed in file headers.
@@ -198,34 +201,40 @@ Each slice is independently mergeable into the epic branch. Dependencies are not
 
 1. **Inline by default: yes.** `show_artifact` defaults to `placement="inline"` for the kinds inline supports; documents and work products pass `placement="panel"` (D2).
 2. **Live-frame cap: 6**, as proposed (D2).
-3. **`send` on by default: yes**, behind the host-enforced gesture, busy, length and rate gates (D4).
-4. **Libraries: vendor three.js, d3 and gsap** (D6).
+3. **`send` on by default: yes**, behind the host-enforced busy, length and rate gates (D4); the gesture gate was later replaced by a confirm chip (see Amendments).
+4. **Libraries: vendor three.js, d3 and gsap** (D6); gsap was later swapped for anime.js (see Amendments).
 
 The status moves to **Accepted**.
 
-## Amendments
+## Amendments (2026-10-11, shipped with epic #4076)
 
-**Follow-ups after the epic merged (#4076).**
+Decisions taken during implementation and hands-on testing. Each is also written into the decision it changes (D2, D4, D6):
 
-1. **The panel belongs to one chat (D2).** The console posts `protoArtifact:context {session}` into
-   the Artifact panel: the active chat tab's session id, at start, on every tab switch and to each
-   fresh load of the panel (a sticky delivery, `setPluginViewContext` in
-   `apps/web/src/lib/pluginViewInbox.ts`). Follow-newest then follows only panel artifacts whose
-   `chat_sessions` names that chat. The artifact tools stamp `chat_sessions` for console chats
-   (`chat-` ids) on every create or revise, so a panel artifact from this chat is followed. An
-   artifact with no `chat_sessions` is **not** auto-followed: one made by a `/v1`, A2A or ACP client,
-   a plugin calling `artifact.show` without a `session_id`, or a record from before the stamp. It
-   stays in the picker, and an explicit "Open in panel" (`protoArtifact:select`) still shows any
-   artifact. A tab switch moves a following panel to that chat's newest panel artifact. A pinned
-   selection never moves. A shell that never receives a context (an older console) follows every
-   panel artifact, as before.
-2. **Opening a dock restores a usable size.** `openView` restores the default width (or height)
-   when the dock is stored below the AppShell minimum. A drag-to-collapse can store it at 0 px,
-   and "Open in panel" then drew a 0 px panel. The setter still stores widths verbatim.
-3. **Embed height (D2).** The height reporter (`HEIGHTJS`) re-measures on DOM changes (throttled),
-   font loads, load and a short settle schedule, and a `protoArtifact:measure` always re-posts. In
-   a flow frame whose box is no taller than its viewport, it also measures the rendered elements'
-   extent, overflow included. A viewport-sized wrapper (`height: 100vh`, centred) otherwise only
-   reported the frame's own height back. A measure taken before the content settled then held the
-   frame at the 80 px floor, with the heading clipped. Fill frames (svg, mermaid, decks, PDFs) keep
-   their fixed box.
+1. **Confirm chip instead of a gesture gate (D4, #4137).** `send` and `openLink` are proposals the operator confirms in a host-UI chip, with per-artifact "Always allow" trust. Send trust and link trust are stored separately. The user-activation check could be satisfied by a frame that focused itself after any console click.
+2. **anime.js instead of gsap (D6, #4133).** gsap's licence doesn't allow redistribution in our vendored LIB map. anime.js (MIT) covers the same tweening and timeline needs.
+3. **Click-to-activate frames (D2, #4154/#4159).** Inline frames run live (charts and animations keep moving) but start **inactive**. A click, or Tab navigation, activates a frame. Returning focus to the page deactivates it. A frame that takes focus without a gesture is **quarantined**: it's unloaded and replaced by "This artifact tried to take keyboard focus" with **Run it**, and focus goes back to the composer at once. `inert` was rejected: Chromium lets an inert frame's own script focus its own input, and WebKit honours it only until the first activation. Known limit: focus moving from one frame to another raises no host event, so frame-to-frame theft isn't caught.
+4. **Artifact store cap 200 (D2).** Raised from the original cap. Artifacts still referenced by a live chat are never evicted.
+5. **Panel follows panel artifacts only (D2, #4158/#4160).** Auto-follow of the newest artifact ignores inline placements. Inline answers never move the panel.
+6. **Panel auto-follow is scoped to the active chat (D2, #4163).** The console posts
+   `protoArtifact:context {session}` into the Artifact panel: the active chat tab's session id, at
+   start, on every tab switch, and again to each fresh load of the panel (a sticky delivery,
+   `setPluginViewContext` in `apps/web/src/lib/pluginViewInbox.ts`). The shell accepts it only from
+   its embedder. Auto-follow then follows only panel artifacts whose `chat_sessions` names that chat.
+   The artifact tools stamp `chat_sessions` on every create or revise from a console (`chat-`)
+   session. An artifact with **no** `chat_sessions` is **not** auto-followed: one made by a `/v1`,
+   A2A or ACP client, by a plugin calling `artifact.show` without a `session_id`, or a record from
+   before the stamp. It stays in the picker, and an explicit "Open in panel" (`protoArtifact:select`)
+   still shows any artifact. A tab switch moves a following panel to that chat's newest panel
+   artifact, or leaves it where it is when that chat has none. A pinned selection never moves. A
+   shell that never receives a context (an older console) follows every panel artifact, as before.
+7. **Opening a dock restores a usable size (#4163).** "Open in panel" goes through `openView`, which
+   now restores the default width (or height) when the dock is stored below the AppShell minimum. A
+   drag-to-collapse can leave the dock stored at 0 px, and the panel then opened 0 px wide. The
+   width setter still stores values verbatim.
+8. **Embed height re-measures until the content settles (D2, #4163).** The height reporter
+   (`HEIGHTJS`) re-measures on DOM changes (throttled), on font loads, on load and on a short settle
+   schedule, and a `protoArtifact:measure` always gets a reply. In a flow frame whose box is no
+   taller than its viewport, it also measures the rendered elements' extent, overflow included.
+   Otherwise a viewport-sized wrapper (`height: 100vh`, centred) only reports the frame's own height
+   back: a measure taken before the content settled held the frame at the 80 px floor, with the
+   heading clipped. Fill frames (svg, mermaid, decks, PDFs) keep their fixed box.
