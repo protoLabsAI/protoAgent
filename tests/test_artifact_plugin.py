@@ -707,8 +707,9 @@ def test_vendored_files_exist_and_match_the_allowlist(monkeypatch, tmp_path):
     vendor = ROOT / "vendor"
     for name in art._VENDOR_FILES:
         assert (vendor / name).exists(), f"vendor/{name} missing"
-    # no stray files served that aren't on disk, no disk files unlisted (UMD .js + ESM .mjs).
-    on_disk = {p.name for p in vendor.iterdir() if p.suffix in (".js", ".mjs")}
+    # no stray files served that aren't on disk, no disk files unlisted (UMD/ESM .js/.mjs +
+    # the DS element-default .css sheet; .LICENSES.txt sidecars are not served, so not counted).
+    on_disk = {p.name for p in vendor.iterdir() if p.suffix in (".js", ".mjs", ".css")}
     assert on_disk == art._VENDOR_FILES
 
 
@@ -868,6 +869,67 @@ def test_the_vendored_embed_pair_matches_the_installed_package():
         src = (_DESIGN_PKG / "src" / src_name).read_text(encoding="utf-8")
         assert _strip_vendor_header(vend) == src, f"{vend_name} drifted from @protolabsai/design"
         assert f"@protolabsai/design@{version}" in vend, f"{vend_name} header must name design@{version}"
+
+
+# ── the DS element-default stylesheet (@protolabsai/ui-css styles/embed.css) ─────
+
+# apps/web depends on @protolabsai/ui-css (^0.67.0), which ships styles/embed.css. node resolves it
+# by walking up from apps/web/src; UNLIKE design (pinned to a conflicting version, kept nested in
+# apps/web/node_modules), ui-css hoists to the repo-root node_modules here. Check the nested copy
+# first, then the hoisted repo-root copy — either is "the installed package" the drift guard matches.
+_UI_CSS_CANDIDATES = (
+    ROOT.parent.parent / "apps" / "web" / "node_modules" / "@protolabsai" / "ui-css",
+    ROOT.parent.parent / "node_modules" / "@protolabsai" / "ui-css",
+)
+
+
+def _installed_ui_css():
+    for pkg in _UI_CSS_CANDIDATES:
+        if (pkg / "styles" / "embed.css").exists():
+            return pkg
+    return None
+
+
+def test_the_embed_css_sheet_is_served_as_css_not_javascript(monkeypatch, tmp_path):
+    """pl-embed.css is allowlisted and served 200 as text/css (NEVER application/javascript) with
+    the vendor route's CORS + immutable headers — the sandboxed frame applies it as a stylesheet.
+    The route picks the media type by extension, so the .js/.mjs libs beside it stay JavaScript."""
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    c = TestClient(_app(art))
+
+    assert "pl-embed.css" in art._VENDOR_FILES
+    r = c.get("/plugins/artifact/vendor/pl-embed.css")
+    assert r.status_code == 200
+    ctype = r.headers["content-type"]
+    assert "text/css" in ctype and "javascript" not in ctype
+    assert "immutable" in r.headers.get("cache-control", "")
+    assert r.headers.get("access-control-allow-origin") == "*"  # opaque-sandbox cross-origin fetch
+    assert "@protolabsai/ui-css@" in r.text  # the header names the package + version
+
+    # the extension switch must not regress the JS/ESM libs beside it — still served as JavaScript.
+    for name in ("react.production.min.js", "d3.mjs", "pl-design-embed.mjs"):
+        jr = c.get(f"/plugins/artifact/vendor/{name}")
+        assert jr.status_code == 200, name
+        assert "javascript" in jr.headers["content-type"], name
+        assert "text/css" not in jr.headers["content-type"], name
+
+
+def test_the_vendored_embed_css_matches_the_installed_package():
+    """Drift guard: pl-embed.css is a VERBATIM copy of @protolabsai/ui-css's styles/embed.css.
+    Where the package is installed (apps/web/node_modules, or the hoisted repo-root node_modules it
+    resolves to from apps/web), the vendored file must be byte-identical once the vendored header is
+    stripped, and the header must name the installed version — a ui-css bump that touches embed.css
+    has to be re-vendored here. Skips cleanly on the web-less lanes that don't install console deps."""
+    pkg = _installed_ui_css()
+    if pkg is None:
+        pytest.skip("@protolabsai/ui-css not installed (apps/web or repo-root node_modules)")
+    version = json.loads((pkg / "package.json").read_text(encoding="utf-8"))["version"]
+    vend = (_VENDOR / "pl-embed.css").read_text(encoding="utf-8")
+    src = (pkg / "styles" / "embed.css").read_text(encoding="utf-8")
+    assert _strip_vendor_header(vend) == src, "pl-embed.css drifted from @protolabsai/ui-css styles/embed.css"
+    assert f"@protolabsai/ui-css@{version}" in vend, f"pl-embed.css header must name ui-css@{version}"
 
 
 # ── the new kinds: markdown + the react import map + the DS surface ──────────────
