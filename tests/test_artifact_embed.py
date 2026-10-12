@@ -430,7 +430,9 @@ def test_live_retheme_updates_tokens_only_never_the_authors_body_colours(monkeyp
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
     harness = (
-        _assignment(js, "SHIM")
+        # the shim's per-navigation nonce placeholder (#4143 review)
+        'var NONCE_SLOT = "__protoArtifactNonceSlot__";\n'
+        + _assignment(js, "SHIM")
         + r"""
 const props = {}, inline = { html: {}, body: {} };
 let onMsg = null;
@@ -488,7 +490,9 @@ def test_a_refused_send_never_covers_the_artifact_with_the_error_overlay(monkeyp
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
     harness = (
-        _assignment(js, "SHIM")
+        # the shim's per-navigation nonce placeholder (#4143 review)
+        'var NONCE_SLOT = "__protoArtifactNonceSlot__";\n'
+        + _assignment(js, "SHIM")
         + "\n"
         + _assignment(js, "ERRBOOT")
         + r"""

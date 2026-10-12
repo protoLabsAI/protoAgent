@@ -30,6 +30,12 @@
   function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
   // The NESTED artifact iframe (sandboxed, no stylesheet access) gets the live theme
   // injected as literal colors — read the kit-managed tokens at render time.
+  // The placeholder every srcdoc's shim carries until frameNavigator assigns it (see SHIM).
+  var NONCE_SLOT = "__protoArtifactNonceSlot__";
+  function mintNonce(){
+    var b=new Uint8Array(16); crypto.getRandomValues(b);
+    var h=""; for(var i=0;i<b.length;i++){ h+=(b[i]<16?"0":"")+b[i].toString(16); } return h;
+  }
   // Injected into EVERY artifact (the window.claude.complete analog): the artifact
   // calls window.protoArtifact.ask(prompt) → a Promise that round-trips via the shell
   // (postMessage) to the gated /ask endpoint → the agent → back. parent.postMessage
@@ -44,7 +50,14 @@
   // A send/openLink refusal (busy, dismissed, rate-limited, timed out, not https…) is an EXPECTED
   // outcome, not a crash: nay() tags its Error protoArtifactRefusal so ERRBOOT's
   // unhandledrejection hook logs it quietly instead of covering the artifact with the red overlay.
-  var SHIM = '<script>(function(){var s=0,w={};'
+  // Per-render capability (#4143 review): a document that REPLACES the artifact (the nested frame
+  // navigating itself — `location.href = …` — which its sandbox allows) still posts from the same
+  // WindowProxy, so `e.source === $frame.contentWindow` alone would let it relay send/openLink/ask.
+  // The shim therefore carries a NONCE, baked into each srcdoc as it is assigned (frameNavigator
+  // swaps NONCE_SLOT for a fresh 128-bit value per navigation) and echoed on every ask/send/
+  // openLink; the shell relays only a matching one, and revokes it on the frame's second load.
+  // A navigated document never sees the srcdoc, so it can't learn the value.
+  var SHIM = '<script>(function(){var s=0,w={},N="' + NONCE_SLOT + '";'
     + 'function nay(m){var er=new Error(m);er.protoArtifactRefusal=true;return er;}'
     + 'window.addEventListener("message",function(e){var m=e.data||{};'
     // Live re-theme (#1872): the shell pushes fresh tokens on every frame load and app-theme
@@ -66,13 +79,13 @@
     + 'if(m.type!=="protoArtifact:result")return;'
     + 'var p=w[m.id];if(!p)return;delete w[m.id];m.error?p.reject(p.b?nay(m.error):new Error(m.error)):p.resolve(m.text);});'
     + 'window.protoArtifact={ask:function(prompt){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej};'
-    + 'parent.postMessage({type:"protoArtifact:ask",id:id,prompt:String(prompt)},"*");'
+    + 'parent.postMessage({type:"protoArtifact:ask",id:id,prompt:String(prompt),nonce:N},"*");'
     + 'setTimeout(function(){if(w[id]){delete w[id];rej(new Error("ask timed out"));}},60000);});},'
     + 'send:function(text){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej,b:1};'
-    + 'parent.postMessage({type:"protoArtifact:send",id:id,text:String(text)},"*");'
+    + 'parent.postMessage({type:"protoArtifact:send",id:id,text:String(text),nonce:N},"*");'
     + 'setTimeout(function(){if(w[id]){delete w[id];rej(nay("send timed out"));}},60000);});},'
     + 'openLink:function(url){return new Promise(function(res,rej){var id=++s;w[id]={resolve:res,reject:rej,b:1};'
-    + 'parent.postMessage({type:"protoArtifact:openLink",id:id,url:String(url)},"*");'
+    + 'parent.postMessage({type:"protoArtifact:openLink",id:id,url:String(url),nonce:N},"*");'
     + 'setTimeout(function(){if(w[id]){delete w[id];rej(nay("openLink timed out"));}},60000);});}};'
     + '})();<\/script>';
   // Design-system surface: link the same-origin DS plugin-kit stylesheet (host-served at
@@ -1444,9 +1457,15 @@
   //     attributes, same load listeners) and assigns there, so the newest document always wins
   //     without waiting for the abandoned one to load.
   // `replaced(el)` hands the new element back so `$frame` follows it.
+  //
+  // It also owns the frame's per-navigation CAPABILITY (#4143 review): each assignment swaps the
+  // shim's NONCE_SLOT for a fresh nonce (the comparison above still uses the slot-bearing text, so
+  // identical content still never re-navigates). An assignment produces exactly ONE load; any
+  // further load before the next assignment means the document navigated itself, so the nonce is
+  // revoked (`nonce()` → null) and the relay refuses its ask/send/openLink from then on.
   function frameNavigator(frame, replaced){
-    var el=frame, doc=null, inFlight=false, loadedOnce=false, listeners=[];
-    function onLoad(){ inFlight=false; loadedOnce=true; }
+    var el=frame, doc=null, inFlight=false, loadedOnce=false, listeners=[], cap=null, loads=0;
+    function onLoad(){ inFlight=false; loadedOnce=true; loads+=1; if(loads>1) cap=null; }
     function attach(n){ n.addEventListener("load", onLoad); listeners.forEach(function(fn){ n.addEventListener("load", fn); }); }
     attach(el);
     return {
@@ -1456,10 +1475,13 @@
           var n=el.cloneNode(false); n.removeAttribute("srcdoc");
           el.replaceWith(n); el=n; attach(n); replaced(n);
         }
-        doc=next; inFlight=true; el.srcdoc=next;
+        doc=next; inFlight=true; cap=mintNonce(); loads=0;
+        el.srcdoc=String(next).split(NONCE_SLOT).join(cap);
       },
       // The frame was blanked (srcdoc removed) — the next set must navigate even to the same doc.
-      clear: function(){ doc=null; },
+      clear: function(){ doc=null; cap=null; },
+      // The live document's capability, or null (none assigned, or revoked by a self-navigation).
+      nonce: function(){ return cap; },
       onLoad: function(fn){ listeners.push(fn); el.addEventListener("load", fn); }
     };
   }
@@ -2283,6 +2305,14 @@
       return;
     }
     // send-to-chat / openLink (ADR 0118 D4) — relayed UP to the console host, which gates them.
+    if(m.type==="protoArtifact:send" || m.type==="protoArtifact:openLink" || m.type==="protoArtifact:ask"){
+      // The capability gate (#4143 review): only the document frameNav assigned — never one that
+      // replaced it by navigating — may ask, send or open a link.
+      if(!capabilityOk(frameNav.nonce(), m)){
+        try{ $frame.contentWindow.postMessage({type:"protoArtifact:result", id:m.id, error:"this artifact frame navigated away and can no longer use the bridge"}, "*"); }catch(_){}
+        return;
+      }
+    }
     if(m.type==="protoArtifact:send" || m.type==="protoArtifact:openLink"){ relayBridge(m); return; }
     if(m.type!=="protoArtifact:ask") return;
     function reply(p){ try{ $frame.contentWindow.postMessage(Object.assign({type:"protoArtifact:result",id:m.id},p),"*"); }catch(_){} }
@@ -2306,6 +2336,9 @@
   // correlates the reply. Works in panel AND embed mode — the embedder is the console host
   // either way.
   var bridgeSeq = 0, bridgePending = {};  // host-correlation id (cid) → the frame's own call id
+  // Does a nested-frame message carry the live document's capability? Null `cap` (none assigned,
+  // or revoked by a self-navigation) refuses everything.
+  function capabilityOk(cap, m){ return !!cap && !!m && typeof m.nonce==="string" && m.nonce===cap; }
   function relayBridge(m){
     var frameId = m.id, kind = (m.type === "protoArtifact:send") ? "send" : "openLink";
     function deny(msg){ if(!$frame) return; try{ $frame.contentWindow.postMessage({type:"protoArtifact:result", id:frameId, error:msg}, "*"); }catch(_){} }

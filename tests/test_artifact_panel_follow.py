@@ -369,7 +369,9 @@ def test_live_retheme_updates_the_frames_color_scheme_in_its_base_rule(monkeypat
     push = _js_function(js, "pushTheme")
     assert 'bgIsDark(tokens["--pl-color-bg"])' in push and "scheme:scheme" in push
     harness = (
-        _assignment(js, "SHIM")
+        # the shim's per-navigation nonce placeholder (#4143 review)
+        'var NONCE_SLOT = "__protoArtifactNonceSlot__";\n'
+        + _assignment(js, "SHIM")
         + r"""
 const listeners = [], set = {}, rule = {};
 global.window = global;

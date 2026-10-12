@@ -492,9 +492,10 @@ def register_operator_routes(
     @app.get("/api/components")
     async def _components_catalog():
         """Live component-v1 kinds a renderer can receive (ADR 0118 D5) — the core widgets
-        plus every plugin-contributed kind — as ``[{name, plugin, frame_url}]``. ``plugin`` is
-        null for a core widget; ``frame_url`` is the public ``/plugins/<id>/<frame>`` page a
-        frame kind renders in, else null. Read-only module state (rebound on every plugin
+        plus every plugin-contributed kind — as ``[{name, plugin, frame_url, reads}]``. ``plugin``
+        is null for a core widget; ``frame_url`` is the public ``/plugins/<id>/<frame>`` page a
+        frame kind renders in, else null; ``reads`` is a frame kind's host-mediated read
+        allowlist (GET patterns relative to ``/api/plugins/<plugin>/``, #4143), else empty. Read-only module state (rebound on every plugin
         reload), so no injected accessor; operator-bearer gated like the rest of /api."""
         from graph.components import component_catalog
 

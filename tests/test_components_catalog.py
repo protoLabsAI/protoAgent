@@ -70,9 +70,9 @@ def test_loader_carries_each_components_frame_through(tmp_path, monkeypatch):
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
     res = load_plugins(LangGraphConfig())
     # The framed kind carries the owning plugin + the public /plugins/<id>/<frame> URL…
-    assert res.component_frames["thing-ref"] == {"plugin": "p", "frame_url": "/plugins/p/component.html"}
+    assert res.component_frames["thing-ref"] == {"plugin": "p", "frame_url": "/plugins/p/component.html", "reads": []}
     # …and a plain kind is still attributed, with no frame.
-    assert res.component_frames["plain-ref"] == {"plugin": "p", "frame_url": None}
+    assert res.component_frames["plain-ref"] == {"plugin": "p", "frame_url": None, "reads": []}
 
 
 # ── catalog: core + plugin kinds, frame_url for frame kinds and null otherwise ───────────
@@ -89,10 +89,10 @@ def test_catalog_lists_core_and_plugin_kinds():
     rows = {r["name"]: r for r in components.component_catalog()}
     # Every core widget is listed with no plugin and no frame.
     for core in components.COMPONENT_TYPES:
-        assert rows[core] == {"name": core, "plugin": None, "frame_url": None}
+        assert rows[core] == {"name": core, "plugin": None, "frame_url": None, "reads": []}
     # The frame kind carries its public URL; the plain plugin kind is attributed but frameless.
-    assert rows["thing-ref"] == {"name": "thing-ref", "plugin": "p", "frame_url": "/plugins/p/component.html"}
-    assert rows["plain-ref"] == {"name": "plain-ref", "plugin": "p", "frame_url": None}
+    assert rows["thing-ref"] == {"name": "thing-ref", "plugin": "p", "frame_url": "/plugins/p/component.html", "reads": []}
+    assert rows["plain-ref"] == {"name": "plain-ref", "plugin": "p", "frame_url": None, "reads": []}
 
 
 # ── reload: disabling a plugin drops its frame kind ──────────────────────────────────────
@@ -150,6 +150,6 @@ def test_route_requires_operator_bearer_and_returns_catalog(tmp_path, monkeypatc
     assert resp.status_code == 200
     rows = {r["name"]: r for r in resp.json()}
     for core in components.COMPONENT_TYPES:
-        assert rows[core] == {"name": core, "plugin": None, "frame_url": None}
-    assert rows["thing-ref"] == {"name": "thing-ref", "plugin": "p", "frame_url": "/plugins/p/component.html"}
-    assert rows["plain-ref"] == {"name": "plain-ref", "plugin": "p", "frame_url": None}
+        assert rows[core] == {"name": core, "plugin": None, "frame_url": None, "reads": []}
+    assert rows["thing-ref"] == {"name": "thing-ref", "plugin": "p", "frame_url": "/plugins/p/component.html", "reads": []}
+    assert rows["plain-ref"] == {"name": "plain-ref", "plugin": "p", "frame_url": None, "reads": []}

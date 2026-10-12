@@ -128,15 +128,16 @@ Inside every artifact frame, inline or panel, the shell's shim adds two calls ne
 ### D5 — Frame-rendered plugin components: kinds render without a console rebuild
 
 - **Plugin declares a frame.** `registry.register_component(name, validator, frame="component.html")` declares that a plugin kind renders in a **plugin-served page**. The path is relative to the plugin's route prefix, and the manifest must list it under `public_paths`, because an opaque-origin frame sends no bearer.
-- **Catalog.** The loader carries the frame path, and a new `GET /api/components` lists the live kinds, each as `{name, plugin, frame_url | null}`.
+- **Catalog.** The loader carries the frame path, and a new `GET /api/components` lists the live kinds, each as `{name, plugin, frame_url | null, reads}`.
 - **Console resolution order.** It becomes: `registerChatComponent` (TS registry) → **frame** → `[unsupported component]`. A compiled renderer still wins, so first-party and fork kinds are unchanged.
 - **The frame host:**
   - It uses `sandbox="allow-scripts"` with no same-origin, and it never receives the bearer.
-  - On load it gets the validated props and the theme tokens over `postMessage` (`{type: "protoComponent:init", props, theme}`). Props stay **data only, validated server-side** by the plugin's validator, exactly as today.
+  - It gets the validated props and the theme tokens over `postMessage` in one `{type: "protoComponent:init", props, theme, nonce}`. The host sends it in answer to the frame's `{type: "protoComponent:ready", pair}`, which echoes the `#pair=` fragment of its URL. The frame then echoes `nonce` on every `read`, `send` and `openLink` (#4143; see Amendment 9). Props stay **data only, validated server-side** by the plugin's validator, exactly as today.
   - It autosizes with the D2 clamp and lazy-mount rules.
   - It gets the D4 `send` and `openLink` bridge, with the same gates.
 - **DS plugin kit.** The plugin kit CSS and JS (`/_ds/plugin-kit.*`) are served publicly, so a frame looks native without a build step.
-- **Limit.** A frame component can't call the plugin's gated routes. Anything it needs comes in its props, or through `send`. A plugin that needs a live, authenticated UI uses a rail view (ADR 0038/0045) or an artifact.
+- **Limit.** A frame component can't call the plugin's gated routes itself. Anything it needs comes in its props, through `send`, or through the host-mediated read channel. A plugin that needs a live, authenticated UI uses a rail view (ADR 0038/0045) or an artifact.
+- **Read channel** *(amended 2026-10-12, #4143)*. A kind may declare `reads=[...]`, which are GET patterns under its own `/api/plugins/<id>/`. The frame posts `protoComponent:read {cid, path, nonce}`, and the host checks the path, makes the authed GET itself and posts back `protoComponent:readResult {cid, ok, status, json | error}`. The bearer never reaches the frame, and writes stay on `send`. The frame first posts `protoComponent:ready {pair}`, echoing the `#pair=` fragment the host put on its URL. That earns exactly one `protoComponent:init {…, nonce}`, and the frame must echo `nonce` on every `read`, `send` and `openLink`. Any sign of a second document revokes the mount. See Amendments.
 
 ### D6 — Libraries and theme: vendored and token-driven, never CDN
 
@@ -208,7 +209,7 @@ The status moves to **Accepted**.
 
 ## Amendments (2026-10-11, shipped with epic #4076)
 
-Decisions taken during implementation and hands-on testing. Each is also written into the decision it changes (D2, D4, D6):
+Decisions taken during implementation and hands-on testing. Each is also written into the decision it changes (D2, D4, D5, D6):
 
 1. **Confirm chip instead of a gesture gate (D4, #4137).** `send` and `openLink` are proposals the operator confirms in a host-UI chip, with per-artifact "Always allow" trust. Send trust and link trust are stored separately. The user-activation check could be satisfied by a frame that focused itself after any console click.
 2. **anime.js instead of gsap (D6, #4133).** gsap's licence doesn't allow redistribution in our vendored LIB map. anime.js (MIT) covers the same tweening and timeline needs.
@@ -238,3 +239,100 @@ Decisions taken during implementation and hands-on testing. Each is also written
    Otherwise a viewport-sized wrapper (`height: 100vh`, centred) only reports the frame's own height
    back: a measure taken before the content settled held the frame at the 80 px floor, with the
    heading clipped. Fill frames (svg, mermaid, decks, PDFs) keep their fixed box.
+9. **Host-mediated read channel for frame components (D5, #4143).** A frame component holds no
+   bearer, so it couldn't show live state (a board card's current status, an updating verdict).
+   It now gets one narrow read path:
+   - **Declaration.** `registry.register_component(name, validator, frame=..., reads=[...])`.
+     Each pattern is a GET path relative to the plugin's own `/api/plugins/<id>/` (an absolute
+     spelling must start with exactly that prefix, which is stripped). `*` matches exactly one
+     path segment and must be the whole segment. A pattern that escapes the prefix, or has a
+     `.`/`..`/empty segment, a query string, a fragment, `**`, a partial `*` or a non-URL-safe
+     character, is logged and skipped, as `frame=` refusals are. `reads` without `frame=` is
+     logged and ignored. The testkit `FakeRegistry` raises `ValueError` on the same refusals.
+   - **Catalog.** The loader carries the accepted patterns, and `GET /api/components` reports each
+     kind as `{name, plugin, frame_url, reads}`. `reads` is always a list, and it's empty for core
+     widgets and frame-less kinds.
+   - **Protocol.** The frame posts `{type: "protoComponent:read", cid, path, nonce}`, where `path` is
+     relative to the plugin prefix (for example `features/bd-vbyd.24`). The host replies
+     `{type: "protoComponent:readResult", cid, ok, status, json}` on success or
+     `{type: "protoComponent:readResult", cid, ok: false, status, error}` on failure. `status` is
+     the HTTP status, or `0` when the host refused before making a request.
+   - **The handshake: fragment pairing, then a one-shot nonce.** `e.source === contentWindow`
+     alone isn't an identity. A `WindowProxy` survives navigation, and `sandbox="allow-scripts"`
+     doesn't stop a frame from navigating itself, for example through a rendered link or
+     `location.href`. Without more, a page that replaced the plugin page would inherit its reads,
+     and its `send`/`openLink` too, which a kind's "Always allow" makes silent.
+
+     Two designs were rejected:
+     - *A nonce pushed in `init` on the first `load`.* A navigation during parse fires only the
+       replacing page's `load`, so that page would be sent the nonce.
+     - *Timed `init` re-posts.* A page that navigates inside the re-post window catches one, then
+       stalls its own `load` so the navigation is never seen.
+
+     The chosen design binds the capability to a secret only the **declared page's URL** carries:
+     1. **Pairing.** For each iframe mount, the host mints `pair` (128 random bits, 32 hex chars) and
+        loads the frame at `<frame_url>#pair=<pair>`. A fragment is never sent to a server and
+        never appears in a `Referer`, and a new navigation drops it. A document that replaced the
+        plugin page therefore can't know `pair`.
+     2. **Ready.** Once its script runs, the frame posts
+        `{type: "protoComponent:ready", pair}` **exactly once**, echoing the value from
+        `location.hash`.
+     3. **Init.** The host answers with **exactly one** `{type: "protoComponent:init", props, theme, nonce}`,
+        and never sends init again. It answers only a ready that meets all of these:
+        - it comes from this frame's window;
+        - its `pair` matches;
+        - the mount hasn't been initialised yet;
+        - the mount has seen at most one `load`.
+
+        `nonce` is a second, fresh 128-bit value (`crypto.getRandomValues`), and `init` is the only
+        message that ever carries it. There are no timed re-posts.
+     4. **Use.** Every `protoComponent:read`, `protoComponent:send` and `protoComponent:openLink`
+        must carry that `nonce`. A missing or wrong one is refused (`error: "missing or invalid nonce"`)
+        and raises no console UI.
+     5. **Revocation.** Any sign of a second document revokes the mount at once:
+        - a second `load` of the element;
+        - a second `ready`;
+        - a `ready` with a missing or wrong `pair`;
+        - a `ready` that arrives after a second load.
+
+        Revoking means the host drops the nonce, aborts reads in flight, and unloads the frame for
+        a "navigated away" notice. The notice's **Reload** mounts a new iframe at the declared URL
+        with a fresh `pair`. An opaque frame's location can't be read, so the host never re-trusts
+        a navigated document in place.
+
+     Residual risk, by design: the declared page can still give away its own capability. It could
+     put `pair` into a URL it navigates to, or navigate in the instant between posting `ready` and
+     receiving `init`. Both are the plugin's own code, which already holds the plugin's reads.
+   - **Artifact frames get the same treatment.** The console host gates on the artifact embed
+     **shell**: a same-origin, first-party page that never navigates itself and that the nested
+     frame can't navigate (its sandbox has no `allow-top-navigation`). The model-authored nested
+     srcdoc frame *can* navigate itself, though. The shell's relay used to gate on
+     `e.source === $frame.contentWindow`, so a replacing page kept `send`/`openLink`/`ask`. Now:
+     - `frameNavigator` (`plugins/artifact/shell.js`) replaces the shim's `NONCE_SLOT` with a fresh
+       128-bit nonce on every srcdoc assignment. Content comparison still ignores the nonce, so
+       identical content never re-navigates.
+     - The shim echoes the nonce as `nonce` on `protoArtifact:ask`, `protoArtifact:send` and
+       `protoArtifact:openLink`.
+     - The shell answers these only for a matching nonce (`capabilityOk`).
+     - Any second `load` of the nested frame after an assignment revokes the nonce.
+
+     A replacing page never sees the srcdoc, so it can't learn the nonce. The shell stays vanilla,
+     CSP-locked JS.
+   - **Host checks** (`FrameComponentHost`, `apps/web/src/chat/frameComponentReads.ts`), all made
+     by the host and none trusted from the frame:
+     - The message source is this frame's own window.
+     - The path matches a declared read.
+     - The request is GET only (any other `method` is refused).
+     - The frame has at most 4 reads per rolling second and 2 in flight.
+     - The frame is mounted and near the viewport, and the console tab is visible. Otherwise the
+       read is refused with `paused`, which also keeps a polling card cheap.
+   - **Host action.** It makes an authed GET with the console's own auth and slug routing
+     (`fetchComponentRead` in `apps/web/src/lib/api/components.ts`). The GET follows no redirects
+     and only accepts a JSON content type. The body is streamed and cut off at 256 KB, and the
+     whole read times out after 10 s, which frees the in-flight slot. Only the parsed JSON, or a
+     short reason, goes back to the frame. An error's `detail` is passed through only from a JSON
+     error body; any other error body becomes `HTTP <status>`. The bearer, the response headers
+     and any non-JSON body never reach the frame. Reads in flight are aborted on unmount,
+     eviction, quarantine and navigation.
+   - **Reads only.** Writes and actions stay on the `send` bridge (D4), so every mutation remains a
+     visible, confirmed user turn.

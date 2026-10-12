@@ -259,6 +259,35 @@ def _accept_component_frame(plugin_id: str, frame, public_paths) -> str | None:
     return s
 
 
+_READ_SEGMENT_RE = re.compile(r"[A-Za-z0-9._~:@+=,-]+")
+
+
+def _accept_component_read(plugin_id: str, pattern) -> str | None:
+    """Validate one component ``reads`` pattern exactly as ``PluginRegistry`` does (ADR 0118 D5
+    amendment, #4143): a GET path relative to ``/api/plugins/<id>/`` (an absolute spelling must
+    start with that exact prefix), ``*`` only as a whole segment, and no ``.``/``..``/empty
+    segment, query string, fragment, ``**`` or non-URL-safe character. Returns the cleaned
+    relative pattern or ``None`` to refuse. Duplicates
+    ``graph.plugins.registry._accept_component_read`` (host-free by contract); a parity test
+    keeps the copies in sync."""
+    if not isinstance(pattern, str):
+        return None
+    s = pattern.strip()
+    prefix = f"/api/plugins/{plugin_id}/"
+    if s.startswith("/"):
+        if not s.startswith(prefix):
+            return None
+        s = s[len(prefix) :]
+    if not s or "?" in s or "#" in s or "**" in s:
+        return None
+    for seg in s.split("/"):
+        if seg == "*":
+            continue
+        if seg in (".", "..") or not _READ_SEGMENT_RE.fullmatch(seg):
+            return None
+    return s
+
+
 class FakeRegistry:
     """Records what ``register(registry)`` contributes, with no host — mirrors the real
     ``graph.plugins.registry.PluginRegistry`` surface so a plugin's ``register()`` runs
@@ -320,6 +349,7 @@ class FakeRegistry:
         self.chat_commands: dict = {}  # slugified token -> handler
         self.components: dict = {}  # component-v1 kind -> props validator (#3617)
         self.component_frames: dict = {}  # kind -> frame page path (ADR 0118 D5, #4087)
+        self.component_reads: dict = {}  # kind -> accepted read patterns (ADR 0118 D5, #4143)
         self.services: dict = {}  # "<plugin_id>.<name>" -> callable (ADR 0116)
         self.service_meta: dict = {}  # name -> {plugin_id, description}
         self.late_tool_factories: list = []
@@ -368,7 +398,7 @@ class FakeRegistry:
     def register_tools(self, tools) -> None:
         self.tools.extend(tools)
 
-    def register_component(self, name: str, validator, frame: str | None = None) -> None:
+    def register_component(self, name: str, validator, frame: str | None = None, reads=None) -> None:
         """Capture a component-v1 kind (``self.components[name] = validator``) so a plugin
         test can run its validator the way the host does. Same signature as the host method;
         the host also refuses a core/invalid name.
@@ -377,7 +407,27 @@ class FakeRegistry:
         under ``/plugins/<id>`` listed in ``public_paths``. A frame the host would refuse (an
         absolute path, a ``..`` segment, or one not in ``public_paths``) raises ``ValueError``
         here, where the host warns + skips (see the class docstring); an accepted frame is
-        captured on ``self.component_frames[name]``."""
+        captured on ``self.component_frames[name]``.
+
+        ``reads`` (ADR 0118 D5 amendment, #4143) is validated like the host too: ``reads``
+        without a ``frame``, a non-list, or any pattern the host would refuse (escapes
+        ``/api/plugins/<id>/``, ``..``, a query string, ``**``, a partial ``*``) raises
+        ``ValueError``; accepted patterns are captured on ``self.component_reads[name]``."""
+        accepted_reads: list = []
+        if reads is not None:
+            if frame is None:
+                raise ValueError(f"component {name!r} declares reads without frame= — the host would ignore them")
+            if isinstance(reads, (str, bytes)) or not hasattr(reads, "__iter__"):
+                raise ValueError(f"component {name!r} reads must be a list of path patterns, got {reads!r}")
+            for pattern in reads:
+                cleaned = _accept_component_read(self.plugin_id, pattern)
+                if cleaned is None:
+                    raise ValueError(
+                        f"component {name!r} read {pattern!r} would be refused by the host (escapes "
+                        f"/api/plugins/{self.plugin_id}/, '..', a query string, '**' or a partial '*')"
+                    )
+                if cleaned not in accepted_reads:
+                    accepted_reads.append(cleaned)
         if frame is not None:
             accepted = _accept_component_frame(self.plugin_id, frame, self.public_paths)
             if accepted is None:
@@ -386,6 +436,8 @@ class FakeRegistry:
                     f"(absolute, contains '..', or not under public_paths)"
                 )
             self.component_frames[name] = accepted
+        if accepted_reads:
+            self.component_reads[name] = accepted_reads
         self.components[name] = validator
 
     def register_service(self, name: str, fn, description: str = "") -> None:
