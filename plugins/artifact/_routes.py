@@ -136,6 +136,11 @@ _VENDOR_FILES = {
     "react.shim.mjs",
     "react-dom-client.shim.mjs",
     "pl-ui.mjs",
+    # The DS Vega chart theme (@protolabsai/design /vega — buildVegaConfig / vegaTooltipTheme),
+    # loaded same-origin by the SHELL itself (not a frame), then injected into the chart frame as
+    # source. Not SRI-pinned in the LIB map: the shell load is same-origin, not an opaque-sandbox
+    # subresource. Verbatim-vendored; tests/test_artifact_vega.py guards it against DS drift.
+    "pl-design-vega.mjs",
 }
 
 
