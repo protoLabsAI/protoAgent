@@ -22,7 +22,14 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ToolArgsBuffer } from "../chat/toolArgsBuffer";
 import { refName } from "./artifactRef";
 import { clampHeight, MIN_FRAME_HEIGHT } from "./inlineFrames";
-import { cachedPluginKitCss, consoleScheme, loadControlDefaults, loadPluginKitCss, previewThemeCss } from "./previewTheme";
+import {
+  cachedControlDefaults,
+  cachedPluginKitCss,
+  consoleScheme,
+  loadControlDefaults,
+  loadPluginKitCss,
+  previewThemeCss,
+} from "./previewTheme";
 import {
   bodyBytesWithoutStyle,
   firstStyleClosed,
@@ -268,19 +275,32 @@ export function StreamingPreview({ buffer, kind = "", title = "", renderFinal }:
   const showPreview = PREVIEW_KINDS.has(kind) && (gateLatched || gateOpenNow);
 
   // One random nonce per mounted frame; the srcdoc (and thus the CSP) are built once from it —
-  // carrying the console theme and, when already cached, the DS kit CSS (#4076). Start the kit's
-  // one-time fetch now, so it has usually landed by the time the gate opens.
-  // Built when the frame first SHOWS (not at card mount) so it picks up the kit if it landed
+  // carrying the console theme and, when already cached, the DS kit CSS plus the DS element-default
+  // control sheet (#4076). Start BOTH one-time fetches now (at MOUNT), so each has usually landed by
+  // the time the gate opens and is inlined into the srcdoc. The control defaults were a build-time
+  // import before protoContent#577; fetching them only after the frame loaded would leave the FIRST
+  // preview on a page with bare browser controls until the post arrived — so they get the same
+  // head-start as the kit here, and the srcdoc built at gate-open includes them when they've landed.
+  // Built when the frame first SHOWS (not at card mount) so it picks up either sheet if it landed
   // in between; `showPreview` is latched for a live stream, so this builds once.
   const [nonce] = useState(randomNonce);
   const built = useMemo(
-    () => (showPreview ? { srcdoc: buildPreviewSrcdoc(nonce), hadKit: cachedPluginKitCss() !== "" } : null),
+    () =>
+      showPreview
+        ? {
+            srcdoc: buildPreviewSrcdoc(nonce),
+            hadKit: cachedPluginKitCss() !== "",
+            hadControlDefaults: cachedControlDefaults() !== "",
+          }
+        : null,
     [nonce, showPreview],
   );
   const srcdoc = built?.srcdoc ?? "";
   const srcdocHadKit = built?.hadKit ?? false;
+  const srcdocHadControlDefaults = built?.hadControlDefaults ?? false;
   useEffect(() => {
     void loadPluginKitCss();
+    void loadControlDefaults();
   }, []);
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -399,15 +419,18 @@ export function StreamingPreview({ buffer, kind = "", title = "", renderFinal }:
       });
     }
     // The DS element defaults (served by the artifact plugin's vendor route, not bundled) load like
-    // the kit — once in, re-post the theme style, which now inlines them (cachedControlDefaults).
-    void loadControlDefaults().then((css) => {
-      if (!cancelled && css) postStyle(PREVIEW_THEME_STYLE_ID, previewThemeCss());
-    });
+    // the kit: inlined into the srcdoc when the mount-time fetch had already landed, else posted in
+    // once it settles by re-posting the theme style, which now inlines them (cachedControlDefaults).
+    if (!srcdocHadControlDefaults) {
+      void loadControlDefaults().then((css) => {
+        if (!cancelled && css) postStyle(PREVIEW_THEME_STYLE_ID, previewThemeCss());
+      });
+    }
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- postStyle reads only refs
-  }, [showPreview, frameLoaded, srcdocHadKit]);
+  }, [showPreview, frameLoaded, srcdocHadKit, srcdocHadControlDefaults]);
 
   // Never leave a trailing post timer behind on unmount.
   useEffect(() => () => {

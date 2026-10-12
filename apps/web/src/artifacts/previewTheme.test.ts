@@ -78,6 +78,24 @@ describe("the preview srcdoc", () => {
     const doc = buildPreviewSrcdoc("n1", { scheme: "dark", css: "", kitCss: safe });
     expect(doc.match(/<script\b/gi)).toHaveLength(1);
   });
+
+  // Regression guard (protoContent#577): the control defaults are a RUNTIME fetch now (not a
+  // build-time import), but StreamingPreview starts it at mount so it has usually landed by the
+  // time the gate opens — and the DEFAULT srcdoc (no explicit theme) reads previewThemeCss() at
+  // build time, the exact path the component takes. So once the fetch has settled, the srcdoc
+  // inlines the defaults on FIRST paint rather than leaving the preview with bare browser controls.
+  it("inlines the cached DS control defaults into the default srcdoc's theme style once they've loaded", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(":where(button){color:var(--pl-color-fg)}"));
+    // Before the mount-time fetch lands, the default srcdoc carries none of them…
+    expect(buildPreviewSrcdoc("n")).not.toContain(":where(button)");
+    // …after it settles and caches them, the srcdoc built at gate-open carries them in the THEME
+    // style element (previewThemeCss concatenates them — the kit style stays untouched).
+    await loadControlDefaults();
+    const doc = buildPreviewSrcdoc("n");
+    expect(doc).toContain(":where(button)");
+    const themeStyle = doc.slice(doc.indexOf('<style id="proto-preview-theme">'), doc.indexOf("</head>"));
+    expect(themeStyle).toContain(":where(button)");
+  });
 });
 
 describe("loadPluginKitCss", () => {
