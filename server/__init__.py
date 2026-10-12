@@ -1335,8 +1335,11 @@ def _main():
     def _stall_timeout() -> float:
         """Seconds of stream SILENCE after which a turn is declared wedged (#2344).
         Read live off STATE.graph_config, like _context_meta, so an operator's change
-        applies to the next turn instead of needing a restart."""
-        return float(getattr(STATE.graph_config, "turn_stall_timeout_seconds", 0.0) or 0.0)
+        applies to the next turn instead of needing a restart. A non-zero value under the
+        liveness cadence's floor is raised to it (``effective_stall_timeout``); 0 = off."""
+        from graph.turn_liveness import effective_stall_timeout
+
+        return effective_stall_timeout(getattr(STATE.graph_config, "turn_stall_timeout_seconds", 0.0))
 
     _a2a_push_client = httpx.AsyncClient(timeout=30)
     a2a_request_handler = DefaultRequestHandler(

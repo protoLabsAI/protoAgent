@@ -41,7 +41,7 @@ from typing import Any
 from graph import delegation_usage
 from graph.output_format import extract_output
 from graph.subagent_model import turn_model_scope
-from graph.turn_liveness import progress_scope
+from graph.turn_liveness import PROGRESS_MIN_INTERVAL_S, progress_scope
 
 # Bound at import, exactly as ``server.chat`` binds them: the plugin chat-command
 # dispatch and the shared slash resolver (``graph.slash_commands`` is re-imported on a
@@ -110,7 +110,7 @@ def _retrieve_outcome(task: asyncio.Task) -> None:
 # ``/<subagent>`` run (#3977) emits. Each frame resets the A2A stall guard; one every
 # few seconds is plenty against a 900s window, and a chatty sub-graph must not turn
 # into a frame per super-step.
-_PROGRESS_MIN_INTERVAL_S = 5.0
+_PROGRESS_MIN_INTERVAL_S = PROGRESS_MIN_INTERVAL_S  # a non-zero stall window is floored at 3x this
 
 
 def _progress_listener(queue: asyncio.Queue):

@@ -38,6 +38,43 @@ log = logging.getLogger(__name__)
 
 ProgressListener = Callable[[str], None]
 
+# The least time between two liveness frames a running ``/<workflow>`` step or
+# ``/<subagent>`` run emits (``server.chat_dispatch._PROGRESS_MIN_INTERVAL_S`` is this).
+PROGRESS_MIN_INTERVAL_S = 5.0
+# The shortest non-zero stall window that can hear that cadence: three frames' worth, so a
+# run that keeps working always lands a frame well inside the window. A shorter window
+# would stall a healthy `/<workflow>` or `/<subagent>` run between two rate-limited frames.
+MIN_STALL_TIMEOUT_S = 3 * PROGRESS_MIN_INTERVAL_S
+
+_warned_stall_floor: set[float] = set()
+
+
+def effective_stall_timeout(configured: float | None) -> float:
+    """The stall window to enforce for a configured ``turn_stall_timeout_seconds``.
+
+    ``0`` (or unset, or negative) keeps its meaning: the guard is off. A non-zero value
+    below :data:`MIN_STALL_TIMEOUT_S` is raised to it, with one WARNING per distinct
+    configured value (the setting is live-reloadable, so a new bad value warns again)."""
+    try:
+        value = float(configured or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if value <= 0 or value >= MIN_STALL_TIMEOUT_S:
+        return value
+    if value not in _warned_stall_floor:
+        _warned_stall_floor.add(value)
+        log.warning(
+            "[a2a] model.turn_stall_timeout_seconds=%gs is below the %gs floor (3x the %gs "
+            "liveness cadence of /workflow and /<subagent> runs); using %gs. Set 0 to disable "
+            "the stall guard.",
+            value,
+            MIN_STALL_TIMEOUT_S,
+            PROGRESS_MIN_INTERVAL_S,
+            MIN_STALL_TIMEOUT_S,
+        )
+    return MIN_STALL_TIMEOUT_S
+
+
 _listener_ctx: contextvars.ContextVar[ProgressListener | None] = contextvars.ContextVar(
     "protoagent_turn_progress", default=None
 )

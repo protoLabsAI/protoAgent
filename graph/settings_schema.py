@@ -19,6 +19,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
+from graph.turn_liveness import MIN_STALL_TIMEOUT_S, PROGRESS_MIN_INTERVAL_S
 from runtime.acp_agents import acp_runtime_options
 
 
@@ -241,7 +242,10 @@ FIELDS: list[Field] = [
         "Fail a turn that goes this long without producing ANY output — a wedged step "
         "that would otherwise leave the chat spinning forever. Not a limit on how long a "
         "turn may take: a turn that keeps streaming is never cut off, however long it "
-        "runs. Raise it if a genuinely silent step is being killed; 0 disables.",
+        "runs. Raise it if a genuinely silent step is being killed; 0 disables. Otherwise "
+        f"at least {MIN_STALL_TIMEOUT_S:g}s: /workflow and /<subagent> runs report progress "
+        f"every {PROGRESS_MIN_INTERVAL_S:g}s, so a shorter window would stop them mid-work "
+        "(a lower value in config.yaml is raised to the floor, with a warning).",
         minimum=0,
     ),
     # Round governance (#2710, ADR 0101 D8) — sits with the other per-turn
@@ -2315,6 +2319,12 @@ def validate_flat(updates: dict[str, Any], hidden: list[str] | None = None) -> t
                 return False, f"{key} must be ≥ {f.minimum}"
             if f.maximum is not None and val > f.maximum:
                 return False, f"{key} must be ≤ {f.maximum}"
+            if key == "model.turn_stall_timeout_seconds" and 0 < val < MIN_STALL_TIMEOUT_S:
+                return False, (
+                    f"{key} must be 0 (off) or at least {MIN_STALL_TIMEOUT_S:g}s — /workflow and "
+                    f"/<subagent> runs report progress every {PROGRESS_MIN_INTERVAL_S:g}s, so a "
+                    "shorter window would stop them mid-work"
+                )
         if f.type == "string_list" and not (isinstance(val, list) and all(isinstance(x, str) for x in val)):
             return False, f"{key} must be a list of strings"
         if f.type == "select" and f.options and val not in f.options:
