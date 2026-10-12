@@ -22,7 +22,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ToolArgsBuffer } from "../chat/toolArgsBuffer";
 import { refName } from "./artifactRef";
 import { clampHeight, MIN_FRAME_HEIGHT } from "./inlineFrames";
-import { cachedPluginKitCss, consoleScheme, loadPluginKitCss, previewThemeCss } from "./previewTheme";
+import { cachedPluginKitCss, consoleScheme, loadControlDefaults, loadPluginKitCss, previewThemeCss } from "./previewTheme";
 import {
   bodyBytesWithoutStyle,
   firstStyleClosed,
@@ -398,6 +398,11 @@ export function StreamingPreview({ buffer, kind = "", title = "", renderFinal }:
         if (!cancelled && css) postStyle(PREVIEW_KIT_STYLE_ID, css);
       });
     }
+    // The DS element defaults (served by the artifact plugin's vendor route, not bundled) load like
+    // the kit — once in, re-post the theme style, which now inlines them (cachedControlDefaults).
+    void loadControlDefaults().then((css) => {
+      if (!cancelled && css) postStyle(PREVIEW_THEME_STYLE_ID, previewThemeCss());
+    });
     return () => {
       cancelled = true;
     };
