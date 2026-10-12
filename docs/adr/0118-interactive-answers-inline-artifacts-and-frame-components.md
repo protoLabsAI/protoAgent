@@ -132,12 +132,12 @@ Inside every artifact frame, inline or panel, the shell's shim adds two calls ne
 - **Console resolution order.** It becomes: `registerChatComponent` (TS registry) → **frame** → `[unsupported component]`. A compiled renderer still wins, so first-party and fork kinds are unchanged.
 - **The frame host:**
   - It uses `sandbox="allow-scripts"` with no same-origin, and it never receives the bearer.
-  - On load it gets the validated props and the theme tokens over `postMessage` (`{type: "protoComponent:init", props, theme}`). Props stay **data only, validated server-side** by the plugin's validator, exactly as today.
+  - On load it gets the validated props and the theme tokens over `postMessage` (`{type: "protoComponent:init", props, theme, nonce}`; the frame echoes `nonce` on every `read`, `send` and `openLink`, #4143). Props stay **data only, validated server-side** by the plugin's validator, exactly as today.
   - It autosizes with the D2 clamp and lazy-mount rules.
   - It gets the D4 `send` and `openLink` bridge, with the same gates.
 - **DS plugin kit.** The plugin kit CSS and JS (`/_ds/plugin-kit.*`) are served publicly, so a frame looks native without a build step.
 - **Limit.** A frame component can't call the plugin's gated routes itself. Anything it needs comes in its props, through `send`, or through the host-mediated read channel. A plugin that needs a live, authenticated UI uses a rail view (ADR 0038/0045) or an artifact.
-- **Read channel** *(amended 2026-10-12, #4143)*. A kind may declare `reads=[...]`, which are GET patterns under its own `/api/plugins/<id>/`. The frame posts `protoComponent:read {cid, path}`, and the host checks the path, makes the authed GET itself and posts back `protoComponent:readResult {cid, ok, status, json | error}`. The bearer never reaches the frame, and writes stay on `send`. See Amendments.
+- **Read channel** *(amended 2026-10-12, #4143)*. A kind may declare `reads=[...]`, which are GET patterns under its own `/api/plugins/<id>/`. The frame posts `protoComponent:read {cid, path, nonce}`, and the host checks the path, makes the authed GET itself and posts back `protoComponent:readResult {cid, ok, status, json | error}`. The bearer never reaches the frame, and writes stay on `send`. `nonce` is a per-mount capability the host delivers only in `protoComponent:init`. The frame must echo it on every `read`, `send` and `openLink`, and a navigation revokes it. See Amendments.
 
 ### D6 — Libraries and theme: vendored and token-driven, never CDN
 
@@ -252,11 +252,39 @@ Decisions taken during implementation and hands-on testing. Each is also written
    - **Catalog.** The loader carries the accepted patterns, and `GET /api/components` reports each
      kind as `{name, plugin, frame_url, reads}`. `reads` is always a list, and it's empty for core
      widgets and frame-less kinds.
-   - **Protocol.** The frame posts `{type: "protoComponent:read", cid, path}`, where `path` is
+   - **Protocol.** The frame posts `{type: "protoComponent:read", cid, path, nonce}`, where `path` is
      relative to the plugin prefix (for example `features/bd-vbyd.24`). The host replies
      `{type: "protoComponent:readResult", cid, ok, status, json}` on success or
      `{type: "protoComponent:readResult", cid, ok: false, status, error}` on failure. `status` is
      the HTTP status, or `0` when the host refused before making a request.
+   - **Per-mount capability (`nonce`).** `e.source === contentWindow` alone isn't an identity. A
+     `WindowProxy` survives navigation, and `sandbox="allow-scripts"` doesn't stop a frame from
+     navigating itself, for example through a rendered link or `location.href`. Without more, a
+     third-party page that replaced the plugin page would inherit its reads, and its
+     `send`/`openLink` too, which a kind's "Always allow" makes silent. So:
+     - On the iframe element's **first** `load`, the host mints a random 128-bit `nonce`
+       (`crypto.getRandomValues`, hex). It sends the nonce **only** in
+       `protoComponent:init {props, theme, nonce}` and that message's short re-post schedule. The
+       re-posts stop as soon as the frame first echoes the nonce.
+     - Every `protoComponent:read`, `protoComponent:send` and `protoComponent:openLink` must carry
+       the same `nonce`. A missing or wrong one is refused (`error: "missing or invalid nonce"`)
+       and raises no console UI.
+     - Any **second** `load` of the same element means the frame navigated. The host revokes the
+       nonce synchronously, never posts `init` to the new document, aborts reads in flight and
+       unloads the frame for a "navigated away" notice. That notice's **Reload** mounts a new
+       iframe at the declared frame URL, with a fresh nonce. An opaque frame's location can't be
+       read, so the host never re-trusts a navigated document in place. This is the safest of the
+       options considered.
+     - Residual risk: a navigation that completes within the ~1.5 s re-post window, before the
+       page has echoed the nonce, could be handed it. Only the plugin page's own code can navigate
+       that early, and that code already holds the plugin's reads.
+   - **Artifact frames are not affected the same way.** The inline artifact host gates on its
+     embed **shell**: a same-origin, first-party plugin page (`plugins/artifact/shell.js`) that
+     never navigates itself. The model-authored content runs in a nested srcdoc frame sandboxed
+     without `allow-top-navigation`, so it can't navigate the shell. It can navigate itself. The
+     document it navigates to then gets only what the model code already had through the shell
+     (`send`/`openLink` proposals and `ask`). It doesn't get data reads, so it gains no
+     escalation. The console host's own `e.source` check on the shell stays sound.
    - **Host checks** (`FrameComponentHost`, `apps/web/src/chat/frameComponentReads.ts`), all made
      by the host and none trusted from the frame:
      - The message source is this frame's own window.
@@ -267,8 +295,11 @@ Decisions taken during implementation and hands-on testing. Each is also written
        read is refused with `paused`, which also keeps a polling card cheap.
    - **Host action.** It makes an authed GET with the console's own auth and slug routing
      (`fetchComponentRead` in `apps/web/src/lib/api/components.ts`). The GET follows no redirects
-     and only accepts a JSON content type with a body of at most 256 KB. Only the parsed JSON, or
-     a short reason, goes back to the frame. The bearer, the response headers and any non-JSON
-     body never do.
+     and only accepts a JSON content type. The body is streamed and cut off at 256 KB, and the
+     whole read times out after 10 s, which frees the in-flight slot. Only the parsed JSON, or a
+     short reason, goes back to the frame. An error's `detail` is passed through only from a JSON
+     error body; any other error body becomes `HTTP <status>`. The bearer, the response headers
+     and any non-JSON body never reach the frame. Reads in flight are aborted on unmount,
+     eviction, quarantine and navigation.
    - **Reads only.** Writes and actions stay on the `send` bridge (D4), so every mutation remains a
      visible, confirmed user turn.

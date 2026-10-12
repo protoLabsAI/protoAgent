@@ -270,7 +270,7 @@ It is **live-only**: previews are **never persisted to task history and never re
 
 A `component-v1` kind a plugin renders in a **frame** (`register_component(..., frame=...)`) runs
 in a sandboxed, opaque-origin iframe with no bearer. It talks to the console host over
-`postMessage` and never over A2A. The host-to-frame messages are `protoComponent:init {props, theme}`
+`postMessage` and never over A2A. The host-to-frame messages are `protoComponent:init {props, theme, nonce}`
 and `protoComponent:theme`. The frame-to-host messages are `protoComponent:height`, plus
 `protoComponent:send` and `protoComponent:openLink` (ADR 0118 D4). For **live data**, a kind
 declares which of its plugin's own GET routes it reads:
@@ -288,16 +288,25 @@ that escape the prefix, or that contain `..`, a query string or `**`, are logged
 
 | Direction | Message | Fields |
 |---|---|---|
-| frame to host | `protoComponent:read` | `cid` (number, echoed back), `path` (relative to `/api/plugins/<plugin>/`, e.g. `features/bd-vbyd.24`). An optional `method` other than `GET` is refused. |
+| host to frame | `protoComponent:init` | `props`, `theme`, and **`nonce`**: this mount's capability (32 hex chars). It is sent only in `init`, and only to the frame's first document. |
+| frame to host | `protoComponent:read` | `cid` (number, echoed back), `path` (relative to `/api/plugins/<plugin>/`, e.g. `features/bd-vbyd.24`), **`nonce`** (echoed from `init`). An optional `method` other than `GET` is refused. |
 | host to frame | `protoComponent:readResult` | `cid`, `ok`, `status` (the HTTP status, or `0` when the host refused before making a request), and either `json` (the parsed body, when `ok`) or `error` (a short reason). |
+
+**Echo `nonce` from `init` on every `protoComponent:read`, `protoComponent:send` and
+`protoComponent:openLink`.** A message without the current nonce is refused with
+`"missing or invalid nonce"`. A frame that navigates itself (a second `load`) loses its nonce
+immediately and is unloaded for a "navigated away" notice, so a page that replaces the plugin page
+can't inherit its reads or its send trust. Reload mounts a fresh frame with a new nonce.
 
 The host serves a read only when all of these hold:
 
-- The message came from that frame's own window.
+- The message came from that frame's own window and carries the mount's `nonce`.
 - The path matches a declared pattern.
 - The frame has at most 4 reads per second and 2 in flight.
 - The frame is mounted and visible (otherwise the error is `paused: …`).
-- The response is JSON of at most 256 KB, with no redirect.
+- The response is JSON of at most 256 KB (streamed and cut off at the cap), with no redirect,
+  within a 10 s timeout. A non-2xx error passes its `detail` through only when the error body is
+  JSON; otherwise the error is `HTTP <status>`.
 
 The host makes the GET with the operator's auth. Only the JSON, or the reason, reaches the frame:
 never the bearer, the headers or a non-JSON body. Reads are the only thing this channel does.

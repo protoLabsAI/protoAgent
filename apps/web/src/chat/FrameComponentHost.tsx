@@ -77,6 +77,26 @@ import { checkReadRequest, createReadLimiter } from "./frameComponentReads";
 //     frame. `status` is 0 when the host refused before any request was made.
 //   • Reads only: writes and actions stay on the `send` bridge above, so every mutation is a
 //     visible, confirmed user turn.
+//
+// Frame capability — the per-mount NONCE (#4143 review F1). `e.source === contentWindow` alone is
+// NOT an identity: a WindowProxy keeps its identity across navigations, and `sandbox=
+// "allow-scripts"` does not stop a frame navigating itself (a rendered link the operator clicks,
+// or `location.href = …`). Without more, a third-party page that replaced the plugin page would
+// inherit its reads (and its send/openLink, which a kind's "Always allow" makes silent). So:
+//   • On the iframe ELEMENT's FIRST `load` the host mints a random nonce (crypto.getRandomValues,
+//     128 bits) and delivers it ONLY inside `protoComponent:init` (and its short re-post schedule).
+//     No other message ever carries it.
+//   • Every `protoComponent:read`, `protoComponent:send` and `protoComponent:openLink` must echo
+//     it as `nonce`; a missing / wrong one is refused (read, send) or ignored.
+//   • Any SECOND `load` of the same element means the frame navigated: the nonce is revoked at
+//     once, the init re-posts are cancelled (init is never posted to the new document), in-flight
+//     reads are aborted, and the frame is unloaded for a "navigated away" notice. Its Reload
+//     button remounts a NEW iframe at the declared frame URL — a genuinely fresh mount, with a
+//     fresh nonce. We can't tell where an opaque frame went, so we never "trust it again" in place.
+//   • The re-post schedule also stops the moment the frame echoes the nonce (it is listening), so
+//     the only residual window is a navigation that completes within the ~1.5 s re-post schedule
+//     after first load before the page answered at all — and a plugin page that navigates itself
+//     that early is the plugin's own code, which already holds its own reads.
 
 // The per-chat-view registry every frame-rendered plugin component shares, so the
 // six-live-frame cap (inlineFrames.ts, ADR 0118 D2) bounds them TOGETHER — a seventh live
@@ -247,6 +267,13 @@ function useNearViewport(ref: React.RefObject<Element | null>, enabled: boolean)
   return visible;
 }
 
+/** A fresh 128-bit capability for one frame mount, as hex. */
+function mintNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
@@ -272,6 +299,19 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const loadedRef = useRef(false);
+  // The current mount's capability (see "Frame capability" above): minted on the iframe
+  // element's first load, revoked (null) on any later load. `loadCounts` counts loads PER ELEMENT,
+  // so a remount (Reload, quarantine "Run it", eviction resume) starts fresh.
+  const nonceRef = useRef<string | null>(null);
+  const loadCounts = useRef(new WeakMap<HTMLIFrameElement, number>());
+  const [navigated, setNavigated] = useState(false);
+  const [mountKey, setMountKey] = useState(0);
+  // The frame echoed its nonce, so it is listening: stop re-posting init (narrows the window in
+  // which a navigated document could still be handed the nonce to the time before first echo).
+  const stopInitReposts = useCallback(() => {
+    initTimers.current.forEach((t) => clearTimeout(t));
+    initTimers.current = [];
+  }, []);
   const initTimers = useRef<number[]>([]);
   // Latest props/url read at post time (not captured at mount), so a re-post always carries
   // the current payload.
@@ -328,6 +368,12 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     postToFrame(frameRef.current?.contentWindow, { type: "protoComponent:bridgeResult", cid, ...result });
   }, []);
 
+  // Does this message carry the CURRENT mount's capability? (False once revoked by navigation.)
+  const hasCapability = useCallback((m: { nonce?: unknown }) => {
+    const cap = nonceRef.current;
+    return cap !== null && typeof m.nonce === "string" && m.nonce === cap;
+  }, []);
+
   // The send gate + confirm chip (ADR 0118 D4 / S19, #4137) — the same one the artifact host uses.
   // Trust is per component KIND (plugin + kind, from the host's own props), not per occurrence.
   const gate = useFrameProposalGate({ bridge, frameId: id, trustKey: `component:${plugin ?? ""}:${kind ?? ""}`, reply: replyToFrame });
@@ -342,10 +388,18 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     function onBridge(e: MessageEvent) {
       const win = frameRef.current?.contentWindow;
       if (!win || e.source !== win) return; // only our own frame
-      const m = (e.data || {}) as { type?: unknown; cid?: unknown; text?: unknown; url?: unknown };
+      const m = (e.data || {}) as { type?: unknown; cid?: unknown; text?: unknown; url?: unknown; nonce?: unknown };
       if (m.type !== "protoComponent:send" && m.type !== "protoComponent:openLink") return;
       const cid = typeof m.cid === "number" ? m.cid : NaN;
       if (Number.isNaN(cid)) return;
+      // The per-mount capability (#4143 F1): a document that replaced the plugin page has none,
+      // so it can neither propose a turn nor ride a kind's "Always allow". Refused WITHOUT any
+      // console UI, so a navigated page can't spam the operator either.
+      if (!hasCapability(m)) {
+        replyToFrame(cid, { ok: false, error: "missing or invalid nonce" });
+        return;
+      }
+      stopInitReposts();
 
       if (m.type === "protoComponent:openLink") {
         // A PROPOSAL like send (#4076 F1): https only, narrowed by the operator's
@@ -370,28 +424,44 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     }
     window.addEventListener("message", onBridge);
     return () => window.removeEventListener("message", onBridge);
-  }, [live, id, kind, plugin, chat, bridge, replyToFrame, gate.propose, gate.proposeOpen, gate.showRejection]);
+  }, [live, id, kind, plugin, chat, bridge, replyToFrame, hasCapability, stopInitReposts, gate.propose, gate.proposeOpen, gate.showRejection]);
+
+  // A self-focusing component must not pull the composer's focus into its frame (#4076): the
+  // frame is click-to-activate (or Tab into it), and one that takes focus on its own is
+  // quarantined — the same guard the inline artifact host uses (frameFocusGuard.ts).
+  const guard = useFrameFocusGuard(frameRef, `component:${plugin ?? ""}:${kind ?? ""}:${id}`, live);
 
   // The read channel (ADR 0118 D5 amendment, #4143). Same source gate as the bridge: only THIS
-  // frame's own window. Every check is the host's (checkReadRequest + the limiter + visibility);
+  // frame's own window, AND the current mount's nonce. Every check is the host's (checkReadRequest + the limiter + visibility);
   // the authed GET happens here and only `{cid, ok, status, json|error}` goes back down.
+  // Servicing stops (and in-flight reads are ABORTED, via the cleanup) whenever the frame is not a
+  // live, un-quarantined, un-navigated mount.
+  const servingReads = live && !guard.quarantined && !navigated;
   useEffect(() => {
-    if (!live) return;
+    if (!servingReads) return;
     const inflight = new Set<AbortController>();
     let alive = true;
-    function reply(win: Window, cid: number, result: ComponentReadResult) {
-      // Deliver only to the window that asked, and only while it is still our live frame (a
-      // quarantine / eviction / reload in between drops the answer).
+    function reply(win: Window, cid: number, result: ComponentReadResult, cap?: string | null) {
+      // Deliver only to the window that asked, only while it is still our live frame, and — for a
+      // served read — only while the capability it was granted under is still current (a
+      // navigation in between revokes it, and the answer is dropped).
       if (!alive || frameRef.current?.contentWindow !== win) return;
+      if (cap !== undefined && nonceRef.current !== cap) return;
       postToFrame(win, { type: "protoComponent:readResult", cid, ...result });
     }
     function onRead(e: MessageEvent) {
       const win = frameRef.current?.contentWindow;
       if (!win || e.source !== win) return; // only our own frame
-      const m = (e.data || {}) as { type?: unknown; cid?: unknown; path?: unknown; method?: unknown };
+      const m = (e.data || {}) as { type?: unknown; cid?: unknown; path?: unknown; method?: unknown; nonce?: unknown };
       if (m.type !== "protoComponent:read") return;
       const cid = typeof m.cid === "number" ? m.cid : NaN;
       if (Number.isNaN(cid)) return;
+      if (!hasCapability(m)) {
+        reply(win, cid, { ok: false, status: 0, error: "missing or invalid nonce" });
+        return;
+      }
+      stopInitReposts();
+      const cap = nonceRef.current;
       if (documentHidden() || !nearViewport.current) {
         reply(win, cid, { ok: false, status: 0, error: "paused: the component is not visible" });
         return;
@@ -409,7 +479,7 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
       const ctrl = new AbortController();
       inflight.add(ctrl);
       void fetchComponentRead(plugin as string, check.path, { signal: ctrl.signal })
-        .then((result) => reply(win, cid, result))
+        .then((result) => reply(win, cid, result, cap))
         .finally(() => {
           inflight.delete(ctrl);
           readLimiter.release();
@@ -419,14 +489,9 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     return () => {
       alive = false;
       window.removeEventListener("message", onRead);
-      inflight.forEach((c) => c.abort()); // unmounted / evicted: stop servicing
+      inflight.forEach((c) => c.abort()); // unmounted / evicted / quarantined / navigated: stop
     };
-  }, [live, plugin, readLimiter, nearViewport]);
-
-  // A self-focusing component must not pull the composer's focus into its frame (#4076): the
-  // frame is click-to-activate (or Tab into it), and one that takes focus on its own is
-  // quarantined — the same guard the inline artifact host uses (frameFocusGuard.ts).
-  const guard = useFrameFocusGuard(frameRef, `component:${plugin ?? ""}:${kind ?? ""}:${id}`, live);
+  }, [servingReads, plugin, readLimiter, nearViewport, hasCapability, stopInitReposts]);
 
   // Clear any pending init re-posts when the frame unmounts / re-points.
   useEffect(() => {
@@ -434,29 +499,51 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
       initTimers.current.forEach((t) => clearTimeout(t));
       initTimers.current = [];
       loadedRef.current = false;
+      nonceRef.current = null; // the frame went away: its capability goes with it
     };
   }, [live, src]);
 
-  function postInit(win: Window) {
-    postToFrame(win, { type: "protoComponent:init", props: propsRef.current, theme: frameTheme() });
+  // The init carries the mount's nonce — the ONLY message that ever does.
+  function postInit(win: Window, nonce: string) {
+    postToFrame(win, { type: "protoComponent:init", props: propsRef.current, theme: frameTheme(), nonce });
   }
 
   function handleLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {
+    const el = e.currentTarget;
+    const loads = (loadCounts.current.get(el) ?? 0) + 1;
+    loadCounts.current.set(el, loads);
+    initTimers.current.forEach((t) => clearTimeout(t));
+    initTimers.current = [];
+    if (loads > 1) {
+      // A second load of the SAME element: the frame navigated away from the plugin page.
+      // Revoke the capability first (synchronously — no read/send/openLink is honoured after this
+      // line), never post init to the new document, and unload it for the notice.
+      nonceRef.current = null;
+      loadedRef.current = false;
+      setNavigated(true);
+      return;
+    }
     loadedRef.current = true;
-    const win = e.currentTarget.contentWindow;
+    const win = el.contentWindow;
     if (!win) return;
+    const nonce = mintNonce();
+    nonceRef.current = nonce;
     // The frame registers its `message` listener asynchronously (it dynamically imports the
     // plugin-kit), so the first init post can land before it is listening and be dropped. Post
-    // once now, then re-post on the handshake module's short schedule; a retry lands once the
-    // kit is ready, and init is idempotent on the kit side so the extra posts are harmless.
-    initTimers.current.forEach((t) => clearTimeout(t));
-    postInit(win);
+    // once now, then re-post on the handshake module's short schedule — only while this nonce is
+    // still current, and only until the frame first echoes it (stopInitReposts).
+    postInit(win, nonce);
     initTimers.current = INIT_REPOST_DELAYS.map((ms) =>
       window.setTimeout(() => {
         const w = frameRef.current?.contentWindow;
-        if (w) postInit(w);
+        if (w && nonceRef.current === nonce) postInit(w, nonce);
       }, ms),
     );
+  }
+
+  function reloadAfterNavigation() {
+    setNavigated(false);
+    setMountKey((k) => k + 1); // a NEW iframe element at the declared src → a fresh first load
   }
 
   return (
@@ -467,11 +554,20 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
       style={{ height, minHeight: height }}
       data-frame-id={id}
     >
-      {live && guard.quarantined ? (
+      {live && navigated ? (
+        // The frame navigated away from its plugin page (#4143 F1): unloaded, capability revoked.
+        <div className="frame-component-host__navigated" role="status" data-testid="frame-component-navigated">
+          This component navigated away from its page and was stopped.{" "}
+          <button type="button" onClick={reloadAfterNavigation}>
+            Reload
+          </button>
+        </div>
+      ) : live && guard.quarantined ? (
         <FrameQuarantineNotice what="component" height={height} onRun={guard.run} />
       ) : live ? (
         <div className="frame-guard" data-active={guard.active ? "true" : undefined} style={{ height: "100%" }}>
           <iframe
+            key={mountKey}
             ref={frameRef}
             className="frame-component-host__frame"
             src={src}

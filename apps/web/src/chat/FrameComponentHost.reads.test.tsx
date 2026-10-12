@@ -8,12 +8,14 @@ import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FrameComponentHost, type FrameComponentHostProps } from "./FrameComponentHost";
+import { fetchComponentRead } from "../lib/api/components";
+import { ComponentChatSendContext, FrameComponentHost, type ComponentChatSend, type FrameComponentHostProps } from "./FrameComponentHost";
 import { checkReadRequest, createReadLimiter, matchesReadPattern, parseReadPath } from "./frameComponentReads";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const BEARER = "SECRET-BEARER-do-not-leak";
+type PostSpy = { mock: { calls: unknown[][] } };
 let container: HTMLElement;
 let root: Root;
 
@@ -38,36 +40,54 @@ function jsonResponse(body: unknown, init: { status?: number; contentType?: stri
   });
 }
 
-function mountHost(extra: Partial<FrameComponentHostProps> = {}) {
+/** The nonce the host handed THIS mount in `protoComponent:init` (what a real frame echoes). */
+let nonce: string | undefined;
+
+function fireLoad(frame: HTMLIFrameElement) {
+  act(() => {
+    frame.dispatchEvent(new Event("load"));
+  });
+}
+
+function initNonce(post: PostSpy): string | undefined {
+  const init = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m?.type === "protoComponent:init");
+  return init?.nonce as string | undefined;
+}
+
+function mountHost(extra: Partial<FrameComponentHostProps> = {}, chat: ComponentChatSend | null = null) {
   act(() =>
     root.render(
-      h(FrameComponentHost, {
-        id: "rx",
-        frameUrl: "/plugins/demo/widget",
-        kind: "pl-demo",
-        plugin: "demo",
-        props: {},
-        reads: ["features", "features/*", "status"],
-        ...extra,
-      }),
+      h(
+        ComponentChatSendContext.Provider,
+        { value: chat },
+        h(FrameComponentHost, {
+          id: "rx",
+          frameUrl: "/plugins/demo/widget",
+          kind: "pl-demo",
+          plugin: "demo",
+          props: {},
+          reads: ["features", "features/*", "status"],
+          ...extra,
+        }),
+      ),
     ),
   );
   const frame = container.querySelector("iframe") as HTMLIFrameElement;
   const post = vi.spyOn(frame.contentWindow as Window, "postMessage").mockImplementation(() => undefined as never);
+  fireLoad(frame); // the first load mints the mount's capability and posts it in init
+  nonce = initNonce(post);
   return { frame, post };
 }
 
 async function read(frame: HTMLIFrameElement, data: Record<string, unknown>, source?: unknown) {
   await act(async () => {
-    const ev = new MessageEvent("message", { data: { type: "protoComponent:read", ...data } });
+    const ev = new MessageEvent("message", { data: { type: "protoComponent:read", nonce, ...data } });
     Object.defineProperty(ev, "source", { value: source ?? frame.contentWindow, configurable: true });
     window.dispatchEvent(ev);
     // Let the fetch promise chain settle.
     await new Promise((r) => setTimeout(r, 0));
   });
 }
-
-type PostSpy = { mock: { calls: unknown[][] } };
 
 function readResults(post: PostSpy): Record<string, unknown>[] {
   return post.mock.calls
@@ -262,6 +282,8 @@ describe("FrameComponentHost — read channel (#4143)", () => {
       act(() => cb!([{ isIntersecting: true } as IntersectionObserverEntry], null as never));
       const frame = container.querySelector("iframe") as HTMLIFrameElement;
       const post = vi.spyOn(frame.contentWindow as Window, "postMessage").mockImplementation(() => undefined as never);
+      fireLoad(frame);
+      nonce = initNonce(post);
 
       act(() => cb!([{ isIntersecting: false } as IntersectionObserverEntry], null as never));
       await read(frame, { cid: 1, path: "features" });
@@ -275,6 +297,206 @@ describe("FrameComponentHost — read channel (#4143)", () => {
     } finally {
       globalThis.IntersectionObserver = realIO;
     }
+  });
+});
+
+describe("FrameComponentHost — per-mount capability (#4143 review F1)", () => {
+  function chatStub() {
+    return { sessionId: "s-1", isBusy: () => false, send: vi.fn() } as ComponentChatSend & { send: ReturnType<typeof vi.fn> };
+  }
+  async function post(frame: HTMLIFrameElement, data: Record<string, unknown>) {
+    await act(async () => {
+      const ev = new MessageEvent("message", { data });
+      Object.defineProperty(ev, "source", { value: frame.contentWindow, configurable: true });
+      window.dispatchEvent(ev);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+  const bridgeFor = (spy: PostSpy, cid: number) =>
+    spy.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .find((m) => m?.type === "protoComponent:bridgeResult" && m.cid === cid);
+
+  it("mints a 128-bit nonce on first load and delivers it only in init", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({ ok: 1 }));
+    const { frame, post: spy } = mountHost({}, chatStub());
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/);
+    await read(frame, { cid: 1, path: "features" });
+    await read(frame, { cid: 2, path: "nope" });
+    await post(frame, { type: "protoComponent:send", cid: 3, text: "hi", nonce });
+    act(() => {
+      window.dispatchEvent(new Event("protoagent:theme"));
+    });
+    for (const [m] of spy.mock.calls) {
+      if ((m as { type?: string }).type === "protoComponent:init") continue;
+      expect(JSON.stringify(m)).not.toContain(nonce!);
+    }
+    expect(resultFor(spy, 1)?.ok).toBe(true);
+  });
+
+  it("refuses a read, send or openLink without the nonce, or with a wrong one", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const chat = chatStub();
+    const { frame, post: spy } = mountHost({}, chat);
+    await read(frame, { cid: 1, path: "features", nonce: undefined });
+    await read(frame, { cid: 2, path: "features", nonce: "0".repeat(32) });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(resultFor(spy, 1)).toEqual(expect.objectContaining({ ok: false, error: "missing or invalid nonce" }));
+    expect(resultFor(spy, 2)).toEqual(expect.objectContaining({ ok: false, error: "missing or invalid nonce" }));
+    await post(frame, { type: "protoComponent:send", cid: 3, text: "hi" });
+    await post(frame, { type: "protoComponent:openLink", cid: 4, url: "https://example.com", nonce: "x" });
+    expect(bridgeFor(spy, 3)).toEqual(expect.objectContaining({ ok: false, error: "missing or invalid nonce" }));
+    expect(bridgeFor(spy, 4)).toEqual(expect.objectContaining({ ok: false }));
+    // …and no confirm chip was raised for either.
+    expect(container.querySelector('[data-testid="component-send-confirm"]')).toBeNull();
+    expect(chat.send).not.toHaveBeenCalled();
+  });
+
+  it("a frame that navigates (a second load) loses read, send and openLink, and gets no init", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({ secret: 1 }));
+    const chat = chatStub();
+    const { frame, post: spy } = mountHost({}, chat);
+    const oldNonce = nonce;
+    await read(frame, { cid: 1, path: "features" }); // the first document works
+    expect(resultFor(spy, 1)?.ok).toBe(true);
+    const win = frame.contentWindow as Window;
+
+    spy.mockClear();
+    fireLoad(frame); // the frame navigated itself (location.href = …) — a second load
+    // No init (and so no nonce) is ever posted to the new document.
+    expect(spy.mock.calls.some((c) => (c[0] as { type?: string }).type === "protoComponent:init")).toBe(false);
+    // The frame was unloaded for the "navigated away" notice.
+    expect(container.querySelector('[data-testid="frame-component-navigated"]')).not.toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+
+    // Even a document that somehow learned the old nonce gets nothing from the old window.
+    fetchSpy.mockClear();
+    await act(async () => {
+      for (const data of [
+        { type: "protoComponent:read", cid: 2, path: "features", nonce: oldNonce },
+        { type: "protoComponent:send", cid: 3, text: "steal", nonce: oldNonce },
+        { type: "protoComponent:openLink", cid: 4, url: "https://evil.example", nonce: oldNonce },
+      ]) {
+        const ev = new MessageEvent("message", { data });
+        Object.defineProperty(ev, "source", { value: win, configurable: true });
+        window.dispatchEvent(ev);
+      }
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="component-send-confirm"]')).toBeNull();
+    expect(readResults(spy)).toHaveLength(0);
+  });
+
+  it("re-posts of init stop once revoked, and stop as soon as the frame echoes the nonce", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({}));
+      const { frame, post: spy } = mountHost();
+      const inits = () => spy.mock.calls.filter((c) => (c[0] as { type?: string }).type === "protoComponent:init").length;
+      expect(inits()).toBe(1);
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(inits()).toBe(2); // still re-posting while the frame hasn't answered
+      act(() => {
+        const ev = new MessageEvent("message", { data: { type: "protoComponent:read", cid: 1, path: "features", nonce } });
+        Object.defineProperty(ev, "source", { value: frame.contentWindow, configurable: true });
+        window.dispatchEvent(ev);
+      });
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(inits()).toBe(2); // the echo stopped the schedule
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts and drops an in-flight read when the frame navigates", async () => {
+    let seenSignal: AbortSignal | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation((_u, init) => {
+      seenSignal = (init as RequestInit).signal ?? undefined;
+      return new Promise<Response>(() => {});
+    });
+    const { frame } = mountHost();
+    await read(frame, { cid: 1, path: "features" });
+    expect(seenSignal?.aborted).toBe(false);
+    fireLoad(frame);
+    expect(seenSignal?.aborted).toBe(true);
+  });
+
+  it("Reload after a navigation remounts the declared frame with a FRESH nonce", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({ ok: 1 }));
+    const { frame } = mountHost();
+    const first = nonce;
+    fireLoad(frame);
+    act(() => (container.querySelector('[data-testid="frame-component-navigated"] button') as HTMLButtonElement).click());
+    const fresh = container.querySelector("iframe") as HTMLIFrameElement;
+    expect(fresh).not.toBeNull();
+    expect(fresh.getAttribute("src")).toContain("/plugins/demo/widget");
+    const spy = vi.spyOn(fresh.contentWindow as Window, "postMessage").mockImplementation(() => undefined as never);
+    fireLoad(fresh);
+    nonce = initNonce(spy);
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(nonce).not.toBe(first);
+    await read(fresh, { cid: 1, path: "features" });
+    expect(resultFor(spy, 1)?.ok).toBe(true);
+  });
+});
+
+describe("fetchComponentRead — body handling (#4143 review F2/F3)", () => {
+  it("never forwards a non-JSON error body", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () => new Response("<html>internal trace token=abc</html>", { status: 500, headers: { "content-type": "text/html" } }),
+    );
+    const r = await fetchComponentRead("demo", "features");
+    expect(r).toEqual({ ok: false, status: 500, error: "HTTP 500" });
+  });
+
+  it("passes a JSON error's detail through, but not a JSON body without one", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => jsonResponse({ detail: "no such feature" }, { status: 404 }));
+    expect(await fetchComponentRead("demo", "features/x")).toEqual({ ok: false, status: 404, error: "no such feature" });
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => jsonResponse({ secret: "raw body" }, { status: 500 }));
+    expect(await fetchComponentRead("demo", "features/x")).toEqual({ ok: false, status: 500, error: "HTTP 500" });
+  });
+
+  it("stops reading a chunked body at the cap instead of buffering it whole", async () => {
+    let pulled = 0;
+    let cancelled = false;
+    const chunk = new Uint8Array(64 * 1024).fill(0x61);
+    const body = new ReadableStream<Uint8Array>({
+      pull(ctrl) {
+        pulled += 1;
+        if (pulled > 400) ctrl.close();
+        else ctrl.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () => new Response(body, { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const r = await fetchComponentRead("demo", "features");
+    expect(r).toEqual(expect.objectContaining({ ok: false, error: expect.stringMatching(/too large/) }));
+    expect(pulled).toBeLessThan(10); // 256 KB / 64 KB ≈ 5 chunks, not 400
+    expect(cancelled).toBe(true);
+  });
+
+  it("times out a read that never answers, aborting the request", async () => {
+    let signal: AbortSignal | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (_u, init) =>
+        new Promise<Response>((_res, rej) => {
+          signal = (init as RequestInit).signal ?? undefined;
+          signal?.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError")));
+        }),
+    );
+    const r = await fetchComponentRead("demo", "features", { timeoutMs: 20 });
+    expect(r).toEqual({ ok: false, status: 0, error: "read timed out" });
+    expect(signal?.aborted).toBe(true);
   });
 });
 

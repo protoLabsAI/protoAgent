@@ -338,12 +338,21 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b / S19)
     const frame = theFrame();
     // Capture the host's reply rather than let jsdom dispatch into the detached contentWindow.
     const post = vi.spyOn(frame.contentWindow as Window, "postMessage").mockImplementation(() => undefined as never);
+    // Load the frame so the host mints this mount's capability; a well-behaved frame echoes the
+    // nonce from its init on every send/openLink (#4143 F1), so the helpers below add it.
+    act(() => {
+      frame.dispatchEvent(new Event("load"));
+    });
+    const init = post.mock.calls.find((c) => (c[0] as { type?: string })?.type === "protoComponent:init");
+    currentNonce = (init?.[0] as { nonce?: string } | undefined)?.nonce;
+    post.mockClear();
     return { frame, post };
   }
+  let currentNonce: string | undefined;
 
   function dispatch(frame: HTMLIFrameElement, data: Record<string, unknown>, source?: unknown) {
     act(() => {
-      const ev = new MessageEvent("message", { data });
+      const ev = new MessageEvent("message", { data: "nonce" in data ? data : { ...data, nonce: currentNonce } });
       Object.defineProperty(ev, "source", { value: source ?? frame.contentWindow, configurable: true });
       window.dispatchEvent(ev);
     });
@@ -465,7 +474,7 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b / S19)
   // #4076 F1: openLink goes through the same chip, with its own "Always allow links" trust.
   async function dispatchLink(frame: HTMLIFrameElement, url: string, cid = 7) {
     await act(async () => {
-      const ev = new MessageEvent("message", { data: { type: "protoComponent:openLink", cid, url } });
+      const ev = new MessageEvent("message", { data: { type: "protoComponent:openLink", cid, url, nonce: currentNonce } });
       Object.defineProperty(ev, "source", { value: frame.contentWindow, configurable: true });
       window.dispatchEvent(ev);
     });
