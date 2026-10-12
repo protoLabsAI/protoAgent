@@ -227,6 +227,19 @@
   // file won't execute. Absolute URL (origin + base) because an srcdoc iframe has no
   // own URL to resolve a relative path against. Bump the file AND the hash together.
   var ORIGIN = location.origin + window.__base;  // "" + base, slug-aware
+  // The Vega-Lite chart THEME is the design system's (@protolabsai/design@0.12.0, the `/vega`
+  // entry), vendored same-origin beside the other libs (vendor/pl-design-vega.mjs) and loaded
+  // as a module like plugin-kit — so the hand-rolled theme()/isDark() that used to live in
+  // artVega is gone and every consumer themes identically (ADR 0116, protoContent#571/#578).
+  // buildVegaConfig(tok) / vegaTooltipTheme(tok) are SELF-CONTAINED (no imports, no closures,
+  // plain ES2017); the nonce-CSP chart frame has no module loader, so vegaDoc injects their
+  // .toString() alongside artVega. Chart-scoped on purpose: a load failure leaves non-chart
+  // artifacts working (vegaDoc reports it per-chart), unlike the kit which every artifact needs.
+  var buildVegaConfig = null, vegaTooltipTheme = null;
+  try {
+    var _dsVega = await import(ORIGIN + "/plugins/artifact/vendor/pl-design-vega.mjs");
+    buildVegaConfig = _dsVega.buildVegaConfig; vegaTooltipTheme = _dsVega.vegaTooltipTheme;
+  } catch (e) { /* surfaced per-chart in vegaDoc, never a dead panel */ }
   var LIB = {
     mermaid: ["mermaid.min.js",
       "sha512-6a80OTZVmEJhqYJUmYd5z8yHUCDlYnj6q9XwB/gKOEyNQV/Q8u+XeSG59a2ZKFEHGTYzgfOQKYEBtrZV7vBr+Q=="],
@@ -1288,11 +1301,18 @@
       + "font-src data:; media-src 'none'; connect-src 'none'; worker-src 'none'; frame-src 'none'; "
       + "object-src 'none'; base-uri 'none'; form-action 'none'";
     var cfg={spec:String(code||""), tokens:themeTokens()};
+    // The DS theme functions, injected as SOURCE (like artVega) so the frame's locked-down
+    // script — no module loader — can call them. If the vendored module failed to load, inject
+    // stubs so THIS chart fails with a reason, never a frame that throws at build time.
+    var dsTheme=(buildVegaConfig && vegaTooltipTheme)
+      ? buildVegaConfig.toString()+';'+vegaTooltipTheme.toString()+';'
+      : 'function buildVegaConfig(){throw new Error("the chart theme failed to load")}'
+        +'function vegaTooltipTheme(){return "dark"};';
     return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
       + base("vega-lite").replace(/<script>/g, '<script nonce="'+nonce+'">')
       + '<style>'+VEGA_CSS+'</style><body><div id="wrap"><div id="vis"></div></div>'
       + cdn("vega", nonce) + cdn("vegaLite", nonce) + cdn("vegaEmbed", nonce)
-      + '<script nonce="'+nonce+'">(' + artVega.toString() + ')(' + JSON.stringify(cfg).replace(/</g,"\\u003c") + ');<\/script></body>';
+      + '<script nonce="'+nonce+'">'+dsTheme+'(' + artVega.toString() + ')(' + JSON.stringify(cfg).replace(/</g,"\\u003c") + ');<\/script></body>';
   }
   var VEGA_CSS='html,body{margin:0;min-height:100%;background:var(--pl-color-bg);color:var(--pl-color-fg);'
     + 'font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}'
@@ -1303,41 +1323,10 @@
   function artVega(cfg){
     var W=window, tok=cfg.tokens||{}, spec=null, view=null, busy=false, again=false;
     function fail(m){ if(W.__artErr) W.__artErr("⚠ "+m); }
-    function t(k, d){ var v=tok[k]; return (typeof v==="string" && v.trim()) ? v.trim() : d; }
-    // Luminance of the ground, for the tooltip theme. Themes are often oklch(), so the browser
-    // resolves the colour (a 1px canvas accepts any CSS colour); hex/rgb are parsed directly
-    // where there's no canvas.
-    function isDark(){
-      var bg=t("--pl-color-bg","#0a0a0c"), m, l;
-      try{ var cv=W.document.createElement("canvas"), x; cv.width=cv.height=1; x=cv.getContext("2d");
-        x.fillStyle="#000"; x.fillStyle=bg; x.fillRect(0,0,1,1); var px=x.getImageData(0,0,1,1).data;
-        return (0.299*px[0]+0.587*px[1]+0.114*px[2])/255<=0.5; }catch(_){}
-      if((m=/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(bg))){ var h=m[1].length===3?m[1].replace(/./g,"$&$&"):m[1];
-        l=(0.299*parseInt(h.slice(0,2),16)+0.587*parseInt(h.slice(2,4),16)+0.114*parseInt(h.slice(4,6),16))/255; }
-      else if((m=/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(bg))) l=(0.299*m[1]+0.587*m[2]+0.114*m[3])/255;
-      else return true;
-      return l<=0.5;
-    }
-    // The Vega config the console theme implies. A spec's own `config` still wins (vega-embed
-    // merges it over this), so an author who means a colour keeps it.
-    function theme(){
-      var fg=t("--pl-color-fg","#ededed"), muted=t("--pl-color-fg-muted",fg),
-          font=t("--pl-font-sans","ui-sans-serif, system-ui, sans-serif"),
-          axis=t("--pl-color-chart-axis",muted), grid=t("--pl-color-chart-grid",t("--pl-color-border","rgba(127,127,127,.25)")),
-          series=[], i, c;
-      for(i=1;i<=8;i++){ c=t("--pl-color-chart-series"+i,""); if(c) series.push(c); }
-      if(!series.length) series.push(t("--pl-color-accent","#9b87f2"));
-      function guide(x){ x.labelColor=muted; x.titleColor=fg; x.labelFont=font; x.titleFont=font; return x; }
-      var out={ background:t("--pl-color-bg","#0a0a0c"), font:font, padding:4,
-        view:{stroke:null},
-        axis:guide({domainColor:axis, tickColor:axis, gridColor:grid, labelFontSize:11, titleFontSize:12, titleFontWeight:500}),
-        legend:guide({labelFontSize:11, titleFontSize:12, titleFontWeight:500}),
-        header:guide({labelFontSize:11, titleFontSize:12}),
-        title:{color:fg, subtitleColor:muted, font:font, subtitleFont:font, anchor:"start", fontSize:14, fontWeight:600, offset:12},
-        mark:{color:series[0]}, text:{color:fg}, rule:{color:axis} };
-      if(series.length>1) out.range={category:series};
-      return out;
-    }
+    // The console theme → the Vega config (buildVegaConfig) and the tooltip theme
+    // (vegaTooltipTheme) are the design system's pure functions, injected as SOURCE by vegaDoc
+    // just above this call. A spec's own `config` still wins (vega-embed merges it over this),
+    // so an author who means a colour keeps it. protoContent#571/#578.
     // Any `url` inside a data definition — refused up front with a reason, rather than left to
     // fail inside the dataflow as a bare "Loading failed". Inline rows (values / datasets) are
     // never walked: a column named `url` is data, not a load. Iterative and bounded (the mirror of
@@ -1392,7 +1381,7 @@
       var p;
       try{
         p=W.vegaEmbed("#vis", prep(), {mode:"vega-lite", renderer:"svg", actions:false, ast:true,
-          loader:LOADER, logger:logger, config:theme(), tooltip:{theme:isDark()?"dark":"light"}});
+          loader:LOADER, logger:logger, config:buildVegaConfig(tok), tooltip:{theme:vegaTooltipTheme(tok)}});
       }catch(e){ p=Promise.reject(e); }
       Promise.resolve(p)
         .then(function(res){ view=res; if(W.__artOk) W.__artOk(); },

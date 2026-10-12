@@ -23,6 +23,21 @@ pytestmark = pytest.mark.platform_sensitive
 
 NODE = shutil.which("node")
 
+VENDOR = ROOT / "vendor"
+VEGA_MJS = VENDOR / "pl-design-vega.mjs"
+# @protolabsai/design is installed under the console workspace (apps/web). The repo root is
+# ROOT.parent.parent; DS resolution walks up from apps/web/src, so the pinned 0.12.0 copy is here.
+DESIGN_PKG = ROOT.parent.parent / "apps" / "web" / "node_modules" / "@protolabsai" / "design"
+
+
+def _ds_theme_src() -> str:
+    """The two DS theme functions as the chart frame gets them — read from the vendored module
+    with ``export`` stripped (exactly what ``buildVegaConfig.toString()`` yields in the shell), so
+    the node harness runs ``artVega`` with them in scope the way ``vegaDoc`` wires them in."""
+    mod = VEGA_MJS.read_text(encoding="utf-8")
+    return _js_function(mod, "buildVegaConfig") + "\n" + _js_function(mod, "vegaTooltipTheme") + "\n"
+
+
 SPEC = {
     "mark": "bar",
     "encoding": {
@@ -160,11 +175,73 @@ def test_vega_libs_are_vendored_and_served_same_origin(monkeypatch, tmp_path):
         assert needle in notices, needle
 
 
+def test_the_ds_theme_module_is_vendored_and_served_same_origin(monkeypatch, tmp_path):
+    """The DS theme is vendored like the other libs and served same-origin with CORS (the shell
+    imports it as a module). It is NOT in the SRI LIB map: the shell load is same-origin, not an
+    opaque-sandbox subresource, so it carries no integrity hash."""
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    assert "pl-design-vega.mjs" in art._VENDOR_FILES
+    r = TestClient(_app(art)).get("/plugins/artifact/vendor/pl-design-vega.mjs")
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]
+    assert r.headers.get("access-control-allow-origin") == "*"
+    body = r.text
+    assert "export function buildVegaConfig(tok)" in body
+    assert "export function vegaTooltipTheme(tok)" in body
+    assert "@protolabsai/design@" in body  # the header names the package + version
+    assert "pl-design-vega.mjs" not in art._SHELL_JS.split("var LIB")[1].split("}", 1)[0]  # no SRI pin
+
+
+def test_the_vendored_ds_functions_are_injection_safe():
+    """Both functions ride a srcdoc <script> (vegaDoc injects their source beside artVega), so
+    their bodies — as .toString() yields them, JSDoc excluded — carry no script-close or
+    comment-open sequence, the same contract artVega holds."""
+    mod = VEGA_MJS.read_text(encoding="utf-8")
+    for fn in ("buildVegaConfig", "vegaTooltipTheme"):
+        body = _js_function(mod, fn)
+        for bad in ("</", "<!", "*/", "<script"):
+            assert bad not in body, (fn, bad)
+
+
+def test_the_vendored_ds_theme_matches_the_installed_package():
+    """Drift guard: the vendored buildVegaConfig / vegaTooltipTheme are a VERBATIM copy of
+    @protolabsai/design's `/vega` entry. Where the package is installed (apps/web/node_modules),
+    the two functions must be byte-identical to the package source, and the vendored header must
+    name the installed version — a DS bump that touches the chart theme has to be re-vendored
+    here. Skips cleanly on the web-less lanes that don't install the console deps."""
+    src = DESIGN_PKG / "src" / "vega.js"
+    if not src.exists():
+        pytest.skip("@protolabsai/design not installed (apps/web/node_modules)")
+    pkg = src.read_text(encoding="utf-8")
+    vend = VEGA_MJS.read_text(encoding="utf-8")
+    for fn in ("buildVegaConfig", "vegaTooltipTheme"):
+        assert _js_function(vend, fn) == _js_function(pkg, fn), f"{fn} drifted from @protolabsai/design"
+    version = json.loads((DESIGN_PKG / "package.json").read_text(encoding="utf-8"))["version"]
+    assert f"@protolabsai/design@{version}" in vend, f"vendor header must name design@{version}"
+
+
 def test_vega_lite_routes_to_its_own_document(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
     src = _js_function(art._SHELL_JS, "srcdoc")
     assert 'if (kind === "vega-lite") return vegaDoc(code);' in src
     assert '"vega-lite": "vl.json"' in art._SHELL_JS  # the panel's code download extension
+
+
+def test_the_frame_theme_is_the_ds_functions_not_a_hand_copy(monkeypatch, tmp_path):
+    """r1: artVega carries no hand-rolled theme()/isDark(); the config comes from the DS
+    buildVegaConfig(tok) and the tooltip from vegaTooltipTheme(tok). vegaDoc injects both DS
+    functions' source beside artVega, and the shell loads them from the vendored same-origin
+    module (not a copy pasted back into shell.js)."""
+    art = _load(monkeypatch, tmp_path)
+    ctl = _js_function(art._SHELL_JS, "artVega")
+    assert "function isDark" not in ctl and "function theme(" not in ctl
+    assert "config:buildVegaConfig(tok)" in ctl
+    assert "tooltip:{theme:vegaTooltipTheme(tok)}" in ctl
+    doc = _js_function(art._SHELL_JS, "vegaDoc")
+    assert "buildVegaConfig.toString()" in doc and "vegaTooltipTheme.toString()" in doc
+    assert 'import(ORIGIN + "/plugins/artifact/vendor/pl-design-vega.mjs")' in art._SHELL_JS
 
 
 # ── the frame: CSP + lockdown ───────────────────────────────────────────────────
@@ -272,7 +349,9 @@ def _run_frame(art, spec, *, tokens=DARK, retheme=False, novega=False) -> dict:
         pytest.skip("node not on PATH")
     src = _js_function(art._SHELL_JS, "artVega")
     code = spec if isinstance(spec, str) else json.dumps(spec)
-    js = (
+    # artVega now calls the DS buildVegaConfig/vegaTooltipTheme, which vegaDoc injects beside it;
+    # mirror that by prepending them (as global declarations) to the harness.
+    js = _ds_theme_src() + (
         _HARNESS.replace("__SRC__", src)
         .replace("__CFG__", json.dumps({"spec": code, "tokens": tokens}))
         .replace("__LIGHT__", json.dumps(LIGHT))
@@ -311,6 +390,42 @@ def test_the_chart_is_themed_from_the_console_tokens(monkeypatch, tmp_path):
     assert cfg["font"] == "Inter, system-ui, sans-serif"
 
 
+def test_the_config_is_the_ds_builder_output(monkeypatch, tmp_path):
+    """The frame's config is @protolabsai/design's buildVegaConfig(tok) — the expected visible
+    changes over the old hand-rolled theme: legends at the bottom, horizontal, 4 columns with no
+    symbol cap (8+ series wrap), wider axis/legend label limits, and the #571 fix — the
+    sequential/heatmap/diverging ranges emitted as hex so a heat map stops using Vega's blues."""
+    art = _load(monkeypatch, tmp_path)
+    cfg = _run_frame(art, SPEC)["calls"][0]["config"]
+    lg = cfg["legend"]
+    assert lg["orient"] == "bottom" and lg["direction"] == "horizontal" and lg["columns"] == 4
+    assert lg["symbolLimit"] == 0 and lg["labelLimit"] == 200
+    assert cfg["axis"]["labelLimit"] == 180
+    rng = cfg["range"]
+    assert rng["category"] == [f"#a{i}a{i}a{i}" for i in range(1, 9)]
+    for k in ("ramp", "heatmap", "diverging"):
+        assert rng[k] and all(re.fullmatch(r"#[0-9a-f]{6}", s) for s in rng[k]), (k, rng[k])
+    assert rng["heatmap"] == rng["ramp"]  # the DS maps both to the one sequential ramp
+
+
+def test_a_heatmap_spec_gets_hex_ranges_from_the_ds_config(monkeypatch, tmp_path):
+    """r5: a heatmap (a `rect` mark with a quantitative colour) draws with the DS range.heatmap —
+    every stop a `#rrggbb`, which is what d3-color can interpolate (it cannot parse oklch)."""
+    art = _load(monkeypatch, tmp_path)
+    heat = {
+        "mark": "rect",
+        "encoding": {
+            "x": {"field": "day", "type": "ordinal"},
+            "y": {"field": "hour", "type": "ordinal"},
+            "color": {"field": "load", "type": "quantitative"},
+        },
+        "data": {"values": [{"day": "Mon", "hour": 9, "load": 3}, {"day": "Tue", "hour": 10, "load": 7}]},
+    }
+    cfg = _run_frame(art, heat)["calls"][0]["config"]
+    for k in ("heatmap", "ramp", "diverging"):
+        assert cfg["range"][k] and all(re.fullmatch(r"#[0-9a-f]{6}", s) for s in cfg["range"][k])
+
+
 def test_a_theme_switch_redraws_in_the_new_palette(monkeypatch, tmp_path):
     """A message from anywhere but the parent is ignored; the on-load push of the SAME tokens
     doesn't redraw; a real switch does — with the light tooltip on a light ground."""
@@ -321,10 +436,16 @@ def test_a_theme_switch_redraws_in_the_new_palette(monkeypatch, tmp_path):
 
 
 def test_missing_tokens_fall_back_to_a_usable_palette(monkeypatch, tmp_path):
+    """With no tokens the DS builder still emits a full, usable config from its literal defaults:
+    the accent fills all eight series slots, and the sequential/diverging ranges are emitted as
+    hex — the DS always themes the ramp now (#571), so a heat map never falls back to Vega's
+    default blues (the pre-DS theme emitted no `range` for a single colour)."""
     art = _load(monkeypatch, tmp_path)
     cfg = _run_frame(art, SPEC, tokens={})["calls"][0]["config"]
     assert cfg["background"] == "#0a0a0c" and cfg["mark"]["color"] == "#9b87f2"
-    assert "range" not in cfg  # one colour isn't a categorical palette — Vega's default stays
+    assert cfg["range"]["category"] == ["#9b87f2"] * 8
+    for k in ("ramp", "heatmap", "diverging"):
+        assert all(re.fullmatch(r"#[0-9a-f]{6}", s) for s in cfg["range"][k]), (k, cfg["range"][k])
 
 
 def test_a_spec_cannot_re_option_the_embed(monkeypatch, tmp_path):
@@ -477,7 +598,9 @@ def test_a_retheme_mid_draw_never_delays_the_render_verdict(monkeypatch, tmp_pat
     if not NODE:
         pytest.skip("node not on PATH")
     src = _js_function(art._SHELL_JS, "artVega")
-    js = _RACE.replace("__SRC__", src).replace("__CFG__", json.dumps({"spec": json.dumps(SPEC), "tokens": DARK}))
+    js = _ds_theme_src() + _RACE.replace("__SRC__", src).replace(
+        "__CFG__", json.dumps({"spec": json.dumps(SPEC), "tokens": DARK})
+    )
     out = subprocess.run([NODE, "-e", js], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     r = json.loads(out.stdout)
@@ -494,7 +617,7 @@ def test_a_failed_first_draw_reports_even_when_a_retheme_is_pending(monkeypatch,
     if not NODE:
         pytest.skip("node not on PATH")
     src = _js_function(art._SHELL_JS, "artVega")
-    js = (
+    js = _ds_theme_src() + (
         _RACE.replace("__SRC__", src)
         .replace("__CFG__", json.dumps({"spec": json.dumps(SPEC), "tokens": DARK}))
         .replace("calls[0].res(); await tick();", "calls[0].rej(new Error('bad encoding')); await tick(); out.errsAfterFirst = errs.slice();")
