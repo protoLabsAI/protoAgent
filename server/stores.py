@@ -69,6 +69,13 @@ def _build_checkpointer(config):
         from graph.checkpointer import build_sqlite_checkpointer
 
         path = _resolve_checkpoint_db(config.checkpoint_db_path)
+        if getattr(config, "checkpoint_vacuum_legacy_on_start", True):
+            # BEFORE the saver (or anything else in this process) opens the DB, on the
+            # synchronous boot path, so no writer of ours is live. Another process holding
+            # the file makes it skip. Best-effort: it never raises.
+            from graph.checkpoint_migrate import migrate_legacy_auto_vacuum
+
+            migrate_legacy_auto_vacuum(path)
         saver = build_sqlite_checkpointer(path)
         STATE.checkpoint_path = path
         log.info("[checkpointer] persistent chat history at %s", path)

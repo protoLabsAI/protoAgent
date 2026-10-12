@@ -88,11 +88,16 @@ def build_sqlite_checkpointer(db_path: str) -> ThreadedSqliteSaver:
     # writes; busy_timeout avoids spurious "database is locked" under contention.
     # busy_timeout FIRST: the WAL pragma itself takes a lock (#2428).
     conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA journal_mode=WAL")
-    # auto_vacuum=INCREMENTAL must be set BEFORE any tables are created so
-    # freed pages are tracked in the freelist — the pruner can then reclaim
-    # them on demand without a full VACUUM rewrite.
+    # auto_vacuum=INCREMENTAL must be set while the file is still EMPTY, so freed
+    # pages are tracked in the freelist and the pruner can hand them back with
+    # ``incremental_vacuum`` instead of a full VACUUM rewrite. That means before
+    # ``journal_mode=WAL`` too: switching to WAL writes the DB header, after which
+    # the auto_vacuum pragma is a silent no-op. It used to run second, so every DB
+    # this function created was auto_vacuum=NONE and never shrank (34 GB files
+    # holding 85 MB of rows). On an existing DB this pragma changes nothing; a
+    # NONE DB is migrated at boot by graph/checkpoint_migrate.py.
     conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+    conn.execute("PRAGMA journal_mode=WAL")
     saver = ThreadedSqliteSaver(conn)
     saver.setup()  # create the checkpoint tables if absent (idempotent)
     return saver

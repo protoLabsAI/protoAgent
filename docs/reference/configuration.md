@@ -862,6 +862,8 @@ checkpoint:
 | `max_age_days` | `30` | Drop checkpoints older than this. |
 | `prune_interval_hours` | `6` | How often the background pruner runs. |
 | `harvest_enabled` | `true` | On thread retire, harvest its history into the knowledge store before purging. |
+| `vacuum` | `true` | After a prune frees rows, truncate the WAL and run `incremental_vacuum` so the file shrinks. |
+| `vacuum_legacy_on_start` | `true` | At startup, before the DB opens, migrate an `auto_vacuum=NONE` history DB once (`PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`) so its freed space goes back to the disk. Runs only when at least half the file (or 256 MB) is free space, the disk has room for the rewrite, and no other process has the DB open. It logs the size before and after. On demand, with the agent stopped: `protoagent checkpoint migrate` (`--workspace <member>` or `--db <path>` for another DB). |
 
 ## `background`
 

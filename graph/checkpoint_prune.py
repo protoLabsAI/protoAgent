@@ -196,20 +196,23 @@ def reclaim(db_path: str, *, full_vacuum: bool = False) -> dict[str, int]:
 
     * ``PRAGMA wal_checkpoint(TRUNCATE)`` — checkpoints the WAL and truncates
       it to zero, so the ``-wal`` file disappears.
-    * ``PRAGMA incremental_vacuum`` — when ``auto_vacuum=INCREMENTAL`` (every DB
-      ``build_sqlite_checkpointer`` created), frees pages from the freelist back
-      to the OS (``page_count`` drops). Cheap; safe alongside live writes.
-    * A legacy DB (``auto_vacuum=NONE``, created before the checkpointer set
-      INCREMENTAL) is NOT vacuumed unless ``full_vacuum=True`` (#3973). A full
+    * ``PRAGMA incremental_vacuum`` — when ``auto_vacuum=INCREMENTAL`` (a DB
+      ``build_sqlite_checkpointer`` creates, or one the boot migration converted),
+      frees pages from the freelist back to the OS (``page_count`` drops). Cheap;
+      safe alongside live writes.
+    * A legacy DB (``auto_vacuum=NONE``: every DB the checkpointer created while it set
+      WAL before the auto_vacuum pragma, which made that pragma a no-op) is NOT vacuumed unless ``full_vacuum=True`` (#3973). A full
       ``VACUUM`` rewrites the whole file under an exclusive lock, stalling every
       live checkpoint write for its duration — too costly for a periodic sweep on
       a running server. Left alone, the freed pages stay on the freelist and are
       reused by later writes, so the file stops growing; it just doesn't shrink.
       ``full_vacuum=True`` (an offline / maintenance caller) sets
       ``auto_vacuum=INCREMENTAL`` and then VACUUMs — the one-time migration, so
-      every later reclaim is the cheap incremental kind. By hand, with the server
-      stopped: ``PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`` (a bare ``VACUUM``
-      shrinks once but leaves the mode NONE).
+      every later reclaim is the cheap incremental kind. The boot path runs that
+      migration automatically, before the checkpointer opens the DB
+      (``graph/checkpoint_migrate.py``; ``protoagent checkpoint migrate`` on demand).
+      By hand, with the server stopped: ``PRAGMA auto_vacuum=INCREMENTAL; VACUUM;``
+      (a bare ``VACUUM`` shrinks once but leaves the mode NONE).
 
     Returns ``{"wal_truncated": int, "pages_reclaimed": int}``.
     Best-effort: any error is caught and logged; the returned counts are zero
@@ -246,9 +249,10 @@ def reclaim(db_path: str, *, full_vacuum: bool = False) -> dict[str, int]:
         else:
             _log.info(
                 "[checkpoint-prune] %s predates auto_vacuum=INCREMENTAL — skipping the full "
-                "VACUUM (it would lock out live writes); freed pages are reused. To migrate "
-                "it so later prunes shrink the file, run with the server stopped: "
-                "sqlite3 %s 'PRAGMA auto_vacuum=INCREMENTAL; VACUUM;'",
+                "VACUUM (it would lock out live writes); freed pages are reused. The next start "
+                "migrates it (checkpoint.vacuum_legacy_on_start) so later prunes shrink the file; "
+                "or, with the server stopped: protoagent checkpoint migrate (= sqlite3 %s "
+                "'PRAGMA auto_vacuum=INCREMENTAL; VACUUM;')",
                 db_path,
                 db_path,
             )

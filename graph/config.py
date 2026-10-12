@@ -1218,6 +1218,11 @@ class LangGraphConfig:
     # (truncate WAL + free unused pages back to the OS). Best-effort; never
     # blocks pruning on error. True by default so the DB shrinks after deletes.
     checkpoint_vacuum: bool = True
+    # One-time migration at boot of a legacy checkpoint DB (auto_vacuum=NONE, created
+    # before the checkpointer set INCREMENTAL): ``PRAGMA auto_vacuum=INCREMENTAL; VACUUM;``
+    # before anything opens it, when the freelist is large enough to matter and the disk
+    # has room (graph/checkpoint_migrate.py). Without it such a DB never shrinks.
+    checkpoint_vacuum_legacy_on_start: bool = True
     # Semantic facts (ADR 0021): on retirement, also extract durable facts from
     # the conversation (aux model) and consolidate them into the store as
     # finding_type="fact". Rides the harvest pass; needs harvest enabled.
@@ -2077,6 +2082,9 @@ class LangGraphConfig:
                 "harvest_enabled", cls.checkpoint_harvest_enabled
             ),
             checkpoint_vacuum=data.get("checkpoint", {}).get("vacuum", cls.checkpoint_vacuum),
+            checkpoint_vacuum_legacy_on_start=data.get("checkpoint", {}).get(
+                "vacuum_legacy_on_start", cls.checkpoint_vacuum_legacy_on_start
+            ),
             knowledge_facts=data.get("knowledge", {}).get("facts", cls.knowledge_facts),
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
             embed_model=knowledge.get("embed_model", cls.embed_model),

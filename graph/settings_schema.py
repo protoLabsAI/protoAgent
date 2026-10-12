@@ -951,7 +951,20 @@ FIELDS: list[Field] = [
         "After a prune frees rows, truncate the WAL and incrementally vacuum so the DB file shrinks instead of "
         "holding the freed space. A DB created before incremental vacuum (auto_vacuum=NONE) isn't fully "
         "VACUUMed while the server runs (it would lock out writes): its freed space is reused, and it shrinks "
-        "after a one-time `PRAGMA auto_vacuum=INCREMENTAL; VACUUM;` with the server stopped.",
+        "after a one-time `PRAGMA auto_vacuum=INCREMENTAL; VACUUM;` with the server stopped — which the next "
+        "start does for you (see the setting below), or `protoagent checkpoint migrate`.",
+    ),
+    Field(
+        "checkpoint.vacuum_legacy_on_start",
+        "checkpoint_vacuum_legacy_on_start",
+        "History: migrate legacy DB on start",
+        "bool",
+        "Knowledge",
+        "At startup, before the history DB opens, migrate a DB created before incremental vacuum "
+        "(auto_vacuum=NONE) with a one-time `PRAGMA auto_vacuum=INCREMENTAL; VACUUM;` so its freed space "
+        "goes back to the disk. Only when at least half the file (or 256 MB) is free space and the disk has "
+        "room; that start takes a few extra seconds. Off = leave it (it reuses freed space but never shrinks).",
+        restart=True,
     ),
     Field(
         "knowledge.facts",
@@ -1831,6 +1844,7 @@ _KNOWLEDGE_SUBSECTION = {
     "checkpoint.prune_interval_hours": "History",
     "checkpoint.harvest_enabled": "History",
     "checkpoint.vacuum": "History",
+    "checkpoint.vacuum_legacy_on_start": "History",
 }
 for _f in FIELDS:
     if _f.key in _KNOWLEDGE_SUBSECTION:
