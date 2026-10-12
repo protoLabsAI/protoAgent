@@ -153,6 +153,17 @@ class TurnStalled(RuntimeError):
     """
 
 
+async def _frame_within(step: asyncio.Task, seconds: float) -> bool:
+    """Wait up to ``seconds`` for ``step`` (the stream's next frame); True if it arrived.
+
+    The stall guard's only clock, as a module-level seam: a test that must tell "keeps
+    working" from "stalled" swaps in a virtual clock (``tests/_virtual_clock.py``) instead
+    of racing a sub-second wall-clock window against a loaded CI box. Only the wait
+    itself — every decision about what a timeout means stays in ``_stall_guarded``."""
+    finished, _ = await asyncio.wait({step}, timeout=seconds)
+    return bool(finished)
+
+
 async def _stall_guarded(stream, seconds: float, last_activity: list[str]):
     """Yield from ``stream``, raising :class:`TurnStalled` if no event arrives
     for ``seconds``.
@@ -199,7 +210,7 @@ async def _stall_guarded(stream, seconds: float, last_activity: list[str]):
             bind_turn_stop(step_ctx, stop)
             step = asyncio.get_running_loop().create_task(iterator.__anext__(), context=step_ctx)
             try:
-                finished, _ = await asyncio.wait({step}, timeout=seconds)
+                finished = await _frame_within(step, seconds)
             except asyncio.CancelledError:
                 # Cancelled from above (an A2A CancelTask): cancel the step and let it
                 # unwind, as `wait_for` did.
