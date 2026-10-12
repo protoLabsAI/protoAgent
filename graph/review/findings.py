@@ -248,9 +248,7 @@ def _candidate_arrays(text: str) -> list[list]:
                         pass
                     i = j + 1
                     break
-        else:
-            break
-        if start >= i:  # unclosed array — stop scanning
+        else:  # unclosed array — stop scanning
             break
     return out
 

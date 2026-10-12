@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from graph.middleware.redaction import redact, PATTERNS
 
 
@@ -408,3 +410,106 @@ def test_env_var_redaction_does_not_rewrap_an_already_redacted_value():
     # not turn that into `[REDACTED]]`.
     out = redact("api_" + "key=" + "abcdefghijklmnop1234")
     assert out.count("[REDACTED]") == 1 and "]]" not in out
+
+
+# ---------------------------------------------------------------------------
+# Key spelling — case, `-` and `_` don't let a sensitive key through (#4166 review)
+# ---------------------------------------------------------------------------
+#
+# Realistic, token-shaped literals on purpose: this file is gitleaks-allowlisted, and a
+# reviewer reading the redacted diff must not mistake the marks for a SyntaxError.
+
+_SECRETS = [
+    "sk-proj-4fT9qLmZ2xVbN8cR1wYhK6uE3sJdP7gA0oXi5nQy",
+    "ghp_Q7mX2vL9bK4nR8wT1yZ6cH3jF5sD0gA2pE7u",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "Zx81-qP_44mmTn0vLr2kWb9s",
+]
+
+_MIXED_CASE_KEYS = [
+    "ApiKey",
+    "apiKey",
+    "Api-Key",
+    "api-key",
+    "x-api-key",
+    "X-Api-Key",
+    "X_API_KEY",
+    "Authorization",
+    "AUTHORIZATION",
+    "accessToken",
+    "Access-Token",
+    "clientSecret",
+    "Client-Secret",
+    "refreshToken",
+    "privateKey",
+    "Openai-Api-Key",
+    "openaiApiKey",
+    "A2A_Auth_Token",
+    "awsSecretAccessKey",
+    "NpmToken",
+]
+
+
+def _assert_no_leak(secret: str, out: object) -> None:
+    text = json.dumps(out)
+    assert secret not in text, text
+    for i in range(1, len(secret) - 3):
+        assert secret[i:] not in text, f"suffix {secret[i:]!r} leaked: {text!r}"
+
+
+@pytest.mark.parametrize("key", _MIXED_CASE_KEYS)
+@pytest.mark.parametrize("secret", _SECRETS)
+def test_mixed_case_dict_keys_are_redacted(key, secret):
+    out = redact({key: secret, "other": "kept"})
+    assert out == {key: "[REDACTED]", "other": "kept"}
+    _assert_no_leak(secret, out)
+
+
+@pytest.mark.parametrize("key", _MIXED_CASE_KEYS)
+def test_mixed_case_keys_are_redacted_when_nested(key):
+    secret = _SECRETS[0]
+    out = redact({"headers": [{key: secret}], "env": {"ok": 1}})
+    assert out == {"headers": [{key: "[REDACTED]"}], "env": {"ok": 1}}
+    _assert_no_leak(secret, out)
+
+
+@pytest.mark.parametrize(
+    "src, secret",
+    [
+        ("OPENAI_API_KEY=sk-proj-4fT9qLmZ2xVbN8cR1wYhK6uE3sJdP7gA0oXi5nQy", _SECRETS[0]),
+        ("openai_api_key=Zx81-qP_44mmTn0vLr2kWb9s", _SECRETS[3]),
+        ("export Api_Key=Zx81-qP_44mmTn0vLr2kWb9s", _SECRETS[3]),
+        ("X-Api-Key: Zx81-qP_44mmTn0vLr2kWb9s", _SECRETS[3]),
+        ('headers = {"apiKey": "Zx81-qP_44mmTn0vLr2kWb9s"}', _SECRETS[3]),
+        ('headers = {"Authorization": "Bearer Zx81-qP_44mmTn0vLr2kWb9s"}', _SECRETS[3]),
+        ("curl -H 'authorization: bearer Zx81-qP_44mmTn0vLr2kWb9s' https://api.example.com", _SECRETS[3]),
+        ("GH_PAT=ghp_Q7mX2vL9bK4nR8wT1yZ6cH3jF5sD0gA2pE7u", _SECRETS[1]),
+    ],
+)
+def test_env_var_and_header_string_forms_leak_nothing(src, secret):
+    out = redact(src)
+    assert "[REDACTED]" in out
+    _assert_no_leak(secret, out)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "tokenizer",
+        "author",
+        "authors",
+        "keyboard",
+        "key",
+        "token_count",
+        "max_tokens",
+        "public",
+        "secretary",
+        "api",
+        "apiVersion",
+        "access",
+        "client_id",
+    ],
+)
+def test_ordinary_keys_are_not_redacted(key):
+    data = {key: "gpt-tokenizer-v2"}
+    assert redact(data) == data
