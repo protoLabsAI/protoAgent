@@ -591,10 +591,13 @@ def _code_text(src: str) -> list[str]:
 def test_no_new_direct_reads_of_the_retired_endpoint_and_key():
     found: dict[str, int] = {}
     for pkg in _SCANNED:
-        for path in sorted((_ROOT / pkg).rglob("*.py")):
+        source_root = _ROOT if pkg in {"plugins", "scripts"} else _ROOT / "src"
+        package = source_root / pkg
+        assert package.is_dir(), f"missing source directory: {package}"
+        for path in sorted(package.rglob("*.py")):
             n = sum(len(_DIRECT_READ.findall(line)) for line in _code_text(path.read_text(encoding="utf-8")))
             if n:
-                found[path.relative_to(_ROOT).as_posix()] = n
+                found[path.relative_to(source_root).as_posix()] = n
     assert found == _ALLOWED, (
         "A direct read of model.api_base / model.api_key appeared or disappeared. Resolve the "
         "default route through graph.config.resolve_model_route instead; if a listed site was "

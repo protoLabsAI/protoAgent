@@ -1012,6 +1012,10 @@
           "title": "0118 — Interactive answers: inline artifacts in chat, streamed previews, a send-to-chat bridge, and frame-rendered plugin components"
         },
         {
+          "path": "adr/0119-source-layout-with-stable-imports.md",
+          "title": "ADR 0119 — Organize runtime source without renaming imports"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
