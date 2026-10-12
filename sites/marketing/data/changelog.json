@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.202.0",
+    "date": "2026-10-12",
+    "changes": [
+      "Frame components can read live data through their host (#4143, ADR 0118 D5 amendment).",
+      "Vega-lite chart artifacts now theme from the design system, not a hand-rolled copy (#4171).",
+      "Frame-rendered plugin components theme via the DS embed layer (#4170).",
+      "Checkpoint DBs now give freed space back to the disk (#4173)."
+    ]
+  },
+  {
     "version": "v0.201.0",
     "date": "2026-10-12",
     "changes": [

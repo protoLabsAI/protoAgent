@@ -15,6 +15,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.202.0] - 2026-10-12
+
+### Added
+- **Frame components can read live data through their host (#4143, ADR 0118 D5 amendment).**
+  `registry.register_component(name, validator, frame=..., reads=[...])` declares GET patterns under
+  the plugin's own `/api/plugins/<id>/` (`*` matches one segment). Patterns that escape the prefix,
+  or use `..`, a query string or `**`, are logged and skipped, and the testkit `FakeRegistry` raises
+  on them. `GET /api/components` now reports `{name, plugin, frame_url, reads}`. In the console, a
+  frame posts `protoComponent:read {cid, path}`, and `FrameComponentHost` checks the request: the
+  source frame, the declared allowlist, GET only, 4 reads/s and 2 in flight per frame, and that the
+  frame is mounted and visible. The host then makes the authed GET itself and posts back
+  `protoComponent:readResult {cid, ok, status, json|error}`. The response must be JSON of at most
+  256 KB, and the bearer and headers never reach the frame. Writes stay on the confirmed `send` bridge.
+  The capability is bound to the declared page by a handshake. The host loads the frame at
+  `<frame_url>#pair=<random>`. The frame posts `protoComponent:ready {pair}` once, echoing that
+  fragment. That earns exactly one `protoComponent:init {props, theme, nonce}`, and there are no
+  re-posts. The frame echoes `nonce` on every `protoComponent:read`, `protoComponent:send` and
+  `protoComponent:openLink`. A second load, a second or unpaired `ready`, or a wrong nonce revokes
+  the mount and unloads the frame, so a page that replaces the plugin page can't inherit its reads
+  or its "Always allow" send trust. **Existing frame components must now post `ready` (with
+  `pair`) to receive `init`, and echo `nonce` on `send`/`openLink`.** The artifact shell gets the
+  same protection: each srcdoc carries a per-render nonce that the shim echoes on
+  `ask`/`send`/`openLink`, and a nested frame that navigates itself loses the bridge. Component
+  reads also stream the body with a 256 KB cutoff and a 10 s timeout, and only a JSON error body's
+  `detail` is passed through.
+
+### Changed
+- **Vega-lite chart artifacts now theme from the design system, not a hand-rolled copy (#4171).**
+  The artifact shell's chart frame built its Vega config and picked its tooltip theme from a
+  `theme()`/`isDark()` pair hand-written inside `artVega`. Those are gone: the frame now draws
+  from `@protolabsai/design`'s pure `buildVegaConfig(tok)` / `vegaTooltipTheme(tok)`, vendored
+  verbatim beside the other chart libs and injected into the nonce-CSP frame as source. Every
+  consumer themes identically from one source, and a drift test keeps the vendored copy in step
+  with the package. Visible changes: legends move to the bottom (horizontal, four columns, no
+  symbol cap, so 8+ series wrap), axis/legend labels get more room, and sequential / heatmap /
+  diverging ranges are emitted as hex — so heat maps use the console palette instead of Vega's
+  default blues. The categorical palette is unchanged: the shell keeps its prior `range.category`
+  contract — a categorical palette is themed only when two or more `--pl-color-chart-series*`
+  colours are defined, and then from exactly those, otherwise Vega keeps its own default category
+  scheme. (The DS `buildVegaConfig` would instead backfill every empty slot with the accent and
+  always set `range.category`; a thin shell adapter trims that back so a custom theme with few or
+  no series colours never collapses a multi-series chart onto the single accent.) The loader deny,
+  `ast:true` interpreter, `prep()` autosize, and live re-theme are unchanged.
+
+- **Frame-rendered plugin components theme via the DS embed layer (#4170).** `FrameComponentHost`
+  now builds the theme it posts into the opaque-origin component frame from
+  `@protolabsai/design/embed` — `themeTokenSnapshot(document.documentElement)` (the live computed
+  `--pl-*` values plus `color-scheme`) routed through `snapshotToCss`, the frame-injection guard
+  that drops any value containing `<`, `{`, `}` or `;` and any non-`--pl-` name — instead of the
+  hand-written `consoleTheme()` token list. The theme is read at post time, so a live theme or
+  accent switch still re-posts fresh values and the frame repaints without a reload, and no bearer
+  is ever posted. The ADR 0026 plugin-view bridge (PluginView, App, Launcher, the command palette)
+  keeps using `consoleTheme()` unchanged. (ADR 0118 D5)
+
+### Fixed
+- **Checkpoint DBs now give freed space back to the disk (#4173).** `build_sqlite_checkpointer`
+  set `journal_mode=WAL` before `auto_vacuum=INCREMENTAL`. Switching to WAL writes the DB
+  header, so the auto_vacuum pragma was a silent no-op and every `checkpoints.db` was created
+  `auto_vacuum=NONE`. The prune pass deleted rows, but the file never shrank. On one machine
+  that meant a 34 GB file holding 85 MB of history and a 30 GB file holding 480 MB, until the
+  disk filled. New DBs are now really INCREMENTAL. At startup, before anything opens it, an
+  existing NONE DB is migrated once (`PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`). That happens
+  only when at least half the file (or 256 MB) is free space, the disk has room for the
+  rewrite, and no other process has the DB open. The size before and after is logged.
+  `checkpoint.vacuum_legacy_on_start: false` turns this off. `protoagent checkpoint migrate`
+  (`--workspace <member>` / `--db <path>`) runs it on demand with the agent stopped.
+  **Upgrade note:** the first start after upgrading can take a few extra seconds for each
+  bloated checkpoint DB (a 34 GB file with 85 MB live took about 5 s).
+
 ## [0.201.0] - 2026-10-12
 
 ### Added
