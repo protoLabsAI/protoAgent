@@ -41,6 +41,13 @@ export type ChatSession = {
   // convenience, and refusing to route `@somebody-else` would be a surprise, not a
   // safety property.
   participants?: string[];
+  // The server's durable turn count (`/api/chat/sessions` `turn_count`) this copy was last
+  // reconciled against at boot. A later count above it — and above the turns this copy
+  // already holds — means another client added turns this cache never saw, so boot
+  // hydration reads the session's turns again (sessionHydration.isBehindServer). Recorded
+  // even when that read added nothing, so a count this copy can never match (a turn
+  // regenerated away, a tail past the read window) is not re-fetched on every boot.
+  serverTurnCount?: number;
 };
 
 // Reasoning is ON by default in the console (auto-enable) — a fresh tab thinks at
@@ -140,6 +147,18 @@ const locallyDeletedIds = new Set<string>(locallyDismissedIds);
 export type HydrationEligibility = {
   sessionId: string;
   localSession: ChatSession | null;
+  /** A non-empty local copy the server has turns beyond (another client added them):
+   *  reconciled through `reconcileSessions`, not filled through `hydrateSessions`. */
+  behind?: boolean;
+};
+
+/** A boot reconcile of a non-empty local session that fell behind the server: the
+ *  transcript to adopt (`messages`, or null when there was nothing to add) and the server
+ *  count it now answers for. Applied only while the session is still `token.localSession`. */
+export type SessionReconcile = {
+  token: HydrationEligibility;
+  messages: ChatMessage[] | null;
+  serverTurnCount: number;
 };
 
 function hydrationCanRepairMessage(message: ChatMessage | undefined): message is ChatMessage {
@@ -386,8 +405,9 @@ export function isParkedSession(session: ChatSession): boolean {
 }
 
 /** Fold server-recovered sessions into the local-first store (#2888).
- * Non-empty local transcripts always win because they carry richer ordered
- * parts and client-only annotations. A locally empty copy may be recovered,
+ * Non-empty local transcripts win here because they carry richer ordered
+ * parts and client-only annotations — a local copy the server has turns BEYOND
+ * goes through `reconcileSessions` instead (sessionHydration.isBehindServer). A locally empty copy may be recovered,
  * and server-only sessions fill only the remaining cap (parked ones first, #3957). The sole auto-created
  * blank tab is a boot placeholder, so a successful recovery replaces it. */
 export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[]): ChatState {
@@ -837,11 +857,43 @@ export const chatStore = {
     return session;
   },
 
-  captureHydrationEligibility(sessionId: string): HydrationEligibility | null {
+  captureHydrationEligibility(sessionId: string, opts: { behind?: boolean } = {}): HydrationEligibility | null {
     if (locallyDeletedIds.has(sessionId) || locallyDismissedIds.has(sessionId)) return null;
     const localSession = state.sessions.find((session) => session.id === sessionId) ?? null;
+    if (opts.behind) return localSession?.messages.length ? { sessionId, localSession, behind: true } : null;
     if (localSession?.messages.length && !needsDurableHydration(localSession)) return null;
     return { sessionId, localSession };
+  },
+
+  /** Commit boot reconciles of local sessions that fell behind the server (another
+   *  client's turns). Each applies only if the session is still the exact object read
+   *  before the fetch — any local edit in between (a send, a reattach settling a turn, a
+   *  delete) vetoes it, and the next boot tries again. */
+  reconcileSessions(updates: SessionReconcile[]) {
+    if (!updates.length) return;
+    setState((current) => {
+      let changed = false;
+      const sessionStatusMap = { ...current.sessionStatusMap };
+      const sessions = current.sessions.map((session) => {
+        const update = updates.find((candidate) => candidate.token.sessionId === session.id);
+        if (!update || session !== update.token.localSession) return session;
+        if (locallyDeletedIds.has(session.id) || locallyDismissedIds.has(session.id)) return session;
+        changed = true;
+        if (!update.messages) return { ...session, serverTurnCount: update.serverTurnCount };
+        const last = [...update.messages].reverse().find((message) => message.role === "assistant");
+        // The adopted tail can end on a turn still running elsewhere: mark it like a
+        // hydrated session's live turn (mergeHydratedSessions), so the slot reattaches.
+        if (last?.status === "streaming" && last.taskId && !last.paused) sessionStatusMap[session.id] = "streaming";
+        // A newer `updatedAt` so a sibling tab's merge (mergeSessions) takes this copy.
+        return {
+          ...session,
+          messages: update.messages,
+          serverTurnCount: update.serverTurnCount,
+          updatedAt: Math.max(session.updatedAt, Date.now()),
+        };
+      });
+      return changed ? { ...current, sessions, sessionStatusMap } : current;
+    });
   },
 
   hydrateSessions(sessions: ChatSession[], eligibility: HydrationEligibility[] = []) {
