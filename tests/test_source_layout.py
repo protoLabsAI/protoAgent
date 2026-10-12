@@ -38,7 +38,8 @@ print(json.dumps({
 def test_module_cli_from_a_neutral_cwd(tmp_path):
     env = {**os.environ, "PROTOAGENT_BOX_ROOT": str(tmp_path / "box"),
            "PROTOAGENT_HOME": str(tmp_path / "instance")}
-    run = subprocess.run([sys.executable, "-I", "-m", "server", "--help"], cwd=tmp_path,
-                         env=env, capture_output=True, text=True, timeout=30)
+    # Isolated mode ignores PYTHONUTF8; match the pipe encoding explicitly on Windows.
+    run = subprocess.run([sys.executable, "-I", "-X", "utf8", "-m", "server", "--help"], cwd=tmp_path,
+                         env=env, capture_output=True, text=True, encoding="utf-8", timeout=30)
     assert run.returncode == 0, run.stderr
     assert "protoagent" in run.stdout.lower()
