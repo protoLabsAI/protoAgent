@@ -13,10 +13,12 @@ import {
 import type { ChatMessage } from "../lib/types";
 import {
   chatStore,
+  dedupeMessages,
   DEFAULT_SESSION_TITLE,
   needsDurableHydration,
   type ChatSession,
   type HydrationEligibility,
+  type SessionReconcile,
 } from "./chat-store";
 import { applyDelegateProgressTo } from "./delegateProgress";
 import { rendersText, replaceText, textRuns } from "./parts";
@@ -323,6 +325,87 @@ export function sessionFromDurableTurns(
   };
 }
 
+/** A bubble of the session's OWN turns — not a participant's (`author`), and tied to a task. */
+function isOwnTurnBubble(message: ChatMessage): boolean {
+  return message.role === "assistant" && !message.author && Boolean(message.taskId);
+}
+
+/** The durable task ids this local transcript already holds a turn for. */
+export function localTurnIds(messages: ChatMessage[]): Set<string> {
+  return new Set(messages.filter(isOwnTurnBubble).map((message) => message.taskId as string));
+}
+
+/** Has the server recorded turns this NON-EMPTY local copy never saw? Another browser,
+ *  window or client ran a turn in the session after this cache last wrote it — the local
+ *  transcript must not win forever over a server that has more (ADR 0104). The index's
+ *  `turn_count` against the turns held locally (and the count last reconciled against,
+ *  `serverTurnCount`) is the cheap signal; the turn read then decides what is missing.
+ *  A copy with no durable turn of its own (a send that never got a task) has nothing to
+ *  anchor a reconcile on and is left alone. */
+export function isBehindServer(session: ChatSession, summary: DurableChatSession): boolean {
+  const known = localTurnIds(session.messages).size;
+  if (!known || typeof summary.turn_count !== "number") return false;
+  return summary.turn_count > Math.max(known, session.serverTurnCount ?? 0);
+}
+
+/** Reconcile a non-empty local transcript with the server's turns, server-authoritative
+ *  for what the local copy never saw while keeping what it did:
+ *
+ *  - Every server turn AFTER the newest turn the local copy holds is added, in the
+ *    server's drawing order (planDurableTurns; a queued turn as its prompt alone). An
+ *    older server turn the local copy lacks is left out — it was there when this copy was
+ *    written, so its absence is local intent (a regenerate), not staleness.
+ *  - A local turn that is only a durable SNAPSHOT (`durableSnapshotFallback`, written by an
+ *    earlier hydration while the turn was still running) is redrawn from the server's
+ *    current copy; it never held anything richer than the server's own.
+ *  - Locally rendered turns are kept as they are (their ordered parts and annotations).
+ *
+ *  Returns the new transcript, null when there is nothing to change, or "retry" while a
+ *  local turn is still LIVE in this copy (streaming, not a snapshot): its reattach owns it,
+ *  and adding turns after it would strand it mid-transcript — the next boot reconciles. */
+export function reconcileServerTurns(
+  local: ChatMessage[],
+  rows: DurableChatTurn[],
+  liveTaskId?: string | null,
+): ChatMessage[] | null | "retry" {
+  const { turns, queued } = planDurableTurns(rows, liveTaskId);
+  const known = localTurnIds(local);
+  let anchor = -1;
+  turns.forEach((turn, index) => {
+    if (known.has(turn.task_id)) anchor = index;
+  });
+  if (anchor < 0) return null;
+  if (local.some((message) => isOwnTurnBubble(message) && message.status === "streaming" && !message.durableSnapshotFallback)) {
+    return "retry";
+  }
+  const draw = (turn: DurableChatTurn) =>
+    queued.has(turn.task_id)
+      ? messagesFromDurableTurn(turn).filter((message) => message.role === "user")
+      : messagesFromDurableTurn(turn);
+  let messages = local;
+  let changed = false;
+  for (const turn of turns.slice(0, anchor + 1)) {
+    const bubbles = messages.filter((message) => isOwnTurnBubble(message) && message.taskId === turn.task_id);
+    if (!bubbles.length || !bubbles.every((message) => message.durableSnapshotFallback)) continue;
+    const fresh = draw(turn);
+    const freshIds = new Set(fresh.map((message) => message.id));
+    const stale = (message: ChatMessage) =>
+      (message.id !== undefined && freshIds.has(message.id)) ||
+      (isOwnTurnBubble(message) && message.taskId === turn.task_id);
+    const at = messages.findIndex(stale);
+    const before = messages.slice(0, at);
+    const after = messages.slice(at).filter((message) => !stale(message));
+    messages = [...before, ...fresh, ...after];
+    changed = true;
+  }
+  const missing = turns.slice(anchor + 1).filter((turn) => !known.has(turn.task_id));
+  if (missing.length) {
+    messages = [...messages, ...missing.flatMap(draw)];
+    changed = true;
+  }
+  return changed ? dedupeMessages(messages) : null;
+}
+
 export const SESSION_INDEX_LIMIT = 50;
 /** At most this many PARKED sessions are pinned into the index (#3957) — the rest of the
  *  SESSION_INDEX_LIMIT stays the newest sessions, so many parked chats never crowd them out
@@ -354,7 +437,8 @@ export function pinParkedSessions(
   return out.slice(0, limit);
 }
 
-/** Fetch only server-only or locally empty sessions, with bounded fan-out.
+/** Fetch only server-only, locally empty, render-stale, or BEHIND-the-server sessions
+ * (isBehindServer), with bounded fan-out.
  * Every read is best-effort: an offline/cold fleet member leaves local chat
  * untouched and will be tried again on the next full page boot. */
 export async function hydrateDurableChatSessions(): Promise<void> {
@@ -373,19 +457,29 @@ export async function hydrateDurableChatSessions(): Promise<void> {
   const local = new Map(chatStore.getSnapshot().sessions.map((session) => [session.id, session]));
   const wanted = summaries.filter((summary) => {
     const session = local.get(summary.session_id);
-    if (session?.messages.length && !needsDurableHydration(session)) return false;
-    const token = chatStore.captureHydrationEligibility(summary.session_id);
+    // A non-empty local copy is fetched to repair a stripped render (#3340), or because
+    // the server has turns it never saw — another client's, after this cache was written.
+    const behind = Boolean(session?.messages.length && !needsDurableHydration(session) && isBehindServer(session, summary));
+    if (session?.messages.length && !needsDurableHydration(session) && !behind) return false;
+    const token = chatStore.captureHydrationEligibility(summary.session_id, { behind });
     if (!token) return false;
     eligibility.set(summary.session_id, token);
     return true;
   });
   const hydrated: ChatSession[] = [];
+  const reconciled: SessionReconcile[] = [];
   let cursor = 0;
   async function worker() {
     while (cursor < wanted.length) {
       const summary = wanted[cursor++];
       try {
         const { turns, live_task_id } = await api.chatSessionTurns(summary.session_id, SESSION_TURN_LIMIT);
+        const token = eligibility.get(summary.session_id);
+        if (token?.behind && token.localSession) {
+          const messages = reconcileServerTurns(token.localSession.messages, turns, live_task_id);
+          if (messages !== "retry") reconciled.push({ token, messages, serverTurnCount: summary.turn_count });
+          continue;
+        }
         const session = sessionFromDurableTurns(summary, turns, live_task_id);
         if (session) hydrated.push(session);
       } catch {
@@ -396,6 +490,7 @@ export async function hydrateDurableChatSessions(): Promise<void> {
   await Promise.all(
     Array.from({ length: Math.min(HYDRATION_CONCURRENCY, wanted.length) }, () => worker()),
   );
+  if (reconciled.length) chatStore.reconcileSessions(reconciled);
   if (hydrated.length) {
     chatStore.hydrateSessions(
       hydrated,
