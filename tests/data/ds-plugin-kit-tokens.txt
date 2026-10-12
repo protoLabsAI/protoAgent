@@ -57,6 +57,7 @@
 --pl-font-weight-body
 --pl-font-weight-medium
 --pl-font-weight-semibold
+--pl-frame-card-min-h
 --pl-gradient-brand
 --pl-gradient-brand-light
 --pl-motion-base
