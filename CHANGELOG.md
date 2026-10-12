@@ -15,6 +15,209 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.201.0] - 2026-10-12
+
+### Added
+- **Tables accept an optional source caption (#4077).** The inline `table` component now
+  takes an optional `source` prop — a short string (≤200 chars) naming where the rows came
+  from. `show_component` asks the agent to set it whenever the rows aren't the user's own
+  input (a web search, a fetched page, a file, a tool result) so the provenance travels
+  with the data. A non-string or over-long `source` is dropped from the props and the table
+  still renders; tables without a `source` are unchanged.
+
+- **Table source caption in chat (#4077).** The built-in `table` chat component now renders a muted `Source: <text>` caption under the table when its `source` prop is a non-empty string. The prop is untrusted, so a non-string is ignored, the text is capped at 200 chars, and it renders as plain text (never HTML). Tables without a `source` are unchanged.
+
+- **Streamed tool arguments (tool-args-v1) (#4078).** A tool can declare `metadata={"stream_args": "<arg>"}`; the server extracts that string argument incrementally as the model streams the tool call — a small partial-JSON string scanner that handles escapes and holds back an unterminated one — and relays it as a live-only `application/vnd.protolabs.tool-args-v1+json` DataPart on `WORKING` frames, so the console can preview an artifact as it is written. Previews flush at ≤4 Hz or every 2 KB and end with a final `done`; they are never persisted to task history nor replayed on reattach or reload. `tool-call-v1` is unchanged. (ADR 0118 D3)
+
+- **Console decodes streamed tool arguments (#4079).** The console now decodes the `tool-args-v1` frames the server streams (ADR 0118 D3) into a per-tool-call-id buffer, reassembling each tool's declared string argument from contiguous slices while tolerating out-of-order and duplicated/overlapping frames. The buffer is live-only — cleared when the turn ends and never rebuilt on hydration or reattach — and nothing renders it yet.
+
+- **Inline artifact placement (#4080).** `show_artifact` and the `artifact.show` service take `placement="inline"` to render an artifact in the conversation (html/svg/mermaid/react/vega-lite; any other kind falls back to the panel with a note). The `artifact-ref` chip gains optional `inline`/`height` hints, and the three write tools declare `stream_args: "code"` so the server can stream a live preview (ADR 0118).
+
+- **Artifact embed mode (#4081).** The artifact shell gains a chrome-less embed view at `/plugins/artifact/view?embed=<id>&v=<version>` that renders exactly one artifact version through the same sandboxed frame builder as the panel — nonce CSP, vendored SRI-pinned libraries, live theme tokens, loader lockdown and render-verdict reporting — reports its content height to the host on every size change, and shows an inert "unavailable" state for an unknown id or version. The panel view is unchanged.
+
+- **Inline frame budget (#4083).** Groundwork for inline artifact frames in chat (ADR 0118):
+  a framework-light `inlineFrames` module that clamps a frame's reported height to
+  [80, 1200] px, caps live inline frames at six per chat view — evicting the
+  least-recently-visible one (which the host then renders as a static "Click to resume" card
+  keeping its last height) — and lazily mounts a frame as it scrolls near the viewport. No UI
+  is wired to it yet.
+
+- **Inline artifacts in the transcript (#4083).** An `artifact-ref` with `inline: true` now hosts the artifact's own sandboxed frame right in the conversation instead of a chip that opens the panel. The frame mounts lazily near the viewport, is sized to the height it reports (clamped to 80–1200 px, taller content scrolls inside), and keeps an **Open in panel** button. At most six inline frames stay live per chat view; an older one that scrolls away becomes a "Click to resume" card that remembers its height. History replay renders inline identically, a deleted artifact or a disabled plugin falls back to the inert chip, and the live turn no longer auto-opens the panel for an inline answer.
+
+- **Partial-HTML sanitiser for streamed previews (#4084).** Groundwork for the ADR 0118
+  console artifact preview: a pure, DOM-free `processPartialHtml` (ported from
+  OpenIntelligentUI, MIT) that makes a still-streaming HTML buffer safe to show — it drops
+  the incomplete trailing tag, strips `<script>`/`<head>` and unclosed `<style>` blocks,
+  hoists complete `<style>` blocks to the top, and defensively removes inline `on*=`
+  event-handler attributes. Companion gating helpers (`firstStyleClosed` /
+  `bodyBytesWithoutStyle`) hold the preview back until the first stylesheet closes, or until
+  1.5 KB of body markup has streamed without one. No UI is wired to it yet.
+
+- **Streamed artifact preview frame (#4084).** A streaming `show_artifact` with inline placement now renders its inline card at once: a title + kind-aware status line, and for `html`/`svg` a sandboxed preview frame (`allow-scripts`, no same-origin) that morphs the still-streaming markup in place via vendored Idiomorph (0BSD) behind a nonce CSP. Model scripts and inline handlers never reach or run in the frame, and the preview stays hidden until the first style closes (or 1.5 KB of style-less body arrives).
+
+- **Live preview while an inline artifact is written (#4084).** The streamed artifact preview now updates at most once a second — with an immediate flush on the moments that read worst stale (the first `<style>` closing, the first body markup, and the stream's end) — instead of thrashing the frame on every chunk, and it sizes itself from the height the frame reports back. The preview appears in the transcript's work spotlight as a streaming inline `show_artifact` writes, and once the tool finishes and the artifact-ref lands it hands over to the artifact's own inline frame, keeping the last measured height so the layout doesn't jump.
+
+- **Presentation ladder in the rendering-artifacts skill (#4085).** The skill now teaches the
+  four-tier ladder (text → `show_component` → inline artifact via
+  `show_artifact(…, placement="inline")` → panel artifact) with "prefer the lowest tier that
+  answers" and "inline for an answer, panel for a work product", the html authoring order
+  (`<style>` first, readable markup, scripts last), and a quality bar for interactive answers
+  (every enabled control does real work; labelled, keyboard-operable inputs with visible focus;
+  validated numeric input; shown units and assumptions; reduced motion with pause/reset;
+  labelled value provenance; and `protoArtifact.send` only from a labelled button). Adds
+  `evals.md`, a hand-labelled prompt-to-tier set. The inline tier and the `send` bridge are the
+  interactive-answers capability (ADR 0118); the skill teaches the panel as the universal
+  fallback and feature-detected `send`, so an answer still renders where those aren't wired yet.
+
+- **Artifact send/openLink bridge gates (#4086).** Artifact frames now get `window.protoArtifact.send(text)` and `window.protoArtifact.openLink(url)` next to `ask` (ADR 0118 D4): the shim relays each through the shell up to the console host, which owns the gates — a real user gesture (missing API asks first), a 1–4000 char length, "the agent is busy" while a turn runs, and at most one send per 2 s per frame; `openLink` opens `https:` only (optionally narrowed by the new `artifact.open_link_origins` setting) with `noopener,noreferrer`. `ask` is unchanged and stays opt-in.
+
+- **Artifacts can send a visible message to chat (#4086).** An inline artifact may call `protoArtifact.send(text)` from a button to start a normal, visible user turn — gated in the console host (a real user gesture, length, "the agent is busy", and a 1-per-2s rate), tagged `{via: "artifact", artifact_id, version}` and shown with a small "from ‹title›" label so it reads exactly as what was sent. `protoArtifact.openLink(url)` opens an https link in a new tab with `noopener,noreferrer`, through the same host gate.
+
+- **Plugin components can declare a frame page (#4087).** `register_component(name, validator, frame=...)` lets a plugin point a component kind at one of its own public pages, relative to `/plugins/<id>`. The frame is refused (and the kind skipped) if it is an absolute path, contains a `..` segment, or is not listed in the manifest's `public_paths`, since an opaque-origin frame iframe carries no bearer. The host-free testkit `FakeRegistry` validates it the same way.
+
+- **GET /api/components catalog (#4087).** A new operator (bearer-gated) route lists the live
+  component-v1 kinds — the core widgets and every plugin-contributed kind — as
+  `{name, plugin, frame_url}`, where `frame_url` is the public `/plugins/<id>/<frame>` page a
+  frame kind (ADR 0118 D5) renders in, or null. Each plugin component's frame is carried
+  through the loader and rebound on every plugin reload beside the component set, so a disabled
+  plugin's kind drops out of the catalog.
+
+- **Frame-rendered plugin components host (#4088).** A console host that renders a plugin's `frame` component (`GET /api/components`) inside a locked-down `sandbox="allow-scripts"` iframe — no `allow-same-origin`, so it runs on an opaque origin and the operator bearer is never reachable or forwarded. It hands the frame the component props and the console theme over `postMessage` (re-posting the theme on a live theme switch), and reuses the shared inline-frame budget: `[80, 1200]` px height clamp, near-viewport lazy mount, and a six-live-frame cap per chat view.
+
+- **Plugin components render in chat without a console rebuild (#4088).** A plugin can contribute a chat component whose renderer is a frame page it serves: the console resolves a `show_component` kind through the live catalog (TS-registered renderer → built-in → plugin frame → unsupported) and hosts the plugin's page inline in a locked-down, bearer-free iframe. The frame reaches chat through the same gated send/openLink bridge as inline artifacts (`{via:"component", kind, plugin}` origin tag), so a frame-started turn is a normal, auditable, "from ‹component›"-labelled user message.
+
+- **three.js available in artifacts (#4118).** The `three` 3D library (r170, MIT) is now vendored same-origin and SRI-pinned alongside d3, so `html` and `react` artifacts can `import * as THREE from "three"` with no CDN, CSP, or SRI error. An html artifact that ships its own import map keeps it: the shell merges the two, with the author's entries winning, instead of injecting a second map ahead of it.
+
+- **anime.js available in artifacts (#4118).** The `animejs` animation library (4.5.0, MIT) is vendored same-origin and SRI-pinned next to three.js and d3, so `html` and `react` artifacts can `import { animate } from "animejs"` with no CDN, CSP or SRI error. It takes the animation slot ADR 0118 D6 planned for GSAP: GSAP's "no charge" license prohibits use in tools that build visual animations without code, and it isn't open source.
+
+- **Plugins can record friction from background work: `graph.sdk.record_friction` (#4164).** The friction ledger only heard from the agent's `record_friction` tool, so failures in a plugin's background loop never reached it. projectBoard's hung coder drives, missing epic base and preflight holds all went unrecorded, and protoEngineer's friction review stayed empty through two weeks of board trouble. The friction plugin now offers a `friction.record` service. `graph.sdk.record_friction(kind, summary, detail, severity, source=...)` writes through it into the same ledger, grouping and review, stamped `plugin:<source>`. With the friction plugin off it does nothing, and it never raises.
+
+### Changed
+- **Plugin frame handshake extracted (#4082).** The bearer + theme postMessage handshake PluginView performs for plugin iframes — the console theme snapshot, the init post that hands the page the operator bearer + theme, its load-time re-post schedule, and the live re-theme on a `protoagent:theme` change — now lives in a shared `pluginFrameHandshake` module so the later iframe hosts reuse it. Pure refactor with unchanged origin checks; no behavior change (ADR 0118, refs #4076).
+
+- **Artifacts render inline by default (#4117).** `show_artifact` (and the `artifact.show` service) now default `placement` to `"inline"`: the frame-renderable kinds (html, svg, mermaid, react, vega-lite) render beside your prose in the conversation, while markdown, decks, PDFs and files fall back to the Artifact panel silently. Pass `placement="panel"` for a work product you keep iterating on; the "not available inline" note now appears only when you explicitly request `placement="inline"` on a kind that can't render inline.
+
+- **Artifact docs list three.js, d3 and anime.js, and the html import map (#4118).** The
+  `show_artifact` tool description, the artifact plugin README and the `rendering-artifacts` skill
+  now name `three` (`import * as THREE from "three"`), `d3` and `animejs`
+  (`import { animate } from "animejs"`) as offline imports with a one-line example each, note that
+  `html` artifacts get the same import map from a `<script type="module">`, and explain that an
+  html artifact's own import map is merged with the shell's, with the author's entries winning.
+
+- **Inline answers stay available in chat history (#4138).** The artifact store now keeps up to 200 unpinned artifacts by default, up from 20 (the *Artifacts kept* setting, or `ARTIFACT_HISTORY`). Past that cap it evicts the oldest artifact that no surviving chat still shows. An artifact whose inline answer or chip went out in a console chat is kept until that chat is deleted. If every artifact is still shown, the store keeps them all, logs a warning, and says so in `list_artifacts`. Pinned artifacts are never evicted, as before. Plugins can check for deleted chats with the new `graph.sdk.deleted_chat_sessions()` helper.
+
+- **Inline artifact frames, their send/openLink confirm chips, the "from ‹title›" label and table sources now use the design system's components (#4165).** The console moves to `@protolabsai/ui` 0.67 / `@protolabsai/design` 0.12 and drops its hand-rolled versions. Inline frames and the streamed preview render in the DS `InlineFrameCard`: a loading skeleton, then the live frame, with "Click to resume" kept in the same box. A frame's proposal to send to chat or open a link is the DS `ConfirmChip`. It is still non-modal, never takes focus, and still resets "Always allow" for each new proposal. A frame-sent message shows its source as the DS `Message` origin line, and a table's source as the DS `Table` caption.
+
+### Fixed
+- **Inline artifacts follow the operator's theme and the design system (#4076).**
+  - **Problem:** in a dark theme, model-written artifacts showed white cards and inputs with dark-grey text, so labels were unreadable and the result looked like a generic web page.
+  - **Full palette in every frame:** each artifact frame now receives the operator's full `--pl-*` palette (raised/inset surfaces, muted text, status colours, radii, fonts), not just four colours, plus a matching `color-scheme`.
+  - **Themed defaults:** plain inputs, buttons, selects and tables get themed defaults at zero specificity, so they look native while the author's own CSS still wins.
+  - **Model guidance:** the artifact skill and the `show_artifact` description now require styling from `--pl-*` tokens and the `.pl-*` classes, with no hardcoded colours.
+
+- **Streamed artifact previews match the console, and a frame can't take your keyboard (#4076).** Fixes from the final interactive-answers regression:
+  - **Themed preview:** the live preview of an artifact being written now uses the console's own theme. It gets the full `--pl-*` palette, a `color-scheme` that follows the console rather than the OS, the same default control styles, and the design-system stylesheet, which is inlined so the preview's CSP stays closed. Before, it showed a white card or bare browser controls and then jumped to the themed frame.
+  - **No focus theft:** an inline artifact or plugin component can no longer take your keyboard. Frames keep running, so charts and animations stay live, but a frame becomes interactive only when you click it (the first click activates it) or Tab into it. It goes back to inactive when you click or tab back to the console. A frame that grabs focus on its own is stopped at once and replaced by "This artifact tried to take keyboard focus." with a **Run it** button, and focus goes back to the composer. This also stops a frame that re-focuses itself in a tight loop. The quarantine lasts for the session. Keyboard Tab into and through frames works again in desktop Chrome.
+  - **No inline card for panel artifacts:** a markdown (or other panel-only) artifact, or one placed in the panel, no longer briefly shows the inline "Preparing…" card. The server now sends the short arguments the model wrote before `code` (`kind`, `placement`, `title`) along with the streamed preview, once, and only those keys. The console reads them case-insensitively, as the plugin does.
+  - **Real tool durations after reload:** tool cards show the server-measured duration, which is now stored on the tool's end frame. When that duration isn't known, the card shows none instead of a fake "0ms".
+  - **Same turn time live and after reload:** a finished or stopped turn's footer time is now when the turn ended, which is what a reload shows, instead of when it started. This also holds when a reattached turn finishes or a stalled stream is settled from the server, both of which now use the server's own end time.
+
+- **Artifacts verify inline renders, file documents in the panel, and stop re-reporting verdicts (#4076).** An inline artifact's create/edit reply now names the `check_artifact(<id>)` call to make, because its chat frame mounts after the reply and no verdict can ride it. `check_artifact` waits the full window for an inline frame even when no panel has polled, so a check right after a reload no longer answers "no result yet" in milliseconds. The skill and `show_artifact` now send a standalone document (README, spec, report, letter) to the panel as a `markdown` artifact with a short summary in chat. A diagram is a `mermaid` artifact, not a chat-text fence (chat shows those as code). Text-only replies ask the model to quote the artifact id and not to offer buttons the client can't click. A vega-lite spec's `$schema` is dropped before drawing, so a v5 pin no longer logs a version warning against the bundled v6. The shell reports each render verdict once per artifact version, across remounts.
+
+- **No more lost keystrokes when an artifact grabs focus (#4076).** When an inline artifact or a frame component pulls keyboard focus away from the composer, the console now hands focus back straight away, and again a moment later as a fallback. Before, in Chrome it waited about 10 ms first. Every key you typed in that gap went to the artifact. This happened most with an artifact you had chosen to run anyway ("Run it") and then clicked away from. The frames also no longer request a `pointer-lock` permissions-policy feature that Chrome does not recognise. Pointer lock still works through the sandbox's `allow-pointer-lock` token.
+
+- **The Artifact panel follows only the active chat's artifacts (#4076).** A panel artifact made by
+  another chat tab, by a `/v1`, A2A or ACP client, or saved before chats were recorded no longer
+  takes the panel over. It stays in the picker, and **Open in panel** still shows it. The console
+  now tells the panel which chat tab is active, so switching tabs moves the panel to that chat's
+  newest panel artifact.
+- **"Open in panel" never opens a 0 px panel (#4076).** A right or bottom dock stored at 0 px
+  (left that way by a drag-to-collapse) reopens at its default size.
+- **Inline artifacts no longer stick at 80 px with a clipped heading (#4076).** A frame whose
+  content settled late inside a viewport-sized wrapper (`height: 100vh`) kept its first, too-early
+  measurement. The frame now re-measures as the content and fonts settle, and sizes a
+  viewport-sized layout to its content.
+
+- **Artifact frames use the console theme's scrollbars and controls, not the OS's (#4076).** An artifact frame's `color-scheme`, which controls native scrollbars, date pickers and form controls, was read from the shell page and so followed the operating system. On a dark console with a light OS, frames drew light scrollbars, and the reverse. It now follows the console's own background colour.
+
+- **"Open in panel" no longer shows a blank or stale Artifact panel (#4076).** Opening the panel from a chat chip rendered the artifact the panel last remembered and then, about 2ms later, the one you clicked. Chrome drops a frame swap made while the previous one is still loading, so the panel kept the old artifact, or stayed black, under the correct picker label until a reload. The panel now resolves the clicked artifact before it renders. A frame never re-loads identical content, and a second swap on a frame that has not finished its first load goes into a fresh frame, so the newest artifact always shows at once.
+
+- **The Artifact panel ignores stale poll answers, and a pending "open this" request survives them (#4076).**
+  - **Problem:** the panel's store poll can overlap with a second poll (started by a deep-link or by the tab coming back). If the older answer landed last, it rolled the panel's copy of the store back, so the panel could jump back to an older artifact for one poll. A poll already in flight when the agent announced a new artifact could also answer without that artifact. The panel then dropped the "open this artifact" request as if the artifact had been deleted, so a pinned panel never switched to the new artifact.
+  - **Fix:** polls are numbered. An answer older than the one already applied is ignored, and only a poll sent after the request arrived can drop it.
+  - **Placement is now covered by tests:** new tests check every store write an inline artifact goes through: create (same chat, `/v1`, `show_service`), the render-status stamp, edit, rewrite and pin. No poll can see an inline artifact without its `placement`.
+
+- **The Artifact panel stays put when an inline answer arrives, and its frame re-themes fully (#4076).**
+  The panel's follow-newest chased the store's current artifact, so an inline svg answered in the same
+  chat, or an inline artifact another session made over `/v1`, took over a panel that was showing a
+  document. Follow-newest now tracks panel-placed artifacts only (ADR 0118 D2), and a new panel
+  artifact still auto-opens. A live theme switch now flips the frame's `color-scheme` along with its
+  tokens, so native controls and scrollbars follow it. The shell page's own `color-scheme` follows the
+  console theme instead of the OS. An uncaught `send()`/`openLink()` refusal is no longer reported as
+  an uncaught promise rejection, and the panel frame drops `allow="pointer-lock"`, which Chrome
+  warned is an unrecognized feature. Pointer lock still works through the `allow-pointer-lock`
+  sandbox token.
+
+- **A stopped turn reads stopped, and the confirm chip's checkbox stays with its label (#4076).** Pressing Stop while a tool call was still running (say `show_artifact` streaming its code) used to settle that call as done, so after a reload the cancelled card showed a green ✓ with empty args and nothing said the turn had been stopped. A call cut off by a stop now shows a neutral "stopped" (no ✓, no spinner), the folded tools chip drops its ✓ too, and the turn's footer says **Stopped**. That holds for the live Stop, a reload, a cold rebuild from the server's `canceled` task, and a reattach. A canceled turn no longer rebuilds as an error bubble either. Separately, the send confirm chip's "Always allow from this artifact" checkbox stays next to its label on one line, and the whole control wraps below Send / Dismiss on a narrow column instead of splitting.
+
+- **Inline chart verdicts and quiet send refusals (#4076).** An inline `vega-lite` chart now reports its render verdict from its first successful draw: a theme push that lands mid-draw is coalesced into one redraw after it, instead of restarting the draw and holding back the verdict. A refused `protoArtifact.send()`/`openLink()` (agent busy, dismissed, rate-limited) no longer covers the artifact with the red error overlay or records a failed render — the shim tags bridge refusals and the error hook logs them quietly, while real errors still show. The `rendering-artifacts` skill now shows `send()` with its Promise handled ("Sent" only on success, a quiet "Not sent: …" on refusal), and says firmly that every standard chart is its own `vega-lite` artifact, even one added to an existing tool — never bars hand-built from divs, CSS or SVG.
+
+- **Inline artifact frames release their slot after resume (#4111).** Clicking "Click to resume" on an evicted inline artifact frame no longer claims the live slot a second time, so unmounting it frees the slot instead of leaking it; a mounting frame no longer flashes the resume card before it registers, and a remounted frame restores its last measured height.
+
+- **Streamed artifact previews stream on the Claude OAuth lane (#4120).** The `anthropic-oauth` client now sets `eager_input_streaming` on write tools that declare `stream_args` (show/update/rewrite_artifact), so a tool's streamed argument arrives incrementally and the D3 inline preview streams instead of landing in one burst at message end.
+
+- **Streamed preview shows on turns without reasoning (#4121).** The live inline-artifact preview (ADR 0118 D3 / S8c) now renders on an unfolded turn — a `show_artifact` call with no reasoning part, as Claude on the OAuth lane emits — not only inside the folded WorkBlock. ChatMessageView drives the spotlit call through the same `inlineArtifactPreview` / `StreamingPreview` path and hands it over to the real inline frame once the artifact-ref lands.
+
+- **Inline artifacts come back live after switching chats (#4123).** A hidden chat tab stays mounted and holds its live-frame slots, so inline frames in the chat you switched to could stay stuck on "Click to resume". An evicted inline frame now re-registers when it scrolls back into view, so least-recently-seen eviction reclaims a slot from the hidden tab's frames — no click needed. The re-register keeps the single-claim invariant, so no slot leaks (#4111).
+
+- **An inline artifact's tool result says it's inline in the chat (#4124).** `show_artifact`
+  no longer replies "now showing in the Artifact panel" for an artifact that renders inline —
+  it says "now showing inline in the chat". `check_artifact` is placement-aware: an inline
+  artifact with no render verdict yet reports that it's rendering inline in the chat or hasn't
+  been scrolled into view, instead of telling the model the panel may be closed (which led it
+  to tell the user to open a panel). Panel artifacts keep the open-the-panel hint.
+
+- **The "from ‹title›" label sits on its own line (#4124).** A send-to-chat user turn's artifact label was `inline-flex`, so it ran into the message ("from Bill SplitterI am splitting…"). It is now block-level `flex`, on its own line above the text. The inline preview placeholder is unchanged: with inline the default placement (S13), a call whose placement isn't known yet is treated as inline.
+
+- **Inline artifacts keep their own colours at handover (#4124).** The artifact frame's live re-theme used to write the console's background and text colour as inline styles on the artifact's `<html>`/`<body>`, which beat the artifact's own `body` rule. So once the real frame took over from the streamed preview, anything inheriting the artifact's text colour switched to the console's, and a dark card's title and buttons went near-black on a light console. The re-theme now updates only the `--pl-*` theme tokens, and the frame's base colours read those tokens. Unstyled artifacts still follow the console theme live, and an artifact's own colours always win.
+
+- **One live inline card per artifact (#4124).** When an agent revises an inline artifact several times in one chat (e.g. parallel `update_artifact` calls producing v2 through v6), only the newest version stays a live frame; earlier versions collapse to a compact "v2 → superseded by v6" chip that still opens its version in the Artifact panel and no longer uses a slot in the 6-live-frame cap. Different artifacts and other chats are unaffected, and a reloaded transcript follows the same rule.
+
+- **Plain API clients get honest artifact replies (#4144).** A `/v1/chat/completions`, `POST /api/chat` or relay-plugin (Discord, `HOST.invoke`) client receives only the reply text, yet `show_artifact` told the model the artifact was "now showing inline in the chat" and `check_artifact` said "check again shortly", which looped (one `/v1` call used ~222k prompt tokens). Each turn now stamps a `renders_ui` flag from its origin into the graph state; on a text-only client the artifact tools say the artifact was saved but can't be displayed (with its id), skip the render wait and the chat chip, and `check_artifact` answers at once that there is no viewer to check. On the console, an inline artifact with no verdict yet now says the render can't be confirmed and not to keep re-checking, instead of inviting a loop. The `artifact.show` plugin service takes the same flag (`renders_ui=`, read with the new `graph.sdk.renders_ui(state)`), so a caller like the data plugin's `data_chart` can return the honest text-only reply too.
+
+- **Chat history shows the right time again (#4145).** The chat session and turn routes now send `last_updated` as zoned UTC (`+00:00`) instead of a zoneless timestamp a browser read as local time, which stamped restored chats hours off (7 hours for an operator at UTC-7). The console also reads any zoneless server timestamp as UTC, so a response from an older server renders correctly too.
+
+- **An inline artifact reports its render check even when the chat isn't on screen (#4147).** The newest inline artifact from the turn in progress now loads straight away, even with the console in a background window, behind another chat tab, or scrolled out of view. Before, its frame waited until it was scrolled into view, so `check_artifact` kept answering "no render result yet". It still counts toward the six-live-frame limit. Artifacts from earlier turns and reloaded history still load only when scrolled into view.
+
+- **A reloaded chat shows the turns another browser ran in it after this one cached it (#4162).** Suppose a browser opened a chat (for example, while another browser's turn in it was still running) and kept it in its local cache. It would then never show that chat's later turns, finished or stopped, no matter how often it reloaded, even though the server had them. On boot the console now notices when the server has more turns for a cached chat than the cache holds. It adds the turns the cache never saw and redraws any turn it only held as a running snapshot. Turns it already rendered stay as they are.
+
+- **Secret redaction no longer eats the quote, bracket or comma after a token — and never leaves part of a secret behind (#4166).**
+  The bearer pattern matched `\S+`, so `"Authorization: Bearer <jwt>",` reached the
+  review panel as `"Authorization: Bearer [REDACTED]` and a PR was FAILed on a
+  SyntaxError that wasn't on disk. Header and `KEY=value` redaction is now quote-aware:
+  a quoted value is redacted up to its matching closing quote (kept), an unquoted one up
+  to whitespace, a quote or a closing bracket — so no suffix of the secret survives.
+  `github_pat_`, base64url `npm_` tokens, standalone JWTs, `ASIA` key ids and
+  URL-userinfo passwords are covered too, the AWS/npm key names are redacted in dict
+  form, and code-review roles are told `[REDACTED]` marks are the runtime's, never a
+  defect.
+
+- **Sensitive dict keys are redacted whatever their case or separator (#4167).**
+  `{"ApiKey": …}`, `apiKey`, `Api-Key`, `x-api-key` and `AUTHORIZATION` slipped past the
+  exact-spelling key check; keys are now casefolded with `-`/`_` dropped before lookup,
+  while ordinary keys like `tokenizer` or `author` stay untouched.
+
+- **A short stall timeout no longer stops `/workflow` and `/<subagent>` runs that are still working (#4168).** These runs report liveness at most every 5s. Before this fix, setting `model.turn_stall_timeout_seconds` below that cadence (for example `3`) made the stall guard stop a healthy run between two progress frames. Now any non-zero window below 15s (3x the cadence) is raised to 15s, and a one-time WARNING names the value that was used. The Settings page also refuses a value in that range and explains why. `0` still disables the guard. The turn-liveness tests also stop flaking under CI load: they now measure the stall window on a virtual clock (a new seam, `a2a_impl.executor._frame_within`) instead of racing a sub-second wall-clock window.
+
+### Security
+- **An artifact can't open a tab without asking you (#4076).** `protoArtifact.openLink(url)` from an inline artifact (and `protoComponent.openLink` from a frame-rendered plugin component) used to open the tab as soon as the https check passed. It now goes through the same confirm chip as `send`: "Open ‹host› in a new tab?" with **Open**, **Dismiss** and **Always allow links from this artifact**. Link trust is stored separately from send trust, so trusting an artifact's messages never lets it open tabs. The same rate limits apply (one open per 2 s, one chip at a time), the `artifact.open_link_origins` setting now actually narrows which origins may open, and the tab opens from your click with no opener and no referrer. The artifact's Promise now resolves only if the tab really opened: a dismissed link or a blocked pop-up rejects with the reason instead of reporting success.
+
+- **Artifact send requires a click inside the artifact (#4122).** An inline artifact (or frame-rendered plugin component) can only post a message to chat when the triggering gesture landed INSIDE its own frame — the send gate now also requires `document.activeElement` to be that frame's iframe, not just a live `navigator.userActivation`. A recent click on console chrome (a "Click to resume" card, a tab, "Open in panel") or a click meant for a sibling frame no longer satisfies the gate, closing a hole where an autosend-on-load could ride the resume click.
+
+- **A trusted artifact can't mislabel where its message came from (#4137).** A send from an "Always allow" artifact is now tagged with the host's own artifact id and version, the same as a confirmed send, never the id and version the frame claims. Each new send proposal also starts with "Always allow" unticked, so a tick on one message never carries over to the next.
+
+- **Artifacts propose, you decide, before anything is sent to chat (#4137).** `protoArtifact.send(text)` from an inline artifact (and `protoComponent.send` from a frame-rendered plugin component) no longer posts on its own. The console shows a confirm chip under the frame (`Send to chat: "…"` with **Send**, **Dismiss** and **Always allow from this artifact**), and the message goes out only when you click Send. This replaces the user-activation + focus gate, which an artifact could satisfy by focusing itself after any console click. "Always allow" trusts that artifact (all of its versions; for components, that plugin's component kind) in this browser and skips the chip, but the length, "the agent is busy" and rate limits still apply. Dismiss rejects the frame's Promise. A new proposal replaces the open chip instead of stacking, and proposals are rate-limited.
+
 ## [0.200.0] - 2026-10-10
 
 ### Fixed
