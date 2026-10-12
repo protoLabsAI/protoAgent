@@ -37,6 +37,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -544,6 +545,41 @@ async def record_friction(kind: str, summary: str, detail: str = "", severity: s
         return "summary is required (one line: what was the friction?)"
     _log(kind, summary, detail, severity, source="agent")
     return f"logged {severity} {kind} friction: “{summary}”."
+
+
+# A plugin's `source` lands in the ledger as-is, so it is held to a short, plain label.
+_SOURCE_RE = re.compile(r"[^A-Za-z0-9_.:-]+")
+
+
+def record_service(kind: str, summary: str, detail: str = "", severity: str = "minor", *, source: str = "") -> str:
+    """The ``friction.record`` service (ADR 0116): record friction from a plugin's own code.
+
+    ``record_friction`` is an agent TOOL, so it only ever captured what went wrong inside a
+    turn. A plugin's background work (projectBoard's loop: hung coder drives, a missing
+    epic base, preflight holds) fails outside any turn, and none of it reached the ledger:
+    protoEngineer's friction review went quiet for two weeks of heavy board trouble.
+
+    Same ledger, same grouping (by ``kind`` + ``summary``), so a caller should keep
+    ``summary`` STABLE across occurrences (no ids, timestamps or counts) and put the
+    specifics in ``detail``. ``source`` names the plugin (``"project_board"``) and is
+    stamped on the record as ``plugin:<source>``. Synchronous (one small append) and never
+    raises: returns the grouped row's id, or ``""`` when the input is invalid or the write
+    failed. Called through ``graph.sdk.record_friction``, which no-ops when this plugin is
+    off."""
+    try:
+        kind = str(kind or "").strip()
+        summary = str(summary or "").strip()
+        if kind not in _KINDS or not summary:
+            log.debug("[friction] record_service: refused kind=%r summary=%r", kind, summary[:60])
+            return ""
+        if severity not in _SEVERITIES:
+            severity = "minor"
+        label = _SOURCE_RE.sub("-", str(source or "").strip())[:64].strip("-") or "unknown"
+        _log(kind, summary, str(detail or ""), severity, source=f"plugin:{label}")
+        return entry_id(kind, _clip(summary, 200))
+    except Exception:  # noqa: BLE001 — recording friction must never break its caller
+        log.warning("[friction] record_service failed", exc_info=True)
+        return ""
 
 
 def _rewrite_ledger(path: Path, lines: list[str]) -> None:
@@ -1247,6 +1283,15 @@ def register(registry):
     global _REGISTRY
     _REGISTRY = registry
     registry.register_tools([record_friction, friction_review, resolve_friction])
+    # ADR 0116 service: how ANOTHER plugin's background work records friction here
+    # (`graph.sdk.record_friction`), without importing this package.
+    register_service = getattr(registry, "register_service", None)
+    if register_service is not None:
+        register_service(
+            "record",
+            record_service,
+            description="Record a friction point from plugin code (kind, summary, detail, severity, source).",
+        )
     registry.register_middleware(lambda config: FrictionMiddleware())
     # ADR 0079 — the agent observes its own backlog instead of re-reporting it (see
     # ``open_friction_work``). Bounded and self-limiting: a quiet ledger adds no lines.
