@@ -644,6 +644,11 @@ def _app_root() -> Path:
     return root
 
 
+def app_root() -> Path:
+    """Read-only asset root shared by runtime consumers across deployment layouts."""
+    return _app_root()
+
+
 def box_root() -> Path:
     """Public alias for :func:`_box_root` — the machine-shared base.
 

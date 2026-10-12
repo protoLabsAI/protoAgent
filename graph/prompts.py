@@ -289,9 +289,9 @@ def build_system_prompt_parts(
     if not soul:
         soul = _read_file(f"{workspace}/SOUL.md")
     if not soul:
-        from infra.paths import _app_root
+        from infra.paths import app_root
 
-        soul = _read_file(_app_root() / "config" / "SOUL.md")
+        soul = _read_file(app_root() / "config" / "SOUL.md")
     if soul:
         parts.append(("SOUL", soul))
     else:

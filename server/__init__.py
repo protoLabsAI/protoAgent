@@ -78,9 +78,9 @@ _event_bus = EventBus(ring=512)  # Server→client SSE push channel (ADR 0003). 
 
 def _bundle_root() -> Path:
     """Shared read-only asset root for source, wheel and frozen installs."""
-    from infra.paths import _app_root
+    from infra.paths import app_root
 
-    return _app_root()
+    return app_root()
 
 
 def _ensure_ca_bundle_env() -> None:

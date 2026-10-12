@@ -28,6 +28,7 @@ def test_assets_and_version_share_the_deployment_root(layout, tmp_path, monkeypa
             '[project]\nname = "protolabs-agent"\nversion = "9.8.7"\n', encoding="utf-8"
         )
     monkeypatch.chdir(tmp_path)
+    assert paths.app_root() == root
     assert paths._app_root() == root
     assert server._bundle_root() == root
     assert paths._anchored_pyproject_version() == (None if layout == "wheel" else "9.8.7")
@@ -68,3 +69,12 @@ def test_source_soul_fallback_uses_shared_asset_root(tmp_path, monkeypatch):
         assert "source-layout-soul-sentinel" in prompts.build_system_prompt(workspace=str(tmp_path / "workspace"))
     finally:
         paths.reset_instance_paths()
+
+
+def test_source_layout_recognizes_the_real_project_manifest(tmp_path, monkeypatch):
+    manifest = (paths.app_root() / "pyproject.toml").read_text(encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(manifest, encoding="utf-8")
+    (tmp_path / "src" / "infra").mkdir(parents=True)
+    monkeypatch.setattr(paths, "__file__", str(tmp_path / "src" / "infra" / "paths.py"))
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
+    assert paths.app_root() == tmp_path
