@@ -1,0 +1,88 @@
+/* VENDORED — @protolabsai/ui-css@0.67.0, styles/embed.css, byte-for-byte.
+ *
+ * The artifact shell serves this file as-is from /plugins/artifact/vendor as text/css, and the
+ * sandboxed frame embeds it (FRAME-ONLY). These are :where() zero-specificity ELEMENT defaults
+ * (html/body/input/select/textarea/button/a/table) wired to --pl-* tokens, so the plain markup an
+ * artifact writes still looks like the console in either theme, paired with a live token snapshot
+ * from the vendored @protolabsai/design/embed module. NEVER @import this anywhere under apps/web:
+ * dropping element defaults into the console would restyle its own markup (which is exactly why the
+ * package does not @import it from styles.css).
+ *
+ * DO NOT EDIT BY HAND — copy verbatim from the package. tests/test_artifact_plugin.py asserts this
+ * file is byte-identical to the installed @protolabsai/ui-css (header aside) when present.
+ * Refs protoLabsAI/protoContent#577, protoLabsAI/protoContent#578.
+ */
+
+/* @protolabsai/ui-css — embed.css: themed defaults for UNSTYLED elements in a sandboxed frame.
+ *
+ * OPT-IN, and deliberately NOT @imported by styles.css: these are ELEMENT defaults
+ * (html/body/input/select/textarea/button/a/table), so dropping them into a host app that only
+ * wants the .pl-* classes would restyle its own markup. A frame embeds them on purpose —
+ *
+ *     import "@protolabsai/ui-css/styles/embed.css";   // the existing ./styles/* export covers it
+ *
+ * paired with a live `--pl-*` snapshot from @protolabsai/design/embed (themeTokenSnapshot +
+ * snapshotToCss), so the plain markup an artifact writes still looks like the console in either
+ * theme. Ported from the protoAgent artifact shell's DEFAULTS (plugins/artifact/shell.js).
+ *
+ * The WHOLE selector — pseudo-classes included — is wrapped in :where(), e.g. :where(button:hover)
+ * and :where(input:focus-visible, …), NOT :where(button):hover. That keeps specificity at (0,0,0),
+ * so ANY author rule in the frame — even a bare type selector like `button{…}` at (0,0,1) — wins
+ * outright. (Leave a pseudo-class outside :where() and it jumps to (0,1,0) and silently overrides
+ * the author; embed.test.mjs asserts nothing trails the outer :where() to catch exactly that.)
+ * Every value is a --pl-* token (the frame defines them from the host snapshot); the only literals
+ * are structural (border/outline widths, the color-scheme keyword) plus the px fallbacks the shell
+ * carried inside var(). No literal colours. */
+
+/* Native controls (scrollbars, date pickers, form widgets) follow this. A [data-theme] force or
+ * the snapshot's own `color-scheme:` declaration — both higher specificity — override it. */
+:where(:root) {
+  color-scheme: light dark;
+}
+
+:where(html, body) {
+  font-family: var(--pl-font-sans, system-ui, sans-serif);
+  line-height: var(--pl-font-line-height-body);
+}
+
+:where(input, select, textarea) {
+  font: inherit;
+  color: var(--pl-color-fg);
+  background: var(--pl-color-bg-inset, transparent); /* ds-audit-ignore stale-fallback — no-snapshot frames inherit the page ground */
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius, 4px);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
+}
+
+:where(input:focus-visible, select:focus-visible, textarea:focus-visible) {
+  outline: 2px solid var(--pl-color-focus, var(--pl-color-accent));
+  outline-offset: 1px;
+}
+
+:where(button) {
+  font: inherit;
+  color: var(--pl-color-fg);
+  background: var(--pl-color-bg-raised, transparent); /* ds-audit-ignore stale-fallback — no-snapshot frames inherit the page ground */
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius, 4px);
+  padding: var(--pl-space-1_5) var(--pl-space-3);
+  cursor: pointer;
+}
+
+:where(button:hover) {
+  background: var(--pl-color-bg-hover, var(--pl-color-bg-raised));
+}
+
+:where(a) {
+  color: var(--pl-color-accent);
+}
+
+:where(table) {
+  border-collapse: collapse;
+}
+
+:where(th, td) {
+  border-bottom: 1px solid var(--pl-color-border);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
+  text-align: left;
+}

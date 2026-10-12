@@ -6,15 +6,17 @@
 // `:where()` control defaults, and the DS plugin-kit stylesheet. The streamed PREVIEW that
 // stands in for that frame while the artifact is still being written must look the same — else
 // it reads as a white card (OS light, console dark) or bare browser controls, then jumps to the
-// themed frame at handover. Its CSP is `default-src 'none'`, so a `<link>` to the kit can't
-// load: the kit's CSS TEXT is fetched once per page, cached, and inlined instead (the CSP stays
-// tight — no network origin is ever allowed into the preview).
+// themed frame at handover. Its CSP is `default-src 'none'`, so a `<link>` to the kit or the
+// control-default sheet can't load: their CSS TEXT is fetched once per page, cached, and inlined
+// instead (the CSP stays tight — no network origin is ever allowed into the preview).
+//
+// The DS element defaults (the `:where()` control resets, ported from the artifact shell's
+// `DEFAULTS`) are NOT bundled into apps/web. They are vendored ONCE into the artifact plugin — the
+// DS `styles/embed.css` sheet, served from its same-origin vendor route — the single vendored copy
+// the live artifact frame also loads. The preview FETCHES that route at runtime, exactly as it
+// fetches the kit (protoContent#577): a runtime fetch, never a build-time console dependency.
 
 import { EMBED_TOKENS, snapshotToCss, themeTokenSnapshot } from "@protolabsai/design/embed";
-// The DS's themed defaults for UNSTYLED elements in a frame (ported from the artifact shell's
-// `DEFAULTS`): zero-specificity `:where()` rules, so any rule the artifact writes wins outright.
-// Inlined as text — the preview CSP has no network origin for a `<link>`.
-import embedDefaultsCss from "@protolabsai/ui-css/styles/embed.css?raw";
 
 import { consoleTheme, PL_TOKEN_VARS } from "../app/pluginFrameHandshake";
 import { apiUrl } from "../lib/api";
@@ -24,9 +26,6 @@ import { apiUrl } from "../lib/api";
  *  artifact shell carries into every live frame) unioned with the design package's full token list,
  *  so the preview resolves every `var(--pl-…)` the live frame does. */
 const PREVIEW_TOKENS: readonly string[] = [...new Set([...EMBED_TOKENS, ...PL_TOKEN_VARS])];
-
-/** The themed control defaults the preview inlines — `@protolabsai/ui-css/styles/embed.css`. */
-export const PREVIEW_CONTROL_DEFAULTS = inlineSafeCss(embedDefaultsCss);
 
 /** The console's light/dark scheme — what its OWN palette renders as (the root's computed
  *  `color-scheme`, which the theme machinery sets from the operator's theme), falling back to the
@@ -53,8 +52,44 @@ export function previewThemeCss(): string {
   return (
     snapshotToCss(snapshot, ":root[data-theme]") +
     "html,body{margin:0;background:var(--pl-color-bg);color:var(--pl-color-fg)}" +
-    PREVIEW_CONTROL_DEFAULTS
+    cachedControlDefaults()
   );
+}
+
+// ── The DS element-default control sheet, fetched once and cached ───────────────────────────
+
+let controlDefaultsCss: string | null = null;
+let controlDefaultsPromise: Promise<string> | null = null;
+
+/** The DS element defaults (the `:where()` control resets) if already loaded, else "" — the
+ *  preview inlines whatever is cached when {@link previewThemeCss} is read, and the rest arrives
+ *  once {@link loadControlDefaults} settles and the theme is re-posted (the same shape as the kit
+ *  below). Zero-specificity, so any rule the artifact writes still wins outright. */
+export function cachedControlDefaults(): string {
+  return controlDefaultsCss ?? "";
+}
+
+/** Fetch the DS element-default sheet ONCE per page and cache its (inline-safe) text. The sheet is
+ *  `@protolabsai/ui-css` `styles/embed.css`, vendored into the artifact plugin and served from its
+ *  same-origin vendor route — the single vendored copy the live artifact frame also loads, never a
+ *  build-time import under apps/web and never a `<link>` (the preview CSP has no network origin).
+ *  Resolves "" on any failure — the preview is then themed by the tokens alone, never left blank. A
+ *  failed fetch is retried on the next call. */
+export function loadControlDefaults(): Promise<string> {
+  if (controlDefaultsCss !== null) return Promise.resolve(controlDefaultsCss);
+  if (controlDefaultsPromise) return controlDefaultsPromise;
+  controlDefaultsPromise = (async () => {
+    try {
+      const res = await fetch(apiUrl("/plugins/artifact/vendor/pl-embed.css", { host: true }));
+      if (!res.ok) throw new Error(`pl-embed.css ${res.status}`);
+      controlDefaultsCss = inlineSafeCss(await res.text());
+      return controlDefaultsCss;
+    } catch {
+      controlDefaultsPromise = null; // retry next time
+      return "";
+    }
+  })();
+  return controlDefaultsPromise;
 }
 
 // ── The DS plugin-kit stylesheet, fetched once and cached ───────────────────────────────────
@@ -94,8 +129,10 @@ export function loadPluginKitCss(): Promise<string> {
   return kitPromise;
 }
 
-/** Test seam: forget the cached kit. */
+/** Test seam: forget the cached kit AND the cached DS control defaults. */
 export function resetPluginKitCssForTest(): void {
   kitCss = null;
   kitPromise = null;
+  controlDefaultsCss = null;
+  controlDefaultsPromise = null;
 }

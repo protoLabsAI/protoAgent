@@ -149,6 +149,11 @@ _VENDOR_FILES = {
     # guards the closure and the DS drift.
     "pl-design-embed.mjs",
     "tokens.js",  # the embed module's relative dependency (./tokens.js) — must resolve same-origin
+    # The DS element-default stylesheet (@protolabsai/ui-css /styles/embed.css). FRAME-ONLY
+    # :where() zero-specificity defaults, embedded in the sandboxed frame beside the embed
+    # module's token snapshot — NEVER imported under apps/web. Served as text/css (below), not
+    # JavaScript. Verbatim-vendored; tests/test_artifact_plugin.py guards the DS drift.
+    "pl-embed.css",
 }
 
 
@@ -198,9 +203,12 @@ def _build_view_router():
         f = Path(__file__).parent / "vendor" / name
         if not f.exists():
             return Response(status_code=404, content=f"{name} not vendored")
+        # Media type follows the extension: a .css default sheet (pl-embed.css) must be served
+        # as text/css so the frame can apply it as a stylesheet; everything else is a JS/ESM lib.
+        media_type = "text/css" if name.endswith(".css") else "application/javascript"
         return FileResponse(
             f,
-            media_type="application/javascript",
+            media_type=media_type,
             headers={
                 "Cache-Control": "public, max-age=31536000, immutable",
                 # The sandboxed artifact iframe is an opaque origin, so its load of

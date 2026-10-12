@@ -5,11 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildPreviewSrcdoc, previewCsp } from "./StreamingPreview";
 import {
+  cachedControlDefaults,
   cachedPluginKitCss,
   consoleScheme,
   inlineSafeCss,
+  loadControlDefaults,
   loadPluginKitCss,
-  PREVIEW_CONTROL_DEFAULTS,
   previewThemeCss,
   resetPluginKitCssForTest,
 } from "./previewTheme";
@@ -31,14 +32,13 @@ afterEach(() => {
 });
 
 describe("previewThemeCss", () => {
-  it("carries the console's --pl-* tokens, its scheme, html/body colours and the control defaults", () => {
+  it("carries the console's --pl-* tokens, its scheme and html/body colours", () => {
     const css = previewThemeCss();
     expect(css).toContain("--pl-color-bg:#101014;");
     expect(css).toContain("--pl-color-fg:#eeeeee;");
     expect(css).toContain("--pl-color-chart-series3:#ff8800;"); // the shell's chart tokens too
     expect(css).toContain("color-scheme:dark");
     expect(css).toContain("html,body{margin:0;background:var(--pl-color-bg);color:var(--pl-color-fg)}");
-    expect(css).toContain(PREVIEW_CONTROL_DEFAULTS);
     // Keyed on [data-theme] so it outranks the kit's :root defaults AND its OS media block.
     expect(css.startsWith(":root[data-theme]{")).toBe(true);
   });
@@ -78,6 +78,24 @@ describe("the preview srcdoc", () => {
     const doc = buildPreviewSrcdoc("n1", { scheme: "dark", css: "", kitCss: safe });
     expect(doc.match(/<script\b/gi)).toHaveLength(1);
   });
+
+  // Regression guard (protoContent#577): the control defaults are a RUNTIME fetch now (not a
+  // build-time import), but StreamingPreview starts it at mount so it has usually landed by the
+  // time the gate opens — and the DEFAULT srcdoc (no explicit theme) reads previewThemeCss() at
+  // build time, the exact path the component takes. So once the fetch has settled, the srcdoc
+  // inlines the defaults on FIRST paint rather than leaving the preview with bare browser controls.
+  it("inlines the cached DS control defaults into the default srcdoc's theme style once they've loaded", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(":where(button){color:var(--pl-color-fg)}"));
+    // Before the mount-time fetch lands, the default srcdoc carries none of them…
+    expect(buildPreviewSrcdoc("n")).not.toContain(":where(button)");
+    // …after it settles and caches them, the srcdoc built at gate-open carries them in the THEME
+    // style element (previewThemeCss concatenates them — the kit style stays untouched).
+    await loadControlDefaults();
+    const doc = buildPreviewSrcdoc("n");
+    expect(doc).toContain(":where(button)");
+    const themeStyle = doc.slice(doc.indexOf('<style id="proto-preview-theme">'), doc.indexOf("</head>"));
+    expect(themeStyle).toContain(":where(button)");
+  });
 });
 
 describe("loadPluginKitCss", () => {
@@ -92,6 +110,62 @@ describe("loadPluginKitCss", () => {
     resetPluginKitCssForTest();
     fetchSpy.mockRejectedValueOnce(new Error("offline"));
     expect(await loadPluginKitCss()).toBe("");
+  });
+});
+
+describe("loadControlDefaults", () => {
+  it("fetches the DS element defaults from the vendor route, caches them inline-safe, and inlines them", async () => {
+    const sheet = ":where(button){color:var(--pl-color-fg)} /* a<b */";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(sheet));
+    // Absent until loaded — never a build-time import, and the preview CSP blocks a <link>.
+    expect(cachedControlDefaults()).toBe("");
+    expect(previewThemeCss()).not.toContain(":where(button)");
+
+    const loaded = await loadControlDefaults();
+    expect(loaded).toContain(":where(button)");
+    expect(loaded).not.toContain("<"); // cached inline-safe (the a<b is escaped)
+    expect(await loadControlDefaults()).toBe(loaded); // once per page
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    // The single vendored copy, served same-origin by the artifact plugin's vendor route.
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("/plugins/artifact/vendor/");
+    expect(cachedControlDefaults()).toBe(loaded);
+
+    // previewThemeCss now inlines the defaults, after the tokens + html/body block.
+    const css = previewThemeCss();
+    expect(css).toContain(loaded);
+    expect(css.indexOf(loaded)).toBeGreaterThan(css.indexOf("html,body{margin:0"));
+  });
+
+  it("falls back to '' on a failed fetch and retries on the next call", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(new Response(":where(a){color:inherit}"));
+    expect(await loadControlDefaults()).toBe(""); // first attempt fails → "" (preview never blank)
+    expect(await loadControlDefaults()).toBe(":where(a){color:inherit}"); // not cached as "" — retried
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// r4 (protoContent#577): the DS element-default stylesheet lives once in the artifact plugin's
+// vendor dir, FRAME-ONLY. apps/web must not import it at build time — the preview fetches the
+// served vendor route instead. Read previewTheme.ts source to pin that nothing reintroduces the
+// import (the needle is split so this guard itself stays clear of the forbidden literal).
+describe("the DS element-default sheet is not imported under apps/web", () => {
+  it("previewTheme.ts sources the control defaults from the vendor route, not a build-time import", () => {
+    const src = Object.values(
+      import.meta.glob("./previewTheme.ts", { query: "?raw", import: "default", eager: true }),
+    )[0] as string;
+    // Nothing is imported from the ui-css package (where that sheet ships).
+    expect(src).not.toContain('from "@protolabsai/ui-css');
+    // No `import … <sheet>` statement survives.
+    const sheetName = "embed" + ".css";
+    const importOfSheet = src
+      .split("\n")
+      .find((l) => l.trimStart().startsWith("import") && l.includes(sheetName));
+    expect(importOfSheet, importOfSheet).toBeUndefined();
+    // It is fetched from the artifact plugin's same-origin vendor route instead.
+    expect(src).toContain("/plugins/artifact/vendor/");
   });
 });
 
