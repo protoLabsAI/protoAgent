@@ -49,6 +49,25 @@ function fireLoad(frame: HTMLIFrameElement) {
   });
 }
 
+function pairOf(frame: HTMLIFrameElement): string {
+  return /#pair=([0-9a-f]+)$/.exec(frame.getAttribute("src") || "")?.[1] ?? "";
+}
+
+/** A message posted FROM `frame`'s window (or a given source). */
+function fromFrame(frame: HTMLIFrameElement, data: Record<string, unknown>, source?: unknown) {
+  act(() => {
+    const ev = new MessageEvent("message", { data });
+    Object.defineProperty(ev, "source", { value: source ?? frame.contentWindow, configurable: true });
+    window.dispatchEvent(ev);
+  });
+}
+
+/** The declared page's handshake: it loads, then posts `ready` echoing the fragment's pair. */
+function handshake(frame: HTMLIFrameElement, pair = pairOf(frame)) {
+  fireLoad(frame);
+  fromFrame(frame, { type: "protoComponent:ready", pair });
+}
+
 function initNonce(post: PostSpy): string | undefined {
   const init = post.mock.calls.map((c) => c[0] as Record<string, unknown>).find((m) => m?.type === "protoComponent:init");
   return init?.nonce as string | undefined;
@@ -74,7 +93,7 @@ function mountHost(extra: Partial<FrameComponentHostProps> = {}, chat: Component
   );
   const frame = container.querySelector("iframe") as HTMLIFrameElement;
   const post = vi.spyOn(frame.contentWindow as Window, "postMessage").mockImplementation(() => undefined as never);
-  fireLoad(frame); // the first load mints the mount's capability and posts it in init
+  handshake(frame); // load + a paired ready earn the mount's one init (and its nonce)
   nonce = initNonce(post);
   return { frame, post };
 }
@@ -282,7 +301,7 @@ describe("FrameComponentHost — read channel (#4143)", () => {
       act(() => cb!([{ isIntersecting: true } as IntersectionObserverEntry], null as never));
       const frame = container.querySelector("iframe") as HTMLIFrameElement;
       const post = vi.spyOn(frame.contentWindow as Window, "postMessage").mockImplementation(() => undefined as never);
-      fireLoad(frame);
+      handshake(frame);
       nonce = initNonce(post);
 
       act(() => cb!([{ isIntersecting: false } as IntersectionObserverEntry], null as never));
@@ -389,29 +408,116 @@ describe("FrameComponentHost — per-mount capability (#4143 review F1)", () => 
     expect(readResults(spy)).toHaveLength(0);
   });
 
-  it("re-posts of init stop once revoked, and stop as soon as the frame echoes the nonce", async () => {
+  const inits = (spy: PostSpy) =>
+    spy.mock.calls.filter((c) => (c[0] as { type?: string })?.type === "protoComponent:init").length;
+  const navigatedNotice = () => container.querySelector('[data-testid="frame-component-navigated"]');
+
+  // Mount WITHOUT the handshake, so each test drives load/ready itself.
+  function mountRaw() {
+    act(() =>
+      root.render(h(FrameComponentHost, { id: "hs", frameUrl: "/plugins/demo/widget", plugin: "demo", props: {}, reads: ["features"] })),
+    );
+    const frame = container.querySelector("iframe") as HTMLIFrameElement;
+    const spy = vi.spyOn(frame.contentWindow as Window, "postMessage").mockImplementation(() => undefined as never);
+    return { frame, spy };
+  }
+
+  it("loads the declared page with a per-mount #pair fragment", () => {
+    const { frame } = mountRaw();
+    expect(frame.getAttribute("src")).toMatch(/\/plugins\/demo\/widget#pair=[0-9a-f]{32}$/);
+  });
+
+  it("a load alone earns no init, and there are no timed re-posts", () => {
     vi.useFakeTimers();
     try {
-      vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({}));
-      const { frame, post: spy } = mountHost();
-      const inits = () => spy.mock.calls.filter((c) => (c[0] as { type?: string }).type === "protoComponent:init").length;
-      expect(inits()).toBe(1);
+      const { frame, spy } = mountRaw();
+      fireLoad(frame);
       act(() => {
-        vi.advanceTimersByTime(150);
+        vi.advanceTimersByTime(10_000);
       });
-      expect(inits()).toBe(2); // still re-posting while the frame hasn't answered
-      act(() => {
-        const ev = new MessageEvent("message", { data: { type: "protoComponent:read", cid: 1, path: "features", nonce } });
-        Object.defineProperty(ev, "source", { value: frame.contentWindow, configurable: true });
-        window.dispatchEvent(ev);
-      });
-      act(() => {
-        vi.advanceTimersByTime(5_000);
-      });
-      expect(inits()).toBe(2); // the echo stopped the schedule
+      expect(inits(spy)).toBe(0);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("exactly one init per mount, only for a ready carrying the fragment's pair", () => {
+    vi.useFakeTimers();
+    try {
+      const { frame, spy } = mountRaw();
+      handshake(frame);
+      expect(inits(spy)).toBe(1);
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(inits(spy)).toBe(1); // never re-posted
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a page that navigated during parse (one load, no pair) gets no init and is unloaded", () => {
+    const { frame, spy } = mountRaw();
+    fireLoad(frame); // the ONLY load is the replacing page's
+    fromFrame(frame, { type: "protoComponent:ready" });
+    expect(inits(spy)).toBe(0);
+    expect(navigatedNotice()).not.toBeNull();
+  });
+
+  it("a ready with a guessed pair is refused and revokes the mount", () => {
+    const { frame, spy } = mountRaw();
+    fromFrame(frame, { type: "protoComponent:ready", pair: "0".repeat(32) });
+    expect(inits(spy)).toBe(0);
+    expect(navigatedNotice()).not.toBeNull();
+  });
+
+  it("a SECOND ready (even with the right pair) revokes the mount and its nonce", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse({}));
+    const { frame, spy } = mountRaw();
+    const pair = pairOf(frame);
+    handshake(frame, pair);
+    nonce = initNonce(spy);
+    const win = frame.contentWindow as Window;
+    fromFrame(frame, { type: "protoComponent:ready", pair });
+    expect(inits(spy)).toBe(1);
+    expect(navigatedNotice()).not.toBeNull();
+    await act(async () => {
+      const ev = new MessageEvent("message", { data: { type: "protoComponent:read", cid: 1, path: "features", nonce } });
+      Object.defineProperty(ev, "source", { value: win, configurable: true });
+      window.dispatchEvent(ev);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("a page that navigates after init and stalls its own load never receives the nonce", () => {
+    vi.useFakeTimers();
+    try {
+      const { frame, spy } = mountRaw();
+      handshake(frame);
+      // The declared page navigates; the new document never fires `load` (a hanging
+      // subresource). With no re-posts, nothing more is ever sent to it…
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(inits(spy)).toBe(1);
+      // …and if it asks, it is refused and the mount revoked.
+      fromFrame(frame, { type: "protoComponent:ready", pair: "nope" });
+      expect(inits(spy)).toBe(1);
+      expect(navigatedNotice()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a ready that arrives after a second load is refused", () => {
+    const { frame, spy } = mountRaw();
+    const pair = pairOf(frame);
+    fireLoad(frame);
+    fireLoad(frame); // navigated → revoked, frame unloaded
+    expect(navigatedNotice()).not.toBeNull();
+    fromFrame(frame, { type: "protoComponent:ready", pair });
+    expect(inits(spy)).toBe(0);
   });
 
   it("aborts and drops an in-flight read when the frame navigates", async () => {
@@ -435,9 +541,10 @@ describe("FrameComponentHost — per-mount capability (#4143 review F1)", () => 
     act(() => (container.querySelector('[data-testid="frame-component-navigated"] button') as HTMLButtonElement).click());
     const fresh = container.querySelector("iframe") as HTMLIFrameElement;
     expect(fresh).not.toBeNull();
-    expect(fresh.getAttribute("src")).toContain("/plugins/demo/widget");
+    expect(fresh.getAttribute("src")).toContain("/plugins/demo/widget#pair=");
+    expect(pairOf(fresh)).not.toBe(pairOf(frame)); // a fresh pairing secret for the new mount
     const spy = vi.spyOn(fresh.contentWindow as Window, "postMessage").mockImplementation(() => undefined as never);
-    fireLoad(fresh);
+    handshake(fresh);
     nonce = initNonce(spy);
     expect(nonce).toMatch(/^[0-9a-f]{32}$/);
     expect(nonce).not.toBe(first);

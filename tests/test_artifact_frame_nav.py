@@ -28,7 +28,11 @@ pytestmark = pytest.mark.platform_sensitive
 
 def _harness(js: str, body: str) -> str:
     return (
-        _js_function(js, "frameNavigator")
+        # The navigator also mints each document's capability (#4143 review): carry its helpers.
+        'var NONCE_SLOT = "__protoArtifactNonceSlot__";\n'
+        + _js_function(js, "mintNonce")
+        + "\n"
+        + _js_function(js, "frameNavigator")
         + r"""
 // A fake iframe: records its srcdoc assignments, its load listeners and its replacement.
 var made = 0, replacedTo = [];

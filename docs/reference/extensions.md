@@ -288,15 +288,40 @@ that escape the prefix, or that contain `..`, a query string or `**`, are logged
 
 | Direction | Message | Fields |
 |---|---|---|
-| host to frame | `protoComponent:init` | `props`, `theme`, and **`nonce`**: this mount's capability (32 hex chars). It is sent only in `init`, and only to the frame's first document. |
+| frame to host | `protoComponent:ready` | **`pair`**: the value of `#pair=<32 hex>` in the frame's own `location.hash`. Post it **exactly once**, when the script runs. |
+| host to frame | `protoComponent:init` | `props`, `theme`, and **`nonce`**: this mount's capability (32 hex chars). It is sent **once**, only in answer to a correctly paired `ready`, and is never re-posted. |
 | frame to host | `protoComponent:read` | `cid` (number, echoed back), `path` (relative to `/api/plugins/<plugin>/`, e.g. `features/bd-vbyd.24`), **`nonce`** (echoed from `init`). An optional `method` other than `GET` is refused. |
 | host to frame | `protoComponent:readResult` | `cid`, `ok`, `status` (the HTTP status, or `0` when the host refused before making a request), and either `json` (the parsed body, when `ok`) or `error` (a short reason). |
 
-**Echo `nonce` from `init` on every `protoComponent:read`, `protoComponent:send` and
-`protoComponent:openLink`.** A message without the current nonce is refused with
-`"missing or invalid nonce"`. A frame that navigates itself (a second `load`) loses its nonce
-immediately and is unloaded for a "navigated away" notice, so a page that replaces the plugin page
-can't inherit its reads or its send trust. Reload mounts a fresh frame with a new nonce.
+**The handshake.** The host loads the frame at `<frame_url>#pair=<pair>`, a fresh secret for each
+mount. A fragment never reaches a server and is dropped by any new navigation, so only the
+declared page can read it.
+
+1. The frame reads `pair` from `location.hash` and posts `{type: "protoComponent:ready", pair}`
+   once. After that it may clear the fragment with `history.replaceState`.
+2. The host answers with exactly one `{type: "protoComponent:init", props, theme, nonce}`.
+3. The frame echoes `nonce` on every `protoComponent:read`, `protoComponent:send` and
+   `protoComponent:openLink`. A message without the current nonce is refused with
+   `"missing or invalid nonce"`.
+
+Any sign of a second document revokes the mount immediately and unloads the frame for a
+"navigated away" notice: a second `load`, a second `ready`, or a `ready` with a missing or wrong
+`pair`. Reload mounts a fresh frame with a new `pair`. A page that replaces the plugin page
+therefore can't inherit its reads or its send trust. A frame that never sends `ready` never
+receives `init`.
+
+A minimal frame script:
+
+```js
+var pair = (location.hash.match(/pair=([0-9a-f]+)/) || [])[1];
+var nonce = null;
+addEventListener("message", function (e) {
+  if (e.source !== parent || !e.data) return;
+  if (e.data.type === "protoComponent:init") { nonce = e.data.nonce; /* render e.data.props */ }
+});
+parent.postMessage({ type: "protoComponent:ready", pair: pair }, "*");
+// later: parent.postMessage({ type: "protoComponent:read", cid: 1, path: "features/x", nonce: nonce }, "*");
+```
 
 The host serves a read only when all of these hold:
 

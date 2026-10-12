@@ -59,14 +59,30 @@ function theFrame(): HTMLIFrameElement {
   return frame as HTMLIFrameElement;
 }
 
-/** Spy on the mounted frame's own window.postMessage, then fire its load event (the host posts
- *  the init synchronously inside onLoad). Returns the spy. */
-function loadFrameWithSpy(frame: HTMLIFrameElement) {
-  const win = frame.contentWindow as Window;
-  const spy = vi.spyOn(win, "postMessage");
+/** The pairing secret the host put in this mount's frame URL fragment (`#pair=<hex>`). */
+function pairOf(frame: HTMLIFrameElement): string {
+  return /#pair=([0-9a-f]+)$/.exec(frame.getAttribute("src") || "")?.[1] ?? "";
+}
+
+/** What a well-behaved frame does: its document loads, then its script posts
+ *  `protoComponent:ready {pair}` (read from location.hash) — which earns exactly one init. */
+function frameReady(frame: HTMLIFrameElement, pair = pairOf(frame)) {
   act(() => {
     frame.dispatchEvent(new Event("load"));
   });
+  act(() => {
+    const ev = new MessageEvent("message", { data: { type: "protoComponent:ready", pair } });
+    Object.defineProperty(ev, "source", { value: frame.contentWindow, configurable: true });
+    window.dispatchEvent(ev);
+  });
+}
+
+/** Spy on the mounted frame's own window.postMessage, then run the load + ready handshake (the
+ *  host posts the init synchronously on a paired ready). Returns the spy. */
+function loadFrameWithSpy(frame: HTMLIFrameElement) {
+  const win = frame.contentWindow as Window;
+  const spy = vi.spyOn(win, "postMessage");
+  frameReady(frame);
   return spy;
 }
 
@@ -340,9 +356,7 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b / S19)
     const post = vi.spyOn(frame.contentWindow as Window, "postMessage").mockImplementation(() => undefined as never);
     // Load the frame so the host mints this mount's capability; a well-behaved frame echoes the
     // nonce from its init on every send/openLink (#4143 F1), so the helpers below add it.
-    act(() => {
-      frame.dispatchEvent(new Event("load"));
-    });
+    frameReady(frame);
     const init = post.mock.calls.find((c) => (c[0] as { type?: string })?.type === "protoComponent:init");
     currentNonce = (init?.[0] as { nonce?: string } | undefined)?.nonce;
     post.mockClear();
