@@ -221,6 +221,36 @@ def test_testkit_accept_component_frame_matches_the_host():
         )
 
 
+def test_testkit_accept_component_read_matches_the_host():
+    # The reads validator (ADR 0118 D5 amendment, #4143) is duplicated host-free too.
+    from graph.plugins.registry import _accept_component_read as host_accept
+
+    cases = [
+        "features",
+        "features/*",
+        "status",
+        "/api/plugins/p/features/*",  # absolute, own prefix — accepted + stripped
+        "/api/plugins/other/features",  # another plugin
+        "/api/config",  # core /api
+        "../other/x",
+        "features/../x",
+        "features?x=1",
+        "features#frag",
+        "features/**",
+        "feat*",
+        "features//x",
+        "features/./x",
+        "features/%2e%2e",
+        "features\\x",
+        "",
+        "   ",
+        None,
+        42,
+    ]
+    for pattern in cases:
+        assert testkit._accept_component_read("p", pattern) == host_accept("p", pattern), f"read drift for {pattern!r}"
+
+
 def test_fake_registry_register_service_runs_host_free_and_mirrors_refusals():
     # The fixed code path: register_service no longer imports graph.plugin_services, so it must
     # still namespace + validate exactly like the host (raising where the host warns-and-skips).

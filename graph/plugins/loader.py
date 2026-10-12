@@ -64,7 +64,7 @@ class PluginLoadResult:
     thread_id_resolver: object = None  # (request_metadata, session_id) -> str (#571); last plugin wins
     chat_commands: dict = field(default_factory=dict)  # token -> handler; user-only chat control commands
     components: dict = field(default_factory=dict)  # component-v1 kind -> props validator (#3617)
-    # component-v1 kind -> {"plugin", "frame_url"} (ADR 0118 D5, #4087). Parallel to
+    # component-v1 kind -> {"plugin", "frame_url", "reads"} (ADR 0118 D5, #4087/#4143). Parallel to
     # ``components``; carries each kind's owning plugin id and the public
     # ``/plugins/<id>/<frame>`` URL it renders in (``frame_url`` None when the kind declared
     # no frame), so GET /api/components can tell a renderer where a frame kind lives.
@@ -1117,10 +1117,15 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
             # plus the public ``/plugins/<id>/<frame>`` URL the registry already validated
             # against the manifest's public_paths — or None when the kind declared no frame.
             # Stored for every kept plugin kind so GET /api/components can attribute it.
+            # ``reads`` (#4143) rides alongside: the frame kind's accepted read patterns, relative
+            # to /api/plugins/<id>/ — the console host's allowlist for protoComponent:read. Only a
+            # frame kind can carry them (the registry drops reads without a frame).
             frame = getattr(registry, "component_frames", {}).get(name)
+            reads = list(getattr(registry, "component_reads", {}).get(name) or []) if frame else []
             result.component_frames[name] = {
                 "plugin": manifest.id,
                 "frame_url": f"/plugins/{manifest.id}/{frame}" if frame else None,
+                "reads": reads,
             }
         for name, fn in getattr(registry, "services", {}).items():  # plugin services (ADR 0116)
             # register_service namespaces every name, but `registry.services` is a plain dict a

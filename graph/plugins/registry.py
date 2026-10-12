@@ -8,6 +8,7 @@ explicit means a plugin never imports protoAgent internals to extend it.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path, PurePosixPath
 
 log = logging.getLogger("protoagent.plugins")
@@ -30,6 +31,43 @@ def _accept_component_frame(plugin_id: str, frame, public_paths) -> str | None:
     full = f"/plugins/{plugin_id}/{s}"  # resolve against the plugin's public view prefix
     if not any(full.startswith(pp) for pp in (public_paths or [])):
         return None
+    return s
+
+
+# One literal path segment of a component ``reads`` pattern (ADR 0118 D5 amendment, #4143):
+# URL-safe characters only, so a pattern can't smuggle a query (``?``), a fragment (``#``), a
+# percent-encoded ``..`` (``%2e%2e``) or a backslash past the segment checks.
+_READ_SEGMENT_RE = re.compile(r"[A-Za-z0-9._~:@+=,-]+")
+
+
+def _accept_component_read(plugin_id: str, pattern) -> str | None:
+    """Validate ONE pattern of a component's ``reads`` (ADR 0118 D5 amendment, #4143).
+
+    A read pattern names a GET route of the plugin's OWN bearer-gated data router, which the
+    console host fetches on the frame's behalf. It is RELATIVE to ``/api/plugins/<id>/`` (e.g.
+    ``"features/*"``); a pattern spelled absolute is accepted only when it starts with that
+    exact prefix, which is stripped. ``*`` matches exactly one path segment and must be the
+    WHOLE segment. Returns the cleaned relative pattern, or ``None`` (the caller logs + skips)
+    for a non-string/blank pattern, one that escapes the plugin prefix, any ``.``/``..``/empty
+    segment, a query string or fragment, ``**`` (or a partial ``*``), or a non-URL-safe char.
+
+    Host-free + stdlib-only so ``graph/plugins/testkit.py`` can duplicate it verbatim; a
+    parity test keeps the two copies in sync (same as ``_accept_component_frame``)."""
+    if not isinstance(pattern, str):
+        return None
+    s = pattern.strip()
+    prefix = f"/api/plugins/{plugin_id}/"
+    if s.startswith("/"):
+        if not s.startswith(prefix):
+            return None  # escapes the plugin's own prefix (another plugin, /api/*, ...)
+        s = s[len(prefix) :]
+    if not s or "?" in s or "#" in s or "**" in s:
+        return None
+    for seg in s.split("/"):
+        if seg == "*":
+            continue
+        if seg in (".", "..") or not _READ_SEGMENT_RE.fullmatch(seg):
+            return None  # empty, dot, partial-``*`` or non-URL-safe segment
     return s
 
 
@@ -144,6 +182,9 @@ class PluginRegistry:
         # every existing reader of it keeps working untouched (ADR 0118 D5, #4087). A later
         # card (S11b) carries this through the loader into GET /api/components.
         self.component_frames: dict = {}
+        # kind -> accepted ``reads`` patterns, relative to /api/plugins/<id>/ (ADR 0118 D5
+        # amendment, #4143): the plugin's own GET routes the console host fetches for the frame.
+        self.component_reads: dict = {}
         self.services: dict = {}  # "<plugin_id>.<name>" -> callable, other plugins' sdk.service (ADR 0116)
         self.service_meta: dict = {}  # name -> {"plugin_id", "description"}; parallel, see goal_verifier_meta
 
@@ -302,7 +343,7 @@ class PluginRegistry:
             return
         self.chat_commands[token] = handler
 
-    def register_component(self, name: str, validator, frame: str | None = None) -> None:
+    def register_component(self, name: str, validator, frame: str | None = None, reads=None) -> None:
         """Contribute a component-v1 KIND (ADR 0051) the chat stream may carry — e.g. a chip
         that points into this plugin's console view (the artifact plugin's ``artifact-ref``,
         #3617).
@@ -328,7 +369,18 @@ class PluginRegistry:
         frame iframe sends no bearer, the page must be auth-exempt: the frame is refused (same
         log-and-skip as a bad name) if it is absolute, contains a ``..`` segment, or is not
         covered by the manifest's ``public_paths``. An accepted frame is stored on
-        ``component_frames[name]`` for a later card to carry through the loader."""
+        ``component_frames[name]`` for a later card to carry through the loader.
+
+        ``reads`` (optional, ADR 0118 D5 amendment, #4143) lists the GET routes of THIS plugin's
+        bearer-gated data router the frame may read through the host-mediated read channel —
+        patterns RELATIVE to ``/api/plugins/<id>/`` (e.g. ``["features", "features/*"]``), where
+        ``*`` matches exactly one path segment. The frame posts ``protoComponent:read {cid,
+        path}``; the console host checks the path against these patterns, makes the authed GET
+        itself and posts back only the JSON — the bearer never reaches the frame. ``reads``
+        requires ``frame`` (it is meaningless without one). Each refused pattern — one that
+        escapes the plugin prefix, contains a ``..``/``.``/empty segment, a query string, ``**``
+        or a partial ``*`` — is logged and skipped; ``reads`` without a frame is logged and
+        ignored. Accepted patterns are stored on ``component_reads[name]``."""
         from graph.components import is_plugin_component_name
 
         if not is_plugin_component_name(name) or not callable(validator):
@@ -354,9 +406,48 @@ class PluginRegistry:
                     self.plugin_id,
                 )
                 return
+        stored_reads = self._accept_reads(name, reads, has_frame=stored_frame is not None)
         self.components[name] = validator
         if stored_frame is not None:
             self.component_frames[name] = stored_frame
+        if stored_reads:
+            self.component_reads[name] = stored_reads
+
+    def _accept_reads(self, name: str, reads, *, has_frame: bool) -> list[str]:
+        """The accepted ``reads`` patterns for component ``name`` (log-and-skip each refusal)."""
+        if reads is None:
+            return []
+        if not has_frame:
+            log.warning(
+                "[plugins] %s: component %r reads ignored — reads requires frame= (ADR 0118 D5)",
+                self.plugin_id,
+                name,
+            )
+            return []
+        if isinstance(reads, (str, bytes)) or not hasattr(reads, "__iter__"):
+            log.warning(
+                "[plugins] %s: component %r reads refused — must be a list of path patterns, got %r",
+                self.plugin_id,
+                name,
+                reads,
+            )
+            return []
+        accepted: list[str] = []
+        for pattern in reads:
+            cleaned = _accept_component_read(self.plugin_id, pattern)
+            if cleaned is None:
+                log.warning(
+                    "[plugins] %s: component %r read %r refused — must be a GET path under "
+                    "/api/plugins/%s/ (no '..', no query string, no '**'; '*' is one whole segment)",
+                    self.plugin_id,
+                    name,
+                    pattern,
+                    self.plugin_id,
+                )
+                continue
+            if cleaned not in accepted:
+                accepted.append(cleaned)
+        return accepted
 
     def register_service(self, name: str, fn, description: str = "") -> None:
         """Offer ``fn`` to OTHER plugins as the service ``<plugin_id>.<name>`` (ADR 0116).

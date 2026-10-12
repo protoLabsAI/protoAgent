@@ -170,6 +170,7 @@ export function ChatComponent({ spec }: { spec: ComponentSpec }) {
           props={spec.props || {}}
           registry={frameRegistry}
           title={spec.component}
+          reads={entry?.reads}
         />
       </div>
     );

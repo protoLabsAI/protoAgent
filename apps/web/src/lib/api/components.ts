@@ -1,6 +1,6 @@
 /**
  * The live component-v1 catalog (ADR 0118 D5 — `GET /api/components`, #4087/S11b): the core
- * widget kinds plus every plugin-contributed kind, each as `{name, plugin, frame_url}`. A
+ * widget kinds plus every plugin-contributed kind, each as `{name, plugin, frame_url, reads}`. A
  * frame kind carries the public `/plugins/<id>/<frame>` page that renders it (`frame_url`);
  * core widgets and frame-less kinds carry null. The frame-component host (ADR 0118 S12)
  * resolves a component name to its frame page through here — the name→host resolution ORDER
@@ -17,7 +17,8 @@
 import { useEffect, useState } from "react";
 
 import { onTopic } from "../events";
-import { request } from "./http";
+import { parseErrorBody, request } from "./http";
+import { apiUrl, applyAuth } from "./routing";
 
 /** One row of `GET /api/components`: a renderable component-v1 kind. `plugin` is null for a
  *  core widget; `frame_url` is the public `/plugins/<id>/<frame>` page a frame kind renders
@@ -26,6 +27,10 @@ export type ComponentCatalogEntry = {
   name: string;
   plugin: string | null;
   frame_url: string | null;
+  /** A frame kind's host-mediated read allowlist (ADR 0118 D5 amendment, #4143): GET path
+   *  patterns RELATIVE to `/api/plugins/<plugin>/`, where `*` matches exactly one segment.
+   *  Empty (or absent, from a pre-#4143 server) ⇒ the frame may read nothing. */
+  reads?: string[];
 };
 
 const CATALOG_PATH = "/api/components";
@@ -109,4 +114,77 @@ export function useComponentCatalog(): {
     };
   }, []);
   return { catalog, frameUrl: (name) => frameUrlFor(name, catalog) };
+}
+
+// ── Host-mediated component reads (ADR 0118 D5 amendment, #4143) ─────────────────────────
+// A frame component runs on an opaque origin with no bearer, so it asks its HOST to read one
+// of its plugin's own GET routes. FrameComponentHost decides whether the read is allowed (the
+// kind's declared `reads`, rate limits); this helper only performs the authed GET and shapes
+// the result. The bearer goes into the request headers here and NOWHERE else — the result
+// carries the status and the parsed JSON (or a reason), never headers or a raw body.
+
+/** Largest response body a component read may return (bytes, UTF-8). */
+export const COMPONENT_READ_MAX_BYTES = 256 * 1024;
+
+/** What the host posts back to the frame (minus the `type`/`cid` envelope). `status` is the
+ *  HTTP status, or 0 when the host refused or the request never produced a response. */
+export type ComponentReadResult =
+  | { ok: true; status: number; json: unknown }
+  | { ok: false; status: number; error: string };
+
+function isJsonContentType(ct: string | null): boolean {
+  if (!ct) return false;
+  const mime = ct.split(";")[0].trim().toLowerCase();
+  return mime === "application/json" || mime.endsWith("+json");
+}
+
+/** GET `/api/plugins/<plugin>/<path>` with the operator's auth (slug-routed like every agent
+ *  path) and return its JSON. `path` MUST already be validated against the kind's declared
+ *  reads (FrameComponentHost does it) — this function trusts it. Refuses (ok:false) a redirect,
+ *  a non-JSON content type, a body over {@link COMPONENT_READ_MAX_BYTES}, or unparseable JSON. A
+ *  non-2xx answer is ok:false with the server's short detail. Never throws. */
+export async function fetchComponentRead(
+  plugin: string,
+  path: string,
+  opts: { signal?: AbortSignal; maxBytes?: number } = {},
+): Promise<ComponentReadResult> {
+  const maxBytes = opts.maxBytes ?? COMPONENT_READ_MAX_BYTES;
+  let response: Response;
+  try {
+    response = await fetch(apiUrl(`/api/plugins/${encodeURIComponent(plugin)}/${path}`), {
+      method: "GET",
+      headers: applyAuth(new Headers({ Accept: "application/json" })),
+      // A redirect could land outside the declared allowlist — refuse rather than follow.
+      redirect: "error",
+      signal: opts.signal,
+    });
+  } catch (err) {
+    if ((err as { name?: string } | null)?.name === "AbortError") return { ok: false, status: 0, error: "read cancelled" };
+    return { ok: false, status: 0, error: "read failed: the request did not complete" };
+  }
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return { ok: false, status: response.status, error: `response too large (over ${maxBytes} bytes)` };
+  }
+  let raw: string;
+  try {
+    raw = await response.text();
+  } catch {
+    return { ok: false, status: response.status, error: "read failed: the response body could not be read" };
+  }
+  if (new TextEncoder().encode(raw).length > maxBytes) {
+    return { ok: false, status: response.status, error: `response too large (over ${maxBytes} bytes)` };
+  }
+  if (!response.ok) {
+    const { detail } = parseErrorBody(raw, `${response.status} ${response.statusText}`);
+    return { ok: false, status: response.status, error: String(detail).slice(0, 200) || `HTTP ${response.status}` };
+  }
+  if (!isJsonContentType(response.headers.get("content-type"))) {
+    return { ok: false, status: response.status, error: "response is not JSON" };
+  }
+  try {
+    return { ok: true, status: response.status, json: JSON.parse(raw) as unknown };
+  } catch {
+    return { ok: false, status: response.status, error: "response is not valid JSON" };
+  }
 }

@@ -187,7 +187,7 @@ enabled plugin already registered keeps the first and warns (resolved in the loa
 ### `registry.register_component` {#registry-register-component}
 
 ```python
-registry.register_component(name: str, validator, frame: str | None = None) -> None
+registry.register_component(name: str, validator, frame: str | None = None, reads=None) -> None
 ```
 
 Contribute a component-v1 KIND ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)) the chat stream may carry — e.g. a chip
@@ -216,6 +216,17 @@ frame iframe sends no bearer, the page must be auth-exempt: the frame is refused
 log-and-skip as a bad name) if it is absolute, contains a `..` segment, or is not
 covered by the manifest's `public_paths`. An accepted frame is stored on
 `component_frames[name]` for a later card to carry through the loader.
+
+`reads` (optional, [ADR 0118](/adr/0118-interactive-answers-inline-artifacts-and-frame-components) D5 amendment, [#4143](https://github.com/protoLabsAI/protoAgent/issues/4143)) lists the GET routes of THIS plugin's
+bearer-gated data router the frame may read through the host-mediated read channel —
+patterns RELATIVE to `/api/plugins/<id>/` (e.g. `["features", "features/*"]`), where
+`*` matches exactly one path segment. The frame posts `protoComponent:read {cid,
+path}`; the console host checks the path against these patterns, makes the authed GET
+itself and posts back only the JSON — the bearer never reaches the frame. `reads`
+requires `frame` (it is meaningless without one). Each refused pattern — one that
+escapes the plugin prefix, contains a `..`/`.`/empty segment, a query string, `**`
+or a partial `*` — is logged and skipped; `reads` without a frame is logged and
+ignored. Accepted patterns are stored on `component_reads[name]`.
 
 ### `registry.register_embedder` {#registry-register-embedder}
 

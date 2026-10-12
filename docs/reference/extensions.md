@@ -266,6 +266,43 @@ The producer yields `("tool_args", {id, arg, offset, chunk, done})` frames, flus
 
 It is **live-only**: previews are **never persisted to task history and never replayed** on resubscribe or hydration. The executor emits them on `WORKING` status frames, so the a2a-sdk `TaskManager` would move them into durable `history` like any other status message — `a2a_impl/stores.py::drop_tool_args_history` removes them on every save, so a reattach or reload replays the finished artifact, never a stale partial. Being template-local content, `tool-args-v1` is **not** declared on the agent card; a consumer that ignores it still gets the finished tool-call card and the answer. There is no change to `tool-call-v1`.
 
+### Frame components: the host-mediated read channel (ADR 0118 D5, #4143)
+
+A `component-v1` kind a plugin renders in a **frame** (`register_component(..., frame=...)`) runs
+in a sandboxed, opaque-origin iframe with no bearer. It talks to the console host over
+`postMessage` and never over A2A. The host-to-frame messages are `protoComponent:init {props, theme}`
+and `protoComponent:theme`. The frame-to-host messages are `protoComponent:height`, plus
+`protoComponent:send` and `protoComponent:openLink` (ADR 0118 D4). For **live data**, a kind
+declares which of its plugin's own GET routes it reads:
+
+```python
+registry.register_component(
+    "board-card", validate_card, frame="card.html", reads=["features", "features/*", "status"]
+)
+```
+
+Patterns are relative to `/api/plugins/<id>/`. `*` matches exactly one path segment. Patterns
+that escape the prefix, or that contain `..`, a query string or `**`, are logged and skipped, and
+`reads` requires `frame`. `GET /api/components` reports each kind as
+`{name, plugin, frame_url, reads}`.
+
+| Direction | Message | Fields |
+|---|---|---|
+| frame to host | `protoComponent:read` | `cid` (number, echoed back), `path` (relative to `/api/plugins/<plugin>/`, e.g. `features/bd-vbyd.24`). An optional `method` other than `GET` is refused. |
+| host to frame | `protoComponent:readResult` | `cid`, `ok`, `status` (the HTTP status, or `0` when the host refused before making a request), and either `json` (the parsed body, when `ok`) or `error` (a short reason). |
+
+The host serves a read only when all of these hold:
+
+- The message came from that frame's own window.
+- The path matches a declared pattern.
+- The frame has at most 4 reads per second and 2 in flight.
+- The frame is mounted and visible (otherwise the error is `paused: …`).
+- The response is JSON of at most 256 KB, with no redirect.
+
+The host makes the GET with the operator's auth. Only the JSON, or the reason, reaches the frame:
+never the bearer, the headers or a non-JSON body. Reads are the only thing this channel does.
+Mutations go through `protoComponent:send`, which is a confirmed, visible user turn.
+
 ## Fork-only declarative extensions
 
 `blast-v1` (`https://proto-labs.ai/a2a/ext/blast-v1`), `hitl-mode-v1` (`…/hitl-mode-v1`), and `effect-domain-v1` (`…/effect-domain-v1`) are **purely declarative** protoLabs extensions — per-skill statements on the card (`{uri, params: {skills: {...}}}`) that let a consumer gate or rank work before dispatching it: blast radius (`self` / `project` / `repo`), approval policy (`autonomous` / `notification`), and declared world-state effects (`{domain, path, delta, confidence}`) respectively.

@@ -60,3 +60,77 @@ test("a plugin's frame component renders inline with no console rebuild", async 
     page.frameLocator('[data-testid="frame-component-host"] iframe').locator("#frame-marker"),
   ).toContainText("FRAME COMPONENT OK");
 });
+
+// Host-mediated read channel (ADR 0118 D5 amendment, #4143): the bearer-free frame asks its
+// HOST to read one of its plugin's own GET routes. The kind declares `reads: ["features/*"]`, so
+// the host serves `features/x` (an authed GET it makes itself) and refuses a deeper path, another
+// plugin's route and core /api — and nothing the frame receives carries the operator's bearer.
+const E2E_BEARER = "E2E-BEARER-never-in-the-frame";
+
+const READ_FRAME_HTML =
+  "<!doctype html><html><body style='margin:0'>" +
+  "<pre id='read-out'>waiting</pre>" +
+  "<script>" +
+  "var results = {};" +
+  "addEventListener('message', function (e) {" +
+  "  var d = e.data;" +
+  "  if (!d || d.type !== 'protoComponent:readResult') return;" +
+  "  results[d.cid] = d;" +
+  "  document.getElementById('read-out').textContent = JSON.stringify(results);" +
+  "});" +
+  "parent.postMessage({ type: 'protoComponent:height', height: 160 }, '*');" +
+  "parent.postMessage({ type: 'protoComponent:read', cid: 1, path: 'features/x' }, '*');" +
+  "parent.postMessage({ type: 'protoComponent:read', cid: 2, path: 'features/x/secret-sub' }, '*');" +
+  "parent.postMessage({ type: 'protoComponent:read', cid: 3, path: '../other/features' }, '*');" +
+  "parent.postMessage({ type: 'protoComponent:read', cid: 4, path: '/api/config' }, '*');" +
+  "</script></body></html>";
+
+test("a frame component reads its declared plugin route through the host, and nothing else", async ({ page }) => {
+  await page.addInitScript((t) => window.localStorage.setItem("protoagent.authToken", t), E2E_BEARER);
+  // Declare the read allowlist on the frame kind (overrides the beforeEach catalog route).
+  await page.route("**/api/components", (route) =>
+    route.fulfill({
+      json: [{ name: "pl-demo-widget", plugin: "demo", frame_url: "/plugins/demo/widget", reads: ["features/*"] }],
+    }),
+  );
+  await page.route("**/plugins/demo/widget*", (route) =>
+    route.fulfill({ contentType: "text/html", body: READ_FRAME_HTML }),
+  );
+  const seen: { url: string; auth: string | undefined }[] = [];
+  await page.route("**/api/plugins/demo/features/x", (route) => {
+    seen.push({ url: route.request().url(), auth: route.request().headers()["authorization"] });
+    return route.fulfill({ json: { id: "x", title: "Feature X", status: "in_progress" } });
+  });
+  // Any other demo/other plugin data route would be a leak — record it so the test fails loudly.
+  // (Core /api/config is a normal console read, so its refusal is asserted on the result only.)
+  const forbidden: string[] = [];
+  await page.route(/\/api\/plugins\/(?:other\/|demo\/(?!features\/x$))/, (route) => {
+    forbidden.push(route.request().url());
+    return route.fulfill({ status: 500, json: { detail: "must not be fetched" } });
+  });
+
+  await page.goto("/app/", { waitUntil: "load" });
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+  await composer.fill("FRAMEKIND demo");
+  await composer.press("Enter");
+
+  const host = page.getByTestId("frame-component-host");
+  await expect(host).toBeVisible();
+  await host.scrollIntoViewIfNeeded();
+
+  const out = page.frameLocator('[data-testid="frame-component-host"] iframe').locator("#read-out");
+  await expect(out).toContainText('"4"');
+  const results = JSON.parse((await out.textContent()) || "{}") as Record<string, Record<string, unknown>>;
+
+  // The allowlisted path is served — the host made an authed GET on the frame's behalf…
+  expect(results["1"]).toMatchObject({ ok: true, status: 200, json: { id: "x", title: "Feature X" } });
+  expect(seen).toHaveLength(1);
+  expect(seen[0].auth).toBe(`Bearer ${E2E_BEARER}`);
+  // …and a deeper path, another plugin's route and core /api are refused without a request.
+  for (const cid of ["2", "3", "4"]) expect(results[cid]).toMatchObject({ ok: false, status: 0 });
+  expect(forbidden).toEqual([]);
+  // The frame never sees the bearer (or any header) in what it was sent.
+  expect(JSON.stringify(results)).not.toContain(E2E_BEARER);
+  expect(JSON.stringify(results).toLowerCase()).not.toContain("authorization");
+});

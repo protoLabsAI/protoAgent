@@ -5,8 +5,10 @@ import { InlineFrameBridgeContext } from "../artifacts/ArtifactRefChip";
 import { BridgeNoticeView, useFrameProposalGate } from "../artifacts/FrameProposalChip";
 import { useFrameFocusGuard } from "../artifacts/frameFocusGuard";
 import { FrameActivationShield, FrameQuarantineNotice } from "../artifacts/FrameGuardViews";
-import { createFrameRegistry, useLazyMount, type FrameRegistry } from "../artifacts/inlineFrames";
+import { createFrameRegistry, LAZY_MOUNT_ROOT_MARGIN, useLazyMount, type FrameRegistry } from "../artifacts/inlineFrames";
 import { apiUrl } from "../lib/api";
+import { fetchComponentRead, type ComponentReadResult } from "../lib/api/components";
+import { checkReadRequest, createReadLimiter } from "./frameComponentReads";
 
 // Host for a FRAME-rendered plugin component (ADR 0118 D5 console, S12). A plugin kind may
 // declare a `frame` — a plugin-served page (`/plugins/<id>/<frame>`, from GET /api/components)
@@ -57,6 +59,21 @@ import { apiUrl } from "../lib/api";
 //   • An accepted send goes through the EXACT send path S10b wired (ComponentChatSend.send →
 //     ChatSessionSlot runTurn), tagged with the origin `{via:"component", kind, plugin}` so the
 //     turn is a normal, visible, auditable user message with a "from ‹title›" label.
+//
+// Read channel (ADR 0118 D5 amendment, #4143) — the one narrow way a frame gets LIVE data:
+//   • The kind declares `reads` at registration (GET patterns under its OWN
+//     `/api/plugins/<id>/`, validated server-side, carried by GET /api/components). The frame
+//     posts `protoComponent:read {cid, path}` with `path` relative to that prefix.
+//   • The host checks it all itself (frameComponentReads.ts): the message came from THIS frame's
+//     window, the path matches a declared read (`*` = exactly one segment), GET only, ≤ 4
+//     reads/s and ≤ 2 in flight per frame, and the frame is mounted + visible (servicing pauses
+//     otherwise, which also keeps refresh polling cheap).
+//   • It then makes the authed GET itself (fetchComponentRead: the operator's auth, slug-routed,
+//     no redirects, JSON only, ≤ 256 KB) and posts `protoComponent:readResult {cid, ok, status,
+//     json | error}`. The bearer, the response headers and any non-JSON body never reach the
+//     frame. `status` is 0 when the host refused before any request was made.
+//   • Reads only: writes and actions stay on the `send` bridge above, so every mutation is a
+//     visible, confirmed user turn.
 
 // The per-chat-view registry every frame-rendered plugin component shares, so the
 // six-live-frame cap (inlineFrames.ts, ADR 0118 D2) bounds them TOGETHER — a seventh live
@@ -95,6 +112,9 @@ export type FrameComponentHostProps = {
   registry?: FrameRegistry;
   /** Accessible title for the iframe. */
   title?: string;
+  /** The kind's declared read allowlist (catalog `reads`, #4143): GET patterns relative to
+   *  `/api/plugins/<plugin>/`. Empty/absent ⇒ every `protoComponent:read` is refused. */
+  reads?: readonly string[];
 };
 
 /** How a frame-rendered plugin component reaches the chat it is shown in (ADR 0118 D4 / S12b).
@@ -168,7 +188,33 @@ function useFrameSlot(registry: FrameRegistry, id: string, want: boolean): boole
   return want && registry.isLive(id);
 }
 
-export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry, title }: FrameComponentHostProps) {
+/** Whether `ref`'s element is near the viewport (same margin as the lazy mount) while `enabled`.
+ *  Read through the returned ref at message time, so a scroll never re-binds listeners. Where
+ *  IntersectionObserver is unavailable it stays true — nothing is ever stuck paused. */
+function useNearViewport(ref: React.RefObject<Element | null>, enabled: boolean): React.MutableRefObject<boolean> {
+  const visible = useRef(true);
+  useEffect(() => {
+    visible.current = true;
+    const el = ref.current;
+    if (!enabled || !el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        const last = entries[entries.length - 1];
+        if (last) visible.current = last.isIntersecting;
+      },
+      { rootMargin: LAZY_MOUNT_ROOT_MARGIN },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref, enabled]);
+  return visible;
+}
+
+function documentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry, title, reads }: FrameComponentHostProps) {
   // A standalone host (no shared registry) gets its own, so lazy-mount + clamp still apply and
   // the single frame is always within the cap.
   const [ownRegistry] = useState(() => registry ?? createFrameRegistry());
@@ -194,6 +240,13 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
   // the current payload.
   const propsRef = useRef(props);
   propsRef.current = props;
+
+  // The read allowlist + per-frame limiter (#4143). Reads are read through a ref at message time
+  // so a catalog refresh never re-binds the listener; the limiter lives as long as this host.
+  const readsRef = useRef(reads);
+  readsRef.current = reads;
+  const [readLimiter] = useState(() => createReadLimiter());
+  const nearViewport = useNearViewport(placeholderRef, live);
 
   // Start at this id's last remembered height (floor if it never measured), so a resumed frame
   // and the static card both keep their size and the transcript layout doesn't jump.
@@ -281,6 +334,57 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     window.addEventListener("message", onBridge);
     return () => window.removeEventListener("message", onBridge);
   }, [live, id, kind, plugin, chat, bridge, replyToFrame, gate.propose, gate.proposeOpen, gate.showRejection]);
+
+  // The read channel (ADR 0118 D5 amendment, #4143). Same source gate as the bridge: only THIS
+  // frame's own window. Every check is the host's (checkReadRequest + the limiter + visibility);
+  // the authed GET happens here and only `{cid, ok, status, json|error}` goes back down.
+  useEffect(() => {
+    if (!live) return;
+    const inflight = new Set<AbortController>();
+    let alive = true;
+    function reply(win: Window, cid: number, result: ComponentReadResult) {
+      // Deliver only to the window that asked, and only while it is still our live frame (a
+      // quarantine / eviction / reload in between drops the answer).
+      if (!alive || frameRef.current?.contentWindow !== win) return;
+      postToFrame(win, { type: "protoComponent:readResult", cid, ...result });
+    }
+    function onRead(e: MessageEvent) {
+      const win = frameRef.current?.contentWindow;
+      if (!win || e.source !== win) return; // only our own frame
+      const m = (e.data || {}) as { type?: unknown; cid?: unknown; path?: unknown; method?: unknown };
+      if (m.type !== "protoComponent:read") return;
+      const cid = typeof m.cid === "number" ? m.cid : NaN;
+      if (Number.isNaN(cid)) return;
+      if (documentHidden() || !nearViewport.current) {
+        reply(win, cid, { ok: false, status: 0, error: "paused: the component is not visible" });
+        return;
+      }
+      const check = checkReadRequest(m, plugin, readsRef.current);
+      if (!check.ok) {
+        reply(win, cid, { ok: false, status: 0, error: check.error });
+        return;
+      }
+      const limited = readLimiter.acquire(Date.now());
+      if (limited) {
+        reply(win, cid, { ok: false, status: 0, error: limited });
+        return;
+      }
+      const ctrl = new AbortController();
+      inflight.add(ctrl);
+      void fetchComponentRead(plugin as string, check.path, { signal: ctrl.signal })
+        .then((result) => reply(win, cid, result))
+        .finally(() => {
+          inflight.delete(ctrl);
+          readLimiter.release();
+        });
+    }
+    window.addEventListener("message", onRead);
+    return () => {
+      alive = false;
+      window.removeEventListener("message", onRead);
+      inflight.forEach((c) => c.abort()); // unmounted / evicted: stop servicing
+    };
+  }, [live, plugin, readLimiter, nearViewport]);
 
   // A self-focusing component must not pull the composer's focus into its frame (#4076): the
   // frame is click-to-activate (or Tab into it), and one that takes focus on its own is

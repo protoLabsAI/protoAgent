@@ -128,7 +128,7 @@ Inside every artifact frame, inline or panel, the shell's shim adds two calls ne
 ### D5 — Frame-rendered plugin components: kinds render without a console rebuild
 
 - **Plugin declares a frame.** `registry.register_component(name, validator, frame="component.html")` declares that a plugin kind renders in a **plugin-served page**. The path is relative to the plugin's route prefix, and the manifest must list it under `public_paths`, because an opaque-origin frame sends no bearer.
-- **Catalog.** The loader carries the frame path, and a new `GET /api/components` lists the live kinds, each as `{name, plugin, frame_url | null}`.
+- **Catalog.** The loader carries the frame path, and a new `GET /api/components` lists the live kinds, each as `{name, plugin, frame_url | null, reads}`.
 - **Console resolution order.** It becomes: `registerChatComponent` (TS registry) → **frame** → `[unsupported component]`. A compiled renderer still wins, so first-party and fork kinds are unchanged.
 - **The frame host:**
   - It uses `sandbox="allow-scripts"` with no same-origin, and it never receives the bearer.
@@ -136,7 +136,8 @@ Inside every artifact frame, inline or panel, the shell's shim adds two calls ne
   - It autosizes with the D2 clamp and lazy-mount rules.
   - It gets the D4 `send` and `openLink` bridge, with the same gates.
 - **DS plugin kit.** The plugin kit CSS and JS (`/_ds/plugin-kit.*`) are served publicly, so a frame looks native without a build step.
-- **Limit.** A frame component can't call the plugin's gated routes. Anything it needs comes in its props, or through `send`. A plugin that needs a live, authenticated UI uses a rail view (ADR 0038/0045) or an artifact.
+- **Limit.** A frame component can't call the plugin's gated routes itself. Anything it needs comes in its props, through `send`, or through the host-mediated read channel. A plugin that needs a live, authenticated UI uses a rail view (ADR 0038/0045) or an artifact.
+- **Read channel** *(amended 2026-10-12, #4143)*. A kind may declare `reads=[...]`, which are GET patterns under its own `/api/plugins/<id>/`. The frame posts `protoComponent:read {cid, path}`, and the host checks the path, makes the authed GET itself and posts back `protoComponent:readResult {cid, ok, status, json | error}`. The bearer never reaches the frame, and writes stay on `send`. See Amendments.
 
 ### D6 — Libraries and theme: vendored and token-driven, never CDN
 
@@ -208,7 +209,7 @@ The status moves to **Accepted**.
 
 ## Amendments (2026-10-11, shipped with epic #4076)
 
-Decisions taken during implementation and hands-on testing. Each is also written into the decision it changes (D2, D4, D6):
+Decisions taken during implementation and hands-on testing. Each is also written into the decision it changes (D2, D4, D5, D6):
 
 1. **Confirm chip instead of a gesture gate (D4, #4137).** `send` and `openLink` are proposals the operator confirms in a host-UI chip, with per-artifact "Always allow" trust. Send trust and link trust are stored separately. The user-activation check could be satisfied by a frame that focused itself after any console click.
 2. **anime.js instead of gsap (D6, #4133).** gsap's licence doesn't allow redistribution in our vendored LIB map. anime.js (MIT) covers the same tweening and timeline needs.
@@ -238,3 +239,36 @@ Decisions taken during implementation and hands-on testing. Each is also written
    Otherwise a viewport-sized wrapper (`height: 100vh`, centred) only reports the frame's own height
    back: a measure taken before the content settled held the frame at the 80 px floor, with the
    heading clipped. Fill frames (svg, mermaid, decks, PDFs) keep their fixed box.
+9. **Host-mediated read channel for frame components (D5, #4143).** A frame component holds no
+   bearer, so it couldn't show live state (a board card's current status, an updating verdict).
+   It now gets one narrow read path:
+   - **Declaration.** `registry.register_component(name, validator, frame=..., reads=[...])`.
+     Each pattern is a GET path relative to the plugin's own `/api/plugins/<id>/` (an absolute
+     spelling must start with exactly that prefix, which is stripped). `*` matches exactly one
+     path segment and must be the whole segment. A pattern that escapes the prefix, or has a
+     `.`/`..`/empty segment, a query string, a fragment, `**`, a partial `*` or a non-URL-safe
+     character, is logged and skipped, as `frame=` refusals are. `reads` without `frame=` is
+     logged and ignored. The testkit `FakeRegistry` raises `ValueError` on the same refusals.
+   - **Catalog.** The loader carries the accepted patterns, and `GET /api/components` reports each
+     kind as `{name, plugin, frame_url, reads}`. `reads` is always a list, and it's empty for core
+     widgets and frame-less kinds.
+   - **Protocol.** The frame posts `{type: "protoComponent:read", cid, path}`, where `path` is
+     relative to the plugin prefix (for example `features/bd-vbyd.24`). The host replies
+     `{type: "protoComponent:readResult", cid, ok, status, json}` on success or
+     `{type: "protoComponent:readResult", cid, ok: false, status, error}` on failure. `status` is
+     the HTTP status, or `0` when the host refused before making a request.
+   - **Host checks** (`FrameComponentHost`, `apps/web/src/chat/frameComponentReads.ts`), all made
+     by the host and none trusted from the frame:
+     - The message source is this frame's own window.
+     - The path matches a declared read.
+     - The request is GET only (any other `method` is refused).
+     - The frame has at most 4 reads per rolling second and 2 in flight.
+     - The frame is mounted and near the viewport, and the console tab is visible. Otherwise the
+       read is refused with `paused`, which also keeps a polling card cheap.
+   - **Host action.** It makes an authed GET with the console's own auth and slug routing
+     (`fetchComponentRead` in `apps/web/src/lib/api/components.ts`). The GET follows no redirects
+     and only accepts a JSON content type with a body of at most 256 KB. Only the parsed JSON, or
+     a short reason, goes back to the frame. The bearer, the response headers and any non-JSON
+     body never do.
+   - **Reads only.** Writes and actions stay on the `send` bridge (D4), so every mutation remains a
+     visible, confirmed user turn.
