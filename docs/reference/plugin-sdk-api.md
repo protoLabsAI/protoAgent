@@ -23,7 +23,7 @@ the module's own.
 
 ## Contents
 
-**Plugin services (the plugin↔plugin call seam, ADR 0116)** — [`service()`](#sdk-service)
+**Plugin services (the plugin↔plugin call seam, ADR 0116)** — [`record_friction()`](#sdk-record-friction), [`service()`](#sdk-service)
 
 **Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`renders_ui()`](#sdk-renders-ui), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types), [`turn_stop_reason()`](#sdk-turn-stop-reason)
 
@@ -74,6 +74,33 @@ artifact plugin's `artifact.show`::
         return "The Artifact plugin is off — enable it to see charts."
     r = show(kind="vega-lite", code=spec_json, title="Sales by weekday")
     return r["message"] + r["ref"]   # the artifact-ref chip tail goes LAST
+
+### `sdk.record_friction` {#sdk-record-friction}
+
+```python
+sdk.record_friction(kind: str, summary: str, detail: str = '', severity: str = 'minor', *, source: str) -> str | None
+```
+
+Record a friction point in THIS instance's friction ledger from plugin code.
+
+The agent's `record_friction` tool only captures what goes wrong inside a turn. A
+plugin's background work (a loop, a poller, a scheduled job) fails outside any turn, so
+without this its failures never reach the agent's friction review. Writes through the
+friction plugin's `friction.record` service ([ADR 0116](/adr/0116-local-first-data-analyst-duckdb-and-vega-lite-charts)): the same ledger, grouping and
+review as the tool.
+
+- `kind`: `"harness"` (tooling/infrastructure got in the way) or `"model"`.
+- `summary`: one line, kept STABLE across occurrences, because the ledger groups by
+  `(kind, summary)`: no ids, timestamps or counts in it. Put those in `detail`.
+- `severity`: `"minor"` or `"major"` (anything else records as minor).
+- `source`: your plugin id; the record is stamped `plugin:<source>`.
+
+Returns the grouped row's id, `""` when the provider refused the input or the write
+failed, and `None` when the friction plugin is off (or the core is older than the
+services seam). It never raises, and it is synchronous (one small file append), so it is
+safe from a worker thread or a background loop. It does not rate-limit: a caller whose
+failure can repeat every tick should dedupe before calling. Guard the call itself with
+`getattr(sdk, "record_friction", None)` on cores older than this seam.
 
 ## Agent + model access (the plugin↔agent channel, ADR 0043)
 

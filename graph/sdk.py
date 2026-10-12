@@ -89,6 +89,40 @@ def service(name: str) -> Callable | None:
     return get_service(name)
 
 
+def record_friction(
+    kind: str, summary: str, detail: str = "", severity: str = "minor", *, source: str
+) -> str | None:
+    """Record a friction point in THIS instance's friction ledger from plugin code.
+
+    The agent's ``record_friction`` tool only captures what goes wrong inside a turn. A
+    plugin's background work (a loop, a poller, a scheduled job) fails outside any turn, so
+    without this its failures never reach the agent's friction review. Writes through the
+    friction plugin's ``friction.record`` service (ADR 0116): the same ledger, grouping and
+    review as the tool.
+
+    - ``kind``: ``"harness"`` (tooling/infrastructure got in the way) or ``"model"``.
+    - ``summary``: one line, kept STABLE across occurrences, because the ledger groups by
+      ``(kind, summary)``: no ids, timestamps or counts in it. Put those in ``detail``.
+    - ``severity``: ``"minor"`` or ``"major"`` (anything else records as minor).
+    - ``source``: your plugin id; the record is stamped ``plugin:<source>``.
+
+    Returns the grouped row's id, ``""`` when the provider refused the input or the write
+    failed, and ``None`` when the friction plugin is off (or the core is older than the
+    services seam). It never raises, and it is synchronous (one small file append), so it is
+    safe from a worker thread or a background loop. It does not rate-limit: a caller whose
+    failure can repeat every tick should dedupe before calling. Guard the call itself with
+    ``getattr(sdk, "record_friction", None)`` on cores older than this seam."""
+    fn = service("friction.record")
+    if fn is None:
+        return None
+    try:
+        out = fn(kind, summary, detail, severity, source=source)
+    except Exception:  # noqa: BLE001 — a provider fault must never break the caller's work
+        log.warning("[sdk] record_friction: the friction.record service raised", exc_info=True)
+        return ""
+    return out if isinstance(out, str) else ""
+
+
 # ── agent + model access (the plugin↔agent channel, ADR 0043) ──────────────────────────
 
 
