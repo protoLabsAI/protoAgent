@@ -1,6 +1,7 @@
+import { snapshotToCss, themeTokenSnapshot } from "@protolabsai/design/embed";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
-import { consoleTheme, INIT_REPOST_DELAYS } from "../app/pluginFrameHandshake";
+import { INIT_REPOST_DELAYS } from "../app/pluginFrameHandshake";
 import { InlineFrameBridgeContext } from "../artifacts/ArtifactRefChip";
 import { BridgeNoticeView, useFrameProposalGate } from "../artifacts/FrameProposalChip";
 import { useFrameFocusGuard } from "../artifacts/frameFocusGuard";
@@ -23,9 +24,11 @@ import { checkReadRequest, createReadLimiter } from "./frameComponentReads";
 //     break out of the frame. Model-reachable component payloads therefore run fully fenced.
 //   • We NEVER post the operator bearer to the frame (contrast PluginView's `protoagent:init`,
 //     which hands trusted first-party views the token). The only messages this host sends are
-//     the component props and the console theme — neither is a secret. So we reuse the theme
-//     half of the handshake module (`consoleTheme` / the re-post schedule) but NONE of its
-//     bearer path.
+//     the component props and the console theme — neither is a secret. The theme is built by the
+//     design system's embed layer (`themeTokenSnapshot` + `snapshotToCss`, ADR 0118 D5): the live
+//     computed `--pl-*` snapshot, routed through the DS frame-injection guard before it crosses
+//     into the frame. We reuse the handshake module's re-post schedule (`INIT_REPOST_DELAYS`) but
+//     NONE of its bearer path.
 //   • Because the frame's origin is opaque, a host→frame post CANNOT name a concrete target
 //     origin (an opaque origin never matches `/plugins/...`'s real origin, so the browser
 //     would drop the message). We post with `"*"`, which is safe precisely because the payload
@@ -163,6 +166,40 @@ function postToFrame(win: Window | null | undefined, message: Record<string, unk
   }
 }
 
+// Reconstruct a `{ name: value }` record from a `selector{a:1;b:2}` rule emitted by snapshotToCss.
+// snapshotToCss is the SOLE frame-injection guard (it alone decides what survives); this only
+// READS its output, so the exact same drop decisions apply — never a second hand-written filter.
+// Safe to split naively: snapshotToCss never emits a value carrying `;` (such values are dropped),
+// and a custom-property name never contains `:`, so the first `:` splits name from value.
+function cssRuleToRecord(rule: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const open = rule.indexOf("{");
+  const close = rule.lastIndexOf("}");
+  if (open < 0 || close <= open) return out;
+  for (const decl of rule.slice(open + 1, close).split(";")) {
+    const i = decl.indexOf(":");
+    if (i < 0) continue;
+    const name = decl.slice(0, i).trim();
+    const value = decl.slice(i + 1).trim();
+    if (name && value) out[name] = value;
+  }
+  return out;
+}
+
+// The theme payload posted into the opaque-origin component frame (ADR 0118 D5). Built by the
+// design system's embed layer, NOT a hand-written token list: `themeTokenSnapshot` reads the
+// console's live computed `--pl-*` values (plus `color-scheme`) off the document root, and
+// `snapshotToCss` is the frame-injection guard — it drops any value containing `<`, `{`, `}` or
+// `;` and any non-`--pl-` name. The frame's plugin-kit shim applies a `{ name: value }` record
+// (setting `--pl-*` custom properties on its own :root), so we hand back exactly the entries the
+// guard kept. Read at POST time (not captured at mount) so a live theme/accent switch re-posts
+// fresh values and the frame repaints without a reload. SSR-safe: no document ⇒ empty theme.
+function frameTheme(): Record<string, string> {
+  if (typeof document === "undefined") return {};
+  const css = snapshotToCss(themeTokenSnapshot(document.documentElement), ":root");
+  return cssRuleToRecord(css);
+}
+
 /** Claim a live slot in the shared budget while `want` holds. Registers on the way in (which
  *  may evict the least-recently-visible sibling), releases on the way out, and re-renders this
  *  host whenever ANY host sharing the registry changes the live set — so an evicted host flips
@@ -278,7 +315,7 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     if (!live) return;
     function onThemeChange() {
       if (!loadedRef.current) return;
-      postToFrame(frameRef.current?.contentWindow, { type: "protoComponent:theme", theme: consoleTheme() });
+      postToFrame(frameRef.current?.contentWindow, { type: "protoComponent:theme", theme: frameTheme() });
     }
     window.addEventListener("protoagent:theme", onThemeChange);
     return () => window.removeEventListener("protoagent:theme", onThemeChange);
@@ -401,7 +438,7 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
   }, [live, src]);
 
   function postInit(win: Window) {
-    postToFrame(win, { type: "protoComponent:init", props: propsRef.current, theme: consoleTheme() });
+    postToFrame(win, { type: "protoComponent:init", props: propsRef.current, theme: frameTheme() });
   }
 
   function handleLoad(e: React.SyntheticEvent<HTMLIFrameElement>) {

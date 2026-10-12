@@ -36,7 +36,8 @@ beforeEach(() => {
   root = createRoot(container);
   // A bearer the host must NEVER read or forward — planted so the leak tests are real.
   window.localStorage.setItem("protoagent.authToken", BEARER);
-  // consoleTheme() reads data-theme for its `mode`; pin it so posts are deterministic.
+  // themeTokenSnapshot falls back to the nearest [data-theme] for `color-scheme` when the computed
+  // value is empty (jsdom has no DS stylesheet); pin it so the non-stubbed posts are deterministic.
   document.documentElement.setAttribute("data-theme", "dark");
 });
 
@@ -78,29 +79,76 @@ function sendHeight(frame: HTMLIFrameElement, height: number, source?: unknown) 
   });
 }
 
+/** Stub getComputedStyle so themeTokenSnapshot (which the host's theme is built from) reads
+ *  deterministic values — jsdom loads no DS stylesheet, so every `--pl-*` would otherwise resolve
+ *  to "". `values` maps a token name to its computed value; `scheme` returns the computed
+ *  `color-scheme` and is a thunk so a test can flip it to model a live theme switch. Restored by
+ *  the afterEach vi.restoreAllMocks. */
+function stubComputedStyle(values: Record<string, string>, scheme: () => string) {
+  vi.spyOn(window, "getComputedStyle").mockImplementation(
+    () =>
+      ({
+        getPropertyValue: (name: string) => (name === "color-scheme" ? scheme() : (values[name] ?? "")),
+      }) as unknown as CSSStyleDeclaration,
+  );
+}
+
 describe("FrameComponentHost", () => {
   it("delivers init props + theme on load and re-posts the fresh theme on a theme change", () => {
+    // The theme is the DS embed snapshot (@protolabsai/design/embed themeTokenSnapshot → the live
+    // `--pl-*` values + color-scheme), routed through snapshotToCss. Stub the computed values so
+    // the posted token record is deterministic; flip `scheme` to model a live theme switch.
+    let scheme = "dark";
+    stubComputedStyle({ "--pl-color-bg": "#0a0a0c", "--pl-color-accent": "#8b5cf6" }, () => scheme);
+
     mount({ id: "c1", frameUrl: "/plugins/demo/widget", props: { title: "Hi", n: 3 } });
     const spy = loadFrameWithSpy(theFrame());
 
-    // Init: the component props + the console theme, targeted at the opaque origin ("*").
+    // Init: the component props + the console theme as a sanitized --pl-* snapshot, targeted "*".
     const init = spy.mock.calls.find((c) => (c[0] as { type?: string })?.type === "protoComponent:init");
     expect(init).toBeTruthy();
     const [initMsg, initTarget] = init as [Record<string, unknown>, string];
     expect(initMsg.props).toEqual({ title: "Hi", n: 3 });
-    expect((initMsg.theme as { mode?: string }).mode).toBe("dark");
+    const initTheme = initMsg.theme as Record<string, string>;
+    expect(initTheme["--pl-color-bg"]).toBe("#0a0a0c");
+    expect(initTheme["--pl-color-accent"]).toBe("#8b5cf6");
+    expect(initTheme["color-scheme"]).toBe("dark");
     expect(initTarget).toBe("*");
 
-    // A live theme switch re-posts the FRESH theme (mode flips to light), without a reload.
+    // A live theme switch re-posts the FRESH theme (color-scheme flips to light), without a reload.
     spy.mockClear();
+    scheme = "light";
     document.documentElement.setAttribute("data-theme", "light");
     act(() => {
       window.dispatchEvent(new Event("protoagent:theme"));
     });
     const reposted = spy.mock.calls.find((c) => (c[0] as { type?: string })?.type === "protoComponent:theme");
     expect(reposted).toBeTruthy();
-    expect((reposted![0] as { theme: { mode: string } }).theme.mode).toBe("light");
+    expect((reposted![0] as { theme: Record<string, string> }).theme["color-scheme"]).toBe("light");
     expect(reposted![1]).toBe("*");
+  });
+
+  it("drops a hostile token value (< { } or ;) and keeps non--pl- names out of the posted theme", () => {
+    // themeTokenSnapshot reads whatever the host's computed style returns; snapshotToCss is the
+    // SOLE guard keeping an injection vector out of the opaque-origin frame. Plant a hostile value
+    // on a real token and prove it never reaches the posted theme, while a benign sibling does.
+    const HOSTILE = "red;}</style><script>evil()</script>";
+    stubComputedStyle({ "--pl-color-bg": HOSTILE, "--pl-color-accent": "#8b5cf6" }, () => "dark");
+
+    mount({ id: "cx", frameUrl: "/plugins/demo/widget", props: {} });
+    const spy = loadFrameWithSpy(theFrame());
+
+    const init = spy.mock.calls.find((c) => (c[0] as { type?: string })?.type === "protoComponent:init")!;
+    const theme = (init[0] as { theme: Record<string, string> }).theme;
+
+    // The benign token survives; the hostile value is dropped wholesale (never escaped).
+    expect(theme["--pl-color-accent"]).toBe("#8b5cf6");
+    expect(theme["--pl-color-bg"]).toBeUndefined();
+    // Every key is a --pl-* custom property or the allowlisted color-scheme — no arbitrary name,
+    // and no surviving value carries a CSS-injection character.
+    for (const key of Object.keys(theme)) expect(key === "color-scheme" || key.startsWith("--pl-")).toBe(true);
+    for (const value of Object.values(theme)) expect(value).not.toMatch(/[<{};]/);
+    expect(JSON.stringify(theme)).not.toContain("<script>");
   });
 
   it("never carries the operator bearer in any message, and the iframe has no allow-same-origin", () => {
