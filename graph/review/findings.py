@@ -52,6 +52,26 @@ _VERDICT_ALIASES = {
 BRIEF_OPEN = "<!-- brief -->"
 BRIEF_CLOSE = "<!-- /brief -->"
 
+# Secret redaction runs over every tool result before a reviewer reads it
+# (graph/middleware/redaction.py via AuditMiddleware), so a diff or file that holds a
+# token-shaped literal — a test fixture, a docs example — arrives with `[REDACTED]`
+# where the token was. The redactor is format-preserving, but a reviewer that doesn't
+# KNOW the marks are ours can still read one as the author's code: projectBoard-plugin#523
+# drew a false "SyntaxError: missing closing quote" finding from a redaction artefact.
+# Interpolated into every code-review role prompt (finder, synthesizer, verifier).
+REDACTION_NOTE = """\
+`[REDACTED]` is inserted by the runtime's secret redactor, never written by the
+author: tool results (diffs, file reads) have secret-shaped values replaced before
+you see them. Read each mark as "a secret literal was here" — the file on disk has
+the real value in its place. A `[REDACTED]` mark is never evidence of a defect:
+NEVER report a `[REDACTED]` mark, or anything that only looks broken because of
+one (an unclosed string, a malformed literal, a token that "is literally
+[REDACTED]"), as a defect. A defect you can establish independently of the mark
+still stands — report it on that evidence. A real secret committed to the repo is
+still a `security` finding: say a credential-shaped literal sits at that
+`file:line`, without trying to quote it."""
+
+
 # The canonical prompt snippet. Role prompts and recipe steps interpolate this so
 # the schema is written down exactly once.
 FINDINGS_CONTRACT = """\
