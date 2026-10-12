@@ -236,6 +236,7 @@ CLI_FORWARD_MODULES = [
     "server.operator_mcp",
     "graph.snapshot_cli",
     "deck.pair",
+    "graph.checkpoint_migrate",
 ]
 
 

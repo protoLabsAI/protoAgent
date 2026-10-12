@@ -62,6 +62,7 @@ def _rows(db: Path) -> list[tuple]:
         conn.close()
 
 
+@pytest.mark.platform_sensitive
 def test_legacy_bloated_db_is_migrated_shrunk_and_intact(tmp_path, caplog):
     db = _legacy_db(tmp_path / "checkpoints.db")
     assert _pragma(db, "auto_vacuum") == 0
@@ -221,6 +222,9 @@ def test_low_disk_in_a_separate_temp_dir_is_skipped(tmp_path, monkeypatch):
     assert _pragma(db, "auto_vacuum") == 0
 
 
+# Exclusivity rests on SQLite's locks, which the Windows VFS implements differently
+# (LockFileEx vs POSIX advisory locks): run these on the Windows lane too.
+@pytest.mark.platform_sensitive
 def test_db_open_in_another_process_is_skipped(tmp_path):
     """Another process holding the DB (e.g. a second server for this instance) makes the
     migration skip instead of VACUUMing under it."""
@@ -247,6 +251,7 @@ def test_db_open_in_another_process_is_skipped(tmp_path):
     assert migrate_legacy_auto_vacuum(db)["status"] == "migrated"
 
 
+@pytest.mark.platform_sensitive
 def test_db_open_in_this_process_is_skipped(tmp_path):
     db = _legacy_db(tmp_path / "checkpoints.db")
     other = sqlite3.connect(db)
