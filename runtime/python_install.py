@@ -165,7 +165,9 @@ def _baseline_requirements_path() -> Path | None:
         base = Path(getattr(sys, "_MEIPASS", "") or Path(sys.executable).parent)
         p = base / "sidecar" / "requirements-docs.txt"
         return p if p.exists() else None
-    p = Path(__file__).resolve().parents[1] / "apps" / "desktop" / "sidecar" / "requirements-docs.txt"
+    from infra.paths import _app_root
+
+    p = _app_root() / "apps" / "desktop" / "sidecar" / "requirements-docs.txt"
     return p if p.exists() else None
 
 

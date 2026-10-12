@@ -77,21 +77,10 @@ _event_bus = EventBus(ring=512)  # Server→client SSE push channel (ADR 0003). 
 
 
 def _bundle_root() -> Path:
-    """Root that read-only bundled assets (``static``, ``config``, ``plugins``,
-    bundled ``workflows``, ``pyproject.toml``) resolve against.
+    """Shared read-only asset root for source, wheel and frozen installs."""
+    from infra.paths import _app_root
 
-    Source checkout: the repo root. This file is ``server/__init__.py``, so the
-    repo is its parent's parent. Frozen sidecar (PyInstaller onefile): the
-    ``_MEIPASS`` extraction dir where ``--add-data`` lands assets at the top
-    level. Before ADR 0023 promoted ``server.py`` into this package these
-    lookups were ``Path(__file__).parent``; the package adds one directory
-    level, so they route through here to stay anchored at the repo / bundle
-    root."""
-    if getattr(sys, "frozen", False):
-        meipass = getattr(sys, "_MEIPASS", None)
-        if meipass:
-            return Path(meipass)
-    return Path(__file__).resolve().parents[1]
+    return _app_root()
 
 
 def _ensure_ca_bundle_env() -> None:
