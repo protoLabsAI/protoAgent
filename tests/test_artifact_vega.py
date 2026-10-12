@@ -9,9 +9,11 @@ browser render is the live check in the PR (screenshots, dark + light)."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 
 import pytest
 
@@ -28,6 +30,19 @@ VEGA_MJS = VENDOR / "pl-design-vega.mjs"
 # @protolabsai/design is installed under the console workspace (apps/web). The repo root is
 # ROOT.parent.parent; DS resolution walks up from apps/web/src, so the pinned 0.12.0 copy is here.
 DESIGN_PKG = ROOT.parent.parent / "apps" / "web" / "node_modules" / "@protolabsai" / "design"
+
+
+def _run_node(js: str) -> subprocess.CompletedProcess:
+    """Run a shell-frame harness under node. The script rides a temp FILE (``node <file>``), NOT
+    ``node -e`` — with the DS theme functions (``_ds_theme_src``) prepended, the one-liner can top
+    Windows' ~32 KB command-line limit (``[WinError 206] The filename or extension is too long``);
+    a deeply-nested spec spilled past it on the Windows lane. A ``.cjs`` extension keeps node in
+    the same CommonJS/sloppy mode ``node -e`` uses, so the harness bodies are unchanged."""
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "frame.cjs")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(js)
+        return subprocess.run([NODE, path], capture_output=True, text=True, timeout=60)
 
 
 def _ds_theme_src() -> str:
@@ -362,7 +377,7 @@ def _run_frame(art, spec, *, tokens=DARK, retheme=False, novega=False) -> dict:
         .replace("__RETHEME__", "true" if retheme else "false")
         .replace("__NOVEGA__", "true" if novega else "false")
     )
-    out = subprocess.run([NODE, "-e", js], capture_output=True, text=True, timeout=60)
+    out = _run_node(js)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
 
@@ -637,7 +652,7 @@ def test_a_retheme_mid_draw_never_delays_the_render_verdict(monkeypatch, tmp_pat
     js = _ds_theme_src() + _RACE.replace("__SRC__", src).replace(
         "__CFG__", json.dumps({"spec": json.dumps(SPEC), "tokens": DARK})
     )
-    out = subprocess.run([NODE, "-e", js], capture_output=True, text=True, timeout=60)
+    out = _run_node(js)
     assert out.returncode == 0, out.stderr
     r = json.loads(out.stdout)
     assert r["inFlight"] == 1, "a re-theme must not restart the in-flight draw"
@@ -658,7 +673,7 @@ def test_a_failed_first_draw_reports_even_when_a_retheme_is_pending(monkeypatch,
         .replace("__CFG__", json.dumps({"spec": json.dumps(SPEC), "tokens": DARK}))
         .replace("calls[0].res(); await tick();", "calls[0].rej(new Error('bad encoding')); await tick(); out.errsAfterFirst = errs.slice();")
     )
-    out = subprocess.run([NODE, "-e", js], capture_output=True, text=True, timeout=60)
+    out = _run_node(js)
     assert out.returncode == 0, out.stderr
     r = json.loads(out.stdout)
     assert r["errsAfterFirst"] == ["⚠ bad encoding"] and r["oksAfterFirst"] == 0

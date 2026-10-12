@@ -14,5 +14,3 @@
   always set `range.category`; a thin shell adapter trims that back so a custom theme with few or
   no series colours never collapses a multi-series chart onto the single accent.) The loader deny,
   `ast:true` interpreter, `prep()` autosize, and live re-theme are unchanged.
-</content>
-</invoke>
