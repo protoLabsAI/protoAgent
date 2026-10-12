@@ -81,6 +81,9 @@ An inline artifact **is** an artifact. It has the same store, versions, render v
   - At most **6** live inline frames exist per chat view. An older frame that scrolls away is replaced by a static "Click to resume" card, which remembers its last height so the layout doesn't jump.
   - Hydration and reattach render inline refs the same way. History replays the stored version, and a deleted artifact or a disabled plugin degrades to today's inert chip.
 - **Live-only side effects stay live-only.** The chip's `onLive` hook (it opens the panel today) does **not** fire for an inline ref, because the answer is already in view.
+- **Panel auto-follow ignores inline artifacts** *(amended 2026-10-11, #4158/#4160)*. The panel follows the newest **panel-placed** artifact only, so an inline answer never moves it. Explicit "Open in panel" always works.
+- **Focus: click-to-activate** *(amended 2026-10-11, #4154/#4159)*. An inline frame runs live but starts inactive. A click or Tab activates it, and focus returning to the page deactivates it. A frame that takes focus without a gesture is quarantined: unloaded and replaced by "This artifact tried to take keyboard focus" with **Run it**, with focus handed straight back to the composer. See Amendments for why `inert` was rejected.
+- **Store cap** *(amended 2026-10-11)*. The artifact store keeps 200 artifacts by default (`artifact.history`). An artifact still referenced by a live chat is never evicted.
 
 ### D3 — Streamed preview: opt-in streaming of one string argument
 
@@ -205,7 +208,7 @@ The status moves to **Accepted**.
 
 ## Amendments (2026-10-11, shipped with epic #4076)
 
-Decisions taken during implementation and hands-on testing, applied in the sections above:
+Decisions taken during implementation and hands-on testing. Each is also written into the decision it changes (D2, D4, D6):
 
 1. **Confirm chip instead of a gesture gate (D4, #4137).** `send` and `openLink` are proposals the operator confirms in a host-UI chip, with per-artifact "Always allow" trust. Send trust and link trust are stored separately. The user-activation check could be satisfied by a frame that focused itself after any console click.
 2. **anime.js instead of gsap (D6, #4133).** gsap's licence doesn't allow redistribution in our vendored LIB map. anime.js (MIT) covers the same tweening and timeline needs.
