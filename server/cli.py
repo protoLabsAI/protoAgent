@@ -53,6 +53,9 @@ _FORWARD: dict[str, tuple[str, str]] = {
     "agent": ("graph.snapshot_cli", "run_snapshot_cli"),
     # `knowledge` lives in server/ (not graph/**) — it boots the instance's stores standalone.
     "knowledge": ("server.knowledge_cli", "run_knowledge_cli"),
+    # `checkpoint migrate` — the one-time auto_vacuum migration of a legacy chat-history DB,
+    # for a STOPPED agent (boot does it too; this is the on-demand / per-workspace form).
+    "checkpoint": ("graph.checkpoint_migrate", "run_checkpoint_cli"),
     # Internal daemon verb: serve the operator tools over MCP stdio. The ACP runtime
     # launches this in the frozen desktop sidecar, where `-m server.operator_mcp`
     # isn't a valid argv (the frozen entrypoint IS `-m server` — see #1603).
@@ -73,6 +76,7 @@ _FORWARD_HELP = {
     "hermes": "(DEPRECATED, #2633) One-command Hermes preset — use ACP delegates instead",
     "operations": "List the operations on the ops layer — name, read/write, summary (ADR 0075)",
     "knowledge": "Ingest a URL / file into this instance's knowledge base (ADR 0075)",
+    "checkpoint": "Maintain the chat-history DB: `migrate` shrinks a legacy one (server stopped)",
     "operator-mcp": "Serve the operator tools over MCP stdio (internal — mounted into ACP runtimes)",
     "agent": "Export this agent as a portable, secret-free snapshot zip (ADR 0091)",
 }

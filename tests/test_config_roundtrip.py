@@ -113,6 +113,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "checkpoint_max_age_days": 30,
     "checkpoint_prune_interval_hours": 6,
     "checkpoint_vacuum": True,
+    "checkpoint_vacuum_legacy_on_start": True,
     "commons_path": "",
     "compaction_enabled": True,
     "compaction_keep_messages": 20,
