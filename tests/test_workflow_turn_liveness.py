@@ -14,7 +14,9 @@
 
 The liveness tests drive the REAL subagent runner (``graph.agent._run_subagent``: real
 ``create_agent``, real middleware stack, a real async tool) with only the chat model
-scripted, under the real ``_stall_guarded`` and the real dispatch chain.
+scripted, under the real ``_stall_guarded`` and the real dispatch chain. The busy step's
+time is VIRTUAL (``tests/_virtual_clock.py``): its tool rounds advance a clock the guard's
+window is measured on, so a loaded CI box can't stretch a healthy gap into a stall.
 """
 
 from __future__ import annotations
@@ -34,12 +36,14 @@ from a2a_impl.executor import TurnStalled, _stall_guarded
 from graph.config import LangGraphConfig
 from graph.subagents.config import SUBAGENT_REGISTRY, SubagentConfig
 from runtime.state import STATE
+from tests._virtual_clock import VirtualClock
 from tests.test_subagent_turn_budget import _ScriptedModel
 
 PROBE = "liveness-probe"
+# Virtual seconds (see `clock`): only the tool rounds move time, so these are exact.
 STALL_S = 0.4
 TOOL_S = 0.15  # each tool round: well inside the window
-ROUNDS = 8  # ...but the whole step (~1.2s+) is three windows long
+ROUNDS = 8  # ...but the whole step (1.2s) is three windows long
 
 
 @pytest.fixture
@@ -60,15 +64,21 @@ def quiet_state(monkeypatch):
 
 
 @pytest.fixture
-def busy_step(monkeypatch):
+def clock(monkeypatch) -> VirtualClock:
+    """The stall guard's window, measured on virtual time the busy step advances."""
+    return VirtualClock().install(monkeypatch)
+
+
+@pytest.fixture
+def busy_step(monkeypatch, clock):
     """A workflow whose one step runs the real subagent runner: ROUNDS tool rounds of an
-    async tool that takes TOOL_S each. Returns the tool-execution log."""
+    async tool that takes TOOL_S (virtual) each. Returns the tool-execution log."""
     executed: list[str] = []
 
     @tool
     async def slow_ping() -> str:
         """Do a slow bit of work."""
-        await asyncio.sleep(TOOL_S)
+        await clock.sleep(TOOL_S)
         executed.append("ping")
         return "pong"
 
@@ -124,18 +134,11 @@ async def _guarded_frames(stall_s: float = STALL_S):
     return pre, frames
 
 
-async def _warm_up(executed: list[str]) -> None:
-    """Run the step once unguarded: the first model call in a process pays one-time
-    costs (executor thread start, lazy imports) that can exceed a sub-second window."""
-    await _guarded_frames(stall_s=0)
-    executed.clear()
-
-
-async def test_a_step_that_keeps_working_outlives_the_stall_window(quiet_state, busy_step):
-    await _warm_up(busy_step)
+async def test_a_step_that_keeps_working_outlives_the_stall_window(quiet_state, busy_step, clock):
     pre, frames = await _guarded_frames()
 
     assert len(busy_step) == ROUNDS  # every tool round ran — nothing was cut off
+    assert clock.now > 2 * STALL_S  # ...over a step several windows long
     assert pre.handled and frames[-1][0] == "done" and "FINAL ANSWER" in frames[-1][1]
     progress = [p for k, p in frames if k == "progress"]
     assert len(progress) >= ROUNDS  # a liveness frame per super-step
@@ -147,6 +150,19 @@ async def test_a_step_that_keeps_working_outlives_the_stall_window(quiet_state, 
         ("tool_end", "workflow:brief:gather"),
         ("tool_end", "workflow:brief"),
     ]
+
+
+async def test_the_same_busy_step_is_stalled_once_its_progress_stops_reaching_the_guard(
+    quiet_state, busy_step, monkeypatch
+):
+    """The control for the test above, on the same clock: rate-limit liveness to one
+    frame, and the identical step is stopped a window into its rounds. So the survival
+    above is the per-super-step frames' doing — not a clock that never runs out."""
+    monkeypatch.setattr(chat_dispatch, "_PROGRESS_MIN_INTERVAL_S", 3600.0)
+
+    with pytest.raises(TurnStalled, match=f"no progress for {STALL_S:g}s"):
+        await _guarded_frames()
+    assert 0 < len(busy_step) < ROUNDS
 
 
 async def test_liveness_frames_are_rate_limited(quiet_state, busy_step, monkeypatch):

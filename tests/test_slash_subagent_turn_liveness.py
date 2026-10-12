@@ -16,7 +16,10 @@ kept working longer than ``turn_stall_timeout_seconds`` (900s) was stopped as st
 
 Drives the REAL chain: ``_pre_turn_dispatch`` → ``_run_parsed_subagent`` →
 ``run_manual_subagent`` → ``_run_subagent`` (real ``create_agent``, real middleware, a
-real async tool) under the real ``_stall_guarded``; only the chat model is scripted.
+real async tool) under the real ``_stall_guarded``; only the chat model is scripted. The
+busy runs' time is VIRTUAL (``tests/_virtual_clock.py``): their tool rounds and model
+calls advance a clock the guard's window is measured on, so a loaded CI box can't stretch
+a healthy gap into a stall.
 """
 
 from __future__ import annotations
@@ -33,15 +36,15 @@ from a2a_impl.executor import TurnStalled, _stall_guarded
 from graph.config import LangGraphConfig
 from graph.subagents.config import SUBAGENT_REGISTRY, SubagentConfig
 from runtime.state import STATE
+from tests._virtual_clock import VirtualClock
 from tests.test_subagent_turn_budget import _ScriptedModel
 from tests.test_workflow_turn_liveness import _calls
 
 PROBE = "slash-liveness-probe"
-# Wider than the workflow twin's (0.4s): this file also runs a whole lead graph, and
-# every frame gap must stay well inside the window on a loaded CI box.
+# Virtual seconds (see `clock`): only the busy work moves time, so these are exact.
 STALL_S = 1.5
 TOOL_S = 0.3  # each tool round (each model call, natively): well inside the window
-ROUNDS = 10  # ...but the whole run (3s+) is over two windows long
+ROUNDS = 10  # ...but the whole run (3s) is two windows long
 
 
 @pytest.fixture
@@ -60,28 +63,26 @@ def slash_state(monkeypatch):
     monkeypatch.setattr(chat_dispatch, "_PROGRESS_MIN_INTERVAL_S", 0.0)
 
 
-class _Busy(list):
-    """The probe's tool-execution log, plus the knobs the next run reads: how many tool
-    rounds the model scripts and how long each tool call takes."""
-
-    rounds: int = ROUNDS
-    tool_s: float = TOOL_S
+@pytest.fixture
+def clock(monkeypatch) -> VirtualClock:
+    """The stall guard's window, measured on virtual time the busy work advances."""
+    return VirtualClock().install(monkeypatch)
 
 
 @pytest.fixture
-def busy_subagent(monkeypatch):
+def busy_subagent(monkeypatch, clock):
     """The probe subagent: ROUNDS tool rounds of an async tool taking TOOL_S each, run
     through the real `_run_parsed_subagent`. Returns the tool-execution log."""
-    executed = _Busy()
+    executed: list[str] = []
 
     @tool
     async def slow_ping() -> str:
         """Do a slow bit of work."""
-        await asyncio.sleep(executed.tool_s)
+        await clock.sleep(TOOL_S)
         executed.append("ping")
         return "pong"
 
-    monkeypatch.setattr(agent_mod, "create_llm", lambda *_a, **_k: _ScriptedModel(rounds=executed.rounds))
+    monkeypatch.setattr(agent_mod, "create_llm", lambda *_a, **_k: _ScriptedModel(rounds=ROUNDS))
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(agent_mod, "get_all_tools", lambda *_a, **_k: [slow_ping])
     monkeypatch.setitem(
@@ -102,23 +103,11 @@ async def _frames(stall_s: float = STALL_S, *, message: str = "/probe go", sessi
     return pre, frames
 
 
-async def _warm_up(executed: _Busy) -> None:
-    """Run once unguarded: the first model call in a process pays one-time costs
-    (executor thread start, lazy imports) that can exceed a sub-second window. One quick
-    round pays them all — the full ROUNDS x TOOL_S script only cost time (#3991)."""
-    executed.rounds, executed.tool_s = 1, 0.0
-    try:
-        await _frames(stall_s=0)
-    finally:
-        executed.rounds, executed.tool_s = ROUNDS, TOOL_S
-    executed.clear()
-
-
-async def test_a_slash_subagent_that_keeps_working_outlives_the_stall_window(slash_state, busy_subagent):
-    await _warm_up(busy_subagent)
+async def test_a_slash_subagent_that_keeps_working_outlives_the_stall_window(slash_state, busy_subagent, clock):
     pre, frames = await _frames()
 
     assert len(busy_subagent) == ROUNDS  # every tool round ran — nothing was cut off
+    assert clock.now > STALL_S  # ...over a run longer than the window
     assert pre.handled and frames[-1][0] == "done" and "FINAL ANSWER" in frames[-1][1]
     progress = [p for k, p in frames if k == "progress"]
     assert len(progress) >= ROUNDS  # a liveness frame per super-step
@@ -132,7 +121,6 @@ async def test_a_slash_subagent_that_keeps_working_outlives_the_stall_window(sla
 
 async def test_slash_liveness_frames_are_rate_limited(slash_state, busy_subagent, monkeypatch):
     monkeypatch.setattr(chat_dispatch, "_PROGRESS_MIN_INTERVAL_S", 3600.0)
-    busy_subagent.tool_s = 0.0  # guard off and the limit an hour: timing is irrelevant
     _pre, frames = await _frames(stall_s=0)  # guard off: count frames only
 
     assert len(busy_subagent) == ROUNDS
@@ -165,8 +153,7 @@ async def test_a_slash_subagent_wedged_in_one_call_is_still_ended_by_the_stall_g
 async def test_another_turns_busy_subagent_cannot_keep_a_wedged_one_alive(slash_state, busy_subagent, monkeypatch):
     """Two slash turns at once. Turn B's subagent keeps working (and reporting); turn A's
     is wedged. B's progress belongs to B: B survives the window, A is still stopped,
-    and none of B's liveness reaches A."""
-    await _warm_up(busy_subagent)
+    and none of B's liveness reaches A. One clock: A's window runs out on B's work."""
     real_run = chat_commands._run_parsed_subagent
     outcome: list[str] = []
 
@@ -219,21 +206,18 @@ async def test_a_failing_slash_subagent_still_fails_the_turn(slash_state, monkey
 # windows long, in sub-window rounds, and pass on origin/main too — guards, not fixes.
 
 
-def _slow_native_model(monkeypatch) -> dict[str, float]:
-    """The nesting test's streaming fake, each model call taking ``delay["s"]`` (TOOL_S
-    unless a warm-up turns it off)."""
+def _slow_native_model(monkeypatch, clock: VirtualClock) -> None:
+    """The nesting test's streaming fake, each model call taking TOOL_S (virtual)."""
     from tests.test_subagent_nesting_stream import _ToolFake
 
     original = _ToolFake._astream
-    delay = {"s": TOOL_S}
 
     async def _slow_astream(self, messages, stop=None, run_manager=None, **kwargs):
-        await asyncio.sleep(delay["s"])
+        await clock.sleep(TOOL_S)
         async for chunk in original(self, messages, stop=stop, run_manager=run_manager, **kwargs):
             yield chunk
 
     monkeypatch.setattr(_ToolFake, "_astream", _slow_astream)
-    return delay
 
 
 def _rounds(tool_name: str, n: int = ROUNDS):
@@ -245,19 +229,11 @@ def _rounds(tool_name: str, n: int = ROUNDS):
     ]
 
 
-async def _guarded_native(install, script, warm_script, delay: dict[str, float], session: str) -> list:
-    """Warm up unguarded on a ONE-round script with no model delay (the first graph run
-    pays one-time costs; the same path, cheap — #3991), then one guarded turn on a freshly
-    installed full script."""
+async def _guarded_native(install, script, session: str) -> list:
+    """One guarded turn on a freshly installed script. No warm-up: a first run's one-time
+    costs (lazy imports, thread start) take no virtual time."""
     from server.chat import _run_turn_stream
 
-    delay["s"] = 0.0
-    install(warm_script)
-    async for _frame in _run_turn_stream(
-        "warm up", f"{session}-warm", {"configurable": {"thread_id": f"{session}-warm"}}
-    ):
-        pass
-    delay["s"] = TOOL_S
     install(script)
     frames = []
     gen = _stall_guarded(
@@ -268,27 +244,26 @@ async def _guarded_native(install, script, warm_script, delay: dict[str, float],
     return frames
 
 
-async def test_a_native_task_delegation_that_keeps_working_outlives_the_stall_window(monkeypatch):
+async def test_a_native_task_delegation_that_keeps_working_outlives_the_stall_window(monkeypatch, clock):
     from langchain_core.messages import AIMessage
 
     from tests.test_subagent_nesting_stream import _delegate, _install
 
-    delay = _slow_native_model(monkeypatch)
+    _slow_native_model(monkeypatch, clock)
 
     def _script(n: int) -> list:
         head = [_delegate(description="check", prompt="what time is it", subagent_type="researcher")]
         return head + _rounds("current_time", n) + [AIMessage(content="it is noon"), AIMessage(content="noon")]
 
-    frames = await _guarded_native(
-        lambda script: _install(monkeypatch, script), _script(ROUNDS), _script(1), delay, "s-native-task"
-    )
+    frames = await _guarded_native(lambda script: _install(monkeypatch, script), _script(ROUNDS), "s-native-task")
 
     nested_ends = [p for k, p in frames if k == "tool_end" and p.get("parentId") == "t1"]
     assert len(nested_ends) == ROUNDS  # every subagent round ran and surfaced
+    assert clock.now > STALL_S  # ...over a turn longer than the window
     assert any(k == "tool_end" and p.get("name") == "task" for k, p in frames)
 
 
-async def test_a_native_run_workflow_step_that_keeps_working_outlives_the_stall_window(monkeypatch):
+async def test_a_native_run_workflow_step_that_keeps_working_outlives_the_stall_window(monkeypatch, clock):
     """The workflows plugin's tool shape: a tool body runs its step through
     ``sdk.run_subagent`` (no ``parent_task_id``) — its rounds still surface."""
     import itertools
@@ -303,7 +278,7 @@ async def test_a_native_run_workflow_step_that_keeps_working_outlives_the_stall_
     @tool
     async def slow_ping() -> str:
         """A step's tool round. Instant: each round already spends TOOL_S in its model
-        call, so a sleep here only doubled the run (#3991)."""
+        call."""
         return "pong"
 
     @tool
@@ -321,7 +296,7 @@ async def test_a_native_run_workflow_step_that_keeps_working_outlives_the_stall_
         monkeypatch.setattr(rs.STATE, attr, None, raising=False)
     monkeypatch.setattr(rs.STATE, "goal_controller", None, raising=False)
     monkeypatch.setattr(rs.STATE, "graph_config", LangGraphConfig(), raising=False)
-    delay = _slow_native_model(monkeypatch)
+    _slow_native_model(monkeypatch, clock)
     lead_call = AIMessage(
         content="", tool_calls=[{"name": "run_workflow", "args": {"name": "w"}, "id": "w1", "type": "tool_call"}]
     )
@@ -337,7 +312,8 @@ async def test_a_native_run_workflow_step_that_keeps_working_outlives_the_stall_
         )
         monkeypatch.setattr(rs.STATE, "graph", graph, raising=False)
 
-    frames = await _guarded_native(install, _script(ROUNDS), _script(1), delay, "s-native-wf")
+    frames = await _guarded_native(install, _script(ROUNDS), "s-native-wf")
 
     assert sum(1 for k, p in frames if k == "tool_end" and p.get("name") == "slow_ping") == ROUNDS
+    assert clock.now > STALL_S
     assert any(k == "tool_end" and p.get("name") == "run_workflow" for k, p in frames)

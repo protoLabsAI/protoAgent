@@ -22,6 +22,7 @@ from a2a.server.events.event_queue import EventQueueLegacy as EventQueue
 from a2a.types import Message, Part, Role, SendMessageRequest
 
 from a2a_impl.executor import ProtoAgentExecutor, TurnOutcome, set_terminal_hook
+from tests._virtual_clock import VirtualClock
 
 
 @pytest.fixture(autouse=True)
@@ -94,17 +95,19 @@ async def test_the_failure_names_the_step_that_wedged():
 
 
 @pytest.mark.asyncio
-async def test_a_slow_but_streaming_turn_is_never_cut_off():
+async def test_a_slow_but_streaming_turn_is_never_cut_off(monkeypatch):
     """The property that makes a stall window the right primitive.
 
     Total runtime here far exceeds the stall window; every individual GAP stays under
     it. A wall-clock cap would kill this turn — a long research turn making dozens of
-    tool calls is healthy work, not a hang.
+    tool calls is healthy work, not a hang. On virtual time (``tests/_virtual_clock.py``):
+    real seconds racing a sub-second window let a loaded CI box stretch a gap past it.
     """
+    clock = VirtualClock().install(monkeypatch)
 
     async def stream(text, ctx, **kwargs):
         for i in range(12):
-            await asyncio.sleep(_STALL / 4)  # 3x the stall window in total; each gap a quarter of it
+            await clock.sleep(_STALL / 4)  # 3x the stall window in total; each gap a quarter of it
             yield ("tool_start", {"id": f"c{i}", "name": "web_search", "input": "{}"})
             yield ("tool_end", {"id": f"c{i}", "name": "web_search", "output": "ok"})
         yield ("done", "finished after a long but healthy run")
@@ -112,6 +115,22 @@ async def test_a_slow_but_streaming_turn_is_never_cut_off():
     outcomes = await asyncio.wait_for(_run(stream, stall=_STALL), 20)
     assert [o.state for o in outcomes] == ["completed"]
     assert outcomes[0].tool_calls == 12
+    assert clock.now > 2 * _STALL
+
+
+@pytest.mark.asyncio
+async def test_a_gap_longer_than_the_window_is_a_stall_on_the_same_clock(monkeypatch):
+    """The control for the test above: the same clock, one gap past the window — so the
+    survival above is the gaps' doing, not a clock that never runs out."""
+    clock = VirtualClock().install(monkeypatch)
+
+    async def stream(text, ctx, **kwargs):
+        yield ("tool_start", {"id": "c0", "name": "web_search", "input": "{}"})
+        await clock.sleep(_STALL * 1.25)
+        yield ("done", "too late")
+
+    outcomes = await asyncio.wait_for(_run(stream, stall=_STALL), 20)
+    assert [o.state for o in outcomes] == ["failed"]
 
 
 @pytest.mark.asyncio
