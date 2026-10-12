@@ -469,11 +469,13 @@ def test_frames_get_the_full_theme_palette_and_themed_defaults(monkeypatch, tmp_
     defaults so plain <input>/<button> look native while author CSS still wins."""
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
-    for tok in ("--pl-color-bg-raised", "--pl-color-bg-inset", "--pl-color-fg-muted", "--pl-color-border-strong",
-                "--pl-color-status-success", "--pl-radius", "--pl-font-mono"):
-        assert f'"{tok}"' in js, tok  # carried by themeTokens()
+    # Full palette is read dynamically by themeTokenSnapshot (all --pl-* tokens on the live
+    # root element); no hand-written list of token names needed — themeTokens() wraps it.
+    assert "themeTokenSnapshot" in js
     base = _js_function(js, "base")
-    assert "var all=themeTokens()" in base and "color-scheme:" in base and "DEFAULTS" in base
+    # base() takes a snapshot, serialises it via snapshotToCss (includes color-scheme), and
+    # appends DEFAULTS for zero-specificity element defaults.
+    assert "var snap=themeTokens()" in base and "snapshotToCss" in base and "DEFAULTS" in base
     assert ":where(input,select,textarea)" in js and ":where(button)" in js  # zero specificity: author wins
 
 
@@ -551,8 +553,13 @@ def test_frame_color_scheme_follows_the_console_ground_not_the_os(monkeypatch, t
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
     base = _js_function(js, "base")
-    assert 'var scheme=bgIsDark(bg)?"dark":"light";' in base
+    # color-scheme is now set on the shell root by pushTheme() (bgIsDark(--pl-color-bg) →
+    # document.documentElement.style.colorScheme), then captured by themeTokenSnapshot and
+    # serialised into the frame's :root CSS by snapshotToCss — not computed inline in base().
+    assert 'var scheme=bgIsDark(bg)?"dark":"light";' not in base
     assert "cs.colorScheme" not in base
+    push = _js_function(js, "pushTheme")
+    assert 'bgIsDark(tokens["--pl-color-bg"])?"dark":"light"' in push
     if not NODE:
         pytest.skip("node not on PATH")
     fn = _js_function(js, "bgIsDark")
