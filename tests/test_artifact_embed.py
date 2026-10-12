@@ -190,7 +190,8 @@ def test_frame_reports_content_height_and_can_shrink(monkeypatch, tmp_path):
     protoArtifact:measure) and posts the content BOX height on every ResizeObserver callback. It
     measures getBoundingClientRect height, NOT documentElement.scrollHeight — scrollHeight is
     floored at the viewport (the frame's own height), so measuring it made height grow-only and
-    kept the overflow:hidden svg/mermaid frames squashed. An unchanged measure is deduped."""
+    kept the overflow:hidden svg/mermaid frames squashed. An unchanged resize is deduped; the
+    shell's measure request always re-posts."""
     if not NODE:
         pytest.skip("node not on PATH")
     art = _load(monkeypatch, tmp_path)
@@ -213,22 +214,103 @@ global.document = {
 };
 eval(HEIGHTJS.replace(/^<script>/, "").replace(/<\/script>$/, ""));
 const onInit = posts.length;                               // self-starts on injection
-global.__msg({ data: { type: "protoArtifact:measure" } }); // same height → deduped, no new post
-const afterSameMeasure = posts.length;
+roCb();                                                     // same height → deduped, no new post
+const afterSameResize = posts.length;
+global.__msg({ data: { type: "protoArtifact:measure" } }); // the shell's wake ALWAYS re-posts
+const afterMeasure = posts.length;
 dh = 540; bh = 540; roCb();                                // content grew
 dh = 150; bh = 150; roCb();                                // content shrank
-console.log(JSON.stringify({ onInit, afterSameMeasure, observed, posts }));
+console.log(JSON.stringify({ onInit, afterSameResize, afterMeasure, observed, posts }));
+process.exit(0);  // don't wait on the settle-schedule timers
 """
     )
     out = _node(harness)
     assert out["onInit"] == 1, "the reporter self-starts in embed frames"
-    assert out["afterSameMeasure"] == 1, "an unchanged measure is deduped"
+    assert out["afterSameResize"] == 1, "an unchanged measure is deduped"
+    assert out["afterMeasure"] == 2, "a measure request is never deduped (a wake can't be swallowed)"
     assert out["observed"] >= 1
     # The first post is the content box height (300), never the 9999 viewport-floored scrollHeight.
     assert out["posts"][0] == {"type": "protoArtifact:height", "height": 300}
     heights = [p["height"] for p in out["posts"]]
     assert 540 in heights, "a taller content change is reported"
     assert out["posts"][-1] == {"type": "protoArtifact:height", "height": 150}, "shrinking content is reported too"
+
+
+def _viewport_harness(js: str, *, fill: bool) -> dict:
+    """Run HEIGHTJS against a frame whose wrapper is viewport-sized (``.app{height:100vh}``): the
+    <html>/<body> boxes always equal the viewport (``innerHeight``), while the content inside
+    overflows it. ``rects`` are the rendered elements; mutations and font loads are fired by hand."""
+    return _node(
+        _assignment(js, "HEIGHTJS")
+        + r"""
+const posts = [], timers = [];
+let roCb = null, moCb = null, fontsCb = null, vh = 80;
+let rects = [{ top: 0, bottom: 20, width: 100, height: 20 }];  // "Loading…" — before the content
+global.setTimeout = (f) => { timers.push(f); return timers.length; };
+global.window = {
+  innerHeight: 80, __artFill: FILL,
+  parent: { postMessage: (m) => posts.push(m.height) },
+  addEventListener: (t, f) => { if (t === "message") global.__msg = f; },
+  ResizeObserver: function (cb) { roCb = cb; this.observe = () => {}; },
+  MutationObserver: function (cb) { moCb = cb; this.observe = () => {}; },
+};
+const el = () => rects.map((r) => ({ getBoundingClientRect: () => r }));
+global.document = {
+  documentElement: { getBoundingClientRect: () => ({ height: window.innerHeight }) },
+  body: { scrollHeight: 0, getBoundingClientRect: () => ({ height: window.innerHeight }),
+          getElementsByTagName: () => el() },
+  fonts: { ready: { then: () => {} }, addEventListener: (t, f) => { fontsCb = f; } },
+};
+eval(HEIGHTJS.replace(/^<script>/, "").replace(/<\/script>$/, ""));
+const first = posts.slice();
+// A module script builds the real UI inside the 100vh wrapper: neither box changes (no resize),
+// only the DOM. Centred and overflowing the 80px viewport: it spills above AND below.
+rects = [{ top: 0, bottom: 80, width: 600, height: 80 },           // the .app wrapper itself
+         { top: -60, bottom: -20, width: 300, height: 40 },        // the clipped heading
+         { top: -10, bottom: 140, width: 300, height: 150 }];      // the rows
+const settle = timers.length;          // the load-time settle schedule
+moCb([]); moCb([]);                    // a burst of mutations → one throttled measure
+const queued = timers.length - settle;
+timers.splice(0).forEach((f) => f());
+const afterMutation = posts.slice();
+window.innerHeight = afterMutation[afterMutation.length - 1];  // the shell resized the frame
+rects = [{ top: 0, bottom: 200, width: 600, height: 200 }, { top: 0, bottom: 40, width: 300, height: 40 },
+         { top: 50, bottom: 200, width: 300, height: 150 }];
+roCb();                                // the resize itself: the content now fits — a fixed point
+fontsCb();                             // a late font load re-measures (same height → deduped)
+console.log(JSON.stringify({ first, settle, queued, afterMutation, final: posts }));
+""".replace("FILL", "1" if fill else "0")
+    )
+
+
+def test_a_viewport_sized_wrapper_never_sticks_the_frame_at_the_floor(monkeypatch, tmp_path):
+    """#4076 follow-up, the 80px clipped frame: a first measure before the content settled floored
+    the frame at 80px; the content then built a ``height:100vh`` wrapper, whose box only ever
+    reported the frame's own 80px back — the centred heading clipped above the frame forever. The
+    reporter now re-measures on DOM changes (throttled) and, when the box is no taller than the
+    viewport, takes the rendered content's extent (overflow included), so the frame grows to fit."""
+    out = _viewport_harness(_js(_load(monkeypatch, tmp_path)), fill=False)
+    assert out["first"] == [80], "nothing settled yet: the box is the viewport"
+    assert out["settle"] == 3, "plus a short settle schedule of re-measures"
+    assert out["queued"] == 1, "a burst of mutations schedules ONE measure"
+    assert out["afterMutation"][-1] == 200, "the content's extent (-60..140), not the 80px viewport"
+    assert out["final"] == [80, 200], "fits at 200 and stays there — no creep, no re-post"
+
+
+def test_a_fill_frame_keeps_its_box(monkeypatch, tmp_path):
+    """A FILL frame (navigable svg/mermaid, decks, PDFs) pans or pages inside a deliberately fixed
+    box; its contents' extent must not grow it."""
+    js = _js(_load(monkeypatch, tmp_path))
+    out = _viewport_harness(js, fill=True)
+    assert set(out["final"]) == {80}
+    suffix = _assignment(js, "HEIGHTJS") + _assignment(js, "EMBED_FLOW_CSS") + _assignment(js, "EMBED_FILL_CSS")
+    marks = _node(
+        suffix
+        + _js_function(js, "embedSuffix")
+        + "\nconsole.log(JSON.stringify([embedSuffix('<p>', true).includes('window.__artFill=1;'),"
+        + " embedSuffix('<p>', false).includes('__artFill=1')]));"
+    )
+    assert marks == [True, False]
 
 
 def test_height_reporter_rides_every_embed_frame_not_just_base(monkeypatch, tmp_path):

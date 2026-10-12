@@ -236,7 +236,7 @@ describe("FrameComponentHost", () => {
 // The send-to-chat / openLink bridge (ADR 0118 D4 / S12b, amended by S19 / #4137): a frame calls
 // window.protoComponent.send()/openLink(); the shim relays it UP to this host as a
 // protoComponent:send|openLink message (correlation id `cid`). The host reuses the artifact
-// host's gate + confirm chip (SendConfirmChip): a send is a PROPOSAL the operator confirms in
+// host's gate + confirm chip (FrameProposalChip): a send is a PROPOSAL the operator confirms in
 // console DOM, unless they chose "Always allow from this component" (per plugin + kind).
 describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b / S19)", () => {
   const q = <T extends Element = HTMLElement>(id: string) => container.querySelector<T>(`[data-testid="${id}"]`);

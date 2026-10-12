@@ -121,8 +121,9 @@ def register(registry) -> None:
             "show",
             show_service,
             description=(
-                "Create an artifact (any kind, e.g. a vega-lite chart) in the Artifact panel, or "
-                "inline in the conversation with placement='inline' (ADR 0118)."
+                "Create an artifact (any kind, e.g. a vega-lite chart). placement defaults to "
+                "'inline': html/svg/mermaid/react/vega-lite render in the conversation, other kinds "
+                "in the Artifact panel; pass placement='panel' for the panel (ADR 0118)."
             ),
         )
     registry.register_skill_dir(

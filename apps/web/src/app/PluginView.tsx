@@ -12,7 +12,7 @@ import { onTopic, replaySince } from "../lib/events";
 import { registerKeybinding } from "../ext/keybindingRegistry";
 import { runForwardedCombo } from "../keybindings/useKeybindings";
 import { createPluginEventRelay, parseSubscribe } from "../lib/pluginEventRelay";
-import { onPluginViewMessage, takePluginViewMessages } from "../lib/pluginViewInbox";
+import { onPluginViewMessage, requeuePluginViewContext, takePluginViewMessages } from "../lib/pluginViewInbox";
 import {
   defaultRouteDeps,
   parsePluginCodeOpen,
@@ -365,6 +365,8 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         // retry covers those.)
         if (frameRef.current?.contentWindow) postInit(frameRef.current.contentWindow, src);
         pageReadyRef.current = true;
+        // A fresh page load has none of the view's sticky context (#4076) — queue it again.
+        if (!embedded && view.key) requeuePluginViewContext(view.key);
         flushInbox();
       } else if (m.type === "protoagent:subscribe") {
         const req = parseSubscribe(m);

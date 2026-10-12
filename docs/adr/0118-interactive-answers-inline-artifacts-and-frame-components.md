@@ -81,7 +81,7 @@ An inline artifact **is** an artifact. It has the same store, versions, render v
   - At most **6** live inline frames exist per chat view. An older frame that scrolls away is replaced by a static "Click to resume" card, which remembers its last height so the layout doesn't jump.
   - Hydration and reattach render inline refs the same way. History replays the stored version, and a deleted artifact or a disabled plugin degrades to today's inert chip.
 - **Live-only side effects stay live-only.** The chip's `onLive` hook (it opens the panel today) does **not** fire for an inline ref, because the answer is already in view.
-- **Panel auto-follow ignores inline artifacts** *(amended 2026-10-11, #4158/#4160)*. The panel follows the newest **panel-placed** artifact only, so an inline answer never moves it. Explicit "Open in panel" always works.
+- **Panel auto-follow ignores inline artifacts and is scoped to the active chat** *(amended 2026-10-11, #4158/#4160, #4163)*. The panel follows the newest **panel-placed** artifact only, so an inline answer never moves it. It follows only artifacts the active chat tab made or revised (their `chat_sessions`, told to the panel by `protoArtifact:context`), so another chat's, a `/v1`/A2A/ACP client's or a legacy artifact never takes it over. Those stay in the picker. Explicit "Open in panel" always works.
 - **Focus: click-to-activate** *(amended 2026-10-11, #4154/#4159)*. An inline frame runs live but starts inactive. A click or Tab activates it, and focus returning to the page deactivates it. A frame that takes focus without a gesture is quarantined: unloaded and replaced by "This artifact tried to take keyboard focus" with **Run it**, with focus handed straight back to the composer. See Amendments for why `inert` was rejected.
 - **Store cap** *(amended 2026-10-11)*. The artifact store keeps 200 artifacts by default (`artifact.history`). An artifact still referenced by a live chat is never evicted.
 
@@ -215,4 +215,26 @@ Decisions taken during implementation and hands-on testing. Each is also written
 3. **Click-to-activate frames (D2, #4154/#4159).** Inline frames run live (charts and animations keep moving) but start **inactive**. A click, or Tab navigation, activates a frame. Returning focus to the page deactivates it. A frame that takes focus without a gesture is **quarantined**: it's unloaded and replaced by "This artifact tried to take keyboard focus" with **Run it**, and focus goes back to the composer at once. `inert` was rejected: Chromium lets an inert frame's own script focus its own input, and WebKit honours it only until the first activation. Known limit: focus moving from one frame to another raises no host event, so frame-to-frame theft isn't caught.
 4. **Artifact store cap 200 (D2).** Raised from the original cap. Artifacts still referenced by a live chat are never evicted.
 5. **Panel follows panel artifacts only (D2, #4158/#4160).** Auto-follow of the newest artifact ignores inline placements. Inline answers never move the panel.
-
+6. **Panel auto-follow is scoped to the active chat (D2, #4163).** The console posts
+   `protoArtifact:context {session}` into the Artifact panel: the active chat tab's session id, at
+   start, on every tab switch, and again to each fresh load of the panel (a sticky delivery,
+   `setPluginViewContext` in `apps/web/src/lib/pluginViewInbox.ts`). The shell accepts it only from
+   its embedder. Auto-follow then follows only panel artifacts whose `chat_sessions` names that chat.
+   The artifact tools stamp `chat_sessions` on every create or revise from a console (`chat-`)
+   session. An artifact with **no** `chat_sessions` is **not** auto-followed: one made by a `/v1`,
+   A2A or ACP client, by a plugin calling `artifact.show` without a `session_id`, or a record from
+   before the stamp. It stays in the picker, and an explicit "Open in panel" (`protoArtifact:select`)
+   still shows any artifact. A tab switch moves a following panel to that chat's newest panel
+   artifact, or leaves it where it is when that chat has none. A pinned selection never moves. A
+   shell that never receives a context (an older console) follows every panel artifact, as before.
+7. **Opening a dock restores a usable size (#4163).** "Open in panel" goes through `openView`, which
+   now restores the default width (or height) when the dock is stored below the AppShell minimum. A
+   drag-to-collapse can leave the dock stored at 0 px, and the panel then opened 0 px wide. The
+   width setter still stores values verbatim.
+8. **Embed height re-measures until the content settles (D2, #4163).** The height reporter
+   (`HEIGHTJS`) re-measures on DOM changes (throttled), on font loads, on load and on a short settle
+   schedule, and a `protoArtifact:measure` always gets a reply. In a flow frame whose box is no
+   taller than its viewport, it also measures the rendered elements' extent, overflow included.
+   Otherwise a viewport-sized wrapper (`height: 100vh`, centred) only reports the frame's own height
+   back: a measure taken before the content settled held the frame at the 80 px floor, with the
+   heading clipped. Fill frames (svg, mermaid, decks, PDFs) keep their fixed box.

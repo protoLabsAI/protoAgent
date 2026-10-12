@@ -107,3 +107,77 @@ test("an uncaught send() refusal is not reported as an uncaught rejection", asyn
   await page.waitForTimeout(300);
   expect(errors.filter((t) => /not sent|unavailable here|Uncaught/i.test(t))).toEqual([]);
 });
+
+// ── #4076 follow-up: the panel belongs to ONE chat ──────────────────────────────────────────
+// The console posts `protoArtifact:context {session}` (the active chat tab) into the panel; the
+// panel then follows only the panel artifacts that chat made or touched (`chat_sessions`). Driven
+// here through a host page that EMBEDS the real shell, since the shell trusts the context only
+// from its embedder.
+
+type Stamped = Art & { chat_sessions?: string[] };
+const stamped = (id: string, ts: number, chats?: string[]): Stamped => ({
+  ...doc(id, ts), ...(chats ? { chat_sessions: chats } : {}),
+});
+
+async function embeddedPanel(page: Page) {
+  await page.route("**/e2e-panel-host", (route) =>
+    route.fulfill({ contentType: "text/html", body: `<!doctype html><iframe id="p" src="${VIEW}" style="width:800px;height:600px"></iframe>` }),
+  );
+  await page.goto("/e2e-panel-host");
+  const panel = page.frameLocator("#p");
+  const context = (session: string) =>
+    page.evaluate((s) => (document.getElementById("p") as HTMLIFrameElement).contentWindow!.postMessage(
+      { type: "protoArtifact:context", session: s }, "*"), session);
+  return { sel: panel.locator("#art"), options: panel.locator("#art option"), context };
+}
+
+test("another chat's — or a /v1, A2A, legacy — panel artifact never takes over the panel", async ({ page }) => {
+  const a = stamped("doc-a", 100, ["chat-a"]);
+  const set = await liveStore(page, { artifacts: [a], current: "doc-a" });
+  const p = await embeddedPanel(page);
+  await expect(p.sel).toHaveValue("doc-a");
+  await p.context("chat-a");
+
+  // Chat B (another tab) writes a panel doc: the store's current, not this panel's.
+  const b = stamped("doc-b", 200, ["chat-b"]);
+  set({ artifacts: [b, a], current: "doc-b" });
+  await expect(p.options).toHaveCount(2); // it is in the picker …
+  await page.waitForTimeout(3500);
+  await expect(p.sel).toHaveValue("doc-a"); // … but the panel stays on chat A's doc
+
+  // A /v1 / A2A / ACP client (no console chat → no chat_sessions), and a pre-stamp record.
+  const api = stamped("doc-api", 300);
+  set({ artifacts: [api, b, a], current: "doc-api" });
+  await expect(p.options).toHaveCount(3);
+  await page.waitForTimeout(3500);
+  await expect(p.sel).toHaveValue("doc-a");
+
+  // Chat A's next panel artifact is followed.
+  const a2 = stamped("doc-a2", 400, ["chat-a"]);
+  set({ artifacts: [a2, api, b, a], current: "doc-a2" });
+  await expect(p.sel).toHaveValue("doc-a2");
+
+  // A tab switch: the panel follows chat B's newest panel artifact, and back again.
+  await p.context("chat-b");
+  await expect(p.sel).toHaveValue("doc-b");
+  await p.context("chat-a");
+  await expect(p.sel).toHaveValue("doc-a2");
+});
+
+test("a context posted by the artifact's own frame is ignored", async ({ page }) => {
+  // Chat A's newest panel artifact is model code that claims to be in chat X.
+  const evil: Stamped = {
+    ...art("evil", "html", '<p id="ok">ok</p><script>setInterval(function(){parent.postMessage({type:"protoArtifact:context",session:"chat-x"},"*")},100)</script>', 100),
+    chat_sessions: ["chat-a"],
+  };
+  const set = await liveStore(page, { artifacts: [evil], current: "evil" });
+  const p = await embeddedPanel(page);
+  await expect(p.sel).toHaveValue("evil"); // booted (listening) before the context is posted
+  await p.context("chat-a");
+  await expect(page.frameLocator("#p").frameLocator("#frame").locator("#ok")).toHaveText("ok");
+  // Chat X's doc arrives: had the frame's claim been believed, the panel would jump to it.
+  set({ artifacts: [stamped("doc-x", 300, ["chat-x"]), evil], current: "doc-x" });
+  await expect(p.options).toHaveCount(2);
+  await page.waitForTimeout(3500);
+  await expect(p.sel).toHaveValue("evil");
+});

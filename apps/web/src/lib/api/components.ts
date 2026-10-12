@@ -44,16 +44,19 @@ function ensurePluginWatch(): void {
 }
 
 /** Fetch the component catalog, cached after the first call. `force` re-reads and replaces
- *  the cache. A failed fetch clears the cache so the next call retries, rather than handing
- *  back a stale rejected promise forever. */
+ *  the cache. A failed fetch clears the cache (if it is still the cached entry) so the next call
+ *  retries, rather than handing back a stale rejected promise forever. */
 export function fetchComponentCatalog(force = false): Promise<ComponentCatalogEntry[]> {
   ensurePluginWatch();
   if (force) cached = null;
   if (!cached) {
-    cached = request<ComponentCatalogEntry[]>(CATALOG_PATH).catch((err) => {
-      cached = null;
+    const p: Promise<ComponentCatalogEntry[]> = request<ComponentCatalogEntry[]>(CATALOG_PATH).catch((err) => {
+      // Only clear OUR entry: a forced re-read (or a plugin reload) may have replaced the cache
+      // while this request was in flight, and a stale rejection must not evict the newer one.
+      if (cached === p) cached = null;
       throw err;
     });
+    cached = p;
   }
   return cached;
 }

@@ -21,6 +21,8 @@
   // it auto-follows new versions). followNewest jumps to the newest PANEL artifact on create
   // unless the user navigated to an older one; panelHead is that artifact (see headOf).
   var arts = [], curId = null, selId = null, selVer = null, followNewest = true, lastRendered = "", panelHead = null;
+  // The chat this panel belongs to (#4076, protoArtifact:context): null until the console says.
+  var chatSession = null;
   // The version in the frame, for render-status (#1458): its id, 1-based position, and its identity —
   // lifetime number + ts — which the route resolves even after a trim has shifted the position.
   var renderingId = null, renderingVer = 0, renderingN = 0, renderingTs = 0;
@@ -116,16 +118,47 @@
   // could only ever GROW, never shrink, and left the overflow:hidden svg/mermaid frames reporting
   // their own squashed height. Deduped so an unchanged measure doesn't thrash the host. No `</`
   // inside: rides a srcdoc <script>.
-  var HEIGHTJS = '<script>(function(){var W=window,D=document,last=-1;'
+  // Viewport-coupled layouts (#4076 follow-up): a generated page often sizes its wrapper to the
+  // viewport (`.app{height:100vh}`, centred, overflow hidden). In an inline frame the viewport IS
+  // the frame, so its box height only ever reports the frame's current height back — a fixed
+  // point. A first measure taken before the content settled (fonts, styles, a module script that
+  // builds the DOM after parse) floored the frame at 80px, and the 100vh wrapper then measured
+  // 80px forever, its centred heading clipped. So when the box is no taller than the viewport (the
+  // signature of that coupling — and of a frame already sized to its content), the reporter also
+  // takes the EXTENT of the rendered elements (lowest bottom minus highest top, overflow
+  // included), which is the content's own height whatever the viewport is. FLOW frames only: a
+  // FILL frame's box is deliberately fixed and its diagram/deck pans or pages inside it, so
+  // embedSuffix marks it (window.__artFill) and its box height stands. Re-measures beyond
+  // the ResizeObserver: DOM changes inside a viewport-sized wrapper (they resize neither <html> nor
+  // <body>; throttled to one measure per 150 ms, so a ticking clock or a live counter costs
+  // little, and attribute/style animation never triggers one), each font load (document.fonts), load, and a short settle schedule; a measure
+  // request from the shell always re-posts (never deduped), so a wake can't be swallowed.
+  var HEIGHTJS = '<script>(function(){var W=window,D=document,last=-1,queued=false;'
+    + 'function ext(){var b=D.body,els=b&&b.getElementsByTagName?b.getElementsByTagName("*"):[],'
+    + 'n=Math.min(els.length,4000),top=0,bot=0,i,r;'
+    + 'for(i=0;i<n;i++){r=els[i].getBoundingClientRect?els[i].getBoundingClientRect():null;'
+    + 'if(!r||(!r.width&&!r.height))continue;if(r.top<top)top=r.top;if(r.bottom>bot)bot=r.bottom;}'
+    + 'return bot-top;}'
     + 'function h(){var d=D.documentElement,b=D.body,'
     + 'dh=d&&d.getBoundingClientRect?d.getBoundingClientRect().height:0,'
-    + 'bh=b?Math.max(b.scrollHeight||0,b.getBoundingClientRect?b.getBoundingClientRect().height:0):0;'
-    + 'return Math.ceil(Math.max(dh,bh));}'
-    + 'function send(){var v=h();if(v===last)return;last=v;'
+    + 'bh=b?Math.max(b.scrollHeight||0,b.getBoundingClientRect?b.getBoundingClientRect().height:0):0,'
+    + 'v=Math.max(dh,bh),vh=W.innerHeight||0;'
+    + 'if(!W.__artFill&&vh&&v<=vh+1)v=Math.max(v,ext());'
+    + 'return Math.ceil(v);}'
+    + 'function send(force){var v=h();if(v===last&&!force)return;last=v;'
     + 'try{W.parent.postMessage({type:"protoArtifact:height",height:v},"*");}catch(_){}}'
-    + 'if(W.ResizeObserver){var ro=new W.ResizeObserver(send);ro.observe(D.documentElement);if(D.body)ro.observe(D.body);}'
-    + 'W.addEventListener("load",send);'
-    + 'W.addEventListener("message",function(ev){if(((ev.data)||{}).type==="protoArtifact:measure")send();});'
+    + 'function soon(){if(queued)return;queued=true;setTimeout(function(){queued=false;send();},150);}'
+    + 'var ro=W.ResizeObserver?new W.ResizeObserver(function(){send();}):null;'
+    + 'function watch(){if(!D.body)return;'
+    + 'if(ro)ro.observe(D.body);'
+    + 'if(W.MutationObserver)new W.MutationObserver(soon).observe(D.body,{childList:true,subtree:true,characterData:true});}'
+    + 'if(ro)ro.observe(D.documentElement);'
+    + 'if(D.body)watch();else if(D.addEventListener)D.addEventListener("DOMContentLoaded",watch);'
+    + 'var fs=D.fonts;if(fs){try{if(fs.ready&&fs.ready.then)fs.ready.then(function(){send();});'
+    + 'if(fs.addEventListener)fs.addEventListener("loadingdone",function(){send();});}catch(_){}}'
+    + 'W.addEventListener("load",function(){send();});'
+    + '[250,1000,2500].forEach(function(t){setTimeout(function(){send();},t);});'
+    + 'W.addEventListener("message",function(ev){if(((ev.data)||{}).type==="protoArtifact:measure")send(true);});'
     + 'send();'
     + '})();<\/script>';
   // The CSS reset embedSuffix pairs with HEIGHTJS (ADR 0118 D2). FLOW kinds (html, markdown, react,
@@ -1465,26 +1498,45 @@
   // null when there is none. The poll moves the selection only when the head CHANGES, so an
   // inline answer (which leaves the head where it was) never moves the panel, and a selection
   // the operator opened from an inline chip stays put until a new panel artifact arrives.
-  function headOf(list, cur){
+  //
+  // The panel belongs to ONE chat (#4076): the console tells it which with
+  // `protoArtifact:context {session}` — the active chat tab, on start and on every tab switch. A
+  // panel artifact is the chat's (`followable`) only when its `chat_sessions` names that chat:
+  // the artifact tools stamp the calling console chat on every create/revise (#4138), so a panel
+  // artifact another chat tab made — or a `/v1`, A2A or ACP client (no `chat-` session, so no
+  // stamp), or a legacy record from before the stamp — is never followed. It stays in the
+  // picker, and an explicit "Open in panel" (`protoArtifact:select`) still shows it. A tab switch
+  // moves the head to that chat's newest panel artifact, so a following panel shows it (and stays
+  // put when that chat has none). session null = the console never said (an older host, a
+  // standalone page): every panel artifact is followable, as before.
+  function followable(a, session){
+    if(!a || a.placement==="inline") return false;
+    if(session==null) return true;
+    var cs=a.chat_sessions;
+    return !!session && Array.isArray(cs) && cs.indexOf(session)>=0;
+  }
+  function headOf(list, cur, session){
     var i, a, best=null, bestTs=-1;
-    for(i=0;i<list.length;i++) if(list[i].id===cur && list[i].placement!=="inline") return cur;
+    for(i=0;i<list.length;i++) if(list[i].id===cur && followable(list[i], session)) return cur;
     for(i=0;i<list.length;i++){
-      a=list[i]; if(a.placement==="inline") continue;
+      a=list[i]; if(!followable(a, session)) continue;
       var vs=a.versions||[], ts=+((vs.length && vs[vs.length-1].ts) || a.updated || a.created || 0);
       if(ts>bestTs){ bestTs=ts; best=a; }
     }
     return best ? best.id : null;
   }
   // The follow rules a fresh poll applies, pure so they can be tested: s is the selection state
-  // {selId, selVer, followNewest, head} before the poll; returns the new one (+ save: re-persist).
-  //   • Following: jump only when a new panel artifact became the head — an inline answer or a
-  //     write to a non-panel artifact leaves the panel where it is. With nothing selected yet (or
-  //     the selection deleted) it lands on the head, or the newest anything when no panel artifact
-  //     exists, so the panel never sits blank over a non-empty store.
+  // {selId, selVer, followNewest, head, session} before the poll; returns the new one (+ save:
+  // re-persist).
+  //   • Following: jump only when a new panel artifact of this chat became the head — an inline
+  //     answer, another chat's artifact or a write to a non-panel artifact leaves the panel where
+  //     it is. With nothing selected yet (or the selection deleted) it lands on the head, or the
+  //     newest anything when the chat has no panel artifact, so the panel never sits blank over a
+  //     non-empty store.
   //   • A pinned selection whose artifact was deleted would strand the panel on a dead id — fall
   //     back to auto-follow + the head and re-persist so it doesn't linger.
   function nextSel(list, cur, s){
-    var head=headOf(list, cur), moved=head!==s.head, fallback=head || (list[0] && list[0].id) || null;
+    var head=headOf(list, cur, s.session), moved=head!==s.head, fallback=head || (list[0] && list[0].id) || null;
     var gone=!s.selId || !list.some(function(a){ return a.id===s.selId; });
     var o={selId:s.selId, selVer:s.selVer, followNewest:s.followNewest, head:head, save:false};
     if(s.followNewest){ if((moved && head) || gone) o.selId=fallback; o.selVer=null; }
@@ -2336,6 +2388,27 @@
     if(booted){ applyPendingSel(0); if(pendingSel) kickPoll(); }
   });
 
+  // Apply the follow rules (nextSel) to the store mirror — after a poll, and when the chat
+  // context changes (a tab switch moves the head to that chat's newest panel artifact).
+  function applyFollow(){
+    var n = nextSel(arts, curId, {selId:selId, selVer:selVer, followNewest:followNewest, head:panelHead, session:chatSession});
+    selId = n.selId; selVer = n.selVer; followNewest = n.followNewest;
+    if (n.head !== panelHead) { panelHead = n.head; saveHead(); }
+    if (n.save) saveSel();
+  }
+  // Which chat this panel belongs to (#4076): the console's active chat tab, sent on start, on
+  // every tab switch and to every fresh load of this page. Trusted only from the embedder, like
+  // a select. Before the first poll it just records the session (the poll applies it); after,
+  // it re-runs the follow rules at once.
+  window.addEventListener("message", function(e){
+    var m=e.data;
+    if(!m || m.type!=="protoArtifact:context" || !fromEmbedder(e) || EMBED) return;
+    var s=typeof m.session==="string" ? m.session.slice(0,200) : "";
+    if(s===chatSession) return;
+    chatSession=s;
+    if(booted && appliedSeq>0){ applyFollow(); rebuildArtSelect(); render(); }
+  });
+
   // Adaptive cadence + conditional requests (#2256): fast (1.5s) while the store is
   // actually changing, decaying to a slow idle tick; unchanged polls are ETag 304s the
   // server answers without reading the store and the panel skips without re-rendering.
@@ -2380,10 +2453,7 @@
       lastEtag = (r.headers && r.headers.get && r.headers.get("ETag")) || "";
       storeChangedAt = Date.now();   // fresh payload ⇒ stay on the fast cadence for a bit
       arts = (d && d.artifacts) || []; curId = (d && d.current) || null;
-      var n = nextSel(arts, curId, {selId:selId, selVer:selVer, followNewest:followNewest, head:panelHead});
-      selId = n.selId; selVer = n.selVer; followNewest = n.followNewest;
-      if (n.head !== panelHead) { panelHead = n.head; saveHead(); }
-      if (n.save) saveSel();
+      applyFollow();
       takePendingSel(my);  // a chip's deep-link (#3617) — after the follow rules, so it wins
       rebuildArtSelect(); render();
       pollOk();
@@ -2451,7 +2521,7 @@
     var m = /script-src 'nonce-([A-Za-z0-9]+)'/.exec(doc);
     var tag = m ? '<script nonce="' + m[1] + '">' : '<script>';
     return '<style>' + (fill ? EMBED_FILL_CSS : EMBED_FLOW_CSS) + '</style>'
-      + HEIGHTJS.replace('<script>', tag);
+      + HEIGHTJS.replace('<script>', tag + (fill ? 'window.__artFill=1;' : ''));
   }
   // Post UP to the embedder (the console host). Targeted at its origin where the browser tells
   // us (ancestorOrigins), like openTarget — a height int is low-stakes, but stay a good citizen.

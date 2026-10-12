@@ -51,7 +51,7 @@ export const OPEN_LINK_SETTINGS_ERROR = "Couldn't read the allowed link origins 
 const supersededError = (action: ProposalAction) =>
   action === "open" ? OPEN_LINK_SUPERSEDED_ERROR : SEND_SUPERSEDED_ERROR;
 
-export function useFrameSendGate({
+export function useFrameProposalGate({
   bridge,
   frameId,
   trustKey,

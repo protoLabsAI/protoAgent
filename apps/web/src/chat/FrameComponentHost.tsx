@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 
 import { consoleTheme, INIT_REPOST_DELAYS } from "../app/pluginFrameHandshake";
 import { InlineFrameBridgeContext } from "../artifacts/ArtifactRefChip";
-import { BridgeNoticeView, useFrameSendGate } from "../artifacts/SendConfirmChip";
+import { BridgeNoticeView, useFrameProposalGate } from "../artifacts/FrameProposalChip";
 import { useFrameFocusGuard } from "../artifacts/frameFocusGuard";
 import { FrameActivationShield, FrameQuarantineNotice } from "../artifacts/FrameGuardViews";
 import { createFrameRegistry, useLazyMount, type FrameRegistry } from "../artifacts/inlineFrames";
@@ -53,7 +53,7 @@ import { apiUrl } from "../lib/api";
 //     PROPOSAL (S19 / #4137): it shows an inline confirm chip in console DOM and posts only when
 //     the operator clicks Send — unless they ticked "Always allow from this component" (keyed by
 //     plugin + kind, per browser). Either way the content length, busy, 1-per-2s send rate and
-//     proposal rate gates apply. Shared with the artifact host via SendConfirmChip.
+//     proposal rate gates apply. Shared with the artifact host via FrameProposalChip.
 //   • An accepted send goes through the EXACT send path S10b wired (ComponentChatSend.send →
 //     ChatSessionSlot runTurn), tagged with the origin `{via:"component", kind, plugin}` so the
 //     turn is a normal, visible, auditable user message with a "from ‹title›" label.
@@ -240,7 +240,7 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
 
   // The send gate + confirm chip (ADR 0118 D4 / S19, #4137) — the same one the artifact host uses.
   // Trust is per component KIND (plugin + kind, from the host's own props), not per occurrence.
-  const gate = useFrameSendGate({ bridge, frameId: id, trustKey: `component:${plugin ?? ""}:${kind ?? ""}`, reply: replyToFrame });
+  const gate = useFrameProposalGate({ bridge, frameId: id, trustKey: `component:${plugin ?? ""}:${kind ?? ""}`, reply: replyToFrame });
 
   // The send/openLink bridge (ADR 0118 D4 / S12b). Gated on `e.source` being THIS frame's own
   // window — a sibling frame or the page can't drive another component's chat — the strong
