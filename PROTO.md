@@ -366,7 +366,7 @@ label before concluding the loop is stuck.
   compare it with the in-app binding.
 
 - **Import layering (enforced by `lint-imports`).** `src/graph/` and the infra
-  packages (`src/a2a_impl/ observability/ security/ infra/ tools/ knowledge/
+  packages under `src/` (`a2a_impl/ observability/ security/ infra/ tools/ knowledge/
   events/ scheduler/ runtime/ ops/`) must **never** import `src/server/` or
   `src/operator_api/`; `src/operator_api/` must never import `src/server/`. (`src/ops/` is the
   ADR 0075 D2 shared-operation layer — one op wrapping a core, called by the CLI,
