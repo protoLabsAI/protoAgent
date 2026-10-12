@@ -230,14 +230,18 @@ def test_vega_lite_routes_to_its_own_document(monkeypatch, tmp_path):
 
 
 def test_the_frame_theme_is_the_ds_functions_not_a_hand_copy(monkeypatch, tmp_path):
-    """r1: artVega carries no hand-rolled theme()/isDark(); the config comes from the DS
-    buildVegaConfig(tok) and the tooltip from vegaTooltipTheme(tok). vegaDoc injects both DS
-    functions' source beside artVega, and the shell loads them from the vendored same-origin
-    module (not a copy pasted back into shell.js)."""
+    """r1: artVega carries no hand-rolled theme()/isDark(); the config is built by the DS
+    buildVegaConfig(tok) and the tooltip by vegaTooltipTheme(tok). The embed's config rides a thin
+    chartConfig(tok) adapter that calls buildVegaConfig and then preserves this shell's prior
+    range.category gate (see test_a_partial_series_set_keeps_the_prior_category_gate) — it is NOT a
+    hand-rolled theme: every colour/axis/legend value still comes from the DS function. vegaDoc
+    injects both DS functions' source beside artVega, and the shell loads them from the vendored
+    same-origin module (not a copy pasted back into shell.js)."""
     art = _load(monkeypatch, tmp_path)
     ctl = _js_function(art._SHELL_JS, "artVega")
     assert "function isDark" not in ctl and "function theme(" not in ctl
-    assert "config:buildVegaConfig(tok)" in ctl
+    assert "config:chartConfig(tok)" in ctl  # the adapter…
+    assert "buildVegaConfig(t" in ctl  # …which delegates the whole config to the DS builder
     assert "tooltip:{theme:vegaTooltipTheme(tok)}" in ctl
     doc = _js_function(art._SHELL_JS, "vegaDoc")
     assert "buildVegaConfig.toString()" in doc and "vegaTooltipTheme.toString()" in doc
@@ -436,36 +440,48 @@ def test_a_theme_switch_redraws_in_the_new_palette(monkeypatch, tmp_path):
 
 
 def test_missing_tokens_fall_back_to_a_usable_palette(monkeypatch, tmp_path):
-    """With no tokens the DS builder still emits a full, usable config from its literal defaults:
-    the accent fills all eight series slots, and the sequential/diverging ranges are emitted as
-    hex — the DS always themes the ramp now (#571), so a heat map never falls back to Vega's
-    default blues (the pre-DS theme emitted no `range` for a single colour)."""
+    """With no tokens the builder still emits a full, usable config from its literal defaults: the
+    background/mark fall to the accent, and the sequential/diverging ranges are emitted as hex — the
+    DS always themes the ramp now (#571), so a heat map never falls back to Vega's default blues
+    (the pre-DS theme emitted no `range` for a single colour). But with no series tokens defined the
+    shell drops range.category (see test_a_partial_series_set_keeps_the_prior_category_gate), so a
+    multi-series chart keeps Vega's own varied category palette rather than painting every series
+    the one accent — the behaviour the old theme() had below two defined series."""
     art = _load(monkeypatch, tmp_path)
     cfg = _run_frame(art, SPEC, tokens={})["calls"][0]["config"]
     assert cfg["background"] == "#0a0a0c" and cfg["mark"]["color"] == "#9b87f2"
-    assert cfg["range"]["category"] == ["#9b87f2"] * 8
+    assert "category" not in cfg["range"]  # no series tokens → Vega's default category scheme
     for k in ("ramp", "heatmap", "diverging"):
         assert all(re.fullmatch(r"#[0-9a-f]{6}", s) for s in cfg["range"][k]), (k, cfg["range"][k])
 
 
-def test_a_partial_series_set_fills_the_rest_with_the_accent(monkeypatch, tmp_path):
-    """DELIBERATE behaviour change over the old hand-rolled `theme()` (named in the changelog):
-    the DS builder always emits `range.category`, with every undefined `--pl-color-chart-series*`
-    slot filled by `--pl-color-accent`. The old theme added only the series tokens that were set
-    and left Vega's own category palette unless two or more were defined. The shipped console
-    themes (and the DS defaults) carry all eight tokens, so this only reshapes a custom theme that
-    omits some of them — pinned here so the collapse-to-accent is by contract, not by accident."""
+def test_a_partial_series_set_keeps_the_prior_category_gate(monkeypatch, tmp_path):
+    """The shell preserves the category contract the old hand-rolled `theme()` had — NOT the DS
+    builder's always-eight-slots default. buildVegaConfig backfills every undefined
+    `--pl-color-chart-series*` with the accent and always sets `range.category`; left as-is, a
+    custom theme that defines one or no series colours would paint every series of a multi-series
+    chart the one accent (the #571 review's regression). chartConfig() restores the old gate: a
+    categorical palette is themed only when TWO OR MORE series colours are defined, and then from
+    exactly those defined colours (no accent padding). The shipped console themes carry all eight
+    tokens, so they are unaffected; this only protects a custom theme that omits some."""
     art = _load(monkeypatch, tmp_path)
-    # Only series1 + series2 defined; 3–8 absent, so the accent backfills them.
-    tokens = {
-        "--pl-color-bg": "#0d0f14",
-        "--pl-color-accent": "#9b87f2",
-        "--pl-color-chart-series1": "#111111",
-        "--pl-color-chart-series2": "#222222",
-    }
-    cfg = _run_frame(art, SPEC, tokens=tokens)["calls"][0]["config"]
-    assert cfg["range"]["category"] == ["#111111", "#222222"] + ["#9b87f2"] * 6
-    assert "category" in cfg["range"]  # always set, even with a single defined series
+    base = {"--pl-color-bg": "#0d0f14", "--pl-color-accent": "#9b87f2"}
+
+    # 2+ defined → category is exactly the defined colours, no accent backfill of the empty slots.
+    two = dict(base, **{"--pl-color-chart-series1": "#111111", "--pl-color-chart-series2": "#222222"})
+    cfg = _run_frame(art, SPEC, tokens=two)["calls"][0]["config"]
+    assert cfg["range"]["category"] == ["#111111", "#222222"]
+
+    # Exactly one defined → no range.category at all, so Vega keeps its own varied palette rather
+    # than collapsing the chart to the single accent-padded colour.
+    one = dict(base, **{"--pl-color-chart-series1": "#111111"})
+    cfg = _run_frame(art, SPEC, tokens=one)["calls"][0]["config"]
+    assert "category" not in cfg["range"]
+    assert cfg["mark"]["color"] == "#111111"  # the one defined series still paints a single mark
+
+    # None defined → no category either; the default-accent mark still renders a single-series chart.
+    cfg = _run_frame(art, SPEC, tokens=base)["calls"][0]["config"]
+    assert "category" not in cfg["range"] and cfg["mark"]["color"] == "#9b87f2"
 
 
 def test_a_spec_cannot_re_option_the_embed(monkeypatch, tmp_path):

@@ -1327,6 +1327,22 @@
     // (vegaTooltipTheme) are the design system's pure functions, injected as SOURCE by vegaDoc
     // just above this call. A spec's own `config` still wins (vega-embed merges it over this),
     // so an author who means a colour keeps it. protoContent#571/#578.
+    // buildVegaConfig always emits an eight-slot range.category, backfilling every undefined
+    // --pl-color-chart-series* with the accent. This shell keeps its prior category contract (the
+    // #571 review): a categorical palette is themed only when the active theme defines TWO OR MORE
+    // series colours — fewer than that, Vega keeps its own default category scheme rather than
+    // painting every series the one accent. chartConfig() takes the DS config verbatim and, below
+    // that threshold, drops range.category (leaving everything else — ramp/heatmap/diverging,
+    // mark, axis, legend — untouched). The shipped console themes define all eight series tokens,
+    // so their multi-series charts are unaffected; only a custom theme that omits some is reshaped.
+    function chartConfig(t){
+      var cfg=buildVegaConfig(t||{}), defined=[], i, c;
+      for(i=1;i<=8;i++){ c=(t||{})["--pl-color-chart-series"+i]; if(typeof c==="string" && c.trim()) defined.push(c.trim()); }
+      if(cfg && cfg.range){
+        if(defined.length>1) cfg.range.category=defined; else delete cfg.range.category;
+      }
+      return cfg;
+    }
     // Any `url` inside a data definition — refused up front with a reason, rather than left to
     // fail inside the dataflow as a bare "Loading failed". Inline rows (values / datasets) are
     // never walked: a column named `url` is data, not a load. Iterative and bounded (the mirror of
@@ -1381,7 +1397,7 @@
       var p;
       try{
         p=W.vegaEmbed("#vis", prep(), {mode:"vega-lite", renderer:"svg", actions:false, ast:true,
-          loader:LOADER, logger:logger, config:buildVegaConfig(tok), tooltip:{theme:vegaTooltipTheme(tok)}});
+          loader:LOADER, logger:logger, config:chartConfig(tok), tooltip:{theme:vegaTooltipTheme(tok)}});
       }catch(e){ p=Promise.reject(e); }
       Promise.resolve(p)
         .then(function(res){ view=res; if(W.__artOk) W.__artOk(); },
