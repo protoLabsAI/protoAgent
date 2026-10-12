@@ -123,7 +123,17 @@ def test_register_offers_the_service_by_name(monkeypatch, tmp_path):
     reg = FakeRegistry(plugin_id="artifact")
     art.register(reg)
     assert reg.services["artifact.show"] is art.show_service
-    assert reg.service_meta["artifact.show"]["description"]
+    desc = reg.service_meta["artifact.show"]["description"]
+    # The description states the real default (#4076 follow-up): inline, not the panel.
+    assert "defaults to 'inline'" in desc and "placement='panel'" in desc
+
+
+def test_show_service_really_defaults_to_inline(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    r = art.show_service(kind="html", code="<p>x</p>")
+    assert r["ok"] and _arts(art)[0].get("placement") == "inline"
+    r = art.show_service(kind="html", code="<p>y</p>", placement="panel")
+    assert r["ok"] and "placement" not in _arts(art)[0]
 
 
 # ── the vendored renderer + its route ───────────────────────────────────────────

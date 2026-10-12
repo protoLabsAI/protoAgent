@@ -495,6 +495,12 @@ pieces, none of them core edits:
    before calling `initPluginView()`**, and accept the message only from `window.parent`
    (`e.source === window.parent`; check `e.origin` against `location.ancestorOrigins[0]` where
    available) — never from a frame you embed. A delivery type can't be `protoagent:*`.
+4. **State the view needs on every load** (not a one-shot "show this"): use
+   `setPluginViewContext("plugin:<id>:<view>", {type: "<id>:context", …})` from the same module.
+   It is delivered at once and re-queued each time the page posts `protoagent:ready`, because a
+   dock unmounts its view and the reloaded page starts empty. The same value twice is a no-op.
+   The Artifact panel learns which chat tab is active this way (`protoArtifact:context
+   {session}`, set by `startArtifactPanelContext()` in `apps/web/src/artifacts/artifactRef.ts`).
 
 ## Fleet-proxied requests: the 20-second read lane
 

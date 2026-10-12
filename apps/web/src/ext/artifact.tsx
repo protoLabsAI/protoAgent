@@ -5,7 +5,7 @@
 // console (the server won't extract it), and a chip replayed from an older history renders
 // inert ("the Artifact panel is off").
 import { ArtifactRefChip, onLiveInlineArtifactRef } from "../artifacts/ArtifactRefChip";
-import { ARTIFACT_REF_COMPONENT, onLiveArtifactRef } from "../artifacts/artifactRef";
+import { ARTIFACT_REF_COMPONENT, onLiveArtifactRef, startArtifactPanelContext } from "../artifacts/artifactRef";
 import { registerChatComponent } from "./componentRegistry";
 
 // The live hook: a panel ref opens the Artifact panel on it; an inline ref marks its frame to
@@ -16,3 +16,7 @@ registerChatComponent(ARTIFACT_REF_COMPONENT, ArtifactRefChip, {
     onLiveArtifactRef(spec, ctx);
   },
 });
+
+// The panel's chat context (#4076): which chat tab is active, so the panel auto-follows only
+// that chat's artifacts. Module-level, once — the ext glob imports this file at boot.
+startArtifactPanelContext();

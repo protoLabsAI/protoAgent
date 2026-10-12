@@ -26,25 +26,31 @@ from tests.test_artifact_slides import _js_function, _node
 pytestmark = pytest.mark.platform_sensitive
 
 
-def _art(aid: str, ts: int, inline: bool = False) -> dict:
+def _art(aid: str, ts: int, inline: bool = False, chats: list[str] | None = None) -> dict:
     a = {"id": aid, "kind": "svg" if inline else "markdown", "versions": [{"code": "x", "ts": ts}]}
     if inline:
         a["placement"] = "inline"
+    if chats is not None:
+        a["chat_sessions"] = chats
     return a
 
 
 def _follow(js: str, steps: list[dict]) -> list[dict]:
     """Run ``nextSel`` over a sequence of polls ({arts, current}); return each poll's state."""
     harness = (
-        _js_function(js, "headOf")
+        _js_function(js, "followable")
+        + "\n"
+        + _js_function(js, "headOf")
         + "\n"
         + _js_function(js, "nextSel")
         + "\nvar steps = "
         + json.dumps(steps)
         + r""";
-var s = {selId: null, selVer: null, followNewest: true, head: null}, out = [];
+var s = {selId: null, selVer: null, followNewest: true, head: null}, session = null, out = [];
 steps.forEach(function (p) {
   if (p.pick) { s.selId = p.pick; s.followNewest = !!p.follow; out.push(null); return; }
+  if ("session" in p) session = p.session;  // the shell's chatSession: set by protoArtifact:context
+  s.session = session;
   s = nextSel(p.arts, p.current, s); out.push({selId: s.selId, follow: s.followNewest, head: s.head});
 });
 console.log(JSON.stringify(out));
@@ -127,6 +133,103 @@ def test_head_is_the_newest_panel_artifact_and_a_pinned_selection_survives(monke
     assert out[3] == {"selId": "new", "follow": True, "head": "new"}
 
 
+# ── #4076 follow-up: the panel belongs to ONE chat ─────────────────────────────────
+
+
+def test_another_chats_panel_artifact_never_takes_over_the_panel(monkeypatch, tmp_path):
+    """The repro: chat A's doc is on the panel; chat B (another tab) — or a /v1, A2A or ACP client,
+    whose artifacts carry no ``chat_sessions`` — makes a PANEL artifact. It becomes the store's
+    current, but the panel (context: chat A) stays on A's doc; A's next panel artifact is followed."""
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    doc = _art("doc", 100, chats=["chat-a"])
+    other = _art("other", 200, chats=["chat-b"])
+    api = _art("api", 300)  # /v1 / A2A / ACP / legacy: no chat recorded
+    doc2 = _art("doc2", 400, chats=["chat-a"])
+    out = _follow(
+        js,
+        [
+            {"session": "chat-a", "arts": [doc], "current": "doc"},
+            {"arts": [other, doc], "current": "other"},
+            {"arts": [api, other, doc], "current": "api"},
+            {"arts": [doc2, api, other, doc], "current": "doc2"},
+        ],
+    )
+    assert out[0] == {"selId": "doc", "follow": True, "head": "doc"}
+    assert out[1] == {"selId": "doc", "follow": True, "head": "doc"}, "another chat's panel artifact"
+    assert out[2] == {"selId": "doc", "follow": True, "head": "doc"}, "an unstamped (/v1, A2A, legacy) one"
+    assert out[3] == {"selId": "doc2", "follow": True, "head": "doc2"}, "this chat's next one is followed"
+
+
+def test_a_tab_switch_follows_that_chats_newest_panel_artifact(monkeypatch, tmp_path):
+    """Switching to chat B moves a following panel to B's newest panel artifact; a chat with none
+    leaves it where it is; back to A shows A's again. A pinned selection never moves."""
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    a, b = _art("a", 100, chats=["chat-a"]), _art("b", 200, chats=["chat-b"])
+    store = {"arts": [b, a], "current": "b"}
+    out = _follow(
+        js,
+        [
+            {"session": "chat-a", **store},
+            {"session": "chat-b", **store},
+            {"session": "chat-new", **store},
+            {"session": "chat-a", **store},
+            {"pick": "b", "follow": False},
+            {"session": "chat-b", **store},
+            {"session": "chat-a", **store},
+        ],
+    )
+    assert [o and o["selId"] for o in out] == ["a", "b", "b", "a", None, "b", "b"]
+
+
+def test_a_chat_that_touched_an_artifact_follows_it(monkeypatch, tmp_path):
+    """``chat_sessions`` lists every chat that created OR revised the artifact (#4138), so chat B
+    editing A's doc makes it B's to follow too."""
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    mine, shared = _art("mine", 100, chats=["chat-b"]), _art("shared", 200, chats=["chat-a", "chat-b"])
+    out = _follow(
+        js, [{"session": "chat-b", "arts": [mine], "current": "mine"}, {"arts": [shared, mine], "current": "shared"}]
+    )
+    assert out[1]["selId"] == "shared"
+
+
+def test_no_context_keeps_the_old_follow_and_an_empty_chat_follows_nothing_new(monkeypatch, tmp_path):
+    """No context (an older console, a standalone page) → every panel artifact is followable, as
+    before. An empty session (no active chat) follows nothing — but still never sits blank."""
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    doc, api = _art("doc", 100), _art("api", 200)
+    legacy = _follow(js, [{"arts": [doc], "current": "doc"}, {"arts": [api, doc], "current": "api"}])
+    assert legacy[1]["selId"] == "api"
+    empty = _follow(js, [{"session": "", "arts": [doc], "current": "doc"}, {"arts": [api, doc], "current": "api"}])
+    assert empty[0] == {"selId": "doc", "follow": True, "head": None}, "never blank over a non-empty store"
+    assert empty[1]["selId"] == "doc"
+
+
+def test_an_explicit_open_in_panel_still_shows_another_chats_artifact(monkeypatch, tmp_path):
+    """A deep link (``protoArtifact:select``) is not auto-follow: it shows the artifact whatever
+    chat made it, and the next foreign artifact still doesn't move the panel off it."""
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    out = _poll_harness(
+        js,
+        """
+chatSession = "chat-a";
+function S(id, ts, chats) { var a = A(id, ts); if (chats) a.chat_sessions = chats; return a; }
+var p = poll(); Q.shift()(ok({artifacts: [S("doc", 100, ["chat-a"])], current: "doc"})); await p;
+var q = poll(); Q.shift()(ok({artifacts: [S("api", 200), S("doc", 100, ["chat-a"])], current: "api"})); await q;
+if (selId !== "doc") throw new Error("followed a foreign artifact: " + selId);
+select("api", 1);
+var r = poll(); Q.shift()(ok({artifacts: [S("api2", 300), S("api", 200), S("doc", 100, ["chat-a"])], current: "api2"})); await r;
+""",
+    )
+    assert out["selId"] == "api" and out["pending"] is None
+
+
+def test_the_context_message_is_trusted_only_from_the_embedder(monkeypatch, tmp_path):
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    i = js.index('m.type!=="protoArtifact:context"')
+    guard = js[i - 200 : i + 120]
+    assert "fromEmbedder(e)" in guard and "EMBED" in guard
+
+
 def _stamped(a: dict) -> dict:
     """``a`` after the render-status stamp — the write a mounted frame makes after a create."""
     b = json.loads(json.dumps(a))
@@ -160,14 +263,24 @@ def _poll_harness(js: str, script: str) -> dict:
     """Run the shell's real ``poll`` + deep-link resolution with a hand-driven fetch: each
     ``kit.apiFetch`` parks in ``Q`` until ``script`` answers it, in whatever order it likes."""
     fns = "\n".join(
-        _js_function(js, n) for n in ("headOf", "nextSel", "atNewest", "total", "takePendingSel", "applyPendingSel")
+        _js_function(js, n)
+        for n in (
+            "followable",
+            "headOf",
+            "nextSel",
+            "applyFollow",
+            "atNewest",
+            "total",
+            "takePendingSel",
+            "applyPendingSel",
+        )
     )
     return _node(
         r"""
 var document = {hidden: false}, Q = [];
 var kit = {apiFetch: function () { return new Promise(function (res) { Q.push(res); }); }};
 var lastEtag = "", storeChangedAt = 0, arts = [], curId = null, selId = null, selVer = null;
-var followNewest = true, panelHead = null, editing = false, pendingSel = null, pollSeq = 0, appliedSeq = 0;
+var followNewest = true, panelHead = null, chatSession = null, editing = false, pendingSel = null, pollSeq = 0, appliedSeq = 0;
 function pollOk() {} function pollFailed() {} function saveHead() {} function saveSel() {} function exitEdit() {}
 function rebuildArtSelect() {} function render() {}
 function A(id, ts) { return {id: id, kind: "markdown", versions: [{code: "x", ts: ts}]}; }
@@ -239,7 +352,8 @@ var next = poll(); Q.shift()(NOT_MODIFIED); await next;
 def test_poll_and_picker_use_the_panel_follow_rules(monkeypatch, tmp_path):
     js = _load(monkeypatch, tmp_path)._SHELL_JS
     poll = _js_function(js, "poll")
-    assert "nextSel(arts, curId," in poll
+    assert "applyFollow();" in poll
+    assert "nextSel(arts, curId," in _js_function(js, "applyFollow")
     assert "selId = curId" not in poll, "the poll must not chase the store's current"
     assert "followNewest=atNewest(selId)" in js and "followNewest=atNewest(a.id)" in js
 

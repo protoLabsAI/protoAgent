@@ -64,6 +64,12 @@ and downloads, see [Work with documents and files](../../docs/guides/documents-a
     doesn't reopen it. On a phone nothing opens by itself — a tap pushes the panel (ADR 0086);
   - a chip for an **older version** opens that version, reads `v2 of 5`, and turns the panel's
     follow-newest off so the next agent edit doesn't yank the operator away from it;
+  - the panel **belongs to the active chat tab**: its follow-newest jumps only to a panel artifact
+    that chat made or revised (the artifact's `chat_sessions`, which the tools stamp for console
+    chats). An artifact from another chat tab, a `/v1`/A2A/ACP client, or a record from before
+    the stamp never takes the panel over; it stays in the picker, and **Open in panel** still
+    shows it. Switching tabs moves a following panel to that chat's newest panel artifact (or
+    leaves it where it is when that chat has none);
   - a **deleted/evicted** artifact (or a version trimmed at the *Versions per artifact* cap)
     renders the chip inert — "no longer available" — and a chip whose panel is off (plugin
     disabled) renders inert too;
@@ -377,7 +383,9 @@ The chat chip's deep-link is an inbound `protoArtifact:select {id, ver}` message
 it only from the window that **embeds** it (`e.source === window.parent`, and `e.origin` must equal
 `location.ancestorOrigins[0]` where the browser provides it) — never from the nested artifact
 frame, so model-authored code can't drive the panel's selection. The console posts it only after
-the page announces it is listening (`protoagent:ready`), targeted at the page's own origin.
+the page announces it is listening (`protoagent:ready`), targeted at the page's own origin. The
+console's `protoArtifact:context {session}` (the active chat tab, re-sent on every tab switch and to
+every fresh load of the panel) is held to the same rule.
 
 > **Offline / no network.** Everything is **vendored** under `vendor/` and served same-origin from
 > `/plugins/artifact/vendor/…`, so every artifact kind renders **fully offline** — no `cdnjs`, no

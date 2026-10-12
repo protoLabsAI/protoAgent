@@ -16,7 +16,7 @@ function rule(selector: string): string {
   return match[1];
 }
 
-describe("send confirm chip: the trust checkbox stays with its label (#4076)", () => {
+describe("frame proposal chip: the trust checkbox stays with its label (#4076)", () => {
   for (const prefix of ["artifact-ref-inline", "frame-component-host"]) {
     it(`${prefix}: the trust control is one inline-flex unit that never wraps inside`, () => {
       const trust = rule(`.${prefix}__bridge-trust`);

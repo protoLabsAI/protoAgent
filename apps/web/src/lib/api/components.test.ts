@@ -79,6 +79,26 @@ describe("fetchComponentCatalog", () => {
     expect(rows).toEqual(CATALOG);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
+
+  it("a stale rejection never evicts a newer cache entry", async () => {
+    // The first request is still in flight when a forced re-read replaces the cache; the first
+    // then fails. Its rejection must not clear the cache the forced read now owns.
+    let rejectFirst: (e: Error) => void = () => {};
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => new Promise<Response>((_res, rej) => (rejectFirst = rej)))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(CATALOG), { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+    const stale = fetchComponentCatalog();
+    const fresh = fetchComponentCatalog(true);
+    rejectFirst(new Error("network"));
+    await expect(stale).rejects.toThrow();
+    expect(await fresh).toEqual(CATALOG);
+    // Still cached: the next read is the fresh entry, no third request.
+    expect(await fetchComponentCatalog()).toEqual(CATALOG);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("frameUrlFor", () => {

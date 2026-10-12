@@ -202,3 +202,30 @@ Each slice is independently mergeable into the epic branch. Dependencies are not
 4. **Libraries: vendor three.js, d3 and gsap** (D6).
 
 The status moves to **Accepted**.
+
+## Amendments
+
+**Follow-ups after the epic merged (#4076).**
+
+1. **The panel belongs to one chat (D2).** The console posts `protoArtifact:context {session}` into
+   the Artifact panel: the active chat tab's session id, at start, on every tab switch and to each
+   fresh load of the panel (a sticky delivery, `setPluginViewContext` in
+   `apps/web/src/lib/pluginViewInbox.ts`). Follow-newest then follows only panel artifacts whose
+   `chat_sessions` names that chat. The artifact tools stamp `chat_sessions` for console chats
+   (`chat-` ids) on every create or revise, so a panel artifact from this chat is followed. An
+   artifact with no `chat_sessions` is **not** auto-followed: one made by a `/v1`, A2A or ACP client,
+   a plugin calling `artifact.show` without a `session_id`, or a record from before the stamp. It
+   stays in the picker, and an explicit "Open in panel" (`protoArtifact:select`) still shows any
+   artifact. A tab switch moves a following panel to that chat's newest panel artifact. A pinned
+   selection never moves. A shell that never receives a context (an older console) follows every
+   panel artifact, as before.
+2. **Opening a dock restores a usable size.** `openView` restores the default width (or height)
+   when the dock is stored below the AppShell minimum. A drag-to-collapse can store it at 0 px,
+   and "Open in panel" then drew a 0 px panel. The setter still stores widths verbatim.
+3. **Embed height (D2).** The height reporter (`HEIGHTJS`) re-measures on DOM changes (throttled),
+   font loads, load and a short settle schedule, and a `protoArtifact:measure` always re-posts. In
+   a flow frame whose box is no taller than its viewport, it also measures the rendered elements'
+   extent, overflow included. A viewport-sized wrapper (`height: 100vh`, centred) otherwise only
+   reported the frame's own height back. A measure taken before the content settled then held the
+   frame at the 80 px floor, with the heading clipped. Fill frames (svg, mermaid, decks, PDFs) keep
+   their fixed box.

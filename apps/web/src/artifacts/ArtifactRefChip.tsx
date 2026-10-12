@@ -30,7 +30,7 @@ import {
 import { createFrameBridge, type FrameBridge } from "./frameBridge";
 import { useFrameFocusGuard } from "./frameFocusGuard";
 import { FrameActivationShield, FrameQuarantineNotice } from "./FrameGuardViews";
-import { BridgeNoticeView, useFrameSendGate } from "./SendConfirmChip";
+import { BridgeNoticeView, useFrameProposalGate } from "./FrameProposalChip";
 import {
   clampHeight,
   createFrameRegistry,
@@ -386,7 +386,7 @@ function InlineArtifactHost({
   // operator decides. Trust ("Always allow from this artifact") is keyed by the artifact id from
   // the HOST's own ref — every version of it, never an id the frame claims — so a trusted
   // artifact's later versions skip the chip but still pass the busy/length/rate gates.
-  const gate = useFrameSendGate({ bridge, frameId: key, trustKey: `artifact:${artifact.id}`, reply: replyToFrame });
+  const gate = useFrameProposalGate({ bridge, frameId: key, trustKey: `artifact:${artifact.id}`, reply: replyToFrame });
 
   // The send/openLink bridge (ADR 0118 D4 / S10b). The shell relays an in-frame
   // protoArtifact.send()/openLink() UP to this host as `protoArtifact:send|openLink` carrying a

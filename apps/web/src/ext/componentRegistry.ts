@@ -53,7 +53,8 @@ export function registerChatComponent(
 }
 
 /** Called by the chat surface for each component on the LIVE stream (and only there). A
- *  throwing hook is contained — a plugin's side effect must never break the turn. */
+ *  throwing hook is contained — a plugin's side effect must never break the turn — but logged
+ *  with the component's name, so a broken hook is diagnosable rather than silently inert. */
 export function dispatchLiveComponent(
   spec: { component: string; props: Record<string, unknown> },
   sessionId?: string,
@@ -62,8 +63,8 @@ export function dispatchLiveComponent(
   if (!hook) return;
   try {
     hook(spec, { sessionId });
-  } catch {
-    /* contained — see above */
+  } catch (err) {
+    console.warn(`[chat] live hook for component "${spec.component}" threw (contained):`, err);
   }
 }
 

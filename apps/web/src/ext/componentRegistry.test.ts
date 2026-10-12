@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   dispatchLiveComponent,
@@ -55,7 +55,13 @@ describe("live component hooks (#3617)", () => {
         throw new Error("plugin bug");
       },
     });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(() => dispatchLiveComponent({ component: "boom", props: {} })).not.toThrow();
+    // Contained, but never silent: the warning names the component so a broken hook is findable.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain('"boom"');
+    expect(warn.mock.calls[0][1]).toBeInstanceOf(Error);
+    warn.mockRestore();
     offBoom();
     off();
     dispatchLiveComponent({ component: "pin", props: { id: "z" } }, "s1");

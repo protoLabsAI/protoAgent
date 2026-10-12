@@ -2,7 +2,7 @@ import { flushSync } from "react-dom";
 
 import { openView } from "../app/palette/nav";
 import { chatStore } from "../chat/chat-store";
-import { postToPluginView } from "../lib/pluginViewInbox";
+import { postToPluginView, setPluginViewContext } from "../lib/pluginViewInbox";
 import { useUI } from "../state/uiStore";
 import { clampHeight } from "./inlineFrames";
 
@@ -169,4 +169,28 @@ export function onLiveArtifactRef(
   const ref = artifactRefFromProps(spec.props);
   if (!ref || ref.inline) return;
   openArtifactRef(ref, { auto: true, sessionId: ctx.sessionId });
+}
+
+/** Tell the Artifact panel which chat it belongs to (#4076): `{type: "protoArtifact:context",
+ *  session}`, the ACTIVE chat tab's session id ("" with none). Its follow-newest then follows
+ *  only the panel artifacts that chat made or touched (their `chat_sessions` names it), so an
+ *  artifact another chat tab, `/v1`, A2A or ACP made never takes the panel over. Sent at start
+ *  and on every tab switch, and re-sent to each fresh load of the panel (a sticky context —
+ *  the panel's iframe unmounts with its dock). An explicit "Open in panel" is unaffected.
+ *  Returns the unsubscribe. */
+export function startArtifactPanelContext(): () => void {
+  let last: string | undefined;
+  const push = () => {
+    let sid = "";
+    try {
+      sid = chatStore.getSnapshot().currentSessionId ?? "";
+    } catch {
+      sid = "";
+    }
+    if (sid === last) return; // the store notifies on every change (streaming); only a switch counts
+    last = sid;
+    setPluginViewContext(ARTIFACT_VIEW_KEY, { type: "protoArtifact:context", session: sid });
+  };
+  push();
+  return chatStore.subscribe(push);
 }

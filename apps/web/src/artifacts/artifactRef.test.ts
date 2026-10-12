@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatStore } from "../chat/chat-store";
 import { dispatchLiveComponent } from "../ext/componentRegistry";
-import { resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
+import { requeuePluginViewContext, resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
 import { useUI } from "../state/uiStore";
 import {
   ARTIFACT_VIEW_KEY,
@@ -11,6 +11,7 @@ import {
   openArtifactRef,
   refName,
   refState,
+  startArtifactPanelContext,
   versionLabel,
 } from "./artifactRef";
 import "../ext/artifact"; // registers the chip + its live hook, as the ext glob does at boot
@@ -153,5 +154,28 @@ describe("openArtifactRef", () => {
     // An unrelated kind's live frame touches nothing.
     dispatchLiveComponent({ component: "table", props: {} }, "s-1");
     expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([]);
+  });
+});
+
+describe("startArtifactPanelContext — the panel learns which chat it belongs to (#4076)", () => {
+  it("posts the active chat on start and on every tab switch, sticky across panel reloads", () => {
+    const a = chatStore.createSession();
+    const b = chatStore.createSession({ incognito: true });
+    chatStore.switchSession(a.id);
+    resetPluginViewInbox();
+    const off = startArtifactPanelContext();
+    try {
+      expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:context", session: a.id }]);
+      chatStore.switchSession(b.id);
+      expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:context", session: b.id }]);
+      // A store change that isn't a switch (a streaming token, a title) posts nothing.
+      chatStore.switchSession(b.id);
+      expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([]);
+      // The panel's iframe reloads (its dock remounted it): it gets the CURRENT chat again.
+      requeuePluginViewContext(ARTIFACT_VIEW_KEY);
+      expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:context", session: b.id }]);
+    } finally {
+      off();
+    }
   });
 });

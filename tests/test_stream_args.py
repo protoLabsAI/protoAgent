@@ -79,6 +79,26 @@ def test_scanner_stays_silent_until_the_arg_arrives():
     assert s.pending == "" and s.done is False and s.dead is False
 
 
+def test_a_dead_or_finished_stream_frees_its_buffers(monkeypatch):
+    """A stream past the cap, a non-string value and a terminated stream emit nothing more —
+    so none of them keeps the accumulated arg JSON alive until the turn ends."""
+    s = _value("code", '{"code": 123}')
+    assert s.dead and s.raw == ""
+    monkeypatch.setattr(turn_stream, "_TOOL_ARGS_MAX_CHARS", 8)
+    big = _value("code", '{"code":"' + "x" * 32)
+    assert len(big.raw) > 32
+    assert list(turn_stream._arg_stream_frames("tc", big, force=False)) == []
+    assert big.dead and big.raw == "" and big.pending == ""
+    big.feed("more")  # a dead stream ignores further chunks
+    assert big.raw == ""
+    monkeypatch.setattr(turn_stream, "_TOOL_ARGS_MAX_CHARS", 1000)
+    fin = _value("code", '{"code":"<p>hi</p>"}')
+    assert fin.done and fin.raw == "" and fin.pending == "<p>hi</p>"
+    (frame,) = turn_stream._arg_stream_frames("tc", fin, force=False)
+    assert frame[1]["chunk"] == "<p>hi</p>" and frame[1]["done"] is True
+    assert fin.dead and fin.pending == ""
+
+
 # ── (b) the turn stream ──────────────────────────────────────────────────────────
 
 

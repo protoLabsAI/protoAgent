@@ -366,6 +366,14 @@ class _ArgStream:
     hints: dict[str, str] = dataclasses.field(default_factory=dict)  # sibling args written first
     hints_sent: dict[str, str] | None = None  # the hints last put on a frame (resend only on change)
 
+    def kill(self) -> None:
+        """Stop this stream for good and free its buffers: a dead stream emits nothing more, so
+        holding the accumulated arg JSON (up to the artifact cap, per tool call) until the turn
+        ends is pure waste."""
+        self.dead = True
+        self.raw = ""
+        self.pending = ""
+
     def feed(self, fragment: str) -> None:
         """Append raw arg JSON and decode as much of the value as is now unambiguous."""
         if self.dead or self.done or not fragment:
@@ -376,7 +384,7 @@ class _ArgStream:
             if located is None:
                 return
             if located is _NOT_A_STRING:
-                self.dead = True
+                self.kill()
                 return
             self.content_start = located
             self.pos = located
@@ -385,6 +393,8 @@ class _ArgStream:
         delta, self.pos, self.done = _decode_value_delta(self.raw, self.pos)
         if delta:
             self.pending += delta
+        if self.done:
+            self.raw = ""  # the closing quote was seen: nothing more is decoded from it
 
 
 def _stream_args_map() -> dict[str, str]:
@@ -419,13 +429,13 @@ def _arg_stream_frames(scanner_id: str, stream: _ArgStream, *, force: bool):
     # Size cap: once the value passes the artifact cap, stop silently — no further frames,
     # not even a done.
     if stream.emitted + len(stream.pending) > _TOOL_ARGS_MAX_CHARS:
-        stream.dead = True
+        stream.kill()
         return
     final = stream.done or force
     if final and not stream.pending and stream.emitted == 0 and not stream.done:
         # Forced to finalize but nothing was ever extracted (the arg never appeared) —
         # there is no preview to terminate.
-        stream.dead = True
+        stream.kill()
         return
     due = (
         final
@@ -439,7 +449,7 @@ def _arg_stream_frames(scanner_id: str, stream: _ArgStream, *, force: bool):
     stream.emitted += len(chunk)
     stream.last_flush = time.monotonic()
     if final:
-        stream.dead = True  # the terminal frame is the last one
+        stream.kill()  # the terminal frame is the last one (its chunk was taken above)
     frame = {"id": scanner_id, "arg": stream.arg, "offset": offset, "chunk": chunk, "done": final}
     if stream.hints and stream.hints != stream.hints_sent:
         frame["hints"] = dict(stream.hints)
