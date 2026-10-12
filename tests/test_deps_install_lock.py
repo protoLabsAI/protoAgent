@@ -223,7 +223,7 @@ def test_two_processes_on_one_environment_run_one_pip(plugin, monkeypatch):
         # The conftest pins data_home() in THIS process only; the children need the same
         # sandboxed box root, or they'd lock under the real ~/.protoagent.
         "PROTOAGENT_BOX_ROOT": str(plugin / "box-root"),
-        "PYTHONPATH": str(REPO),
+        "PYTHONPATH": os.pathsep.join((str(REPO / "src"), str(REPO))),
     }
     kids = []
     for name in ("a", "b"):

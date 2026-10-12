@@ -246,7 +246,7 @@ def live(tmp_path_factory):
         "PROTOAGENT_HEADLESS_SETUP": "1",
         "PROTOAGENT_DISCOVERY_DISABLE": "1",
         "PROBE_SURFACE_LOG": str(surface_log),
-        "PYTHONPATH": str(ROOT),
+        "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT))),
     }
     for k in ("PROTOAGENT_CONFIG_DIR", "PROTOAGENT_PLUGINS_DIR", "A2A_AUTH_TOKEN"):
         env.pop(k, None)

@@ -47,6 +47,14 @@ connection testing, and your first chat.
 | <a href="docs/public/readme/hero-code-pane.gif"><img src="docs/public/readme/hero-code-pane-poster.png" alt="Claude Code's finished run in a protoAgent chat tab: todo list done, pytest 3 passed, and the Diff pane showing the changes to calc.py and test_calc.py" width="280"></a> | <img src="docs/public/readme/board-builds.gif" alt="Project board: a card in In Review with auto-merge pending moves to Done with its PR link, and a backlog card whose dependencies closed is flagged to promote" width="280"> | <img src="docs/public/readme/install-plugin.gif" alt="Settings, Plugins: the terminal plugin is installed from its git URL, a Terminal icon appears in the rail with no restart, and the shell runs a command" width="280"> |
 | `delegate_to` hands a coding task to a CLI coding agent over ACP, streams its work into your chat, and brings the result back. [Spawn CLI coding agents →](./docs/guides/coding-agents.md) | The **Project Manager** archetype runs the pipeline: brief → board card → disposable worktree → pull request → CI gates → merge. [Build with a coding agent →](./docs/guides/build-with-a-coding-agent.md) | Runs on your machine. Plugins installed from any git URL add tools and console views. [Download →](https://agent.protolabs.studio/download) |
 
+## Repository layout
+
+Runtime Python code lives in `src/`, with unchanged import names such as `graph`
+and `server`. `apps/` contains the web console and desktop shell; `plugins/`
+contains bundled plugins. Tests, development scripts, documentation and deployment
+files live in `tests/`, `scripts/`, `docs/` and `deploy/`. `uv sync` installs the
+application editably, so each checkout's CLI uses its own source and assets.
+
 ## From source, step by step
 
 You need Git, uv, Python 3.11+, Node 20, and npm 11+. A source checkout needs a

@@ -56,7 +56,7 @@ def _defined_tokens() -> set[str]:
 def _surfaces() -> list[Path]:
     """Every bundled file that can style a plugin view: the pages themselves, the module
     scripts they load, and the Python modules that still inline a page."""
-    roots = (REPO / "plugins", REPO / "examples" / "plugins", REPO / "graph" / "plugins")
+    roots = (REPO / "plugins", REPO / "examples" / "plugins", REPO / "src" / "graph" / "plugins")
     out: list[Path] = []
     for root in roots:
         for path in root.rglob("*"):

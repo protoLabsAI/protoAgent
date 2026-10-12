@@ -25,9 +25,9 @@ GUIDE = REPO / "docs" / "guides" / "model-concurrency.md"
 CONFIG_REF = REPO / "docs" / "reference" / "configuration.md"
 API_REF = REPO / "docs" / "reference" / "operator-api.md"
 
-METRICS_SRC = REPO / "observability" / "metrics.py"
-SCHEMA_SRC = REPO / "graph" / "settings_schema.py"
-ROUTES_SRC = REPO / "operator_api" / "telemetry_routes.py"
+METRICS_SRC = REPO / "src" / "observability" / "metrics.py"
+SCHEMA_SRC = REPO / "src" / "graph" / "settings_schema.py"
+ROUTES_SRC = REPO / "src" / "operator_api" / "telemetry_routes.py"
 
 ENDPOINT = "/api/telemetry/llm-lanes"
 CONFIG_KEYS = ("model.max_inflight", "model.inflight_queue_timeout", "model.inflight_interactive_reserve")

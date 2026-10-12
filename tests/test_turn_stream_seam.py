@@ -111,7 +111,7 @@ def test_callers_reach_run_turn_stream_through_turn_stream():
     """No caller in ``server/`` reads ``_run_turn_stream`` by a bare binding — only as
     ``_turn_stream._run_turn_stream``, so a patch on the owner is what runs."""
     offenders: list[str] = []
-    for path in sorted((_REPO / "server").rglob("*.py")):
+    for path in sorted((_REPO / "src" / "server").rglob("*.py")):
         if path.name == "turn_stream.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))

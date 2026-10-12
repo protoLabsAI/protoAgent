@@ -105,7 +105,7 @@ def boot(keep_terminal_h: float, *, goal_enabled: bool = False) -> tuple[subproc
         "PROTOAGENT_BOX_ROOT": str(box),
         "PROTOAGENT_INSTANCE": "watchsmoke",
         "PROTOAGENT_HEADLESS_SETUP": "1",
-        "PYTHONPATH": str(ROOT),
+        "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT))),
     }
     proc = subprocess.Popen(
         [sys.executable, "-m", "server", "--ui", "none", "--port", str(port)],

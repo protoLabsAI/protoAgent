@@ -170,7 +170,7 @@ def test_the_watch_poller_is_started_unconditionally():
     import ast
     from pathlib import Path
 
-    src = Path(__file__).resolve().parents[1] / "server" / "__init__.py"
+    src = Path(__file__).resolve().parents[1] / "src" / "server" / "__init__.py"
     tree = ast.parse(src.read_text(encoding="utf-8"))
 
     # Every `_watch_loop()` CALL (the import of the same name is an alias, not a Call),

@@ -4,7 +4,7 @@ The canonical instruction file for any agent (human or AI) working in this repo.
 `CLAUDE.md` / `AGENTS.md` are thin pointers here — edit **this** file.
 
 protoAgent is a LangGraph-based agent runtime with a FastAPI server, a React
-console (`apps/web`), a terminal fleet deck (`deck/`, Textual), a plugin system,
+console (`apps/web`), a terminal fleet deck (`src/deck/`, Textual), a plugin system,
 and an A2A surface. Python is the core; TypeScript is the console.
 
 ---
@@ -18,8 +18,8 @@ and an A2A surface. Python is the core; TypeScript is the console.
   (`plugin` / `workspace` / `fleet` / `skills` / `config`) plus lifecycle
   (`up` / `down` / `status` / `serve` / `setup`); `protoagent up` runs the instance
   detached and `protoagent status` reports it. For an installed package, use `protoagent`; a source checkout uses
-  `uv run python -m server` because uv does not install the project CLI. Both front doors route through the
-  same dispatcher (`server/cli.py::dispatch`), so `python -m server <sub>` keeps
+  `uv run protoagent` (or `uv run python -m server`) after `uv sync` installs the project editably. Both front doors route through the
+  same dispatcher (`src/server/cli.py::dispatch`), so `python -m server <sub>` keeps
   working. Console is served from `apps/web/dist`; `/healthz` is the readiness probe.
 - **Isolated dev instance (don't stomp prod data):** `scripts/dev.sh` runs a
   sandboxed instance via `PROTOAGENT_INSTANCE=dev` (ADR 0065 two-tier paths) on
@@ -40,7 +40,7 @@ and an A2A surface. Python is the core; TypeScript is the console.
   defaults), so seed a gateway in that instance if the test needs model-backed
   features; pure-console/UI review works as-is. (Serving a worktree's own
   `apps/web/dist`: `cd <worktree> && … python -m server` — `_bundle_root()` anchors
-  to the loaded `server/` package, so it serves that checkout's build.)
+  to the loaded `src/server/` package, so it serves that checkout's build.)
 - **Factory-reset the current instance:** `protoagent reset` uses the same resolved
   `infra.paths` roots as the runtime, so it works for desktop, wheel, Docker and
   named instances. The next boot runs the setup wizard. **Always `--dry-run` first**
@@ -328,7 +328,7 @@ label before concluding the loop is stuck.
   straight into the tracked config at the dotted key, and `required: true` is a hard
   gate (create → 400, host install → refuses to activate). So the first segment of a
   key must be a *plugin* section (`project_board.repo`, `github.default_repo`) —
-  `CONFIG_INPUT_RESERVED_SECTIONS` in `graph/plugins/bundles.py` rejects `model`,
+  `CONFIG_INPUT_RESERVED_SECTIONS` in `src/graph/plugins/bundles.py` rejects `model`,
   `plugins`, `projects`, `onboarding`, `delegates`, `egress`, … at install. Don't
   "fix" a failing bundle by adding its section to that set; give the plugin its own.
   Related seam: a plugin that is enabled but can't work (missing binary, no coder, CLI
@@ -337,7 +337,7 @@ label before concluding the loop is stuck.
   Plugins that also run on older hosts guard it with `getattr`.
 
 - **Config dataclass ↔ golden field map.** Adding or removing a field on the
-  graph config dataclass (`graph/config.py`) requires updating the golden field
+  graph config dataclass (`src/graph/config.py`) requires updating the golden field
   map in **`tests/test_config_roundtrip.py`**, or the test fails with "golden
   field map is out of sync with the dataclass fields." Wire the field in all
   three places: the dataclass default, the `from_dict` parser, and the golden
@@ -365,10 +365,10 @@ label before concluding the loop is stuck.
   only current commands. The desktop ⌥Space launcher is also a palette; do not
   compare it with the in-app binding.
 
-- **Import layering (enforced by `lint-imports`).** `graph/` and the infra
-  packages (`a2a_impl/ observability/ security/ infra/ tools/ knowledge/
-  events/ scheduler/ runtime/ ops/`) must **never** import `server/` or
-  `operator_api/`; `operator_api/` must never import `server/`. (`ops/` is the
+- **Import layering (enforced by `lint-imports`).** `src/graph/` and the infra
+  packages (`src/a2a_impl/ observability/ security/ infra/ tools/ knowledge/
+  events/ scheduler/ runtime/ ops/`) must **never** import `src/server/` or
+  `src/operator_api/`; `src/operator_api/` must never import `src/server/`. (`src/ops/` is the
   ADR 0075 D2 shared-operation layer — one op wrapping a core, called by the CLI,
   REST, and MCP adapters; being neutral is what lets all three import it.) The
   `ignore_imports` lists in `pyproject.toml [tool.importlinter]` are a
@@ -376,23 +376,23 @@ label before concluding the loop is stuck.
   them. import-linter sees function-level (lazy) imports too, so you can't hide
   one inside a function.
 
-- **The fleet deck (`deck/`) is an HTTP client of the hub, never an importer of
-  the core.** It must not import `graph/`, `server/` or `operator_api/` (a
-  `lint-imports` contract); `graph/fleet/cli.py` imports the deck and hands it what
+- **The fleet deck (`src/deck/`) is an HTTP client of the hub, never an importer of
+  the core.** It must not import `src/graph/`, `src/server/` or `src/operator_api/` (a
+  `lint-imports` contract); `src/graph/fleet/cli.py` imports the deck and hands it what
   it needs from the core as callables (peer discovery, the hub launcher). Textual
   is imported by name only when the deck opens — `--help` and every
   non-interactive verb stay Textual-free (`tests/test_fleet_cli.py` asserts it per
   verb), which is why the hub model shared with the CLI lives in the Textual-free
-  `deck/discovery.py`. Any hub- or member-authored string put into a widget must
+  `src/deck/discovery.py`. Any hub- or member-authored string put into a widget must
   be a `rich.text.Text`: Textual parses a plain `str` as markup, and a stray `[/]`
   raises on the UI thread (`tests/test_deck_markup.py`). The frozen desktop binary ships
   the deck, and every desktop-build leg runs it there (`scripts/fleet_deck_smoke.py --bin`,
   #3498) through the hidden `protoagent fleet --self-check` — the deck under Textual's
   headless driver over an in-memory roster, painting roster, filter, detail and hub tree.
 
-- **Module names.** It's `a2a_impl/` (NOT `a2a/` — that shadows the A2A SDK).
-  Metrics live in `observability/` → `from observability import metrics`.
-  Security helpers in `security/`, box/runtime infra in `infra/`. (Root-module
+- **Module names.** It's `src/a2a_impl/` (NOT `a2a/` — that shadows the A2A SDK).
+  Metrics live in `src/observability/` → `from observability import metrics`.
+  Security helpers in `src/security/`, box/runtime infra in `src/infra/`. (Root-module
   reorg: ADR around #896.)
 
 - **Tool / state injection.** `current_session_id()` is **empty inside tool
@@ -432,3 +432,15 @@ label before concluding the loop is stuck.
 - **Don't commit secrets.** A gitleaks gate runs in CI (`secret-scan.yml`).
 - **Don't re-commit local churn** — `config/plugins/*` installs and
   `plugins.lock` working-tree changes are expected dev-local state.
+
+## Source layout
+
+Runtime Python packages live in `src/`; their import names remain `graph`,
+`server`, `infra`, etc. Run `uv sync` in each worktree before launching code.
+`evals/` and bundled `plugins/` remain at the repository root. Editable installs
+expose both roots; wheels install the same top-level package names as before.
+
+Use `infra.paths._app_root()` for read-only bundle assets, not a hand-counted
+parent of `__file__`. Source scanners must walk `src/<package>` while deriving
+module names relative to `src/`. Source-only subprocesses that explicitly set
+`PYTHONPATH` need both `src/` and the repository root (for bundled plugins).

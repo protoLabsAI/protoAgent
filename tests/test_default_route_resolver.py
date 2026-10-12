@@ -252,7 +252,7 @@ def test_the_egress_auto_allow_and_the_openshell_policy(case):
 
 def test_both_agent_init_egress_call_sites_go_through_the_helper():
     """The seam is only worth having if nothing bypasses it (the boot/reload revert this pins)."""
-    code = _code_text((_ROOT / "server" / "agent_init.py").read_text(encoding="utf-8"))
+    code = _code_text((_ROOT / "src" / "server" / "agent_init.py").read_text(encoding="utf-8"))
     joined = "\n".join(code)
     assert sum(line.count("egress.set_allowed_hosts (") for line in code) == 1, (
         "server/agent_init.py must call egress.set_allowed_hosts in exactly one place — "

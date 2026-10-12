@@ -111,7 +111,7 @@ def test_drivers_reach_the_shared_loop_through_the_module():
     """No module in ``server/`` binds a goal_loop name directly (``from server.goal_loop
     import …``) or reads one bare — only ``_goal_loop.<name>``, so a patch on the owner runs."""
     offenders: list[str] = []
-    for path in sorted((_REPO / "server").rglob("*.py")):
+    for path in sorted((_REPO / "src" / "server").rglob("*.py")):
         if path.name == "goal_loop.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
