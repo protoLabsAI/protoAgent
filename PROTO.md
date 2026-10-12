@@ -440,7 +440,7 @@ Runtime Python packages live in `src/`; their import names remain `graph`,
 `evals/` and bundled `plugins/` remain at the repository root. Editable installs
 expose both roots; wheels install the same top-level package names as before.
 
-Use `infra.paths._app_root()` for read-only bundle assets, not a hand-counted
+Use `infra.paths.app_root()` for read-only bundle assets, not a hand-counted
 parent of `__file__`. Source scanners must walk `src/<package>` while deriving
 module names relative to `src/`. Source-only subprocesses that explicitly set
 `PYTHONPATH` need both `src/` and the repository root (for bundled plugins).

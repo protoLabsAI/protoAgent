@@ -21,7 +21,7 @@ import graph, server, infra.paths, plugins.docs.corpus
 print(json.dumps({
     'graph': graph.__file__,
     'server': server.__file__,
-    'assets': str(infra.paths._app_root()),
+    'assets': str(infra.paths.app_root()),
     'docs': str(plugins.docs.corpus.docs_root()),
 }))
 """

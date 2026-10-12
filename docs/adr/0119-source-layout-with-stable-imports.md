@@ -18,7 +18,7 @@ prefix when building wheels. `uv sync` installs the project editably; each
 worktree needs its own environment. `evals/` and bundled `plugins/` retain their
 root locations, as do configuration seeds, static assets and the applications.
 
-Read-only assets resolve through `infra.paths._app_root()`: the repository root
+Read-only assets resolve through `infra.paths.app_root()`: the repository root
 for source installs, site-packages for wheels, and `_MEIPASS` for frozen builds.
 Source recognition is bounded to the immediate parent of `src/` and checks the
 project manifest; it never searches arbitrary ancestor directories or the cwd.
