@@ -141,8 +141,25 @@ _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
         "AWS_SESSION_TOKEN",
         "AWS_ACCESS_KEY_ID",
         "NPM_TOKEN",
+        # Header spelling, as a dict key (`{"X-Api-Key": …}`).
+        "X_API_KEY",
     }
 )
+
+
+def _normalize_key(key: str) -> str:
+    """Spelling-insensitive key form: casefolded, `-` and `_` dropped — so `ApiKey`,
+    `apiKey`, `Api-Key` and `API_KEY` are one key. Membership is exact on the result,
+    so `tokenizer`, `author` and `keyboard` stay ordinary keys."""
+    return key.casefold().replace("-", "").replace("_", "")
+
+
+_SENSITIVE_KEYS_NORMALIZED: frozenset[str] = frozenset(_normalize_key(k) for k in _SENSITIVE_ENV_KEYS)
+
+
+def _is_sensitive_key(key: object) -> bool:
+    return isinstance(key, str) and _normalize_key(key) in _SENSITIVE_KEYS_NORMALIZED
+
 
 _PLACEHOLDER = "[REDACTED]"
 _MAX_DEPTH = 10
@@ -287,7 +304,7 @@ def redact(data: Any, _depth: int = 0) -> Any:
         result: dict[str, Any] = {}
         for k, v in data.items():
             # Redact values for known sensitive keys unconditionally
-            if k in _SENSITIVE_ENV_KEYS or (isinstance(k, str) and k.upper() in _SENSITIVE_ENV_KEYS):
+            if _is_sensitive_key(k):
                 result[k] = _PLACEHOLDER
             else:
                 result[k] = redact(v, _depth + 1)
