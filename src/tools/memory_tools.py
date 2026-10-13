@@ -39,6 +39,13 @@ _MEMORY_EXPIRES_MAX_DAYS = 3650
 _RECALL_SESSION_MAX_CHARS = 6000
 
 
+def _memory_handle(chunk_id, tier=None) -> str:
+    # Layered stores have separate ID spaces; forget_memory only deletes private rows.
+    if tier == "commons":
+        return f"commons:{chunk_id} (shared, not deletable with forget_memory)"
+    return f"#{chunk_id}" if chunk_id is not None else ""
+
+
 class _KnowledgeIngestError(Exception):
     """An expected, user-legible ``knowledge_ingest`` failure (missing dependency,
     unsupported type, no text, no such file). Its message is safe to show verbatim —
@@ -401,7 +408,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
     ) -> str:
         """Search long-term memory for chunks relevant to ``query``.
 
-        Returns the top-k matches, one per line, each citing its provenance
+        Returns the top-k matches, one per line, with a #<id> for forget_memory
+        on private chunks (shared commons rows are marked separately), citing provenance
         when known — source **domain** (in brackets), stored date, namespace.
         Pull this when the operator asks something where stored context is more
         reliable than the model's own training data ("what's my coffee order?",
@@ -448,7 +456,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         if not results:
             return "No matches."
         lines = [
-            _superseded_label(r)
+            (_memory_handle(r.get("id"), r.get("tier")) + " ").lstrip()
+            + _superseded_label(r)
             + f"[{r.get('domain', '?')}] {r['preview']}"
             + _memory_citation(
                 source=r.get("source"),
@@ -609,7 +618,8 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
                 kind_tag += f" review={c.review_state}"
             if getattr(c, "expires_at", None):  # date precision — enough to see it's lapsing
                 kind_tag += f" expires={str(c.expires_at)[:10]}"
-            lines.append(f"#{c.id} {c.created_at} {head} {preview}{cite}{kind_tag}")
+            handle = _memory_handle(c.id, getattr(c, "tier", None))
+            lines.append(f"{handle} {c.created_at} {head} {preview}{cite}{kind_tag}")
         return "\n".join(lines)
 
     @tool
@@ -633,7 +643,9 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
     @tool
     async def forget_memory(chunk_id: int, reason: str = "") -> str:
         """HARD-delete ONE long-term-memory chunk by id (the `#<id>` shown by
-        memory_list). The consolidation/forgetting half of a `/dream` pass: use
+        memory_list or memory_recall). Shared commons rows are not deletable
+        with this tool; their IDs belong to a separate store.
+        The consolidation/forgetting half of a `/dream` pass: use
         it to remove a fact that is stale, superseded, or a duplicate — ideally
         after `memory_ingest`-ing the corrected/merged version first.
 
@@ -643,7 +655,7 @@ def _build_memory_tools(knowledge_store, graph_config=None, background_mgr=None)
         row outright — history-keeping does not override it.
 
         Targeted and deliberate by design: it deletes exactly the one id you
-        pass (no bulk/wildcard delete), so review with memory_list and forget
+        pass (no bulk/wildcard delete), so review with memory_list or memory_recall and forget
         only what you're sure is no longer worth keeping. `reason` is for your
         own audit trail. Returns whether a chunk was removed.
         """
