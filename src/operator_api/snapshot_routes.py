@@ -127,7 +127,9 @@ def register_snapshot_routes(app) -> None:
 
         from graph.snapshot_import import SnapshotError, apply_snapshot, inspect_snapshot
 
-        data = await file.read()
+        # One extra byte distinguishes an exact-limit archive from an oversized one
+        # without allocating the entire (already spooled) upload in memory.
+        data = await file.read(MAX_UPLOAD_BYTES + 1)
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(status_code=413, detail=f"snapshot exceeds {MAX_UPLOAD_BYTES} bytes")
 
