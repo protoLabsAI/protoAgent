@@ -9,6 +9,7 @@
 // store just means dismissals last until reload.
 
 import { useSyncExternalStore } from "react";
+import { readKey, writeKey, removeKey } from "../lib/storage";
 
 const KEY = "protoagent.goals.dismissed";
 const CAP = 100;
@@ -16,7 +17,7 @@ const listeners = new Set<() => void>();
 
 function load(): Set<string> {
   try {
-    return new Set(JSON.parse(window.localStorage.getItem(KEY) || "[]"));
+    return new Set(JSON.parse(readKey("local", KEY) || "[]"));
   } catch {
     return new Set();
   }
@@ -42,7 +43,7 @@ export function dismissGoal(key: string) {
   next.add(key);
   snapshot = next;
   try {
-    window.localStorage.setItem(KEY, JSON.stringify([...next].slice(-CAP)));
+    writeKey("local", KEY, JSON.stringify([...next].slice(-CAP)));
   } catch {
     // Storage blocked (private window / preview) — the dismissal holds until reload.
   }
@@ -53,7 +54,7 @@ export function dismissGoal(key: string) {
 export function resetDismissedGoals() {
   snapshot = new Set();
   try {
-    window.localStorage.removeItem(KEY);
+    removeKey("local", KEY);
   } catch {
     // ignore
   }

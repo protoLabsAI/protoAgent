@@ -1,10 +1,11 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 import type { Keybinding } from "../ext/keybindingRegistry";
+import { persistStorage } from "../lib/storage";
 
 // User keybinding overrides (ADR 0063) — a GLOBAL map { bindingId → combo }, persisted to a
-// single localStorage key (NOT per-agent: your shortcuts are yours everywhere). A binding's
+// single browser-storage key (NOT per-agent: your shortcuts are yours everywhere). A binding's
 // effective combo is its override, else its registered default.
 type OverridesState = {
   overrides: Record<string, string>;
@@ -27,7 +28,12 @@ export const useKeybindingOverrides = create<OverridesState>()(
         }),
       resetAll: () => set({ overrides: {} }),
     }),
-    { name: "protoagent.keybindings" }, // global — not suffixed per-agent
+    {
+      name: "protoagent.keybindings", // global — not suffixed per-agent
+      // The storage seam (ADR 0114 D1) — without it zustand falls back to raw localStorage,
+      // whose setItem throws out of every `set()` once the quota is full.
+      storage: createJSONStorage(() => persistStorage("local")),
+    },
   ),
 );
 

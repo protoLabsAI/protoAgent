@@ -17,6 +17,8 @@
 // Discover, Fleet Room) are the same in every window; and the key this migrates FROM is
 // already global. An id that only exists in one window (a plugin view another agent doesn't
 // run) simply doesn't resolve there and is skipped when the list is rendered.
+import { readKey, writeKey } from "../../lib/storage";
+
 const KEY = "protoagent.palette.recent";
 /** `fleetPalette.ts`'s store — the one-time migration source. Read, never written. */
 const LEGACY_FLEET_KEY = "protoagent.fleet.recent";
@@ -68,7 +70,7 @@ function coerce(raw: unknown): RecentMap {
  *  there is a surface that wants it. */
 export function migrateFleetRecency(): RecentMap {
   try {
-    const raw = localStorage.getItem(LEGACY_FLEET_KEY);
+    const raw = readKey("local", LEGACY_FLEET_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     if (!parsed || typeof parsed !== "object") return {};
     const out: RecentMap = {};
@@ -93,14 +95,14 @@ function write(map: RecentMap): void {
       : entries
           .sort((a, b) => frecency(b[1], now) - frecency(a[1], now) || b[1].t - a[1].t)
           .slice(0, MAX_ENTRIES);
-  localStorage.setItem(KEY, JSON.stringify(Object.fromEntries(kept)));
+  writeKey("local", KEY, JSON.stringify(Object.fromEntries(kept)));
 }
 
 /** The whole store. On the FIRST read (no key yet) this migrates the fleet store forward
  *  and persists the result, so the migration happens once rather than on every read. */
 export function readPaletteRecency(): RecentMap {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = readKey("local", KEY);
     if (raw != null) return coerce(JSON.parse(raw));
     const seeded = migrateFleetRecency();
     // Write even when EMPTY: the key's existence is the migration marker, and re-parsing

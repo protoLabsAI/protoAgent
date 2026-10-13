@@ -7,6 +7,8 @@
 // when a message is submitted. The in-memory cache avoids re-parsing localStorage on every
 // arrow press; it stays in sync because pushes go through here.
 
+import { readKey, writeKey } from "../lib/storage";
+
 const KEY = "protoagent.chat.inputHistory";
 const MAX = 100; // cap the ring — plenty for recall, bounded localStorage footprint
 
@@ -14,7 +16,7 @@ let _cache: string[] | null = null;
 
 function read(): string[] {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = readKey("local", KEY);
     if (!raw) return [];
     const arr = JSON.parse(raw) as unknown;
     return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string") : [];
@@ -43,7 +45,7 @@ export function pushInputHistory(entry: string): void {
   hist.push(e);
   while (hist.length > MAX) hist.shift();
   try {
-    localStorage.setItem(KEY, JSON.stringify(hist));
+    writeKey("local", KEY, JSON.stringify(hist));
   } catch {
     /* quota / disabled storage — keep the in-memory ring, don't throw */
   }

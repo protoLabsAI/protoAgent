@@ -1,6 +1,7 @@
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
 import { api, currentSlug } from "./api";
+import { setDevHooksEnabled } from "./storage";
 import type { FleetTelemetry, ReviewState } from "./types";
 
 // Centralized query keys + option factories (ADR 0013). Surfaces read these via
@@ -160,7 +161,12 @@ export const fleetQuery = () =>
 export const flagsQuery = () =>
   queryOptions({
     queryKey: queryKeys.flags,
-    queryFn: () => api.flags(),
+    queryFn: async () => {
+      const flags = await api.flags();
+      // Beta/prod ignore destructive storage QA hooks; a dev build keeps them available.
+      setDevHooksEnabled(import.meta.env.DEV || flags?.channel === "dev");
+      return flags;
+    },
     staleTime: 5 * 60_000,
   });
 

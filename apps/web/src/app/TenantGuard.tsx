@@ -2,6 +2,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 import { useEffect } from "react";
 
 import { SWITCHED_FLAG, tenantCheck } from "../lib/tenant";
+import { readKey, removeKey } from "../lib/storage";
 
 // Tenant guard: localStorage is keyed by ORIGIN, but the backend behind an origin can
 // change (a fork booted on the old port — a different data root now answers here). The
@@ -21,8 +22,8 @@ export function TenantGuard({ uid }: { uid: string | undefined }) {
   // Post-reload notice — the clearing happened just before the reload below.
   useEffect(() => {
     try {
-      if (sessionStorage.getItem(SWITCHED_FLAG)) {
-        sessionStorage.removeItem(SWITCHED_FLAG);
+      if (readKey("session", SWITCHED_FLAG)) {
+        removeKey("session", SWITCHED_FLAG);
         toast({
           tone: "info",
           title: "Different agent on this address",

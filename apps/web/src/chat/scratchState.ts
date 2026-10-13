@@ -5,6 +5,7 @@
 // Keys are slug-namespaced like the chat store: sessions are per agent.
 
 import type { QueuedSteer } from "../lib/types";
+import { readKey, removeKey, writeKey } from "../lib/storage";
 
 const SLUG = (() => {
   try {
@@ -21,7 +22,7 @@ function key(kind: string, sessionId: string): string {
 
 function read(kind: string, sessionId: string): string | null {
   try {
-    return window.sessionStorage.getItem(key(kind, sessionId));
+    return readKey("session", key(kind, sessionId));
   } catch {
     return null;
   }
@@ -29,8 +30,8 @@ function read(kind: string, sessionId: string): string | null {
 
 function write(kind: string, sessionId: string, value: string | null): void {
   try {
-    if (value === null || value === "") window.sessionStorage.removeItem(key(kind, sessionId));
-    else window.sessionStorage.setItem(key(kind, sessionId), value);
+    if (value === null || value === "") removeKey("session", key(kind, sessionId));
+    else writeKey("session", key(kind, sessionId), value);
   } catch {
     /* hardened contexts: scratch state is best-effort */
   }

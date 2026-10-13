@@ -1,4 +1,5 @@
 import { api, apiUrl } from "./api";
+import { readKey, writeKey } from "./storage";
 
 // Client for the server→client event bus (ADR 0003, extended ADR 0039). One EventSource
 // is shared for the app's lifetime. Every event arrives as an unnamed SSE frame carrying
@@ -42,13 +43,9 @@ const SINCE_KEY = (() => {
 })();
 
 function loadLastSeq(): number | null {
-  try {
-    const raw = window.sessionStorage.getItem(SINCE_KEY);
-    const n = raw === null ? NaN : Number(raw);
-    return Number.isFinite(n) && n >= 0 ? n : null;
-  } catch {
-    return null;
-  }
+  const raw = readKey("session", SINCE_KEY);
+  const n = raw === null ? NaN : Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 let lastSeq: number | null = loadLastSeq();
@@ -102,8 +99,15 @@ function dispatch(raw: string): number | null {
     ring.push({ topic, data, seq });
     if (ring.length > RING_MAX) ring.shift();
   }
+  // Each listener in its own try (ADR 0114 D1): one throwing subscriber must not starve
+  // the ones after it, nor skip the caller's `lastSeq` update.
   for (const sub of subs) {
-    if (topicMatches(sub.pattern, topic)) sub.fn(data, topic, seq);
+    if (!topicMatches(sub.pattern, topic)) continue;
+    try {
+      sub.fn(data, topic, seq);
+    } catch (err) {
+      console.error(`[events] listener for ${sub.pattern} threw on ${topic}`, err);
+    }
   }
   return seq ?? null;
 }
@@ -181,11 +185,7 @@ async function connect() {
     const seq = dispatch((event as MessageEvent).data);
     if (seq !== null) {
       lastSeq = seq;
-      try {
-        window.sessionStorage.setItem(SINCE_KEY, String(seq));
-      } catch {
-        /* hardened contexts: live-only, same as before */
-      }
+      writeKey("session", SINCE_KEY, String(seq)); // best-effort: live-only if it fails
     }
   };
 }

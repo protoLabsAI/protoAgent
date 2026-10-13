@@ -9,6 +9,7 @@
 // every other client still hold the full turn.
 
 import type { ChatMessage, ToolCall } from "../lib/types";
+import { readKey, writeKey } from "../lib/storage";
 
 /** The sentinel prefix `graph/agent.py`'s `task` tool returns when the operator cancels a
  *  running delegation. The frame also carries `error: true` (the card settles as an X), so
@@ -35,7 +36,7 @@ const DISMISSED_KEY = "protoagent.chat.dismissedToolCalls";
 
 export function dismissedToolCallSet(): Set<string> {
   try {
-    return new Set(JSON.parse(window.localStorage.getItem(DISMISSED_KEY) || "[]"));
+    return new Set(JSON.parse(readKey("local", DISMISSED_KEY) || "[]"));
   } catch {
     return new Set();
   }
@@ -47,7 +48,7 @@ export function rememberDismissedToolCall(id: string): Set<string> {
   const s = dismissedToolCallSet();
   s.add(id);
   try {
-    window.localStorage.setItem(DISMISSED_KEY, JSON.stringify([...s].slice(-300)));
+    writeKey("local", DISMISSED_KEY, JSON.stringify([...s].slice(-300)));
   } catch {
     /* storage unavailable — the card still hides for this page's lifetime */
   }

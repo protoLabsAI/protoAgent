@@ -2,6 +2,10 @@
 
 Status: **Accepted** (Swap & Resume S5; umbrella: the swap-resume initiative)
 
+**Amendment proposed by [ADR 0114](0114-console-browser-storage-budget.md)**: the primary
+transcript store moves from `localStorage` to IndexedDB. "A non-empty local session wins"
+still holds, now guarded by 0114's load barrier: a session that hasn't loaded is never treated as empty.
+
 ## Context
 
 A chat session's rendered history lives in exactly one place: the browser's

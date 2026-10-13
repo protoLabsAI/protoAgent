@@ -8,6 +8,7 @@ import { api } from "../lib/api";
 import { queryKeys } from "../lib/queries";
 import { depsInstallToast, useDepsInstaller } from "../plugins/depsInstall";
 import { useUI } from "../state/uiStore";
+import { readKey, removeKey, writeKey } from "../lib/storage";
 
 // Structured plugin SETUP GAP delivered on runtime status `setup_gaps[]` (server side:
 // graph/plugins/setup_gaps.py, published by operator_api/console_handlers.py — #3395). A gap
@@ -120,7 +121,7 @@ const dismissKey = (scope: string) => `${DISMISS_KEY}:${scope}`;
 
 function readDismissed(scope: string): Set<string> {
   try {
-    const raw = window.sessionStorage.getItem(dismissKey(scope));
+    const raw = readKey("session", dismissKey(scope));
     const parsed = raw ? JSON.parse(raw) : [];
     return new Set(Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : []);
   } catch {
@@ -131,8 +132,8 @@ function readDismissed(scope: string): Set<string> {
 
 function writeDismissed(scope: string, sigs: Set<string>): void {
   try {
-    if (sigs.size) window.sessionStorage.setItem(dismissKey(scope), JSON.stringify([...sigs]));
-    else window.sessionStorage.removeItem(dismissKey(scope));
+    if (sigs.size) writeKey("session", dismissKey(scope), JSON.stringify([...sigs]));
+    else removeKey("session", dismissKey(scope));
   } catch {
     // Hardened browser contexts (private mode, disabled storage) — the dismissal is still
     // honored in-memory for this render tree; it just won't survive a reload. Never throw.

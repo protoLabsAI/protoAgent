@@ -19,6 +19,11 @@ _SPEC = importlib.util.spec_from_file_location(
 )
 staleness = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(staleness)
+_ROADMAP_SPEC = importlib.util.spec_from_file_location(
+    "roadmap", Path(__file__).parent.parent / "scripts" / "roadmap.py"
+)
+roadmap = importlib.util.module_from_spec(_ROADMAP_SPEC)
+_ROADMAP_SPEC.loader.exec_module(roadmap)
 
 
 # Fixture mirroring the real roadmap.json shape (see scripts/roadmap.py, which derives it
@@ -136,11 +141,24 @@ def test_real_roadmap_json_parses_into_the_expected_ref_shape() -> None:
     # sections carry the known statuses, and every extracted ref is an int under an
     # active status with a non-empty title.
     sections = json.loads(staleness.ROADMAP_JSON.read_text(encoding="utf-8"))
+    source_sections = roadmap.parse(roadmap.ROADMAP.read_text(encoding="utf-8"))
+    assert sections == source_sections, "roadmap.json is stale; run scripts/roadmap.py build"
     statuses = {s["status"] for s in sections}
-    assert statuses == {"Planned", "In progress", "Shipped"}
+    assert statuses <= {"Planned", "In progress", "Shipped"}
+    assert "Shipped" in statuses
 
     refs = staleness.active_issue_refs(sections)
-    assert refs, "expected at least one Planned/In-progress issue ref in the live roadmap"
+    # Require every active source reference, even if the generated data drops them all.
+    # An empty active queue is valid only when the source roadmap also has no issue refs.
+    expected = [
+        (section["status"], item["title"], int(ref[1:]))
+        for section in source_sections
+        if section["status"] in {"Planned", "In progress"}
+        for item in section["items"]
+        for ref in item["refs"]
+        if ref.startswith("#")
+    ]
+    assert refs == expected
     for status, title, number in refs:
         assert staleness._is_active(status)
         assert title and isinstance(title, str)

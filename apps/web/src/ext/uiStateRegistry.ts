@@ -1,6 +1,8 @@
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { persistStorage } from "../lib/storage";
+
 // Build-time fork seam for UI-STATE SLICES (ADR 0061, extends ADR 0038 D3). A fork calls
 // `createUISlice(namespace, initial)` to own a namespaced, PERSISTED zustand store for its
 // own UI state — WITHOUT editing core `uiStore.ts`, so `git pull upstream` stays conflict-
@@ -25,12 +27,8 @@ const _agent = (() => {
     return "";
   }
 })();
-const _storage = createJSONStorage(() => ({
-  getItem: (name: string) => globalThis.localStorage.getItem(_agent ? `${name}:${_agent}` : name),
-  setItem: (name: string, value: string) =>
-    globalThis.localStorage.setItem(_agent ? `${name}:${_agent}` : name, value),
-  removeItem: (name: string) => globalThis.localStorage.removeItem(_agent ? `${name}:${_agent}` : name),
-}));
+// Through the storage seam (ADR 0114 D1): a full quota never throws out of `set()`.
+const _storage = createJSONStorage(() => persistStorage("local", (name) => (_agent ? `${name}:${_agent}` : name)));
 
 const _stores = new Map<string, unknown>();
 

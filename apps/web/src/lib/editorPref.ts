@@ -9,6 +9,7 @@
 import { useSyncExternalStore } from "react";
 
 import { DEFAULT_EDITOR, isEditorId, type EditorId } from "./editorLinks";
+import { readKey, writeKey } from "./storage";
 
 export const EDITOR_PREF_KEY = "protoagent.editor";
 
@@ -18,7 +19,7 @@ let memory: EditorId | null = null;
 
 export function getEditorPref(): EditorId {
   try {
-    const raw = globalThis.localStorage?.getItem(EDITOR_PREF_KEY);
+    const raw = readKey("local", EDITOR_PREF_KEY);
     if (isEditorId(raw)) return raw;
   } catch {
     /* storage unavailable — fall through */
@@ -29,7 +30,7 @@ export function getEditorPref(): EditorId {
 export function setEditorPref(editor: EditorId): void {
   memory = editor;
   try {
-    globalThis.localStorage?.setItem(EDITOR_PREF_KEY, editor);
+    writeKey("local", EDITOR_PREF_KEY, editor);
   } catch {
     /* storage unavailable — the in-memory value still applies this session */
   }
@@ -74,12 +75,12 @@ let openInMemory: OpenFilesIn | null = null;
 
 export function getOpenFilesIn(): OpenFilesIn {
   try {
-    const raw = globalThis.localStorage?.getItem(OPEN_FILES_IN_KEY);
+    const raw = readKey("local", OPEN_FILES_IN_KEY);
     if (raw === "protoagent" || raw === "editor") return raw;
     // An operator who explicitly turned file links OFF before the pane existed keeps them
     // off: their stored "off" meant "no links", and a new default must not overrule it.
     if (openInMemory) return openInMemory;
-    if (globalThis.localStorage?.getItem(EDITOR_PREF_KEY) === "off") return "editor";
+    if (readKey("local", EDITOR_PREF_KEY) === "off") return "editor";
   } catch {
     /* storage unavailable — fall through */
   }
@@ -89,7 +90,7 @@ export function getOpenFilesIn(): OpenFilesIn {
 export function setOpenFilesIn(v: OpenFilesIn): void {
   openInMemory = v;
   try {
-    globalThis.localStorage?.setItem(OPEN_FILES_IN_KEY, v);
+    writeKey("local", OPEN_FILES_IN_KEY, v);
   } catch {
     /* storage unavailable — the in-memory value still applies this session */
   }

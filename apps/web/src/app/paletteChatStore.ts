@@ -4,6 +4,8 @@
 // chat-store's slug-namespacing + try/catch + debounce. `/clear` mints a fresh thread
 // and wipes the old one's checkpoints.
 import type { ChatMessage } from "../lib/types";
+import { readKey, writeKey } from "../lib/storage";
+import { persistBlocked } from "../lib/storageReset";
 
 // Per-agent key (ADR 0042 slug routing) — a window on /agent/<slug>/ keeps its own
 // palette thread; host (no slug) uses the bare key. Fixed per page load.
@@ -48,7 +50,7 @@ function sanitize(messages: unknown): ChatMessage[] {
 
 export function loadPaletteThread(scope?: string): PaletteThread {
   try {
-    const raw = window.localStorage.getItem(keyFor(scope));
+    const raw = readKey("local", keyFor(scope));
     if (raw) {
       const p = JSON.parse(raw) as Partial<PaletteThread>;
       if (p && typeof p.contextId === "string") {
@@ -64,8 +66,10 @@ export function loadPaletteThread(scope?: string): PaletteThread {
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let pending: { thread: PaletteThread; scope?: string } | null = null;
 function write(thread: PaletteThread, scope?: string) {
+  // A storage reset (ADR 0114 D6) — never write a cleared thread back.
+  if (persistBlocked()) return;
   try {
-    window.localStorage.setItem(keyFor(scope), JSON.stringify(thread));
+    writeKey("local", keyFor(scope), JSON.stringify(thread));
   } catch {
     // storage can be unavailable (hardened contexts)
   }
@@ -76,6 +80,12 @@ function write(thread: PaletteThread, scope?: string) {
  *  Only one palette chat is open at a time, so the single trailing timer flushes the
  *  latest thread+scope (`pending`). */
 export function savePaletteThread(thread: PaletteThread, immediate = false, scope?: string): void {
+  if (persistBlocked()) {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = null;
+    pending = null;
+    return;
+  }
   pending = { thread, scope };
   if (immediate) {
     if (saveTimer) {
@@ -89,7 +99,7 @@ export function savePaletteThread(thread: PaletteThread, immediate = false, scop
   if (saveTimer) return; // trailing write already scheduled
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    if (pending) write(pending.thread, pending.scope);
+    if (pending && !persistBlocked()) write(pending.thread, pending.scope);
     pending = null;
   }, 300);
 }

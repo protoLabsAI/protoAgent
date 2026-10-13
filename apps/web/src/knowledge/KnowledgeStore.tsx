@@ -18,6 +18,7 @@ import type { KnowledgeChunk } from "../lib/types";
 
 import { ReviewActions, ReviewChip } from "./ReviewVerdict";
 import { takeKnowledgeSearchSeed, useKnowledgeSearchSeedVersion } from "./searchSeed";
+import { readKey, writeKey } from "../lib/storage";
 
 // The shape every knowledge list/search query caches — reused for optimistic
 // bulk-delete cache surgery (#1770) without re-declaring the response fields.
@@ -482,12 +483,12 @@ export function KnowledgeStore() {
   // state persists per source; an active search force-expands so matches stay visible.
   const GROUPS_LS_KEY = "protoagent.kb.openGroups";
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
-    try { return JSON.parse(localStorage.getItem(GROUPS_LS_KEY) || "{}") as Record<string, boolean>; }
+    try { return JSON.parse(readKey("local", GROUPS_LS_KEY) || "{}") as Record<string, boolean>; }
     catch { return {}; }
   });
   const persistGroups = (next: Record<string, boolean>) => {
     setOpenGroups(next);
-    try { localStorage.setItem(GROUPS_LS_KEY, JSON.stringify(next)); } catch { /* private mode — ignore */ }
+    try { writeKey("local", GROUPS_LS_KEY, JSON.stringify(next)); } catch { /* private mode — ignore */ }
   };
   const searching = debouncedQuery.trim().length > 0;
   const isGroupOpen = (src: string) => searching || (openGroups[src] ?? false);

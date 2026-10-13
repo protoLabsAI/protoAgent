@@ -1,7 +1,7 @@
 // Persisted UI/layout state (ADR 0035 D5 — slice 1).
 //
 // The single source of truth for *navigation/layout* state: which surface is active,
-// which sub-tab, the right panel's width/collapse. Zustand + `persist` → localStorage, so a
+// which sub-tab, the right panel's width/collapse. Zustand + `persist` → browser storage, so a
 // refresh restores exactly where the user was (these were React `useState` before, lost on
 // reload). UI state ONLY — server data stays in react-query; the two never mix.
 //
@@ -12,9 +12,11 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { persistStorage } from "../lib/storage";
+
 // Per-agent layout (ADR 0042). Each fleet agent keeps its OWN layout — rail order, widths,
 // active surface, plugins out. In the single-agent product that fell out for free (each agent
-// is its own origin → its own localStorage); the unified console collapses that, so we namespace
+// is its own origin → its own browser storage); the unified console collapses that, so we namespace
 // the persisted key by the agent. With slug routing (ADR 0042) the agent IS the URL slug
 // (/app/agent/<slug>/), so derive the layout key from the URL at module load — each window keys
 // its own layout, deterministically, no switch event needed. host = the legacy un-suffixed key.
@@ -26,12 +28,12 @@ let _layoutAgent = (() => {
     return "";
   }
 })();
-const _layoutStorage = createJSONStorage(() => ({
-  getItem: (name: string) => globalThis.localStorage.getItem(_layoutAgent ? `${name}:${_layoutAgent}` : name),
-  setItem: (name: string, value: string) =>
-    globalThis.localStorage.setItem(_layoutAgent ? `${name}:${_layoutAgent}` : name, value),
-  removeItem: (name: string) => globalThis.localStorage.removeItem(_layoutAgent ? `${name}:${_layoutAgent}` : name),
-}));
+// Through the storage seam (ADR 0114 D1): `setItem` never throws (a full quota used to
+// throw out of every `set()` — including setters in mount effects — into the root error
+// boundary) and skips a write whose value storage already holds (no-op sets, pluginDots).
+const _layoutStorage = createJSONStorage(() =>
+  persistStorage("local", (name) => (_layoutAgent ? `${name}:${_layoutAgent}` : name)),
+);
 
 // Core surfaces are fixed literals; plugin views (ADR 0026) add dynamic surfaces keyed
 // `plugin:<pluginId>:<viewId>`. The `(string & {})` keeps literal autocomplete while allowing
@@ -553,7 +555,7 @@ export const useUI = create<UIState>()(
       setShowChatUsage: (showChatUsage) => set({ showChatUsage }),
     }),
     {
-      name: "protoagent.ui", // localStorage key (per-agent-suffixed in fleet mode — see _layoutStorage)
+      name: "protoagent.ui", // storage key (per-agent-suffixed in fleet mode — see _layoutStorage)
       storage: _layoutStorage,
       version: 14, // …v12 Settings→utility pill · v13 railOrder.hidden bucket · v14 drop dead settingsScope (domain-first IA, ADR 0048)
       migrate: (persisted: unknown) => migrateUiState(persisted) as never,

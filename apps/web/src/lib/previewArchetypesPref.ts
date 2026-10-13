@@ -8,6 +8,7 @@
 // lifetime when storage is unavailable.
 
 import { useSyncExternalStore } from "react";
+import { readKey, writeKey } from "./storage";
 
 export const PREVIEW_ARCHETYPES_KEY = "protoagent.newAgent.showPreviewArchetypes";
 
@@ -16,7 +17,7 @@ let memory: boolean | null = null;
 
 export function getShowPreviewArchetypes(): boolean {
   try {
-    const raw = globalThis.localStorage?.getItem(PREVIEW_ARCHETYPES_KEY);
+    const raw = readKey("local", PREVIEW_ARCHETYPES_KEY);
     if (raw === "1") return true;
     if (raw === "0") return false;
   } catch {
@@ -28,7 +29,7 @@ export function getShowPreviewArchetypes(): boolean {
 export function setShowPreviewArchetypes(on: boolean): void {
   memory = on;
   try {
-    globalThis.localStorage?.setItem(PREVIEW_ARCHETYPES_KEY, on ? "1" : "0");
+    writeKey("local", PREVIEW_ARCHETYPES_KEY, on ? "1" : "0");
   } catch {
     /* storage unavailable — the in-memory value still applies this session */
   }

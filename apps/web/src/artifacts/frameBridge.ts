@@ -1,3 +1,4 @@
+import { readKey, writeKey } from "../lib/storage";
 // ADR 0118 D4 (amended by S19 / #4137) — the send-to-chat / openLink bridge GATES, enforced in
 // the CONSOLE HOST and never in untrusted frame code. An artifact (or frame-component, S12) frame
 // calls window.protoArtifact.send(text) / .openLink(url); the shell relays the request up to the
@@ -193,12 +194,11 @@ export interface TrustStore {
 
 type KeyValueStorage = Pick<Storage, "getItem" | "setItem">;
 
-function defaultStorage(): KeyValueStorage | null {
-  try {
-    return typeof window !== "undefined" ? window.localStorage : null;
-  } catch {
-    return null; // storage blocked (privacy mode, sandboxed host) — session-only trust
-  }
+function defaultStorage(): KeyValueStorage {
+  return {
+    getItem: (key) => readKey("local", key),
+    setItem: (key, value) => { writeKey("local", key, value); },
+  };
 }
 
 /** The send trust store's type (kept for existing callers). */

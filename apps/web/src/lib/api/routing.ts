@@ -1,3 +1,4 @@
+import { readKey } from "../storage";
 /**
  * Slug routing + auth for the console's HTTP calls (ADR 0042), split out of `lib/api.ts`
  * (#3808). Leaf module: imports nothing from `lib/api.ts`, so `http.ts` and `api.ts` can
@@ -8,7 +9,7 @@ function defaultApiBase() {
   if (typeof window === "undefined") return "";
   let savedBase = "";
   try {
-    savedBase = window.localStorage.getItem("protoagent.apiBase") || "";
+    savedBase = readKey("local", "protoagent.apiBase") || "";
   } catch {
     savedBase = "";
   }
@@ -122,7 +123,7 @@ export function memberPath(slug: string, rel: string): string {
  * exempt server-side since EventSource can't set headers.) */
 export function authToken(): string {
   try {
-    return window.localStorage.getItem("protoagent.authToken") || "";
+    return readKey("local", "protoagent.authToken") || "";
   } catch {
     return "";
   }

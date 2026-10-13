@@ -38,6 +38,7 @@ import { Button } from "@protolabsai/ui/primitives";
 
 import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
+import { StorageWarning } from "./StorageWarning";
 import { AgentDownBanner } from "./AgentDownBanner";
 import { SignedOutBanner } from "./SignedOutBanner";
 import {
@@ -112,6 +113,7 @@ import { PaletteChat } from "./PaletteChat";
 import { CORE_SURFACES } from "./coreSurfaces";
 import { listen } from "../lib/desktop";
 import type { RuntimeStatus } from "../lib/types";
+import { readKey, writeKey } from "../lib/storage";
 
 // Consolidated nav (heavy grouping): four rail surfaces, each grouped one
 // fanning out to sub-views via an in-surface segmented control.
@@ -135,7 +137,7 @@ import type { RuntimeStatus } from "../lib/types";
 function useLocalStorageState(key: string, fallback: string) {
   const [value, setValue] = useState(() => {
     try {
-      return window.localStorage.getItem(key) || fallback;
+      return readKey("local", key) || fallback;
     } catch {
       return fallback;
     }
@@ -143,7 +145,7 @@ function useLocalStorageState(key: string, fallback: string) {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(key, value);
+      writeKey("local", key, value);
     } catch {
       // localStorage can be unavailable in hardened browser contexts.
     }
@@ -996,6 +998,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
               {visibleSetupGaps.map((gap) => (
                 <SetupGapBanner key={gapIdentity(gap)} gap={gap} onDismiss={() => dismissSetupGap(gap)} />
               ))}
+              <StorageWarning />
               <AgentDownBanner />
               <SignedOutBanner runtime={runtime} />
             </>
@@ -1047,6 +1050,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       {/* Focused fleet member stopped mid-session (the boot gate only catches boot-time
           down; a runtime stop otherwise surfaces only as plugin views 409-ing). Slim
           strip with a hub-routed Start; renders nothing on the host or a running agent. */}
+      <StorageWarning />
       <AgentDownBanner />
 
       {/* Deliberate OAuth signed-out state (#2513) — visible status + the reconnect
