@@ -25,6 +25,8 @@ from tests.privacy_asserts import assert_owner_only
 import httpx
 import pytest
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 # ── YAML round-trip ──────────────────────────────────────────────────────────
 

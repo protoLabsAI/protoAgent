@@ -6,6 +6,8 @@ from graph.config import LangGraphConfig
 from graph.goals.controller import GoalController
 from graph.goals.store import GoalStore
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _ctrl(tmp_path, **overrides):
     cfg = LangGraphConfig(**overrides)
@@ -173,7 +175,8 @@ async def test_untrusted_chat_refuses_shell_and_eval_verifiers(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_untrusted_chat_allows_declarative_verifiers(tmp_path):
+async def test_untrusted_chat_allows_declarative_verifiers(tmp_path, monkeypatch):
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"p:v": object()})
     c = _ctrl(tmp_path)
     ok = [
         "/goal make the build green",  # fuzzy → llm
@@ -279,7 +282,8 @@ def test_set_goal_operator_coerces_string_contract_lists(tmp_path):
     assert state.boundaries == ["tools/"]
 
 
-def test_set_goal_safe_stores_contract(tmp_path):
+def test_set_goal_safe_stores_contract(tmp_path, monkeypatch):
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"p:v": object()})
     c = _ctrl(tmp_path)
     ok, _ = c.set_goal_safe(
         "s",
@@ -304,7 +308,9 @@ async def test_continuation_includes_contract(tmp_path):
     c.set_goal_operator(
         "s",
         "ship it",
-        {"type": "command", "command": "pytest -q"},
+        # evaluate() really runs a command verifier — never point it at the suite: `pytest -q`
+        # here re-ran the whole suite from the repo root until the 120s verify timeout.
+        {"type": "command", "command": "exit 1"},
         outcome="suite green on main",
         constraints=["no new network calls"],
         boundaries=["graph/goals/"],
@@ -317,7 +323,7 @@ async def test_continuation_includes_contract(tmp_path):
     assert "NOT yet met" in msg
     # ...and the contract directive is appended.
     assert "DONE only when the verifier passes" in msg
-    assert "pytest -q" in msg  # verifier summary
+    assert "exit 1" in msg  # verifier summary
     assert "suite green on main" in msg
     assert "no new network calls" in msg
     assert "graph/goals/" in msg

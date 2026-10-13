@@ -19,6 +19,8 @@ import {
   ACTIVITY_HISTORY,
   ARCHETYPES,
   ARCHETYPE_PREVIEWS,
+  archetypeFromUrl,
+  HELD_ARCHETYPES,
   ARTIFACT_STORE,
   buildFrames,
   buildWatches,
@@ -53,6 +55,7 @@ import {
   TELEMETRY_SUMMARY,
   TELEMETRY_TURNS,
   TOOL_CALL_EXT_URI,
+  HITL_MIME,
   VERIFIERS,
   WORKFLOW_RECIPE_FULL,
   WORKFLOW_RUN_RECORD,
@@ -135,6 +138,64 @@ const MIME = {
   ".map": "application/json; charset=utf-8",
 };
 
+// A task PARKED on operator input (#3082, #3930): input-required, its status message
+// carrying the pending approval gate. contextId matches the seeded session so the frame
+// dispatcher's foreign-context guard passes it through. Served by GetTask AND as the
+// opening frame of the (held-open) SubscribeToTask stream, as the real server does.
+function pausedTask(id) {
+  // An id carrying "paused-ask_human" is parked in an `ask_human` call (#3946): its history replays the
+  // card's START frame and never an end — the call is in flight until the operator answers.
+  const ask = String(id).includes("paused-ask_human");
+  // A turn parked LIVE ("PARK_ASK_HUMAN <label>", #3956) belongs to the session that sent it and
+  // asks its own question — two parked at once must each come back as themselves.
+  const live = liveParks.get(String(id));
+  const question = live?.question ?? "Which fruit should I pick?";
+  // A live park keeps the history its task really has — a re-parked one (#3963) only the
+  // held message that re-parked it, and no ask_human card of its own.
+  if (live?.history) {
+    return {
+      id, contextId: live.sessionId,
+      status: {
+        state: "TASK_STATE_INPUT_REQUIRED",
+        message: { parts: [{ metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" }, data: { question } }] },
+      },
+      artifacts: [],
+      history: live.history,
+    };
+  }
+  return {
+    id, contextId: live?.sessionId ?? "s-stuck",
+    status: {
+      state: "TASK_STATE_INPUT_REQUIRED",
+      message: {
+        parts: [{
+          metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" },
+          data: ask
+            ? { question }
+            : { kind: "approval", title: "Approve the deploy?", detail: "kubectl apply -f prod.yaml" },
+        }],
+      },
+    },
+    artifacts: [],
+    ...(ask
+      ? {
+          history: [
+            { role: "ROLE_USER", parts: [{ text: "pick a fruit" }] },
+            {
+              role: "ROLE_AGENT",
+              parts: [],
+              metadata: {
+                "https://proto-labs.ai/a2a/ext/tool-call-v1": {
+                  toolCallId: "ask-1", name: "ask_human", phase: "started",
+                  args: JSON.stringify({ question }),
+                },
+              },
+            },
+          ],
+        }
+      : {}),
+  };
+}
 function sendJson(res, body, status = 200) {
   const data = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -184,6 +245,65 @@ const parkedTurns = new Map();
 // session id → release(). Keyed by session for the same reason as parkedTurns: one mock
 // serves every parallel worker, and a release must only ever free its own spec's turn.
 const releasableTurns = new Map();
+// Turns PARKED LIVE on an `ask_human` question ("PARK_ASK_HUMAN <label>", #3956), task id →
+// { sessionId, question }. The task id is per session (so parallel workers and two parked
+// tabs never share one) and carries "paused-ask_human", so GetTask / SubscribeToTask serve it
+// as the parked snapshot a reload's reattach replays. A `hitl_resume` answer naming the task
+// continues it and releases the entry.
+const liveParks = new Map();
+// A pause RE-PARKED by a plain message (#3963), the real server's shape (#1560/#3930): a
+// message with no hitl_resume sent to a session parked in "PARK_ASK_HUMAN" is held and parks
+// the SAME question on a NEW task; the old task is then completed with a pointer to it
+// ("Continued in task …" + protoagent_superseded_by metadata), stamped ~50 ms AFTER the new
+// one parked. old task id → { sessionId, successor, history }.
+const supersededTasks = new Map();
+// The durable turns (ADR 0104 rows) of every session that parked LIVE, in CREATION order:
+// session id → rows. Served, with the x-e2e-repark-session header, by the session index and
+// GET …/turns — ordered by LAST CHANGE with no live marker, the way main served them before
+// #3963, so the console is proven not to depend on the server's order.
+const durableTurns = new Map();
+let reparkSeq = 0;
+
+function recordDurableTurn(sessionId, row) {
+  const rows = durableTurns.get(sessionId) ?? [];
+  const at = rows.findIndex((r) => r.task_id === row.task_id);
+  if (at >= 0) rows[at] = { ...rows[at], ...row };
+  else rows.push(row);
+  durableTurns.set(sessionId, rows);
+}
+
+function askHumanHistory(prompt, question) {
+  return [
+    { role: "ROLE_USER", parts: [{ text: prompt }] },
+    {
+      role: "ROLE_AGENT",
+      parts: [],
+      metadata: {
+        "https://proto-labs.ai/a2a/ext/tool-call-v1": {
+          toolCallId: "ask-1", name: "ask_human", phase: "started", args: JSON.stringify({ question }),
+        },
+      },
+    },
+  ];
+}
+
+function supersededTask(id) {
+  const entry = supersededTasks.get(String(id));
+  return {
+    id,
+    contextId: entry.sessionId,
+    status: {
+      state: "TASK_STATE_COMPLETED",
+      message: {
+        role: "ROLE_AGENT",
+        parts: [{ text: `Continued in task ${entry.successor}.` }],
+        metadata: { protoagent_superseded_by: entry.successor },
+      },
+    },
+    artifacts: [],
+    history: entry.history,
+  };
+}
 
 // Per-plugin update fixtures, keyed by id — seeds non-default freshness states
 // (behind / pinned / errored) for any pre-seeded plugin. After a successful
@@ -572,7 +692,10 @@ function handleApiGet(
         { name: "remy", url: "http://192.168.5.50:7871", host: "192.168.5.50", port: 7871 },
       ] };
     case "/api/archetypes":
-      return { archetypes: ARCHETYPES };
+      // Held (preview) archetypes ride only the explicit opt-in, before Custom (kept last).
+      return params.get("include_held") === "1"
+        ? { archetypes: [...ARCHETYPES.slice(0, -1), ...HELD_ARCHETYPES, ARCHETYPES[ARCHETYPES.length - 1]] }
+        : { archetypes: ARCHETYPES };
     case "/api/activity":
       return ACTIVITY_HISTORY;
     case "/api/inbox":
@@ -637,6 +760,50 @@ function handleApiGet(
   }
 }
 
+// A held turn whose durable task reports a chosen state (#3972): the stalled-stream
+// watchdog consults GetTask once the frames stop, so the state it reads there is what the
+// spec drives — `rejected` must settle as an error, `unspecified` must not spin forever.
+const HELD_TASK = /^task-e2e-held-([a-z_]+)$/;
+function heldTaskId(prompt) {
+  const m = /hold the turn open, task ([a-z_]+)/i.exec(prompt);
+  return m ? `task-e2e-held-${m[1].toLowerCase()}` : null;
+}
+
+// A turn still RUNNING when the browser reloads (x-e2e-pretool-midturn): a reasoning model
+// streamed a sentence, then called a tool that is still going. The durable task keeps the
+// answer as ONE flattened artifact and the work frames in history, each stamped with the
+// answer-text offset it streamed at (a2a_impl TEXT_OFFSET_META) — what lets the replay put
+// the sentence back ABOVE the tool, as the live turn drew it, instead of folding it into
+// "Working…". Served by the session turns route (cold hydration) and as the opening frame
+// of the held-open SubscribeToTask stream (the reattach).
+export const PRETOOL_SESSION = "chat-pretool";
+export const PRETOOL_TASK = "task-pretool-live";
+export const PRETOOL_SENTENCE = "I am protoAgent, a plugin-extensible desktop agent.";
+function pretoolTask() {
+  return {
+    id: PRETOOL_TASK,
+    contextId: PRETOOL_SESSION,
+    status: { state: "TASK_STATE_WORKING" },
+    artifacts: [{ parts: [{ text: PRETOOL_SENTENCE }] }],
+    history: [
+      { role: "ROLE_USER", parts: [{ text: "Introduce yourself, then note it" }] },
+      {
+        role: "ROLE_AGENT",
+        parts: [{ data: { text: "A sentence first, then the note." }, metadata: { mimeType: "application/vnd.protolabs.reasoning-v1+json" } }],
+        metadata: { "protoagent/textOffset": 0 },
+      },
+      {
+        role: "ROLE_AGENT",
+        parts: [],
+        metadata: {
+          "https://proto-labs.ai/a2a/ext/tool-call-v1": { toolCallId: "pretool-n1", name: "append_note", phase: "started", args: "{}" },
+          "protoagent/textOffset": PRETOOL_SENTENCE.length,
+        },
+      },
+    ],
+  };
+}
+
 // POST /a2a message/stream → SSE of the canned frames for this prompt.
 async function handleA2AStream(req, res, body) {
   const params = body.params || {};
@@ -648,6 +815,7 @@ async function handleA2AStream(req, res, body) {
   // the steer POST carries in its path. That correspondence is what lets a parked turn
   // pick up its OWN interjection and no one else's.
   const sessionId = params.message?.contextId || params.contextId || "e2e-ctx";
+  if (await handleLivePark(res, body, prompt, sessionId)) return;
   const frames = buildFrames({
     rpcId: body.id ?? "1",
     // Echo the contextId the console sent (it rides on the MESSAGE, like the real server,
@@ -655,7 +823,9 @@ async function handleA2AStream(req, res, body) {
     // whose contextId != its sessionId (frameIsForeign, #1399); a mock that didn't echo the
     // real contextId would have all its frames rejected and render nothing.
     contextId: sessionId,
-    taskId: "task-e2e-1",
+    // "hold the turn open, task STATE": the held turn's task reports STATE on GetTask (see
+    // HELD_TASK) — what the stalled-stream watchdog reads when the frames stop (#3972).
+    taskId: heldTaskId(prompt) ?? "task-e2e-1",
     prompt,
   });
 
@@ -750,6 +920,155 @@ async function handleA2AStream(req, res, body) {
     await new Promise((r) => setTimeout(r, gap));
   }
   res.end();
+}
+
+// "PARK_ASK_HUMAN <label>" parks the turn LIVE in an `ask_human` call (#3956), the real
+// server's shape: the tool's START frame, then an input-required status carrying the
+// question — and the stream CLOSES there (the SDK ends SendStreamingMessage at an interrupted
+// state) with no end frame for the call. The answer (`hitl_resume` on that task id, A2A
+// §3.4.3) continues the same task: the call ends and the turn completes, echoing the answer
+// and the task it landed on so a spec can see the RIGHT task was resumed.
+async function handleLivePark(res, body, prompt, sessionId) {
+  const message = body.params?.message ?? {};
+  const resumeTaskId = message.taskId ? String(message.taskId) : "";
+  const answering = message.metadata?.hitl_resume === true && liveParks.has(resumeTaskId);
+  const park = /PARK_ASK_HUMAN\s+(\S+)/.exec(prompt);
+  // A plain message into a session parked here (#3963): held, and re-parked on a new task.
+  const reparkFrom =
+    !answering && !park && !resumeTaskId && message.metadata?.hitl_resume !== true
+      ? [...liveParks.entries()].find(([, entry]) => entry.sessionId === sessionId)?.[0] ?? ""
+      : "";
+  if (!answering && !park && !reparkFrom) return false;
+  const rpcId = body.id ?? "1";
+  const wrap = (result) => ({ jsonrpc: "2.0", id: rpcId, result });
+  const status = (taskId, state, extra = {}) =>
+    wrap({ kind: "status-update", taskId, contextId: sessionId, status: { state, ...extra } });
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  const send = async (frame) => {
+    res.write(`data: ${JSON.stringify(frame)}\r\n\r\n`);
+    await new Promise((r) => setTimeout(r, 40));
+  };
+  if (answering) {
+    const { sessionId: owner } = liveParks.get(resumeTaskId);
+    liveParks.delete(resumeTaskId);
+    await send(status(resumeTaskId, "working", {
+      message: {
+        role: "agent",
+        parts: [{ kind: "text", text: "✅ ask_human" }],
+        metadata: { [TOOL_CALL_EXT_URI]: { toolCallId: "ask-1", name: "ask_human", phase: "completed", result: prompt } },
+      },
+    }));
+    await send(wrap({
+      kind: "artifact-update",
+      taskId: resumeTaskId,
+      contextId: sessionId,
+      artifact: { artifactId: resumeTaskId, parts: [{ kind: "text", text: `You like ${prompt}. (resumed ${resumeTaskId} in ${owner})` }] },
+      lastChunk: true,
+    }));
+    await send(status(resumeTaskId, "completed"));
+    recordDurableTurn(owner, {
+      task_id: resumeTaskId,
+      state: "TASK_STATE_COMPLETED",
+      last_updated: new Date().toISOString(),
+      text: `You like ${prompt}.`,
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [{ parts: [{ text: `You like ${prompt}.` }] }],
+    });
+    res.end();
+    return true;
+  }
+  if (reparkFrom) {
+    const { question } = liveParks.get(reparkFrom);
+    const successor = `task-paused-ask_human-repark${++reparkSeq}-${sessionId}`;
+    liveParks.delete(reparkFrom);
+    liveParks.set(successor, { sessionId, question, history: [{ role: "ROLE_USER", parts: [{ text: prompt }] }] });
+    await send(wrap({ kind: "task", id: successor, contextId: sessionId, status: { state: "submitted" }, artifacts: [] }));
+    await send(status(successor, "working"));
+    await send(status(successor, "input-required", {
+      message: { role: "agent", parts: [{ kind: "data", data: { question }, metadata: { mimeType: HITL_MIME } }] },
+    }));
+    const parkedAt = Date.now();
+    recordDurableTurn(sessionId, {
+      task_id: successor,
+      state: "TASK_STATE_INPUT_REQUIRED",
+      last_updated: new Date(parkedAt).toISOString(),
+      text: "",
+      status: {
+        state: "TASK_STATE_INPUT_REQUIRED",
+        message: { role: "ROLE_AGENT", parts: [{ data: { question }, metadata: { mimeType: HITL_MIME } }] },
+      },
+      artifacts: [],
+      history: [{ role: "ROLE_USER", parts: [{ text: prompt }] }],
+    });
+    // The old task's settle lands just AFTER the new one parked — so its last change is later.
+    await new Promise((r) => setTimeout(r, 50));
+    const old = (durableTurns.get(sessionId) ?? []).find((r) => r.task_id === reparkFrom);
+    supersededTasks.set(reparkFrom, { sessionId, successor, history: old?.history ?? [] });
+    recordDurableTurn(sessionId, {
+      task_id: reparkFrom,
+      state: "TASK_STATE_COMPLETED",
+      last_updated: new Date(parkedAt + 50).toISOString(),
+      status: supersededTask(reparkFrom).status,
+    });
+    res.end();
+    return true;
+  }
+  const taskId = `task-paused-ask_human-live-${sessionId}`;
+  const question = `Which fruit goes with ${park[1]}?`;
+  // "PARK_ASK_HUMAN PLUGINFORM": a plugin composer form (#1701) on the same input-required
+  // frame. It parks no graph (its redeem completes the task server-side), so the console
+  // must NOT leave the turn paused.
+  if (park[1] === "PLUGINFORM") {
+    const formTask = `task-plugin-form-${sessionId}`;
+    await send(wrap({ kind: "task", id: formTask, contextId: sessionId, status: { state: "submitted" }, artifacts: [] }));
+    await send(status(formTask, "input-required", {
+      message: {
+        role: "agent",
+        parts: [{
+          kind: "data",
+          data: { question: "Plugin form question?", plugin_callback_id: "cb-e2e-1" },
+          metadata: { mimeType: HITL_MIME },
+        }],
+      },
+    }));
+    res.end();
+    return true;
+  }
+  liveParks.set(taskId, { sessionId, question });
+  recordDurableTurn(sessionId, {
+    task_id: taskId,
+    state: "TASK_STATE_INPUT_REQUIRED",
+    last_updated: new Date().toISOString(),
+    text: "",
+    status: {
+      state: "TASK_STATE_INPUT_REQUIRED",
+      message: { role: "ROLE_AGENT", parts: [{ data: { question }, metadata: { mimeType: HITL_MIME } }] },
+    },
+    artifacts: [],
+    history: askHumanHistory(prompt, question),
+  });
+  await send(wrap({ kind: "task", id: taskId, contextId: sessionId, status: { state: "submitted" }, artifacts: [] }));
+  await send(status(taskId, "working", {
+    message: {
+      role: "agent",
+      parts: [{ kind: "text", text: "🔧 ask_human" }],
+      metadata: { [TOOL_CALL_EXT_URI]: { toolCallId: "ask-1", name: "ask_human", phase: "started", args: JSON.stringify({ question }) } },
+    },
+  }));
+  await send(status(taskId, "input-required", {
+    message: { role: "agent", parts: [{ kind: "data", data: { question }, metadata: { mimeType: HITL_MIME } }] },
+  }));
+  // The stream fails AFTER the park (#3956 review): "DROPNET" drops the socket, "ERRFRAME"
+  // sends a JSON-RPC error frame. The task is still parked server-side either way.
+  if (park[1] === "DROPNET") {
+    res.destroy();
+    return true;
+  }
+  if (park[1] === "ERRFRAME") {
+    await send({ jsonrpc: "2.0", id: rpcId, error: { code: -32000, message: "stream failed after the park" } });
+  }
+  res.end();
+  return true;
 }
 
 async function serveStatic(pathname, res) {
@@ -877,23 +1196,20 @@ const server = createServer(async (req, res) => {
       // and re-render the HITL card from this snapshot — never finalize.
       // contextId matches the seeded session so the frame dispatcher's
       // foreign-context guard passes the replay through.
+      // A pause another task took over (#3963): completed, pointing at its successor.
+      if (supersededTasks.has(String(body.params?.id || ""))) {
+        return sendJson(res, { jsonrpc: "2.0", id: body.id, result: supersededTask(body.params?.id) });
+      }
       if (String(body.params?.id || "").includes("paused")) {
+        return sendJson(res, { jsonrpc: "2.0", id: body.id, result: pausedTask(body.params?.id) });
+      }
+      if (body.params?.id === PRETOOL_TASK) return sendJson(res, { jsonrpc: "2.0", id: body.id, result: pretoolTask() });
+      const held = HELD_TASK.exec(String(body.params?.id || ""));
+      if (held) {
         return sendJson(res, {
           jsonrpc: "2.0",
           id: body.id,
-          result: {
-            id: body.params?.id, contextId: "s-stuck",
-            status: {
-              state: "TASK_STATE_INPUT_REQUIRED",
-              message: {
-                parts: [{
-                  metadata: { mimeType: "application/vnd.protolabs.hitl-v1+json" },
-                  data: { kind: "approval", title: "Approve the deploy?", detail: "kubectl apply -f prod.yaml" },
-                }],
-              },
-            },
-            artifacts: [],
-          },
+          result: { id: body.params.id, status: { state: `TASK_STATE_${held[1].toUpperCase()}` }, artifacts: [] },
         });
       }
       // A task id carrying "history" also returns a durable history with a
@@ -930,6 +1246,21 @@ const server = createServer(async (req, res) => {
       });
     }
     if (body?.method === "SubscribeToTask") {
+      if (body.params?.id === PRETOOL_TASK) {
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" });
+        res.write(`data: ${JSON.stringify({ id: body.id, jsonrpc: "2.0", result: { task: pretoolTask() } })}\r\n\r\n`);
+        return; // still running — the server holds the subscription open
+      }
+      // A PAUSED task (input-required) is interrupted, not terminal: the real server
+      // (a2a-sdk 1.1.5) answers with the Task snapshot and then HOLDS the stream open
+      // until the operator's answer continues the task (A2A §3.1.6 ends a subscription
+      // only at a terminal state). Mirror that exactly — the mock that rejected here hid
+      // #3930, a reattach waiting on this stream to close.
+      if (String(body.params?.id || "").includes("paused") && !supersededTasks.has(String(body.params?.id || ""))) {
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store" });
+        res.write(`data: ${JSON.stringify({ id: body.id, jsonrpc: "2.0", result: { task: pausedTask(body.params?.id) } })}\r\n\r\n`);
+        return; // never ended by the server
+      }
       // The real server rejects resubscribe for a TERMINAL task — the console's
       // reattach then falls back to GetTask snapshot replay. Mirror that.
       return sendJson(res, {
@@ -1015,17 +1346,169 @@ const server = createServer(async (req, res) => {
          setTimeout(() => frame("turn.resumed", { task_id: "t-hitl", context_id: "sess-hitl" }), 1800),
          setTimeout(() => frame("turn.usage", { task_id: "t-hitl", context_id: "sess-hitl", state: "completed", input_tokens: 10, output_tokens: 5 }), 3200)]
       : [];
-    req.on("close", () => { clearInterval(t); goals.forEach(clearTimeout); turns.forEach(clearTimeout); hitl.forEach(clearTimeout); });
+    // Code pane live updates (ADR 0112): `fs.changed` for the `<project>:<path>` the spec
+    // names in `x-e2e-fs-change` (`;<source>` optional, default delegate), repeated so a slow
+    // connect can't miss it. Header-gated: only that spec's stream carries it.
+    const fsChange = String(req.headers["x-e2e-fs-change"] || "");
+    const fsTimer = fsChange
+      ? setInterval(() => {
+          const [where, source = "delegate"] = fsChange.split(";");
+          const [project, path] = where.split(":");
+          frame("fs.changed", { project, paths: [path], source, target: "claude-code" });
+        }, 600)
+      : null;
+    // Goal transitions (driving → achieved): `goal.changed` for the session the spec names in
+    // `x-e2e-goal-changed`, repeated so a slow connect can't miss it. The spec owns the
+    // `/api/goals` payload (page.route) and flips it; this push is what makes the console
+    // refetch WITHOUT a reload. Header-gated: only that spec's stream carries it.
+    const goalChanged = String(req.headers["x-e2e-goal-changed"] || "");
+    const goalTimer = goalChanged
+      ? setInterval(() => frame("goal.changed", { session_id: goalChanged }), 600)
+      : null;
+    req.on("close", () => {
+      clearInterval(t);
+      if (goalTimer) clearInterval(goalTimer);
+      goals.forEach(clearTimeout);
+      turns.forEach(clearTimeout);
+      hitl.forEach(clearTimeout);
+      if (fsTimer) clearInterval(fsTimer);
+    });
     return;
   }
   if (pathname.startsWith("/api/")) {
     if (req.method === "GET") {
       // ADR 0104/#2888 fresh-profile recovery. Header-gated so the durable
       // session fixture does not add a chat tab to every unrelated E2E spec.
+      if (req.headers["x-e2e-pretool-midturn"] === "1" && pathname === "/api/chat/sessions") {
+        return sendJson(res, { sessions: [{ session_id: PRETOOL_SESSION, last_updated: "2026-08-20T12:00:00Z", turn_count: 1 }] });
+      }
+      if (req.headers["x-e2e-pretool-midturn"] === "1" && pathname === `/api/chat/sessions/${PRETOOL_SESSION}/turns`) {
+        const t = pretoolTask();
+        return sendJson(res, {
+          turns: [{
+            task_id: t.id, state: t.status.state, last_updated: "2026-08-20T12:00:00Z", text: PRETOOL_SENTENCE,
+            status: t.status, artifacts: t.artifacts, history: t.history,
+          }],
+        });
+      }
+      // A chat this browser cached at its FIRST turn, after which another client ran two
+      // more (the second stopped). The index counts all three; …/turns serves them in
+      // creation order. Header-gated, so no other spec grows the session.
+      if (req.headers["x-e2e-session-behind"] === "1" && pathname === "/api/chat/sessions") {
+        return sendJson(res, {
+          sessions: [{ session_id: "chat-behind", last_updated: "2026-10-11T20:20:00Z", turn_count: 3 }],
+        });
+      }
+      if (req.headers["x-e2e-session-behind"] === "1" && pathname === "/api/chat/sessions/chat-behind/turns") {
+        const done = (n, prompt, answer, at) => ({
+          task_id: `task-behind-${n}`,
+          state: "TASK_STATE_COMPLETED",
+          last_updated: at,
+          text: answer,
+          status: { state: "TASK_STATE_COMPLETED" },
+          artifacts: [{ parts: [{ text: answer }] }],
+          history: [{ role: "ROLE_USER", parts: [{ text: prompt }] }],
+        });
+        return sendJson(res, {
+          turns: [
+            done(1, "First question", "The server copy of the first answer.", "2026-10-11T20:18:00Z"),
+            done(2, "Second question from the other browser", "Second answer, from the other browser.", "2026-10-11T20:19:00Z"),
+            {
+              task_id: "task-behind-3",
+              state: "TASK_STATE_CANCELED",
+              last_updated: "2026-10-11T20:20:00Z",
+              text: "",
+              status: { state: "TASK_STATE_CANCELED" },
+              artifacts: [],
+              history: [{ role: "ROLE_USER", parts: [{ text: "Third question, stopped" }] }],
+            },
+          ],
+          live_task_id: null,
+        });
+      }
       if (req.headers["x-e2e-session-history"] === "1" && pathname === "/api/chat/sessions") {
         return sendJson(res, {
           sessions: [{ session_id: "chat-recovered", last_updated: "2026-08-20T12:00:00Z", turn_count: 1 }],
         });
+      }
+      // #3957: a session that parked live and then sank below the newest-N session index —
+      // `limit` newer finished sessions bury it, as a busy agent's index does. Only the
+      // `parked=true` index names it (with its newest turn's `last_state`), the way the
+      // real server answers. Header-gated to the one session a spec names.
+      const buriedParked = req.headers["x-e2e-buried-parked-session"];
+      if (buriedParked && pathname === "/api/chat/sessions") {
+        const limit = Math.max(1, Math.min(Number(url.searchParams.get("limit") || 50), 200));
+        if (url.searchParams.get("parked") === "true") {
+          const rows = durableTurns.get(buriedParked) ?? [];
+          const newestRow = rows.at(-1);
+          const parked = newestRow && /input.required|auth.required/i.test(newestRow.state);
+          return sendJson(res, {
+            sessions: parked
+              ? [{
+                  session_id: buriedParked,
+                  last_updated: "2020-01-01T00:00:00Z",
+                  turn_count: rows.length,
+                  last_state: newestRow.state,
+                }]
+              : [],
+          });
+        }
+        return sendJson(res, {
+          sessions: Array.from({ length: limit }, (_, i) => ({
+            session_id: `chat-buried-newer-${String(i).padStart(3, "0")}`,
+            last_updated: `2099-01-01T00:${String(59 - (i % 60)).padStart(2, "0")}:00Z`,
+            turn_count: 1,
+          })),
+        });
+      }
+      if (buriedParked && pathname === `/api/chat/sessions/${buriedParked}/turns`) {
+        const rows = durableTurns.get(buriedParked) ?? [];
+        const live = [...rows].reverse().find((r) => /input.required|auth.required/i.test(r.state));
+        return sendJson(res, {
+          turns: rows.map((r) => ({ ...r, last_updated: "2020-01-01T00:00:00Z", live: r === live })),
+          live_task_id: live?.task_id ?? null,
+        });
+      }
+      const buriedNewer = buriedParked && /^\/api\/chat\/sessions\/(chat-buried-newer-\d+)\/turns$/.exec(pathname);
+      if (buriedNewer) {
+        const id = buriedNewer[1];
+        return sendJson(res, {
+          turns: [{
+            task_id: `task-${id}`,
+            state: "TASK_STATE_COMPLETED",
+            last_updated: "2099-01-01T00:00:00Z",
+            text: `Answer for ${id}.`,
+            status: { state: "TASK_STATE_COMPLETED" },
+            artifacts: [{ parts: [{ text: `Answer for ${id}.` }] }],
+            history: [{ role: "ROLE_USER", parts: [{ text: `Question ${id}` }] }],
+          }],
+          live_task_id: null,
+        });
+      }
+      // #3963: a session that parked live, as a FRESH profile finds it — header-gated to
+      // the one session a spec names, so no other spec grows a recovered tab.
+      const reparkSession = req.headers["x-e2e-repark-session"];
+      if (reparkSession && pathname === "/api/chat/sessions") {
+        const rows = durableTurns.get(reparkSession) ?? [];
+        const last = rows.map((r) => r.last_updated).sort().at(-1) ?? null;
+        return sendJson(res, { sessions: [{ session_id: reparkSession, last_updated: last, turn_count: rows.length }] });
+      }
+      if (reparkSession && pathname === `/api/chat/sessions/${reparkSession}/turns`) {
+        const rows = [...(durableTurns.get(reparkSession) ?? [])];
+        // Ordered by LAST CHANGE — main's pre-#3963 order, the parked task first. The
+        // "legacy" variant sends no live marker (a server that predates it); the "marker"
+        // variant names the live turn (the newest parked one), which must win over any order.
+        rows.sort((a, b) => a.last_updated.localeCompare(b.last_updated));
+        if (req.headers["x-e2e-repark-variant"] === "marker") {
+          const live = [...(durableTurns.get(reparkSession) ?? [])]
+            .reverse()
+            .find((r) => r.state === "TASK_STATE_INPUT_REQUIRED");
+          return sendJson(res, {
+            turns: rows.map((r) => ({ ...r, live: r === live })),
+            live_task_id: live?.task_id ?? null,
+          });
+        }
+        return sendJson(res, { turns: rows });
       }
       if (
         req.headers["x-e2e-session-history"] === "1" &&
@@ -1150,6 +1633,17 @@ const server = createServer(async (req, res) => {
         // Archetype bundle peek (#2041) — the enriched preview (mcp + secrets) the
         // preview dialog and the new-agent Configure step both read. Unknown/code-free
         // ids fall back to bundle:null.
+        // "From a bundle URL" peek — same validation shape as the server: 400 for a non-git
+        // URL, 502 for a repo that can't be read (`…/missing` in the path).
+        if (pathname === "/api/archetypes/from-url") {
+          const u = (url.searchParams.get("url") || "").trim();
+          const ref = (url.searchParams.get("ref") || "").trim();
+          if (!/^(?:https:\/\/[A-Za-z0-9.-]+(?::\d+)?\/|git@[A-Za-z0-9.-]+:)[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+\/?$/.test(u)) {
+            return sendJson(res, { detail: `not a git repository URL: '${u}'` }, 400);
+          }
+          if (u.includes("/missing")) return sendJson(res, { detail: `could not read bundle ${u}: repository not found` }, 502);
+          return sendJson(res, archetypeFromUrl(u, ref));
+        }
         const m = pathname.match(/^\/api\/archetypes\/([^/]+)\/preview$/);
         if (m) {
           const id = decodeURIComponent(m[1]);
@@ -1685,9 +2179,9 @@ const server = createServer(async (req, res) => {
       if (m) {
         return sendJson(res, {
           ok: true, enabled: !!body.enabled, reloaded: true,
-          // Enable hot-mounts the view router live (#822) → no restart. Only DISABLE of a
-          // view plugin (boardy) leaves a stale route → restart recommended.
-          restart_recommended: !body.enabled && m[1] === "boardy",
+          // Mirrors the server: enable hot-mounts the view router (#822) and disable
+          // unmounts it (ADR 0096) → no restart either way.
+          restart_recommended: false,
         });
       }
     }

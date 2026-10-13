@@ -1,3 +1,4 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
 
@@ -31,9 +32,9 @@ export function MonthCalendar({
   return (
     <div className="cal" role="group" aria-label="Choose a date">
       <div className="cal-head">
-        <button type="button" className="cal-nav" onClick={() => step(-1)} aria-label="Previous month"><ChevronLeft size={15} /></button>
+        <Button variant="ghost" size="sm" icon type="button" onClick={() => step(-1)} aria-label="Previous month"><ChevronLeft size={15} /></Button>
         <span className="cal-title">{MONTHS[m]} {y}</span>
-        <button type="button" className="cal-nav" onClick={() => step(1)} aria-label="Next month"><ChevronRight size={15} /></button>
+        <Button variant="ghost" size="sm" icon type="button" onClick={() => step(1)} aria-label="Next month"><ChevronRight size={15} /></Button>
       </div>
       <div className="cal-grid cal-dow">{WD.map((d) => <span key={d} className="cal-wd">{d}</span>)}</div>
       <div className="cal-grid">

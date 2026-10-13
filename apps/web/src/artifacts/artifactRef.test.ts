@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { chatStore } from "../chat/chat-store";
 import { dispatchLiveComponent } from "../ext/componentRegistry";
-import { resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
+import { requeuePluginViewContext, resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
 import { useUI } from "../state/uiStore";
 import {
   ARTIFACT_VIEW_KEY,
@@ -11,6 +11,7 @@ import {
   openArtifactRef,
   refName,
   refState,
+  startArtifactPanelContext,
   versionLabel,
 } from "./artifactRef";
 import "../ext/artifact"; // registers the chip + its live hook, as the ext glob does at boot
@@ -42,6 +43,8 @@ describe("artifactRefFromProps", () => {
       version: 2,
       title: "My page",
       kind: "html",
+      inline: false,
+      height: 0,
     });
     expect(artifactRefFromProps({ artifact_id: "", version: 1 })).toBeNull();
     expect(artifactRefFromProps({ artifact_id: "a", version: 0 })).toBeNull();
@@ -50,11 +53,26 @@ describe("artifactRefFromProps", () => {
     expect(artifactRefFromProps(undefined)).toBeNull();
     // An unknown kind is dropped rather than echoed into the chip.
     expect(artifactRefFromProps({ artifact_id: "a", version: 1, kind: "<b>x</b>" })?.kind).toBe("");
+    // A chart (ADR 0116) is a known kind, so an untitled one still says what it is.
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, kind: "vega-lite" })?.kind).toBe("vega-lite");
   });
 
   it("names an untitled artifact by its kind", () => {
     expect(refName({ title: "", kind: "svg" })).toBe("svg artifact");
     expect(refName({ title: "", kind: "" })).toBe("Artifact");
+  });
+
+  it("reads inline + a clamped height hint off untrusted props (ADR 0118 D2)", () => {
+    // `inline` is an exact boolean — a truthy non-true value does not opt in.
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true })).toMatchObject({ inline: true });
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: 1 as unknown })).toMatchObject({ inline: false });
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1 })?.inline).toBe(false);
+    // `height` is a finite positive int run through the [80,1200] clamp; junk/≤0 → 0 (no hint).
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: 300 })?.height).toBe(300);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: 5000 })?.height).toBe(1200);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: 10 })?.height).toBe(80);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: -4 })?.height).toBe(0);
+    expect(artifactRefFromProps({ artifact_id: "a", version: 1, inline: true, height: "big" as unknown })?.height).toBe(0);
   });
 });
 
@@ -113,6 +131,22 @@ describe("openArtifactRef", () => {
     expect(useUI.getState().rightPanel).toBe(ARTIFACT_VIEW_KEY);
   });
 
+  it("auto: does NOT open the panel for an inline ref — the answer is already in the transcript", () => {
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ ...chatStore.getSnapshot(), currentSessionId: "s-1" });
+    onLiveArtifactRef(
+      { component: "artifact-ref", props: { artifact_id: "a-inline", version: 1, kind: "html", inline: true } },
+      { sessionId: "s-1" },
+    );
+    expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([]);
+    expect(useUI.getState().rightCollapsed).toBe(true);
+    // The same ref WITHOUT inline still auto-opens, so this is the inline gate, not a dead hook.
+    onLiveArtifactRef(
+      { component: "artifact-ref", props: { artifact_id: "a-inline", version: 1, kind: "html" } },
+      { sessionId: "s-1" },
+    );
+    expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:select", id: "a-inline", ver: 1 }]);
+  });
+
   it("the ext module wires the live hook through the component registry", () => {
     vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ ...chatStore.getSnapshot(), currentSessionId: "s-1" });
     dispatchLiveComponent({ component: "artifact-ref", props: { artifact_id: "a-2", version: 1 } }, "s-1");
@@ -120,5 +154,28 @@ describe("openArtifactRef", () => {
     // An unrelated kind's live frame touches nothing.
     dispatchLiveComponent({ component: "table", props: {} }, "s-1");
     expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([]);
+  });
+});
+
+describe("startArtifactPanelContext — the panel learns which chat it belongs to (#4076)", () => {
+  it("posts the active chat on start and on every tab switch, sticky across panel reloads", () => {
+    const a = chatStore.createSession();
+    const b = chatStore.createSession({ incognito: true });
+    chatStore.switchSession(a.id);
+    resetPluginViewInbox();
+    const off = startArtifactPanelContext();
+    try {
+      expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:context", session: a.id }]);
+      chatStore.switchSession(b.id);
+      expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:context", session: b.id }]);
+      // A store change that isn't a switch (a streaming token, a title) posts nothing.
+      chatStore.switchSession(b.id);
+      expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([]);
+      // The panel's iframe reloads (its dock remounted it): it gets the CURRENT chat again.
+      requeuePluginViewContext(ARTIFACT_VIEW_KEY);
+      expect(takePluginViewMessages(ARTIFACT_VIEW_KEY)).toEqual([{ type: "protoArtifact:context", session: b.id }]);
+    } finally {
+      off();
+    }
   });
 });

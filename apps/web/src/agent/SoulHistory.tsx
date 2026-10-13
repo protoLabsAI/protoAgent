@@ -43,6 +43,7 @@ export function SoulHistoryButton({ onRestored }: { onRestored: () => void }) {
         onClose={() => setOpen(false)}
         title="Persona version history"
         width={620}
+        padding="roomy"
         className="soul-history-dialog"
       >
         <SoulHistoryList

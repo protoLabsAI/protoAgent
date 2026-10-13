@@ -1,8 +1,38 @@
 # Configuration
 
-`config/langgraph-config.yaml` is the runtime config. Loaded at server boot by `graph/config.py::LangGraphConfig.from_yaml()`. All fields have defaults; the YAML only needs to override what's changing.
+The live config is `<instance_root>/config/langgraph-config.yaml`. All fields
+have defaults; YAML overrides the values you change. Use **Settings** to edit the
+running agent, or locate its files and the source of each effective value with:
 
-**Template vs. live file.** The repo tracks `config/langgraph-config.example.yaml` (the shipped template, with defaults + comments). The live `config/langgraph-config.yaml` is **untracked** — it's per-deployment state, written by the setup wizard / settings drawer. On first run the server copies the template into place (`config_io.ensure_live_config`), so edits never dirty a tracked file. Secrets are split out further into `config/secrets.yaml` (see [Secrets](#secrets)).
+```bash
+protoagent config explain
+# Source checkout:
+uv run python -m server config explain
+```
+
+## File locations
+
+| Installation | Instance root | Live config |
+| --- | --- | --- |
+| Source or Python package, default instance | `~/.protoagent/default` | `~/.protoagent/default/config/langgraph-config.yaml` |
+| Named host instance | `<box_root>/<PROTOAGENT_INSTANCE>` | `<instance_root>/config/langgraph-config.yaml` |
+| Packaged desktop | The app's per-user config directory | `<instance_root>/config/langgraph-config.yaml` |
+| Bundled Docker image | `/sandbox` | `/sandbox/config/langgraph-config.yaml` |
+
+`PROTOAGENT_HOME` sets an explicit instance root. Otherwise, `PROTOAGENT_INSTANCE`
+selects a directory under `PROTOAGENT_BOX_ROOT` (normally `~/.protoagent`, or
+`/sandbox` in Docker). With neither set, the instance is `default`.
+Identity resolves from environment variables before config loads; `instance.id`
+in YAML does not select the data root. See [Run multiple instances](/guides/multi-instance).
+
+The repository's `config/langgraph-config.example.yaml` is a read-only seed.
+First boot creates the live config under the instance root. Persona (`SOUL.md`),
+secrets (`secrets.yaml`), and the setup marker (`.setup-complete`) are siblings of
+that file. In examples below, `config/` means this instance's live config directory.
+
+Machine-shared defaults live in `<box_root>/host-config.yaml`. Settings resolve
+through the App → Host → Agent cascade; `config explain` shows provenance and
+redacts secrets.
 
 ## Full example
 
@@ -92,6 +122,9 @@ model:
 | `favorites` | `[]` | Pinned go-to models for the chat `/model` quick-switch — the inline picker offers these, in this order, instead of the gateway's full list. Manage (add/remove/reorder) in Settings ▸ Model ▸ Favorite models. Empty = `/model` shows every gateway model with a hint to pin favorites. |
 | `request_timeout` | `120.0` | Per-call gateway timeout (seconds) — bounds a hung/slow gateway so a turn fails cleanly. |
 | `max_retries` | `2` | Transient-retry cap on the LLM client (→ `llm_max_retries`). |
+| `max_inflight` | `0` | Cap on concurrent model calls per lane (resolved endpoint + model) in **this process**. `0` (default) disables the in-flight limiter entirely. Per-process, not box-wide — size the limits across your instances so they sum within the gateway's parallel capacity. [ADR 0115](../adr/0115-gateway-inflight-limiter.md); see [Operate the model in-flight limiter](../guides/model-concurrency.md). |
+| `inflight_queue_timeout` | `300` | Longest one caller may wait (seconds) for a free slot when the lane is saturated. **Separate from `request_timeout`** (which times the HTTP call once a slot is held); kept below the turn stall timeout so a queued turn fails with a queue error, not a stall. Only applies when `max_inflight` is non-zero. |
+| `inflight_interactive_reserve` | `1` | Slots reserved for `interactive` (operator-watched) callers, so a background fan-out can't take the operator's last slot. Clamped to `max_inflight − 1`, leaving non-interactive work at least one slot. Per-process like `max_inflight`; only applies when the limiter is on. |
 | `top_p` | _(unset)_ | Nucleus sampling. Standard OpenAI param; sent only when set. |
 | `presence_penalty` | _(unset)_ | Standard OpenAI param; sent only when set. |
 | `top_k` | `-1` | Top-k sampling. Rides `extra_body` (vLLM-style gateways). `-1`/negative = gateway default. |
@@ -124,7 +157,7 @@ auth:
 
 `LangGraphConfig.from_yaml` overlays this file on top of the main config at load time. Precedence for each secret: **`secrets.yaml` → main YAML value → env var** (`OPENAI_API_KEY` / `A2A_AUTH_TOKEN`). A declared connection's key has no env tier — `OPENAI_API_KEY` only feeds the `gateway` the loader builds for a config with no `providers:` block. So env-injected deployments (e.g. `infisical run`) work unchanged — just leave `secrets.yaml` absent. Every config save also strips any secret keys the main YAML might still carry, so a checkout converges to secret-free — and the strip **relocates, never drops**: an inline value `secrets.yaml` doesn't already hold (e.g. a hand-seeded `model.api_key` on a fresh instance with no secrets file yet) is written to the overlay in the same save, an existing overlay value is never overwritten by a stale inline copy, and if the overlay write fails the key stays inline rather than being lost (#1645). The `/api/config` endpoint redacts all three fields to `""`; runtime status reports only whether a key is set (`model.api_key_configured`), never the value. (`auth.federation_token` doesn't share `from_yaml`'s env-var fallback above — its own env source, `A2A_FEDERATION_TOKEN`, is read one layer down, by the A2A auth guard itself; see "Federation token" below.)
 
-### External secrets manager (ADR 0080)
+### External secrets manager (ADR 0080) {#secrets_manager}
 
 Instead of hand-maintaining env vars (or wrapping the process in `infisical run`), the server can **pull secrets from Infisical itself** and export them as env vars — at boot, on every config reload, and on a refresh interval, so rotation lands without a restart. Enable it with the `secrets_manager` section (or Settings ▸ Secrets manager, which includes a connection test and a sync-now button):
 
@@ -142,7 +175,7 @@ secrets_manager:
   override_env: false              # true = manager values beat pre-existing env vars
 ```
 
-Semantics — deliberately boring:
+Behavior:
 
 - **Fetched values land in the env fallback tier.** The precedence above is unchanged: `secrets.yaml` → main YAML → env; the manager merely populates env. An env var you exported yourself always shadows the manager (flip `override_env` for rotation-wins), and only vars the hydrator *set itself* are ever updated or removed on refresh.
 - **Bootstrap credentials stay local** — the universal-auth machine identity (`client_id` / `client_secret`) is the one pair that can't come from the manager. It resolves like any core secret: `secrets_manager.client_id/client_secret` in `secrets.yaml` (where the Settings UI stores them, never echoed back) → main YAML → the `INFISICAL_CLIENT_ID` / `INFISICAL_CLIENT_SECRET` env vars. The recommended posture: *secrets.yaml holds only the machine identity; every other credential lives in the manager.* Fetched values can never overwrite the bootstrap pair or `PROTOAGENT_*` instance identity.
@@ -174,6 +207,7 @@ One entry per subagent name. Each entry matches a `SubagentConfig` in `graph/sub
 | `enabled` | `true` | If false, the subagent is still registered but dispatches return "disabled" errors. |
 | `tools` | `[]` | Allowlist. Tool names not listed here are invisible to this subagent. |
 | `max_turns` | `30` | Tool rounds per delegation: the subagent can call tools this many times, then it must answer. The runner converts this into LangGraph's step-based `recursion_limit` using the compiled middleware stack, so adding middleware never shrinks it. Round `max_turns + 1` hard-stops, and the partial output comes back marked `hard-stopped at max_turns`. |
+| `model` | `""` | Pin this subagent to a model. A subagent run picks its model in this order: this pin, then the delegating turn's model override (the chat tab's pick, `metadata.model`), then `routing.aux_model`, then the main model. The same order covers `task` / `task_batch`, `/<subagent>` slash runs and background jobs. A background job runs as a detached turn, so it takes the pin or the override when one is set and otherwise runs on the main model. |
 
 Two `subagents`-block keys govern **fan-out** via the `task_batch` tool (concurrent delegation):
 
@@ -304,6 +338,7 @@ execute_code:
 tools:
   disabled: []              # tool names to DROP (the operator's denylist)
   hidden: []                # tool names to REMOVE ENTIRELY — denied AND never shown in the console
+  subagent_only: []         # tool names kept OFF the lead — only subagents that allowlist them get them
   deferred:
     enabled: false          # OFF by default — the full tool set is shown
     keep: []                # always-on tool names; empty = built-in base
@@ -313,6 +348,7 @@ tools:
 |---|---|---|
 | `disabled` | `[]` | Tool names to **drop** from the agent at graph build — covers the **fully assembled** set: core, plugin, MCP, the delegation tools, and the filesystem tools (so `disabled: [run_command]` removes shell access for this agent). Live-reloadable — in the console, **every row at Settings ▸ Capabilities ▸ Tools carries an on/off switch** that edits this list (a toggled-off tool stays listed, dimmed, so it can be re-enabled). Plugins still ADD tools on top (see [Plugins](/guides/plugins)). ([ADR 0005](../adr/0005-tool-pollution-and-progressive-disclosure.md)) |
 | `hidden` | `[]` | A **hard superset of `disabled`** (#2172, [ADR 0071](../adr/0071-plugin-permissions-trust-model.md)): a hidden tool is denied at the graph like a disabled one, **and dropped from the console's tool inventory entirely** — it never renders as a toggle, so it can't be re-enabled from the UI. A setup-time trust control for restricted consoles and archetypes: the config file is the boundary, the UI is presentation. `disabled` = "off but visible"; `hidden` = "not available, and not offered". |
+| `subagent_only` | `[]` | Tool names **kept off the lead agent** but still available to any subagent whose `tools` allowlist names them ([ADR 0117](../adr/0117-subagent-only-tools.md)). The lead model is never offered them and a lead call to one is blocked, so it reaches them only by delegating with `task`: the domain's tools, their schemas and the context they generate stay inside the subagent that owns it. Background subagents get them too. They are kept out of `search_tools`, execute_code's bridge and the operator MCP. `disabled` still wins. Graph build logs a name no subagent allowlists, and filesystem or late tools, which only a background subagent can reach. The console's Tools list marks them "Subagents only". |
 | `deferred.enabled` | `false` | Withhold most tool schemas; expose them via `search_tools`. |
 | `deferred.keep` | `[]` | Tool names always shown. Empty → built-in base (keyless core + `task`/`task_batch`/`run_workflow`/`save_workflow` + `search_tools`). `search_tools` is always kept regardless. |
 
@@ -345,7 +381,7 @@ telemetry:
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | Write a per-turn row at terminal time. `false` → no store; endpoints return `{enabled:false}`. |
-| `db_path` | `/sandbox/telemetry.db` | SQLite path; `/sandbox`→`~/.protoagent` fallback, instance-scoped (ADR 0004). |
+| `db_path` | `/sandbox/telemetry.db` | SQLite path; the legacy `/sandbox` default resolves to `<instance_root>/telemetry.db`. |
 
 ## `tracing`
 
@@ -654,6 +690,7 @@ goal:
   no_progress_limit: 3     # identical verifier evidence N times -> unachievable
   eval_model: ""           # blank = main model (llm verifier / fuzzy goals)
   verify_timeout: 120      # seconds for command/test/ci verifiers
+  max_rounds_per_turn: 50  # model rounds per goal-driven turn; 0 = unlimited
 ```
 
 | Key | Default | What |
@@ -663,6 +700,7 @@ goal:
 | `no_progress_limit` | `3` | Same verifier reason+evidence this many times in a row → `unachievable`. |
 | `eval_model` | `""` | Model for the `llm` verifier (blank = main model). |
 | `verify_timeout` | `120` | Wall-clock seconds for `command`/`test`/`ci` verifiers. |
+| `max_rounds_per_turn` | `50` | Model rounds one **goal-driven** turn (the kickoff or any continuation) may run. At the cap the turn ends with a hand-back and the goal drive **pauses**: the goal stays active, the verifier still judges that turn (a met goal finishes), a `round_cap` event lands on the goal's timeline, and the reply ends with `⏸ goal paused — round cap reached …`. The next message (or a watch/schedule fire) drives it again, so each re-drive costs at most one capped turn. `0` = unlimited — no goal-specific cap (`model.round_hard_cap` still applies if set). With both set, a goal turn stops at the **smaller**; non-goal turns see only `model.round_hard_cap`. Hot-applies on save (no restart). |
 
 **Setting a goal** — `/goal <text>` (fuzzy, `llm`-verified) or a JSON spec:
 ```
@@ -754,11 +792,14 @@ Human-authored skills in the AgentSkills [`SKILL.md`](../guides/skills.md) forma
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | Load `SKILL.md` skills and list the `<available_skills>` index. |
-| `db_path` | `/sandbox/skills.db` | FTS5 index path. Falls back to `~/.protoagent/skills.db` when the configured path isn't writable. |
+| `db_path` | `/sandbox/skills.db` (legacy) | Private FTS5 index resolves to `<instance_root>/skills.db`; shared mode uses `<commons>/skills.db`. The legacy configured path no longer selects private storage. |
 | `top_k` | `5` | Max skills listed in the always-on `<available_skills>` index per turn (the rest stay reachable via `list_skills`; any one's body loads on demand via `load_skill`). |
-| `dir` | `""` | Optional override for the *writable* skills root. Default: `<config-dir>/skills` (where `<config-dir>` honors `PROTOAGENT_CONFIG_DIR`). |
+| `dir` | `""` | Optional override for the *writable* skills root. Default: `<config-dir>/skills` (where `<config-dir>` is `<instance_root>/config`). |
 
-Skills load from two roots — bundled (`config/skills/`, shipped) and writable (`<config-dir>/skills/`, your drop-ins); live skills override bundled ones by `name`. `GET /api/runtime/status` reports `skills.count`. See the [Skills guide](../guides/skills.md) for authoring.
+Skills load from bundled `config/skills/`, live `<config-dir>/skills/`, the console's
+`<instance_root>/skills/`, and enabled plugins' skill directories. Live skills
+override bundled ones by `name`. `GET /api/runtime/status` reports `skills.count`.
+See the [Skills guide](../guides/skills.md) for authoring.
 
 ## `a2a`
 
@@ -816,11 +857,13 @@ checkpoint:
 
 | Key | Default | What |
 |---|---|---|
-| `db_path` | `/sandbox/checkpoints.db` | SQLite path (`/sandbox`→`~/.protoagent` fallback, instance-scoped). Blank → in-memory (chat history doesn't survive a restart). |
+| `db_path` | `/sandbox/checkpoints.db` | SQLite path (legacy `/sandbox` default resolves to `<instance_root>/checkpoints.db`). Blank → in-memory (chat history doesn't survive a restart). |
 | `keep_per_thread` | `5` | How many checkpoints to retain per conversation thread. |
 | `max_age_days` | `30` | Drop checkpoints older than this. |
 | `prune_interval_hours` | `6` | How often the background pruner runs. |
 | `harvest_enabled` | `true` | On thread retire, harvest its history into the knowledge store before purging. |
+| `vacuum` | `true` | After a prune frees rows, truncate the WAL and run `incremental_vacuum` so the file shrinks. |
+| `vacuum_legacy_on_start` | `true` | At startup, before the DB opens, migrate an `auto_vacuum=NONE` history DB once (`PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`) so its freed space goes back to the disk. Runs only when at least half the file (or 256 MB) is free space, the disk has room for the rewrite, and no other process has the DB open. It logs the size before and after. On demand, with the agent stopped: `protoagent checkpoint migrate` (`--workspace <member>` or `--db <path>` for another DB). |
 
 ## `background`
 
@@ -848,7 +891,9 @@ workflows:
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | Expose `run_workflow` / `save_workflow` and load `*.yaml` recipes. |
-| `dir` | `/sandbox/workflows` | Writable recipe root (`/sandbox`→`~/.protoagent` fallback). Bundled recipes also load from `workflows/`. |
+| `dir` | `/sandbox/workflows` | Writable recipe root (legacy `/sandbox` default resolves beneath the instance root). Bundled recipes also load from `workflows/`. |
+
+The workflows **plugin**'s own settings live in their own section, `workflow_runs` (not `workflows`, which is this built-in one): `workflow_runs.max_runs` (default `200`) is how many finished runs `.runs/` keeps.
 
 ## `plugins`
 
@@ -884,6 +929,6 @@ Scheduler **enable/disable** is YAML-controlled (`middleware.scheduler` above) s
 
 | Env var | Default | What |
 |---|---|---|
-| `SCHEDULER_DB_DIR` | `/sandbox/scheduler` | Parent directory for `<agent_name>/jobs.db`. Falls back to `~/.protoagent/scheduler/<agent_name>/jobs.db` when unwritable. |
+| `SCHEDULER_DB_DIR` | `<instance_root>/scheduler` | Explicit parent-directory override; jobs use `<override>/<agent_name>/jobs.db` when set. The default private path is `<instance_root>/scheduler/agent/jobs.db`. |
 | `SCHEDULER_INVOKE_URL` | `http://127.0.0.1:<active_port>` | Local backend: where to POST `message/send` when a job fires. Override only if the agent's A2A endpoint isn't on localhost. |
 | `SCHEDULER_DISABLED` | unset | Runtime escape hatch — set to `1` / `true` to drop the scheduler tools entirely without editing YAML. `middleware.scheduler: false` is the canonical opt-out. |

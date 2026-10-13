@@ -824,7 +824,7 @@ def _build_develop_tool(config: dict | None):
             return await _work()
 
         try:
-            from tools.lg_tools import _session_id_from
+            from tools.session import _session_id_from
 
             # Injected graph state, not the tracing contextvar (empty in a tool
             # body) — the session id is what the completion drains back to.

@@ -1,14 +1,9 @@
 # Verifier-grounded coder (`coder_solve`)
 
-The `coder` plugin solves a **verifiable** coding task — "implement X, here are the
-tests" — by an **execution-grounded search ladder** and hands back a solution that
-*actually passes the tests*, not a plausible-looking one. It's the verifier-grounded
-counterpart to the [ACP coding agent](/guides/coding-agents): where a bare `acp`
-dispatch is one un-checked shot, `coder` runs candidates, **runs their tests**, and
-escalates only when the cheaper rung fails.
-
-Design rationale and the board integration are in
-[ADR 0064](/adr/0064-coder-execution-grounded-code-solve).
+Use the `coder` plugin for a coding task with an executable completion check.
+It runs candidate solutions against the verifier and escalates to another model
+when a cheaper attempt fails. It returns a verified solution or reports failure.
+For general coding delegation, use [CLI coding agents](/guides/coding-agents).
 
 ## What it contributes
 

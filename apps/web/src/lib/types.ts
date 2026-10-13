@@ -329,8 +329,8 @@ export type BrowseListing = {
 };
 
 // `exists` is READ-ONLY liveness from GET /api/settings/filesystem-projects: a root whose
-// folder is gone gets skipped when the fs tools are built, and if that empties the registry
-// the whole toolset unbinds. Absent on rows the editor is composing.
+// folder is gone is unreachable (its tool calls say "folder is missing") until it's back;
+// the other folders keep working (#3643). Absent on rows the editor is composing.
 export type FsProject = { name?: string; path: string; write: boolean; exists?: boolean };
 
 // The ADR 0095 managed-projects registry (GET /api/projects, read-only — registration
@@ -355,8 +355,8 @@ export type ManagedProject = {
 // ADR 0095 exists to kill.
 export type ManagedProjects = {
   enabled: boolean;
-  // "unbound" = the registry has entries but none of their folders are there, so the
-  // fence resolves EMPTY and the whole fs toolset unbinds (#2251). Distinct from
+  // "unbound" = the registry has entries but none feeds the fence (all `fs: false`, or
+  // every folder missing), so the fs tools can reach nothing (#2251, #3643). Distinct from
   // "registry" precisely because that case must not look like it's working.
   fence_source: "explicit" | "registry" | "workspace_default" | "disabled" | "unbound";
   projects: ManagedProject[];
@@ -410,6 +410,8 @@ export type BundleConfigInput = {
   // name. Absent on older hosts/bundles — a long legacy `label` still renders as-is.
   help?: string;
   type?: BundleConfigInputType;
+  // `type: path` only: a list of folders, answered as one "\n"-joined string.
+  multiple?: boolean;
   required?: boolean;
   default?: string | boolean;
 };
@@ -497,6 +499,10 @@ export type SettingsField = {
   // Whether a "path" field ends on a folder or a file. Emitted for every field; only read
   // when type is "path".
   path_kind?: "dir" | "file";
+  // A "path" field that holds SEVERAL paths: render one row per path (Browse… each, plus
+  // Add/Remove). The value is still ONE string, the rows joined with "\n". Absent from
+  // older cores → the single picker, which edits the same string.
+  multiple?: boolean;
   section: string;
   description?: string;
   restart: boolean;
@@ -593,10 +599,11 @@ export type WorkflowRecipe = {
   max_concurrency?: number;
 };
 
-export type WorkflowRunStatus = "running" | "done" | "failed" | "paused";
+// `cancelled`: stopped from outside (its turn ended, the server shut it down) — not a failure (#3957).
+export type WorkflowRunStatus = "running" | "done" | "failed" | "paused" | "cancelled";
 
 export type WorkflowStepMeta = {
-  status?: "running" | "done" | "failed";
+  status?: "running" | "done" | "failed" | "cancelled";
   started_at?: string;
   finished_at?: string;
   seconds?: number;
@@ -620,6 +627,8 @@ export type WorkflowRunRecord = {
   output?: string;
   failed?: string[];
   degraded?: string[];
+  // Why a run that never returned its envelope failed (e.g. its turn stalled, #3940).
+  error?: string;
 };
 
 // History summaries (GET /runs/all) — every recorded run, newest first.
@@ -791,6 +800,9 @@ export type ToolInfo = {
   source: "core" | "plugin" | "mcp";
   category?: string;
   enabled: boolean;
+  /** Held for subagents (`tools.subagent_only`, ADR 0117): live, but not the lead's, and
+   *  outside the response's `count`. */
+  subagent_only?: boolean;
 };
 
 export type ToolCall = {
@@ -807,13 +819,63 @@ export type ToolCall = {
    *  wire preview, so the context-cost chip must estimate from this instead. */
   outputChars?: number;
   status: "running" | "done" | "error";
+  /** In flight when its turn PARKED on the operator (input-required, #3946): the call is
+   *  waiting on a human, not working — rendered as waiting (no spinner, no climbing
+   *  timer). Cleared when the turn resumes or the card settles. */
+  paused?: boolean;
+  /** Still in flight when its turn was STOPPED (operator Stop / CancelTask, #4076): the call
+   *  never completed, so it settles with `status: "done"` (no spinner) but renders neutral
+   *  "stopped" — never the ✓ a call that actually returned gets. Survives reload: the live
+   *  Stop stamps it on the persisted bubble, and durable hydration / reattach stamp it off a
+   *  `canceled` task state. */
+  stopped?: boolean;
   /** Client wall-clock when the start frame arrived (ms epoch). */
   startedAt?: number;
-  /** Elapsed start→end, stamped client-side when the end frame arrives. */
+  /** `startedAt` is NOT when the call started: the start frame was REPLAYED from a task
+   *  snapshot (reload / reattach), so `now - startedAt` would measure the replay, not the
+   *  call (#4076). A duration is then taken only from the wire's measured `durationMs`. */
+  startReplayed?: boolean;
+  /** Elapsed start→end: the server-measured execution time off the end frame when it
+   *  carries one, else stamped client-side when the end frame arrives. Absent when unknown —
+   *  the card then shows no duration rather than a fake one. */
   durationMs?: number;
   /** id of the enclosing `task` tool, if this call ran inside a subagent. */
   parentId?: string;
+  /** An `@`-mention card's addressed coding agents' live state (#3979), keyed by
+   *  participant name — `@a @b` is one card over two delegates. */
+  delegateProgress?: Record<string, DelegateProgress>;
 };
+
+/** A tool call a coding-agent delegate is making, as its live view shows it (#3979). */
+export type DelegateTool = {
+  id?: string;
+  name: string;
+  /** ACP's classification: read / edit / execute / search / fetch / think / … */
+  kind?: string;
+  status: "running" | "completed" | "failed" | string;
+  locations?: Array<{ path: string; line?: number }>;
+};
+
+/** One entry of a coding agent's own plan (its todo list). */
+export type DelegatePlanEntry = { content: string; status: "pending" | "in_progress" | "completed" | string };
+
+/** A coding-agent delegation's live state — a WHOLE snapshot (latest wins), bounded
+ *  server-side (graph/delegate_progress.py), on the delegate-progress-v1 frame (#3979). */
+export type DelegateProgress = {
+  target: string;
+  plan?: DelegatePlanEntry[];
+  currentTool?: DelegateTool;
+  recentTools: DelegateTool[];
+  toolCount: number;
+  /** The tail of what the coder has said so far. */
+  text?: string;
+  done: boolean;
+  ok: boolean;
+};
+
+/** The wire event: which card (`id`) a snapshot belongs to — an `@` mention card's tool
+ *  call id, or a `delegate_to` ask's id. */
+export type DelegateProgressEvent = DelegateProgress & { id: string };
 
 /** One artifact reference resolved into a chat-bundle tool_call part (#2179 P2, graph.chat_bundle
  *  / plugins.artifact.resolve_for_bundle). `available: false` covers a deleted artifact, a binary
@@ -872,6 +934,11 @@ export type ToolEvent = {
   /** True pre-truncation result size in chars, from the wire fragment (#2775). */
   outputChars?: number;
   error?: boolean; // an "end" that failed (phase "failed" on the wire) → card shows the X
+  /** The server-measured execution time, on an end frame (#4076). */
+  durationMs?: number;
+  /** Replayed from a task snapshot (reload / reattach), not seen live — so the client's
+   *  clock between this frame and its pair measures nothing (#4076). */
+  replayed?: boolean;
   /** id of the enclosing `task` delegation when this is a subagent's own tool call —
    *  set server-side so nesting is explicit (by id), not inferred from frame order. */
   parentId?: string;
@@ -1004,7 +1071,7 @@ export type ContextWindow = {
 
 /** Emphasis tone for a local SYSTEM NOTE (a role-"system" message without a `report`) —
  *  e.g. a slash-command confirmation, a status line, or a warning. The reusable seam for
- *  posting non-agent, in-thread notices is `ChatSurface.noteToThread(text, { tone })`,
+ *  posting non-agent, in-thread notices is `ChatSessionSlot.noteToThread(text, { tone })`,
  *  exposed to forks via the slash + composer registries. Add a tone here + a matching
  *  `.chat-note--<tone>` rule in chat.css; nothing else needs to change. */
 export type SystemNoteTone = "info" | "warning" | "danger" | "success";
@@ -1079,6 +1146,10 @@ export type Delegation = {
   jobId?: string;
   /** The dispatch itself failed (an unknown delegate, …) — the reason. */
   error?: string;
+  /** The ask's id on the wire (the delegation's run) — what its live progress is keyed by. */
+  id?: string;
+  /** A coding delegate's live state while it works, and its final state after (#3979). */
+  progress?: DelegateProgress;
 };
 
 /** Operator messages folded into a running turn at one model-call boundary (#2959). */
@@ -1125,11 +1196,25 @@ export type ChatMessage = {
    *  text/tool-call order is preserved. Absent on history-loaded messages, which fall
    *  back to the grouped reasoning→toolCalls→content layout. */
   parts?: ChatPart[];
+  /** LIVE-ONLY streamed tool-argument previews (ADR 0118 D3), keyed by tool-call id — the
+   *  per-tool-call buffer the console decodes off working frames (`chat/toolArgsBuffer`,
+   *  structurally the `ToolArgsBuffer` view). Stamped while the turn streams so the WorkBlock can
+   *  render a live artifact preview, and DROPPED when the turn settles: never persisted, never
+   *  rebuilt on hydration/reattach (a reload shows the finished tool card, never a stale partial). */
+  toolArgs?: Record<string, { arg: string; text: string; done: boolean }>;
   /** Streamed scratch_pad reasoning ("thinking") — rendered as a collapsible block
    *  above the answer; never part of `content`. */
   reasoning?: string;
   createdAt?: number;
   status?: "streaming" | "done" | "error";
+  /** The turn is PAUSED on the operator (input-required / auth-required, #3946). The
+   *  status stays `streaming` — the server still owns the turn and the answer continues
+   *  it — but nothing is being produced, so the bubble renders as waiting: no streaming
+   *  spinner, no running-card timers. Cleared when the turn resumes or settles. */
+  paused?: boolean;
+  /** The turn was STOPPED before it finished (operator Stop / a `canceled` task, #4076) —
+   *  the footer carries a quiet "Stopped" marker so a reload still says why it ends early. */
+  stopped?: boolean;
   /** A2A task id for this turn — persisted so a stuck `streaming` message can be
    *  reconciled against the server's task state on reload (self-heal). */
   taskId?: string;
@@ -1148,6 +1233,18 @@ export type ChatMessage = {
    *  instead of a full-size assistant bubble. Persisted, so the card treatment survives reload;
    *  absent on operator-initiated turns, which stay full-size. */
   origin?: string;
+  /** Origin tag for a user turn a frame's send-to-chat bridge started (ADR 0118 D4), instead of
+   *  the operator typing it. The turn is a NORMAL, visible user message — this only records WHERE
+   *  the click came from, so the bubble can show a small "from ‹title›" label and the turn stays
+   *  auditable as the user's. Two frame origins carry it:
+   *    - an inline ARTIFACT frame (S10b): `{via, artifact_id, version}` — exactly the D4 metadata;
+   *    - a plugin COMPONENT frame (S12b): `{via, kind, plugin}` — the component-v1 kind and the
+   *      plugin that owns the frame (`plugin` null for a core frame kind).
+   *  `title` is a display convenience the host supplies for the label. Absent on a normally-typed
+   *  turn. */
+  sentVia?:
+    | { via: "artifact"; artifact_id: string; version: number; title?: string }
+    | { via: "component"; kind: string; plugin: string | null; title?: string };
   /** A server turn's result that `chat.resumed` APPENDED, because this transcript had no
    *  preview of that turn to replace: a scheduled fire or a watch reaction that landed while
    *  some other turn here was still running. It is not that running turn's row. So the
@@ -1931,6 +2028,22 @@ export type Archetype = {
   // create so the member persists them to workspace.yaml and warns at boot when its
   // bound toolset doesn't cover the contract. Optional: absent on older hosts.
   requires_tools?: string[];
+  // A catalog `held` entry — an archetype still being tested. Only served on the opt-in
+  // `GET /api/archetypes?include_held=1` (Settings ▸ New agent ▸ Advanced ▸ "Show preview
+  // archetypes"); the picker badges it "Preview".
+  held?: boolean;
+  // The tag / branch / SHA a "From a bundle URL" archetype is pinned to — rides the create
+  // as `ref`. Absent on catalog rows (they install the bundle's default branch).
+  ref?: string;
+};
+
+// GET /api/archetypes/from-url — an uncatalogued bundle peeked by URL: its archetype row
+// (shaped like an /api/archetypes entry), the same bundle peek /preview serves, and whether
+// the source is official/acked (`trusted`, ADR 0071 D3) with its normalized display form.
+export type ArchetypeFromUrl = ArchetypePreview & {
+  archetype: Archetype;
+  trusted: boolean;
+  source: string;
 };
 
 // What an archetype's bundle would set up — the read-only pre-install peek

@@ -12,7 +12,8 @@ def _ctrl(tmp_path):
     return GoalController(config=None, store=GoalStore(base_dir=str(tmp_path)))
 
 
-def test_accepts_a_plugin_verifier(tmp_path):
+def test_accepts_a_plugin_verifier(tmp_path, monkeypatch):
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"spacetraders:credits": object()})
     c = _ctrl(tmp_path)
     ok, msg = c.set_goal_safe(
         "s1",
@@ -49,6 +50,7 @@ async def test_rest_handler_is_the_operator_channel(tmp_path, monkeypatch):
     from runtime.state import STATE
 
     monkeypatch.setattr(STATE, "goal_controller", _ctrl(tmp_path))
+    monkeypatch.setattr("graph.goals.verifiers._PLUGIN_VERIFIERS", {"x:y": object()})
 
     plugin_goal = await console_handlers._operator_goals_set(
         {"session_id": "s", "condition": "c", "verifier": {"type": "plugin", "check": "x:y"}}

@@ -1,30 +1,18 @@
-# Plugins
+# Build plugins
 
-Plugins are **drop-in packages** that extend protoAgent without forking it. A
-plugin contributes **tools**, bundled **skills**, FastAPI **routes**, background
-**surfaces**, **subagents**, **middleware**, knowledge backends/embedders, goal
-verifiers — plus its own **config / secrets / Settings** (ADR 0018/0019/0032).
-Plugins run **in-process** with the agent's privileges, so they're **disabled by
-default** and you opt in explicitly — only enable plugins you trust.
+Build a plugin to add tools, skills, routes, background work, or console views
+without changing core. Plugins run in the server process with its privileges.
+Enable only code you trust. Some bundled plugins are enabled by default; the
+`delegates` registry is built in and needs no enable step.
 
-> The first-party **Telegram** integration ships bundled as a plugin
-> (`plugins/telegram/`), opt-in via `plugins: { enabled: [telegram] }`.
-> Integrations like **Discord**, **GitHub**, **Google** Gmail/Calendar, and **Slack** install as
-> **external** plugins from their own repos (browse + install them in Settings ▸
-> Plugins ▸ Discover). To drive a **CLI coding agent over ACP**, enable the **delegates**
-> plugin and declare an `acp` delegate — see
-> [CLI coding agents over ACP](/guides/coding-agents).
-
-> **Trust model.** This is the in-process / trusted model (matching Hermes): an
-> enabled plugin's `register()` runs as the agent. Don't enable code you
-> haven't reviewed. Untrusted third-party *tools* are better added via
-> [MCP](./mcp.md) (out-of-process).
+To use an existing plugin, follow [Install and publish plugins](/guides/plugin-registry).
+Telegram is bundled; Discord, GitHub, Google, and Slack install from external repos.
 
 ## Start here
 
-This page explains how to *build* one. When you already know the shape and just need a
-signature, a field, or a flag, go to the reference instead — it is generated from the code,
-so it is complete and current by construction:
+For a first working example, use [Build your first plugin](/tutorials/first-plugin).
+This guide covers the contribution contracts. The references below are generated
+from source signatures and docstrings:
 
 | Reference | Contents |
 | --- | --- |
@@ -36,22 +24,9 @@ so it is complete and current by construction:
 | [View bridge](/reference/plugin-view-bridge) | The sandboxed-iframe `postMessage` protocol |
 | [Event bus topics](/reference/plugin-events) | Every topic core publishes, with payload keys |
 
-New to plugins? [Build your first plugin](/tutorials/first-plugin) is the twenty-minute version,
-and [Plugin architecture](/explanation/plugin-architecture) explains the model — what runs
-in-process, what's sandboxed, and when your code is called.
-
-Otherwise, pick the job you actually have:
-
-| I want to… | Go to |
-| --- | --- |
-| **Turn on a plugin that ships with protoAgent** | Settings ▸ Plugins ▸ Installed, or `plugins: { enabled: [telegram] }` — [Enable one](#enable-one) |
-| **Install someone else's plugin from a git URL** | [Install & publish plugins](/guides/plugin-registry) |
-| **Write my own** | [Anatomy](#anatomy) — the manifest, `register()`, and what you can contribute (tools, routes, a console view, …) |
-| **Add a console surface to one** | [Building a plugin view](/guides/building-react-plugin-views) |
-| **Turn my agent into a chat bot** | [Build a communication plugin](/guides/communication-plugins) |
-
-The rest of this page walks the plugin contract top to bottom — read it once when you
-write your first plugin, then use the [reference pages](/reference/) for lookup.
+For console UI, see [Build a plugin view](/guides/build-a-plugin-view). For messaging
+integrations, see [Build a communication plugin](/guides/communication-plugins).
+[Plugin architecture](/explanation/plugin-architecture) explains loading and trust.
 
 ## Anatomy
 
@@ -90,7 +65,7 @@ federation_paths: []      # prefixes under THIS plugin's own namespace that acce
                           # the /api operator ceiling is lowered. See below.
 ```
 
-**Every field, with its type and default: [Plugin manifest reference](/reference/plugin-manifest).** Generated from the dataclass the loader reads, so it can't fall behind. The fields worth explaining rather than listing have their own sections below.
+**Every field, with its type and default: [Plugin manifest reference](/reference/plugin-manifest).** Generated from the manifest dataclass. The fields worth explaining rather than listing have their own sections below.
 
 ### Entry — `register(registry)`
 
@@ -160,7 +135,7 @@ restarts what it was **doing**. The recipe:
 1. **Persist the operator's INTENT, not the run state.** When the operator starts the work,
    write a durable flag (`wanted: true`); when they *deliberately* stop it, clear the flag.
    Module-level state resets on reload, so the flag lives on disk — a small JSON in the
-   per-agent config dir (`PROTOAGENT_CONFIG_DIR`), the same store your watch/plan state uses.
+   instance store returned by `sdk.plugin_store(plugin_id=registry.plugin_id)`.
 2. **Distinguish a lifecycle stop from an operator stop.** The surface `stop` hook
    (shutdown/reload) must halt the task **without** clearing the intent — a reload isn't a
    decision. Only the operator's own stop clears it. (A single `stop_ops()` that both halts
@@ -273,7 +248,7 @@ stay mounted until restart, but the path is operator-only again, so a peer gets 
 than a stale door. The live set is visible alongside the public prefixes on the member
 well-known path.
 
-### Middleware — `register_middleware` (ADR 0032)
+### Middleware — `register_middleware` (ADR 0032) {#middleware-register-middleware-adr-0032}
 
 A plugin can contribute a LangGraph **`AgentMiddleware`** — the per-turn hook layer
 (`before_model` / `after_model` / `wrap_tool_call` / …) the core uses for knowledge
@@ -404,8 +379,7 @@ db = sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"
 ```
 
 **Every call, with its signature and failure mode: [Plugin SDK reference](/reference/plugin-sdk-api).**
-It is generated from the source, so it is complete and current — this guide deliberately
-doesn't restate it.
+The reference is generated from source signatures and docstrings.
 
 Two things the reference can't tell you. First, **import it inside the function that uses
 it** if your plugin must also run host-free in its own test suite; a module-level
@@ -559,7 +533,28 @@ settings:                      # System → Settings group (named after the sect
 ```
 
 **Field types:** `string` · `text` (multiline string — a system prompt / template) ·
-`number` · `bool` · `select` (with `options: [...]`) · `string_list` · `secret`.
+`number` · `bool` · `select` (with `options: [...]`) · `string_list` · `secret` ·
+`path` (a local path on the agent's machine, with a **Browse…** picker over the server's
+filesystem; `path_kind: dir` (default) ends on a folder, `path_kind: file` on a file).
+
+**Several paths in one setting — `multiple: true`:** a `path` setting that holds more
+than one path (data folders, vaults, repos) adds `multiple: true` and renders as a list:
+one row per path, each with its own Browse…, a Remove (×) button, and an **Add folder**
+button that appends a row and opens Browse… for it. The stored value is still **one
+string** — the rows joined with `\n`, duplicates dropped — so parse it by splitting on
+newlines (and commas, which is how an existing comma-separated value loads into rows):
+
+```yaml
+settings:
+  - { key: data_dirs, label: "Data folders", type: path, path_kind: dir, multiple: true }
+```
+
+```python
+dirs = [p.strip() for p in re.split(r"[,\n]", cfg.get("data_dirs") or "") if p.strip()]
+```
+
+`multiple` is additive: a core that predates it ignores the key and shows the single
+path box, which edits the same string — so it needs no `min_protoagent_version` bump.
 
 **Tabbed Configure dialogs:** a larger plugin can declare an ordered tab registry,
 then assign ordinary schema-backed fields by stable tab id. Labels are presentation;
@@ -609,6 +604,23 @@ read as "unset".)
 settings:
   - { key: api_key, label: "API key", type: secret, required: true }
 ```
+
+**Settings that name a program to spawn** — mark them `spawns: true`. An agent with
+the guarded `set_config` tool (`tools.self_config_enabled`) may retune your plugin's
+settings, but must never be able to point one at a binary your plugin then runs. The
+fence already refuses keys whose *name* says so — any `_`/`-`/camelCase token of
+`command` `cmd` `args` `argv` `binary` `bin` `exe` `executable` `interpreter`
+`entrypoint` (`local_gate_cmd`, `rh_bin`, `binary_path`) — so prefer such a name. When
+the natural name doesn't (`ffmpeg_path`), declare it:
+
+```yaml
+settings:
+  - { key: ffmpeg_path, label: "ffmpeg path", type: string, spawns: true }
+```
+
+Only the agent's writer is fenced; the operator still sets the key from Settings. Older
+cores ignore the field, so declaring it never breaks a load. See
+[ADR 0019 §3b](/adr/0019-plugin-config-settings-secrets).
 
 Read the resolved config (manifest defaults ⊕ YAML ⊕ secrets) in `register()`:
 
@@ -675,7 +687,10 @@ lacks a `reload` hook and hands back a different `stop` (fresh closures over a f
 dispatcher/queue) is **stopped, then started from the new registration** — otherwise the
 old loop would keep driving the old objects while the new routes use the new ones
 (#3593). The old task gets a grace period, then a cancel; one that still won't end is
-kept, and its replacement is not started. Declare `reload` to keep a surface running across saves,
+kept, and its replacement is not started. A disabled or uninstalled plugin's surface gets the
+same grace and cancel. A surface that outlives all of it is the one plugin contribution that
+needs a process restart, and the console's install / update / toggle / uninstall response says
+so (`restart_recommended`). Declare `reload` to keep a surface running across saves,
 or register module-level/singleton `start`/`stop` so a re-register is the same surface. Everything is best-effort: a failing
 plugin/route/surface logs and never breaks boot. The shipped [`plugins/hello`](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/hello)
 example demonstrates the contribution types. Plugin contributions show in
@@ -686,9 +701,10 @@ surface + route + tools (+ status probe) examples.
 
 ## Where plugins live & how they're enabled {#enable-one}
 
-Two roots (like skills): bundled `plugins/` (shipped, e.g. the `hello` example)
-and live `<config-dir>/plugins/` (your drop-ins; `<config-dir>` honors
-`PROTOAGENT_CONFIG_DIR`, override with `plugins.dir`). Live overrides bundled by `id`.
+Bundled plugins live in the shipped `plugins/` tree. Installed plugins and local
+drop-ins live in `<instance_root>/plugins/`; `plugins.dir` or
+`PROTOAGENT_PLUGINS_DIR` can override that directory. Run `protoagent config explain`
+to find it. A live plugin overrides a bundled plugin with the same `id`.
 
 `plugins.dir` must be an **absolute** path. A relative one is ignored with a warning
 (the instance's own plugins dir is used instead): it would resolve against the working
@@ -716,8 +732,14 @@ status chips filter to All / Loaded / Disabled / **Attention** (error, unfinishe
 update available, or missing pip deps), and plugins installed by a bundle carry the bundle's
 name as a chip (searchable too). Each row has a one-click **Enable / Disable** toggle — it
 edits `plugins.enabled` and hot-reloads, so tools / middleware / MCP servers apply
-immediately. A plugin that serves a **console view** or runs a **background surface**
-(its router mounts at startup) needs a restart to finish — the toggle says so.
+immediately. That includes a plugin's **console view** and **background surface**: enabling
+mounts its router on the live app (the view's rail icon appears) and starts its surfaces;
+disabling unmounts the router and stops them. Neither direction needs a restart. Installing
+from a git URL auto-enables through the same reload, so a fresh install is live too, and
+**Update** / uninstall are live the same way (the router re-mounts with the new code or
+leaves). The exception is a background surface the reload can't swap: one whose task won't
+stop, or one that stays on its `reload(cfg)` hook across an update and so keeps running the
+old code. The toast asks for a restart then.
 
 Plugin tools that would shadow a core or MCP tool name are skipped (logged).
 Bundled skills load as `disk`-source [skills](./skills.md), re-seeded each boot.

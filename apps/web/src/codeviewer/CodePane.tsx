@@ -29,6 +29,7 @@ import { useIsMobile } from "../lib/useIsMobile";
 import { refLabel } from "./codeRef";
 import { hasHunks, newLineForOld, splitPatch, type PatchFile } from "./diffParse";
 import { countCutLines, pageAfter, pageBefore, windowFor, type LineRange } from "./fileWindow";
+import { diffQueryKey, fileQueryPrefix } from "./liveRefresh";
 import { openCode } from "./open";
 import {
   canonicalizeRef,
@@ -41,6 +42,7 @@ import {
   type CodeTab,
 } from "./store";
 import { useThemeMode } from "./themeMode";
+import { useStampPoll } from "./useStampPoll";
 
 // The code pane (ADR 0112) — a READ-ONLY view of the agent's project files beside chat, for
 // the operator as navigator: the agent points (show_code, a tool-card link, follow mode) and
@@ -89,7 +91,7 @@ export default function CodePane() {
               data-testid="code-follow"
               title={
                 follow
-                  ? "Following: the pane moves to each file the agent reads or edits. Click to stop."
+                  ? "Following: the pane moves to each file the agent reads or edits, and to a coding delegate's edits. Click to stop."
                   : "Follow the agent: move the pane to each file it reads or edits (off by default)"
               }
               onClick={() => setFollow(!follow)}
@@ -201,6 +203,13 @@ function FileView({ current, seq, recent }: { current: CodeRef; seq: number; rec
   // A window the operator paged to (Earlier / Later). Cleared by every new open (`seq`).
   const [page, setPage] = useState<{ seq: number; range: LineRange } | null>(null);
   const activePage = page && page.seq === seq ? page.range : null;
+
+  // Live updates (ADR 0112): a change nothing reported (a terminal, an editor) re-reads the
+  // file in place — the `fs.changed` bus path (CodeChangeWatch) covers the reported ones.
+  useStampPoll(current.project, current.path, () => {
+    void qc.invalidateQueries({ queryKey: fileQueryPrefix(current.project, current.path) });
+    void qc.invalidateQueries({ queryKey: diffQueryKey(current.project) });
+  });
 
   // Keyed on `seq` too: every open re-reads the file, so a follow jump after an edit_file (or
   // the operator revisiting from Recent) shows the file as it is NOW, not a cached copy.
@@ -556,17 +565,38 @@ function DiffTab() {
 
 function DiffView({ project, projects }: { project: string; projects: string[] }) {
   const mode = useThemeMode();
+  const qc = useQueryClient();
   const q = useQuery({
-    queryKey: ["code-pane-diff", project],
+    queryKey: diffQueryKey(project),
     queryFn: () => api.fsDiff(project),
     retry: false,
     staleTime: 5_000,
+    // A live re-fetch (an edit landed) keeps the current diff on screen until the new one is
+    // in, instead of flashing "Loading changes…" under the operator.
+    placeholderData: keepPreviousData,
   });
+  // Live updates (ADR 0112): `fs.changed` on the bus (CodeChangeWatch) re-fetches this for
+  // every reported write; the stamp poll catches the rest (a terminal, an editor).
+  useStampPoll(project, null, () => void qc.invalidateQueries({ queryKey: diffQueryKey(project) }));
   const patches = useMemo(() => splitPatch(q.data?.patch ?? ""), [q.data]);
   const files = q.data?.files ?? [];
-  const [picked, setPicked] = useState<string | null>(null);
+  // Follow mode moved here for a delegate's edit: pick that file and show its first hunk.
+  const focus = useCodeViewer((s) => s.diffFocus);
+  const [picked, setPicked] = useState<string | null>(() =>
+    focus && focus.project === project ? focus.path : null,
+  );
+  const diffBodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!focus || focus.project !== project) return;
+    setPicked(focus.path);
+    // The patch is rendered from its first hunk down — the top of the body IS the first hunk.
+    diffBodyRef.current?.scrollTo?.({ top: 0 });
+  }, [focus, project]);
   const selectable = files.filter((f) => !f.denied && !f.binary);
-  const active = picked ?? selectable[0]?.path ?? null;
+  // A picked file that a live re-fetch no longer lists (reverted, committed) falls back to the
+  // first changed file rather than "Pick a file" over an empty body.
+  const pickedLive = picked && (files.some((f) => f.path === picked) || q.isFetching) ? picked : null;
+  const active = pickedLive ?? selectable[0]?.path ?? null;
   const patch: PatchFile | undefined = patches.find((p) => p.path === active);
   const options = useMemo(
     () => ({
@@ -639,7 +669,7 @@ function DiffView({ project, projects }: { project: string; projects: string[] }
             ))}
           </ul>
           {q.data.truncated ? <div className="code-pane__notice">The diff is past the viewer's cap — some changes aren't shown.</div> : null}
-          <div className="code-pane__body code-pane__body--diff" data-testid="code-pane-diff-body">
+          <div className="code-pane__body code-pane__body--diff" data-testid="code-pane-diff-body" ref={diffBodyRef}>
             {renamedFrom && active ? (
               <div className="code-pane__subnote" data-testid="code-pane-renamed">
                 Renamed from <code>{renamedFrom}</code>

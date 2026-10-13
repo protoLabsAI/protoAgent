@@ -683,6 +683,18 @@
   // Relative stamps ("12m ago") go stale on a view left open on a wall display; re-render
   // the labels on a slow tick without refetching.
   setInterval(() => { if (state.items.length) render(); }, 60000);
+
+  // The ledger changes under the view: the agent resolves rows with resolve_friction while
+  // this page sits open. Fetched once, the page kept showing a resolved row as open, and an
+  // agent told "it's still open" re-resolved it and was answered "no match". Re-read when
+  // the view becomes visible again and on a slow tick while it is (this instance only —
+  // the fleet rollup is a fan-out and stays on Refresh).
+  const liveReload = () => {
+    if (started && !document.hidden && state.scope !== "fleet" && !state.busy.size) void load();
+  };
+  document.addEventListener("visibilitychange", liveReload);
+  window.addEventListener("focus", liveReload);
+  setInterval(liveReload, 30000);
 </script>
 </body>
 </html>

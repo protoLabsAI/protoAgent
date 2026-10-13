@@ -194,6 +194,8 @@ function Field({
     control = (
       <Input
         type="number"
+        min={schema.minimum}
+        max={schema.maximum}
         value={value === undefined || value === null ? "" : String(value)}
         onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
         onKeyDown={confirmOnEnter}
@@ -359,7 +361,7 @@ export function HitlForm({
   // ask_human / free-text question.
   if (!isForm) {
     const prompt = payload.question || payload.description || payload.title || "Input requested.";
-    // Same convention as the chat composer's onComposerKeyDown (ChatSurface.tsx, #2614):
+    // Same convention as the chat composer's onComposerKeyDown (ChatSessionSlot.tsx, #2614):
     // bare Enter sends the response; ⌘/Ctrl+Enter inserts a newline at the caret (the
     // textarea wouldn't on its own — a modified Enter has no default browser action).
     const onFreeTextKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {

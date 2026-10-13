@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  bootLiveTurns,
   dedupeMessages,
   ensureActiveSessions,
   mergeHydratedSessions,
@@ -81,6 +82,44 @@ describe("ensureActiveSessions", () => {
   });
 });
 
+// #3956 review: a turn PARKED on the operator (paused bubble) still boots active so its
+// reattach brings the form back, but it is not "streaming" — only MAX_ACTIVE_SESSIONS slots
+// mount, and every parked session past the cap kept a streaming tab dot, the rail's
+// any-streaming dot and a retirement block until it was opened.
+describe("bootLiveTurns", () => {
+  const turn = (id: string, extra: Partial<ChatMessage>): ChatSession => ({
+    id,
+    title: id,
+    createdAt: 1,
+    updatedAt: 1,
+    messages: [
+      { id: `${id}-u`, role: "user", content: "pick a fruit", status: "done" },
+      { id: `${id}-a`, role: "assistant", content: "", status: "streaming", taskId: `task-${id}`, ...extra },
+    ],
+  });
+
+  it("marks no parked session streaming, however many there are", () => {
+    const parked = Array.from({ length: 7 }, (_, i) => turn(`n${i}`, { paused: true }));
+    const boot = bootLiveTurns({ version: 1, sessions: parked, currentSessionId: "n0" });
+    expect(boot.sessionStatusMap).toEqual({});
+    // …but they still come back active (up to the cap), so their slots mount and reattach.
+    expect(boot.activeSessions).toEqual(["n0", "n1", "n2", "n3", "n4"].slice(0, MAX_ACTIVE_SESSIONS));
+  });
+
+  it("a working turn is streaming and mounts ahead of parked ones; a settled one is neither", () => {
+    const sessions = [
+      turn("parked-a", { paused: true }),
+      turn("parked-b", { paused: true }),
+      turn("working", {}),
+      turn("settled", { status: "done" }),
+      turn("no-task", { taskId: undefined }),
+    ];
+    const boot = bootLiveTurns({ version: 1, sessions, currentSessionId: "settled" });
+    expect(boot.sessionStatusMap).toEqual({ working: "streaming" });
+    expect(boot.activeSessions).toEqual(["settled", "working", "parked-a", "parked-b"]);
+  });
+});
+
 describe("mergeHydratedSessions", () => {
   const session = (id: string, messages: ChatMessage[], updatedAt = 10): ChatSession => ({
     id,
@@ -90,6 +129,26 @@ describe("mergeHydratedSessions", () => {
     updatedAt,
   });
   const user = (content: string): ChatMessage => ({ role: "user", content, status: "done" });
+
+  it("a recovered PARKED turn is not marked streaming; a working one is (#3956)", () => {
+    const current = {
+      ...mkState([]),
+      version: 1,
+      sessions: [],
+      currentSessionId: null,
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+      serverTurnControls: {},
+    };
+    const live = (id: string, paused?: boolean): ChatSession =>
+      session(id, [
+        user("pick a fruit"),
+        { id: `${id}-a`, role: "assistant", content: "", status: "streaming", taskId: `task-${id}`, ...(paused ? { paused } : {}) },
+      ]);
+    const next = mergeHydratedSessions(current as never, [live("chat-parked", true), live("chat-working")]);
+    expect(next.sessionStatusMap["chat-parked"]).toBeUndefined();
+    expect(next.sessionStatusMap["chat-working"]).toBe("streaming");
+  });
 
   it("never overwrites richer non-empty local history", () => {
     const local = session("chat-a", [user("local")]);
@@ -297,7 +356,7 @@ describe("persist debouncing", () => {
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
     chatStore.updateMessages(sessionId, msg("final answer"));
-    chatStore.setSessionStatus(sessionId, "idle"); // ChatSurface's stream-done path
+    chatStore.setSessionStatus(sessionId, "idle"); // ChatSessionSlot's stream-done path
     expect(setItem).toHaveBeenCalledTimes(1);
     const written = JSON.parse(setItem.mock.calls[0][1] as string);
     const session = written.sessions.find((s: { id: string }) => s.id === sessionId);
@@ -576,7 +635,7 @@ describe("cross-tab persistence", () => {
 });
 
 // Incognito threads (ADR 0069 D3b): the flag lives ON the session (persisted with it)
-// so ChatSurface can stamp metadata.incognito onto EVERY send while it's on — the
+// so ChatSessionSlot can stamp metadata.incognito onto EVERY send while it's on — the
 // backend flag is per-message, and a mixed thread would leak earlier incognito content
 // into a later non-incognito turn's summary.
 describe("incognito sessions", () => {

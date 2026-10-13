@@ -1,8 +1,9 @@
 """Foundational real-subprocess fleet tests (the harness skeleton).
 
-Covers the three things the fleet had NO live coverage for: two isolated
-instances, a hub spawning a real member + proxying to it, and a member resolving
-its config under the new ``<ws>/config`` layout (the old double-scope footgun).
+Covers two isolated instances, a member resolving its config under the new
+``<ws>/config`` layout (the old double-scope footgun) and serving its own agent card
+through the hub proxy, and authed SSE to a fleet-token member. The plain
+spawn → list → proxy path is covered by ``test_fleet_crash_restart.py``.
 
 Slow + opt-in: ``PA_RUN_INTEGRATION=1 pytest tests/integration``.
 """
@@ -38,31 +39,6 @@ def test_two_instances_boot_isolated(fleet):
     assert not (b.data_root / ".protoagent").is_relative_to(a.data_root)
 
 
-def test_hub_spawns_member_and_proxies(fleet):
-    hub = fleet(name="hub")
-
-    st, raw = http_post(f"{hub.base}/api/fleet", {"name": "alpha", "inherit_config": True, "start": True}, timeout=180)
-    assert st == 200, f"create member failed: {st} {raw[:300]}"
-    agent = json.loads(raw)["agent"]
-    assert agent.get("running"), f"member did not start: {agent}"
-    mid = agent["id"]
-
-    # The hub's fleet registry lists the member (agents = [host, ...members, ...remotes]).
-    st, raw = http_get(f"{hub.base}/api/fleet")
-    assert st == 200, raw[:200]
-    ids = [a.get("id") for a in json.loads(raw).get("agents", [])]
-    assert mid in ids, f"member {mid} not in fleet {ids}"
-
-    # Proxy round-trip: the hub forwards /agents/<id>/healthz to the real member process.
-    reached = poll(lambda: http_get(f"{hub.base}/agents/{mid}/healthz", timeout=3)[0] == 200, timeout=90)
-    assert reached, "member never reachable through the hub proxy"
-
-    # The member serves its OWN agent card through the proxy.
-    st, raw = http_get(f"{hub.base}/agents/{mid}/.well-known/agent-card.json", timeout=10)
-    assert st == 200, f"proxied agent card: {st} {raw[:200]}"
-    assert json.loads(raw).get("name"), "proxied member card has no name"
-
-
 def test_member_config_resolves_under_new_layout(fleet):
     """A member is launched with PROTOAGENT_HOME=<ws>; its config must land at
     <ws>/config/ (NOT double-scoped under <ws>/<id>/), and the inherited gateway
@@ -93,6 +69,12 @@ def test_member_config_resolves_under_new_layout(fleet):
     )
     assert cfg is not None, "member /api/config not reachable through the proxy"
     assert "127.0.0.1" in json.dumps(cfg), f"member config api missing inherited gateway: {json.dumps(cfg)[:300]}"
+
+    # The member serves its OWN agent card through the proxy. (Spawn → fleet listing →
+    # proxied /healthz is covered end to end by test_fleet_crash_restart.)
+    st, raw = http_get(f"{hub.base}/agents/{mid}/.well-known/agent-card.json", timeout=10)
+    assert st == 200, f"proxied agent card: {st} {raw[:200]}"
+    assert json.loads(raw).get("name"), "proxied member card has no name"
 
 
 def _http_status_only(url: str, timeout: float = 6.0) -> int:

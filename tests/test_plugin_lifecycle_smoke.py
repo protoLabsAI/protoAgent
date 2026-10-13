@@ -16,6 +16,8 @@ import pytest
 
 from graph.plugins import installer
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _git(cwd: Path, *args: str) -> None:
     # maintenance.auto=false / gc.auto=0: `git commit` spawns a DETACHED

@@ -15,6 +15,9 @@ from __future__ import annotations
 from tests.privacy_asserts import assert_owner_only
 
 from pathlib import Path
+import pytest
+
+pytestmark = pytest.mark.platform_sensitive
 
 
 def test_split_extracts_secrets_and_drops_blanks() -> None:

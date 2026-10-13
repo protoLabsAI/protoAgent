@@ -9,7 +9,12 @@ list or a narrow regex passes those and still misses the case in production.
 
 from __future__ import annotations
 
+import ast
+import base64
+import hashlib
 import importlib.util
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -105,11 +110,35 @@ def test_verdict_matching_is_case_insensitive():
     assert not rah.decide([review(MERGED, "fail")], MERGED, []).ok
 
 
-def test_the_LAST_marker_for_a_head_wins():
-    # The panel posts COMMENTED and may later promote the same head to APPROVED; a promotion
-    # must not be overridden by the earlier row, nor vice versa.
+def test_a_promotion_speaks_only_for_a_head_with_no_round():
+    # The panel posts COMMENTED and may later promote the same head to APPROVED. A promotion
+    # is not a round (pr-reviewer-plugin#234): it counts only when it is all there is, and it
+    # never outvotes a round on the same head.
+    assert rah.decide([review(MERGED, "PASS", promoted="true")], MERGED, []).ok
+    assert rah.decide([review(MERGED, "PASS"), review(MERGED, "PASS", promoted="true")], MERGED, []).ok
     reviews = [review(MERGED, "FAIL"), review(MERGED, "PASS", promoted="true")]
-    assert rah.decide(reviews, MERGED, []).ok
+    assert not rah.decide(reviews, MERGED, []).ok
+
+
+def test_the_STRICTEST_round_for_a_head_wins_not_the_latest():
+    # pr-reviewer-plugin#239: after a FAIL, a re-review PASS on the same head used to turn this
+    # check green while the plugin's `QA panel` (strictest per head) stayed red. Each round is
+    # tagged so the test proves WHICH round spoke, not only that something said FAIL
+    # (pr-reviewer-plugin#254).
+    def tagged(verdict, n):
+        marker = f"<!-- protoagent-qa-review head={MERGED} verdict={verdict} promoted=false round={n} -->"
+        return review(MERGED, body=f"{marker}\n## QA panel review\n")
+
+    reviews = [tagged("FAIL", 1), tagged("PASS", 2)]
+    assert rah.parse_marker(reviews[-1]["body"])["verdict"] == "PASS"  # what "latest" read
+    pick = rah.verdict_for_head(reviews, MERGED)
+    assert (pick["verdict"], pick["round"]) == ("FAIL", "1")  # the EARLIER round speaks
+    decision = rah.decide(reviews, MERGED, [])
+    assert not decision.ok and decision.description == f"QA panel returned FAIL for {MERGED[:12]}"
+    # Among equally strict rounds the newest speaks; a stricter earlier one beats a later one.
+    assert rah.verdict_for_head([tagged("FAIL", 1), tagged("PASS", 2), tagged("FAIL", 3)], MERGED)["round"] == "3"
+    pick = rah.verdict_for_head([tagged("WARN", 1), tagged("PASS", 2)], MERGED)
+    assert (pick["verdict"], pick["round"]) == ("WARN", "1")
 
 
 # ── what must NOT count as a verdict ───────────────────────────────────────────
@@ -429,3 +458,166 @@ def test_a_marker_with_no_verdict_attribute_fails_closed():
     decision = rah.decide([review(MERGED, body=body)], MERGED, [])
     assert not decision.ok
     assert "carries no verdict" in decision.description
+
+
+# ── a FAIL a later round supersedes (pr-reviewer-plugin#234, vendored) ─────────
+#
+# The strictest round wins, except a FAIL that a later COMPLETE, VERIFIED round on the same
+# head superseded: it dispositioned that FAIL (its `disp=` record names it) and refuted EVERY
+# blocking finding with evidence, the refutation honoured. The rule is vendored from the
+# plugin's rounds.py, so this check and the plugin's `QA panel` give the same answer.
+
+FILE = "src/engagement.rs"
+MAJOR = {
+    "file": FILE,
+    "line": 42,
+    "severity": "major",
+    "claim": "Unconditional Engaged exclusions silently alter legacy behaviour.",
+    "evidence": "if state == State::Engaged { return; }",
+    "verdict": "confirmed",
+}
+REFUTED = {"a": f"{FILE}:42", "d": "refuted", "e": True, "h": True}
+
+
+def token(record):
+    """The panel's `disp=` disposition record: unpadded base64url of compact JSON."""
+    raw = json.dumps(record, separators=(",", ":"), sort_keys=True).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def panel_round(verdict, findings=(), *, id, record=None, complete=True, verified=True):
+    """A panel round as the plugin posts it: the marker, then the findings record."""
+    attrs = f"head={MERGED} verdict={verdict} promoted=false"
+    attrs += "" if complete else " complete=false"
+    attrs += "" if verified else " verified=false"
+    attrs += f" disp={token(record)}" if record else ""
+    body = (
+        f"<!-- protoagent-qa-review {attrs} -->\n## QA panel review — **{verdict}**\n\n"
+        "<details>\n<summary>findings JSON (machine-readable)</summary>\n\n"
+        f"```json\n{json.dumps(list(findings), indent=2)}\n```\n</details>"
+    )
+    return {"user": {"login": rah.REVIEWER_LOGIN}, "body": body, "id": id}
+
+
+def refuting(of=102, **row):
+    return {"of": of, "rows": [{**REFUTED, **row}]}
+
+
+R1 = panel_round("PASS", id=101)
+R2 = panel_round("FAIL", [MAJOR], id=102)
+
+
+def test_a_round_that_refutes_every_blocking_finding_with_evidence_supersedes_the_fail():
+    # mythxengine-sdk#409: r1 PASS, r2 FAIL with one major, r3 on the SAME head refutes it.
+    decision = rah.decide([R1, R2, panel_round("PASS", id=103, record=refuting())], MERGED, [])
+    assert decision.ok and "refuted with evidence" in decision.description
+
+
+@pytest.mark.parametrize(
+    "newer",
+    [
+        panel_round("PASS", id=103, record=refuting(d="open")),
+        panel_round("PASS", id=103, record=refuting(d="fixed")),
+        panel_round("PASS", id=103, record={"of": 102, "rows": []}),
+        panel_round("PASS", id=103, record=refuting(e=False)),
+        panel_round("PASS", id=103, record=refuting(h=False)),
+        panel_round("PASS", id=103, record=refuting(), complete=False),
+        panel_round("PASS", id=103, record=refuting(), verified=False),
+        panel_round("PASS", id=103),
+        panel_round("PASS", [{**MAJOR, "carried": True}], id=103, record=refuting()),
+    ],
+    ids=[
+        "open",
+        "fixed-on-an-unchanged-head",
+        "unaccounted",
+        "no-evidence",
+        "not-honoured",
+        "incomplete",
+        "unverified",
+        "no-record",
+        "still-carried",
+    ],
+)
+def test_the_fail_stands_unless_every_supersede_condition_holds(newer):
+    decision = rah.decide([R1, R2, newer], MERGED, [])
+    assert not decision.ok and "FAIL" in decision.description
+
+
+def test_two_racing_rounds_on_one_head_still_settle_strictest():
+    # pr-reviewer-plugin#89: both started from r1, so neither names the other.
+    racer = panel_round("PASS", id=103, record=refuting(of=101))
+    for reviews in ([R1, R2, racer], [R1, racer, R2]):
+        assert not rah.decide(reviews, MERGED, []).ok
+
+
+def test_a_supersede_rule_that_raises_falls_back_to_strictest(monkeypatch, capsys):
+    def boom(_rounds):
+        raise RuntimeError("rule broke")
+
+    monkeypatch.setattr(rah, "_v_superseded_fails", boom)
+    assert not rah.decide([R1, R2, panel_round("PASS", id=103, record=refuting())], MERGED, []).ok
+    assert "strictest verdict wins" in capsys.readouterr().err
+
+
+def _canonical(node):
+    """Mirror of pr-reviewer-plugin `scripts/vendor_supersede_rule.py::canonical`."""
+    if isinstance(node, list):
+        kept = [
+            _canonical(n)
+            for n in node
+            if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant) and isinstance(n.value.value, str))
+        ]
+        return "[" + ",".join(kept) + "]"
+    if isinstance(node, ast.AST):
+        fields = [
+            f"{name}={_canonical(getattr(node, name, None))}"
+            for name in node._fields
+            if getattr(node, name, None) not in (None, [])
+        ]
+        return f"{type(node).__name__}(" + ",".join(fields) + ")"
+    return repr(node)
+
+
+def test_the_vendored_supersede_block_is_unedited():
+    # Edit the rule in pr-reviewer-plugin and re-sync (`scripts/vendor_supersede_rule.py
+    # --sync`), never here: this copy must keep answering exactly as `QA panel` does.
+    text = Path(rah.__file__).read_text(encoding="utf-8")
+    begin = text.index("# ── BEGIN VENDORED SUPERSEDE RULE")
+    end = text.index("\n", text.index("# ── END VENDORED SUPERSEDE RULE"))
+    block = text[begin:end]
+    recorded = re.search(r"block-ast-sha256:\s*(\S+)", block).group(1)
+    assert hashlib.sha256(_canonical(ast.parse(block).body).encode()).hexdigest() == recorded
+
+
+# ── a hung `gh` is a failed call, not a hung gate (pr-reviewer-plugin#254) ─────
+
+
+def test_a_hung_gh_call_times_out_as_a_failed_api_call(monkeypatch):
+    seen = {}
+
+    def hung(cmd, **kwargs):
+        seen.update(kwargs)
+        raise rah.subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+    monkeypatch.setattr(rah.subprocess, "run", hung)
+    with pytest.raises(RuntimeError, match="timed out"):
+        rah._gh("api", "repos/o/r/pulls/1/reviews")
+    assert seen["timeout"] == rah.GH_TIMEOUT_S > 0
+
+
+def test_a_timed_out_reviews_read_posts_no_status_and_still_exits_zero(monkeypatch, capsys):
+    calls = []
+
+    def hung(cmd, **kwargs):
+        calls.append(cmd)
+        raise rah.subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+    monkeypatch.setattr(rah.subprocess, "run", hung)
+    monkeypatch.setenv("PR_NUMBER", "123")
+    monkeypatch.setenv("HEAD_SHA", "a" * 40)
+    monkeypatch.setenv("PR_LABELS", "")
+    monkeypatch.delenv("DRY_RUN", raising=False)
+    assert rah.main() == 0
+    # Fail closed: the read failed, so no verdict was decided and no status was written.
+    assert len(calls) == 1 and "statuses" not in " ".join(calls[0])
+    assert "timed out" in capsys.readouterr().err

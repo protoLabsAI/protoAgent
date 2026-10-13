@@ -13,6 +13,11 @@ on:
     # merged to main once) — they need the full gate at each slice, not only at the end.
     branches: [main, 'epic/**']
     types: [opened, synchronize, reopened, ready_for_review]
+  # Nightly: the one run that takes the Windows lane over the WHOLE Python suite. PRs and
+  # main pushes run only the `platform_sensitive` subset there (see windows-python-tests),
+  # so this is the net for an OS-dependent test that slipped its mark.
+  schedule:
+    - cron: "17 7 * * *"
 
 permissions:
   contents: read
@@ -179,7 +184,9 @@ jobs:
         # pyproject.toml; the import contracts (graph/ and the infra packages
         # must not import server/ or operator_api/) + the grandfathered burndown
         # list live in pyproject.toml [tool.importlinter].
-        run: pip install ruff==0.15.10 import-linter==2.11
+        run: |
+          pip install ruff==0.15.10 import-linter==2.11
+          pip install --no-deps -e .
       - uses: astral-sh/setup-uv@v7
         with:
           # Pinned like ruff/import-linter above, and for a sharper reason: uv's lock
@@ -208,7 +215,11 @@ jobs:
   tests:
     name: Python tests
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
-    timeout-minutes: 15
+    # The suite runs 12–14 min on a free runner and grows with every PR; at 15 the
+    # cap cancelled green runs mid-suite (2 of 15 main commits on 2026-09-29, plus
+    # PRs), and a cancelled required check blocks the merge. 25 matches the
+    # Windows lanes; if it creeps toward this too, shard it like they are.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -235,25 +246,30 @@ jobs:
         # so `uv sync` brings it and tests/test_ingestion_docx.py gates, never skips.)
         run: |
           uv sync --frozen --python 3.12
-          uv pip install pytest pytest-asyncio
+          uv pip install pytest pytest-asyncio pytest-xdist==3.8.0
       - name: Run tests
         # Kept as a bare pytest call (not `python scripts/gate.py`) so lint and
         # tests stay separate jobs with parallel execution and clear failure
         # attribution — the no-flag gate script runs this same suite locally.
+        # `-n auto`: one worker per vCPU (4 on ubuntu-latest). Serially the suite
+        # took ~7 min here; per-test state that leaked only by file order (the
+        # goal-verifier registry) is isolated in tests/conftest.py.
         run: |
           . .venv/bin/activate
-          python -m pytest tests/ -q
+          python -m pytest tests/ -q -n auto
 
   windows-scope:
-    name: Classify Windows test scope
-    # Drafts retain the existing zero-Windows-cost behavior. Ready PRs classify
-    # their entire base...head diff; pushes to main always request both suites.
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    name: Classify CI test scope
+    # Classifies the PR's entire base...head diff for the path-scoped gates (the
+    # Windows-native suites and web-e2e); pushes to main always request every gate.
+    # Runs on drafts too, because web-e2e runs on drafts — the Windows jobs carry
+    # their own draft guard below, so drafts keep zero Windows cost.
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 5
     outputs:
       python_tests: ${{ steps.scope.outputs.python_tests }}
       rust_tests: ${{ steps.scope.outputs.rust_tests }}
+      web_tests: ${{ steps.scope.outputs.web_tests }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -274,13 +290,28 @@ jobs:
 
   windows-python-tests:
     name: Windows Python tests (shard ${{ matrix.group }}/2)
-    # The previous single job spent 15–18 of its ~19 minutes in pytest. Two
-    # isolated runners preserve the complete suite while halving the critical
-    # path; pytest-split keeps collection/order semantics within each shard.
+    # PRs and main pushes run only `-m platform_sensitive` (~27% of the suite): the
+    # tests that spawn processes, signal, lock, chmod/symlink, replace/rename files,
+    # branch on the platform, or import code that does — plus every file that ever
+    # failed natively (#2412). The rest is platform-neutral Python the Linux job
+    # already gates, and on Windows it cost ~0.2s/test in tmp-dir/filesystem overhead
+    # (~25 min for the full suite). tests/test_platform_sensitive_marks.py keeps the
+    # marks honest; the nightly `schedule` run still covers the whole suite.
+    # Two isolated shards halve the critical path; pytest-split keeps
+    # collection/order semantics within each shard.
     needs: windows-scope
-    if: needs.windows-scope.outputs.python_tests == 'true'
+    if: >-
+      needs.windows-scope.outputs.python_tests == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
-    timeout-minutes: 25
+    # 35, not 25: shard 2 ran 17–25 min and was cancelled at the cap on 3 of 12 main
+    # commits (2026-09-29) — the duration seed was a month stale, so ~4.5k newer tests
+    # were unmeasured and piled onto one shard. Regenerate the seed ON WINDOWS when that
+    # recurs (a macOS seed skews the split — #3892): run windows-test-durations.yml
+    # (`gh workflow run windows-test-durations.yml`, also monthly), which opens a PR.
+    # By hand, on a Windows box only:
+    #   uv run --with pytest-split==0.11.0 --with pytest --with pytest-asyncio python -m pytest tests/ -q --store-durations --clean-durations --durations-path tests/windows_test_durations.json
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -308,21 +339,24 @@ jobs:
         run: |
           uv sync --frozen --python 3.12
           uv pip install pytest pytest-asyncio pytest-split==0.11.0
-      - name: Run full-suite shard ${{ matrix.group }}/2
+      - name: Run shard ${{ matrix.group }}/2
         # tests/windows_native_exclusions.txt is the #2412 burndown: files that
         # failed natively at the 2026-08-08 baseline (currently empty). The two
-        # groups are disjoint and exhaustive, so every non-excluded test still
-        # gates the PR.
+        # groups are disjoint and exhaustive over the selected tests.
         shell: bash
+        env:
+          FULL_SUITE: ${{ github.event_name == 'schedule' }}
         run: |
           source .venv/Scripts/activate
+          SCOPE_ARGS=(-m platform_sensitive)
+          if [ "${FULL_SUITE}" = "true" ]; then SCOPE_ARGS=(); fi
           IGNORE_ARGS=()
           while IFS= read -r path; do
             if [[ -n "${path}" && ! "${path}" =~ ^[[:space:]]*# ]]; then
               IGNORE_ARGS+=("--ignore=${path}")
             fi
           done < tests/windows_native_exclusions.txt
-          python -m pytest tests/ -q "${IGNORE_ARGS[@]}" \
+          python -m pytest tests/ -q "${SCOPE_ARGS[@]}" "${IGNORE_ARGS[@]}" \
             --splits 2 --group ${{ matrix.group }} --splitting-algorithm least_duration \
             --durations-path tests/windows_test_durations.json
 
@@ -332,7 +366,9 @@ jobs:
     # without exercising their Rust changes. This conditional lane tests the
     # actual Tauri crate and normally finishes before the Python shards.
     needs: windows-scope
-    if: needs.windows-scope.outputs.rust_tests == 'true'
+    if: >-
+      needs.windows-scope.outputs.rust_tests == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
     runs-on: windows-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 25
     steps:
@@ -482,6 +518,14 @@ jobs:
 
   web-e2e:
     name: Web E2E smoke
+    # Path-scoped: the job drives the built SPA against a mock backend, so a PR that
+    # touches nothing it reads (scripts/windows_ci_scope.py `_needs_web`) skips it —
+    # a job skipped by `if:` reports success, keeping the required check green.
+    # Fails OPEN: if classification itself failed, the job still runs.
+    needs: windows-scope
+    if: >-
+      !cancelled() &&
+      (needs.windows-scope.result != 'success' || needs.windows-scope.outputs.web_tests == 'true')
     runs-on: ubuntu-latest  # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     # Browsers + system deps come PREINSTALLED in the Playwright job container —
     # ZERO apt at runtime. This retires the apt lock-contention flake class that
@@ -491,7 +535,13 @@ jobs:
     # @playwright/test version — a guard step below fails loudly on drift.
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-noble
-    timeout-minutes: 10
+    # This single job runs BOTH the vitest unit suite (~2.5 min) and the build+Playwright
+    # E2E smoke (~6.5 min) back to back, so the job lands at ~9.5–10 min — right against a
+    # 10-min cap. It flaked as a `cancelled` timeout when a run drifted a few seconds over
+    # (a hard timeout is killed mid-step, not reported as a failure), and the margin only
+    # shrinks as the unit suite grows (each new guard adds vitest time). 15 min gives real
+    # headroom without masking a genuine hang — a broken test still errors in seconds.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

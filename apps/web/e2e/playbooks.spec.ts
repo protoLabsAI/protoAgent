@@ -52,10 +52,14 @@ test("the + button opens the New skill DIALOG, not an inline panel form", async 
   await expect(dialog.getByRole("button", { name: "Create skill" })).toBeVisible();
 
   // The "user only" (hide from the agent) toggle appears only once it's a /slash command.
-  const userOnly = dialog.getByLabel(/hide from the agent/i);
+  // The DS Checkbox (@protolabsai/ui/forms) visually hides its native <input> (0×0,
+  // opacity:0) behind a styled box, so .check()/toBeVisible() on the input no longer apply.
+  // Toggle it through the visible label (a native <label> toggles the input it wraps) and
+  // assert the revealed checkbox by role — the a11y tree exposes it regardless of visibility.
+  const userOnly = dialog.getByRole("checkbox", { name: /hide from the agent/i });
   await expect(userOnly).toHaveCount(0);
-  await dialog.getByLabel("invokable as a slash command").check();
-  await expect(userOnly).toBeVisible();
+  await dialog.locator(".pl-checkbox", { hasText: "Invokable as a" }).click();
+  await expect(userOnly).toHaveCount(1);
 });
 
 test("layered skills show tier badges and promote a private skill to the commons", async ({ page }) => {

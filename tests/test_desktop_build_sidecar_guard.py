@@ -27,7 +27,10 @@ DESKTOP = ROOT / "apps" / "desktop"
 GUARD = DESKTOP / "scripts" / "build-if-sidecar.mjs"
 NODE = shutil.which("node")
 
-pytestmark = pytest.mark.skipif(NODE is None, reason="node not installed (CI runners carry it)")
+pytestmark = [
+    pytest.mark.skipif(NODE is None, reason="node not installed (CI runners carry it)"),
+    pytest.mark.platform_sensitive,
+]
 
 
 def test_package_json_build_delegates_to_the_guard() -> None:

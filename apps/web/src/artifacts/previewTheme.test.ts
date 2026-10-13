@@ -1,0 +1,220 @@
+// The streamed preview carries the console's theme (#4076): the same palette, console-matched
+// color-scheme, html/body colours and :where() control defaults the live artifact frame gets,
+// plus the DS kit CSS inlined (never a network <link> — the preview CSP stays default-src 'none').
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { buildPreviewSrcdoc, previewCsp } from "./StreamingPreview";
+import {
+  cachedControlDefaults,
+  cachedPluginKitCss,
+  consoleScheme,
+  inlineSafeCss,
+  loadControlDefaults,
+  loadPluginKitCss,
+  previewThemeCss,
+  resetPluginKitCssForTest,
+} from "./previewTheme";
+
+const root = document.documentElement;
+
+beforeEach(() => {
+  resetPluginKitCssForTest();
+  root.style.setProperty("--pl-color-bg", "#101014");
+  root.style.setProperty("--pl-color-fg", "#eeeeee");
+  root.style.setProperty("--pl-color-chart-series3", "#ff8800");
+  root.style.setProperty("color-scheme", "dark");
+});
+
+afterEach(() => {
+  root.removeAttribute("style");
+  root.removeAttribute("data-theme");
+  vi.restoreAllMocks();
+});
+
+describe("previewThemeCss", () => {
+  it("carries the console's --pl-* tokens, its scheme and html/body colours", () => {
+    const css = previewThemeCss();
+    expect(css).toContain("--pl-color-bg:#101014;");
+    expect(css).toContain("--pl-color-fg:#eeeeee;");
+    expect(css).toContain("--pl-color-chart-series3:#ff8800;"); // the shell's chart tokens too
+    expect(css).toContain("color-scheme:dark");
+    expect(css).toContain("html,body{margin:0;background:var(--pl-color-bg);color:var(--pl-color-fg)}");
+    // Keyed on [data-theme] so it outranks the kit's :root defaults AND its OS media block.
+    expect(css.startsWith(":root[data-theme]{")).toBe(true);
+  });
+
+  it("follows the CONSOLE's scheme, not the OS", () => {
+    // The OS says dark…
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (q: string) => ({ matches: q.includes("dark"), media: q }) as MediaQueryList,
+    });
+    // …the console renders light.
+    root.style.setProperty("color-scheme", "light");
+    expect(consoleScheme()).toBe("light");
+    expect(previewThemeCss()).toContain("color-scheme:light");
+  });
+
+  it("never inlines a value that could break out of the rule", () => {
+    root.style.setProperty("--pl-color-accent", "red}</style><script>x()</script>");
+    expect(previewThemeCss()).not.toContain("<script");
+  });
+});
+
+describe("the preview srcdoc", () => {
+  it("stamps the scheme on <html>, inlines kit + theme, and keeps the exact CSP with one script", () => {
+    const doc = buildPreviewSrcdoc("abc123", { scheme: "light", css: ":root[data-theme]{--pl-color-bg:#fff}", kitCss: ".pl-btn{}" });
+    expect(doc).toContain('<html lang="en" data-theme="light">');
+    expect(doc).toContain('<style id="proto-preview-kit">.pl-btn{}</style>');
+    expect(doc).toContain('<style id="proto-preview-theme">:root[data-theme]{--pl-color-bg:#fff}</style>');
+    expect(doc).toContain(`content="${previewCsp("abc123")}"`);
+    expect(doc).not.toMatch(/<link\b/i);
+    expect(doc.match(/<script\b/gi)).toHaveLength(1);
+  });
+
+  it("a hostile `<` in the kit CSS can never close the style element", () => {
+    const safe = inlineSafeCss("/* </style><script>alert(1)</script> */ a{}");
+    expect(safe).not.toContain("<");
+    const doc = buildPreviewSrcdoc("n1", { scheme: "dark", css: "", kitCss: safe });
+    expect(doc.match(/<script\b/gi)).toHaveLength(1);
+  });
+
+  // Regression guard (protoContent#577): the control defaults are a RUNTIME fetch now (not a
+  // build-time import), but StreamingPreview starts it at mount so it has usually landed by the
+  // time the gate opens — and the DEFAULT srcdoc (no explicit theme) reads previewThemeCss() at
+  // build time, the exact path the component takes. So once the fetch has settled, the srcdoc
+  // inlines the defaults on FIRST paint rather than leaving the preview with bare browser controls.
+  it("inlines the cached DS control defaults into the default srcdoc's theme style once they've loaded", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(":where(button){color:var(--pl-color-fg)}"));
+    // Before the mount-time fetch lands, the default srcdoc carries none of them…
+    expect(buildPreviewSrcdoc("n")).not.toContain(":where(button)");
+    // …after it settles and caches them, the srcdoc built at gate-open carries them in the THEME
+    // style element (previewThemeCss concatenates them — the kit style stays untouched).
+    await loadControlDefaults();
+    const doc = buildPreviewSrcdoc("n");
+    expect(doc).toContain(":where(button)");
+    const themeStyle = doc.slice(doc.indexOf('<style id="proto-preview-theme">'), doc.indexOf("</head>"));
+    expect(themeStyle).toContain(":where(button)");
+  });
+});
+
+describe("loadPluginKitCss", () => {
+  it("fetches the kit once, caches it inline-safe, and falls back to '' on failure", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(".pl-x{} /* a<b */"));
+    expect(await loadPluginKitCss()).toBe(".pl-x{} /* a\\3c b */");
+    expect(await loadPluginKitCss()).toBe(".pl-x{} /* a\\3c b */");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("/_ds/plugin-kit.css");
+    expect(cachedPluginKitCss()).toContain(".pl-x{}");
+
+    resetPluginKitCssForTest();
+    fetchSpy.mockRejectedValueOnce(new Error("offline"));
+    expect(await loadPluginKitCss()).toBe("");
+  });
+});
+
+describe("loadControlDefaults", () => {
+  it("fetches the DS element defaults from the vendor route, caches them inline-safe, and inlines them", async () => {
+    const sheet = ":where(button){color:var(--pl-color-fg)} /* a<b */";
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(sheet));
+    // Absent until loaded — never a build-time import, and the preview CSP blocks a <link>.
+    expect(cachedControlDefaults()).toBe("");
+    expect(previewThemeCss()).not.toContain(":where(button)");
+
+    const loaded = await loadControlDefaults();
+    expect(loaded).toContain(":where(button)");
+    expect(loaded).not.toContain("<"); // cached inline-safe (the a<b is escaped)
+    expect(await loadControlDefaults()).toBe(loaded); // once per page
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    // The single vendored copy, served same-origin by the artifact plugin's vendor route.
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("/plugins/artifact/vendor/");
+    expect(cachedControlDefaults()).toBe(loaded);
+
+    // previewThemeCss now inlines the defaults, after the tokens + html/body block.
+    const css = previewThemeCss();
+    expect(css).toContain(loaded);
+    expect(css.indexOf(loaded)).toBeGreaterThan(css.indexOf("html,body{margin:0"));
+  });
+
+  it("falls back to '' on a failed fetch and retries on the next call", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue(new Response(":where(a){color:inherit}"));
+    expect(await loadControlDefaults()).toBe(""); // first attempt fails → "" (preview never blank)
+    expect(await loadControlDefaults()).toBe(":where(a){color:inherit}"); // not cached as "" — retried
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// r4 (protoContent#577): the DS element-default stylesheet lives once in the artifact plugin's
+// vendor dir, FRAME-ONLY. apps/web must not import it at build time — the preview fetches the
+// served vendor route instead. Read previewTheme.ts source to pin that nothing reintroduces the
+// import (the needle is split so this guard itself stays clear of the forbidden literal).
+describe("the DS element-default sheet is not imported under apps/web", () => {
+  it("previewTheme.ts sources the control defaults from the vendor route, not a build-time import", () => {
+    const src = Object.values(
+      import.meta.glob("./previewTheme.ts", { query: "?raw", import: "default", eager: true }),
+    )[0] as string;
+    // Nothing is imported from the ui-css package (where that sheet ships).
+    expect(src).not.toContain('from "@protolabsai/ui-css');
+    // No `import … <sheet>` statement survives.
+    const sheetName = "embed" + ".css";
+    const importOfSheet = src
+      .split("\n")
+      .find((l) => l.trimStart().startsWith("import") && l.includes(sheetName));
+    expect(importOfSheet, importOfSheet).toBeUndefined();
+    // It is fetched from the artifact plugin's same-origin vendor route instead.
+    expect(src).toContain("/plugins/artifact/vendor/");
+  });
+});
+
+// Preview/live parity for the page box (#4154 review): the streamed preview stands in for the
+// live inline frame, so html/body must get the SAME margin/padding/font-size there as the shell's
+// `base()` gives the live frame — else the content shifts at handover. The live frame sets
+// `html,body{margin:0}` and no padding or font-size of its own (DEFAULTS only adds font-family +
+// line-height; size comes from the DS kit, inlined into both). Read from shell.js itself so a
+// change on either side fails here.
+const SHELL = Object.values(
+  import.meta.glob("../../../../plugins/artifact/shell.js", { query: "?raw", import: "default", eager: true }),
+)[0] as string;
+
+/** The declarations every rule targeting html/body (bare or `:where()`) sets, merged in order. */
+function pageBoxDecls(css: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const sel = m[1].trim();
+    if (sel !== "html,body" && sel !== ":where(html,body)") continue;
+    for (const d of m[2].split(";")) {
+      const i = d.indexOf(":");
+      if (i > 0) out[d.slice(0, i).trim()] = d.slice(i + 1).trim();
+    }
+  }
+  return out;
+}
+
+/** The live frame's html/body CSS: shell.js `DEFAULTS` plus `base()`'s html,body rule, with the
+ *  JS string concatenation flattened (`'+bg+'` placeholders become `X`). */
+function liveFrameCss(): string {
+  const defaults = /var DEFAULTS = ([\s\S]*?);\n/.exec(SHELL)?.[1] ?? "";
+  const baseRule = /\+ ('html,body\{margin:0;background:.*)\n/.exec(SHELL)?.[1] ?? "";
+  const flat = (js: string) => js.replace(/'\s*\+\s*'/g, "").replace(/'\+\w+\+'/g, "X").replace(/^'|'$/g, "");
+  return flat(defaults) + flat(baseRule);
+}
+
+describe("preview/live parity", () => {
+  it("html/body get the same margin, padding and font-size as the live inline frame", () => {
+    expect(SHELL).toContain("function base(kind)");
+    const live = pageBoxDecls(liveFrameCss());
+    const preview = pageBoxDecls(previewThemeCss());
+    expect(live.margin).toBe("0"); // the extraction found the live rule at all
+    for (const prop of ["margin", "padding", "font-size", "font"]) {
+      expect(preview[prop], prop).toBe(live[prop]);
+    }
+    // Pinned explicitly too: no padding, no font-size override in either (the old preview's
+    // `padding:8px;font:14px/1.5 …` was the drift this guards against).
+    expect(preview.padding).toBeUndefined();
+    expect(preview["font-size"]).toBeUndefined();
+    expect(preview.font).toBeUndefined();
+  });
+});

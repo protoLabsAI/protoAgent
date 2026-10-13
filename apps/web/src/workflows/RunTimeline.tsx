@@ -1,3 +1,4 @@
+import { Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -30,7 +31,7 @@ type StepView = {
   id: string;
   subagent: string;
   gate?: string;
-  status: "queued" | "running" | "done" | "failed" | "gated";
+  status: "queued" | "running" | "done" | "failed" | "gated" | "cancelled";
   seconds?: number;
   startedAt?: string;
   output?: string;
@@ -82,7 +83,9 @@ function stepViews(record: WorkflowRunRecord): StepView[] {
             ? "done"
             : meta.status === "running"
               ? "running"
-              : "queued";
+              : meta.status === "cancelled"
+                ? "cancelled"
+                : "queued";
     return {
       id,
       subagent: step.subagent,
@@ -105,6 +108,8 @@ function StatusIcon({ status }: { status: StepView["status"] }) {
       return <X size={14} className="run-step-failed" />;
     case "gated":
       return <Pause size={14} className="run-step-gated" />;
+    case "cancelled":
+      return <X size={14} className="run-step-cancelled" />;
     default:
       return <CircleDashed size={14} className="run-step-queued" />;
   }
@@ -146,7 +151,7 @@ function InlineGate({ record }: { record: WorkflowRunRecord }) {
       </div>
       {paused ? (
         editing ? (
-          <textarea
+          <Textarea
             className="workflow-gate-edit"
             value={draft}
             rows={6}
@@ -219,7 +224,7 @@ export function RunTimeline({ runId, onClose }: { runId: string; onClose: () => 
   // A terminal transition refreshes history + the Pending Gates queue once.
   const status = record?.status;
   useEffect(() => {
-    if (status === "done" || status === "failed") {
+    if (status === "done" || status === "failed" || status === "cancelled") {
       void queryClient.invalidateQueries({ queryKey: queryKeys.workflowRunHistory });
       void queryClient.invalidateQueries({ queryKey: queryKeys.workflowRuns });
     }
@@ -290,7 +295,9 @@ export function RunTimeline({ runId, onClose }: { runId: string; onClose: () => 
         </p>
       ) : null}
       {record.status === "failed" || record.failed?.length ? (
-        <p className="workflow-failed">Failed steps: {(record.failed ?? []).join(", ") || "(run error)"}</p>
+        <p className="workflow-failed">
+          {record.failed?.length ? `Failed steps: ${record.failed.join(", ")}` : record.error || "Failed steps: (run error)"}
+        </p>
       ) : null}
       {record.status === "done" && record.output ? (
         <div className="workflow-result">

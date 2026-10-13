@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { chatStore, type ServerTurnControlState } from "../chat/chat-store";
 import { isReattaching } from "../chat/reattach";
 import {
+  effectiveOrigin,
   labelForOrigin,
   liveMessageId,
   noteTurnFinished,
@@ -111,7 +112,9 @@ export function ServerTurnWatch() {
   useEffect(() => {
     const offStarted = onTopic("turn.started", (data) => {
       const session = String(data.session_id ?? "");
-      const origin = String(data.origin ?? "");
+      // A goal drive turn arrives as a `scheduler` fire with a `goal-run:` trigger — fold it
+      // into the `goal` origin so it is labelled and settled as a goal run, not a schedule.
+      const origin = effectiveOrigin(data.origin, data.trigger);
       emitServerTurnControl(data.control);
       if (session) {
         // Remember the RAW origin (#3028) so the terminal `chat.resumed` can tag its settled

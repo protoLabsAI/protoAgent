@@ -19,7 +19,7 @@
 .doc-viewer__title {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   min-width: 0;
 }
 .doc-viewer__heading {
@@ -28,21 +28,21 @@
   white-space: nowrap;
 }
 .doc-viewer__subtitle {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-weight: 400;
   color: var(--pl-color-fg-subtle);
 }
 
 .doc-viewer__body {
   /* Comfortable reading measure; the markdown renderer styles the rest. */
-  font-size: 14px;
+  font-size: var(--pl-font-size-base);
   line-height: 1.65;
 }
 
 .doc-viewer__status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   color: var(--pl-color-fg-subtle);
-  padding: 8px 0;
+  padding: var(--pl-space-2) 0;
 }

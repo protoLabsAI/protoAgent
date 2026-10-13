@@ -128,6 +128,49 @@ def test_sse_event_stream_emits_keepalive_when_idle():
     assert asyncio.run(run()) == ": keepalive\n\n"
 
 
+def test_sse_event_stream_survives_idle_keepalives():
+    """An idle keepalive must not end the stream. The keepalive used to come from
+    ``wait_for(agen.__anext__())`` timing out, which CANCELS the bus subscription's
+    generator: it closed, the next read raised StopAsyncIteration, and every console bus
+    connection ended after its first idle keepalive (15s). The console reconnected and
+    re-hydrated its stores every 15s; the background job store's hydrate dropped the live
+    delegate progress, so the delegation's progress card blinked out each time."""
+    from operator_api.routes import _sse_event_stream
+
+    async def run():
+        bus = EventBus()
+        gen = _sse_event_stream(bus.subscribe, keepalive_s=0.05)
+        assert await gen.__anext__() == ": connected\n\n"
+        for _ in range(3):  # several idle windows in a row
+            assert await asyncio.wait_for(gen.__anext__(), timeout=2) == ": keepalive\n\n"
+        bus.publish("background.progress", {"job_id": "bg-1"})
+        frame = await asyncio.wait_for(gen.__anext__(), timeout=2)
+        while frame.startswith(":"):  # a keepalive may race the publish
+            frame = await asyncio.wait_for(gen.__anext__(), timeout=2)
+        await gen.aclose()
+        return frame
+
+    frame = asyncio.run(run())
+    assert '"topic": "background.progress"' in frame and '"job_id": "bg-1"' in frame
+
+
+def test_sse_event_stream_close_while_idle_releases_the_subscription():
+    """Closing the stream mid-wait (the client left) still unsubscribes from the bus."""
+    from operator_api.routes import _sse_event_stream
+
+    async def run():
+        bus = EventBus()
+        gen = _sse_event_stream(bus.subscribe, keepalive_s=0.05)
+        await gen.__anext__()
+        await asyncio.wait_for(gen.__anext__(), timeout=2)
+        assert bus.subscriber_count() == 1
+        await gen.aclose()
+        await asyncio.sleep(0)
+        return bus.subscriber_count()
+
+    assert asyncio.run(run()) == 0
+
+
 # --- ADR 0039: topics, in-process handlers, ring replay, namespace guard ---
 
 

@@ -14,6 +14,8 @@ import pytest
 
 import infra.paths as paths
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def box(monkeypatch, tmp_path):

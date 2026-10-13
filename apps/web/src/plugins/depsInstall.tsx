@@ -182,6 +182,7 @@ export function DepsInstallDialog({ need, onClose }: { need: PluginDepsNeeded; o
         width="min(560px, 94vw)"
         footer={footer}
         className="plugin-deps-dialog"
+        padding="roomy"
       >
         <div data-testid="plugin-deps-dialog">
           <p>

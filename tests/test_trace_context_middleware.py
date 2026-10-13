@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from graph.middleware.trace_context import TraceContextMiddleware
+from graph.providers.identity import tag_model_provider
 from observability import tracing
 
 _TID = "a" * 32
@@ -19,10 +20,14 @@ _SID = "b" * 16
 
 
 class _FakeModel:
-    """Pydantic-shaped stand-in: has an extra_body slot + model_copy(update=...)."""
+    """Pydantic-shaped stand-in: has an extra_body slot + model_copy(update=...).
 
-    def __init__(self, extra_body=None):
+    Tagged as a gateway (openai-compat) client, the way ``create_llm`` tags every
+    gateway build — only those get the stamp (#3928)."""
+
+    def __init__(self, extra_body=None, provider_type="openai-compat"):
         self.extra_body = extra_body
+        tag_model_provider(self, provider_type, "gateway" if provider_type == "openai-compat" else provider_type)
 
     def model_copy(self, update=None):
         clone = _FakeModel(self.extra_body)
@@ -114,7 +119,9 @@ def test_real_chatopenai_payload_carries_the_stamp(monkeypatch, mw):
     from langchain_openai import ChatOpenAI
 
     _set_ctx(monkeypatch, {"trace_id": _TID, "span_id": _SID})
-    model = ChatOpenAI(api_key="x", model="gw/model", extra_body={"top_k": 20})
+    model = tag_model_provider(
+        ChatOpenAI(api_key="x", model="gw/model", extra_body={"top_k": 20}), "openai-compat", "gateway"
+    )
     out = mw._with_trace(_FakeRequest(model))
 
     payload = out.model._get_request_payload([("human", "hi")])
@@ -124,6 +131,128 @@ def test_real_chatopenai_payload_carries_the_stamp(monkeypatch, mw):
     assert payload["extra_body"]["top_k"] == 20
     # the shared original stays clean
     assert model.extra_body == {"top_k": 20}
+
+
+# ─── Gateway lane only (#3928) ────────────────────────────────────────────────
+# The native Codex client is a ChatOpenAI with an ``extra_body`` slot too; stamping
+# it sent ``metadata`` to chatgpt.com/backend-api/codex/responses, which 400s
+# "Unsupported parameter: metadata" — every turn on a native Codex model failed.
+
+
+@pytest.mark.parametrize("provider_type", ["openai-codex", "anthropic-oauth", "acp", ""])
+def test_non_gateway_models_are_never_stamped(monkeypatch, mw, provider_type):
+    _set_ctx(monkeypatch, {"trace_id": _TID, "span_id": _SID})
+    req = _FakeRequest(_FakeModel({"top_k": 1}, provider_type=provider_type))
+    out = mw._with_trace(req)
+    assert out is req
+    assert "metadata" not in (out.model.extra_body or {})
+
+
+_CODEX_BASE = "https://chatgpt.example/backend-api/codex"
+_GATEWAY_BASE = "https://gw.example.com/v1"
+
+
+def _capture_wire(monkeypatch) -> list[dict]:
+    """Capture the request the OpenAI SDK actually builds — after it has merged
+    ``extra_body`` into the JSON body — and stop it there, so no network is touched.
+
+    Hooked at the SDK's ``_build_request`` rather than an httpx transport: the SDK
+    ships its own HTTP stack, and this is the last point where the body is final
+    whatever that stack is."""
+    import json
+
+    from openai._base_client import SyncAPIClient
+
+    sent: list[dict] = []
+    real_build = SyncAPIClient._build_request
+
+    def _build(self, options, *args, **kwargs):
+        request = real_build(self, options, *args, **kwargs)
+        if request.method == "POST":  # skip the gateway's GET /model/info probes
+            sent.append({"url": str(request.url), "body": json.loads(request.read() or b"{}")})
+            raise RuntimeError("captured")
+        return request
+
+    monkeypatch.setattr(SyncAPIClient, "_build_request", _build)
+    return sent
+
+
+def _invoke_through_middleware(mw, model) -> None:
+    """Run one model call through ``wrap_model_call`` the way the agent does."""
+
+    def handler(request):
+        try:
+            return request.model.invoke("hi")
+        except Exception:  # noqa: BLE001 — the capture stops the call; the payload is the point
+            return None
+
+    mw.wrap_model_call(_FakeRequest(model), handler)
+
+
+def test_native_codex_request_on_the_wire_carries_no_metadata(monkeypatch, mw):
+    """The client ``create_llm`` builds for ``openai-codex`` — through the real
+    Responses payload builder and the real SDK — sends no ``metadata`` even while a
+    Langfuse trace is active."""
+    import graph.providers.openai_codex as ocx
+    from graph.config import LangGraphConfig
+    from graph.llm import create_llm
+    from graph.providers.oauth import CodexOAuthCreds
+
+    monkeypatch.setattr(
+        ocx,
+        "resolve_codex_oauth",
+        lambda *a, **k: CodexOAuthCreds(access_token="t", account_id="a", base_url=_CODEX_BASE, source="s"),
+    )
+    monkeypatch.setattr(tracing, "is_enabled", lambda: False)  # keep the emit side quiet
+    _set_ctx(monkeypatch, {"trace_id": _TID, "span_id": _SID})
+    sent = _capture_wire(monkeypatch)
+
+    llm = create_llm(LangGraphConfig(model_provider="openai-codex", model_name="gpt-5.6-sol", llm_max_retries=0))
+    _invoke_through_middleware(mw, llm)
+
+    assert sent, "the client never reached the wire"
+    assert sent[0]["url"].startswith(_CODEX_BASE + "/responses")
+    body = sent[0]["body"]
+    assert "metadata" not in body
+    assert _TID not in str(body)
+
+
+def test_gateway_request_on_the_wire_still_carries_the_trace(monkeypatch, mw):
+    from graph.config import LangGraphConfig
+    from graph.llm import create_llm
+
+    monkeypatch.setattr(tracing, "is_enabled", lambda: False)
+    _set_ctx(monkeypatch, {"trace_id": _TID, "span_id": _SID})
+    sent = _capture_wire(monkeypatch)
+
+    llm = create_llm(
+        LangGraphConfig(
+            model_provider="",
+            model_name="protolabs/reasoning",
+            api_base=_GATEWAY_BASE,
+            api_key="gw-key",
+            llm_max_retries=0,
+        )
+    )
+    _invoke_through_middleware(mw, llm)
+
+    assert sent and sent[0]["url"].startswith(_GATEWAY_BASE)
+    meta = sent[0]["body"]["metadata"]
+    assert meta["existing_trace_id"] == _TID
+    assert meta["parent_observation_id"] == _SID
+
+
+def test_native_anthropic_oauth_model_is_left_untouched(monkeypatch, mw):
+    from graph.config import LangGraphConfig
+    from graph.llm import create_llm
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "cc-X")
+    _set_ctx(monkeypatch, {"trace_id": _TID, "span_id": _SID})
+    llm = create_llm(LangGraphConfig(model_provider="anthropic-oauth", model_name="claude-opus-5"))
+    req = _FakeRequest(llm)
+    out = mw._with_trace(req)
+    assert out is req and out.model is llm
+    assert "metadata" not in (getattr(llm, "model_kwargs", None) or {})
 
 
 async def test_awrap_model_call_passes_stamped_request_to_handler(monkeypatch, mw):

@@ -4,6 +4,7 @@ import { DropdownSelect, Input, SecretInput, Switch } from "@protolabsai/ui/form
 
 import { fieldId, type ConfigField } from "../lib/archetypeConfig";
 import { delegatesQuery } from "../lib/queries";
+import { PathListPicker } from "../settings/PathListPicker";
 import { PathPicker } from "../settings/PathPicker";
 
 // The input widget for one Configure-step field — shared by SetupWizard and
@@ -59,6 +60,18 @@ export function ArchetypeConfigField({
           { value: "", label: names.length ? "Pick a coding delegate…" : "No coding (acp) delegates configured" },
           ...names.map((n) => ({ value: n, label: n })),
         ]}
+      />
+    );
+  }
+  if (field.kind === "path" && field.multiple) {
+    // `multiple: true` — a list of folders, answered as one "\n"-joined string.
+    return (
+      <PathListPicker
+        id={fieldId(field)}
+        value={value}
+        onChange={onChange}
+        label={field.label}
+        describedBy={describedBy}
       />
     );
   }

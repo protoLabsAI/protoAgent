@@ -70,14 +70,21 @@ describe("consoleTheme() — the bridge payload (#2225)", () => {
     for (const name of PL_TOKEN_VARS) expect(theme[name]).toBe(varValue(name));
   });
 
-  it("keeps the six legacy curated keys, read from the console's own vars", () => {
+  it("keeps the six legacy curated keys, now read from the real --pl-color-* tokens", () => {
+    // theme-base.css retired the old --bg/--fg/--border aliases (#2233), so the legacy
+    // keys must read the real tokens: reading the retired vars sent "" to older kits.
     const theme = consoleTheme();
-    expect(theme.bg).toBe(varValue("--bg"));
-    expect(theme.bgPanel).toBe(varValue("--bg-panel"));
-    expect(theme.fg).toBe(varValue("--fg"));
-    expect(theme.fgMuted).toBe(varValue("--fg-muted"));
-    expect(theme.brand).toBe(varValue("--brand-violet-light"));
-    expect(theme.border).toBe(varValue("--border"));
+    for (const [key, source] of [
+      ["bg", "--pl-color-bg"],
+      ["bgPanel", "--pl-color-bg-raised"],
+      ["fg", "--pl-color-fg"],
+      ["fgMuted", "--pl-color-fg-muted"],
+      ["brand", "--pl-color-accent"],
+      ["border", "--pl-color-border"],
+    ] as const) {
+      expect(theme[key]).toBe(varValue(source));
+      expect(theme[key]).not.toBe(""); // the retired-alias regression sent empties
+    }
   });
 
   it("carries the active data-theme mode, falling back to the OS scheme when unforced", () => {
@@ -112,6 +119,51 @@ describe("pluginIdFromView — the namespace source", () => {
 
   it("has no namespace to offer for a path that isn't a plugin route", () => {
     expect(pluginIdFromView({ path: "/app/chat" })).toBe("");
+  });
+});
+
+// The tab strip fuses to the panel card via DS `<Tabs attached>` (DS 0.63 card 2) — the job
+// the local `.pl-appshell__col > .pl-tabs` override used to do before it was deleted. In a
+// rail/dock column the strip must carry it (`.pl-tabs--attached`, on the responsive
+// `.pl-tabs-wrap`); embedded Configure renders `plugin-view--embedded`, not a column card, so
+// it must NOT — otherwise it'd sprout a top border/radius the dialog never wanted.
+describe("PluginView — the tab strip attaches to the panel only in a column", () => {
+  let container: HTMLElement;
+  let root: Root;
+
+  const tabbed = (): PluginViewType => ({
+    id: "main", label: "Boardy", path: "/api/plugins/boardy/main", key: "plugin:boardy:main",
+    tabs: [
+      { id: "a", label: "A", path: "/api/plugins/boardy/a" },
+      { id: "b", label: "B", path: "/api/plugins/boardy/b" },
+    ],
+  });
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200 })));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("marks a multi-tab rail view's strip attached, and leaves embedded Configure detached", async () => {
+    await act(async () => {
+      root.render(h(PluginView, { view: tabbed() }));
+    });
+    expect(container.querySelectorAll(".pl-tab").length).toBeGreaterThan(1); // the strip rendered
+    expect(container.querySelector(".pl-tabs--attached")).not.toBeNull();
+
+    await act(async () => {
+      root.render(h(PluginView, { view: tabbed(), embedded: true }));
+    });
+    expect(container.querySelectorAll(".pl-tab").length).toBeGreaterThan(1); // still a multi-tab strip
+    expect(container.querySelector(".pl-tabs--attached")).toBeNull();
   });
 });
 
@@ -174,8 +226,10 @@ describe("PluginView — the protoagent:theme re-post carries updated values", (
     expect(themed.length).toBe(1);
     const theme = themed[0].theme!;
     expect(theme.mode).toBe("light");
-    expect(theme.bg).toBe("resolved(--bg:1)");
-    expect(theme.brand).toBe("resolved(--brand-violet-light:1)");
+    expect(theme.bg).toBe("resolved(--pl-color-bg:1)");
+    expect(theme.bg).not.toBe("");
+    expect(theme.brand).toBe("resolved(--pl-color-accent:1)");
+    expect(theme.brand).not.toBe("");
     for (const name of PL_TOKEN_VARS) expect(theme[name]).toBe(varValue(name));
   });
 

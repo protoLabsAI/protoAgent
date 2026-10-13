@@ -94,13 +94,14 @@ export function McpCatalogDialog({
       onClose={close}
       title="Add a common MCP server"
       width="min(720px, 95vw)"
+      padding="roomy"
       className={`mcp-catalog-dialog${selected ? "" : " mcp-catalog-dialog--browse"}`}
     >
       {selected ? (
         <div className="mcp-catalog-configure">
-          <button type="button" className="mcp-catalog-back" onClick={back}>
+          <Button type="button" variant="ghost" size="sm" onClick={back}>
             <ArrowLeft size={14} /> All servers
-          </button>
+          </Button>
           <div className="mcp-catalog-config-head">
             <strong>{selected.name}</strong>
             {selected.requires ? <span className="mcp-catalog-chip">needs {selected.requires}</span> : null}

@@ -111,6 +111,8 @@ export function createAgentBody(
   return {
     name: state.name.trim(),
     bundle: archetype?.bundle ?? null,
+    // A "From a bundle URL" archetype pins the ref the operator gave; catalog rows have none.
+    ref: archetype?.bundle && archetype.ref ? archetype.ref : undefined,
     soul: soul || undefined,
     inputs: Object.keys(inputs).length ? inputs : undefined,
     secrets: secrets.length ? secrets : undefined,

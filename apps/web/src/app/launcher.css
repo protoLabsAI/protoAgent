@@ -27,15 +27,10 @@ html.is-launcher,
   padding: var(--pl-space-4) !important;
 }
 
-/* The floating card: the DS panel already carries the radius + border; layer on a
- * translucent surface + backdrop blur so the desktop shows through slightly. The opaque
- * `background` is a fallback for WebKit without color-mix (degrades to solid, still rounded). */
+/* The floating card: the DS panel already carries the radius + border; render it as a solid
+ * DS raised surface with the standard popover shadow. No glass morphism on UI surfaces (DS
+ * ruling) — the see-through window margin still comes from the transparent overlay above. */
 .is-launcher .pl-cmdk__panel {
   background: var(--pl-color-bg-raised);
-  background: color-mix(in srgb, var(--pl-color-bg-raised) 82%, transparent);
-  -webkit-backdrop-filter: blur(24px) saturate(1.4);
-  backdrop-filter: blur(24px) saturate(1.4);
-  box-shadow:
-    var(--pl-shadow-popover),
-    0 24px 60px -20px rgb(0 0 0 / 0.55);
+  box-shadow: var(--pl-shadow-popover);
 }

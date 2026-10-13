@@ -27,26 +27,21 @@ import asyncio
 
 import httpx
 import pytest
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.routes.agent_card_routes import create_agent_card_routes
-from a2a.server.routes.fastapi_routes import add_a2a_routes_to_fastapi
-from a2a.server.routes.jsonrpc_routes import create_jsonrpc_routes
-from a2a.server.tasks import InMemoryPushNotificationConfigStore, InMemoryTaskStore
-from a2a.types import AgentSkill
-from fastapi import FastAPI
 from google.protobuf.json_format import MessageToDict
 
 import protolabs_a2a as pa
 from a2a_impl.executor import (
     _CONTEXT_MIME,
-    ProtoAgentExecutor,
     TurnOutcome,
     set_progress_hook,
     set_terminal_hook,
 )
 from a2a_impl.registry import OwnedProducerActiveTaskRegistry, harden_active_task_registry
-
-A2A_HEADERS = {"A2A-Version": "1.0"}
+from tests._a2a_app import A2A_HEADERS, drain_handlers
+from tests._a2a_app import build_app as _build_app
+from tests._a2a_app import poll_terminal as _poll_terminal
+from tests._a2a_app import send_msg as _send_msg
+from tests._a2a_app import skill as _skill
 
 
 # ── protolabs_a2a: parts ──────────────────────────────────────────────────────
@@ -150,10 +145,6 @@ def test_merge_extension_metadata_folds_fragments_into_one_map():
 # ── protolabs_a2a: agent card ─────────────────────────────────────────────────
 
 
-def _skill() -> AgentSkill:
-    return AgentSkill(id="chat", name="Chat", description="general chat", tags=["t"])
-
-
 def test_build_agent_card_applies_conventions():
     card = pa.build_agent_card(
         name="protoagent",
@@ -189,77 +180,6 @@ def test_build_agent_card_omits_bearer_when_not_configured():
 # ── ProtoAgentExecutor end-to-end (through a2a-sdk) ───────────────────────────
 
 
-def _build_app(stream_fn, *, bearer=None, api_key="", allowed_origins=None, task_store=None, **executor_kwargs):
-    """Mount a real a2a-sdk app driven by ProtoAgentExecutor(stream_fn, **executor_kwargs)."""
-    card = pa.build_agent_card(
-        name="test",
-        description="d",
-        url="http://test/a2a",
-        version="0.0.0",
-        skills=[_skill()],
-        bearer=bool(bearer),
-    )
-    handler = DefaultRequestHandler(
-        agent_executor=ProtoAgentExecutor(stream_fn, **executor_kwargs),
-        task_store=task_store if task_store is not None else InMemoryTaskStore(),
-        agent_card=card,
-        push_config_store=InMemoryPushNotificationConfigStore(),
-    )
-    # Mirror production wiring (#1713): every test turn runs through the
-    # owned-producer registry, exactly like server/__init__.py mounts it.
-    assert harden_active_task_registry(handler)
-    _HANDLERS.append(handler)
-    app = FastAPI()
-    app.state.a2a_handler = handler
-    if bearer is not None or api_key or allowed_origins is not None:
-        from a2a_impl import auth
-
-        auth.install(
-            app,
-            bearer_token=bearer or "",
-            api_key=api_key,
-            allowed_origins_raw=allowed_origins or "",
-        )
-    add_a2a_routes_to_fastapi(
-        app,
-        agent_card_routes=create_agent_card_routes(card),
-        jsonrpc_routes=create_jsonrpc_routes(handler, rpc_url="/a2a"),
-    )
-    return app
-
-
-def _send_msg(client, text="hi", rpc_id="r1"):
-    return client.post(
-        "/a2a",
-        headers=A2A_HEADERS,
-        json={
-            "jsonrpc": "2.0",
-            "id": rpc_id,
-            "method": "SendMessage",
-            "params": {"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": text}]}},
-        },
-    )
-
-
-async def _poll_terminal(client, task_id, *, tries=60):
-    for _ in range(tries):
-        g = await client.post(
-            "/a2a",
-            headers=A2A_HEADERS,
-            json={"jsonrpc": "2.0", "id": "g", "method": "GetTask", "params": {"id": task_id}},
-        )
-        t = g.json()["result"]
-        if t["status"]["state"] in (
-            "TASK_STATE_COMPLETED",
-            "TASK_STATE_FAILED",
-            "TASK_STATE_CANCELED",
-            "TASK_STATE_INPUT_REQUIRED",
-        ):
-            return t
-        await asyncio.sleep(0.03)
-    raise AssertionError(f"task {task_id} never reached terminal")
-
-
 @pytest.fixture(autouse=True)
 def _clear_terminal_hook():
     set_terminal_hook(None)
@@ -274,12 +194,6 @@ def _clear_progress_hook():
     set_progress_hook(None)
 
 
-# Handlers built by _build_app during the current test — drained at teardown so
-# their retire-then-remove cleanup tasks (#1713) finish inside the test's event
-# loop instead of being destroyed pending when pytest closes it.
-_HANDLERS: list = []
-
-
 @pytest.fixture(autouse=True)
 def _fast_retire(monkeypatch):
     """Shrink the producer flush grace so teardown drains stay fast in tests."""
@@ -289,12 +203,7 @@ def _fast_retire(monkeypatch):
 @pytest.fixture(autouse=True)
 async def _drain_a2a_cleanup():
     yield
-    for handler in _HANDLERS:
-        reg = getattr(handler, "_active_task_registry", None)
-        tasks = set(getattr(reg, "_cleanup_tasks", ()) or ())
-        if tasks:
-            await asyncio.wait(tasks, timeout=5)
-    _HANDLERS.clear()
+    await drain_handlers()
 
 
 @pytest.mark.asyncio
@@ -645,6 +554,54 @@ async def test_consumed_steer_flushes_prior_text_then_surfaces_a_typed_boundary(
 
 
 @pytest.mark.asyncio
+async def test_goal_status_is_a_typed_status_line_not_a_tool_call_or_text():
+    """#4012: a goal drive's 🎯 status line used to be a plain-string tool_start — WORKING
+    *text* a delegator's card committed as content, counted as a tool call. It now rides its
+    own goal-status DataPart, after the text that preceded it, and counts as no tool call."""
+    import json
+
+    from a2a_impl.executor import GOAL_STATUS_MIME
+
+    outcomes: list[TurnOutcome] = []
+    set_terminal_hook(outcomes.append)
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", "Applying the fix. " * 8)
+        yield ("goal_status", {"text": "🎯 checking the goal…"})
+        yield ("done", "Applying the fix.")
+
+    app = _build_app(stream)
+    goal_lines, plain_status_text = [], []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "goal",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                result = json.loads(line[5:].strip()).get("result", {})
+                status = result.get("statusUpdate", {}).get("status", {})
+                for part in status.get("message", {}).get("parts", []):
+                    if (part.get("metadata") or {}).get("mimeType") == GOAL_STATUS_MIME:
+                        goal_lines.append(part.get("data", {}).get("text"))
+                    elif part.get("text"):
+                        plain_status_text.append(part["text"])
+    set_terminal_hook(None)
+
+    assert goal_lines == ["🎯 checking the goal…"]
+    assert not any("🎯" in t for t in plain_status_text)
+    assert outcomes and outcomes[0].tool_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_tool_end_fragment_carries_true_output_size():
     """#2775: the fragment's `result` is the CAPPED card preview; `outputChars` rides
     the same extra-key lane as parentToolCallId with the true pre-truncation size, so
@@ -682,6 +639,46 @@ async def test_tool_end_fragment_carries_true_output_size():
     completed = next(f for f in fragments if f.get("phase") == "completed")
     # Proto-JSON round-trips numbers as floats — compare numerically, like durationMs.
     assert int(completed["outputChars"]) == 51_337
+
+
+@pytest.mark.asyncio
+async def test_tool_end_fragment_carries_the_measured_duration():
+    """#4076: the end frame carries the call's measured `durationMs` (the durable store
+    keeps it), so a reload shows the real duration instead of a replayed ~0ms. An
+    unmeasured call (duration 0) carries none — the console then shows no duration."""
+    import json
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("tool_end", {"id": "t1", "name": "fetch_url", "output": "a", "duration_ms": 1_234})
+        yield ("tool_end", {"id": "t2", "name": "fetch_url", "output": "b", "duration_ms": 0})
+        yield ("done", "ok")
+
+    app = _build_app(stream)
+    fragments = []
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+        async with c.stream(
+            "POST",
+            "/a2a",
+            headers=A2A_HEADERS,
+            json={
+                "jsonrpc": "2.0",
+                "id": "s",
+                "method": "SendStreamingMessage",
+                "params": {"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+            },
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                frame = json.loads(line[5:].strip())
+                msg = frame.get("result", {}).get("statusUpdate", {}).get("status", {}).get("message")
+                frag = (msg or {}).get("metadata", {}).get(pa.TOOL_CALL_EXT_URI)
+                if frag is not None:
+                    fragments.append(frag)
+
+    by_id = {f.get("toolCallId"): f for f in fragments if f.get("phase") == "completed"}
+    assert int(by_id["t1"]["durationMs"]) == 1_234
+    assert "durationMs" not in by_id["t2"]
 
 
 @pytest.mark.asyncio
@@ -803,6 +800,42 @@ def _reasoning_texts_from_history(history: list[dict]) -> list[str]:
         if texts:
             out.append("".join(texts))
     return out
+
+
+@pytest.mark.asyncio
+async def test_delegate_progress_rides_a_dataframe_and_persists_once_per_delegation(tmp_path):
+    """#3979: a coding delegate's live snapshots reach the console as delegate-progress-v1
+    DataParts on WORKING frames — and the durable store keeps only the LATEST one per
+    delegation, so a reload replays the final state without a row per frame."""
+    from a2a_impl.executor import DELEGATE_PROGRESS_MIME
+    from a2a_impl.stores import ReasoningCoalescingTaskStore, make_sqlite_engine
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("tool_start", {"id": "mention:claude-code", "name": "@claude-code", "input": "go"})
+        for n in range(1, 31):
+            yield (
+                "delegate_progress",
+                {"id": "mention:claude-code", "target": "claude-code", "tool_count": n, "done": n == 30},
+            )
+        yield ("tool_end", {"id": "mention:claude-code", "name": "@claude-code", "output": "1 replied"})
+        yield ("done", "the reply")
+
+    store = ReasoningCoalescingTaskStore(make_sqlite_engine(str(tmp_path / "a2a-tasks.db")))
+    await store.initialize()
+    app = _build_app(stream, task_store=store)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    snapshots = [
+        part["data"]
+        for m in final.get("history") or []
+        for part in m.get("parts") or []
+        if (part.get("metadata") or {}).get("mimeType") == DELEGATE_PROGRESS_MIME
+    ]
+    assert len(snapshots) == 1, snapshots
+    assert snapshots[0]["tool_count"] == 30 and snapshots[0]["done"] is True
 
 
 @pytest.mark.asyncio
@@ -1288,10 +1321,18 @@ async def test_harden_swaps_registry_preserving_wiring():
     handler = app.state.a2a_handler
     reg = handler._active_task_registry
     assert isinstance(reg, OwnedProducerActiveTaskRegistry)
-    # Same executor/store the stock registry was built with — only the cleanup
-    # behavior changes.
+    # Same executor/store/stream the stock registry was built with — only the
+    # cleanup behavior changes. Since a2a-sdk 1.2 (#3950) the handler hands its
+    # registry a VersionedTaskStore view (_versioned_store: a LegacyTaskStoreAdapter
+    # around the plain handler.task_store), plus the optional cluster event stream.
+    from a2a.server.cluster.task_store import LegacyTaskStoreAdapter
+
     assert reg._agent_executor is handler.agent_executor
-    assert reg._task_store is handler.task_store
+    assert reg._task_store is handler._versioned_store
+    assert isinstance(reg._task_store, LegacyTaskStoreAdapter)
+    assert reg._task_store.store is handler.task_store
+    assert reg._push_sender is handler._push_sender
+    assert reg._event_stream is handler._event_stream
 
 
 def test_harden_degrades_gracefully_on_moved_internals():
@@ -1464,3 +1505,120 @@ def test_task_id_from_response_reads_both_wire_shapes():
     assert task_id_from_response(None) == ""
     assert task_id_from_response("not a dict") == ""
 
+
+
+@pytest.mark.asyncio
+async def test_work_frames_carry_the_text_offset_they_streamed_at(tmp_path):
+    """Durable history keeps the answer as ONE flattened artifact and the work frames
+    separately, so each work frame (reasoning run, tool call) is stamped with the length
+    of the answer text streamed before it (TEXT_OFFSET_META). That is what lets a
+    reattach / reload replay a pre-tool sentence ABOVE the tool, as the live turn drew it,
+    instead of folding it into the "Working…" block. Coalescing keeps the run head's
+    stamp; the offset counts UTF-16 code units (the console's string indexing)."""
+    from a2a_impl.executor import TEXT_FINGERPRINT_META, TEXT_OFFSET_META, _utf16_fnv1a
+    from a2a_impl.stores import ReasoningCoalescingTaskStore, make_sqlite_engine
+
+    sentence = "I am protoAgent 👋, a desktop agent."
+    answer = f"{sentence}\n\nDone — noted."
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("reasoning", "The operator wants a sentence ")
+        yield ("reasoning", "and then a note.")
+        yield ("text", sentence)
+        yield ("tool_start", {"id": "n1", "name": "append_note", "input": '{"text": "hi"}'})
+        yield ("tool_end", {"id": "n1", "name": "append_note", "output": "ok"})
+        yield ("text", "\n\nDone — noted.")
+        yield ("done", answer)
+
+    store = ReasoningCoalescingTaskStore(make_sqlite_engine(str(tmp_path / "a2a-tasks.db")))
+    await store.initialize()
+    app = _build_app(stream, task_store=store)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    history = final.get("history") or []
+    utf16 = len(sentence.encode("utf-16-le")) // 2
+    assert utf16 == len(sentence) + 1  # the emoji is a surrogate pair — two JS code units
+    reasoning = [m for m in history if _reasoning_texts_from_history([m])]
+    assert len(reasoning) == 1 and reasoning[0]["metadata"][TEXT_OFFSET_META] == 0
+    tools = [m for m in history if pa.TOOL_CALL_EXT_URI in (m.get("metadata") or {})]
+    assert [m["metadata"][TEXT_OFFSET_META] for m in tools] == [utf16, utf16]
+    assert final["artifacts"][0]["parts"][0]["text"] == answer
+    # The terminal artifact proves what the offsets were measured against: the streamed text
+    # (here identical to the stored answer), as a UTF-16 length + FNV-1a hash.
+    fp = final["artifacts"][0]["metadata"][TEXT_FINGERPRINT_META]
+    assert fp == {"length": len(answer.encode("utf-16-le")) // 2, "fnv1a": _utf16_fnv1a(answer)}
+
+
+def test_utf16_fnv1a_parity_constants():
+    """The console recomputes this hash (a2aStream.ts utf16Fnv1a) — same constants there."""
+    from a2a_impl.executor import _utf16_fnv1a
+
+    assert _utf16_fnv1a("") == 2166136261
+    assert _utf16_fnv1a("I am protoAgent 👋, a desktop agent.") == 3055660355
+    assert _utf16_fnv1a("Let me check the config.") == 2152712979
+
+
+@pytest.mark.asyncio
+async def test_goal_style_turn_fingerprints_the_streamed_text_not_the_stored_answer():
+    """A goal drive streams several passes but stores only the last pass + the goal note.
+    The tool offsets index the STREAMED text, so the fingerprint must describe that text —
+    the console sees it doesn't prefix the stored answer and keeps the old order instead of
+    cutting the answer mid-word."""
+    from a2a_impl.executor import TEXT_FINGERPRINT_META, TEXT_OFFSET_META, _utf16_fnv1a
+
+    streamed = "Let me check the config."
+    stored = "The config is fine and verified.\n\n---\n🎯 Goal met"
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", streamed)
+        yield ("tool_start", {"id": "t1", "name": "read_file", "input": "{}"})
+        yield ("tool_end", {"id": "t1", "name": "read_file", "output": "ok"})
+        yield ("done", stored)
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    art = final["artifacts"][0]
+    assert art["parts"][0]["text"] == stored
+    fp = art["metadata"][TEXT_FINGERPRINT_META]
+    assert fp == {"length": len(streamed), "fnv1a": _utf16_fnv1a(streamed)}
+    # Struct numbers round-trip as floats on the wire — the console reads them with Number().
+    assert _utf16_fnv1a(stored[: int(fp["length"])]) != int(fp["fnv1a"])  # the console sees a mismatch → fallback
+    tools = [m for m in final.get("history") or [] if pa.TOOL_CALL_EXT_URI in (m.get("metadata") or {})]
+    assert {m["metadata"][TEXT_OFFSET_META] for m in tools} == {24}
+
+
+@pytest.mark.asyncio
+async def test_normal_turn_fingerprint_matches_the_stripped_stored_answer():
+    """The stored answer is `extract_output(...).strip()`, so a streamed trailing newline
+    must not make a NORMAL turn's fingerprint miss — that would silently drop every settled
+    reload back to the old order. The fingerprint covers `accumulated.rstrip()`, which the
+    stored answer starts with exactly."""
+    from a2a_impl.executor import TEXT_FINGERPRINT_META, _utf16_fnv1a
+
+    streamed = "Let me check the config.\n\nAll good.\n"
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("text", "Let me check the config.")
+        yield ("tool_start", {"id": "t1", "name": "read_file", "input": "{}"})
+        yield ("tool_end", {"id": "t1", "name": "read_file", "output": "ok"})
+        yield ("text", "\n\nAll good.\n")
+        yield ("done", streamed.strip())
+
+    app = _build_app(stream)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=30) as c:
+        task = (await _send_msg(c)).json()["result"]["task"]
+        final = await _poll_terminal(c, task["id"])
+
+    art = final["artifacts"][0]
+    stored = art["parts"][0]["text"]
+    fp = art["metadata"][TEXT_FINGERPRINT_META]
+    length = int(fp["length"])
+    assert length == len(streamed.rstrip())
+    # What the console checks: the stored answer's prefix of that length hashes the same.
+    assert _utf16_fnv1a(stored[:length]) == int(fp["fnv1a"])

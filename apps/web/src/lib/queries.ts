@@ -190,10 +190,12 @@ export const publishedLinksQuery = () =>
   });
 
 // Archetypes for the new-agent picker (Basic + installed bundles) — config, not live.
-export const archetypesQuery = () =>
+// `includeHeld` (the picker's "Show preview archetypes" opt-in) adds the catalog's held
+// entries under its own key, so the default list is never polluted by the preview one.
+export const archetypesQuery = (includeHeld = false) =>
   queryOptions({
-    queryKey: queryKeys.archetypes,
-    queryFn: () => api.archetypes(),
+    queryKey: includeHeld ? [...queryKeys.archetypes, "held"] : queryKeys.archetypes,
+    queryFn: () => api.archetypes(includeHeld),
   });
 
 // Goals the agent works toward (goal mode). Lives in the right sidebar; the panel
@@ -213,6 +215,15 @@ export const goalDetailQuery = (sessionId: string) =>
     queryKey: queryKeys.goalDetail(sessionId),
     queryFn: () => api.goalDetail(sessionId),
   });
+
+/** The app-wide `goal.*` bus refresh (App.tsx). The goals LIST refetches even with no
+ *  observer mounted (`refetchType: "all"`, exact key), so the Work card / chat strip are fresh
+ *  the moment they mount. Detail drawers share the `goals` prefix but refetch only while
+ *  ACTIVE — an `"all"` on the prefix refetched every cached-but-closed drawer on every event. */
+export function refreshGoalsOnEvent(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.goals, exact: true, refetchType: "all" });
+  void queryClient.invalidateQueries({ queryKey: [...queryKeys.goals, "detail"] });
+}
 
 // Passive watches (ADR 0067) — verifier-only objectives polled out-of-band. Lives in the
 // Work hub; the panel invalidates this on the `watch.*` bus pushes (created/checked/met/

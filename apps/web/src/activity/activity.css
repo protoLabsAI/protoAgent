@@ -1,6 +1,4 @@
-/* Activity surface (ADR 0003) — moved from app/theme.css (#832). The
-   background-stream rail dot (.rail-dot) stays in theme.css: it styles the
-   always-mounted shell rail buttons, not the Activity surface. */
+/* Activity surface (ADR 0003) — moved from app/theme.css (#832). */
 .activity-body {
   display: flex;
   flex-direction: column;
@@ -10,10 +8,10 @@
 .activity-log {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
+  padding: var(--pl-space-3);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 
 /* Layout-only: the chrome is the DS Empty (.pl-empty--slotted, which centers its
@@ -25,11 +23,11 @@
 .activity-msg {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 
 .activity-role {
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--pl-color-fg-subtle, var(--pl-color-fg-muted));
@@ -38,9 +36,9 @@
 .activity-content {
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 8px 12px;
-  background: var(--pl-color-bg-raised, #111114);
-  font-size: 14px;
+  padding: var(--pl-space-2) var(--pl-space-3);
+  background: var(--pl-color-bg-raised);
+  font-size: var(--pl-font-size-base);
 }
 
 /* Stimulus attribution (#1375): a quiet quoted line above the response naming what it
@@ -49,12 +47,12 @@
 .activity-stimulus {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 0 0 6px;
-  padding-left: 8px;
+  gap: var(--pl-space-1_5);
+  margin: 0 0 var(--pl-space-1_5);
+  padding-left: var(--pl-space-2);
   border-left: 2px solid var(--pl-color-border);
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   min-width: 0;
 }
 .activity-stimulus svg {
@@ -66,7 +64,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   opacity: 0.85;
 }
 .activity-stimulus-text {
@@ -77,33 +75,33 @@
 }
 
 .activity-user .activity-content {
-  background: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 12%, transparent);
+  background: color-mix(in srgb, var(--pl-color-accent) 12%, transparent);
 }
 
 /* Read-only since the 2026-06 IA pass — the reply composer is gone (Activity is a
    utility-bar widget now). A load failure surfaces as a strip above the feed. */
 .activity-error {
-  margin: 8px 12px 0;
-  padding: 8px 12px;
-  border: 1px solid var(--pl-color-status-error, #e5484d);
+  margin: var(--pl-space-2) var(--pl-space-3) 0;
+  padding: var(--pl-space-2) var(--pl-space-3);
+  border: 1px solid var(--pl-color-status-error);
   border-radius: var(--pl-radius);
-  color: var(--pl-color-status-error, #e5484d);
-  font-size: 13px;
+  color: var(--pl-color-status-error);
+  font-size: var(--pl-font-size-sm);
 }
 
 /* Activity provenance feed (ADR 0022) ------------------------------------- */
 .activity-feed {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
+  padding: var(--pl-space-3);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--pl-space-3);
 }
 .activity-entry {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--pl-space-1);
 }
 /* Entry header: provenance badge + an "open in reader" affordance (ADR 0062),
    revealed on hover/focus so the feed stays clean. */
@@ -111,7 +109,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .activity-entry-open {
   opacity: 0;
@@ -126,27 +124,27 @@
 .activity-prov {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   flex-wrap: wrap;
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
 }
 .activity-origin {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 7px;
-  border-radius: 999px;
+  gap: var(--pl-space-1);
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border-radius: var(--pl-radius-pill);
   font-weight: 600;
   border: 1px solid var(--pl-color-border);
   color: var(--pl-color-fg-muted);
 }
 .activity-origin svg { flex: 0 0 auto; }
-.activity-origin-scheduler { color: var(--brand-indigo-bright); border-color: color-mix(in srgb, var(--brand-indigo-bright) 45%, var(--pl-color-border)); }
+.activity-origin-scheduler { color: var(--pl-color-chart-series2); border-color: color-mix(in srgb, var(--pl-color-chart-series2) 45%, var(--pl-color-border)); }
 .activity-origin-inbox     { color: var(--pl-color-status-success); border-color: color-mix(in srgb, var(--pl-color-status-success) 45%, var(--pl-color-border)); }
 .activity-origin-webhook   { color: var(--pl-color-status-warning); border-color: color-mix(in srgb, var(--pl-color-status-warning) 45%, var(--pl-color-border)); }
-.activity-origin-a2a       { color: var(--brand-pink); border-color: color-mix(in srgb, var(--brand-pink) 45%, var(--pl-color-border)); }
-.activity-origin-operator  { color: var(--pl-color-accent, #7c8cff); border-color: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 45%, var(--pl-color-border)); }
-.activity-trigger { font-family: var(--pl-font-mono, ui-monospace, monospace); color: var(--pl-color-fg-muted); }
+.activity-origin-a2a       { color: var(--pl-color-chart-series8); border-color: color-mix(in srgb, var(--pl-color-chart-series8) 45%, var(--pl-color-border)); }
+.activity-origin-operator  { color: var(--pl-color-accent); border-color: color-mix(in srgb, var(--pl-color-accent) 45%, var(--pl-color-border)); }
+.activity-trigger { font-family: var(--pl-font-mono); color: var(--pl-color-fg-muted); }
 .activity-time { margin-left: auto; color: var(--pl-color-fg-subtle, var(--pl-color-fg-muted)); }
 
 /* Unified feed (#3029) ------------------------------------------------------
@@ -169,27 +167,27 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-2_5);
   border-bottom: 1px solid var(--pl-color-border);
 }
 
 .inbox-item {
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  background: var(--pl-color-bg-raised, #111114);
-  padding: 8px 10px;
+  background: var(--pl-color-bg-raised);
+  padding: var(--pl-space-2) var(--pl-space-2_5);
 }
 
 .inbox-item-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
+  gap: var(--pl-space-1_5);
+  margin-bottom: var(--pl-space-1);
 }
 
 .inbox-source {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
   font-family: var(--pl-font-mono);
 }
@@ -199,7 +197,7 @@
 }
 
 .inbox-text {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -208,19 +206,19 @@
    delivery failed (#3351) — surface it as a conspicuous BLOCKED page (a warning-toned card +
    flag) an operator can triage, distinct from an ordinary next/later stimulus. */
 .inbox-item--stuck {
-  border-color: var(--pl-color-status-warning, #f5a623);
-  background: color-mix(in srgb, var(--pl-color-status-warning, #f5a623) 12%, var(--pl-color-bg-raised, #111114));
+  border-color: var(--pl-color-status-warning);
+  background: color-mix(in srgb, var(--pl-color-status-warning) 12%, var(--pl-color-bg-raised));
 }
 
 .inbox-stuck-flag {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 10px;
+  gap: var(--pl-space-1);
+  font-size: var(--pl-font-size-3xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--pl-color-status-warning, #f5a623);
+  color: var(--pl-color-status-warning);
 }
 
 .inbox-stuck-flag svg {

@@ -1,0 +1,1438 @@
+"""A2A surface: agent-card building, skill declarations, per-turn telemetry, and
+the executor terminal hook.
+
+Extracted from ``server/__init__.py`` (ADR 0023, phase 2). These functions build
+the A2A 1.0 agent card served at ``/.well-known/agent-card.json``, declare the
+agent's skills, record a telemetry row per terminal turn, and surface the
+Activity thread's answer on the event bus when a turn ends. The a2a-sdk route
+wiring itself still lives in ``server.__init__._main`` (it calls these); only the
+logic moved here.
+
+``server/__init__.py`` re-exports every public name below so ``server.<symbol>``
+keeps resolving for ``_main`` and the test suite. The symbols this module
+imports from ``server`` (``agent_name``, ``_event_bus``) are all defined in
+``__init__`` before its re-export line, so the import is not a cycle.
+"""
+
+import asyncio
+import hashlib
+import logging
+import os
+from datetime import UTC, datetime
+from typing import Any
+
+from events import ACTIVITY_CONTEXT
+from graph.output_format import extract_output
+from runtime.state import STATE
+from server import _event_bus, agent_name
+
+log = logging.getLogger("protoagent.server")
+
+# Holds the fire-and-forget background-wake/-resume/-index tasks (ADR 0050 Phase 2,
+# ADR 0070) so they aren't GC'd mid-flight; the done callback discards each on completion.
+_BG_WAKE_TASKS: set = set()
+
+# ADR 0070 D2 — results at or under this size just drain inline; anything bigger is
+# also indexed into the knowledge store so the full report stays searchable after
+# the drain notification truncates it.
+_BG_INDEX_MIN_CHARS = 800
+
+_A2A_ACCEPTED_STATES = {
+    "TASK_STATE_SUBMITTED",
+    "TASK_STATE_WORKING",
+    "TASK_STATE_INPUT_REQUIRED",
+    "TASK_STATE_COMPLETED",
+    "submitted",
+    "working",
+    "input-required",
+    "input_required",
+    "completed",
+}
+
+
+def _background_wake_enabled() -> bool:
+    """Whether a finished background job should autonomously wake the agent (ADR 0050
+    Phase 2). On by default; ``BACKGROUND_WAKE=0`` opts out (parity with
+    ``BACKGROUND_DISABLED``)."""
+    return os.environ.get("BACKGROUND_WAKE", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _background_auto_resume_enabled() -> bool:
+    """Whether a finished background job push-resumes its origin session (ADR 0070 D1).
+    Config ``background.auto_resume``; default on. ``false`` restores pull-only delivery
+    (the drain on the origin session's next manual turn)."""
+    cfg = STATE.graph_config
+    return bool(getattr(cfg, "background_auto_resume", True)) if cfg is not None else True
+
+
+def _a2a_result_state(payload: dict) -> str:
+    """Best-effort extraction of task state from an A2A response frame.
+
+    The SDK has returned both bare Task payloads and ``{"task": Task}`` envelopes in
+    different A2A paths, so accept either shape. A missing state is deliberately not an
+    acceptance signal: the caller is about to mark a durable inbox item delivered.
+    """
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return ""
+    status_update = result.get("statusUpdate")
+    if isinstance(status_update, dict):
+        status = status_update.get("status")
+        if isinstance(status, dict):
+            return str(status.get("state") or "")
+    task = result.get("task")
+    if isinstance(task, dict):
+        result = task
+    status = result.get("status")
+    if not isinstance(status, dict):
+        return ""
+    return str(status.get("state") or "")
+
+
+def _a2a_send_accepted(payload: dict) -> bool:
+    """Whether an A2A response proves the A2A layer owns the turn."""
+    if payload.get("error"):
+        return False
+    return _a2a_result_state(payload) in _A2A_ACCEPTED_STATES
+
+
+async def _fire_activity_from_inbox(item: dict) -> bool:
+    """Self-A2A fire for a newly received now-priority inbox item.
+
+    This lives in ``server`` rather than ``operator_api`` because the acceptance
+    check is server/A2A protocol knowledge. Returns True only once the self-POST is
+    accepted as an owned turn; HTTP reachability, JSON-RPC errors, explicit failed
+    states, and missing task evidence are all refusal/failure for inbox delivery
+    purposes.
+    """
+    from uuid import uuid4
+
+    import httpx
+
+    from a2a_impl.auth import self_invocation_headers
+
+    mid = str(uuid4())
+    body = {
+        "jsonrpc": "2.0",
+        "id": mid,
+        "method": "SendMessage",
+        "params": {
+            "message": {
+                "role": "ROLE_USER",
+                "parts": [{"text": item["text"]}],
+                "messageId": mid,
+                "contextId": ACTIVITY_CONTEXT,
+                "metadata": {
+                    "origin": "inbox",
+                    "inbox_id": item.get("id"),
+                    "inbox_source": item.get("source", ""),
+                    "priority": item.get("priority", "now"),
+                },
+            },
+        },
+    }
+    headers = {"Content-Type": "application/json", "A2A-Version": A2A_PROTOCOL_VERSION}
+    headers.update(self_invocation_headers())
+    app = getattr(STATE, "fastapi_app", None)
+    base_url = f"http://127.0.0.1:{STATE.active_port}"
+    client_kwargs = {"timeout": 30}
+    if app is not None:
+        client_kwargs.update({"transport": httpx.ASGITransport(app=app), "base_url": base_url})
+        url = "/a2a"
+    else:
+        url = f"{base_url}/a2a"
+    try:
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            r = await client.post(url, headers=headers, json=body)
+        if r.status_code >= 400:
+            log.warning(
+                "[inbox] now-fire rejected for item %s: HTTP %d %s",
+                item.get("id"),
+                r.status_code,
+                r.text[:200],
+            )
+            return False
+        ctype = r.headers.get("content-type", "")
+        if not ctype.startswith("application/json"):
+            log.warning(
+                "[inbox] now-fire rejected for item %s: non-JSON A2A response %s %s",
+                item.get("id"),
+                ctype or "<missing-content-type>",
+                r.text[:200],
+            )
+            return False
+        payload = r.json()
+        if _a2a_send_accepted(payload):
+            return True
+        err = payload.get("error")
+        state = _a2a_result_state(payload)
+        if err:
+            log.warning("[inbox] now-fire rejected for item %s: %s", item.get("id"), err)
+        elif state:
+            log.warning("[inbox] now-fire not accepted for item %s: task state %s", item.get("id"), state)
+        else:
+            log.warning("[inbox] now-fire rejected for item %s: A2A response had no task status", item.get("id"))
+        return False
+    except Exception:
+        log.exception("[inbox] now-fire failed for item %s", item.get("id"))
+        return False
+
+
+def install_inbox_now_delivery() -> None:
+    """Register the server-owned now-inbox delivery hook for operator handlers."""
+    STATE.inbox_now_delivery = _fire_activity_from_inbox
+
+
+install_inbox_now_delivery()
+
+
+def _should_auto_resume(job) -> bool:
+    """The ADR 0070 D1 guards: push-resume a completed/failed job into its origin
+    session unless the feature is off, the job was canceled (the operator already
+    intervened), there is no origin chat session or it is itself a background
+    context (no resume chains), or the spawning thread was incognito (no memory
+    trail — the report still drains normally)."""
+    if job.status == "canceled":
+        return False
+    origin = job.origin_session or ""
+    if not origin or origin.startswith("background:"):
+        return False
+    if getattr(job, "origin_incognito", False):
+        return False
+    return _background_auto_resume_enabled()
+
+
+def _background_wake_text(job) -> str:
+    """The stimulus the agent wakes to when a background job finishes."""
+    result = job.result or ""
+    if len(result) > 4000:
+        result = result[:4000] + "\n\n…[truncated]"
+    where = f" (you spawned it from session {job.origin_session})" if job.origin_session else ""
+    verb = "failed" if job.status == "failed" else "finished"
+    return (
+        f"A background task you delegated has {verb}{where} — decide whether to act on it.\n\n"
+        f"Job: {job.description} [{job.subagent_type}]\n"
+        f"Status: {job.status}\n"
+        f"Result:\n{result}\n\n"
+        "If this calls for follow-up action, take it now. Otherwise acknowledge it briefly "
+        "and stop — don't re-run the task."
+    )
+
+
+async def _background_wake(job) -> bool:
+    """Wake the agent on a completion by adding a now-priority inbox item (ADR 0050
+    Phase 2) — which fires a turn into the Activity thread via the existing inbox→
+    Activity path (storm-guarded). Returns whether the fire was dispatched. The Activity
+    response surfaces live in the console's Activity feed (server-driven, unlike the
+    localStorage chat view)."""
+    if STATE.inbox_store is None:
+        return False
+    from operator_api.console_handlers import _operator_inbox_add
+
+    res = await _operator_inbox_add(
+        {
+            "text": _background_wake_text(job),
+            "priority": "now",
+            "source": "background",
+            "dedup_key": f"background-wake:{job.id}",
+        }
+    )
+    return bool(res.get("fired"))
+
+
+def _spawn_background_wake(job) -> None:
+    """Schedule the (async) wake fire-and-forget on the running loop. No-op off-loop."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _go() -> None:
+        try:
+            await _background_wake(job)
+        except Exception:  # noqa: BLE001 — best-effort; never breaks the terminal hook
+            log.exception("[background] wake fire failed for %s", getattr(job, "id", "?"))
+
+    t = loop.create_task(_go())
+    _BG_WAKE_TASKS.add(t)
+    t.add_done_callback(_BG_WAKE_TASKS.discard)
+
+
+def _spawn_background_resume(mgr, job) -> None:
+    """Schedule the push-resume nudge (ADR 0070 D1) fire-and-forget on the running
+    loop, batch-aware (#1766). Routes through ``mgr.resume_for_terminal(job)``:
+
+    - a SINGLETON (no batch / batch of one) push-resumes exactly as before;
+    - the LAST member of a fan-out fires ONE coalesced batch nudge (siblings' reports
+      ride the same drained turn);
+    - a non-last member returns ``None`` — HELD, nothing delivered — and we do nothing
+      (no wake, no failure); the last member will deliver for the whole batch.
+
+    On a delivered-vs-not bool (singleton or fired batch), a non-delivery falls back to
+    the ADR 0050 Phase 2 Activity wake (when enabled) so the completion still reaches the
+    agent somewhere. Either way ``notified`` is untouched — the report(s) always drain
+    into the origin session, exactly once. No-op off-loop."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _go() -> None:
+        try:
+            delivered = await mgr.resume_for_terminal(job)
+        except Exception:  # noqa: BLE001 — resume_for_terminal is never-raises by contract; belt and braces
+            log.exception("[background] push-resume failed for %s", getattr(job, "id", "?"))
+            delivered = False
+        if delivered is None:
+            return  # held for still-outstanding batch siblings — the last member delivers
+        if not delivered and _background_wake_enabled():
+            try:
+                await _background_wake(job)
+            except Exception:  # noqa: BLE001 — best-effort fallback
+                log.exception("[background] wake fallback failed for %s", getattr(job, "id", "?"))
+
+    t = loop.create_task(_go())
+    _BG_WAKE_TASKS.add(t)
+    t.add_done_callback(_BG_WAKE_TASKS.discard)
+
+
+def _should_index_report(job) -> bool:
+    """The ADR 0070 D2 guards: index a *completed* job's report when it is substantial
+    (> ``_BG_INDEX_MIN_CHARS`` — smaller results just drain inline), the knowledge
+    store is up, and the spawning thread wasn't incognito (no memory trail)."""
+    if job is None or job.status != "completed":
+        return False
+    if getattr(job, "origin_incognito", False):
+        return False
+    # A CHAINED job — spawned from another background worker's turn — is never
+    # indexed: its origin is a disposable worker identity (D3 — worker sessions are
+    # never memory), its content flows into the parent worker's own report (which is
+    # indexed, or not, under the REAL origin session's rules), and the worker turn
+    # runs non-incognito so an incognito root's no-memory-trail contract (ADR 0069
+    # D3b) would otherwise leak transitively through the chain.
+    if (job.origin_session or "").startswith("background:"):
+        return False
+    if len(job.result or "") <= _BG_INDEX_MIN_CHARS:
+        return False
+    return STATE.knowledge_store is not None
+
+
+def _spawn_report_index(job) -> None:
+    """Index a finished job's FULL report into the knowledge store (ADR 0070 D2),
+    fire-and-forget. Keyed to the ORIGIN session (``source=origin_session``) with
+    ``source_type="background_report"`` (trust tier 2 — agent-derived, ADR 0069 D8),
+    so ``memory_recall`` surfaces it with provenance + trust citations after the
+    drain notification truncates the in-context copy. ``add_document`` chunks
+    document-sized reports with the shared ingestion chunker (knowledge/chunking.py).
+    Best-effort; never raises into the terminal hook. No-op off-loop."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _go() -> None:
+        try:
+            from knowledge import add_document
+
+            # add_document does blocking gateway work per chunk (embed + optional
+            # contextual enrichment) — keep it off the event loop.
+            chunk_ids = await asyncio.to_thread(
+                add_document,
+                STATE.knowledge_store,
+                job.result,
+                domain="conversation",
+                heading=f"Background report: {job.description} ({job.id})",
+                source=job.origin_session or f"background:{job.id}",
+                source_type="background_report",
+            )
+            log.info("[background] indexed report for %s → %d chunk(s)", job.id, len(chunk_ids or []))
+        except Exception:  # noqa: BLE001 — indexing is best-effort; jobs.db stays the record
+            log.exception("[background] report indexing failed for %s", getattr(job, "id", "?"))
+
+    t = loop.create_task(_go())
+    _BG_WAKE_TASKS.add(t)
+    t.add_done_callback(_BG_WAKE_TASKS.discard)
+
+
+def _bearer_configured() -> bool:
+    """Whether THIS server requires a bearer — read from the guard that enforces it.
+
+    This used to re-derive the answer from ``A2A_AUTH_TOKEN`` + ``graph_config.auth_token``,
+    which is a second derivation of a fact ``a2a_impl.auth`` already owns. It drifted:
+    the guard resolves those two sources with its own precedence and can be rotated live
+    via ``set_bearer_token``, so a card built from the env could advertise a credential the
+    server did not enforce (#2620).
+
+    ``auth.bearer_configured()`` exists for precisely this reason — ADR 0087 D6 learned the
+    same lesson from the other side (a client's cached token says nothing about what the
+    server accepts). Delegating here means the card, the bind guard and the middleware all
+    answer from one place. Safe at every call site: ``auth.install()`` runs before both the
+    card build and the bind guard in ``server._main``.
+    """
+    from a2a_impl import auth
+
+    return auth.bearer_configured()
+
+
+# Skill declarations (ADR-0006 addendum / #476). A skill MAY declare an
+# ``output_schema`` (JSON Schema) + ``result_mime`` — when present, the agent
+# enforces the schema via a forced-tool-call finalizer in the executor and emits
+# the result as a typed DataPart (``protolabs_a2a.emit_skill_result``), and the
+# card advertises the MIME in that skill's ``output_modes``. No schema ⇒ free
+# text (today's default). The schema lives HERE (skill config), not on the card
+# — ``AgentSkill`` only carries ``output_modes`` (the MIME), per the A2A spec.
+#
+# This is the TEMPLATE DEFAULT — one free-text placeholder so a fresh clone is
+# callable. Forks declare their real skills WITHOUT editing this file (#570):
+# either in ``langgraph-config.yaml`` (``a2a.skills: [...]``) or via a plugin
+# (``registry.register_a2a_skill(spec)``). ``_resolved_skill_specs()`` merges
+# both and falls back here when neither is set.
+_SKILL_SPECS: list[dict] = [
+    {
+        "id": "chat",
+        "name": "Chat",
+        "description": "General-purpose chat interface. Replace with your agent's real skills.",
+        "tags": ["template"],
+        "examples": ["hello", "what can you do?"],
+        # To make a skill return schema-enforced structured output, add:
+        #   "output_schema": {"type": "object", "properties": {...}, "required": [...]},
+        #   "result_mime": "application/vnd.protolabs.<your-skill>-v1+json",
+    },
+]
+
+
+def _resolved_skill_specs() -> list[dict]:
+    """The agent's advertised A2A skills, resolved at runtime (#570) so a fork
+    never edits this file. Sources, in order: ``a2a.skills`` from
+    ``langgraph-config.yaml`` (``STATE.graph_config.a2a_skills``), then
+    plugin-contributed skills (``register_a2a_skill`` → ``STATE.plugin_a2a_skills``).
+    Falls back to the template placeholder ``_SKILL_SPECS`` when neither is set,
+    so a fresh clone stays callable."""
+    cfg = STATE.graph_config
+    merged: list[dict] = []
+    if cfg is not None:
+        merged.extend(getattr(cfg, "a2a_skills", None) or [])
+    merged.extend(getattr(STATE, "plugin_a2a_skills", None) or [])
+    # Unique by id, first occurrence wins — config precedes plugins, so on a
+    # YAML-vs-plugin collision the operator's entry is the one advertised AND the
+    # one the structured finalizer enforces (#2754). Plugin-vs-plugin collisions
+    # were already rejected (with a warning) at load.
+    seen: set = set()
+    resolved = [s for s in merged if not (s.get("id") in seen or seen.add(s.get("id")))]
+    return resolved or _SKILL_SPECS
+
+
+def _agent_skills():
+    """Build the card's ``AgentSkill`` list from the resolved skill specs. A spec
+    with a ``result_mime`` advertises it in ``output_modes`` (the A2A-native way
+    to tell consumers the skill emits that structured type)."""
+    from a2a.types import AgentSkill
+
+    skills = []
+    for s in _resolved_skill_specs():
+        kwargs = dict(
+            id=s["id"],
+            name=s["name"],
+            description=s["description"],
+            tags=s.get("tags", []),
+            examples=s.get("examples", []),
+        )
+        if s.get("result_mime"):
+            kwargs["output_modes"] = [s["result_mime"]]
+        skills.append(AgentSkill(**kwargs))
+    return skills
+
+
+def structured_skill_schema(skill_id: str) -> dict | None:
+    """For a skill that declares structured output, return
+    ``{"schema": <JSON Schema>, "mime": <result_mime>}``; else ``None`` (free
+    text). The executor's structured finalizer (#476) reads this to run the
+    forced-tool-call against the schema and emit the validated object as a
+    ``result_mime`` DataPart. The schema isn't on the card (``AgentSkill`` has no
+    schema field) — it lives in the resolved skill specs."""
+    for s in _resolved_skill_specs():
+        if s["id"] == skill_id and s.get("output_schema") and s.get("result_mime"):
+            return {"schema": s["output_schema"], "mime": s["result_mime"]}
+    return None
+
+
+def _package_version() -> str:
+    """Single-source the agent-card version.
+
+    Delegates to ``paths.package_version()`` (one source of truth — the
+    pyproject ``[project].version`` the release pipeline bumps) so the card,
+    the plugin ``min_protoagent_version`` gate (``graph/plugins/loader.py``),
+    the runtime status, and the fleet version handshake can never disagree (#1644).
+    Kept as a name here for its existing importers (``server.__init__`` re-exports it).
+    """
+    from infra.paths import package_version
+
+    return package_version()
+
+
+def _a2a_card_url() -> str:
+    """The reachable JSON-RPC endpoint to advertise in the A2A card's interface.
+
+    The card tells other agents *where to send* ``message/send``, so this must
+    be the agent's externally-reachable address — not the bind host. Prefer an
+    explicit ``A2A_PUBLIC_URL`` (set this for any deployed agent: behind a proxy
+    / in a container the public address isn't the bound port). Fall back to the
+    actually-bound loopback port (``STATE.active_port``) for local + desktop runs —
+    correct there because the client is on the same host (and the desktop's port
+    is dynamic). The ``/a2a`` suffix is the JSON-RPC route.
+    """
+    base = (os.environ.get("A2A_PUBLIC_URL") or "").strip().rstrip("/")
+    if not base:
+        base = f"http://127.0.0.1:{STATE.active_port}"
+    return f"{base}/a2a"
+
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", ""}
+
+
+def assert_routable_card_url() -> None:
+    """Fail fast at startup if the card would advertise a loopback URL (opt-in).
+
+    A *deployed* agent that advertises ``http://127.0.0.1:.../a2a`` — e.g. because
+    ``A2A_PUBLIC_URL`` wasn't set after a redeploy — is silently unreachable to any
+    remote consumer that dials the card's interface URL. That's a deployment-config
+    regression no test catches; it surfaces only at first cross-host dispatch.
+
+    When ``a2a.require_routable_url`` is set, refuse to start (exit non-zero) rather
+    than discover it later. **Off by default** — local + desktop runs *should*
+    advertise loopback (the client is same-host, and the desktop port is dynamic).
+    Deployed agents opt in via config.
+    """
+    cfg = STATE.graph_config
+    if not (cfg and getattr(cfg, "a2a_require_routable_url", False)):
+        return
+    from urllib.parse import urlparse
+
+    url = _a2a_card_url()
+    host = (urlparse(url).hostname or "").lower()
+    if host in _LOOPBACK_HOSTS:
+        log.critical(
+            "[a2a] refusing to start: the agent card would advertise a loopback "
+            "URL %r (host=%r), unreachable to remote consumers. "
+            "a2a.require_routable_url is set — a deployed agent must advertise its "
+            "externally-reachable address. Set A2A_PUBLIC_URL to the host other "
+            "agents reach (e.g. http://roxy:7870).",
+            url,
+            host or "<empty>",
+        )
+        raise SystemExit(1)
+    log.info("[a2a] card URL %s is routable (require_routable_url check passed)", url)
+
+
+# Default card description — used when an instance sets no ``a2a.description`` in
+# config (#570). It describes the runtime itself, since that is what an unconfigured
+# install IS (and what a stranger curling ``/.well-known/agent-card.json`` sees).
+# Forks override via config, not by editing this file.
+_DEFAULT_CARD_DESCRIPTION = (
+    "protoAgent — an open-source (MIT), self-hosted LangGraph agent runtime. "
+    "Speaks A2A 1.0 and an OpenAI-compatible /v1 API, and is extended with tools, "
+    "skills, subagents and console views through drop-in plugins."
+)
+
+
+def _emitted_extension_uris(pa) -> list[str]:
+    """The extension URIs this runtime actually emits, in card order.
+
+    Deliberately narrower than ``pa.ALL_EXTENSION_URIS``: that constant is the
+    fleet-wide *vocabulary*, while the card must state this agent's *behavior*.
+    Declaring an extension nothing emits is a broken promise a consumer can't
+    detect except by waiting for a payload that never comes — so anything added
+    here must have a live emission path (see ``a2a_impl/executor.py``).
+    """
+    return [pa.COST_EXT_URI, pa.WORLDSTATE_DELTA_EXT_URI, pa.TOOL_CALL_EXT_URI]
+
+
+def _apply_real_security(card, pa) -> None:
+    """Rewrite the card's security block to describe what the guard actually enforces (#2620).
+
+    ``pa.build_agent_card`` always advertises the ``apiKey`` scheme and, when a bearer is
+    configured, appends ``bearer`` as a SECOND requirement — i.e. as an OR-alternative.
+    Both halves of that were wrong against this server:
+
+    * **apiKey was advertised even when no API key exists.** ``X-API-Key`` is enforced only
+      when ``<AGENT>_API_KEY`` is set. On a bearer-only agent — the normal deployment — a
+      standards-following client is entitled to pick the advertised apiKey scheme, and gets
+      401 from an agent that is healthy and correctly configured.
+    * **The two behaved as an AND.** The guard checked them independently and sequentially,
+      so with both configured neither credential alone was accepted, while the card
+      promised either would do. That conjunction was accidental rather than chosen, and is
+      now genuinely an OR (see ``auth._classify_request``) — so the card's OR shape became
+      the truth instead of the lie.
+
+    Each configured credential is therefore its own requirement: the A2A requirements list
+    is a set of alternatives, which is exactly what the guard now implements. An agent that
+    enforces nothing advertises nothing.
+
+    Best-effort: a card that fails to rewrite is worse than one that does, but not worse
+    than no card at all, so a proto shape change degrades to the builder's output rather
+    than taking down the well-known endpoint.
+    """
+    from a2a.types import SecurityRequirement, StringList
+
+    from a2a_impl.auth import enforced_schemes
+
+    bearer, api_key = enforced_schemes()
+    try:
+        # Build EVERYTHING first, mutate the card second. Clearing the fields up front
+        # and constructing as we went meant a failure midway left the card with its
+        # security block wiped — an agent advertising no auth at all, which is a worse
+        # lie than the one this function exists to fix.
+        schemes, requirements = {}, []
+        for name, scheme in (
+            (pa.API_KEY_SCHEME_NAME, pa.api_key_scheme() if api_key else None),
+            (pa.BEARER_SCHEME_NAME, pa.bearer_scheme() if bearer else None),
+        ):
+            if scheme is None:
+                continue
+            schemes[name] = scheme
+            # One requirement PER credential — the requirements list is a set of
+            # alternatives, and any one of these authenticates. (Naming several schemes
+            # inside a single requirement would mean "present all of them".)
+            requirements.append(SecurityRequirement(schemes={name: StringList(list=[])}))
+
+        card.ClearField("security_schemes")
+        card.ClearField("security_requirements")
+        for name, scheme in schemes.items():
+            card.security_schemes[name].CopyFrom(scheme)
+        card.security_requirements.extend(requirements)
+    except Exception:  # noqa: BLE001 — never let card polish break /.well-known
+        log.warning("[a2a] could not rewrite the card security block; serving the builder's", exc_info=True)
+
+
+def _build_agent_card_proto():
+    """Build the A2A 1.0 ``AgentCard`` (proto) served at
+    ``/.well-known/agent-card.json``, applying the protoLabs fleet conventions
+    via ``protolabs_a2a.build_agent_card``.
+
+    Identity is config/plugin-driven (#570), so a fork shouldn't edit this file:
+    ``name`` resolves from identity (``agent_name()``), ``description`` from
+    ``a2a.description`` in ``langgraph-config.yaml`` (falling back to the template
+    default below), and ``skills`` from config/plugins (``_resolved_skill_specs``).
+    The card declares exactly the extensions this runtime actually emits
+    (``_EMITTED_EXTENSION_URIS``) — **not** ``pa.ALL_EXTENSION_URIS``:
+
+    * ``cost-v1`` — emitted on every terminal artifact (``_terminal_parts``).
+    * ``worldstate-delta-v1`` — emitted when a tool yields ``delta`` events.
+    * ``tool-call-v1`` — emitted on status frames as tools run.
+
+    ``confidence-v1`` is deliberately NOT declared. A card is a contract: a
+    consumer that sees the URI is entitled to build a calibration pipeline on
+    it, and this agent has no ``<confidence>`` self-report to populate it with,
+    so declaring it would strand that consumer on a field that never arrives.
+    A fork that wants it should emit the tag, merge
+    ``pa.confidence_metadata(...)`` in ``_terminal_parts``, and add the URI back
+    here — in that order.
+
+    The interface ``url`` (``_a2a_card_url``) targets the JSON-RPC endpoint
+    (``/a2a``) at the agent's reachable address — set ``A2A_PUBLIC_URL`` when
+    deployed; otherwise it's the bound loopback port.
+    """
+    import protolabs_a2a as pa
+
+    cfg = STATE.graph_config
+    description = (getattr(cfg, "a2a_description", "") or "").strip() or _DEFAULT_CARD_DESCRIPTION
+    card = pa.build_agent_card(
+        name=agent_name(),
+        description=description,
+        url=_a2a_card_url(),
+        version=_package_version(),
+        skills=_agent_skills(),
+        extension_uris=_emitted_extension_uris(pa),
+        # No `bearer=` — _apply_real_security below owns the whole security block and
+        # would discard whatever the builder produced. Passing it would be dead input in
+        # the very function this change gave a single owner. (Once protolabs-a2a#7 ships
+        # `api_key=`, both flags move here and the post-processing goes away.)
+    )
+    _apply_real_security(card, pa)
+    # Card polish (ADR 0051 Slice 3) — build_agent_card doesn't set these, but the
+    # 1.0 proto AgentCard has them: a docs link + an icon for consumers/registries.
+    # Overridable via a2a.documentation_url / a2a.icon_url config; default to the
+    # public docs + the served brand mark.
+    doc_url = (getattr(cfg, "a2a_documentation_url", "") or "").strip() or "https://protolabsai.github.io/protoAgent/"
+    icon_url = (getattr(cfg, "a2a_icon_url", "") or "").strip()
+    try:
+        card.documentation_url = doc_url
+        if icon_url:
+            card.icon_url = icon_url
+    except Exception:  # noqa: BLE001 — card polish is best-effort, never break the card
+        pass
+    return card
+
+
+# The A2A *protocol* version this agent speaks — distinct from the agent's app
+# version (``_package_version`` → the card's ``version``). It mirrors the a2a-sdk
+# ``PROTOCOL_VERSION_1_0`` that ``build_agent_card`` writes into
+# ``supported_interfaces[].protocol_version`` and the ``A2A-Version: 1.0`` header
+# the runtime sends everywhere. One value, advertised in two shapes (see below).
+A2A_PROTOCOL_VERSION = "1.0"
+A2A_SUPPORTED_VERSIONS = (A2A_PROTOCOL_VERSION,)
+
+
+def agent_card_dict(card) -> dict:
+    """The JSON served at ``/.well-known/agent-card.json`` — a2a-sdk's canonical
+    camelCase card dict plus a small, proto-free protocol-version hint.
+
+    The proto ``AgentCard`` already carries the protocol version natively in
+    ``supportedInterfaces[].protocolVersion`` (``build_agent_card`` sets it to
+    1.0), but that's nested inside the proto-shaped interface list. We ALSO surface
+    a top-level ``protocolVersion`` + ``supportedVersions`` so a delegating peer can
+    pre-check version compatibility — and fail fast on a mismatch — without proto
+    knowledge or walking ``supportedInterfaces``. The proto card has no slot for
+    these extra top-level keys, so they're injected into the served JSON here
+    (``setdefault`` — never clobber a native key the sdk may add later)."""
+    from a2a.server.routes.agent_card_routes import agent_card_to_dict
+
+    d = agent_card_to_dict(card)
+    d.setdefault("protocolVersion", A2A_PROTOCOL_VERSION)
+    d.setdefault("supportedVersions", list(A2A_SUPPORTED_VERSIONS))
+    return d
+
+
+def agent_card_routes(card) -> list:
+    """Starlette route(s) for the agent card — like a2a-sdk's
+    ``create_agent_card_routes`` but serving ``agent_card_dict`` so the JSON carries
+    the proto-free protocol-version hint. Same well-known path + GET, so
+    ``add_a2a_routes_to_fastapi`` mounts it identically.
+
+    The route reads the LIVE card from ``_served_card`` (seeded with ``card``
+    here) instead of closing over the boot-time object, so a hot reload that
+    changes the skill set (``refresh_served_card``) is visible to callers
+    without a restart (#2754)."""
+    from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    _served_card["card"] = card
+
+    async def _get_agent_card(_request) -> JSONResponse:
+        return JSONResponse(agent_card_dict(_served_card["card"]))
+
+    return [Route(path=AGENT_CARD_WELL_KNOWN_PATH, endpoint=_get_agent_card, methods=["GET"])]
+
+
+# The live served card + the SDK objects that hold a private copy of it. The
+# card route above reads ``card`` per-request; ``consumers`` are request
+# handlers whose ``_agent_card`` must follow (the SDK captures the card at
+# construction — same class of boot-time capture #2754 fixes for the route).
+_served_card: dict = {"card": None, "consumers": []}
+
+
+def register_card_consumer(handler) -> None:
+    """Track an a2a-sdk request handler so ``refresh_served_card`` can swap its
+    captured ``_agent_card`` alongside the served route's copy. Private-attr
+    reach-in, like ``harden_active_task_registry`` — remove if the SDK grows a
+    setter."""
+    _served_card["consumers"].append(handler)
+
+
+def refresh_served_card() -> None:
+    """Rebuild the agent card from live state (#2754). Called by the reload path
+    after it swaps ``STATE.plugin_a2a_skills``: before this, hot-enabling a
+    plugin refreshed the structured finalizer's view of the skills but left the
+    SERVED card frozen at its boot-time build — the card advertised a skill set
+    the runtime no longer had (or hid one it did). No-op before the server has
+    built its first card."""
+    if _served_card["card"] is None:
+        return
+    try:
+        card = _build_agent_card_proto()
+    except Exception:  # the reload must survive a cosmetic rebuild failure
+        log.exception("[a2a] card rebuild after reload failed — serving the previous card")
+        return
+    _served_card["card"] = card
+    for handler in _served_card["consumers"]:
+        handler._agent_card = card
+
+
+def _record_a2a_telemetry(outcome) -> None:
+    """Write one per-turn telemetry row from an executor ``TurnOutcome``
+    (ADR 0006 Slice 2).
+
+    The A2A adapter over the shared writer: unpack the outcome, hand its fields to
+    ``server.turn_telemetry.record_turn``, then do the one thing that is genuinely
+    A2A-only (fleet trace export, which needs the outcome object itself). The
+    non-streaming driver calls the same writer with its own fields, so the two
+    surfaces cannot drift into recording different shapes (#3000).
+
+    Best-effort throughout — a failure never affects the turn.
+    """
+    from server.turn_telemetry import record_turn
+
+    record_turn(
+        task_id=getattr(outcome, "task_id", "") or "",
+        session_id=getattr(outcome, "context_id", "") or "",
+        state=getattr(outcome, "state", "") or "",
+        models=list(getattr(outcome, "models", None) or []),
+        usage=outcome.usage or {},
+        cost_usd=float(getattr(outcome, "cost_usd", 0.0) or 0.0),
+        duration_ms=int(getattr(outcome, "duration_ms", 0) or 0),
+        llm_calls=int(outcome.llm_calls),
+        tool_calls=int(outcome.tool_calls),
+        # Captured by the executor DURING the stream (the trace contextvar is already
+        # reset by the time this hook runs) — lets the console pivot a telemetry row
+        # straight to its Langfuse trace tree.
+        trace_id=getattr(outcome, "trace_id", "") or "",
+        tool_durations=getattr(outcome, "tool_durations", None),
+        # getattr-guarded like trace_id: an older/alternate producer's outcome object
+        # may predate the field.
+        context_tokens=int(getattr(outcome, "context_tokens", 0) or 0),
+        # What the caller asked for — the row's model when no call reported one (#3957).
+        requested_model=str(getattr(outcome, "requested_model", "") or ""),
+    )
+
+    # Fleet trace export → lab (the flywheel Observe, #1897). Off unless
+    # PROTOAGENT_FLEET_TRACE_EXPORT is set; best-effort, never touches the turn.
+    try:
+        from observability import trace_export
+
+        if trace_export.is_enabled():
+            trace_export.export_turn(
+                outcome,
+                checkpointer=STATE.checkpointer,
+                graph_config=STATE.graph_config,
+                bound_tools=getattr(STATE.graph, "bound_tools", None),
+            )
+    except Exception:  # noqa: BLE001 — export is best-effort
+        log.exception("[trace_export] failed to export turn %s", outcome.task_id)
+
+
+# How much of one streamed narration chunk rides the bus. The executor already batches
+# text to its own flush threshold, so this is a backstop against a single pathological
+# flush (a tool that returns a novel, echoed into the answer), not the normal path.
+_CHAT_PROGRESS_TEXT_LIMIT = 2000
+# Tool output on a live card is a preview — the full result is in the turn's history.
+_CHAT_PROGRESS_OUTPUT_LIMIT = 500
+
+
+def _server_turn_control(context_id: str, task_id: str, frame: dict) -> dict | None:
+    """Return/register the session-scoped control payload for a server-fired chat turn."""
+    from server.chat import live_server_turn_control, register_live_server_turn
+
+    if frame.get("phase") == "turn_started":
+        return register_live_server_turn(
+            context_id,
+            task_id,
+            origin=frame.get("origin"),
+            trigger=frame.get("trigger"),
+            attended=frame.get("attended"),
+        )
+    return live_server_turn_control(context_id, task_id)
+
+
+def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
+    """Republish a SERVER-FIRED turn's frames into its chat session as ``chat.progress``
+    (#2361), so an open console can watch the turn happen instead of staring at a typing
+    indicator for minutes.
+
+    A scheduled fire, a watch reaction, or a background push-resume runs by self-POSTing
+    into a session. The server holds that A2A stream, so the browser — which only renders
+    turns IT streamed — sees nothing until the terminal ``chat.resumed`` lands. #1767 gave
+    these turns a typing indicator; this gives them their content.
+
+    **Gated on origin, not on context shape.** A turn the browser is streaming itself must
+    NOT be republished — the console would render every tool card and narration chunk
+    twice, once from its own stream and once from the bus. ``is_autonomous_origin`` covers
+    exactly the set of turns nobody is holding a stream for, and the executor stamps each
+    frame with the origin it read from request metadata.
+
+    Published UNRETAINED: these frames are live-only. The replay ring holds 128 events
+    total, so one long turn would evict the durable events a reconnecting client needs —
+    and a replayed progress frame from a finished turn renders work that is already over.
+
+    Best-effort — never raises into the executor.
+    """
+    from server.chat import is_autonomous_origin  # local: server.chat imports heavy graph deps
+
+    if not is_autonomous_origin(frame.get("origin")):
+        return
+    phase = frame.get("phase")
+    control = _server_turn_control(context_id, task_id, frame)
+    if phase == "turn_started":
+        if control is None:
+            return
+        data = {"phase": "turn_started"}
+    elif phase == "text":
+        text = str(frame.get("text") or "")
+        if not text:
+            return
+        data = {"phase": "text", "text": text[:_CHAT_PROGRESS_TEXT_LIMIT]}
+    elif phase in ("tool_start", "tool_end"):
+        out = frame.get("output")
+        if isinstance(out, str) and len(out) > _CHAT_PROGRESS_OUTPUT_LIMIT:
+            out = out[:_CHAT_PROGRESS_OUTPUT_LIMIT] + "…"
+        data = {
+            "phase": phase,
+            "tool": frame.get("name"),
+            "tool_call_id": frame.get("id"),
+            "output": out,
+            "error": bool(frame.get("error")),
+        }
+    elif phase == "room_reply":
+        author = str(frame.get("author") or "")
+        addressed_to = str(frame.get("addressed_to") or "")
+        text = str(frame.get("text") or "")
+        if author:
+            # `message_id` is the emitter's own id and NOTHING synthesises one here, which
+            # is what keeps an `@`-addressed turn safe on this path: the mention exchange
+            # frames carry no `id`, so `parseProgress` drops them and the preview renders
+            # the turn's answer once, from `chat.resumed`. Do not give this branch the
+            # content-hash fallback the ask below has (#3447) without first teaching the
+            # preview about `in_answer` — a scheduled or watch-fired `@name` turn would
+            # then draw the participant's bubble AND the final answer, which is #3449 all
+            # over again on a path that has no room-v1 decoder. Pinned by
+            # test_a2a_handler.py::test_an_addressed_exchange_is_not_republished_as_a_preview_bubble.
+            data = {
+                "phase": "room_reply",
+                "message_id": str(frame.get("id") or ""),
+                "author": author,
+                "from": str(frame.get("from") or "assistant"),
+                # A delegate deliverable is intentionally whole (#2363), just like the
+                # foreground room-reply frame. Background transport must not silently
+                # turn an authored answer back into a preview.
+                "text": text,
+                "ok": bool(frame.get("ok")),
+            }
+        elif addressed_to:
+            # The lead's outgoing delegation ask — a delegation made DURING a server-fired
+            # turn (answering background reports by delegating again) gets the same row a
+            # browser-streamed one does. Ids dedupe the live bus copy, so they must be per
+            # DELEGATION: the emitter's run id, else its background job, and only then the
+            # ask's content (a pre-#3447 emitter, where two identical asks would collapse).
+            job_id = str(frame.get("job_id") or "")
+            ask_key = (
+                str(frame.get("id") or "")
+                or job_id
+                or hashlib.sha1(f"{addressed_to}\0{text}".encode()).hexdigest()[:12]
+            )
+            data = {
+                "phase": "room_reply",
+                "message_id": f"ask-{ask_key}",
+                "addressed_to": addressed_to,
+                "text": text,
+                "ok": frame.get("ok") is not False,
+                **{k: frame[k] for k in ("summary", "background", "job_id", "error") if frame.get(k) not in (None, "")},
+            }
+        else:
+            return
+    elif phase == "steer_consumed":
+        # The model-call boundary where an operator interjection was folded in. A
+        # browser-owned stream carries this inline; a server-fired turn's stream is held
+        # by the server, so this frame is the console's ONLY acknowledgement that the
+        # queued message reached the agent — without it the bubble stays "queued" under
+        # an answer that already used it. Ids + text travel whole: the console settles
+        # the operator's exact words at this point in the turn. Live-only like the rest;
+        # a console that misses it settles off the steer queue when the turn ends.
+        items = [
+            {"id": str(item["id"]), "text": str(item["text"])}
+            for item in (frame.get("items") or [])
+            if isinstance(item, dict) and item.get("id") and item.get("text")
+        ]
+        if not items:
+            return
+        data = {"phase": "steer_consumed", "items": items}
+    else:
+        return
+    _event_bus.publish(
+        "chat.progress",
+        {
+            "session_id": context_id,
+            "task_id": task_id,
+            **data,
+            **({"control": control} if control else {}),
+        },
+        retain=False,
+    )
+
+
+def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
+    """Per-frame progress hook (ADR 0051). A HITL pause (``input_required``) is published
+    for EVERY context as ``turn.input_required`` so a fleet console can surface "needs your
+    approval" without polling. Otherwise only background turns get a bus push — live turns
+    already stream over their own SSE. On the opening ``turn_started`` frame it records the
+    A2A task id on the job row (the handle ``stop_task`` needs); on tool frames it
+    republishes ``background.progress`` for the console's live job card.
+    Best-effort — never raises into the executor."""
+    if frame.get("phase") == "turn_ended":
+        # The executor's guaranteed exit signal (#3933): whatever path the turn took out —
+        # including a crash before its terminal hook fired — forget its control entry.
+        # Nothing is published: the terminal / park frames already told every consumer.
+        from server.chat import finish_live_server_turn
+
+        finish_live_server_turn(context_id, task_id)
+        return
+    if frame.get("phase") == "input_required":
+        from server.chat import finish_live_server_turn
+
+        finish_live_server_turn(context_id, task_id)
+        # The turn is parked awaiting a human answer/approval. Carries a short prompt so a
+        # consumer can render "needs your approval — <what>" without fetching the task.
+        _event_bus.publish(
+            "turn.input_required",
+            {
+                "task_id": task_id,
+                "context_id": context_id,
+                "prompt": str(frame.get("prompt") or "")[:300],
+            },
+        )
+        return
+    if frame.get("phase") == "turn_started" and frame.get("resumed"):
+        # The parked turn got its answer and is running again — lets a console flip
+        # "needs approval" back to "running" without waiting for the terminal frame.
+        # Falls through: a resumed BACKGROUND turn still records its task id below.
+        _event_bus.publish("turn.resumed", {"task_id": task_id, "context_id": context_id})
+    if not context_id.startswith("background:"):
+        _publish_chat_progress(context_id, task_id, frame)
+        return
+    mgr = getattr(STATE, "background_mgr", None)
+    if mgr is None:
+        return
+    job_id = context_id.split(":", 1)[1]
+    if not job_id:
+        return
+    phase = frame.get("phase")
+    if phase == "turn_started":
+        try:
+            mgr.store.set_a2a_task_id(job_id, task_id)
+        except Exception:  # noqa: BLE001
+            log.exception("[background] failed to record task id for %s", job_id)
+        return
+    out = frame.get("output")
+    if isinstance(out, str) and len(out) > 500:
+        out = out[:500] + "…"
+    _event_bus.publish(
+        "background.progress",
+        {
+            "job_id": job_id,
+            "task_id": task_id,
+            "phase": phase,  # "tool_start" | "tool_end"
+            "tool": frame.get("name"),
+            "tool_call_id": frame.get("id"),
+            "output": out,
+            "error": bool(frame.get("error")),
+        },
+        # Live-only (#2692), same treatment as _publish_chat_progress just above: a
+        # busy background job's own tool_start/tool_end chatter was crowding
+        # background.completed — the event the replay ring most needs to protect —
+        # out of the shared 128-slot ring before a reconnecting client could replay it.
+        retain=False,
+    )
+
+
+def _handle_background_terminal(outcome) -> None:
+    """Settle a finished background subagent job (ADR 0050).
+
+    Marks the store row terminal with the turn's final text and publishes a
+    ``background.completed`` event for the console (the model learns separately, via
+    the drain into the spawning session's next turn). Best-effort."""
+    mgr = getattr(STATE, "background_mgr", None)
+    if mgr is None:
+        return
+    _ctx = str(getattr(outcome, "context_id", "") or "")
+    job_id = (getattr(outcome, "trigger", "") or "").strip()
+    if not job_id and _ctx.startswith("background:"):
+        job_id = _ctx.split(":", 1)[1]
+    if not job_id:
+        return
+    state = getattr(outcome, "state", "completed")
+    status = state if state in ("completed", "canceled") else "failed"
+    text = extract_output(outcome.text) or outcome.text or ""
+    # Why a job that did not complete ended (#3945). The outcome's `text` is only what
+    # the turn managed to say — for a turn the provider rejected (a 429) that is nothing,
+    # so storing it alone left the job with an empty result and the agent inventing a
+    # cause ("likely a transient issue"). The executor's terminal error names the real one.
+    error = str(getattr(outcome, "error", "") or "").strip()
+    if status != "completed" and not error and state not in ("failed", "canceled"):
+        # A background turn has no one to answer it, so a park is a failure — say so.
+        error = f"the background turn ended in state {state!r}"
+    # The background turn's own priced spend, onto its ledger edge (#3565). The executor
+    # reports 0.0 when no call reported usage — unknown, not free — so only a positive
+    # total is recorded (the same rule its cost-v1 extension applies).
+    cost = float(getattr(outcome, "cost_usd", 0.0) or 0.0)
+    try:
+        mgr.store.mark_complete(job_id, status, text, cost_usd=cost if cost > 0 else None, error=error)
+    except Exception:  # noqa: BLE001
+        log.exception("[background] failed to settle job %s", job_id)
+        return
+    job = None
+    try:
+        job = mgr.store.get(job_id)
+    except Exception:  # noqa: BLE001 — read is best-effort for the event payload
+        pass
+    # Carry a trimmed result so a still-open spawning chat can render the outcome
+    # live without a refetch (the model learns separately, via the next-turn drain).
+    # The console chat card offers "Read full report" for the full text, so the
+    # preview just marks that it's clipped — no panel CTA.
+    result_preview = text if len(text) <= 2000 else text[:2000] + "\n\n…_[truncated]_"
+    _event_bus.publish(
+        "background.completed",
+        {
+            "job_id": job_id,
+            "status": status,
+            "subagent_type": getattr(job, "subagent_type", "") if job else "",
+            "description": getattr(job, "description", "") if job else "",
+            "origin_session": getattr(job, "origin_session", "") if job else "",
+            "result": result_preview,
+            "error": error if status != "completed" else "",
+        },
+    )
+    # Index the full report into the knowledge store (ADR 0070 D2) BEFORE any resume
+    # turn runs, so the drained notification's "searchable via memory_recall" pointer
+    # is already true when the agent reads it.
+    if _should_index_report(job):
+        _spawn_report_index(job)
+    # Delivery (ADR 0070 D1): push-resume the ORIGIN session — the nudge turn's drain
+    # injects the <task-notification> and the agent briefs the operator right where
+    # the work was requested. That one turn IS the reaction, so the ADR 0050 Phase 2
+    # Activity wake only fires when the resume doesn't apply (feature off, canceled,
+    # incognito, no/background origin) or couldn't be delivered (fallback inside
+    # _spawn_background_resume) — never both for one completion.
+    if job is not None and _should_auto_resume(job):
+        _spawn_background_resume(mgr, job)
+    elif job is not None and _background_wake_enabled():
+        _spawn_background_wake(job)
+
+
+def _surface_resumed_chat_turn(outcome) -> None:
+    """Surface a scheduler-fired turn (a ``wait`` resume / scheduled task, ADR 0053)
+    that landed in a CHAT session — not the Activity thread — on the event bus so an
+    open chat tab shows the resumed turn LIVE (bd-k02). The browser only renders
+    turns it streamed, so a server-fired resume is otherwise invisible until the
+    next interaction. Mirrors the ADR 0050 background path. Only server-fired
+    origins qualify — scheduler resumes and ADR 0070 push-resume briefings; an
+    operator/A2A chat turn the browser already streamed does not.
+
+    Carries the turn's terminal ``state`` (+ ``error`` for a non-completed one) so the
+    console can render a FAILED resume as a failure. Without it every resume arrived
+    looking identical to a good one: a server-fired turn that crashed (a wedged tool, a
+    LangGraph ``recursion_limit``) published its partial narration as an ordinary
+    assistant message that simply trailed off mid-sentence, while the real reason sat
+    unread in the task's terminal ``status.message``. A crash BEFORE any text was worse
+    — the old empty-text guard dropped the event entirely, so the turn vanished with no
+    trace in the UI at all. That guard now applies only to a COMPLETED turn, where empty
+    text genuinely means "nothing to say"; a failure is published on the strength of its
+    error alone."""
+    if getattr(outcome, "origin", "") not in ("scheduler", "background-resume"):
+        return
+    text = extract_output(outcome.text) or outcome.text
+    state = str(getattr(outcome, "state", "") or "completed")
+    error = str(getattr(outcome, "error", "") or "")
+    if not text.strip() and (state == "completed" or not error.strip()):
+        return
+    _event_bus.publish(
+        "chat.resumed",
+        {
+            "session_id": str(getattr(outcome, "context_id", "") or ""),
+            "text": text,
+            "task_id": getattr(outcome, "task_id", "") or "",
+            "trigger": getattr(outcome, "trigger", "") or "",
+            "state": state,
+            "error": error,
+            # Trigger origin (#3028) so the console can render this settled turn as a compact
+            # result card instead of a full-size operator answer. The console also has a store
+            # fallback (the origin captured at turn.started), so this is additive, not required.
+            "origin": str(getattr(outcome, "origin", "") or ""),
+        },
+    )
+
+
+# Scheduled-result delivery (#2990): a fire's result summary surfaces in the chat that
+# CREATED the schedule as a ScheduledReportCard. The full-card summary is truncated to
+# this many chars (the whole turn stays readable in Activity via the "View full result"
+# link). The stale window skips delivery to a chat that's had no turn in this long — very
+# likely closed, so the card would land nowhere useful (the result is still in Activity).
+_SCHEDULED_SUMMARY_CAP = 500
+_SCHEDULED_STALE_WINDOW_S = 24 * 60 * 60  # 24h
+
+
+def _scheduled_delivery_payload(outcome) -> dict | None:
+    """Build the ``scheduler.completed`` event payload for a scheduled fire whose
+    result should surface in the chat that created it (#2990), or ``None`` when this
+    turn isn't such a fire. Pure + sync so the guards + shaping are unit-testable
+    without a task store or event loop.
+
+    Returns ``None`` (no delivery) when: the turn isn't a ``scheduler`` fire; it's a
+    ``wait:`` resume (already runs IN its chat, surfaced by chat.resumed); the job has
+    no ``origin_session`` (created outside a chat — r6, backward compatible); the origin
+    is the Activity thread itself (nothing to surface there); or the fire already ran IN
+    the origin session (a one-shot resume — chat.resumed covers it, no double-delivery)."""
+    if getattr(outcome, "origin", "") != "scheduler":
+        return None
+    job_id = (getattr(outcome, "trigger", "") or "").strip()
+    if not job_id or job_id.startswith("wait:"):
+        return None
+    scheduler = getattr(STATE, "scheduler", None)
+    getter = getattr(scheduler, "get_job", None)
+    job = None
+    if callable(getter):
+        try:
+            job = getter(job_id)
+        except Exception:  # noqa: BLE001 — a lookup failure just means no card
+            job = None
+    origin = (getattr(job, "origin_session", "") or "").strip() if job else ""
+    if not origin or origin == ACTIVITY_CONTEXT:
+        return None
+    context_id = str(getattr(outcome, "context_id", "") or "")
+    if context_id == origin:
+        return None
+    text = extract_output(outcome.text) or outcome.text or ""
+    summary = text.strip()
+    if len(summary) > _SCHEDULED_SUMMARY_CAP:
+        summary = summary[:_SCHEDULED_SUMMARY_CAP].rstrip() + "…"
+    state = str(getattr(outcome, "state", "") or "completed")
+    status = state if state in ("completed", "canceled") else "failed"
+    # Recurring collapse (r4): the FIRST fire renders a full card; subsequent fires into
+    # the same session collapse to a compact chip. ``fire_count`` is the PRE-fire value at
+    # terminal time — the scheduler bumps it only after the fire lands — so 0 == first fire.
+    collapse = bool(getattr(job, "fire_count", 0))
+    return {
+        "job_id": job_id,
+        "origin_session": origin,
+        "fired_at": datetime.now(UTC).isoformat(),
+        "summary": summary,
+        "status": status,
+        "collapse": collapse,
+        "schedule": str(getattr(job, "schedule", "") or ""),
+        "activity_context": context_id or ACTIVITY_CONTEXT,
+        "task_id": getattr(outcome, "task_id", "") or "",
+    }
+
+
+def _is_recent(last_updated, now, window_s: int) -> bool:
+    """Whether ``last_updated`` is within ``window_s`` seconds of ``now`` (#2990 r3).
+    A ``None`` timestamp counts as recent (can't prove staleness → don't suppress);
+    naive datetimes are read as UTC (the task store persists UTC)."""
+    if last_updated is None:
+        return True
+    if getattr(last_updated, "tzinfo", None) is None:
+        last_updated = last_updated.replace(tzinfo=UTC)
+    return (now - last_updated).total_seconds() <= window_s
+
+
+def _plugin_form_callback_in(status_json: Any) -> str:
+    """The ``plugin_callback_id`` a parked task's status message carries, or "". The store
+    keeps the status as proto JSON; the hitl-v1 DataPart's payload sits under ``data``
+    (nested once more under a ``DataPart``-shaped encoding), so both spellings are read."""
+    if not isinstance(status_json, dict):
+        return ""
+    message = status_json.get("message")
+    parts = message.get("parts") if isinstance(message, dict) else None
+    for p in parts or []:
+        if not isinstance(p, dict):
+            continue
+        data = p.get("data")
+        if isinstance(data, dict) and isinstance(data.get("data"), dict):
+            data = data["data"]
+        if isinstance(data, dict) and data.get("plugin_callback_id"):
+            return str(data["plugin_callback_id"])
+    return ""
+
+
+async def settle_plugin_form_task(session_id: str) -> bool:
+    """Complete the task a plugin composer-form parked (#1701 Slice 2, #3470).
+
+    The form rides the same ``input_required`` frame the agent HITL uses so the console
+    renders the card, but it is not a graph interrupt: its answers go to
+    ``POST /api/chat/commands/submit``, which never touched the A2A task. Left in
+    ``input_required`` (a state the TTL sweep deliberately skips) the session's latest task
+    read as "waiting on the operator" forever — a fleet roster parked the member on every
+    probe. The executor cannot finish it itself (the SDK's consumer treats input_required
+    as the stream's final event), so the redeem route calls this once the wizard is done.
+    A direct row update, like the store's own reapers: the SDK store scopes ``get``/``save``
+    by the request's owner, which the redeem route does not have. The status message (the
+    card) stays in the record; only the state and its timestamp move. Best-effort: returns
+    whether a parked plugin-form task was completed."""
+    engine = getattr(STATE, "a2a_task_engine", None)
+    sid = str(session_id or "").strip()
+    if engine is None or not sid:
+        return False
+    try:
+        from a2a.server.tasks.database_task_store import TaskModel
+        from sqlalchemy import select, update
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from a2a_impl.stores import task_newest_first
+
+        session_maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_maker() as session:
+            row = (
+                await session.execute(
+                    select(TaskModel.id, TaskModel.status)
+                    .where(TaskModel.context_id == sid)
+                    # The newest-CREATED turn, like the durable turns reader (#3963).
+                    .order_by(*task_newest_first(TaskModel, engine.dialect.name))
+                    .limit(1)
+                )
+            ).first()
+            if row is None:
+                return False
+            task_id, status_json = row
+            if not isinstance(status_json, dict) or str(status_json.get("state") or "") != "TASK_STATE_INPUT_REQUIRED":
+                return False
+            if not _plugin_form_callback_in(status_json):
+                return False  # a real HITL pause: the operator's answer resumes it, nothing else may end it
+            now = datetime.now(UTC)
+            blob = {**status_json, "state": "TASK_STATE_COMPLETED", "timestamp": now.isoformat().replace("+00:00", "Z")}
+            result = await session.execute(
+                update(TaskModel)
+                .where(TaskModel.id == task_id, TaskModel.status["state"].as_string() == "TASK_STATE_INPUT_REQUIRED")
+                .values(status=blob, last_updated=now)
+            )
+            await session.commit()
+        if not (result.rowcount or 0):
+            return False
+        log.info("[a2a] plugin form redeemed — completed its parked task %s in %s", task_id, sid)
+        return True
+    except Exception:  # noqa: BLE001 — a redeem must never fail on this bookkeeping
+        log.exception("[a2a] could not settle the plugin-form task for %s — it stays input_required", sid)
+        return False
+
+
+async def _session_recently_active(session_id: str, *, window_s: int = _SCHEDULED_STALE_WINDOW_S) -> bool:
+    """Has ``session_id`` had a turn within ``window_s`` seconds? (#2990 r3)
+
+    Reads the A2A task store — the durable per-session turn log. Best-effort: returns
+    True on any uncertainty (no engine / read error / no rows), because the guard exists
+    to skip *known-stale* sessions, not to demand a positive liveness proof."""
+    engine = getattr(STATE, "a2a_task_engine", None)
+    if engine is None:
+        return True
+    try:
+        from a2a.server.tasks.database_task_store import TaskModel
+        from sqlalchemy import func, select
+
+        async with engine.connect() as conn:
+            latest = (
+                await conn.execute(
+                    select(func.max(TaskModel.last_updated)).where(TaskModel.context_id == session_id)
+                )
+            ).scalar()
+    except Exception:  # noqa: BLE001 — a read failure must not suppress a delivery
+        return True
+    return _is_recent(latest, datetime.now(UTC), window_s)
+
+
+async def _deliver_scheduled(payload: dict) -> bool:
+    """Publish a scheduled fire's result card unless the origin session is stale (#2990
+    r3). Returns whether it published. Best-effort — never raises."""
+    origin = payload["origin_session"]
+    try:
+        if not await _session_recently_active(origin):
+            log.info(
+                "[scheduler] session %s idle > 24h — skipping result card for job %s (result stays in Activity)",
+                origin,
+                payload["job_id"],
+            )
+            return False
+        _event_bus.publish("scheduler.completed", payload)
+        log.info("[scheduler] delivered result card for job %s → session %s", payload["job_id"], origin)
+        return True
+    except Exception:  # noqa: BLE001
+        log.exception("[scheduler] scheduled delivery failed for %s", payload["job_id"])
+        return False
+
+
+def _handle_scheduled_delivery(outcome) -> None:
+    """Deliver a scheduled fire's result back to the chat that created the schedule
+    (#2990). A cron runs in Activity (a `wait`/resume runs back in its chat), but if the
+    schedule was created from a chat we stamped it as the job's ``origin_session``; after
+    the fired turn completes, push a ``scheduler.completed`` event carrying a result
+    summary so the console renders a ScheduledReportCard — a full card on the first fire,
+    a compact dismissable chip on recurring re-fires — right where the operator set the
+    schedule up, instead of it hiding in Activity.
+
+    The stale-session check reads the async task store, so it runs off this sync hook.
+    Best-effort — never raises into the terminal hook."""
+    payload = _scheduled_delivery_payload(outcome)
+    if payload is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop (a direct unit-test call) — publish inline; the stale guard
+        # is a best-effort refinement layered on top of the always-safe bus publish
+        # (an unconsumed event creates no ghost session).
+        _event_bus.publish("scheduler.completed", payload)
+        return
+    t = loop.create_task(_deliver_scheduled(payload))
+    _BG_WAKE_TASKS.add(t)
+    t.add_done_callback(_BG_WAKE_TASKS.discard)
+
+
+def _a2a_terminal(outcome) -> None:
+    """A2A terminal hook (ADR 0003 / 0006). Fired by ``ProtoAgentExecutor`` with
+    a ``TurnOutcome`` when a turn reaches a terminal state. Records per-turn
+    telemetry and surfaces either the Activity thread's answer or an ordinary
+    peer-delegation outcome (``origin=a2a``) on the Activity feed. The peer keeps
+    its real A2A context/task identity; ordinary operator chat still returns through
+    its own stream and is never duplicated here. Best-effort — never raises."""
+    from server.chat import finish_live_server_turn
+
+    # First, so a telemetry failure below can't skip it (#3933); the executor's
+    # `turn_ended` progress frame is the backstop for paths that never reach this hook.
+    finish_live_server_turn(getattr(outcome, "context_id", "") or "", getattr(outcome, "task_id", "") or "")
+    _record_a2a_telemetry(outcome)
+    # Scheduled fires (#2990): deliver the result back to the chat that created the
+    # schedule as a ScheduledReportCard, whichever thread the fire actually ran in. A
+    # no-op for every non-scheduled turn (guarded inside _scheduled_delivery_payload).
+    _handle_scheduled_delivery(outcome)
+    # Background subagent turns (ADR 0050) live in a dedicated ``background:<id>``
+    # context, not the Activity thread — settle the job + notify the UI here, before
+    # the Activity early-return below.
+    _ctx = str(getattr(outcome, "context_id", "") or "")
+    if getattr(outcome, "origin", "") == "background" or _ctx.startswith("background:"):
+        _handle_background_terminal(outcome)
+        return
+    origin = getattr(outcome, "origin", "") or "operator"
+    is_peer_turn = origin == "a2a"
+    if outcome.context_id != ACTIVITY_CONTEXT and not is_peer_turn:
+        _surface_resumed_chat_turn(outcome)
+        return
+    text = extract_output(outcome.text) or outcome.text
+    state = str(getattr(outcome, "state", "") or "completed")
+    error = str(getattr(outcome, "error", "") or "")
+    # A peer failure must read as failed even when the model emitted partial narration
+    # first. ``state``/``error`` travel on the event for machine consumers, but the
+    # Activity UI renders the text body; append the terminal cause so an operator never
+    # mistakes a trailing partial answer for a successful sister-agent handoff.
+    if is_peer_turn and state != "completed" and error.strip():
+        failure = f"**A2A turn failed:** {error}"
+        text = f"{text.rstrip()}\n\n{failure}" if text.strip() else failure
+    if not text.strip():
+        return
+    trigger = getattr(outcome, "trigger", "") or ""
+    priority = getattr(outcome, "priority", "") or ""
+    stimulus = getattr(outcome, "stimulus", "") or ""
+    feed_context = _ctx if is_peer_turn else ACTIVITY_CONTEXT
+    # Provenance feed (ADR 0022): durably log the turn + what triggered it + the stimulus it
+    # responds to (#1375), so the feed reads as an explicit reply.
+    if STATE.activity_log is not None:
+        STATE.activity_log.add(
+            context_id=feed_context,
+            origin=origin,
+            trigger=trigger,
+            priority=priority,
+            state=state,
+            text=text,
+            task_id=getattr(outcome, "task_id", "") or "",
+            stimulus=stimulus,
+        )
+    _event_bus.publish(
+        "activity.message",
+        {
+            "role": "assistant",
+            "text": text,
+            "context_id": feed_context,
+            "origin": origin,
+            "trigger": trigger,
+            "priority": priority,
+            "stimulus": stimulus,
+            "state": state,
+            "task_id": getattr(outcome, "task_id", "") or "",
+            "error": error,
+        },
+    )

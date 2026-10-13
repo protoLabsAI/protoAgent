@@ -1,0 +1,318 @@
+<!doctype html>
+<!--
+  SAVED ATS FORM FIXTURE — intl-tel-input v23+ PHONE-COUNTRY picker (#4032 v23 read-back).
+
+  Models the DOM contract of the intl-tel-input v23+/v24 country picker as it ships on the
+  live GitLab Greenhouse application form:
+      https://job-boards.greenhouse.io/gitlab/jobs/8698330002
+  after intl-tel-input moved from the old `.iti__selected-flag` markup to the v23 `button`
+  markup. Captured / last modeled: 2026-10-06.
+
+  It is a SEPARATE file from greenhouse_phone_country.html ON PURPOSE: that file models the
+  OLD / react-select-style phone picker and keeps "Country" as its only field labelled
+  Country; THIS file models the v23 `button.iti__selected-country` shape, so each markup era
+  has a picker that is the ONLY "Country" field in its own document. greenhouse_phone_country
+  .html is NOT modified beyond a cross-reference note.
+
+  This is a MINIMAL, self-contained reproduction — no network, no external JS/CSS — whose
+  purpose is to exercise the agent_browser in-page form JavaScript (plugins/agent_browser/
+  forms.py) in a real browser. What matters is the DOM contract and the interaction behavior,
+  NOT a pixel copy.
+
+  The picker is the intl-tel-input v23+ widget:
+    * `div.iti` (aria-label="Country" — the picker's persistent accessible name, as the live
+      widget is named) wraps `div.iti__country-container` > `button.iti__selected-country`
+      (role="combobox", aria-controls → the dropdown content id). The button carries NO
+      `<label for>` / aria-label of its OWN, so it is addressable by the LABEL "Country"
+      (borrowed from the wrapper) on EVERY call — even after a prior pick overwrites its
+      title — and the sibling `input[type=tel]#phone_number` keeps its own "Phone" label.
+    * Inside the button: `div.iti__selected-country-primary` > `div.iti__flag` +
+      `div.iti__arrow`, a `span.iti__selected-dial-code` whose VISIBLE text is only the dial
+      code ("+1"), and a `span.iti__a11y-text` screen-reader string.
+    * THE BUG THIS FIXTURE REPRODUCES: on commit the button renders ONLY the flag + the "+1"
+      dial code as visible text; the committed country NAME lives in a `title` on the button
+      (and a `title`/`aria-label` on the child flag, and in the a11y span) — NOT in the
+      visible text. So a read-back that roots on the wrong element, or only reads the visible
+      text, sees "+1" (shared by the US and Canada) and reports a false mismatch.
+    * THE DROPDOWN IS PORTALLED: while open it is appended to <body> as a
+      `div.iti.iti--container` > `div.iti__dropdown-content` (id === the button's
+      aria-controls) holding a search `input` and `ul.iti__country-list`
+      (role="listbox", aria-label="Country") of `li.iti__country` items
+      (`.iti__country-name` + `.iti__dial-code`). Addressing the picker by a selector that
+      lands in THAT body-level container must still resolve the owning `.iti` wrapper for the
+      read-back (via aria-controls), never the portalled container (which has no
+      selected-country button and is removed on commit).
+    * `data-force-commit="<country name>"` is a TEST HOOK on the `.iti` wrapper: when set, the
+      NEXT option click commits THAT country regardless of which row was clicked — so a
+      United-States click can still read back Canada, proving a shared "+1" never counts as a
+      match (a hard mismatch).
+
+  A SECOND, NON-PORTALLED picker sits beside it (`#mobile_iti`, labelled "Mobile region" — NOT
+  "Country", so "Country" stays unambiguous): the older / no-dropdownContainer intl-tel-input
+  shape, where the `ul.iti__country-list` and its `li.iti__country` rows are PARKED in the page on
+  load, hidden by `iti__hide` while closed, and — like the real library — a row click while the
+  list is CLOSED is a no-op. Two pickers on one page with rows parked in the DOM is exactly the
+  state that tripped the #4032 bug-2 review regression: a document-wide row scan with no visibility
+  check read those hidden rows as "already open", skipped the button click, and clicked a hidden
+  row on a closed list (and conflated the two pickers' rows). browser_select must open THIS picker
+  by clicking its button first, then commit — addressed by the CSS id `#mobile_country_button`.
+
+  Include the US and Canada (both +1); Afghanistan and the United Kingdom round out the list.
+
+  TO REFRESH when intl-tel-input changes its markup: open a live application form, read the
+  phone-country widget's DOM in devtools, update the matching block below (keep the class
+  names forms.py keys on — `iti`, `iti__selected-country`, `iti__selected-dial-code`,
+  `iti__a11y-text`, `iti__country-list`, `iti__country` / `iti__country-name`), and bump the
+  "last modeled" date. Run: pytest tests/test_agent_browser_forms_live.py.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Greenhouse — Phone country (intl-tel-input v23)</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 640px; margin: 2rem auto; }
+  .field { margin: 1rem 0; }
+  label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  input[type=tel] { width: 100%; padding: .4rem; box-sizing: border-box; font-size: 1rem; }
+
+  /* intl-tel-input v23+ */
+  .iti { position: relative; display: block; }
+  .iti__country-container { position: absolute; top: 0; bottom: 0; }
+  .iti__selected-country {
+    display: flex; align-items: center; gap: .35rem; height: 100%; padding: 0 .5rem;
+    border: none; background: transparent; cursor: pointer; font: inherit;
+  }
+  .iti__selected-country-primary { display: inline-flex; align-items: center; gap: .25rem; }
+  .iti__flag { width: 1.2rem; height: .9rem; background: #ddd; display: inline-block; }
+  .iti__arrow { width: 0; height: 0; border-left: .3rem solid transparent;
+    border-right: .3rem solid transparent; border-top: .35rem solid #555; }
+  .iti__selected-dial-code { color: #555; }
+  /* the a11y span is visually hidden but present in the DOM (textContent readable) */
+  .iti__a11y-text { position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; }
+  .iti > input[type=tel] { padding-left: 4rem; }
+
+  .iti--container {
+    position: absolute; z-index: 10; background: #fff; border: 1px solid #ccc;
+    max-height: 16rem; overflow: auto;
+  }
+  .iti__search-input { width: 100%; padding: .4rem; box-sizing: border-box; border: none;
+    border-bottom: 1px solid #eee; }
+  .iti__country-list { list-style: none; margin: 0; padding: 0; }
+  .iti__country { padding: .4rem .5rem; cursor: pointer; display: flex; gap: .5rem; }
+  .iti__country--highlight { background: #deebff; }
+  .iti__dial-code { color: #999; }
+  .iti__hide { display: none; }
+  /* the NON-PORTALLED picker's dropdown lives IN the page (no body-level .iti--container) */
+  .iti__country-container > .iti__dropdown-content {
+    position: absolute; z-index: 10; background: #fff; border: 1px solid #ccc;
+    min-width: 12rem; max-height: 16rem; overflow: auto;
+  }
+</style>
+</head>
+<body>
+<h1>Apply for this job</h1>
+<form id="application" aria-label="Application">
+
+  <!-- Phone — an intl-tel-input v23+ widget whose dropdown PORTALS to a body-level
+       `.iti--container` while open. The COUNTRY picker is the button; the national number is the
+       tel input beside it. The picker's only accessible name is aria-label="Country" on the `.iti`
+       wrapper (data-portal="body" selects the portalled behavior in the script below). -->
+  <div class="field">
+    <label for="phone_number">Phone *</label>
+    <div class="iti" id="phone_iti" aria-label="Country" data-options="country" data-portal="body">
+      <div class="iti__country-container">
+        <button type="button" class="iti__selected-country" id="country_button"
+                role="combobox" aria-haspopup="listbox" aria-expanded="false"
+                aria-controls="iti_dropdown_content">
+          <span class="iti__selected-country-primary">
+            <span class="iti__flag"></span>
+            <span class="iti__arrow"></span>
+          </span>
+          <span class="iti__selected-dial-code"></span>
+          <span class="iti__a11y-text"></span>
+        </button>
+      </div>
+      <input type="tel" id="phone_number" name="phone" autocomplete="off">
+    </div>
+  </div>
+
+  <!-- Mobile — a SECOND intl-tel-input v23 picker that is NON-PORTALLED: its dropdown + country
+       list live in the page and are PARKED (hidden by iti__hide) while closed. Labelled "Mobile
+       region" (never "Country") so the label resolver keeps "Country" pointing only at the picker
+       above. Addressed in tests by the CSS id `#mobile_country_button`. -->
+  <div class="field">
+    <label for="mobile_number">Mobile *</label>
+    <div class="iti" id="mobile_iti" aria-label="Mobile region" data-options="country">
+      <div class="iti__country-container">
+        <button type="button" class="iti__selected-country" id="mobile_country_button"
+                role="combobox" aria-haspopup="listbox" aria-expanded="false"
+                aria-controls="mobile_country_listbox">
+          <span class="iti__selected-country-primary">
+            <span class="iti__flag"></span>
+            <span class="iti__arrow"></span>
+          </span>
+          <span class="iti__selected-dial-code"></span>
+          <span class="iti__a11y-text"></span>
+        </button>
+        <!-- PARKED in the page, hidden by iti__hide while closed (rows populated on load). -->
+        <div class="iti__dropdown-content iti__hide" id="mobile_dropdown_content">
+          <input type="text" class="iti__search-input" aria-label="Search">
+          <ul class="iti__country-list" id="mobile_country_listbox" role="listbox"
+              aria-label="Mobile region"></ul>
+        </div>
+      </div>
+      <input type="tel" id="mobile_number" name="mobile" autocomplete="off">
+    </div>
+  </div>
+
+</form>
+
+<script>
+"use strict";
+
+// Each option carries the country NAME and the dial code. On commit the button shows only a
+// flag + "+<dial>" as VISIBLE text, with the NAME in a title on the button (and a title +
+// aria-label on the child flag, and in the a11y span) — the live intl-tel-input v23 contract.
+var OPTIONS = {
+  country: [
+    { name: "Afghanistan",    dial: "93" },
+    { name: "Canada",         dial: "1"  },
+    { name: "United States",  dial: "1"  },
+    { name: "United Kingdom", dial: "44" }
+  ]
+};
+
+var PORTAL_DROPDOWN_ID = "iti_dropdown_content";
+
+document.querySelectorAll(".iti[data-options]").forEach(function (iti) {
+  var which = iti.getAttribute("data-options");
+  var portalled = iti.getAttribute("data-portal") === "body";
+  var button = iti.querySelector(".iti__selected-country");
+  var flag = iti.querySelector(".iti__flag");
+  var dialCode = iti.querySelector(".iti__selected-dial-code");
+  var a11y = iti.querySelector(".iti__a11y-text");
+  // The NON-PORTALLED picker's dropdown + list live IN the page, hidden by iti__hide while closed.
+  var inlineContent = portalled ? null : iti.querySelector(".iti__dropdown-content");
+  var inlineList = portalled ? null : iti.querySelector(".iti__country-list");
+
+  function entryFor(name) {
+    var list = OPTIONS[which];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].name.toLowerCase() === String(name).toLowerCase()) return list[i];
+    }
+    return null;
+  }
+
+  function renderRows(ul) {
+    while (ul.firstChild) ul.removeChild(ul.firstChild);
+    OPTIONS[which].forEach(function (entry, i) {
+      var li = document.createElement("li");
+      li.className = "iti__country" + (i === 0 ? " iti__country--highlight" : "");
+      li.setAttribute("role", "option");
+      var nm = document.createElement("span");
+      nm.className = "iti__country-name";
+      nm.textContent = entry.name;                   // the NAME — no dial code in this span
+      var dc = document.createElement("span");
+      dc.className = "iti__dial-code";
+      dc.textContent = "+" + entry.dial;
+      li.appendChild(nm);
+      li.appendChild(dc);
+      // Commit on mousedown — what intl-tel-input does, and the event forms.py fires first — but
+      // ONLY while the list is OPEN. The real library ignores a click on a CLOSED (hidden) row, so
+      // a read-back must drive the button to OPEN the list first; clicking a parked hidden row is
+      // a no-op here, which is what catches the #4032 bug-2 "skipped the open" regression.
+      li.addEventListener("mousedown", function (e) {
+        e.preventDefault();
+        if (!isOpen()) return;
+        commit(entry.name);
+      });
+      ul.appendChild(li);
+    });
+  }
+
+  function portalDropdown() { return document.getElementById(PORTAL_DROPDOWN_ID); }
+  function isOpen() {
+    if (portalled) return !!portalDropdown();
+    return !!inlineContent && !inlineContent.classList.contains("iti__hide");
+  }
+
+  function openMenu() {
+    if (isOpen()) return;
+    if (portalled) {
+      // PORTALLED to <body> as a body-level `.iti.iti--container`, like real intl-tel-input v23.
+      var container = document.createElement("div");
+      container.className = "iti iti--container";
+      var content = document.createElement("div");
+      content.className = "iti__dropdown-content";
+      content.id = PORTAL_DROPDOWN_ID;               // === the button's aria-controls
+      var search = document.createElement("input");
+      search.type = "text";
+      search.className = "iti__search-input";
+      search.setAttribute("aria-label", "Search");
+      var ul = document.createElement("ul");
+      ul.className = "iti__country-list";
+      ul.id = "iti_country_listbox";
+      ul.setAttribute("role", "listbox");
+      ul.setAttribute("aria-label", "Country");      // the listbox's accessible name (as live)
+      renderRows(ul);
+      content.appendChild(search);
+      content.appendChild(ul);
+      container.appendChild(content);
+      document.body.appendChild(container);
+    } else {
+      inlineContent.classList.remove("iti__hide");   // REVEAL the parked, in-page list
+    }
+    button.setAttribute("aria-expanded", "true");
+  }
+
+  function closeMenu() {
+    if (portalled) {
+      var content = portalDropdown();
+      if (content) {
+        var container = (content.closest && content.closest(".iti--container")) || content;
+        container.remove();
+      }
+    } else if (inlineContent) {
+      inlineContent.classList.add("iti__hide");       // re-park the in-page list
+    }
+    button.setAttribute("aria-expanded", "false");
+  }
+
+  function commit(name) {
+    // A TEST HOOK: when data-force-commit is set the NEXT click commits THAT country regardless
+    // of which row was clicked — so a United-States click can still read back Canada (both +1).
+    var forced = iti.getAttribute("data-force-commit");
+    var entry = entryFor(forced || name) || entryFor(name);
+    if (!entry) return;
+    // VISIBLE text is only the dial code; the committed country NAME lives in attributes.
+    button.setAttribute("title", entry.name);
+    if (flag) {
+      flag.setAttribute("title", entry.name);
+      flag.setAttribute("aria-label", entry.name + ": +" + entry.dial);
+    }
+    if (dialCode) dialCode.textContent = "+" + entry.dial;
+    if (a11y) a11y.textContent = "Selected country " + entry.name + " +" + entry.dial;
+    closeMenu();
+  }
+
+  // The non-portalled picker PARKS its rows in the page on load, hidden by iti__hide — the state
+  // that tripped the bug: a document-wide, visibility-blind row scan saw them and skipped the open.
+  if (!portalled && inlineList) renderRows(inlineList);
+
+  button.addEventListener("click", function (e) {
+    e.preventDefault();
+    if (isOpen()) closeMenu();                        // a second click TOGGLES closed (like v23)
+    else openMenu();
+  });
+
+  button.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!isOpen()) openMenu();                      // ArrowDown opens (an OPEN signal, not a commit)
+    }
+  });
+});
+</script>
+</body>
+</html>

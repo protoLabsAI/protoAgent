@@ -3,18 +3,118 @@
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import os
 import secrets
 from pathlib import Path
+from typing import Annotated, Any
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
-from . import _config, _links, _preview, _ref, _render_status, _store
+from . import _config, _docx, _links, _pdfview, _preview, _ref, _render_status, _slides, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
-_KINDS = {"html", "svg", "mermaid", "react", "markdown"}
+_KINDS = {"html", "svg", "mermaid", "react", "markdown", "vega-lite"}
+
+# Kinds that can render in the inline frame (ADR 0118 D2). `markdown` (and files/decks on the
+# save side) render text/pages, not through the sandboxed frame, so they stay in the panel.
+_INLINE_KINDS = frozenset({"html", "svg", "mermaid", "react", "vega-lite"})
+
+
+def _resolve_placement(placement: str | None, kind: str) -> tuple[bool, str]:
+    """Whether this call emits an INLINE artifact-ref, plus a note for the tool result when an
+    explicit inline request falls back to the panel (ADR 0118 D2; inline-by-default as of the
+    2026-10-10 operator decision).
+
+    Placement DEFAULTS to inline: with no explicit placement (``None``), the frame-renderable
+    kinds (``_INLINE_KINDS``) render inline and every other kind (markdown, decks, PDFs, files)
+    falls back to the panel SILENTLY — no note. The "not available inline" note is reserved for a
+    caller who EXPLICITLY passed ``placement="inline"`` on an unsupported kind. An explicit
+    ``placement="panel"`` always opens the panel."""
+    norm = (placement or "").strip().lower()
+    if norm not in ("", "inline"):
+        # Any explicit placement other than "inline" — notably "panel" — opens the panel, silently.
+        return False, ""
+    if kind in _INLINE_KINDS:
+        return True, ""
+    # A non-frame kind can't render inline → panel. The fallback note is only for an EXPLICIT
+    # inline request; under the default (``placement is None``) the panel is silent.
+    if placement is not None:
+        return False, (
+            f"\n\nNote: {kind} can't render inline — showing it in the Artifact panel instead. "
+            f"Inline placement is available for: {', '.join(sorted(_INLINE_KINDS))}."
+        )
+    return False, ""
+
+
+# Bounds on the write-time spec walk. A real chart spec is a few levels deep; the rows in
+# `data.values` are never walked (below), so the node budget counts structure, not data.
+_SPEC_MAX_DEPTH = 64
+_SPEC_MAX_NODES = 100_000
+# Keys holding INLINE rows. A row is data, not a load: a column named `url` (a table of page
+# hits) is a value, so the walk never descends into these.
+_INLINE_ROWS = frozenset({"values", "datasets"})
+
+
+def _remote_data(spec: dict) -> str | None:
+    """"remote" when a `url` sits inside a data definition, "deep"/"large" past the walk's bounds,
+    else None. ITERATIVE on purpose: a hostile spec nested hundreds deep must be a clean refusal,
+    never a RecursionError out of a tool (or out of ``show_service``, which promises not to raise)."""
+    stack: list[tuple[object, bool, int]] = [(spec, False, 0)]
+    nodes = 0
+    while stack:
+        o, in_data, depth = stack.pop()
+        nodes += 1
+        if depth > _SPEC_MAX_DEPTH:
+            return "deep"
+        if nodes > _SPEC_MAX_NODES:
+            return "large"
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if in_data and k == "url":
+                    return "remote"
+                if k in _INLINE_ROWS:
+                    continue
+                if isinstance(v, (dict, list)):
+                    stack.append((v, in_data or k == "data", depth + 1))
+        elif isinstance(o, list):
+            stack.extend((v, in_data, depth + 1) for v in o if isinstance(v, (dict, list)))
+    return None
+
+
+def _vega_problem(code: str) -> str | None:
+    """Why ``code`` can't be a ``vega-lite`` artifact, or None (ADR 0116).
+
+    Checked when a version is WRITTEN, so a malformed spec is refused with a reason the model can
+    act on instead of committing a version that only fails in the panel. The frame re-checks all of
+    it (and its loader refuses every load regardless): this is feedback, the frame is the fence."""
+    try:
+        spec = json.loads(code)
+    except RecursionError:  # json's own parser recurses: a spec nested ~1000 deep
+        return f"A vega-lite spec may nest at most {_SPEC_MAX_DEPTH} levels — this one is far deeper."
+    except ValueError as e:
+        return f"A vega-lite artifact's code must be a JSON Vega-Lite spec — it isn't valid JSON ({e})."
+    if not isinstance(spec, dict):
+        return "A vega-lite artifact's code must be a JSON object (a Vega-Lite spec)."
+    why = _remote_data(spec)
+    if why == "deep":
+        return f"A vega-lite spec may nest at most {_SPEC_MAX_DEPTH} levels — flatten it."
+    if why == "large":
+        return f"A vega-lite spec's structure (outside its inline rows) may have at most {_SPEC_MAX_NODES} nodes."
+    if why == "remote":
+        return (
+            "Charts render INLINE data only — put the rows in `data.values` (the data plugin's "
+            "data_chart does this for you); a `data.url` is never loaded."
+        )
+    return None
+
+
+def _kind_problem(kind: str, code: str) -> str | None:
+    """A per-kind content check for a version about to be written; None when it's fine."""
+    return _vega_problem(code) if kind == "vega-lite" else None
 
 # ── full-body-write nudge (#2257) ────────────────────────────────────────────
 # Iterating an artifact by re-SAVING it (save_file_artifact / rewrite_artifact)
@@ -30,6 +130,46 @@ _recent_full_saves: dict[str, list[int]] = {}
 # pin_artifact's at-the-cap refusal names the held pins so the agent can pick one to unpin —
 # but only this many; past it the reply points at list_artifacts instead of growing unbounded.
 _PIN_NAMES_SHOWN = 5
+
+
+def _chat_session(state: Any) -> str:
+    """The calling chat's session id, from the tool's injected graph state (#4138).
+    ``current_session_id()`` alone reads EMPTY inside a tool body; ``_session_id_from`` prefers
+    the state and keeps that contextvar only as a fallback. ``""`` when neither knows it — an
+    ACP tool process, a direct call — and the artifact then records no chat (evictable as before)."""
+    try:
+        from tools.session import _session_id_from
+
+        return _session_id_from(state)
+    except Exception:  # noqa: BLE001 — no host: read the state directly
+        return (state.get("session_id") or "").strip() if isinstance(state, dict) else ""
+
+
+def _renders_ui(state: Any) -> bool:
+    """Whether this turn's client can display an artifact at all (#4144) — the SDK's reading of
+    the injected graph state's ``renders_ui``, so the plugin and every other caller agree."""
+    from graph.sdk import renders_ui
+
+    return renders_ui(state)
+
+
+# The text-only client's tail (#4144): said once, on every create/edit, so the model answers in
+# text instead of pointing at a chat view this client doesn't have — or looping check_artifact.
+_TEXT_ONLY_NOTE = (
+    " This client renders text only: it can't display the artifact, and its render can't be "
+    "checked (don't call check_artifact). Answer in text, quote the artifact id above so the user "
+    "can open it later in the console, and offer the source (get_artifact) if the user wants it. "
+    "Don't describe its buttons or other interactive controls as usable from here — this client "
+    "can't click them."
+)
+
+
+def _stamp_ref(art: dict, session_id: str) -> None:
+    """Record that this call's ``artifact-ref`` goes out in ``session_id``'s chat, so eviction
+    keeps ``art`` while that chat exists (#4138). Only when the chip is emitted at all — on a
+    host without the component seam no chat ever shows it."""
+    if _ref.EMIT:
+        _store._stamp_chat_session(art, session_id)
 
 
 def _busy_reply(fn):
@@ -64,9 +204,64 @@ def _save_nudge(art_id: str) -> str:
     )
 
 
+def _resolve_file(path: str, project: str = "") -> tuple[Path | None, str]:
+    """``path`` (+ optional fs ``project``) → the file to save, or ``(None, why)``.
+
+    Speaks the fs tools' path language, so a file the agent just found with
+    ``find_files``/``read_file`` (a project + a relative path) saves as-is:
+
+    * ``project`` given → resolved inside that project's fence (``..`` can't escape it);
+    * an absolute or ``~`` path → used as-is (unchanged behaviour);
+    * a relative path with no project → looked up in every registered project. Exactly one
+      hit wins; more than one is ambiguous (the agent must name the project); none falls back
+      to the old cwd-relative lookup before giving up.
+    """
+    raw = (path or "").strip()
+    registry = _links._registry()
+    if project:
+        if registry is None:
+            return None, f"project {project!r} given, but this agent has no filesystem projects — pass an absolute path."
+        try:
+            p = registry.resolve(project, raw)
+        except ValueError as e:
+            return None, f"{e}."
+        if not p.is_file():
+            return None, f"No file at {raw!r} in project {project!r}. Write the file first, then pass its path."
+        return p, ""
+    p = Path(os.path.expanduser(raw))
+    if p.is_absolute():
+        p = p.resolve()
+        return (p, "") if p.is_file() else (None, f"No file at {raw!r}. Write the file first, then pass its path.")
+    hits: list[tuple[str, Path]] = []
+    names = registry.names() if registry is not None else []
+    for name in names:
+        try:
+            cand = registry.resolve(name, raw)
+        except ValueError:
+            continue
+        if cand.is_file():
+            hits.append((name, cand))
+    if len(hits) == 1:
+        return hits[0][1], ""
+    if len(hits) > 1:
+        where = ", ".join(n for n, _ in hits)
+        return None, f"{raw!r} exists in more than one project ({where}) — pass `project` to pick one."
+    cwd = p.resolve()
+    if cwd.is_file():
+        return cwd, ""
+    looked = f" (looked in project(s): {', '.join(names)})" if names else ""
+    return None, f"No file at {raw!r}{looked}. Write the file first, then pass its path."
+
+
 @tool
 @_busy_reply
-def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str:
+def save_file_artifact(
+    path: str,
+    title: str = "",
+    artifact_id: str = "",
+    project: str = "",
+    state: Annotated[Any, InjectedState] = None,
+) -> str:
     """Save a GENERATED FILE (a .docx / .xlsx / .pptx / .pdf / image / text file you already
     wrote to disk) into the Artifact panel as a VERSIONED download artifact — so the file gets
     the same edit-history + inspectable panel treatment as a rendered artifact, and the user
@@ -74,10 +269,12 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
 
     Use this right AFTER a skill writes a document to disk (e.g. cowork's docx/xlsx/pptx/pdf
     skills, a generated report or image): pass the file ``path``. The panel stores the bytes,
-    shows a download card with a preview typed by content (csv/tsv → a real table, .md →
-    rendered prose, .json → pretty-printed; docx→text, xlsx→sheet table, pptx→slide outline,
-    pdf→text; images get a thumbnail; other text files → plain text), and offers a Download
-    button.
+    shows a preview typed by content, and offers a Download button:
+    .docx → the real rendered PAGES (Word styles, tables, images, headers/footers);
+    .pdf → the real rendered PAGES; .pptx → the real rendered SLIDES (each keeps its
+    extracted text beneath); .csv/.tsv → a table (delimiter sniffed, numbers right-aligned);
+    .xlsx → one table per sheet; .md → rendered prose; .json → pretty-printed; images → a
+    thumbnail; other text files → plain text.
 
     COMPOSE the file completely, then save ONCE — do not save revision after revision while
     you iterate in a single turn; every save round-trips the full file through the
@@ -87,11 +284,15 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
     becomes v2, v3… of the same artifact rather than a new panel entry), pass that artifact's
     ``artifact_id`` (see ``list_artifacts``). Returns the artifact id.
 
+    ``path`` takes the same form as the fs tools: a path relative to a filesystem project
+    (pass ``project``, or omit it when only one project has that file — the default
+    ``workspace`` included), or an absolute path.
+
     This is for FILES on disk. To render HTML/SVG/React/Markdown/charts, use ``show_artifact``.
     """
-    p = Path(os.path.expanduser(path or "")).resolve()
-    if not p.exists() or not p.is_file():
-        return f"No file at {path!r}. Write the file first, then pass its path."
+    p, why = _resolve_file(path, project)
+    if p is None:
+        return why
     data = p.read_bytes()
     limit = _config._max_blob_bytes()
     if len(data) > limit:
@@ -106,13 +307,34 @@ def save_file_artifact(path: str, title: str = "", artifact_id: str = "") -> str
     mime = _preview._guess_mime(p)
     preview = _preview._extract_preview(p, data, mime)
     thumb = _preview._thumbnail(data, mime)
+    # A deck gets the slide renderer's safety preflight (caps on size / entries / inflation /
+    # image pixels) — the panel only parses it in the browser when this says it may.
+    slides = _slides.preflight(data) if _slides.is_slides(p.name, mime) else None
+    # A PDF gets the page renderer's safety preflight (size / page count / decoded stream bytes /
+    # image pixels) — the panel only draws its pages when this says it may.
+    pdf = _pdfview.preflight(data) if _pdfview.is_pdf(p.name, mime) else None
+    # A Word document gets the docx renderer's preflight (zip inflation + image pixel budget).
+    docx = _docx.preflight(data) if _docx.is_docx(p.name, mime) else None
     ext = p.suffix.lower().lstrip(".") or "bin"
-    return _save_file(p.name, data, mime, preview, thumb, ext, title, artifact_id)
+    return _save_file(
+        p.name, data, mime, preview, thumb, ext, title, artifact_id, slides, pdf, docx, session_id=_chat_session(state)
+    )
 
 
 @_store.serialized
 def _save_file(
-    filename: str, data: bytes, mime: str, preview: str, thumb: str | None, ext: str, title: str, artifact_id: str
+    filename: str,
+    data: bytes,
+    mime: str,
+    preview: str,
+    thumb: str | None,
+    ext: str,
+    title: str,
+    artifact_id: str,
+    slides: dict | None = None,
+    pdf: dict | None = None,
+    docx: dict | None = None,
+    session_id: str = "",
 ) -> str:
     """save_file_artifact's store read-modify-write. The blob is written INSIDE the lock on
     purpose: the blob sweep runs under it too, so it can never see (and delete) a blob that
@@ -139,6 +361,12 @@ def _save_file(
         "size": len(data),
         "thumb": thumb or "",
     }
+    if slides is not None:
+        file_meta["slides"] = slides
+    if pdf is not None:
+        file_meta["pdf"] = pdf
+    if docx is not None:
+        file_meta["docx"] = docx
     if art is None:
         nv = _store._new_version(preview, extra={"file": file_meta, "blob": blob_name})
         art = {
@@ -150,6 +378,7 @@ def _save_file(
             "created": nv["ts"],
             "updated": nv["ts"],
         }
+        _stamp_ref(art, session_id)
         store["artifacts"].insert(0, art)
         store["current"] = art_id
         _store._write_store(store)
@@ -158,6 +387,7 @@ def _save_file(
     else:
         if title:
             art["title"] = title
+        _stamp_ref(art, session_id)
         v = _store._commit_version(store, art, preview, extra={"file": file_meta, "blob": blob_name})
     kb = len(data) // 1024
     return (
@@ -175,7 +405,7 @@ _RenderTarget = tuple[str, int, tuple[int, int]]
 _LockedResult = tuple[str, None] | tuple[str, _RenderTarget, str]
 
 
-def _then_render(result: _LockedResult) -> str:
+def _then_render(result: _LockedResult, renders_ui: bool = True) -> str:
     """A locked create/edit's reply plus the inline render verdict for the version it wrote,
     then the ``artifact-ref`` chip pointing at that version (#3617).
 
@@ -191,26 +421,54 @@ def _then_render(result: _LockedResult) -> str:
     msg, target, *rest = result
     if target is None:
         return msg
+    if not renders_ui:
+        # A text-only client (#4144): no viewer will ever post a verdict for it, and no chip can
+        # reach it — so neither the render wait nor the component tail, just the honest note.
+        return msg + _TEXT_ONLY_NOTE
     return msg + _render_status._render_suffix(*target) + (rest[0] if rest else "")
 
 
 @tool
 @_busy_reply
-def show_artifact(kind: str, code: str, title: str = "", links: dict | str | None = None) -> str:
+def show_artifact(
+    kind: str,
+    code: str,
+    title: str = "",
+    links: dict | str | None = None,
+    placement: str | None = None,
+    state: Annotated[Any, InjectedState] = None,
+) -> str:
     """CREATE a new generative-UI artifact in the console's Artifact panel.
 
     ``kind`` is one of: "html" (a full or partial HTML document), "svg" (inline SVG markup),
     "mermaid" (a Mermaid diagram definition), "markdown" (a Markdown document — rendered with
-    design-system prose styling; ```mermaid fences become live diagrams), or "react" (a
+    design-system prose styling; ```mermaid fences become live diagrams), "vega-lite" (a CHART: a
+    JSON Vega-Lite spec with its rows inline in ``data.values`` — themed to the console
+    automatically, so leave colours/background out, and omit ``$schema`` (the renderer is always
+    Vega-Lite v6); ``data.url`` is never loaded — EVERY standard
+    bar/line/area/point/arc/heat-map chart is one, even one "added" to an existing tool: show it as
+    its own inline vega-lite artifact beside the tool, never bars/lines hand-built from divs, CSS
+    or SVG), or "react" (a
     self-contained React component script; name your top-level component ``App`` and it
     AUTO-MOUNTS into ``#root`` (no manual ``createRoot(...).render`` needed — though an explicit
     render still works). React, ReactDOM and Babel are provided, and it can ``import`` from a
-    curated offline set — ``d3``, ``chart.js``, ``lucide``, and ``@pl/ui`` design-system
-    components like ``Button``/``Card``/``Stat``/``Icon``). ``code`` is the source; ``title`` is
+    curated offline set — ``three`` (3D: ``import * as THREE from "three"``), ``d3``
+    (``import * as d3 from "d3"``), ``animejs`` (animation: ``import { animate } from "animejs"``,
+    then ``animate(el, { translateX: 100, duration: 400 })``), ``chart.js``, ``lucide``, and
+    ``@pl/ui`` design-system components like ``Button``/``Card``/``Stat``/``Icon``). An ``html``
+    artifact can import ``three`` / ``d3`` / ``animejs`` / ``chart.js`` / ``lucide`` the same way
+    from a ``<script type="module">``; its own import map, if it ships one, is merged with these
+    (its entries win). ``code`` is the source; ``title`` is
     an optional label. Runs sandboxed — it can't access the console.
 
     After creating it, CHECK IT RENDERED: this reply carries the render verdict when the panel is
-    open; otherwise call ``check_artifact``. Fix any reported error before moving on.
+    open; otherwise — always for an INLINE artifact, whose chat frame mounts only after this reply —
+    call ``check_artifact(<id>)`` before telling the user it works. Fix any reported error.
+
+    A STANDALONE DOCUMENT the user will keep or edit (a README, spec, report, letter) is
+    ``kind="markdown"`` here — it opens in the panel — with a short summary in chat, not the whole
+    document pasted into the reply. Short answers stay text. A DIAGRAM is ``kind="mermaid"``
+    (inline by default): a ```mermaid fence in chat text shows as plain code, not a drawing.
 
     To EDIT what you just made, use ``update_artifact`` (a small targeted change) or
     ``rewrite_artifact`` (a full replacement) — they iterate the SAME artifact as a new
@@ -222,6 +480,15 @@ def show_artifact(kind: str, code: str, title: str = "", links: dict | str | Non
     the chat, data-only, no sandbox, lighter). Rule of thumb: a generated VISUAL → this tool;
     a data SHAPE → a component. Prefer either over writing files when the user just wants to
     SEE something rendered. Returns the artifact id.
+
+    ``placement`` DEFAULTS to ``"inline"``; pass ``"panel"`` to override it. Inline renders the
+    SAME artifact directly in the conversation — the same sandbox, versions and "Open in panel" —
+    for an answer the user interacts with in place (a calculator, an explainer, a chart, a small
+    tool). Inline placement covers html, svg, mermaid, react and vega-lite; any other kind
+    (markdown, decks, PDFs, files) renders in the panel instead — SILENTLY under the default, with
+    a note only when you EXPLICITLY pass ``placement="inline"`` on such a kind. Pass
+    ``placement="panel"`` for a work product you iterate on over many turns (a document, a deck, a
+    large app) — that still opens the panel.
 
     CODE-LINKED DIAGRAMS (mermaid only): ``links`` maps diagram elements to code, so the
     operator can click a node or a message and land on that code in the console's code pane.
@@ -236,19 +503,100 @@ def show_artifact(kind: str, code: str, title: str = "", links: dict | str | Non
     anchor isn't in the file. The reply echoes each target's first line and every snap. Bad
     links are dropped with a reason (the diagram still renders). ``note`` is one sentence
     (≤ 280 chars).
+
+    Style ``html``/``react`` with the injected design system, which is required: colours ONLY from
+    the theme tokens (``var(--pl-color-fg)``, ``var(--pl-color-bg-raised)``, ``var(--pl-color-accent)`` …) (never ``#fff``/``white``/hex/rgb; the operator's theme may be dark
+    or light), and the ``.pl-*`` classes (``pl-card``, ``pl-field`` + ``pl-input``, ``pl-btn
+    pl-btn--primary``, ``pl-stats``, ``pl-table``). See the ``rendering-artifacts`` skill.
     """
     checked = _links.check(links)
-    return _then_render(_show(kind, code, title, checked))
+    ui = _renders_ui(state)
+    return _then_render(
+        _show(kind, code, title, checked, placement, session_id=_chat_session(state), renders_ui=ui), ui
+    )
+
+
+def show_service(
+    kind: str,
+    code: str,
+    title: str = "",
+    placement: str | None = None,
+    session_id: str = "",
+    renders_ui: bool = True,
+) -> dict:
+    """The ``artifact.show`` plugin service (ADR 0116): create an artifact for ANOTHER plugin.
+
+    How a plugin puts something in the Artifact panel without importing this one — e.g. the data
+    plugin's ``data_chart`` runs a query and hands the rows, inlined into a Vega-Lite spec, here::
+
+        show = sdk.service("artifact.show")   # None when the artifact plugin is off
+        r = show(kind="vega-lite", code=spec_json, title="Best weekdays")
+
+    It is exactly ``show_artifact`` minus the code ``links``: the same kinds, size cap, per-kind
+    checks, version chain and render-verdict wait. ``placement`` DEFAULTS to ``"inline"`` (pass
+    ``"panel"`` to override) — inline renders the artifact in the conversation (html/svg/mermaid/
+    react/vega-lite); any other kind renders in the panel, SILENTLY under the default and noted in
+    ``message`` only when ``placement="inline"`` is explicit. ``session_id`` is the chat the
+    caller's reply goes out in (``tools.session._session_id_from`` of the caller's injected
+    state): pass it when you append ``ref``, so eviction keeps the artifact while that chat
+    exists (#4138); omitted, the artifact is evictable oldest-first. ``renders_ui`` is whether
+    the caller's turn reaches a client that can display the artifact (#4144) — pass
+    ``graph.sdk.renders_ui(state)`` from the caller's injected state. ``False`` (a plain API
+    client: ``/v1``, ``/api/chat``, a relay plugin's turn) returns the honest text-only reply —
+    saved, with its id, but this client can't display it — with no render-verdict wait and an
+    empty ``ref``. Defaults to ``True``: the console reply, as before. Returns a dict —
+    never raises for a refusal:
+
+    - ``ok`` — False when nothing was created (``message`` says why);
+    - ``id`` / ``version`` — the new artifact and its version (``""`` / ``0`` on a refusal);
+    - ``message`` — the model-facing reply, render verdict included when a panel is open;
+    - ``ref`` — the ``artifact-ref`` chat-chip tail ("" when the host can't lift it, or the
+      client renders text only). Append it
+      LAST, verbatim, to your tool's return string: the server lifts it into a chip that opens
+      the panel on this version.
+
+    It is SYNCHRONOUS and can BLOCK: when a panel is open it waits (``time.sleep`` polling, up to
+    ~3.2 s) for the frame's render verdict, and it takes the store's cross-process file lock. Call
+    it from a sync tool body, or from async code via ``asyncio.to_thread`` — never directly on an
+    event loop."""
+    try:
+        result = _show(kind, code, title, placement=placement, session_id=session_id, renders_ui=renders_ui)
+    except _store.StoreLockTimeout as e:
+        return {"ok": False, "id": "", "version": 0, "message": str(e), "ref": ""}
+    msg, target, *rest = result
+    if target is None:
+        return {"ok": False, "id": "", "version": 0, "message": msg, "ref": ""}
+    if not renders_ui:
+        # Same as show_artifact on a text-only client (#4144): no viewer, so no wait and no chip.
+        return {"ok": True, "id": target[0], "version": target[1], "message": msg + _TEXT_ONLY_NOTE, "ref": ""}
+    return {
+        "ok": True,
+        "id": target[0],
+        "version": target[1],
+        "message": msg + _render_status._render_suffix(*target),
+        "ref": rest[0] if rest else "",
+    }
 
 
 @_store.serialized
-def _show(kind: str, code: str, title: str, checked: _links.Checked | None = None) -> _LockedResult:
+def _show(
+    kind: str,
+    code: str,
+    title: str,
+    checked: _links.Checked | None = None,
+    placement: str | None = None,
+    session_id: str = "",
+    renders_ui: bool = True,
+) -> _LockedResult:
     k = (kind or "").strip().lower()
     if k not in _KINDS:
         return f"Unknown artifact kind {kind!r}. Use one of: {', '.join(sorted(_KINDS))}.", None
     code = code or ""
     if err := _store._too_big(code):
         return err, None
+    if err := _kind_problem(k, code):
+        return err, None
+    inline, placement_note = _resolve_placement(placement, k)
     kept, report = _links.finish(checked, k, code) if checked else ({}, "")
     store = _store._read_store()
     nv = _store._new_version(code, extra={"links": kept} if kept else None)
@@ -261,15 +609,34 @@ def _show(kind: str, code: str, title: str, checked: _links.Checked | None = Non
         "created": nv["ts"],
         "updated": nv["ts"],
     }
+    if inline:
+        # Persist placement on the ARTIFACT, not just this one chip: update_artifact and
+        # rewrite_artifact read it back (``_store._is_inline``) so the next version's chip stays
+        # inline too (ADR 0118 D2). ABSENT on a panel artifact, so the default store is unchanged.
+        art["placement"] = "inline"
+    _stamp_ref(art, session_id)
     store["artifacts"].insert(0, art)
     store["current"] = art["id"]
     _store._write_store(store)
     _store._emit("created", {"id": art["id"], "kind": k, "title": title or ""})
+    # Say where it ACTUALLY shows: an inline artifact renders in the chat, not the panel (#4124) —
+    # a "now showing in the Artifact panel" reply sends the model telling the user to open it.
+    where = "now showing inline in the chat" if inline else "now showing in the Artifact panel"
+    if not renders_ui:
+        # A text-only client (#4144) has no chat view and no panel: say it was SAVED, with its id
+        # and what it is, and no placement note (inline vs panel means nothing to this client).
+        label = f' "{title}"' if title else ""
+        return (
+            f"Saved {k} artifact {art['id']}{label} ({len(code)} chars) — this client can't display it."
+            + report,
+            (art["id"], 1, _store._version_key(art)),
+            "",
+        )
     msg = (
-        f"Created {k} artifact {art['id']} ({len(code)} chars) — now showing in the Artifact "
-        f"panel. Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
-    ) + report
-    return msg, (art["id"], 1, _store._version_key(art)), _ref.ref_tail(art)
+        f"Created {k} artifact {art['id']} ({len(code)} chars) — {where}. "
+        f"Edit it with update_artifact(old_string, new_string) or rewrite_artifact(code)."
+    ) + placement_note + report
+    return msg, (art["id"], 1, _store._version_key(art)), _ref.ref_tail(art, inline=inline)
 
 
 def _carry_links(art: dict, checked: _links.Checked | None, new_code: str) -> tuple[dict, str]:
@@ -307,7 +674,13 @@ def _carry_links(art: dict, checked: _links.Checked | None, new_code: str) -> tu
 
 @tool
 @_busy_reply
-def update_artifact(old_string: str, new_string: str, artifact_id: str = "", links: dict | str | None = None) -> str:
+def update_artifact(
+    old_string: str,
+    new_string: str,
+    artifact_id: str = "",
+    links: dict | str | None = None,
+    state: Annotated[Any, InjectedState] = None,
+) -> str:
     """Make a TARGETED edit to an existing artifact: replace ``old_string`` with ``new_string``
     in its current source, creating a new version. ``old_string`` must match the current source
     EXACTLY ONCE (whitespace included) — add surrounding context to disambiguate if needed.
@@ -315,16 +688,27 @@ def update_artifact(old_string: str, new_string: str, artifact_id: str = "", lin
     ``list_artifacts``). Prefer this over ``rewrite_artifact`` for small changes — it's the fast
     path and keeps the version history clean.
 
+    Asked to ADD A CHART to an existing tool? Don't edit bars/lines into it — a standard chart is
+    its own inline ``vega-lite`` artifact (``show_artifact(kind="vega-lite", …)``) beside the tool.
+
     A mermaid diagram's code ``links`` (see ``show_artifact``) CARRY OVER to the new version
     unless you pass ``links`` — the full new map, replacing the old one (``{}`` clears them).
     If your edit renumbers sequence messages (msg:<n>), pass the corrected map.
     """
     checked = _links.check(links)
-    return _then_render(_update(old_string, new_string, artifact_id, checked))
+    return _then_render(
+        _update(old_string, new_string, artifact_id, checked, session_id=_chat_session(state)), _renders_ui(state)
+    )
 
 
 @_store.serialized
-def _update(old_string: str, new_string: str, artifact_id: str, checked: _links.Checked | None = None) -> _LockedResult:
+def _update(
+    old_string: str,
+    new_string: str,
+    artifact_id: str,
+    checked: _links.Checked | None = None,
+    session_id: str = "",
+) -> _LockedResult:
     if not old_string:
         return "old_string must not be empty.", None
     store = _store._read_store()
@@ -347,18 +731,29 @@ def _update(old_string: str, new_string: str, artifact_id: str, checked: _links.
     new_code = src.replace(old_string, new_string, 1)
     if err := _store._too_big(new_code):
         return err, None
+    if err := _kind_problem(art["kind"], new_code):
+        return err, None
     kept, report = _carry_links(art, checked, new_code)
+    _stamp_ref(art, session_id)
     v = _store._commit_version(store, art, new_code, extra={"links": kept} if kept else None)
     return (
         f"Updated artifact {art['id']} → version {v}." + report,
         (art["id"], v, _store._version_key(art)),
-        _ref.ref_tail(art),
+        # An inline artifact keeps its inline chip across edits (ADR 0118 D2) — placement is read
+        # from the artifact, not re-specified per edit, so an update never silently panels it.
+        _ref.ref_tail(art, inline=_store._is_inline(art)),
     )
 
 
 @tool
 @_busy_reply
-def rewrite_artifact(code: str, title: str = "", artifact_id: str = "", links: dict | str | None = None) -> str:
+def rewrite_artifact(
+    code: str,
+    title: str = "",
+    artifact_id: str = "",
+    links: dict | str | None = None,
+    state: Annotated[Any, InjectedState] = None,
+) -> str:
     """Replace an artifact's ENTIRE source with ``code``, creating a new version (the kind is
     kept). Use this for a large change where a targeted ``update_artifact`` would be awkward;
     prefer ``update_artifact`` for small edits — a rewrite round-trips the full body through
@@ -370,11 +765,15 @@ def rewrite_artifact(code: str, title: str = "", artifact_id: str = "", links: d
     the new source is a new diagram, so pass the ``links`` for it (the old version keeps its own).
     """
     checked = _links.check(links)
-    return _then_render(_rewrite(code, title, artifact_id, checked))
+    return _then_render(
+        _rewrite(code, title, artifact_id, checked, session_id=_chat_session(state)), _renders_ui(state)
+    )
 
 
 @_store.serialized
-def _rewrite(code: str, title: str, artifact_id: str, checked: _links.Checked | None = None) -> _LockedResult:
+def _rewrite(
+    code: str, title: str, artifact_id: str, checked: _links.Checked | None = None, session_id: str = ""
+) -> _LockedResult:
     code = code or ""
     if err := _store._too_big(code):
         return err, None
@@ -384,6 +783,8 @@ def _rewrite(code: str, title: str, artifact_id: str, checked: _links.Checked | 
         return "No artifact to rewrite. Create one with show_artifact first.", None
     if _store._is_file(art):
         return _store._file_not_editable(art), None
+    if err := _kind_problem(art["kind"], code):
+        return err, None
     if title:
         art["title"] = title
     kept, report = _links.finish(checked, art["kind"], code) if checked else ({}, "")
@@ -394,12 +795,22 @@ def _rewrite(code: str, title: str, artifact_id: str, checked: _links.Checked | 
                 f"\nThe previous version's {len(old)} code link(s) were not carried over (a rewrite is a "
                 "new diagram) — pass `links` to link this one."
             )
+    _stamp_ref(art, session_id)
     v = _store._commit_version(store, art, code, extra={"links": kept} if kept else None)
     return (
         f"Rewrote artifact {art['id']} → version {v}." + report + _save_nudge(art["id"]),
         (art["id"], v, _store._version_key(art)),
-        _ref.ref_tail(art),
+        # Same as update: a rewrite of an inline artifact stays inline (ADR 0118 D2).
+        _ref.ref_tail(art, inline=_store._is_inline(art)),
     )
+
+
+# The write tools declare the string argument the server streams as a live inline preview
+# (ADR 0118 D3: tool metadata ``{"stream_args": "code"}`` → `tool_args` frames). Harmless on a
+# host without the streaming seam — it's read, never required.
+show_artifact.metadata = {"stream_args": "code"}
+update_artifact.metadata = {"stream_args": "code"}
+rewrite_artifact.metadata = {"stream_args": "code"}
 
 
 def _pin_mark(art: dict) -> str:
@@ -420,11 +831,17 @@ def list_artifacts() -> str:
         lines.append(
             f"{a['id']}  [{a['kind']}]  {a['title'] or '(untitled)'}  · v{len(a['versions'])}{_pin_mark(a)}{cur}"
         )
+    cap = _config._max_history()
+    unpinned = len(store["artifacts"]) - len(_store._pinned(store))
     retention = (
-        f"Retention: the {_config._max_history()} most recently touched unpinned artifacts are kept "
-        f"(older ones are evicted); pinned artifacts ({len(_store._pinned(store))}/"
-        f"{_config._max_pinned()} pins used) are never evicted."
+        f"Retention: up to {cap} unpinned artifacts are kept; past that the oldest one no surviving "
+        f"chat still shows is evicted (an artifact shown in a chat stays until that chat is deleted); "
+        f"pinned artifacts ({len(_store._pinned(store))}/{_config._max_pinned()} pins used) are never evicted."
     )
+    if unpinned > cap:
+        # The all-referenced case (#4138): the store keeps live answers over its cap rather than
+        # delete one — say so where the agent (and the operator through it) looks.
+        retention += f" The store is {unpinned - cap} over that cap: every remaining artifact is still shown in a chat."
     return "Artifacts (pinned first, then newest first):\n" + "\n".join(lines) + "\n\n" + retention
 
 
@@ -450,18 +867,22 @@ def get_artifact(artifact_id: str = "") -> str:
 
 
 @tool
-def check_artifact(artifact_id: str = "") -> str:
+def check_artifact(artifact_id: str = "", state: Annotated[Any, InjectedState] = None) -> str:
     """Check whether an artifact's latest version actually RENDERED — the feedback channel for
     the code→render→fix loop. Rendering happens async in the browser, so a create/edit can
     return before the result is known; call this (or just iterate) to see how it went.
 
     Returns the render verdict: rendered cleanly, FAILED with the captured error message, or
-    "no result yet" (the panel is closed / not showing this version — open the Artifact panel).
+    "no result yet" — for a panel artifact, the panel is closed / not showing this version (open
+    the Artifact panel); for an INLINE artifact, the operator's chat isn't showing it yet, so the
+    render can't be confirmed — don't keep re-checking, and never open the panel for it. On a
+    client that renders text only, there is no viewer and nothing to check.
     Defaults to the current artifact; pass ``artifact_id`` (see ``list_artifacts``) to target
     another. Read-only.
 
-    Safe to call right after creating/editing: if a result isn't in yet but the panel is live,
-    it waits briefly for the verdict rather than returning "no result yet"."""
+    Safe to call right after creating/editing: if a result isn't in yet, it waits briefly for the
+    verdict rather than returning "no result yet" — for an INLINE artifact always (its chat frame
+    mounts after the create reply), for a panel artifact while the panel is live."""
     store = _store._read_store()
     art = _store._find(store, artifact_id or store["current"])
     if art is None:
@@ -471,8 +892,30 @@ def check_artifact(artifact_id: str = "") -> str:
     # (so an immediate post-render check returns the real result, not a premature "no result yet").
     # By identity, not position: an edit committed during the wait must not lend v its verdict.
     key = _store._version_key(art)
-    r = _render_status._version_render(art, v, key) or _render_status._await_render(art["id"], v, key)
+    r = _render_status._version_render(art, v, key)
+    if r is None and not _renders_ui(state):
+        # A text-only client (#4144): no viewer will ever post a verdict, so waiting or
+        # re-checking can only burn turns — answer at once, and say so.
+        return (
+            f"Artifact {art['id']} v{v}: no viewer on this client (it renders text only), so the "
+            "render can't be checked. Don't re-check — answer in text."
+        )
+    # An INLINE artifact waits the full window whatever the panel is doing (#4076): this client
+    # renders UI (the text-only case returned above), so its chat frame WILL mount during the turn
+    # — the hidden-tab eager mount (S22) covers a backgrounded tab — but after a reload nothing has
+    # polled yet, and the panel-poll gate alone answered "no result yet" before the frame loaded.
+    r = r or _render_status._await_render(art["id"], v, key, inline_viewer=_store._is_inline(art))
     if r is None:
+        if _store._is_inline(art):
+            # An inline artifact renders in the chat's own frame (ADR 0118 D2), mounted lazily as
+            # it scrolls into view — the panel has nothing to do with it, so never point there
+            # (#4124). And no "check again": a frame that isn't on screen posts nothing, so a
+            # re-check loop only burns context (#4144/#4147).
+            return (
+                f"Artifact {art['id']} v{v}: no render result yet — it's inline in the chat, but the "
+                "operator's chat isn't showing it yet, so the render can't be confirmed. Don't keep "
+                "re-checking; carry on, and fix it if the operator reports a problem."
+            )
         return (
             f"Artifact {art['id']} v{v}: no render result yet — the Artifact panel may be "
             "closed or not showing this version. Open it to render."

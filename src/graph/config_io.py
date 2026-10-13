@@ -1,0 +1,2003 @@
+"""Config I/O for the console's live-edit Settings drawer (operator_api/config_routes.py).
+
+Three jobs:
+
+1. **YAML round-trip** that preserves comments and unknown keys in
+   ``config/langgraph-config.yaml``. ``LangGraphConfig.from_yaml``
+   silently drops anything it doesn't know about, so writing back via
+   a freshly-constructed dataclass would wipe fork-added sections
+   (e.g. the ``memory`` / ``skills`` blocks the template already
+   ships). We use ruamel.yaml when available for comment preservation;
+   PyYAML is the fallback.
+
+2. **SOUL.md persona.** The live persona lives at the instance's
+   ``<instance_root>/config/SOUL.md`` (``instance_paths().soul_path``);
+   drawer edits write there and ``read_soul`` falls back to the bundled
+   ``config/SOUL.md`` seed when the instance has none yet. ``ensure_live_soul``
+   seeds that live file on first run (seed-not-force, like ``ensure_live_config``)
+   from ``PROTOAGENT_SEED_SOUL`` or the bundle — and heals a lingering starter
+   placeholder so a baked persona isn't shadowed forever.
+
+3. **Gateway introspection.** ``list_gateway_models`` hits
+   ``{api_base}/models`` so the drawer's model dropdown reflects
+   whatever the connected LiteLLM gateway (or OpenAI-compat endpoint)
+   actually exposes — no hardcoded list to drift out of sync.
+"""
+
+from __future__ import annotations
+
+import copy
+import difflib
+import hashlib
+import json
+import logging
+import os
+import threading
+import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from graph.config import LangGraphConfig, _deep_merge_dicts, resolve_model_route
+from infra.paths import atomic_write, harden_private_file, instance_paths
+
+log = logging.getLogger("protoagent.config_io")
+
+#: The one lock for every in-process read-modify-write of the LIVE config files and
+#: the graph reload that follows it (#2743). It lives here, with the writes, because
+#: the graph layer writes those files too — a plugin uninstall scrubs
+#: `plugins.enabled` itself (installer._clean_config_refs) — and could not reach a
+#: lock defined in server/. `server.agent_init._CONFIG_WRITE_LOCK` IS this object.
+#: Reentrant: the applier takes it and then calls the reload, which takes it again.
+#: Hold it across the READ as well as the write — a lock around the save alone is
+#: exactly the lost update it exists to prevent.
+CONFIG_WRITE_LOCK = threading.RLock()
+
+# Absent-key sentinel for the three-way merge — distinct from a key explicitly set
+# to None, which is a real operator value the merge must respect.
+_MISSING = object()
+
+
+# ── Path accessors (resolved at call time from infra.paths.instance_paths) ───
+# Every config-dir location is derived from the frozen ``InstancePaths`` object
+# on each call — never captured at import time (the old import-time constants
+# read ``PROTOAGENT_*`` before the env was finalized, the fragility this cutover
+# removes). ``instance_root`` IS the per-instance scoped leaf, so there is no
+# ``scope_leaf`` / double-scope dance here: config / secrets / setup-marker /
+# theme / SOUL all sit directly under ``<instance_root>/config``. The bundled,
+# read-only seeds (``.example`` template, default SOUL.md, presets) live in the
+# App tier under ``app_root/config``.
+
+
+def config_yaml_path() -> Path:
+    """The live agent config YAML — ``<instance_root>/config/langgraph-config.yaml``.
+
+    Untracked + per-instance: generated from the ``.example`` template on first
+    run (see ``ensure_live_config``) and rewritten by the wizard/drawer."""
+    return instance_paths().config_yaml
+
+
+def secrets_yaml_path() -> Path:
+    """Untracked secrets overlay sibling of the config YAML — the model API key
+    and A2A bearer live here (gitignored + dockerignored), never in the tracked
+    YAML, read back by ``LangGraphConfig.from_yaml`` and stripped on every save."""
+    return instance_paths().secrets_yaml
+
+
+def setup_marker_path() -> Path:
+    """Setup-complete marker — presence ⇒ the wizard has been run."""
+    return instance_paths().setup_marker
+
+
+def host_archetype_path() -> Path:
+    """The host's archetype capability contract — ``<config_dir>/archetype-contract.yaml``,
+    sibling of the setup marker (and gitignored like it: runtime state, never config to
+    commit). The host-side mirror of a fleet member's ``workspace.yaml``
+    (``requires_tools``, ADR 0100): written by the setup wizard's finish, read by
+    ``capability_contract_warning`` when there is no workspace record. Named
+    ``-contract`` so it can't be mistaken for an ``archetype-catalog.json`` override."""
+    return setup_marker_path().parent / "archetype-contract.yaml"
+
+
+def theme_json_path() -> Path:
+    """Per-agent console theme file (ADR 0042)."""
+    return instance_paths().theme_json
+
+
+def config_example_path() -> Path:
+    """Bundled, read-only ``.example`` template (App-tier seed)."""
+    return instance_paths().config_example
+
+
+def seed_snapshot_path() -> Path:
+    """The baked seed exactly as last applied — ``<config_dir>/.seed-applied.yaml``.
+
+    The baseline half of merge-on-boot's three-way compare (#2071): it lets
+    ``apply_seed_merge`` tell "the operator edited this key" (live differs from the
+    snapshot) from "the image changed this key" (live still matches the snapshot, so
+    it can safely track the new seed). Written only by ``apply_seed_merge``; absent
+    on any instance that has never merged, which is the seed-once behavior."""
+    return config_yaml_path().parent / ".seed-applied.yaml"
+
+
+def soul_source_path() -> Path:
+    """Bundled, read-only default ``SOUL.md`` (App-tier seed)."""
+    return instance_paths().soul_source
+
+
+def presets_dir() -> Path:
+    """Bundled ``SOUL.md`` starter-presets dir (App-tier seed). Dropping a new
+    markdown file in makes it a wizard choice — no registry to update."""
+    return instance_paths().presets_dir
+
+
+# (section, key) pairs that must never be written to the tracked YAML.
+SECRET_PATHS: tuple[tuple[str, str], ...] = (
+    ("model", "api_key"),
+    ("auth", "token"),
+    ("auth", "federation_token"),  # ADR 0066, #1504
+    # Secrets-manager bootstrap machine identity (ADR 0080) — the one credential pair
+    # that can't come from the manager itself, routed to secrets.yaml like the API key.
+    ("secrets_manager", "client_id"),
+    ("secrets_manager", "client_secret"),
+    # Langfuse credentials (#3017). Both halves of the pair are credentials — the
+    # "public" key is only public relative to Langfuse's own browser SDK; here it
+    # authenticates the ingest client alongside the secret key, so neither belongs
+    # in a file that gets exported, backed up or forked.
+    ("tracing", "public_key"),
+    ("tracing", "secret_key"),
+    # Plugin secrets (e.g. discord's `discord.bot_token`) are declared by their
+    # plugin manifests and added dynamically via secret_paths() (ADR 0019).
+)
+
+
+# Last successfully-discovered plugin secret paths. On a discovery FAILURE we fall back
+# to this cache rather than an empty set — otherwise a transient error would stop
+# recognizing a plugin's declared secret keys, and strip_secrets_from_doc (which uses
+# secret_paths) would let that secret be written into the main, exportable/forkable YAML
+# in plaintext (#877). The cache only fails safe (more keys treated as secret).
+_PLUGIN_SECRET_PATHS_CACHE: tuple[tuple[str, str], ...] = ()
+
+
+def secret_paths() -> tuple[tuple[str, str], ...]:
+    """Base ``SECRET_PATHS`` plus the (section, key) pairs each INSTALLED plugin
+    declares as secrets (ADR 0019). Used by the split/strip logic so a plugin
+    secret is routed to ``secrets.yaml`` exactly like the model API key.
+
+    Covers installed-but-DISABLED plugins too: otherwise a secret saved for a plugin
+    that's off wouldn't be recognized as a secret and would be written to the live
+    config YAML in plaintext (the wrong file — configs get exported/backed-up/forked).
+
+    On a discovery failure, falls back to the last successful set (never an empty one),
+    so a transient error can't silently downgrade a plugin secret to plaintext (#877)."""
+    global _PLUGIN_SECRET_PATHS_CACHE
+    try:
+        from graph.plugins.pconfig import installed_plugin_config_schemas
+
+        extra = tuple((sch.section, key) for sch in installed_plugin_config_schemas(strict=True) for key in sch.secrets)
+        _PLUGIN_SECRET_PATHS_CACHE = extra  # remember the good set for next time
+    except Exception as e:  # noqa: BLE001 — discovery is best-effort; fail SAFE, not empty
+        extra = _PLUGIN_SECRET_PATHS_CACHE
+        log.warning(
+            "[plugins] secret-path discovery failed — keeping %d cached plugin secret "
+            "path(s) so a declared secret isn't written to the main YAML in plaintext: %s",
+            len(extra),
+            e,
+        )
+    return SECRET_PATHS + extra
+
+
+# ---------------------------------------------------------------------------
+# YAML round-trip
+# ---------------------------------------------------------------------------
+
+try:
+    from ruamel.yaml import YAML  # type: ignore
+
+    _HAS_RUAMEL = True
+except ImportError:
+    _HAS_RUAMEL = False
+
+# One parser PER THREAD. A ruamel ``YAML`` keeps its reader/scanner state on the
+# instance, so a single shared one parsing on two threads at once corrupts both
+# parses — and config is read on the event loop while a write loads the same file in
+# a worker thread (two ``POST /api/delegates`` at once hit exactly that).
+_yaml_local = threading.local()
+
+
+def _rt_yaml() -> Any:
+    """This thread's round-trip parser, configured for the live-config layout."""
+    y = getattr(_yaml_local, "yaml", None)
+    if y is None:
+        y = YAML(typ="rt")
+        y.preserve_quotes = True
+        y.indent(mapping=2, sequence=4, offset=2)
+        _yaml_local.yaml = y
+    return y
+
+
+# Files that make up the live config tier — migrated as a unit by the one-shot
+# legacy-layout bridge below.
+_MIGRATED_CONFIG_FILES = ("langgraph-config.yaml", "secrets.yaml", ".setup-complete", "theme.json")
+
+# Per-instance DATA stores that lived flat under the box root in the old layout
+# (``~/.protoagent/checkpoints.db``, ``~/.protoagent/knowledge``, …) and now live
+# under ``instance_root`` (``~/.protoagent/default/...``). The store-tier bridge
+# below carries them for the DEFAULT instance only. Box-tier shared state
+# (host-config.yaml, commons, .instances, .data-version, workspaces) is deliberately
+# NOT in either list — it stays at the box root, shared by every instance.
+_LEGACY_STORE_FILES = ("checkpoints.db", "telemetry.db", "skills.db", "a2a-tasks.db", "a2a-push.db")
+_LEGACY_STORE_DIRS = (
+    "knowledge",
+    "memory",
+    "scheduler",
+    "inbox",
+    "background",
+    "activity",
+    "audit",
+    "tasks",
+    "workflows",
+    "acp_sessions",
+    "goals",
+    "workspace",
+)
+
+
+def _legacy_config_dirs() -> list[Path]:
+    """Old-layout directories that may hold this instance's pre-redesign config, in
+    priority order. Computed independently of the (now-deleted) legacy resolvers.
+
+    Two shapes cover every deployment:
+      * flat under the instance root — ``<instance_root>/langgraph-config.yaml`` (the
+        desktop ``PROTOAGENT_HOME`` dir and a fleet member's ``<ws>`` dir used to hold
+        the config file directly), and
+      * the bundle/repo config dir ``<app_root>/config[/<iid>]`` (local default in
+        ``REPO/config``, the dev sandbox in ``REPO/config/dev``, the container in
+        ``/opt/protoagent/config``), plus an explicit ``PROTOAGENT_CONFIG_DIR`` when the
+        upgrading environment still exports the retired var.
+    """
+    p = instance_paths()
+    out: list[Path] = [p.instance_root]
+    cd = os.environ.get("PROTOAGENT_CONFIG_DIR", "").strip()
+    if cd:
+        out.append(Path(cd).expanduser())
+    else:
+        base = p.app_root / "config"
+        iid = os.environ.get("PROTOAGENT_INSTANCE", "").strip()
+        out.append(base / iid if iid else base)
+    cfg = p.config_dir.resolve()
+    return [d for d in out if d.resolve() != cfg]
+
+
+def migrate_legacy_layout() -> bool:
+    """One-shot, idempotent, non-destructive bridge from the pre-redesign on-disk
+    layout into the new ``instance_root/config``. Returns True if it copied anything.
+
+    Runs only when the new live config is ABSENT, then copies an old config bundle
+    (``langgraph-config.yaml`` + ``secrets.yaml`` + ``.setup-complete`` + ``theme.json``)
+    from the first legacy dir that has one — so a build upgraded in place keeps its
+    config, secrets and setup state with no user action. Copy (never move) leaves the
+    originals as harmless orphans; ``copy2`` preserves ``secrets.yaml``'s 0600 mode. A
+    no-op once migrated. Self-contained and deletable in a future major — the path
+    *resolver* stays single-rule; this is the only bridge from the old layout.
+    """
+    import shutil
+
+    p = instance_paths()
+    if p.config_yaml.exists():
+        return False
+    migrated = False
+    for src_dir in _legacy_config_dirs():
+        if not (src_dir / "langgraph-config.yaml").is_file():
+            continue
+        p.config_dir.mkdir(parents=True, exist_ok=True)
+        for name in _MIGRATED_CONFIG_FILES:
+            src, dst = src_dir / name, p.config_dir / name
+            if src.is_file() and not dst.exists():
+                shutil.copy2(src, dst)  # copy2 keeps secrets.yaml's 0600 mode
+                migrated = True
+        log.warning(
+            "[config] migrated legacy config layout %s → %s (one-time; the originals are "
+            "left untouched and can be removed once you've confirmed the upgrade)",
+            src_dir,
+            p.config_dir,
+        )
+        break
+    # The container's old runtime SOUL (entrypoint used to write /sandbox/SOUL.md).
+    legacy_soul = Path("/sandbox/SOUL.md")
+    if legacy_soul.is_file() and not p.soul_path.exists():
+        p.soul_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy_soul, p.soul_path)
+        migrated = True
+    # Carry the default instance's data stores into the new instance_root (first
+    # boot only — gated by the same absent-live-config condition above so a store
+    # the operator later clears is never resurrected). Only the DEFAULT instance
+    # auto-migrates; scoped sandboxes (e.g. the dev instance) re-init from scratch.
+    migrated = _migrate_legacy_stores(p) or migrated
+    return migrated
+
+
+def _migrate_legacy_stores(p) -> bool:
+    """One-shot, idempotent, non-destructive copy of the pre-redesign data stores from
+    the flat box root into ``instance_root`` (``box_root/<store>`` → ``box_root/default/
+    <store>``). Returns True if it copied anything.
+
+    Only runs for the standard local DEFAULT instance (``instance_id == "default"`` and
+    ``box_root`` is the parent of ``instance_root``) — a ``PROTOAGENT_HOME`` deploy or a
+    named/dev instance has a distinct root and re-inits rather than inheriting the
+    default's data. Copy (never move); skip any store whose destination already exists.
+    Box-tier shared state is never touched. Best-effort — a copy failure must never
+    block boot."""
+    import shutil
+
+    if p.instance_id != "default" or p.box_root != p.instance_root.parent:
+        return False
+    moved: list[str] = []
+    for name in _LEGACY_STORE_FILES:
+        src, dst = p.box_root / name, p.instance_root / name
+        if src.is_file() and not dst.exists():
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                moved.append(name)
+            except OSError as exc:
+                log.warning("[migrate] could not carry store file %s: %s", name, exc)
+    for name in _LEGACY_STORE_DIRS:
+        src, dst = p.box_root / name, p.instance_root / name
+        if src.is_dir() and not dst.exists():
+            try:
+                shutil.copytree(src, dst)
+                moved.append(f"{name}/")
+            except OSError as exc:
+                log.warning("[migrate] could not carry store dir %s: %s", name, exc)
+    if moved:
+        log.warning(
+            "[migrate] carried default-instance data stores into %s (one-time; originals "
+            "left untouched, removable once you've confirmed the upgrade): %s",
+            p.instance_root,
+            ", ".join(moved),
+        )
+    return bool(moved)
+
+
+_MAX_ITERATIONS_MIGRATION_MARKER = ".max-iterations-50-migrated"
+
+
+def _migrate_dead_max_iterations_default() -> bool:
+    """One-time upgrade fix (#2679 QA review). ``model.max_iterations`` used to be
+    defined in the config schema but never consumed anywhere, so every existing
+    install's live config sat at the old placeholder default of 50 and it did
+    nothing. Now that the field drives the real LangGraph ``recursion_limit``, an
+    untouched live config would silently cut an existing install's effective
+    per-turn tool-call budget from the previously-hardcoded ~200 steps (≈25 tool
+    calls) to 50 (≈6) the moment it upgrades — the opposite of what this fix
+    intends. A fresh install never hits this (``LangGraphConfig``'s dataclass
+    default is already 2000).
+
+    Runs at most once per instance, gated by a marker file next to the live
+    config — so an operator who *later* deliberately sets ``max_iterations: 50``
+    on purpose keeps that choice; this only corrects the untouched-template-
+    leftover case, and only on the first boot after upgrading. Rewrites the live
+    YAML's ``model.max_iterations`` to the new default (2000) ONLY when it's
+    still exactly the dead field's old value; any other stored value (including
+    a hand-picked cap) is left alone. Best-effort — a failure here must never
+    block boot.
+    """
+    live = config_yaml_path()
+    if not live.exists():
+        return False
+    marker = live.parent / _MAX_ITERATIONS_MIGRATION_MARKER
+    if marker.exists():
+        return False
+    try:
+        from infra.paths import read_text_utf8
+
+        text = read_text_utf8(live)
+        if _HAS_RUAMEL:
+            doc = _rt_yaml().load(text) or _rt_yaml().load("{}\n")
+        else:
+            import yaml
+
+            doc = yaml.safe_load(text) or {}
+        model = doc.get("model") if hasattr(doc, "get") else None
+        changed = isinstance(model, dict) and model.get("max_iterations") == 50
+        if changed:
+            model["max_iterations"] = 2000
+            save_yaml_doc(doc, live)
+            log.warning(
+                "[config] migrated model.max_iterations 50 -> 2000 in %s (one-time; "
+                "the field was previously unused, so the old value was a template "
+                "leftover, not an operator choice — set it explicitly to override)",
+                live,
+            )
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("", encoding="utf-8")
+        return changed
+    except Exception:  # noqa: BLE001 — never block boot over a migration
+        log.exception("[config] max_iterations migration failed for %s (non-fatal)", live)
+        return False
+
+
+def ensure_live_config() -> bool:
+    """Seed the live config on first run. Returns True only when it created the file.
+
+    The live ``langgraph-config.yaml`` is untracked, so a fresh clone / new container
+    volume / **new instance** won't have one. Seed source, in precedence order:
+
+    - ``PROTOAGENT_SEED_CONFIG`` — an explicit baked config file. A container/fleet
+      deploy points at it so a fresh instance comes up **pre-configured** (then
+      console edits override it, persisted on the config volume). This is the
+      config-as-code seed: bake your config into the image, point this env at it, and
+      you never hand-bake the live ``langgraph-config.yaml`` (which a config volume
+      would then freeze + shadow on later image updates).
+    - Otherwise copy the bundled ``.example`` template (``config_example_path()``).
+
+    Idempotent for the SEED step — does nothing once the live file exists, so
+    operator edits are never clobbered. That is the right contract for operator-owned
+    config but leaves the seed's *declarative* half stranded on an image roll;
+    ``apply_seed_merge`` (opt-in, #2071) is the boot-time companion that re-applies it
+    without clobbering operator edits. This function also runs
+    ``_migrate_dead_max_iterations_default`` unconditionally before the seed-exists
+    check — that's a narrow, marker-gated, one-shot field correction, not a
+    reopening of the general no-clobber contract.
+    """
+    # Bridge an in-place upgrade first: if an old-layout config exists, copy it into the
+    # new instance_root/config so the seed-from-.example branch below never strands it.
+    migrate_legacy_layout()
+    _migrate_dead_max_iterations_default()
+    live = config_yaml_path()
+    if live.exists():
+        return False
+    import shutil
+
+    # An explicit baked seed (PROTOAGENT_SEED_CONFIG) wins over the bundled .example.
+    # Missing/blank env → seed from the template.
+    seed_override = os.environ.get("PROTOAGENT_SEED_CONFIG", "").strip()
+    seed_path = Path(seed_override).expanduser() if seed_override else None
+    if seed_path is not None and seed_path.is_file():
+        source = seed_path
+    else:
+        if seed_override:
+            log.warning(
+                "[config] PROTOAGENT_SEED_CONFIG=%r is not a readable file — seeding from the default template instead",
+                seed_override,
+            )
+        source = config_example_path()
+    if not source.exists():
+        return False
+
+    live.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, live)
+    log.info("[config] seeded live config %s from %s", live, source.name)
+    return True
+
+
+# ── Merge-on-boot declarative seeding (#2071) ────────────────────────────────
+#
+# ``ensure_live_config`` is seed-ONCE: correct for operator-owned config (console
+# edits must never be clobbered), but it means the *image-owned declarative* half of
+# ``PROTOAGENT_SEED_CONFIG`` — agent identity, the A2A card description/skills,
+# ``plugins.enabled`` — never reaches an existing config volume on an image roll. A
+# fleet agent whose volume was seeded before a block existed keeps serving the stock
+# value forever, and the only fixes are wiping the volume (loses operator state) or
+# hand-POSTing /api/config. Both defeat config-as-code.
+#
+# The fix is a THREE-WAY merge against ``.seed-applied.yaml`` — the seed as it was
+# last applied. Per leaf:
+#
+#   key absent from live            → take the seed value   (new declarative key)
+#   live still equals the snapshot  → take the seed value   (operator never touched it)
+#   live differs from the snapshot  → keep live             (operator edited it — wins)
+#
+# The snapshot is what makes this durable. The simpler two-way form (deep-merge the
+# seed under live) fixes the first roll only: the live file was itself seeded from
+# the old seed, so it already carries every old key, and "live wins" then pins those
+# keys forever — the second image roll silently goes missing exactly like the first.
+#
+# Opt-in via the PROTOAGENT_SEED_MERGE env var, deliberately NOT a config field: the
+# flag would otherwise live in the very file being merged, so the seed's own value
+# would fight the operator's. Unset ⇒ seed-once, byte-for-byte unchanged.
+
+_SEED_MERGE_ENV = "PROTOAGENT_SEED_MERGE"
+
+
+def seed_merge_enabled() -> bool:
+    """True when merge-on-boot is opted into (``PROTOAGENT_SEED_MERGE``)."""
+    from infra.paths import _TRUTHY
+
+    return os.environ.get(_SEED_MERGE_ENV, "").strip().lower() in _TRUTHY
+
+
+def _seed_config_path() -> Path | None:
+    """The baked declarative seed (``PROTOAGENT_SEED_CONFIG``), or None.
+
+    Only the explicit baked seed is merge-eligible — never the bundled ``.example``
+    template. The template is a generic starter, not image-owned declarative config;
+    re-applying it every boot would fight the operator's wizard answers with defaults
+    they already replaced."""
+    raw = os.environ.get("PROTOAGENT_SEED_CONFIG", "").strip()
+    if not raw:
+        return None
+    p = Path(raw).expanduser()
+    return p if p.is_file() else None
+
+
+def _merge_three_way(
+    live: Any, seed: Any, last: Any, *, prefix: str, secrets: set[str], out: dict[str, list[str]]
+) -> None:
+    """Recursively apply the seed→live three-way merge. Mutates ``live`` in place.
+
+    ``last`` is the corresponding subtree of the previously-applied seed, or ``{}``
+    when there is no baseline (a volume seeded before merge-on-boot existed). With no
+    baseline every existing key is treated as operator-owned and kept — so the first
+    merge boot can only ADD genuinely new keys, never overwrite. The snapshot written
+    afterwards gives every later boot a real baseline."""
+    last = last if isinstance(last, dict) else {}
+
+    for key, seed_val in seed.items():
+        dotted = f"{prefix}{key}"
+        if dotted in secrets:
+            continue  # credentials are deploy state, not declarative config — see below
+        live_val = live.get(key, _MISSING)
+        last_val = last.get(key, _MISSING)
+
+        if isinstance(seed_val, dict) and isinstance(live_val, dict):
+            _merge_three_way(live_val, seed_val, last_val, prefix=f"{dotted}.", secrets=secrets, out=out)
+        elif live_val is _MISSING:
+            live[key] = copy.deepcopy(seed_val)
+            out["added"].append(dotted)
+        elif last_val is _MISSING:
+            out["kept"].append(dotted)  # no baseline ⇒ assume operator-owned
+        elif live_val == last_val:
+            if live_val != seed_val:
+                live[key] = copy.deepcopy(seed_val)
+                out["updated"].append(dotted)
+        else:
+            out["kept"].append(dotted)  # operator edited it — operator wins
+
+    # Retraction: a key the image DROPPED from the seed and the operator never
+    # touched goes too, so the image can retract a setting as well as change one
+    # (LangGraphConfig then falls back to its dataclass default). Guarded tightly —
+    # the live value must still exactly equal the baseline.
+    for key, last_val in last.items():
+        dotted = f"{prefix}{key}"
+        if key in seed or dotted in secrets or isinstance(last_val, dict):
+            continue
+        if live.get(key, _MISSING) == last_val:
+            del live[key]
+            out["removed"].append(dotted)
+
+
+def apply_seed_merge() -> dict[str, list[str]] | None:
+    """Re-apply the baked seed's image-owned keys onto the live config (#2071).
+
+    Called at boot, right after ``ensure_live_config``. Returns a
+    ``{"added"|"updated"|"kept"|"removed": [dotted paths]}`` summary, or ``None``
+    when the merge did not run (flag off, no baked seed, or an unreadable one).
+
+    Never raises: a broken seed or an unwritable config dir logs and leaves the live
+    config exactly as it was. Booting with a stale card beats not booting.
+    """
+    if not seed_merge_enabled():
+        return None
+    seed_path = _seed_config_path()
+    if seed_path is None:
+        return None
+
+    try:
+        seed_doc = load_yaml_doc(seed_path)
+        if not isinstance(seed_doc, dict) or not seed_doc:
+            log.warning("[config] seed %s is empty or not a mapping — skipping merge", seed_path)
+            return None
+
+        live_path = config_yaml_path()
+        live_doc = load_yaml_doc(live_path)
+        if not isinstance(live_doc, dict):
+            log.warning("[config] live config %s is not a mapping — skipping merge", live_path)
+            return None
+
+        snap_path = seed_snapshot_path()
+        last_doc = load_yaml_doc(snap_path) if snap_path.exists() else {}
+        last_doc = last_doc if isinstance(last_doc, dict) else {}
+
+        # Credentials never ride the declarative merge: a secret belongs in
+        # secrets.yaml, and writing one into the live YAML would put it in the
+        # exportable/forkable file in plaintext (#877). Deploy state, not config.
+        secrets = {f"{section}.{key}" for section, key in secret_paths()}
+
+        out: dict[str, list[str]] = {"added": [], "updated": [], "kept": [], "removed": []}
+        _merge_three_way(live_doc, seed_doc, last_doc, prefix="", secrets=secrets, out=out)
+
+        changed = out["added"] or out["updated"] or out["removed"]
+        if changed:
+            save_yaml_doc(live_doc, live_path)
+            log.info(
+                "[config] merge-on-boot applied from %s — added=%s updated=%s removed=%s (kept %d operator-owned)",
+                seed_path.name,
+                out["added"] or "-",
+                out["updated"] or "-",
+                out["removed"] or "-",
+                len(out["kept"]),
+            )
+        else:
+            log.debug("[config] merge-on-boot: live config already matches the seed")
+
+        # Always refresh the baseline, even on a no-op — a fresh volume that
+        # ``ensure_live_config`` just seeded verbatim has no snapshot yet, and
+        # without one the NEXT roll would have no baseline to compare against.
+        _write_seed_snapshot(seed_doc, snap_path)
+        return out
+    except Exception:
+        log.exception(
+            "[config] merge-on-boot failed for seed %s — leaving the live config untouched (set %s= to disable)",
+            seed_path,
+            _SEED_MERGE_ENV,
+        )
+        return None
+
+
+def _write_seed_snapshot(seed_doc: Any, path: Path) -> None:
+    """Persist the seed as applied, 0600.
+
+    Mode matches ``secrets.yaml`` rather than the live config: the snapshot is a
+    verbatim copy of whatever the image baked, and a deploy that puts a credential
+    in its seed should not get a second, more readable copy of it here."""
+    import io
+
+    from infra.paths import atomic_write
+
+    buf = io.StringIO()
+    if _HAS_RUAMEL:
+        _rt_yaml().dump(seed_doc, buf)
+    else:
+        import yaml
+
+        yaml.safe_dump(seed_doc, buf, sort_keys=False, default_flow_style=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, buf.getvalue(), mode=0o600)
+
+
+def load_yaml_doc(path: Path | None = None) -> Any:
+    """Load the config YAML as a mutable document.
+
+    ``path`` defaults to ``config_yaml_path()`` (resolved at call time, never an
+    import-time constant). With ruamel: returns a CommentedMap that preserves
+    comments + key order on subsequent dump. Without: returns a plain dict and
+    comments are lost on next save (a warning is logged once per save so the
+    operator knows).
+    """
+    resolved = Path(path) if path is not None else config_yaml_path()
+    if resolved == config_yaml_path():
+        ensure_live_config()
+    if not resolved.exists():
+        return {} if not _HAS_RUAMEL else _rt_yaml().load("{}\n")
+
+    from infra.paths import read_text_utf8
+
+    text = read_text_utf8(resolved)
+    if _HAS_RUAMEL:
+        return _rt_yaml().load(text) or _rt_yaml().load("{}\n")
+    import yaml
+
+    return yaml.safe_load(text) or {}
+
+
+def save_yaml_doc(doc: Any, path: Path | None = None) -> None:
+    """Persist the document atomically (temp + rename). Creates parent dirs.
+
+    ``path`` defaults to ``config_yaml_path()``. This file is the single most
+    important one the agent owns — a crash mid-dump must never leave a truncated
+    YAML behind, so the dump goes to a buffer and lands via ``paths.atomic_write``.
+    """
+    import io
+
+    from infra.paths import atomic_write
+
+    resolved = Path(path) if path is not None else config_yaml_path()
+    buf = io.StringIO()
+    if _HAS_RUAMEL:
+        _rt_yaml().dump(doc, buf)
+    else:
+        log.warning(
+            "ruamel.yaml not installed — YAML comments in %s will not be "
+            "preserved on save. Add `ruamel.yaml>=0.18` to requirements.txt "
+            "to fix.",
+            resolved,
+        )
+        import yaml
+
+        yaml.safe_dump(doc, buf, sort_keys=False, default_flow_style=False)
+    atomic_write(resolved, buf.getvalue())
+
+
+# ---------------------------------------------------------------------------
+# Config dict <-> dataclass
+# ---------------------------------------------------------------------------
+
+
+def config_to_dict(config: LangGraphConfig) -> dict[str, Any]:
+    """Serialize a LangGraphConfig into the nested dict shape the UI works with.
+
+    SINGLE SOURCE (B1): every settings-schema field (``graph.settings_schema.FIELDS``)
+    is emitted from its declared ``key -> attr`` mapping, so adding a ``Field``
+    auto-serializes it — this function no longer hand-mirrors the schema (it used
+    to, and silently drifted: 27 fields were unserialized). Secret-typed fields are
+    redacted to ``""`` — the UI only needs to know one is set, and the blank-means-
+    unchanged save semantics (``split_secret_updates``) keep the stored secret
+    intact when the blank is echoed back. The non-FIELDS legacy keys
+    (mcp / knowledge.db_path / skills / plugins / researcher) and the ADR-0019
+    plugin sections are layered on explicitly below.
+    """
+    from graph.settings_schema import FIELDS
+
+    # (A) Schema-driven: every settings-exposed key, from its declared key->attr.
+    d: dict[str, Any] = {}
+    for f in FIELDS:
+        val = "" if f.type == "secret" else getattr(config, f.attr)
+        if isinstance(val, (list, tuple)):
+            val = list(val)
+        cursor = d
+        parts = f.key.split(".")
+        for part in parts[:-1]:
+            cursor = cursor.setdefault(part, {})
+        cursor[parts[-1]] = val
+
+    # (B) Non-FIELDS legacy keys the UI/round-trip needs but the settings schema
+    # doesn't expose. Their attrs still round-trip via from_yaml; they're just not
+    # in FIELDS, so they stay explicit.
+    r = config.researcher
+    _deep_merge_dicts(
+        d,
+        {
+            # System lifecycle reactions (ADR 0074) — a top-level list of
+            # {event, prompt?, webhook?, session?} dicts, so it round-trips here (like
+            # filesystem.projects / mcp.servers) rather than through the string_list FIELDS.
+            "lifecycle_hooks": list(config.lifecycle_hooks),
+            # Managed projects registry (ADR 0095) — a top-level list of
+            # {name, path, github?, default_branch?, write?, no_delete?, fs?} dicts,
+            # so it round-trips here (like lifecycle_hooks / filesystem.projects)
+            # rather than through the string_list FIELDS.
+            "projects": list(config.projects),
+            # background_keep is an operational knob (not a settings-schema field),
+            # so emit it here for round-trip completeness like the breaker knobs.
+            "checkpoint": {
+                "background_keep": config.checkpoint_background_keep,
+            },
+            "knowledge": {
+                "db_path": config.knowledge_db_path,
+                # Breaker knobs aren't settings-schema fields (operational, config-only),
+                # so emit them here for round-trip completeness.
+                "embed_breaker_threshold": config.knowledge_embed_breaker_threshold,
+                "embed_breaker_cooldown_s": config.knowledge_embed_breaker_cooldown_s,
+                # Same for the chunk-fold floor — max_chars/overlap are settings
+                # fields (round-trip via FIELDS); min_chars is config-only.
+                "chunk_min_chars": config.knowledge_chunk_min_chars,
+                # contextual_enrichment is a settings field; its doc cap is config-only.
+                "context_max_doc_chars": config.knowledge_context_max_doc_chars,
+            },
+            # The filesystem toggles are settings-schema fields (§A); the projects
+            # REGISTRY (list of {name,path,write} dicts) is config-only, so emit it
+            # here or a consumer treating this dict as the complete config loses it.
+            "filesystem": {
+                "projects": list(config.filesystem_projects),
+            },
+            "mcp": {
+                "enabled": config.mcp_enabled,
+                "servers": list(config.mcp_servers),
+                "timeout_seconds": config.mcp_timeout_seconds,
+                "call_timeout_seconds": config.mcp_call_timeout_seconds,
+                "max_result_chars": config.mcp_max_result_chars,
+                "denylist": list(config.mcp_denylist),
+                "persistent_sessions": config.mcp_persistent_sessions,
+            },
+            "skills": {
+                "enabled": config.skills_enabled,
+                "db_path": config.skills_db_path,
+                "dir": config.skills_dir,
+            },
+            # Every plugins.* key from_dict consumes must be emitted here, or any
+            # consumer treating this dict as the COMPLETE config silently loses it
+            # (the YAML file itself was never at risk — apply_updates_to_yaml merges
+            # in place). `disabled` + `sources.allow` were omitted until the
+            # 2026-06-10 prod-readiness audit (N6); plugin-hardening P1 writes
+            # `sources.*`, so the dict has to carry them.
+            "plugins": {
+                "enabled": list(config.plugins_enabled),
+                "disabled": list(config.plugins_disabled),
+                "dir": config.plugins_dir,
+                "allow_unbundled_deps": config.plugins_allow_unbundled_deps,
+                # `official`/`acked`/`trust_unverified` (ADR 0071 D3, #2721): the ack
+                # store MUST survive this dict — an ack that doesn't persist re-asks
+                # forever (the exact write-path drop the June audit warned about).
+                "sources": {
+                    # Absent-vs-explicit-empty is semantic (#2743): None (open)
+                    # OMITS the key; [] (deny-all) writes an explicit empty list.
+                    **(
+                        {"allow": list(config.plugins_sources_allow)}
+                        if config.plugins_sources_allow is not None
+                        else {}
+                    ),
+                    "official": list(config.plugins_sources_official),
+                    "acked": list(config.plugins_sources_acked),
+                },
+                "trust_unverified": config.plugins_trust_unverified,
+                "update_policy": dict(config.plugins_update_policy),
+                "autoupdate_interval_hours": config.plugins_autoupdate_interval_hours,
+            },
+            "subagents": {
+                "researcher": {
+                    "enabled": r.enabled,
+                    "tools": list(r.tools),
+                    "max_turns": r.max_turns,
+                    "model": r.model,
+                },
+            },
+        },
+    )
+
+    # (C) Plugin-declared sections (ADR 0019) — reflect the PASSED config's resolved
+    # plugin_config (not a re-discovery), with declared secrets redacted
+    # (blank-means-unchanged, like api_key). A default config has none.
+    plugin_cfg = getattr(config, "plugin_config", {}) or {}
+    if plugin_cfg:
+        discovery_ok = True
+        try:
+            # ALL installed plugins (not just enabled) — so a disabled plugin's stored
+            # secret is redacted from the API response too, never echoed back in the clear.
+            from graph.plugins.pconfig import installed_plugin_config_schemas
+
+            secrets_by_section = {s.section: set(s.secrets) for s in installed_plugin_config_schemas(strict=True)}
+        except Exception:  # noqa: BLE001 — discovery FAILED (vs genuinely-empty): we no longer know which keys are secret
+            discovery_ok = False
+            secrets_by_section = {}
+        for section, vals in plugin_cfg.items():
+            if not discovery_ok:
+                # Fail SAFE: with no schema we can't tell a secret from a non-secret
+                # value, so blank the WHOLE section rather than risk echoing a plugin
+                # secret in the clear (blank-means-unchanged on save, like api_key).
+                d[section] = {k: "" for k in vals}
+                continue
+            redacted = dict(vals)
+            for skey in secrets_by_section.get(section, set()):
+                if skey in redacted:
+                    redacted[skey] = ""
+            d[section] = redacted
+    return d
+
+
+def pop_keys_from_yaml(doc: Any, dotted_keys: list[str]) -> Any:
+    """Delete each dotted key (``"model.name"``, ``"prompt_cache.warm.enabled"``)
+    from the loaded YAML document, pruning any parent maps left empty by the
+    deletion.
+
+    Reset-to-inherited (ADR 0047 slice 3): removing a key from the leaf doc makes
+    the cascade fall back to the Host/App layer for that field. Preserves comments +
+    key order on the surviving sections (mutates the ruamel ``CommentedMap`` in
+    place). A key that isn't present is silently skipped — reset is idempotent.
+    """
+    for dotted in dotted_keys:
+        parts = dotted.split(".")
+        # Walk to the leaf's parent, remembering the chain so we can prune
+        # now-empty ancestors after the delete.
+        chain: list[tuple[Any, str]] = []
+        cur = doc
+        ok = True
+        for part in parts[:-1]:
+            if not isinstance(cur, dict) or part not in cur or not isinstance(cur.get(part), dict):
+                ok = False
+                break
+            chain.append((cur, part))
+            cur = cur[part]
+        if not ok or not isinstance(cur, dict) or parts[-1] not in cur:
+            continue
+        del cur[parts[-1]]
+        # Prune empty parents from the deepest outward.
+        for parent, key in reversed(chain):
+            child = parent.get(key)
+            if isinstance(child, dict) and not child:
+                del parent[key]
+            else:
+                break
+    return doc
+
+
+# Deletion sentinel for ``apply_updates_to_yaml``: inside a nested mapping an update
+# value of ``None`` means "remove this key", not "write null". This is the one durable
+# way a resolved config update can express REMOVAL — the third lifecycle operation
+# alongside addition and replacement (ADR 0047) — so map-owned config
+# (``project_board.projects``, a plugin config map, a delegates map) can drop a member
+# through the normal persist/readback path instead of every caller re-implementing it.
+_DELETE = None
+
+
+def apply_updates_to_yaml(doc: Any, updates: dict[str, Any]) -> Any:
+    """Merge a nested updates dict into the loaded YAML document.
+
+    Uses __setitem__ / __delitem__ on whatever container ruamel loaded
+    (CommentedMap acts like dict), so comments / key order / unknown sections are
+    preserved. Keys that don't exist yet get added at the end of the containing
+    section.
+
+    **Fixed-depth merge (unchanged).** A section merges into an existing section and
+    a section-member map merges into an existing member map — siblings under each are
+    kept — but the innermost value is ASSIGNED, not deep-merged: a non-``None`` mapping
+    at the leaf REPLACES the stored mapping wholesale, so its own omitted members are
+    dropped rather than stranded. (Recursively deep-merging every level would silently
+    retain removed members — the exact bug this change exists to fix — so the leaf
+    assignment stays a replacement.)
+
+    **Deletion sentinel (nested map entries only).** Within a section's mapping an
+    update value of ``None`` REMOVES that key from ``doc`` instead of writing ``null``
+    or retaining the old value — at the section-member level (``{'section': {'key':
+    None}}``) and one level deeper, inside a member map (``{'section': {'key': {'inner':
+    None}}}``). That is what lets a caller submit a surviving map with a removed member
+    (``{'project_board': {'projects': {'gone': None}}}`` drops only ``gone``) and have
+    it actually leave the persisted YAML, siblings / comments / order intact. Deletion
+    is idempotent — a key that isn't present is simply skipped.
+
+    It is deliberately confined to *nested* entries: a TOP-LEVEL section whose update
+    value is ``None`` is written through unchanged (``doc[section] = None``), so a
+    documented nullable top-level scalar keeps its explicit-null semantics and is never
+    silently dropped. Clearing a nested *scalar* setting back to its inherited default
+    is the reset path's job (``pop_keys_from_yaml`` / ``_reset_settings_keys``), so by
+    the settings-apply contract a ``None`` that reaches a nested entry is an explicit
+    deletion, not a "set to null". A falsy *real* value (``False`` / ``0`` / ``""``) is
+    never the sentinel. Non-``None`` merge behavior — add or replace — is unchanged.
+    """
+    for section, values in updates.items():
+        if not isinstance(values, dict):
+            doc[section] = values
+            continue
+        if section not in doc or not isinstance(doc.get(section), dict):
+            doc[section] = {}
+        for key, val in values.items():
+            if val is _DELETE:
+                # Section-member deletion sentinel: drop the key, don't null it.
+                if isinstance(doc[section], dict) and key in doc[section]:
+                    del doc[section][key]
+                continue
+            if isinstance(val, dict):
+                if key not in doc[section] or not isinstance(doc[section].get(key), dict):
+                    doc[section][key] = {}
+                for inner_key, inner_val in val.items():
+                    if inner_val is _DELETE:
+                        # The same sentinel one level deeper, within the member map.
+                        if inner_key in doc[section][key]:
+                            del doc[section][key][inner_key]
+                        continue
+                    doc[section][key][inner_key] = inner_val
+            else:
+                doc[section][key] = val
+    return doc
+
+
+# ---------------------------------------------------------------------------
+# Secrets overlay
+# ---------------------------------------------------------------------------
+
+
+def split_secret_updates(config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split a UI config dict into (non-secret, secret) halves.
+
+    Secret fields (``SECRET_PATHS``) are pulled out of the returned
+    non-secret dict so they never reach the tracked YAML. Only *non-blank*
+    secret values are routed to the secret half — a blank value means "leave
+    the stored secret unchanged" (the UI sends blank when the user didn't
+    re-enter a key), so it's dropped entirely rather than clobbering.
+    """
+    import copy
+
+    main = copy.deepcopy(config)
+    secrets: dict[str, Any] = {}
+    for section, key in secret_paths():
+        sect = main.get(section)
+        if not isinstance(sect, dict) or key not in sect:
+            continue
+        value = sect.pop(key)
+        if isinstance(value, str) and value.strip():
+            secrets.setdefault(section, {})[key] = value.strip()
+        # Drop the section entirely if popping the secret emptied it, so we
+        # don't write an empty `auth: {}` block to the main YAML.
+        if not sect:
+            main.pop(section, None)
+    # The provider registry is a LIST of objects (ADR 0106), which `secret_paths()`'s
+    # (section, key) pairs cannot describe — so each connection's key is pulled out here
+    # and filed under `providers.<id>`, exactly where the loader's overlay looks for it.
+    # Without this a key written through the wizard or a config PUT would land in the
+    # tracked YAML, which gets exported, backed up and forked.
+    entries = main.get("providers")
+    if isinstance(entries, list):
+        seen_ids: set[str] = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            value = entry.pop("api_key", None)
+            pid = str(entry.get("id", "") or "").strip().lower()
+            if not pid:
+                continue
+            # `_parse_providers` keeps the FIRST entry for a duplicated id, so the key must
+            # follow the same rule: taking the last one would apply a later duplicate's
+            # credential to the first one's endpoint.
+            if pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+            # A blank means "leave the stored key alone", the same rule every other
+            # secret follows — the UI sends blank when the operator didn't re-enter one.
+            if isinstance(value, str) and value.strip():
+                secrets.setdefault("providers", {})[pid] = value.strip()
+    return main, secrets
+
+
+def strip_secrets_from_doc(doc: Any) -> Any:
+    """Relocate any secret keys still present in the main YAML document to the
+    ``secrets.yaml`` overlay, then remove them from the doc.
+
+    Belt-and-suspenders alongside ``split_secret_updates``: even if an older
+    YAML still carries an ``api_key`` (or a hand-edit reintroduces one), every
+    save scrubs it so the tracked file converges to secret-free. Stripping is
+    only safe once the value is preserved, though — a hand-seeded key on a
+    fresh instance (no ``secrets.yaml`` yet) used to be scrubbed with no
+    overlay write, losing the credential outright (#1645). So: a non-blank
+    inline value the overlay doesn't already hold is written to ``secrets.yaml``
+    first (an existing overlay value is never clobbered by a stale inline copy —
+    the overlay wins at load time, so the inline copy was shadowed anyway), and
+    if that write fails the key is left inline rather than dropped.
+    """
+
+    def _blank(v: Any) -> bool:
+        return v is None or (isinstance(v, str) and not v.strip())
+
+    # Pass 1: find every inline secret; queue the ones whose value would be
+    # LOST by stripping (non-blank, and not already stored in the overlay).
+    stored = load_secrets()
+    present: list[tuple[str, str]] = []
+    pending: dict[str, dict[str, Any]] = {}
+    for section, key in secret_paths():
+        sect = doc.get(section) if hasattr(doc, "get") else None
+        if not isinstance(sect, dict) or key not in sect:
+            continue
+        present.append((section, key))
+        value = sect.get(key)
+        overlay = stored.get(section)
+        held = overlay.get(key) if isinstance(overlay, dict) else None
+        if not _blank(value) and _blank(held):
+            pending.setdefault(section, {})[key] = value.strip() if isinstance(value, str) else value
+
+    relocated = True
+    if pending:
+        try:
+            save_secrets(pending)
+        except Exception:
+            relocated = False
+            log.warning(
+                "[config] secrets overlay write failed — leaving %s inline in the main "
+                "YAML rather than dropping the value(s) (#1645)",
+                ", ".join(f"{s}.{k}" for s, vals in pending.items() for k in vals),
+                exc_info=True,
+            )
+
+    # Pass 2: strip. A key whose relocation failed stays inline (recoverable).
+    for section, key in present:
+        if not relocated and key in pending.get(section, {}):
+            continue
+        sect = doc.get(section)
+        if isinstance(sect, dict) and key in sect:
+            del sect[key]
+        if isinstance(sect, dict) and not sect:
+            try:
+                del doc[section]
+            except (KeyError, TypeError):
+                pass
+    return doc
+
+
+def load_secrets(path: Path | None = None) -> dict[str, Any]:
+    """Load the untracked secrets overlay (empty dict if absent/unreadable).
+
+    ``path`` defaults to ``secrets_yaml_path()`` (this instance's overlay); pass an explicit
+    path to read a DIFFERENT instance's file — the fleet create path (ADR 0042) reads a member
+    workspace's ``secrets.yaml`` from the hub process to merge operator-supplied values into.
+    """
+    secrets_path = path if path is not None else secrets_yaml_path()
+    if not secrets_path.exists():
+        return {}
+    import yaml as _yaml
+
+    from infra.paths import read_text_utf8
+
+    try:
+        data = _yaml.safe_load(read_text_utf8(secrets_path)) or {}
+        return data if isinstance(data, dict) else {}
+    except (OSError, _yaml.YAMLError):
+        return {}
+
+
+def save_secrets(secret_updates: dict[str, Any], path: Path | None = None) -> None:
+    """Merge non-blank secret updates into the untracked secrets file.
+
+    Written with mode 0600 (owner-only). Merges rather than overwrites so a
+    save that only changes the API key doesn't drop a stored bearer token.
+
+    ``path`` defaults to ``secrets_yaml_path()``; pass an explicit path to write a DIFFERENT
+    instance's overlay — the fleet create path (ADR 0042) seeds a member workspace's
+    ``secrets.yaml`` (``<ws>/config/secrets.yaml``) from the hub process, reusing this
+    function's 0600 + atomic-replace + merge-not-clobber guarantees.
+    """
+    if not secret_updates:
+        return
+    import os
+    import yaml as _yaml
+
+    secrets_path = path if path is not None else secrets_yaml_path()
+    current = load_secrets(secrets_path)
+    for section, values in secret_updates.items():
+        if not isinstance(values, dict):
+            continue
+        dest = current.setdefault(section, {})
+        for key, val in values.items():
+            dest[key] = val
+
+    secrets_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = secrets_path.with_suffix(".yaml.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        _yaml.safe_dump(current, f, sort_keys=False, default_flow_style=False)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, secrets_path)
+    harden_private_file(secrets_path)  # the Windows ACL belt (POSIX: same chmod again) — #2412 phase 4
+
+
+def validate_config_dict(updates: dict[str, Any]) -> tuple[bool, str]:
+    """Validate without persisting. Returns (ok, error-message).
+
+    Catches type mismatches and obvious range errors before we touch
+    disk or rebuild the graph.
+    """
+    try:
+        model = updates.get("model", {})
+        temp = float(model.get("temperature", 0.2))
+        if not 0.0 <= temp <= 2.0:
+            return False, f"temperature must be 0.0-2.0, got {temp}"
+        max_tokens = int(model.get("max_tokens", 4096))
+        if max_tokens < 1:
+            return False, f"max_tokens must be >= 1, got {max_tokens}"
+        max_iter = int(model.get("max_iterations", 2000))
+        if max_iter < 1:
+            return False, f"max_iterations must be >= 1, got {max_iter}"
+
+        researcher = updates.get("subagents", {}).get("researcher", {})
+        if researcher:
+            max_turns = int(researcher.get("max_turns", 40))
+            if max_turns < 1:
+                return False, f"researcher.max_turns must be >= 1, got {max_turns}"
+            tools = researcher.get("tools", [])
+            if not isinstance(tools, list):
+                return False, "researcher.tools must be a list"
+
+        knowledge = updates.get("knowledge", {})
+        if knowledge:
+            top_k = int(knowledge.get("top_k", 5))
+            if top_k < 1:
+                return False, f"knowledge.top_k must be >= 1, got {top_k}"
+
+        operator = updates.get("operator", {})
+        if operator:
+            allowed = operator.get("allowed_dirs", [])
+            if not isinstance(allowed, list) or not all(isinstance(d, str) for d in allowed):
+                return False, "operator.allowed_dirs must be a list of strings"
+            if "project_dir" in operator and not isinstance(operator["project_dir"], str):
+                return False, "operator.project_dir must be a string"
+    except (TypeError, ValueError) as e:
+        return False, f"config validation: {e}"
+    return True, ""
+
+
+# ---------------------------------------------------------------------------
+# SOUL.md
+# ---------------------------------------------------------------------------
+
+
+def read_soul() -> str:
+    """Return the current persona text.
+
+    Reads the instance's live ``SOUL.md`` (``instance_paths().soul_path``, what
+    ``graph/prompts.build_system_prompt`` resolves), falling back to the bundled
+    seed (``soul_source_path()``) when the instance hasn't written one yet.
+    """
+    for path in (instance_paths().soul_path, soul_source_path()):
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+    return ""
+
+
+def soul_revision() -> str:
+    """A short, stable fingerprint (8-char SHA-1) of the CURRENT effective persona (SOUL.md,
+    seed-fallback included) — so a run's telemetry can be tagged with which persona was live
+    (#1691). Empty string when there's no persona text. Matches the content-hash suffix of the
+    soul-history version ids, so a tagged run can be lined up with an archived version."""
+    text = read_soul()
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:8] if text else ""
+
+
+def record_soul_edit_provenance(*, revision: str, session_id: str, reason: str, section: str, mode: str) -> Path:
+    """Persist the trusted audit record for an automatic persona mutation."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    path = instance_paths().soul_history_dir / f"{stamp}-{revision}.self-edit.json"
+    atomic_write(
+        path,
+        json.dumps(
+            {
+                "edited_at": stamp,
+                "revision": revision,
+                "session_id": session_id,
+                "reason": reason,
+                "section": section,
+                "mode": mode,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    records = sorted(path.parent.glob("*.self-edit.json"))
+    for stale in records[:-_SOUL_HISTORY_CAP] if len(records) > _SOUL_HISTORY_CAP else []:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    return path
+
+
+def read_host_delegates() -> list[dict]:
+    """The fleet-shared ``delegates:`` list from the box's ``host-config.yaml`` (ADR 0105),
+    secret-free, ``[]`` when the file is absent / unreadable / not a mapping — the same
+    tolerance the cascade's read side has. Pure file read: the delegates plugin's store
+    and the workspace create path both resolve through here, so ``graph/`` never
+    imports plugin code for it."""
+    import yaml as _y
+
+    from infra.paths import host_config_path, read_text_utf8
+
+    hp = host_config_path()
+    try:
+        if not hp.exists():
+            return []
+        doc = _y.safe_load(read_text_utf8(hp)) or {}
+    except (OSError, _y.YAMLError):
+        return []
+    if not isinstance(doc, dict):
+        return []
+    return [dict(e) for e in (doc.get("delegates") or []) if isinstance(e, dict)]
+
+
+def sync_host_model_layer(config) -> bool:
+    """Mirror the host's model group into the Host layer (``host-config.yaml``, #2528).
+
+    The Host layer starts absent on a normal install, so a member's "Reset to
+    inherited" fell through to App defaults — a gateway model nothing on the box
+    backs — and the graph rebuild refused it, rolling every reset back: the member
+    was stuck on its create-time overrides forever. The HOST's model settings are
+    already the box's de-facto defaults (``create()`` copies them so a new member
+    boots ready-to-chat); this keeps the *inheritable* layer in step at the reload
+    commit, so a member reset genuinely lands on "what the box runs" — including a
+    native-OAuth provider, whose credentials members resolve on their own
+    (instance store, bootstrapped from the machine-level CLI login).
+
+    Members never write box state (their reload must not clobber the hub's layer);
+    a corrupt/non-mapping host file is left alone (the cascade already ignores it,
+    and overwriting would destroy whatever the operator had there). No-op when
+    already in step. Returns True when the file changed.
+    """
+    from graph.workspaces.manager import is_workspace_member
+    from infra.paths import atomic_write, host_config_path, read_text_utf8
+
+    if is_workspace_member():
+        return False
+    import yaml as _y
+
+    hp = host_config_path()
+    if not hp.parent.exists():
+        # Never conjure a directory tree just to mirror a config: a host-config
+        # override pointing into a non-existent location (read-only sidecar
+        # setups, test sentinels) means "no host layer here" — same contract as
+        # the read side, which treats the file as absent.
+        return False
+    doc: dict = {}
+    if hp.exists():
+        try:
+            doc = _y.safe_load(read_text_utf8(hp)) or {}
+        except (OSError, _y.YAMLError):
+            log.warning("[config] host-config.yaml unreadable — not mirroring the model group over it")
+            return False
+        if not isinstance(doc, dict):
+            log.warning("[config] host-config.yaml is not a mapping — not mirroring the model group over it")
+            return False
+    model = doc.get("model")
+    if not isinstance(model, dict):
+        model = {}
+        doc["model"] = model
+    desired = {
+        "name": getattr(config, "model_name", ""),
+        "provider": getattr(config, "model_provider", ""),
+        "api_base": getattr(config, "api_base", ""),
+    }
+    if all(model.get(k) == v for k, v in desired.items()):
+        return False
+    model.update(desired)
+    atomic_write(hp, _y.safe_dump(doc, sort_keys=False))
+    log.info("[config] host model group mirrored to the Host layer (%s)", hp)
+    return True
+
+
+def write_soul(text: str) -> list[Path]:
+    """Write persona text to the instance's live ``SOUL.md`` (mkdir parents).
+
+    Before overwriting, the OUTGOING persona is archived to the soul-history dir (#1691) so
+    prompt iterations can be reviewed and rolled back — deduped against the newest snapshot and
+    capped; a history failure never blocks the save. Returns the path(s) written for UI feedback.
+    """
+    target = instance_paths().soul_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # Archive the effective outgoing persona — the instance file, or the bundled SEED the agent
+    # was actually running on the very first edit (read_soul falls back to it). Capturing the
+    # seed matters: that first save is exactly the iteration you'd otherwise lose. Best-effort:
+    # reading the old text (or archiving it) must never block the actual save.
+    try:
+        old = read_soul()
+    except (OSError, ValueError):
+        old = ""
+    if old and old != text:
+        snapshot_soul(old)
+    target.write_text(text, encoding="utf-8")
+    return [target]
+
+
+# The distinctive sentence in the shipped starter ``config/SOUL.md``. It's the
+# whole point of that file to be replaced, so a live SOUL still carrying this
+# marker was never authored by anyone — it's an un-seeded default we may heal.
+_SOUL_PLACEHOLDER_MARKER = "Replace this file."
+
+
+def _is_placeholder_soul(text: str) -> bool:
+    """True when ``text`` is the shipped starter placeholder (still un-authored)."""
+    return _SOUL_PLACEHOLDER_MARKER in text
+
+
+def ensure_live_soul() -> bool:
+    """Seed the instance's live ``SOUL.md`` on first run — the persona analogue of
+    :func:`ensure_live_config`.
+
+    ``read_soul`` already falls back to the bundled seed when the live SOUL is
+    *absent*, so a fresh agent shows its baked persona. But an older boot (or a
+    finished setup wizard) can materialise the **starter placeholder** into the
+    live path, and that never-absent placeholder then permanently shadows a
+    persona baked into the bundle afterwards — the agent runs "Replace this file"
+    forever. This bridges that gap: it seeds the live SOUL when it is absent
+    **or still the shipped placeholder**, from ``PROTOAGENT_SEED_SOUL`` (a baked
+    persona-as-code file) when set, else the bundled ``soul_source_path()``.
+
+    Seed-not-force, exactly like ``ensure_live_config``: a real (non-placeholder)
+    live SOUL is never touched, and a placeholder is never written *over* another
+    placeholder. Returns ``True`` only when it wrote the file.
+    """
+    live = instance_paths().soul_path
+    if live.exists():
+        try:
+            current = live.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        if not _is_placeholder_soul(current):
+            return False  # a real persona already lives here — never clobber
+
+    seed_override = os.environ.get("PROTOAGENT_SEED_SOUL", "").strip()
+    seed_path = Path(seed_override).expanduser() if seed_override else None
+    if seed_path is not None and seed_path.is_file():
+        source = seed_path
+    else:
+        if seed_override:
+            log.warning(
+                "[soul] PROTOAGENT_SEED_SOUL=%r is not a readable file — falling back to the bundled seed",
+                seed_override,
+            )
+        source = soul_source_path()
+    if not source.exists():
+        return False
+
+    try:
+        source_text = source.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if _is_placeholder_soul(source_text):
+        return False  # nothing real to seed — don't replace a placeholder with one
+
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text(source_text, encoding="utf-8")
+    log.info("[soul] seeded live SOUL.md %s from %s", live, source.name)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# SOUL.md version history (#1691)
+# ---------------------------------------------------------------------------
+# Every persona save archives the OUTGOING text (see write_soul) into the
+# instance's soul-history dir. Versions are plain .md files named
+# ``<YYYYMMDDThhmmss.ffffffZ>-<8-char content hash>`` — lexical sort ==
+# chronological (microsecond precision), the hash disambiguates same-instant
+# saves. The console surfaces them as a restorable list; restore just re-saves
+# the chosen text (which snapshots the current one first, so rolling back is
+# itself reversible).
+
+_SOUL_VERSION_RE = re.compile(r"^\d{8}T\d{6}\.\d{6}Z-[0-9a-f]{8}$")
+_SOUL_HISTORY_CAP = 50  # keep the most recent N snapshots per instance
+
+
+def _soul_version_id(text: str, when: datetime) -> str:
+    # Microsecond precision so a lexical filename sort stays chronological even for rapid
+    # saves — two saves in the same second would otherwise order by hash, not time.
+    stamp = when.strftime("%Y%m%dT%H%M%S.%fZ")
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+    return f"{stamp}-{digest}"
+
+
+def _prune_soul_history(hist: Path, cap: int | None = None) -> None:
+    """Keep only the most-recent ``cap`` snapshots (lexical filename sort == chronological).
+    ``cap`` is resolved at call time (not bound as a default) so it honors a patched module cap."""
+    cap = _SOUL_HISTORY_CAP if cap is None else cap
+    try:
+        files = sorted(hist.glob("*.md"))
+    except OSError:
+        return
+    for stale in files[:-cap] if len(files) > cap else []:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+
+def snapshot_soul(text: str) -> Path | None:
+    """Archive ``text`` (an outgoing persona) into the soul-history dir, unless it's identical
+    to the newest existing snapshot (so repeat no-op saves don't pile up). Returns the snapshot
+    path, or None when skipped/unwritable. Never raises — history is best-effort."""
+    text = text or ""
+    try:
+        hist = instance_paths().soul_history_dir
+        hist.mkdir(parents=True, exist_ok=True)
+        existing = sorted(hist.glob("*.md"))
+        try:
+            if existing and existing[-1].read_text(encoding="utf-8") == text:
+                return None  # already the latest recorded version — dedupe
+        except (OSError, ValueError):
+            pass  # a corrupt/unreadable newest snapshot must not stop us archiving THIS one
+        when = datetime.now(timezone.utc)
+        if existing and _SOUL_VERSION_RE.match(existing[-1].stem):
+            # The lexical-sort==chronological invariant needs strictly increasing
+            # stamps — but Windows' clock can tick coarser than a microsecond, so
+            # two rapid saves can share one, and then the HASH decides which
+            # snapshot the prune deletes. Stamp strictly after the newest.
+            prev_when = datetime.strptime(existing[-1].stem.split("-")[0], "%Y%m%dT%H%M%S.%fZ").replace(
+                tzinfo=timezone.utc
+            )
+            if when <= prev_when:
+                when = prev_when + timedelta(microseconds=1)
+        path = hist / f"{_soul_version_id(text, when)}.md"
+        path.write_text(text, encoding="utf-8")
+        _prune_soul_history(hist)
+        return path
+    except (OSError, ValueError) as exc:  # non-utf8/other read error must never block the save
+        log.warning("[soul] history snapshot failed: %s", exc)
+        return None
+
+
+def _soul_history_files() -> list[Path]:
+    try:
+        return sorted(instance_paths().soul_history_dir.glob("*.md"), reverse=True)  # newest first
+    except OSError:
+        return []
+
+
+def _soul_version_saved_at(version_id: str) -> str:
+    """The ISO-8601 UTC timestamp encoded in a version id, or "" if unparseable."""
+    m = re.match(r"^(\d{8}T\d{6}\.\d{6})Z", version_id)
+    if not m:
+        return ""
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%dT%H%M%S.%f").replace(tzinfo=timezone.utc).isoformat()
+    except ValueError:
+        return ""
+
+
+def _soul_preview(text: str, limit: int) -> str:
+    return " ".join((text or "").split())[:limit]
+
+
+def list_soul_versions(preview_chars: int = 140) -> list[dict]:
+    """Recorded SOUL.md snapshots, newest first: ``{id, saved_at, size, preview, is_current}``.
+    ``saved_at`` is ISO-8601 UTC; ``preview`` is the leading text with whitespace collapsed for a
+    one-line UI summary; ``is_current`` marks the NEWEST snapshot whose text matches the live
+    persona (true right after a restore — so a version panel can flag which one is active without a
+    separate config fetch). Unreadable files are skipped."""
+    try:
+        current = read_soul()
+    except (OSError, ValueError):
+        current = ""
+    out: list[dict] = []
+    current_seen = False
+    for path in _soul_history_files():  # newest first
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, ValueError):  # a corrupt history file is skipped, never 500s the list
+            continue
+        # Several archived copies can be byte-identical — dedup only collapses CONSECUTIVE repeats,
+        # so a persona saved, changed, and saved again lands twice. Flag only the FIRST (newest)
+        # match as current, else a restored-to persona lights up every identical row (#1691).
+        is_current = bool(current) and not current_seen and text == current
+        current_seen = current_seen or is_current
+        out.append(
+            {
+                "id": path.stem,
+                "saved_at": _soul_version_saved_at(path.stem),
+                "size": len(text),
+                "preview": _soul_preview(text, preview_chars),
+                "is_current": is_current,
+            }
+        )
+    return out
+
+
+def read_soul_version(version_id: str) -> str | None:
+    """Full text of a recorded snapshot, or None if the id is invalid/missing/unreadable. The id
+    is validated against the generated format so it can never be a caller-controlled path (no
+    traversal), with a resolved-parent check as defense in depth.
+
+    None (absent) is intentionally distinct from "" (a legitimately archived empty persona) —
+    the restore route's 404 relies on that distinction, so don't collapse them to "" for
+    symmetry with read_soul_preset."""
+    if not _SOUL_VERSION_RE.match(version_id or ""):
+        return None
+    hist = instance_paths().soul_history_dir
+    path = hist / f"{version_id}.md"
+    try:
+        if hist.resolve() not in path.resolve().parents:
+            return None
+        return path.read_text(encoding="utf-8")
+    except (OSError, ValueError):  # missing / unreadable / non-utf8 → absent, never raise
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Persona drift detection (#1986)
+# ---------------------------------------------------------------------------
+# A deterministic, read-only curation pass: diff the live SOUL.md against a
+# baseline (the EARLIEST recorded soul-history snapshot, or an explicit pinned
+# version) and quantify how far the persona has drifted. The signals are pure
+# functions of the two texts — net size delta, section churn (added/dropped
+# markdown headings), and a difflib retention ratio — so identical inputs always
+# yield an identical score (no clock, no I/O, no model). Recovery is out of scope
+# (the restore endpoint already exists); this only surfaces the signal so a
+# background maintenance pass can publish ``persona.drift_detected``.
+
+# Markdown ATX heading (``#`` … ``######``) — the persona's section boundaries.
+_SOUL_SECTION_RE = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$", re.MULTILINE)
+
+
+def _soul_sections(text: str) -> list[str]:
+    """The markdown heading titles in a persona doc, in document order."""
+    return [m.group(1).strip() for m in _SOUL_SECTION_RE.finditer(text or "")]
+
+
+def compute_soul_drift(baseline: str, current: str) -> dict:
+    """Deterministic drift signals between a ``baseline`` persona and the ``current`` one.
+
+    Returns ``{score, retention, size_delta, baseline_size, current_size,
+    sections_added, sections_dropped, rationale}``. ``retention`` is difflib's
+    ``SequenceMatcher`` ratio (1.0 = identical); ``score`` is ``1 - retention``
+    (0.0 = no drift, 1.0 = total). ``sections_*`` compare the markdown heading
+    sets. Pure function of its two inputs — same inputs, same output."""
+    baseline = baseline or ""
+    current = current or ""
+    retention = difflib.SequenceMatcher(None, baseline, current, autojunk=False).ratio()
+    score = round(1.0 - retention, 4)
+    base_sections, cur_sections = _soul_sections(baseline), _soul_sections(current)
+    base_set, cur_set = set(base_sections), set(cur_sections)
+    sections_added = [s for s in cur_sections if s not in base_set]
+    sections_dropped = [s for s in base_sections if s not in cur_set]
+    size_delta = len(current) - len(baseline)
+    rationale = (
+        f"{round(retention * 100)}% of the baseline persona retained; "
+        f"size {size_delta:+d} chars ({len(baseline)}→{len(current)}); "
+        f"sections +{len(sections_added)}/-{len(sections_dropped)}"
+    )
+    return {
+        "score": score,
+        "retention": round(retention, 4),
+        "size_delta": size_delta,
+        "baseline_size": len(baseline),
+        "current_size": len(current),
+        "sections_added": sections_added,
+        "sections_dropped": sections_dropped,
+        "rationale": rationale,
+    }
+
+
+def detect_soul_drift(baseline_version_id: str | None = None) -> dict | None:
+    """Compare the live persona against a baseline soul-history snapshot.
+
+    The baseline is ``baseline_version_id`` when given (a pinned version), else the
+    EARLIEST recorded snapshot (the origin persona). Returns the
+    :func:`compute_soul_drift` report augmented with ``baseline_id`` /
+    ``baseline_saved_at``, or ``None`` when there is nothing to compare — no
+    recorded history, an unreadable/invalid baseline, or no live persona — so a
+    caller can cleanly skip publishing. Read-only and best-effort."""
+    current = read_soul()
+    if not current:
+        return None
+    if baseline_version_id:
+        baseline_id = baseline_version_id
+        baseline = read_soul_version(baseline_version_id)
+    else:
+        versions = list_soul_versions()  # newest first — the earliest is last
+        if not versions:
+            return None
+        baseline_id = versions[-1]["id"]
+        baseline = read_soul_version(baseline_id)
+    if baseline is None:
+        return None
+    report = compute_soul_drift(baseline, current)
+    report["baseline_id"] = baseline_id
+    report["baseline_saved_at"] = _soul_version_saved_at(baseline_id)
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Gateway model discovery
+# ---------------------------------------------------------------------------
+
+
+def list_gateway_models(
+    api_base: str,
+    api_key: str = "",
+    timeout: float = 10.0,
+    *,
+    allow_env_key: bool = True,
+) -> tuple[list[str], str]:
+    """Fetch the model list from ``{api_base}/models``.
+
+    Works against any OpenAI-compatible endpoint — LiteLLM gateway,
+    OpenAI proper, vLLM, Ollama with the OpenAI adapter. Returns
+    ``(model_ids, error_message)``. On success ``error_message`` is
+    empty; on failure model_ids is empty and the message is human-
+    readable.
+    """
+    import httpx
+
+    if not api_base:
+        return [], "api_base is empty"
+
+    # `allow_env_key=False` is for a REGISTERED connection (ADR 0106): a blank key there
+    # means "this endpoint needs none", not "go find a global one". Without the opt-out
+    # the fallback here quietly undid the isolation the callers had just enforced and put
+    # OPENAI_API_KEY on the wire to a local endpoint.
+    key = api_key or (os.environ.get("OPENAI_API_KEY", "") if allow_env_key else "")
+    url = api_base.rstrip("/") + "/models"
+    # SSRF guard (#871): an operator-supplied api_base must not steer this probe at
+    # cloud-metadata (169.254.169.254) or another link-local/reserved address. But a
+    # custom api_base is an OPERATOR-configured gateway — overwhelmingly localhost
+    # (Ollama / LM Studio / local vLLM / LiteLLM) or a LAN/tailnet host — so allow_private
+    # (same as the fleet-remote probe in graph/fleet/supervisor.py) while STILL blocking
+    # link-local/metadata/multicast/reserved. An unresolvable host isn't itself an SSRF
+    # target — let the real httpx connection error surface instead of a misleading block.
+    # If an egress allowlist IS set, it still enforces (the host must be allowlisted, which
+    # it also needs for actual gateway egress / the OpenShell policy anyway).
+    from security import egress
+
+    if egress.check_url(url, allow_private=True, block_unresolvable=False):
+        return [], "api_base host is blocked by the egress guard (set egress.allowed_hosts to permit it)"
+    headers = {}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.get(url, headers=headers)
+    except httpx.HTTPError as e:
+        return [], f"connection failed: {e}"
+    except Exception as e:  # noqa: BLE001 — a malformed api_base (httpx.InvalidURL, e.g.
+        # "Invalid port", a bad scheme/host) is NOT an httpx.HTTPError, so it would
+        # otherwise propagate as a 500 and lock the setup wizard. A probe must always
+        # return a fixable error, never raise.
+        return [], f"invalid api_base ({type(e).__name__}): {e}"
+
+    if resp.status_code >= 400:
+        # Don't echo the raw upstream body (#871) — just the status.
+        return [], f"HTTP {resp.status_code} from the gateway's /models"
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return [], f"non-JSON response from {url}"
+
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return [], f"unexpected shape from {url} — no 'data' array"
+
+    ids: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            model_id = item.get("id") or item.get("name")
+            if isinstance(model_id, str):
+                ids.append(model_id)
+    ids.sort()
+    return ids, ""
+
+
+def validate_model_connection(
+    api_base: str,
+    api_key: str = "",
+    model: str = "",
+    timeout: float = 20.0,
+    allow_env_key: bool = True,
+) -> tuple[bool, str]:
+    """Probe the model with a minimal real completion — the *true* auth check.
+
+    ``list_gateway_models`` only hits ``/models``, which gateways answer for
+    keys that can't actually run a completion (e.g. the proto-labs LiteLLM
+    gateway lists models but rejects a non-``sk-`` virtual key at
+    ``/chat/completions`` with a 401). This sends a 1-token completion down the
+    same path the agent uses, so a bad key / wrong model / unreachable gateway
+    is caught *before* setup completes instead of surfacing as a cryptic failed
+    chat turn. Returns ``(ok, error_message)`` — the message is the gateway's
+    own human-readable detail (e.g. "expected to start with 'sk-'") when it has
+    one, so the UI can show something actionable.
+    """
+    import httpx
+
+    if not api_base:
+        return False, "api_base is empty"
+    if not model:
+        return False, "model is empty"
+
+    # `allow_env_key=False` is for a REGISTERED connection (ADR 0106), exactly as in
+    # `list_gateway_models`: a blank key there means "this endpoint needs none", not "go
+    # find a global one". Without the opt-out this probe sends OPENAI_API_KEY — or the
+    # live default route's key, via the callers — to whatever endpoint was typed, which
+    # is the credential-crossing the registry exists to prevent.
+    key = api_key or (os.environ.get("OPENAI_API_KEY", "") if allow_env_key else "")
+    url = api_base.rstrip("/") + "/chat/completions"
+    # SSRF guard (#871) — same as list_gateway_models: allow_private so a localhost /
+    # LAN / tailnet operator gateway works, link-local/metadata stays blocked, and an
+    # allowlist (when set) still enforces.
+    from security import egress
+
+    if egress.check_url(url, allow_private=True, block_unresolvable=False):
+        return False, "api_base host is blocked by the egress guard (set egress.allowed_hosts to permit it)"
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "temperature": 0,
+    }
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(url, headers=headers, json=payload)
+    except httpx.HTTPError as e:
+        return False, f"connection failed: {e}"
+
+    if resp.status_code < 400:
+        return True, ""
+
+    # Surface the gateway's own error message when present (OpenAI-shaped
+    # ``{"error": {"message": ...}}``), else the raw body, capped.
+    detail = ""
+    try:
+        body = resp.json()
+        err = body.get("error") if isinstance(body, dict) else None
+        if isinstance(err, dict):
+            detail = err.get("message") or ""
+        elif isinstance(err, str):
+            detail = err
+    except ValueError:
+        detail = ""
+    if not detail:
+        detail = (resp.text or "")[:300]
+    # Sanitize: gateways (e.g. LiteLLM) dump the masked key, a token *hash*, and
+    # internal table names into auth errors — never echo those into the setup UI.
+    # Keep the leading human-readable cause, drop everything from the first
+    # secret-ish marker on, and cap the length.
+    import re as _re
+
+    detail = (
+        _re.split(
+            r"\s*(?:Received API Key|Key Hash|Unable to find token|Token=)",
+            detail,
+            maxsplit=1,
+        )[0]
+        .strip()
+        .rstrip(".,")
+    )
+    detail = detail[:200]
+    if resp.status_code in (401, 403) and not detail:
+        detail = "authentication failed — check the API key"
+    return False, f"HTTP {resp.status_code}: {detail}" if detail else f"HTTP {resp.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# Tool registry introspection
+# ---------------------------------------------------------------------------
+
+
+def list_available_tools(knowledge_store: Any = None) -> list[str]:
+    """Return every tool name the runtime *could* wire into the graph.
+
+    The wizard's tool checkbox group reads this. We deliberately
+    expose the scheduler tool names even when no scheduler has been
+    constructed yet (fresh boot, pre-setup) — otherwise the wizard
+    would hide tools that the runtime will register the moment the
+    user finishes setup. Same logic for memory tools when the
+    knowledge store is absent.
+    """
+    from tools.lg_tools import (
+        INBOX_TOOL_NAMES,
+        MEMORY_TOOL_NAMES,
+        SCHEDULER_TOOL_NAMES,
+        get_all_tools,
+    )
+
+    names = [t.name for t in get_all_tools(knowledge_store)]
+    # Deduplicate while preserving order: tools already present
+    # (because their backend was passed in) shouldn't appear twice.
+    seen = set(names)
+    for extra in (*MEMORY_TOOL_NAMES, *SCHEDULER_TOOL_NAMES, *INBOX_TOOL_NAMES):
+        if extra not in seen:
+            names.append(extra)
+            seen.add(extra)
+    return names
+
+
+# ---------------------------------------------------------------------------
+# Setup wizard state
+# ---------------------------------------------------------------------------
+
+
+def is_setup_complete() -> bool:
+    """True once the wizard has been completed at least once.
+
+    Checked at server boot to decide wizard-first vs chat-first
+    rendering. Don't read the YAML to infer this — a fork that ships
+    with a baked-in config still needs to walk a user through the
+    wizard on first run.
+    """
+    return setup_marker_path().exists()
+
+
+def mark_setup_complete() -> None:
+    """Write the marker so subsequent boots skip the wizard.
+
+    Idempotent — safe to call repeatedly. The file is empty; only
+    its presence matters.
+    """
+    marker = setup_marker_path()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+
+
+def write_host_archetype(requires_tools) -> None:
+    """Record the archetype capability contract the setup wizard installed onto THIS
+    host (#2277 / ADR 0100).
+
+    ``POST /api/fleet`` copies an archetype's ``requires_tools`` onto the new member's
+    ``workspace.yaml`` at create; the wizard's host path had nowhere to put it, so a
+    wizard-installed Project Manager never got the contract banner. This is that
+    somewhere: the same ``requires_tools`` key, in ``archetype-contract.yaml`` next to
+    the setup marker. An empty/absent list removes the record (a re-run of the wizard
+    onto a code-free persona must not keep yesterday's contract)."""
+    import yaml
+
+    tools = [str(t).strip() for t in (requires_tools or []) if str(t).strip()]
+    path = host_archetype_path()
+    if not tools:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, yaml.safe_dump({"requires_tools": tools}, sort_keys=False))
+
+
+def read_host_archetype() -> dict | None:
+    """The host archetype record written by :func:`write_host_archetype`, or ``None``
+    when there is none (a host that never ran the wizard onto a contract-carrying
+    archetype — the common case) or it's unreadable. Never raises: it feeds a
+    status-time warning."""
+    import yaml
+
+    path = host_archetype_path()
+    if not path.exists():
+        return None
+    try:
+        d = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def validate_for_headless(config) -> tuple[bool, str]:
+    """Can a headless tier compile the graph from this config without a wizard?
+
+    Returns ``(ok, reason)`` (ADR 0010). Requires a model endpoint and a
+    resolvable key — the wizard's job, done here from config + env instead.
+    Used by ``--setup`` and the boot-time auto-complete; on failure the caller
+    fails fast rather than marking a broken config complete.
+    """
+    # ACP-only setup (ADR 0033): an external coding agent drives turns + backs aux calls,
+    # so no OpenAI-compatible gateway is required. (Semantic recall degrades to keyword
+    # without an embed endpoint — fine, not a blocker.)
+    if str(getattr(config, "agent_runtime", "native") or "native").startswith("acp:"):
+        return True, "ok"
+
+    # Native OAuth-subscription providers (ADR 0097) authenticate from a coding-agent
+    # credential store (Claude Code / Codex OAuth token), not an api_base + api_key —
+    # so, like the ACP exemption above, they need no gateway endpoint. A missing/expired
+    # token surfaces as a clean OAuthCredentialError at the first turn, not here.
+    from graph.providers import is_native_oauth_provider
+
+    if is_native_oauth_provider(getattr(config, "model_provider", "")):
+        return True, "ok"
+
+    route = resolve_model_route(config)
+    if not route.base_url:
+        return False, "model.api_base is not set"
+    if not route.api_key:
+        return False, "no model api_key — set model.api_key in config/secrets.yaml or the OPENAI_API_KEY env var"
+    return True, "ok"
+
+
+def reset_setup() -> None:
+    """Remove the marker, forcing the wizard to run on next page load.
+
+    Exposed to the drawer as a "Re-run setup" action. Leaves the YAML
+    + SOUL.md in place so the wizard pre-populates with the current
+    values — reset is for revisiting choices, not for wiping config.
+    The archetype contract goes with the marker: it belongs to the
+    archetype the LAST wizard run picked, and the re-run records its own.
+    """
+    setup_marker_path().unlink(missing_ok=True)
+    host_archetype_path().unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# SOUL.md presets
+# ---------------------------------------------------------------------------
+
+
+def list_soul_presets() -> list[str]:
+    """Return preset names (file stems, no extension) sorted alphabetically.
+
+    The wizard's preset dropdown reads from this — dropping a new
+    markdown file into ``config/soul-presets/`` makes it a choice
+    without code changes.
+    """
+    root = presets_dir()
+    if not root.exists():
+        return []
+    return sorted(p.stem for p in root.glob("*.md"))
+
+
+def read_soul_preset(name: str) -> str:
+    """Return the preset's content.
+
+    Returns empty string for an unknown name rather than raising —
+    the wizard treats that as "no preset selected, blank canvas".
+
+    Path-traversal guarded: the resolved target must live inside
+    ``presets_dir()``. A name like ``"../secret"`` would otherwise
+    escape the presets directory and read arbitrary ``.md`` files
+    anywhere the process can reach.
+    """
+    root = presets_dir()
+    presets_root = root.resolve()
+    candidate = (root / f"{name}.md").resolve()
+    if presets_root not in candidate.parents or not candidate.is_file():
+        return ""
+    return candidate.read_text(encoding="utf-8")

@@ -114,15 +114,46 @@ _VENDOR_FILES = {
     "react.production.min.js",
     "react-dom.production.min.js",
     "babel.min.js",
+    "pptx-renderer.min.js",  # @aiden0z/pptx-renderer as an IIFE (window.PptxRenderer) — slide previews
+    "vega.min.js",  # vega / vega-lite / vega-embed UMD builds — `vega-lite` chart artifacts (ADR 0116)
+    "vega-lite.min.js",
+    "vega-embed.min.js",
+    "jszip.min.js",  # JSZip + docx-preview UMD builds — .docx page previews
+    "docx-preview.min.js",
+    # ESM modules loaded by <script type="module"> (SRI-pinned too): pdf.js, legacy build —
+    # PDF page previews. The worker module only sets globalThis.pdfjsWorker, so pdf.js runs on
+    # the frame's main thread (the sandbox CSP forbids workers).
+    "pdfjs.min.mjs",
+    "pdfjs-worker.min.mjs",
     # ESM modules (the `react` import map): curated libs …
     "d3.mjs",
     "chartjs.mjs",
     "lucide.mjs",
     "marked.mjs",
+    "three.module.min.js",  # three.js r170 self-contained ESM build — 3D `html`/`react` artifacts
+    "anime.esm.min.js",  # anime.js 4.5.0 self-contained ESM build — animation for `html`/`react` artifacts
     # … React shims + authored design-system wrappers
     "react.shim.mjs",
     "react-dom-client.shim.mjs",
     "pl-ui.mjs",
+    # The DS Vega chart theme (@protolabsai/design /vega — buildVegaConfig / vegaTooltipTheme),
+    # loaded same-origin by the SHELL itself (not a frame), then injected into the chart frame as
+    # source. Not SRI-pinned in the LIB map: the shell load is same-origin, not an opaque-sandbox
+    # subresource. Verbatim-vendored; tests/test_artifact_vega.py guards it against DS drift.
+    "pl-design-vega.mjs",
+    # The DS embed theme-handoff module (@protolabsai/design /embed — themeTokenSnapshot /
+    # snapshotToCss). Verbatim-vendored like pl-design-vega.mjs; same entry shape, same header.
+    # embed.js is NOT self-contained — it does `import … from "./tokens.js"`, so tokens.js is
+    # vendored beside it and MUST stay allowlisted too: the /vendor/{name} route is flat, and the
+    # browser resolves that relative import against this module. tests/test_artifact_plugin.py
+    # guards the closure and the DS drift.
+    "pl-design-embed.mjs",
+    "tokens.js",  # the embed module's relative dependency (./tokens.js) — must resolve same-origin
+    # The DS element-default stylesheet (@protolabsai/ui-css /styles/embed.css). FRAME-ONLY
+    # :where() zero-specificity defaults, embedded in the sandboxed frame beside the embed
+    # module's token snapshot — NEVER imported under apps/web. Served as text/css (below), not
+    # JavaScript. Verbatim-vendored; tests/test_artifact_plugin.py guards the DS drift.
+    "pl-embed.css",
 }
 
 
@@ -172,9 +203,12 @@ def _build_view_router():
         f = Path(__file__).parent / "vendor" / name
         if not f.exists():
             return Response(status_code=404, content=f"{name} not vendored")
+        # Media type follows the extension: a .css default sheet (pl-embed.css) must be served
+        # as text/css so the frame can apply it as a stylesheet; everything else is a JS/ESM lib.
+        media_type = "text/css" if name.endswith(".css") else "application/javascript"
         return FileResponse(
             f,
-            media_type="application/javascript",
+            media_type=media_type,
             headers={
                 "Cache-Control": "public, max-age=31536000, immutable",
                 # The sandboxed artifact iframe is an opaque origin, so its load of

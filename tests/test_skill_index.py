@@ -22,14 +22,15 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from graph.skills.index import SkillsIndex
-from graph.middleware.knowledge import KnowledgeMiddleware
+from graph.middleware.knowledge import KnowledgeMiddleware, turn_projection
 
 
 # ── Helpers / fixtures ────────────────────────────────────────────────────────
 
 
-def _frame(mw):
-    return mw._turn_projection or ""
+def _frame(update):
+    """The projection text a before_agent update carries (run-scoped, ADR 0108 D2)."""
+    return turn_projection(update)[0]
 
 
 @dataclass
@@ -190,7 +191,9 @@ def test_skill_summaries_lists_name_description_slash(populated_index) -> None:
     assert r["description"] == "Research a topic using web search tools"
     # last_used/confidence ride along (#2867) so the layered union can re-sort
     # merged tiers on the backends' own key.
-    assert set(r) == {"name", "description", "slash", "last_used", "confidence"}
+    # tools_used rides along so the index can flag skills whose tools the agent lacks.
+    assert set(r) == {"name", "description", "slash", "tools_used", "last_used", "confidence"}
+    assert r["tools_used"] == ["web_search", "fetch_url"]
     assert "prompt_template" not in r  # body is loaded on demand, not listed
 
 
@@ -316,9 +319,9 @@ def test_before_model_injects_available_skills(tmp_db) -> None:
     km = _skills_km(idx)
 
     # The query is irrelevant — the index is the same every turn (progressive disclosure).
-    km.before_agent({"messages": [HumanMessage(content="anything at all")]}, runtime=None)
+    _upd = km.before_agent({"messages": [HumanMessage(content="anything at all")]}, runtime=None)
 
-    ctx = _frame(km)
+    ctx = _frame(_upd)
     assert ctx
     assert "<available_skills>" in ctx
     assert "web-research" in ctx
@@ -333,8 +336,8 @@ def test_before_model_index_independent_of_query(tmp_db) -> None:
     idx.add_skill(_make_artifact(name="web-research", description="Research topics using web search"))
     km = _skills_km(idx)
 
-    km.before_agent({"messages": [HumanMessage(content="completely unrelated zebra")]}, runtime=None)
-    assert "web-research" in _frame(km)
+    _upd = km.before_agent({"messages": [HumanMessage(content="completely unrelated zebra")]}, runtime=None)
+    assert "web-research" in _frame(_upd)
 
 
 def test_before_model_lists_all_with_full_rows_capped(tmp_db) -> None:
@@ -349,8 +352,8 @@ def test_before_model_lists_all_with_full_rows_capped(tmp_db) -> None:
     km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx, skills_top_k=2)
     km._prior_sessions_cache = ""
 
-    km.before_agent({"messages": [HumanMessage(content="hi")]}, runtime=None)
-    ctx = _frame(km)
+    _upd = km.before_agent({"messages": [HumanMessage(content="hi")]}, runtime=None)
+    ctx = _frame(_upd)
     assert ctx.count("<skill ") == 5  # every identity present
     assert ctx.count("</skill>") == 2  # full descriptions capped at top_k
     for i in range(5):
@@ -377,24 +380,24 @@ def test_before_model_user_facing_skill_shows_slash(tmp_db) -> None:
         source="disk",
     )
     km = _skills_km(idx)
-    km.before_agent({"messages": [HumanMessage(content="x")]}, runtime=None)
-    ctx = _frame(km)
+    _upd = km.before_agent({"messages": [HumanMessage(content="x")]}, runtime=None)
+    ctx = _frame(_upd)
     assert 'slash="/research"' in ctx
 
 
 def test_before_model_no_skills_no_block(tmp_db) -> None:
     """before_model() must omit the block when the index is empty."""
     km = _skills_km(SkillsIndex(db_path=tmp_db))  # empty index
-    km.before_agent({"messages": [HumanMessage(content="some query")]}, runtime=None)
-    assert "<available_skills>" not in _frame(km)
+    _upd = km.before_agent({"messages": [HumanMessage(content="some query")]}, runtime=None)
+    assert "<available_skills>" not in _frame(_upd)
 
 
 def test_before_model_no_skills_index_configured() -> None:
     """before_model() must not crash when skills_index is None."""
     km = _make_knowledge_middleware_no_store()  # no skills_index
     km._prior_sessions_cache = ""
-    km.before_agent({"messages": [HumanMessage(content="test query")]}, runtime=None)
-    assert "<available_skills>" not in _frame(km)
+    _upd = km.before_agent({"messages": [HumanMessage(content="test query")]}, runtime=None)
+    assert "<available_skills>" not in _frame(_upd)
 
 
 # ── Curation surface (v2 schema: confidence + last_used) ──────────────────────
@@ -571,3 +574,84 @@ def test_concurrent_access_is_thread_safe(populated_index) -> None:
     assert index.discoverable_count() == 3
     ws = index.get_skill("web-research")
     assert ws is not None and isinstance(ws["confidence"], float)
+
+
+# ── missing_tools: flag skills whose declared tools the agent lacks (ADR 0060 §5) ──
+
+
+def _missing_km(idx, bound) -> KnowledgeMiddleware:
+    store = MagicMock()
+    store.search.return_value = []
+    km = KnowledgeMiddleware(knowledge_store=store, skills_index=idx, bound_tool_names=bound)
+    km._prior_sessions_cache = ""
+    return km
+
+
+def _skill_row(ctx: str, name: str) -> str:
+    return next(line for line in ctx.splitlines() if f'<skill name="{name}"' in line)
+
+
+def test_index_flags_skill_with_unbound_tools_but_keeps_it_listed(populated_index) -> None:
+    km = _missing_km(populated_index, frozenset({"web_search", "calculator", "load_skill"}))
+    ctx = _frame(km.before_agent({"messages": [HumanMessage(content="hi")]}, runtime=None))
+
+    research = _skill_row(ctx, "web-research")
+    assert 'missing_tools="fetch_url"' in research
+    assert "Research a topic using web search tools" in research  # still a full, usable row
+    assert 'missing_tools="current_time"' in _skill_row(ctx, "time-lookup")
+    assert "missing_tools" not in _skill_row(ctx, "calculator-math")  # everything bound
+    assert "missing_tools lists tools a skill declares" in ctx  # the one explanatory comment
+
+
+def test_index_makes_no_absence_claim_without_a_bound_set(populated_index) -> None:
+    """No bound tool names (external runtime, tests) → no attribute, no comment."""
+    km = _missing_km(populated_index, None)
+    ctx = _frame(km.before_agent({"messages": [HumanMessage(content="hi")]}, runtime=None))
+    assert "<available_skills>" in ctx
+    assert "missing_tools" not in ctx
+
+
+def test_index_omits_the_comment_when_nothing_is_missing(populated_index) -> None:
+    bound = frozenset({"web_search", "fetch_url", "calculator", "current_time"})
+    ctx = _frame(_missing_km(populated_index, bound).before_agent({"messages": [HumanMessage(content="x")]}, None))
+    assert "missing_tools" not in ctx
+
+
+def test_missing_tools_also_on_name_only_rows_and_capped() -> None:
+    """The flag survives the budget's name-only floor, and a long tool list is capped."""
+    from graph.projection import ProjectionOptions, _skill_index
+
+    class _Idx:
+        def skill_summaries(self):
+            return [
+                {"name": "big", "description": "d" * 50, "slash": "", "tools_used": [f"t{i}" for i in range(8)]},
+            ]
+
+    opts = ProjectionOptions(skills_index_chars=8192, bound_tool_names=frozenset({"t0"}))
+    block, _, _ = _skill_index(_Idx(), opts, bare_only=True)
+    row = _skill_row(block, "big")
+    assert row.endswith("/>")  # name-only row
+    assert 'missing_tools="t1,t2,t3,t4,t5,+2 more"' in row
+
+
+def test_missing_tools_attribute_is_escaped() -> None:
+    from graph.projection import ProjectionOptions, _skill_index
+
+    class _Idx:
+        def skill_summaries(self):
+            return [{"name": "q", "description": "d", "slash": "", "tools_used": ['bad"name']}]
+
+    block, _, _ = _skill_index(_Idx(), ProjectionOptions(bound_tool_names=frozenset()))
+    assert 'missing_tools="bad&quot;name"' in block
+
+
+def test_build_middleware_hands_the_bound_tools_to_the_skill_index() -> None:
+    """graph/agent.py wires the assembled tool surface into KnowledgeMiddleware."""
+    from graph.agent import _build_middleware
+    from graph.config import LangGraphConfig
+
+    cfg = LangGraphConfig(api_key="k")
+    cfg.skills_enabled = True
+    mw = _build_middleware(cfg, None, skills_index=MagicMock(), bound_tool_names=frozenset({"a", "b"}))
+    km = next(m for m in mw if isinstance(m, KnowledgeMiddleware))
+    assert km._bound_tool_names == frozenset({"a", "b"})

@@ -6,10 +6,8 @@ File a GitHub issue straight from the console — two ways, one backend path:
 - the **🐛 bug button** in the utility bar (bottom-left, next to Settings), which
   opens a **form dialog**.
 
-It's **user-only** — like [`/goal`](/guides/goal-mode) the command short-circuits the
-turn and is handled by the server; it is deliberately **not** an agent tool, so the
-agent can't open issues on its own (the read-only GitHub tools in the `github` plugin
-stay agent-facing; *creating* an issue is a write you keep in your own hands).
+The `/issue` command is user-only and handled by the server. Its form scaffolds
+and validates the required issue sections before submitting through `gh`.
 
 ## Syntax
 

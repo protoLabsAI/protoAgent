@@ -16,6 +16,10 @@ export const COMPONENT_MIME = "application/vnd.protolabs.component-v1+json";
 export const HITL_MIME = "application/vnd.protolabs.hitl-v1+json";
 export const STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json";
 export const ROOM_MIME = "application/vnd.protolabs.room-v1+json";
+export const REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json";
+// A streamed tool-argument slice (ADR 0118 D3): a contiguous chunk of one tool call's declared
+// string arg, already decoded server-side, on a WORKING frame — decoded by toolArgsFromParts.
+export const TOOL_ARGS_MIME = "application/vnd.protolabs.tool-args-v1+json";
 
 // The brief a DELEGATE_BG turn hands to `sonnet` — long on purpose: it is the wall of text the
 // delegation row keeps behind "Show brief" instead of rendering as a chat bubble.
@@ -182,6 +186,54 @@ export const ARCHETYPES = [
   },
   { id: "custom", label: "Custom", icon: "PenLine", blurb: "Write your own — fill in a template.", bundle: null, soul: "# Identity\n\n_Describe your agent in one paragraph._" },
 ];
+
+// The catalog's `held` entries — only on GET /api/archetypes?include_held=1 (the New-agent
+// picker's "Show preview archetypes" opt-in), each flagged `held: true` → a "Preview" badge.
+export const HELD_ARCHETYPES = [
+  {
+    id: "analyst", label: "Analyst", icon: "ChartColumn",
+    blurb: "Answers questions from your own data files — CSV, Parquet, Excel, SQLite — with SQL and a live chart.",
+    bundle: "https://github.com/protoLabsAI/analyst-archetype",
+    soul: "# Identity\n\nI am a data analyst.",
+    tier: "standard",
+    requires_tools: ["data_query", "data_chart"],
+    held: true,
+  },
+];
+
+// GET /api/archetypes/from-url — the "From a bundle URL" peek. Shaped after the real
+// analyst-archetype v0.1.0: one fetched plugin pinned at a ref, two built-ins it turns on,
+// and a required config_inputs prompt. A non-protoLabsAI URL answers `trusted: false` → the ack.
+export function archetypeFromUrl(url, ref) {
+  const source = url.replace(/^https:\/\//, "").replace(/\.git$/, "").replace(/\/$/, "");
+  return {
+    id: "analyst-archetype",
+    archetype: {
+      id: "analyst-archetype", label: "Analyst", icon: "ChartColumn",
+      blurb: "Answers questions from your own data files with SQL and a live chart.",
+      bundle: url, soul: "# Identity\n\nI am a data analyst.", tier: "standard",
+      requires: [], requires_tools: ["data_query", "data_chart"],
+      ...(ref ? { ref } : {}),
+    },
+    bundle: {
+      kind: "bundle", id: "analyst-archetype", name: "Analyst",
+      description: "A read-only data analyst over the folders you allow.",
+      enabled: ["data", "artifact", "notes"],
+      members: [
+        { id: "data", builtin: false, ref: "v0.1.0", url: "https://github.com/protoLabsAI/data-plugin", name: "Data", version: "0.1.0", description: "SQL over CSV / Parquet / Excel / SQLite, plus charts.", skills: [{ name: "analyze", description: "Answer a question from data" }] },
+        { id: "artifact", builtin: true, name: "Artifact", version: "0.4.0", description: "Publish charts and reports as artifacts." },
+        { id: "notes", builtin: true, name: "Notes", version: "0.6.0", description: "Markdown notes beside chat." },
+      ],
+      mcp: [],
+      secrets: [],
+      config_inputs: [
+        { key: "data.data_dirs", label: "Data folders", type: "path", required: true, help: "Only these folders are readable." },
+      ],
+    },
+    trusted: source.toLowerCase().startsWith("github.com/protolabsai/"), // official org → no ack
+    source,
+  };
+}
 
 // GET /api/archetypes/{id}/preview — the read-only bundle peek (#2041). product-archetype
 // asks for a GitHub MCP server (needs a token) + a standalone Brave secret, so it exercises
@@ -595,6 +647,9 @@ export const SETTINGS_SCHEMA = [
     plugin_id: "demo",
     fields: [
       { key: "demo.greeting", label: "Greeting", type: "string", section: "Demo Plugin", restart: false, description: "Shown by the demo tool.", options: [], value: "hello", default: "hello", scope: "agent", source: "agent" },
+      // A `multiple: true` path setting (the data plugin's "Data folders" shape) — the legacy
+      // comma-separated value must load as one row per folder.
+      { key: "demo.data_dirs", label: "Data folders", type: "path", path_kind: "dir", multiple: true, section: "Demo Plugin", restart: false, description: "Folders the demo reads.", options: [], value: "/home/op/Documents, /srv/data", default: "", scope: "agent", source: "agent" },
     ],
   },
   {
@@ -799,6 +854,81 @@ function scenarioFor(prompt) {
   // wrote — a chip in the transcript that (live, desktop) opens the Artifact panel on it.
   // `ARTIFACTREF V<n>` points at v<n> of `art-chain`; `ARTIFACTREF GONE` at a deleted one.
   // The store it points into is artifact-chip.spec.ts's own (it routes /history + /refs).
+  // Inline placement (ADR 0118 D2): the create tool wrote `placement="inline"`, so the
+  // artifact-ref carries `inline: true` (+ a height hint) and the chip hosts the artifact's own
+  // embed frame right in the transcript. Points at `art-inline` in artifact-inline.spec.ts's
+  // own html store (it routes /history + /refs).
+  if (t.includes("ARTIFACTREF INLINE")) {
+    return {
+      events: [
+        { id: "art-i", name: "show_artifact", phase: "start", input: JSON.stringify({ kind: "html", placement: "inline", title: "Inline calc", code: "<html/>" }) },
+        { id: "art-i", name: "show_artifact", phase: "end", output: "Created inline html artifact art-inline — showing in the transcript." },
+      ],
+      component: {
+        component: "artifact-ref",
+        props: { artifact_id: "art-inline", version: 1, versions_total: 1, title: "Inline calc", kind: "html", inline: true, height: 160 },
+      },
+      answer: "Here's the inline calculator.",
+    };
+  }
+  // ARTIFACTREF STREAM (ADR 0118 D3 / S8c): an inline show_artifact whose `code` arrives LIVE as
+  // tool-args-v1 slices BEFORE the tool ends — so the WorkBlock shows a sandboxed live PREVIEW
+  // while the model writes, then hands over to the real inline frame once the artifact-ref lands.
+  // Reasoning is included so the turn folds into the WorkBlock (where the spotlight preview lives).
+  // Points at `art-inline` (artifact-streaming-preview.spec.ts routes its own html store). Pair
+  // with "PARK THE TOOL" to hold the turn mid-tool so the preview is observable before the end.
+  //
+  // The tool START frame carries input "" — exactly as the real server does: it streams only the
+  // `code` arg (server/turn_stream.py), leaving the call's full args (kind/placement/title) for a
+  // second tool_start at model end. So the console has NOTHING to parse for placement while the
+  // code streams, and the preview MUST come from the decoded buffer alone — the path the console
+  // bug fixed in S8c broke by keying the preview on `input`. The kind rides the markup (html), the
+  // handover reads the artifact-ref component below, not the args.
+  // ARTIFACTREF STREAM NOREASON (#4121): the SAME streamed inline show_artifact as ARTIFACTREF
+  // STREAM, but with NO reasoning part — the shape Claude on the OAuth lane emits (it sends no
+  // thinking). foldPlan needs BOTH a tool call AND reasoning to fold, so this turn stays UNFOLDED:
+  // it exercises the unfolded live-preview path in ChatMessageView, where the WorkBlock — and the
+  // spotlight preview it used to host — never mount. Everything else matches ARTIFACTREF STREAM.
+  // Checked BEFORE the plain ARTIFACTREF STREAM branch because this prompt also contains that
+  // substring. Pair with "PARK THE TOOL" to hold the turn mid-tool so the preview is observable.
+  if (t.includes("ARTIFACTREF STREAM NOREASON")) {
+    return {
+      events: [
+        { id: "art-i", name: "show_artifact", phase: "start", input: "" },
+        { id: "art-i", name: "show_artifact", phase: "end", output: "Created inline html artifact art-inline — showing in the transcript." },
+      ],
+      toolArgs: {
+        id: "art-i",
+        arg: "code",
+        chunks: ['<style>#live{color:#09f}</style><div id="live">', "live preview ", "streaming…</div>"],
+      },
+      component: {
+        component: "artifact-ref",
+        props: { artifact_id: "art-inline", version: 1, versions_total: 1, title: "Streamed page", kind: "html", inline: true, height: 160 },
+      },
+      answer: "Here's the streamed page.",
+    };
+  }
+  if (t.includes("ARTIFACTREF STREAM")) {
+    return {
+      reasoning: "Writing the page…",
+      events: [
+        { id: "art-i", name: "show_artifact", phase: "start", input: "" },
+        { id: "art-i", name: "show_artifact", phase: "end", output: "Created inline html artifact art-inline — showing in the transcript." },
+      ],
+      // The first slice closes a <style>, so the preview gate opens at once (never flashes unstyled).
+      toolArgs: {
+        id: "art-i",
+        arg: "code",
+        chunks: ['<style>#live{color:#09f}</style><div id="live">', "live preview ", "streaming…</div>"],
+      },
+      component: {
+        component: "artifact-ref",
+        props: { artifact_id: "art-inline", version: 1, versions_total: 1, title: "Streamed page", kind: "html", inline: true, height: 160 },
+      },
+      answer: "Here's the streamed page.",
+    };
+  }
   const artRef = t.match(/ARTIFACTREF (GONE|V(\d+))/);
   if (artRef) {
     const gone = artRef[1] === "GONE";
@@ -1110,6 +1240,22 @@ function scenarioFor(prompt) {
     };
   if (t.includes("CALC"))
     return { name: "calculator", input: { expression: "19 * 23" }, output: "19 * 23 = 437", answer: "19 × 23 = 437." };
+  if (t.includes("FRAMEKIND"))
+    // Frame-rendered plugin component (ADR 0118 D5 / S12b): a component-v1 kind the console has
+    // NO built-in renderer for. It resolves through the live catalog (GET /api/components) to the
+    // plugin's FRAME page and hosts it inline — so the component renders with no console rebuild.
+    // frame-component.spec.ts routes the catalog + the frame page.
+    return {
+      events: [
+        { id: "fc-1", name: "show_component", phase: "start", input: JSON.stringify({ component: "pl-demo-widget" }) },
+        { id: "fc-1", name: "show_component", phase: "end", output: "Rendered the demo widget for the user." },
+      ],
+      component: {
+        component: "pl-demo-widget",
+        props: { greeting: "hello from the plugin" },
+      },
+      answer: "Here's the demo widget.",
+    };
   if (t.includes("COMPONENT"))
     // show_component (#1323): the tool fires AND emits a component-v1 part. The tool card is
     // suppressed (it's a render directive); the table renders inline below the answer.
@@ -1138,6 +1284,36 @@ function scenarioFor(prompt) {
       output: "[200] https://example.com\n\nExample Domain. This domain is for use in examples.",
       answer: "Fetched example.com.",
     };
+  if (t.includes("MDFLASH"))
+    // A tool turn with a markdown answer, on a fresh page — two launch-demo flashes:
+    //   1. the answer is the page's FIRST Markdown mount, and the lazy renderer's fallback once
+    //      painted it as raw source (`- **bold** … \`code\`` on one line — LazyMarkdown.tsx);
+    //   2. the answer STREAMS, and its very first delta is a bare `**` (then `- `, a lone
+    //      backtick): a marker with nothing after it yet, which streamdown's incomplete-markdown
+    //      repair leaves as a literal (danglingMarker.ts).
+    // The answer must never show markdown syntax on any frame. No reasoning: a tool-only turn
+    // doesn't fold, so its answer streams INLINE below the tool card (a folded turn keeps the
+    // streaming answer inside the collapsed WorkBlock until it settles — parts.ts foldPlan).
+    return {
+      name: "append_note",
+      input: { text: "protoAgent summary" },
+      output: "Appended to the note.",
+      streamChunks: ["**", "Done** — appended to your notes:\n\n- ", "**", "protoAgent** — private, plugin-extensible desktop agent\n- ", "**", "Extended via plugins** — pinned in `", "plugins.lock`, no fork needed"],
+      answer: "**Done** — appended to your notes:\n\n- **protoAgent** — private, plugin-extensible desktop agent\n- **Extended via plugins** — pinned in `plugins.lock`, no fork needed",
+    };
+  if (t.includes("THINKPRE"))
+    // A reasoning model's turn: think → stream a sentence → call a tool → answer. The sentence
+    // renders unfolded (no tool yet), so when the tool call folds the reason+tool turn into the
+    // WorkBlock the sentence must STAY in the bubble above it — never vanish into the collapsed
+    // "Working…" block (the launch-demo glitch; parts.ts foldPlan's lead).
+    return {
+      reasoning: "The operator wants a sentence, then a note.",
+      preText: "I am protoAgent, a plugin-extensible desktop agent.",
+      name: "append_note",
+      input: { text: "hi" },
+      output: "Appended to the note.",
+      answer: "\n\nDone — the note says hi.",
+    };
   if (t.includes("PREAMBLE"))
     // Pre-tool narration (`preText`) streams as an answer artifact BEFORE the tool —
     // it must render ABOVE the tool card, with the final answer BELOW it (ordering fix).
@@ -1147,7 +1323,7 @@ function scenarioFor(prompt) {
       input: { query: "agent client protocol" },
       output: "1 result(s): Agent Client Protocol — https://agentclientprotocol.com",
       // The post-tool answer is the NEXT model call, so the server opens its first delta
-      // with a paragraph break (server/chat.py _run_turn_stream) and the terminal replace
+      // with a paragraph break (server/turn_stream.py _run_turn_stream) and the terminal replace
       // — the whole turn's text — carries the same break. The client's parts drop a
       // run's leading whitespace, so that replace must still read as "nothing diverged"
       // and keep the interleaving (parts.ts replaceText).
@@ -1303,6 +1479,20 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
       final: false,
     });
 
+  // A tool-args-v1 slice (ADR 0118 D3): one contiguous chunk of a tool's declared string arg on a
+  // WORKING frame, decoded by toolArgsFromParts into the live preview buffer (chat/toolArgsBuffer).
+  const toolArgsFrame = (data) =>
+    wrap({
+      kind: "status-update",
+      taskId,
+      contextId,
+      status: {
+        state: "working",
+        message: { role: "agent", parts: [{ kind: "data", data, metadata: { mimeType: TOOL_ARGS_MIME } }] },
+      },
+      final: false,
+    });
+
   // Single-tool scenarios synthesize a start/end pair; multi-tool scenarios
   // (e.g. SUBAGENT) provide their own ordered event list.
   const toolEvents =
@@ -1315,6 +1505,22 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
     wrap({ kind: "task", id: taskId, contextId, status: { state: "submitted" }, artifacts: [] }),
     statusFrame("working…", null),
   ];
+  // Streamed reasoning ("thinking") ahead of everything else — a reasoning-v1 DataPart on a
+  // working status frame, as a2a_impl's executor emits it.
+  if (scenario.reasoning) {
+    frames.push(
+      wrap({
+        kind: "status-update",
+        taskId,
+        contextId,
+        status: {
+          state: "working",
+          message: { role: "agent", parts: [{ kind: "data", data: { text: scenario.reasoning }, metadata: { mimeType: REASONING_MIME } }] },
+        },
+        final: false,
+      }),
+    );
+  }
   // Pre-tool answer text (ordering scenario) — streamed as an artifact BEFORE the
   // tool frames, mirroring the backend flushing buffered text before a tool frame.
   if (scenario.preText) {
@@ -1332,6 +1538,16 @@ export function buildFrames({ rpcId, contextId, taskId, prompt }) {
   for (const ev of toolEvents) {
     const text = ev.phase === "start" ? `🔧 ${ev.name}: ${ev.input ?? ""}` : `✅ ${ev.name} → ${ev.output ?? ""}`;
     frames.push(statusFrame(text, ev));
+    // After the matching tool's START frame, stream its declared argument as tool-args-v1 slices
+    // (ADR 0118 D3): contiguous chunks on WORKING frames, offsets in CODE POINTS like the server.
+    if (ev.phase === "start" && scenario.toolArgs && scenario.toolArgs.id === ev.id) {
+      const { id, arg, chunks } = scenario.toolArgs;
+      let offset = 0;
+      chunks.forEach((chunk, i) => {
+        frames.push(toolArgsFrame({ id, arg, offset, chunk, done: i === chunks.length - 1 }));
+        offset += [...chunk].length;
+      });
+    }
   }
   // Room frames (room-v1, #3042): a delegation's outgoing ask / a participant's reply, each
   // its own status frame carrying the room DataPart — decoded by roomReplyFromParts.
@@ -1834,7 +2050,7 @@ export const MEMORY_INJECTION_DETAILS = {
 // type carries the shared `env` (envmap) editor field (#2114) — the per-delegate env
 // map + env_remove list + per-row secret toggle.
 // Mirrors the real schema: the backend marks the env editor `advanced`, so it renders
-// inside the collapsible group rather than inline (see plugins/delegates/adapters.py).
+// inside the collapsible group rather than inline (see plugins/delegates/base.py).
 const ENV_FIELD = {
   key: "env", label: "Environment", kind: "envmap", required: false,
   help: "Extra environment variables. Values are verbatim (no ${VAR} expansion) and merge over the inherited env after the removals below.",

@@ -124,7 +124,7 @@ def test_middleware_carries_skills_index_when_enabled(tmp_path: Path) -> None:
 def test_before_model_injects_available_skills(tmp_path: Path) -> None:
     from langchain_core.messages import HumanMessage
 
-    from graph.middleware.knowledge import KnowledgeMiddleware
+    from graph.middleware.knowledge import KnowledgeMiddleware, turn_projection
 
     root = tmp_path / "skills"
     _write_skill(
@@ -139,8 +139,8 @@ def test_before_model_injects_available_skills(tmp_path: Path) -> None:
     # No knowledge store — proves skills work KB-less (the None-store guard).
     mw = KnowledgeMiddleware(None, skills_index=index)
     state = {"messages": [HumanMessage(content="please research the web for me")]}
-    mw.before_agent(state, runtime=None)
-    ctx = mw._turn_projection or ""
+    _upd = mw.before_agent(state, runtime=None)
+    ctx = turn_projection(_upd)[0] or ""
     assert ctx
     assert "<available_skills>" in ctx
     assert "web-research" in ctx

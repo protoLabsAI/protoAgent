@@ -8,8 +8,8 @@
 .goal-row {
   position: relative;
   display: grid;
-  gap: 4px;
-  padding: 10px 34px 10px 12px;
+  gap: var(--pl-space-1);
+  padding: var(--pl-space-2_5) 34px var(--pl-space-2_5) var(--pl-space-3);
   border-bottom: 1px solid var(--pl-color-border);
   min-width: 0;
   cursor: pointer;
@@ -17,7 +17,7 @@
 
 /* The row is a button (opens the detail drawer) — hover/focus affordance. */
 .goal-row:hover {
-  background: var(--pl-color-bg-hover, rgba(127, 127, 127, 0.06));
+  background: var(--pl-color-bg-hover);
 }
 
 .goal-row:focus-visible {
@@ -33,7 +33,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
 }
 
@@ -42,32 +42,28 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .goal-row-meta {
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   line-height: 1.45;
   word-break: break-word;
 }
 
 .goal-row-clear {
   position: absolute;
-  top: 8px;
-  right: 6px;
+  top: var(--pl-space-2);
+  right: var(--pl-space-1_5);
 }
 
 /* New-goal modal (GoalCreateDialog) — a chromeless DS Dialog around the shared HitlForm
    wizard (ADR 0073), the one creator for both the Goals panel header action and the Work
-   overview quick-add. HitlForm brings its own title/stepper/actions, so drop the dialog
-   body padding and the card's own margin/border/background: the dialog frame provides the
-   border + elevation, and the wizard fills it instead of floating as a box-in-a-box. */
-.goal-create-modal .pl-dialog__body {
-  padding: 0;
-}
-
+   overview quick-add. The body padding is gone (the dialog passes padding="none"); here we
+   drop the card's own margin/border/background so the dialog frame provides the border +
+   elevation and the wizard fills it instead of floating as a box-in-a-box. */
 .goal-create-modal .hitl-card {
   margin: 0;
   border: 0;
@@ -81,39 +77,39 @@
 .goal-detail {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  font-size: 13px;
+  gap: var(--pl-space-4);
+  font-size: var(--pl-font-size-sm);
 }
 
 .goal-detail-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .goal-detail-condition {
-  font-size: 14px;
+  font-size: var(--pl-font-size-base);
   line-height: 1.4;
   min-width: 0;
 }
 
 .goal-detail-facts {
   display: grid;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   margin: 0;
 }
 
 .goal-detail-facts > div {
   display: grid;
   grid-template-columns: 84px 1fr;
-  gap: 8px;
+  gap: var(--pl-space-2);
   align-items: baseline;
 }
 
 .goal-detail-facts dt {
   color: var(--pl-color-fg-subtle);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -126,20 +122,20 @@
 
 .goal-detail-mono {
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .goal-detail-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   border-top: 1px solid var(--pl-color-border);
-  padding-top: 12px;
+  padding-top: var(--pl-space-3);
 }
 
 .goal-detail-section h4 {
   margin: 0;
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--pl-color-fg-subtle);
@@ -154,7 +150,7 @@
   margin: 0;
   padding-left: 18px;
   display: grid;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
 }
 
 .goal-detail-key {
@@ -164,12 +160,12 @@
 
 .goal-detail-evidence {
   margin: 0;
-  padding: 8px 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   font-family: var(--pl-font-mono);
-  font-size: 11.5px;
+  font-size: var(--pl-font-size-2xs);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -179,7 +175,7 @@
 
 /* The plan is agent-authored markdown — keep it readable but compact in the drawer. */
 .goal-detail-plan {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.55;
 }
 
@@ -195,41 +191,41 @@
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .goal-timeline-item {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 8px;
+  gap: var(--pl-space-2);
   align-items: start;
 }
 
 .goal-timeline-body {
   display: grid;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   min-width: 0;
 }
 
 .goal-timeline-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .goal-timeline-iter {
   font-family: var(--pl-font-mono);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
 }
 
 .goal-timeline-time {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
 }
 
 .goal-timeline-reason {
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.45;
   word-break: break-word;
 }

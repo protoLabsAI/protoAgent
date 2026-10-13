@@ -35,7 +35,9 @@ from langchain_core.runnables import RunnableLambda
 
 from plugins.delegates.adapters import ADAPTERS, _peer_usage_row
 from plugins.delegates.registry import DelegateRegistry
-from tests.test_a2a_handler import _build_app, _poll_terminal, _send_msg
+from tests._a2a_app import build_app as _build_app
+from tests._a2a_app import poll_terminal as _poll_terminal
+from tests._a2a_app import send_msg as _send_msg
 from tests.test_telemetry import _run_turn_outcome
 
 
@@ -227,7 +229,7 @@ def _delegate_to(peer_url="https://peer/a2a", name="orbis"):
 
 async def _dispatch_capturing_usage(monkeypatch, *responses, target="orbis", **tool_args):
     """Run ``delegate_to`` under ``astream_events`` — the same consumer
-    ``server/chat.py::_run_turn_stream`` is — and return (reply, usage payloads)."""
+    ``server/turn_stream.py::_run_turn_stream`` is — and return (reply, usage payloads)."""
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _PeerClient(*responses))
     tool = _delegate_to(name=target)
     usage: list[dict] = []
@@ -525,12 +527,12 @@ async def test_unreadable_peer_telemetry_never_fails_the_delegation(monkeypatch)
     answer already in hand, tell the model the delegate broke, and put a red mark on a
     healthy peer in the Delegates panel.
     """
-    from plugins.delegates import adapters, status
+    from plugins.delegates import a2a, status
 
     def _boom(result, delegate):
         raise ValueError("malformed cost-v1")
 
-    monkeypatch.setattr(adapters, "_peer_usage_row", _boom)
+    monkeypatch.setattr(a2a, "_peer_usage_row", _boom)
     status.reset()
     inline = {"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [_artifact(metadata=_PEER_COST)]}}}
     reply, usage = await _dispatch_capturing_usage(monkeypatch, inline)
@@ -893,10 +895,10 @@ async def test_an_out_of_range_peer_value_is_clamped_floored_and_reported(monkey
     """
     import logging
 
-    from plugins.delegates import adapters
+    from plugins.delegates import a2a
     from plugins.delegates.adapters import _MAX_WIRE_COST_USD, _MAX_WIRE_TOKENS
 
-    monkeypatch.setattr(adapters, "_clamp_warned", set())
+    monkeypatch.setattr(a2a, "_clamp_warned", set())
     caplog.set_level(logging.WARNING, logger="protoagent.plugins.delegates")
 
     poisoned = {"result": {"task": {"id": "t1", "status": {"state": "TASK_STATE_COMPLETED"}, "artifacts": [_artifact(metadata=_HOSTILE_COST)]}}}
@@ -956,12 +958,12 @@ async def test_a_wide_integer_literal_is_bounded_not_dropped(tmp_path, monkeypat
     back out.
     """
     from observability.telemetry_store import TelemetryStore
-    from plugins.delegates import adapters
+    from plugins.delegates import a2a
     from plugins.delegates.adapters import _MAX_WIRE_TOKENS
     from runtime.state import STATE
     from server.a2a import _record_a2a_telemetry
 
-    monkeypatch.setattr(adapters, "_clamp_warned", set())
+    monkeypatch.setattr(a2a, "_clamp_warned", set())
     reply, usage = await _dispatch_capturing_usage(monkeypatch, _wire_body(_WIDE_INT_COST))
     assert str(reply) == "hi from peer", "the delegation itself must still succeed"
     assert len(usage) == 1, "the peer's cost-v1 was erased instead of bounded"
@@ -1015,9 +1017,9 @@ async def test_a_non_finite_peer_neither_warns_nor_spends_a_hostile_peers_warnin
     """
     import logging
 
-    from plugins.delegates import adapters
+    from plugins.delegates import a2a
 
-    monkeypatch.setattr(adapters, "_clamp_warned", set())
+    monkeypatch.setattr(a2a, "_clamp_warned", set())
     caplog.set_level(logging.DEBUG, logger="protoagent.plugins.delegates")
 
     def _warnings():

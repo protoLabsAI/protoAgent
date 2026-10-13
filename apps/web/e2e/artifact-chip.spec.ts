@@ -122,3 +122,36 @@ test("the shell ignores a select posted by the artifact's own (model-authored) f
   await page.waitForTimeout(500);
   await expect(panel(page).locator("#vlabel")).toHaveText("v3 of 3");
 });
+
+test("a chip opens a freshly mounted panel straight onto its artifact, not the remembered one", async ({ page }) => {
+  // #4076: the panel remembered ANOTHER artifact (protoartifact.sel), so boot rendered that one and
+  // the chip's select re-targeted the frame ~2ms later — mid-navigation. Chrome drops a srcdoc
+  // swapped in that window, which left the panel stale or black under the right picker label until
+  // a reload. The deep-link now resolves before the first render: ONE srcdoc, the asked-for one.
+  await page.addInitScript(() => {
+    if (!location.pathname.endsWith("/plugins/artifact/view") || location.search) return;
+    try {
+      localStorage.setItem("protoartifact.sel", JSON.stringify({ selId: "art-other", selVer: null, followNewest: false }));
+    } catch {
+      /* storage blocked — the spec then can't seed, and the count below still holds */
+    }
+    const w = window as unknown as { __srcdocs: string[] };
+    w.__srcdocs = [];
+    const d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "srcdoc")!;
+    Object.defineProperty(HTMLIFrameElement.prototype, "srcdoc", {
+      configurable: true,
+      get: d.get,
+      set(v: string) {
+        w.__srcdocs.push(/<svg id="(\w+)"/.exec(v)?.[1] ?? "?");
+        d.set!.call(this, v);
+      },
+    });
+  });
+  await send(page, "ARTIFACTREF V2 fresh mount");
+  await expectPanelOn(page, "v2 of 3", "v2");
+  const srcdocs = await panelFrame(page)
+    .contentFrame()
+    .locator("body")
+    .evaluate(() => (window as unknown as { __srcdocs: string[] }).__srcdocs);
+  expect(srcdocs).toEqual(["v2"]);
+});

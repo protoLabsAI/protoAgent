@@ -10,15 +10,43 @@ import type { ChatMessage } from "../lib/types";
 // The backend now brackets each such self-POST with `turn.started` / `turn.finished` bus
 // events carrying the target `session_id` and an `origin` (`background-resume` /
 // `scheduler` / `watch-<id>`). This tiny store tracks which sessions currently have a
-// server turn in flight so ChatSurface can render the EXISTING typing indicator, labelled
+// server turn in flight so ChatSessionSlot can render the EXISTING typing indicator, labelled
 // by trigger, without hijacking `sessionStatusMap` (which drives the composer/send loop)
 // or inserting a placeholder message. Additive and self-contained — clears on finish.
+
+// A goal DRIVE turn run headlessly (the operator-API kick, a detach-resume, a re-arm). On the
+// wire it is an ordinary `scheduler` fire — every server origin set keys off that — but its
+// job id carries the `goal-run:` prefix (graph.goals.types.GOAL_RUN_JOB_PREFIX), and the job
+// id travels as the turn's `trigger`. The console folds that into its own origin token so a
+// goal run streams and settles like a normal turn instead of collapsing into a "Scheduled
+// task" result card — the operator set the goal to watch it work.
+export const GOAL_RUN_ORIGIN = "goal";
+const GOAL_RUN_TRIGGER_PREFIX = "goal-run:";
+
+// The agent's own `wait` elapsing (tools/scheduler_tools.py). Also an ordinary `scheduler`
+// fire on the wire, with a `wait:<session>` job id as its trigger. The agent yielded in THIS
+// chat and picks the same work back up here, so it is the conversation continuing — not a
+// schedule the operator set elsewhere — and streams and settles like a normal turn.
+export const WAIT_RESUME_ORIGIN = "wait-resume";
+const WAIT_TRIGGER_PREFIX = "wait:";
+
+/** The origin the console renders a server turn under: `goal` for a goal drive turn (by its
+ *  `goal-run:` trigger), `wait-resume` for a `wait` wake-up (by its `wait:` trigger), else the
+ *  server's own origin token unchanged. */
+export function effectiveOrigin(origin: unknown, trigger: unknown): string {
+  const t = String(trigger ?? "");
+  if (t.startsWith(GOAL_RUN_TRIGGER_PREFIX)) return GOAL_RUN_ORIGIN;
+  if (t.startsWith(WAIT_TRIGGER_PREFIX)) return WAIT_RESUME_ORIGIN;
+  return String(origin ?? "");
+}
 
 /** Human label for the typing indicator, derived from the turn's origin. A watch reaction
  *  arrives as `watch-<id>` (its scheduler job id); everything else is one of the two fixed
  *  origins. Unknown origins fall back to a generic phrasing so a new backend trigger still
  *  reads sensibly instead of showing a raw token. */
 export function labelForOrigin(origin: string): string {
+  if (origin === GOAL_RUN_ORIGIN) return "driving the goal…";
+  if (origin === WAIT_RESUME_ORIGIN) return "picking back up after a wait…";
   if (origin === "background-resume") return "responding to background reports…";
   if (origin === "scheduler") return "running a scheduled task…";
   if (origin.startsWith("watch-") || origin === "watch") return "reacting to a triggered watch…";
@@ -56,7 +84,10 @@ export function originForSession(sessionId: string): string {
 
 // The agent's own conversation continuing, not a side-channel run: its turn in response to its
 // OWN background reports (ADR 0070 push-resume) or to a delegate's result. See rendersAsResultCard.
-const CONVERSATIONAL_ORIGINS = new Set(["background-resume", "delegate-result"]);
+// A goal run is the same: the operator set the goal to watch the agent work toward it, so its
+// turns stay full-size (tool cards and all) rather than folding into a collapsed card. So does a
+// `wait` wake-up: the agent paused its own work in this chat and is resuming it.
+const CONVERSATIONAL_ORIGINS = new Set(["background-resume", "delegate-result", GOAL_RUN_ORIGIN, WAIT_RESUME_ORIGIN]);
 
 /** Whether a SETTLED server-initiated turn collapses into the compact result card (#3028).
  *  A scheduled fire, a watch reaction or an inbox/webhook trigger is a run the operator didn't
@@ -77,6 +108,8 @@ export function rendersAsResultCard(origin: string | undefined): boolean {
 export function serverResultLabel(origin: string): string | null {
   const o = origin.trim().toLowerCase();
   if (!o) return null;
+  if (o === GOAL_RUN_ORIGIN) return "Goal run";
+  if (o === WAIT_RESUME_ORIGIN) return "Wait resumed";
   if (o === "scheduler") return "Scheduled task";
   if (o === "background-resume") return "Background report";
   if (o === "background") return "Background task";

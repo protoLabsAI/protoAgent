@@ -83,7 +83,8 @@ function ToolsBody() {
         old && {
           ...old,
           tools: old.tools.map((t) => (t.name === name ? { ...t, enabled } : t)),
-          count: old.count + (enabled ? 1 : -1),
+          // A subagent-only row was never in `count` (the lead's wired tools).
+          count: old.tools.some((t) => t.name === name && t.subagent_only) ? old.count : old.count + (enabled ? 1 : -1),
           disabled: next,
         });
       return { key, prev };
@@ -145,12 +146,13 @@ function ToolsBody() {
     return a.localeCompare(b);
   });
 
-  const off = data.tools.length - data.count;
+  const off = data.tools.filter((t) => !t.enabled).length;
+  const held = data.tools.filter((t) => t.enabled && t.subagent_only).length;
   return (
     <>
       <PanelHeader
         title="Tools"
-        kicker={`${data.count} wired tool${data.count === 1 ? "" : "s"}${off ? ` · ${off} off` : ""} · ${groups.size} group${groups.size === 1 ? "" : "s"}`}
+        kicker={`${data.count} wired tool${data.count === 1 ? "" : "s"}${off ? ` · ${off} off` : ""}${held ? ` · ${held} subagent-only` : ""} · ${groups.size} group${groups.size === 1 ? "" : "s"}`}
       />
       <div className="stage-body">
         {/* Managed Python runtime (ADR 0094) — only renders on a frozen desktop build with
@@ -232,6 +234,7 @@ function ToolsBody() {
                         <div className="tools-row-main">
                           <code className="tools-name">{t.name}</code>
                           {t.description ? <span className="tools-desc">{t.description}</span> : null}
+                          {t.subagent_only ? <span className="tools-desc">Subagents only</span> : null}
                         </div>
                         <Switch
                           checked={t.enabled}
@@ -271,7 +274,7 @@ function WorkFoldersButton() {
         <FolderTree size={15} /> Work folders
       </Button>
       {open ? (
-        <Dialog open onClose={() => setOpen(false)} title="Work folders" width={520}>
+        <Dialog open padding="roomy" onClose={() => setOpen(false)} title="Work folders" width={520}>
           <ManagedProjectsList />
           <FsProjectsEditor />
         </Dialog>
@@ -280,7 +283,7 @@ function WorkFoldersButton() {
   );
 }
 
-// Mirrors the backend's `_falsey` (graph/config.py). The registry's `fs` / `write` values
+// Mirrors the backend's `_falsey` (graph/config_load.py). The registry's `fs` / `write` values
 // can arrive as strings from JSON, an env overlay or a hand-edit — `"false"` is a truthy
 // string in JS exactly as it is in Python. A bare `p.fs === false` here would label a
 // project read-write in the console while the backend correctly kept it OUT of the fence:
@@ -354,9 +357,9 @@ function ManagedProjectsList() {
               </>
             ) : (
               <>
-                None of these projects' folders exist, so the filesystem tools are{" "}
-                <strong>unbound</strong> — the agent has no <code>read_file</code> /{" "}
-                <code>list_dir</code> at all. Fix the paths in your config file.
+                None of these projects' folders exist, so the agent's filesystem tools{" "}
+                <strong>can't reach anything</strong> until one is back. Restore the folders
+                or fix the paths in your config file.
               </>
             )}
           </span>
@@ -430,7 +433,7 @@ function FsProjectsEditor() {
           <AlertTriangle size={14} />
           <span>
             {allMissing
-              ? "None of these folders exist, so the filesystem tools are unbound — the agent has no read_file / list_dir at all. Fix or remove the paths below."
+              ? "None of these folders exist, so the agent's filesystem tools can't reach anything until one is back. Restore the folders, or fix or remove the paths below."
               : `${missing.length} folder${missing.length > 1 ? "s are" : " is"} missing and skipped — the agent can't reach ${missing.length > 1 ? "them" : "it"}.`}
           </span>
         </p>

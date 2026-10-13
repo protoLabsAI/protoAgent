@@ -32,7 +32,13 @@ from langchain_core.tools import tool
 from graph import sdk
 from plugins.workflows.engine import execute_workflow, render_template, resolve_inputs, validate_recipe
 from plugins.workflows.registry import WorkflowRegistry
-from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, STATUS_PAUSED, WorkflowRunStore
+from plugins.workflows.run_state import (
+    STATUS_CANCELLED,
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_PAUSED,
+    WorkflowRunStore,
+)
 
 log = logging.getLogger("protoagent.plugins.workflows")
 
@@ -40,7 +46,8 @@ _RECIPES = Path(__file__).parent / "recipes"
 
 _PAUSE_PREVIEW = 400  # chars of each prior step's output shown in the pause notice
 
-# Terminal-run retention (`.runs/` pruning); the manifest's `max_runs` overrides in register().
+# Terminal-run retention (`.runs/` pruning); `workflow_runs.max_runs` (the plugin's own config
+# section — `workflows:` is core's) overrides in register().
 _MAX_RUNS = 200
 
 # Detached Studio runs — referenced so the loop can't GC an in-flight DAG.
@@ -182,7 +189,10 @@ async def _run_prepared(
                 seed_outputs=seed_outputs,
             )
             _trace_outcome(traced, result)
-    except Exception:
+    except asyncio.CancelledError:
+        _finish_stopped(run_store)
+        raise
+    except BaseException:  # or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
         raise
     if result.get("paused"):  # parked at a `gate: human` step — durable + resumable, not terminal
@@ -256,16 +266,48 @@ async def _start_background(
     return run_id
 
 
+def _finish_stopped(run_store: WorkflowRunStore) -> None:
+    """Close out a run whose task was cancelled. A cancel is its own terminal state
+    (#3957) — stopped, not broken — EXCEPT when the stall guard sent it (#3940): that
+    turn failed ("The turn stalled …"), so the run did too, and says why."""
+    stalled = sdk.turn_stop_reason()
+    if stalled:
+        run_store.finish(STATUS_FAILED, error=stalled)
+    else:
+        run_store.finish(STATUS_CANCELLED)
+
+
 async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str) -> str:
     """One step's subagent, with the step's identity on its ``subagent:`` span (#3565).
 
     The run's own keys (``run_id``, ``workflow``, ``parent_session_id``, the redacted
     ``input_*`` values) arrive from the enclosing ``sdk.trace_run``; this adds which step
     it was, so a trace answers "which lane of which run" without a timestamp join."""
+    description = f"workflow {name}:{step_id}"
     with sdk.trace_attributes(
         {"workflow": name, "step_id": step_id, "subagent": subagent_type}, tags=[f"step:{step_id}"]
     ):
-        return await sdk.run_subagent(subagent_type, prompt, description=f"workflow {name}:{step_id}")
+        out = await sdk.run_subagent(subagent_type, prompt, description=description)
+    return _strip_completed_header(out, subagent_type, description)
+
+
+def _strip_completed_header(out: str, subagent_type: str, description: str) -> str:
+    """Drop the ``[<subagent> completed: <description>]`` line ``run_subagent`` puts on a
+    CLEAN finish (#3946). It's a tool-result marker for a lead model reading ``task()``
+    output; in a workflow the step output is the deliverable — threaded into later prompts
+    and, for the last step, returned as the reply — so it surfaced as a raw
+    ``[researcher completed: workflow …]`` first line. Nothing parses it. The warning
+    headers (hard-stopped / ended without its deliverable) are KEPT: they tell a
+    downstream synthesize step, and the operator, to treat the lane as a Gap."""
+    header = f"[{subagent_type} completed: {description}]"
+    if not isinstance(out, str) or not out.startswith(header):
+        return out
+    rest = out[len(header) :]
+    if rest.startswith("\n\n"):
+        return rest[2:]
+    if rest.strip() == "-- no output produced.":
+        return "(no output produced)"
+    return out
 
 
 def _trace_outcome(traced: sdk.TracedRun, result: dict) -> None:
@@ -411,7 +453,10 @@ async def _resume(
         ) as traced:
             result = await execute_workflow(recipe, inputs, **kwargs)
             _trace_outcome(traced, result)
-    except Exception:
+    except asyncio.CancelledError:
+        _finish_stopped(run_store)
+        raise
+    except BaseException:  # or its record is left "running" forever
         run_store.finish(STATUS_FAILED)
         raise
     if result.get("paused"):  # a DOWNSTREAM gate — durable + resumable again, not terminal

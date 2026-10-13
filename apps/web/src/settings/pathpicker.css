@@ -3,7 +3,7 @@
 .path-picker {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .path-picker-input {
   flex: 1;
@@ -13,17 +13,17 @@
 .path-browser {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .path-browser-roots {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .path-browser-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
 }
 /* The current path can be arbitrarily long; it truncates rather than widening the
@@ -36,15 +36,15 @@
   white-space: nowrap;
   direction: rtl; /* keep the DEEPEST segment visible when it overflows */
   text-align: left;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 .path-browser-note {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   margin: 0;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-warning);
 }
 .path-browser-list {
@@ -53,21 +53,21 @@
   height: 260px;
   overflow-y: auto;
   border: 1px solid var(--pl-color-border);
-  border-radius: 8px;
-  padding: 4px;
+  border-radius: var(--pl-radius-lg);
+  padding: var(--pl-space-1);
 }
 .path-browser-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   width: 100%;
-  padding: 6px 8px;
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   background: transparent;
   color: var(--pl-color-fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -76,7 +76,7 @@
   background: var(--pl-color-bg-raised);
 }
 .path-browser-row.is-selected {
-  background: color-mix(in srgb, var(--brand-violet-light) 22%, transparent);
+  background: color-mix(in srgb, var(--pl-color-accent) 22%, transparent);
 }
 .path-browser-name {
   flex: 1;
@@ -92,17 +92,17 @@
 .path-browser-empty {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   margin: auto;
-  padding: 12px;
+  padding: var(--pl-space-3);
   color: var(--pl-color-fg-subtle);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 .path-browser-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .path-browser-chosen {
   flex: 1;
@@ -112,11 +112,35 @@
   white-space: nowrap;
   direction: rtl;
   text-align: left;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 .path-browser-buttons {
   display: flex;
   flex: none;
-  gap: 8px;
+  gap: var(--pl-space-2);
+}
+
+/* The list form (`multiple: true`) — one PathPicker row per path, a Remove beside each,
+   "Add folder" underneath. Rows stack with the same gap as the single control's parts. */
+.path-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1_5);
+  min-width: 0;
+}
+.path-list-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-1);
+  min-width: 0;
+}
+.path-list-picker {
+  flex: 1;
+  min-width: 0;
+}
+.path-list-empty {
+  margin: 0;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-subtle);
 }

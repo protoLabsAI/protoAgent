@@ -8,9 +8,10 @@ import type { Archetype, ArchetypePreviewMember } from "../lib/types";
 // "What's included" — the read-only pre-pick preview of an archetype: the full
 // base SOUL plus, for bundle-backed archetypes, the bundle's members with each
 // one's skills/pip-deps/capabilities (GET /api/archetypes/{id}/preview — a peek,
-// nothing installs). Shared by the setup wizard and the fleet new-agent panel.
+// nothing installs). Shared by the setup wizard and the fleet new-agent panel; MemberCard is
+// reused by the new-agent "From a bundle URL" step to show what a pasted bundle installs.
 
-function MemberCard({ member }: { member: ArchetypePreviewMember }) {
+export function MemberCard({ member }: { member: ArchetypePreviewMember }) {
   if (member.error) {
     return (
       <div className="archetype-preview-member">
@@ -67,7 +68,7 @@ export function ArchetypePreviewDialog({ archetype, onClose }: { archetype: Arch
   });
 
   return (
-    <Dialog open onClose={onClose} title={`What's included — ${archetype.label}`} width="min(680px, 95vw)">
+    <Dialog open onClose={onClose} title={`What's included — ${archetype.label}`} width="min(680px, 95vw)" padding="roomy">
       <div className="archetype-preview">
         <p className="archetype-preview-desc">{archetype.blurb}</p>
 

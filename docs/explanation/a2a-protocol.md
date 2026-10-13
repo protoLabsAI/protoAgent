@@ -52,7 +52,7 @@ If you are porting a consumer from 0.3, these are the breakages, in the order yo
 | `DeleteTaskPushNotificationConfig` | `tasks/pushNotificationConfig/delete` |
 | `GetExtendedAgentCard` | `agent/getAuthenticatedExtendedCard` |
 
-**2. The `A2A-Version: 1.0` request header is load-bearing.** An `a2a-sdk` ≥1.0 receiver reads a *missing* header as "this client speaks 0.3", and a 1.0-only handler then rejects the call with **`-32009 VERSION_NOT_SUPPORTED`** ("A2A version '0.3' is not supported by this handler. Expected version '1.0'."). Outbound, the template stamps the header in `plugins/delegates/adapters.py::A2aAdapter._rpc`.
+**2. The `A2A-Version: 1.0` request header is load-bearing.** An `a2a-sdk` ≥1.0 receiver reads a *missing* header as "this client speaks 0.3", and a 1.0-only handler then rejects the call with **`-32009 VERSION_NOT_SUPPORTED`** ("A2A version '0.3' is not supported by this handler. Expected version '1.0'."). Outbound, the template stamps the header in `plugins/delegates/a2a.py::A2aAdapter._rpc`.
 
 The gate's **position in the pipeline** is what makes this confusing to debug, so it's worth stating exactly. The dispatcher (`a2a/server/routes/jsonrpc_dispatcher.py`) resolves in this order:
 
@@ -66,7 +66,7 @@ The practical consequence: **you cannot detect a version problem with a malforme
 
 **3. Parts are untyped, roles and states are enum-spelled.** 0.3's `{"kind": "text", "text": "…"}` becomes `{"text": "…"}`. `"role": "user"` becomes `"role": "ROLE_USER"`. Task states are `TASK_STATE_COMPLETED`, not `"completed"`. The template's `tools/a2a_parse.py::_is_terminal` accepts both spellings so a fork can talk to mixed-version peers.
 
-One more sharp edge: **`contextId` lives inside the message, not on `params`.** Putting it at params level is a `-32602 Invalid params` (pinned by `test_params_level_context_id_is_rejected`).
+One more sharp edge: **`contextId` lives inside the message, not on `params`.** Since a2a-sdk 1.2 the SDK ignores unknown request fields (forward compatibility), so on a stock server a params-level `contextId` is *silently dropped* and the turn runs in a fresh context with no error. protoAgent refuses it instead: a `SendMessage` / `SendStreamingMessage` (or v0.3 `message/send` / `message/stream`) carrying `contextId` or `taskId` on `params` gets `-32602` with a message naming the fix (`a2a_impl/request_guard.py`, pinned by `tests/test_a2a_misplaced_ids.py`). Other unknown fields still pass through.
 
 ## SSE frames are a oneof, not a `kind` discriminator
 

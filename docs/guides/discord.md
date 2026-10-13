@@ -1,12 +1,9 @@
 # Discord surface
 
-An **optional native Discord surface** ([ADR 0015](/adr/0015-discord-ingress-surface),
-[ADR 0016](/adr/0016-discord-ui-config)) — DMs and @-mentions reach the agent,
-replies post back. Raw Discord Gateway + REST **v10** over `httpx` + `websockets`
-(both already core), no `discord.py`. It's a **standalone plugin**
-([`protoLabsAI/discord-plugin`](https://github.com/protoLabsAI/discord-plugin), ADR
-0058) — install it at runtime, then give it a bot token. **Off until you do** — when
-unset the gateway never starts and the outbound tools aren't registered.
+Install the [Discord plugin](https://github.com/protoLabsAI/discord-plugin) to
+send DMs and mentions to the agent and receive replies in Discord. You need a
+Discord bot token and permission to add the bot to your server. The gateway stays
+inactive until the plugin is enabled and configured.
 
 ## Connect it in the app
 

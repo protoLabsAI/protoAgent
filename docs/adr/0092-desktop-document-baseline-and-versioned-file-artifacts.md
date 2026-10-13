@@ -72,6 +72,14 @@ preview** in addition to (or instead of) the text `code`:
   artifacts are untouched (purely additive `kind`).
 - New config: max blob size + blob retention, alongside the existing `max_versions`.
 
+> **Amendment (2026-10, artifact previews):** D2 shipped, and the inline preview has since moved
+> past text projections for the main document types. `.pptx` (#4019), `.pdf` (#4046) and `.docx`
+> render in the panel as their **real slides / pages** with vendored client-side renderers, each
+> behind a save-time safety preflight stamped on the version; `.csv`/`.tsv` render as a table and
+> `.xlsx` as one table per sheet. The diffable text projection is unchanged: every version still
+> stores it in `code`, and it stays visible under the rendered view. See
+> `plugins/artifact/README.md` → *File artifacts*.
+
 ### D3 — An explicit `save_file_artifact(path, title)` tool *(follow-up PR)*
 
 The seam by which a generated file becomes a versioned artifact is an **explicit

@@ -16,9 +16,11 @@ Two wire facts these tests pin, both easy to get wrong from the 0.3 docs:
 * ``CreateTaskPushNotificationConfig`` params are the **bare, flat**
   ``TaskPushNotificationConfig`` (``{tenant, id, task_id, url, token,
   authentication}`` — ``a2a_pb2.pyi:289``). There is no 0.3-style
-  ``pushNotificationConfig`` wrapper in 1.0, and because the dispatcher
-  ``ParseDict``s params strictly, sending one is a ``-32602``
-  (``test_v0_3_nested_push_config_shape_is_rejected``).
+  ``pushNotificationConfig`` wrapper in 1.0. Since a2a-sdk 1.2 the dispatcher
+  *ignores* unknown keys, so the wrapper isn't refused for being there: the
+  0.3 shape fails only because the required top-level ``url`` is missing, and
+  anything nested under the wrapper (token, authentication) is silently
+  dropped (``test_v0_3_nested_push_config_shape_is_rejected``).
 
 The ``_scripted_push_app`` tests pin the client's TASK_NOT_FOUND retry
 (``_rpc_until_task_visible``): a just-started task is live in the active
@@ -399,7 +401,11 @@ async def test_set_push_config_does_not_retry_other_rpc_errors(monkeypatch):
 @pytest.mark.asyncio
 async def test_v0_3_nested_push_config_shape_is_rejected(monkeypatch):
     """Pins why ``set_push_config`` sends flat params: the 0.3 wrapper
-    (``{"taskId": …, "pushNotificationConfig": {…}}``) is a ``-32602`` here."""
+    (``{"taskId": …, "pushNotificationConfig": {…}}``) is a ``-32602`` here.
+
+    Since a2a-sdk 1.2 unknown keys are ignored, so the refusal is for the
+    missing top-level ``url`` — not for the wrapper key itself. Assert that, so
+    this test can't keep passing for a reason it no longer names."""
     gate = asyncio.Event()
     app, handler = _build_app(_gated_stream(gate))
     _route(monkeypatch, app)  # so the client below shares the routed transport
@@ -422,7 +428,9 @@ async def test_v0_3_nested_push_config_shape_is_rejected(monkeypatch):
                     },
                 },
             )
-        assert r.json().get("error", {}).get("code") == -32602
+        error = r.json().get("error", {})
+        assert error.get("code") == -32602
+        assert "url" in json.dumps(error.get("data", error)), error
     finally:
         gate.set()
         await asyncio.wait_for(streaming, 10)

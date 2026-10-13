@@ -175,6 +175,7 @@ class TestPublicGistLitmus:
         assert result.manifest["plugins"] == []
         assert any("pin metadata contained sensitive text" in n for n in result.notes)
 
+    @pytest.mark.platform_sensitive
     def test_a_symlinked_skill_asset_is_not_dereferenced(self, agent_tree, tmp_path):
         outside = tmp_path / "outside.txt"
         outside.write_text("ordinary private material", encoding="utf-8")
@@ -188,6 +189,7 @@ class TestPublicGistLitmus:
             assert "skills/instance/reviewing/linked.txt" not in zf.namelist()
         assert any("skipped symlinked skill asset" in n for n in result.notes)
 
+    @pytest.mark.platform_sensitive
     def test_a_symlinked_skill_directory_is_not_walked(self, agent_tree, tmp_path):
         outside = tmp_path / "outside-skill"
         outside.mkdir()

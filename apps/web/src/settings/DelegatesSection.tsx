@@ -227,6 +227,7 @@ export function DelegatesSection() {
             carries only the fields + actions. */}
         <Dialog
           open={adding || editing != null}
+          padding="roomy"
           onClose={closeForm}
           title={editing ? `Edit ${editing.name}` : "Add a delegate"}
           width="min(560px, 94vw)"

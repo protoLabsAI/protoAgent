@@ -12,6 +12,8 @@ import pytest
 import tools.fs_tools as fs
 from tools.fs_tools import _editor_argv, build_fs_tools
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @dataclass
 class _Cfg:

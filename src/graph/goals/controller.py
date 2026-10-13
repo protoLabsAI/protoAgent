@@ -1,0 +1,790 @@
+"""GoalController — control-message parsing + the goal decision loop.
+
+Two responsibilities, both pure of any graph calls so they're unit-testable:
+
+1. ``parse_control`` — interpret a ``/goal`` control message (set / status /
+   clear) and mutate the store. Returns a reply string when the message *was* a
+   command (the caller short-circuits the turn), else ``None``.
+
+2. ``evaluate`` — run after the agent "stops" (terminal turn). Runs the goal's
+   verifier and returns a ``Decision``: keep going with a continuation prompt,
+   or finish (achieved / exhausted / unachievable).
+
+The server invocation paths own the actual re-invocation loop; this class only
+decides what should happen next.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import os
+from dataclasses import dataclass
+
+from graph.fence_scope import current_fence, fence_scope
+from graph.goals.store import GoalStore
+from graph.goals.types import GoalState, goal_budget_problem
+from graph.goals.verifiers import (
+    VERIFIERS,
+    VerifierInvoker,
+    VerifyContext,
+    is_safe_workspace_relative_data_path,
+    run_verifier,
+)
+from graph.subagent_model import current_turn_model
+
+log = logging.getLogger(__name__)
+
+CLEAR_ALIASES = {"clear", "stop", "off", "reset", "none", "cancel"}
+
+# Cap the per-iteration timeline so a long-running / re-armed goal's JSON stays bounded.
+_HISTORY_CAP = 50
+
+# The exact prefix a successful ``/goal`` SET replies with. The chat runners match on it
+# to decide whether to KICK an initial goal-driven turn (#1910) — see ``is_set_ack``.
+SET_ACK_PREFIX = "Goal set. "
+
+# Verifier types the mid-turn probe (``GoalController.probe``) may run: the mechanical ones.
+# ``llm`` judges the turn's final text and costs a model call, so it waits for the turn to end.
+_PROBE_TYPES = frozenset({"command", "test", "ci", "data", "plugin"})
+
+# Appended to every kickoff + continuation prompt (ADR 0079): point the drive loop at the full
+# toolkit so it composes goals with tasks/watches/scheduling instead of spinning. The system
+# prompt carries the full operating model; this is the goal-loop-specific reminder.
+_DRIVE_TACTIC = (
+    "Decompose this into `task_create` items and drive them down. If your next step waits on "
+    "async or delegated work (a build, a peer agent, CI, a review), set a `create_watch` on that "
+    "condition (or a `schedule_task`) and END the turn — you'll be resumed when it's ready. Don't "
+    "spin polling to the iteration cap."
+)
+
+
+def _coerce_str_list(value) -> list[str]:
+    """Normalize a contract list field (``constraints``/``boundaries``) to ``list[str]``.
+
+    A bare string becomes a 1-element list; ``None``/empty → ``[]``; a list/tuple is
+    stringified element-wise (blank entries dropped); anything else → ``[]``. Keeps
+    the operator-set seam forgiving of a JSON body that sent a single string where a
+    list was expected (ADR 0073)."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if str(v).strip()]
+    return []
+
+
+@dataclass
+class Decision:
+    action: str  # "continue" | "done"
+    state: GoalState | None = None
+    message: str | None = None  # continuation prompt (action == "continue")
+    note: str = ""  # human-readable status note
+
+
+class GoalController:
+    def __init__(self, config, store: GoalStore | None = None, *, scheduler=None):
+        self._config = config
+        self._store = store or GoalStore()
+        self._scheduler = scheduler
+
+    def reconfigure(self, config, *, scheduler=None) -> None:
+        """Refresh live policy dependencies after a settings reload."""
+        self._config = config
+        self._scheduler = scheduler
+
+    @property
+    def store(self) -> GoalStore:
+        return self._store
+
+    def active_goal(self, session_id: str) -> GoalState | None:
+        state = self._store.get(session_id)
+        return state if state and state.active else None
+
+    # --- control messages --------------------------------------------------
+
+    async def parse_control(self, message: str, session_id: str, *, trusted: bool = True) -> str | None:
+        # `trusted` gates which verifier types a SET may use (Phase 1 trust-gate, #1407).
+        # The server's chat entry points MUST pass trusted=False; the default stays True
+        # for the operator/programmatic path (and backward-compat) that Phase 2 re-enables.
+        if not isinstance(message, str):
+            return None
+        stripped = message.strip()
+        if not (stripped == "/goal" or stripped.lower().startswith("/goal ") or stripped.lower().startswith("/goal\n")):
+            return None
+        rest = stripped[len("/goal") :].strip()
+
+        # /goal  → status
+        if not rest:
+            state = self._store.get(session_id)
+            return state.status_line() if state else "No active goal for this session."
+
+        # /goal clear|stop|...  → clear
+        if rest.lower() in CLEAR_ALIASES:
+            existed = self._store.clear(session_id)
+            return "Goal cleared." if existed else "No active goal to clear."
+
+        # /goal {json}  or  /goal <free text>  → set
+        spec, condition, max_iters, no_progress, fresh_context, contract = self._parse_set(rest)
+        if condition is None:
+            return (
+                "Could not parse goal. Use `/goal <text>` or "
+                '`/goal {"condition": "...", "verifier": {"type": "command", '
+                '"command": "pytest -q"}}`.'
+            )
+        # A JSON spec's budgets are caller data (#3973): `"max_iterations": "abc"` used to
+        # be stored as-is and broke the drive loop's budget comparison on the next turn.
+        if problem := goal_budget_problem(max_iters, no_progress):
+            return f"Could not set goal: {problem}"
+        # Validate the verifier TYPE before the trust-gate (#3957): an unknown type is a
+        # typo, not a safety question — answering it with the "for safety…" refusal sent
+        # the operator looking for a trust problem that wasn't there.
+        # Shape-guarded: a JSON verifier can carry any value as its type (a list is
+        # unhashable, and `in` on the dict would raise rather than refuse it).
+        vtype = (spec or {}).get("type", "llm") if isinstance(spec, dict) else None
+        if not isinstance(vtype, str) or vtype not in VERIFIERS:
+            return f"Could not set goal: unknown verifier type {vtype!r}; known: {', '.join(sorted(VERIFIERS))}."
+        # Phase 1 trust-gate (#1407): a /goal CHAT message is untrusted — both server call
+        # sites pass trusted=False, because a federation peer / API client shares the
+        # operator bearer today, so we can't tell them apart. Refuse the code-exec verifiers
+        # from chat for EVERYONE: command/test/ci shell out on the host, and a `data` `expr`
+        # is a restricted-eval sink + arbitrary file read (ADR 0028 D3). Only the declarative
+        # types pass — `plugin`, `llm` (fuzzy), and `data` with a plain `contains`
+        # constrained to a safe path inside the managed workspace.
+        if not trusted and not self._chat_verifier_allowed(spec):
+            return (
+                "For safety, a `command`, `test`, `ci`, `data`+`expr`, or `data` verifier "
+                "outside the managed workspace can't be set from a chat message. Use a fuzzy "
+                "goal (`/goal <text>`), a `plugin` verifier, or a workspace-relative `data` "
+                "verifier with `contains`. (Shell/eval and absolute-path verifiers are "
+                "operator-only.)"
+            )
+        if err := self.unknown_plugin_verifier_error(spec):
+            return f"Could not set goal: {err}"
+        if not trusted and (spec or {}).get("type") == "data":
+            # Persist the scope with the verifier: evaluation happens after the request's
+            # trust signal is gone. Direct trusted/operator specs keep the legacy CWD-relative
+            # default unless they explicitly opt in (the console forms do).
+            spec = {**spec, "workspace_relative": True}
+        state = GoalState(
+            session_id=session_id,
+            # The setting turn's model pick (#3957) — re-drives without one run on it.
+            model=current_turn_model(),
+            condition=condition,
+            verifier=spec,
+            fresh_context=fresh_context,
+            max_iterations=max_iters or getattr(self._config, "goal_max_iterations", 8),
+            no_progress_limit=no_progress,  # per-goal patience; None → config
+            outcome=contract.get("outcome", ""),
+            constraints=list(contract.get("constraints") or []),
+            boundaries=list(contract.get("boundaries") or []),
+            stop_when=contract.get("stop_when", ""),
+        )
+        self._store.set(state)
+        return f"{SET_ACK_PREFIX}{state.status_line()}"
+
+    @staticmethod
+    def is_set_ack(reply: str | None) -> bool:
+        """True when a ``parse_control`` reply is the ack for a *successful* goal SET
+        (as opposed to a status / clear / parse-error reply). The chat runners use this to
+        decide whether to KICK an initial goal-driven turn (#1910): a SET should drive the
+        agent immediately, whereas /goal status or /goal clear just reply and stop."""
+        return isinstance(reply, str) and reply.startswith(SET_ACK_PREFIX)
+
+    def kickoff_prompt(self, state: GoalState, user_message: str = "") -> str:
+        """The initial goal-driven turn's prompt (#1910). The re-invoke iterations receive
+        the goal via ``_continuation``; the *first* turn had nothing — it fell through to a
+        bare user message, so the agent never learned its own active goal and asked
+        "what goal?", parking at INPUT_REQUIRED before the drive loop could run. This
+        injects the goal condition (and completion contract, if any) so the agent BEGINS on
+        turn 1. Mirrors the continuation framing for iteration 0 (no verifier result yet)."""
+        if state.fresh_context:
+            lead = (
+                f"[goal kickoff — 0/{state.max_iterations}, fresh context]\n"
+                f"Goal: {state.condition}\n\n"
+                "Take ONE concrete step toward the goal now. Record your running plan by "
+                "calling the `update_goal_plan` tool (it is persisted for the next "
+                "iteration). If you determine the goal is impossible or out of scope, call "
+                "the `abandon_goal` tool with a reason and stop."
+            )
+        else:
+            lead = (
+                f"[goal kickoff — 0/{state.max_iterations}]\n"
+                f"You have an active goal for this session: {state.condition}\n\n"
+                "Begin working toward it now — take concrete action; do not ask which goal "
+                "it is. Record your running plan by calling the `update_goal_plan` tool (it "
+                "is persisted and fed back to you each iteration). If it is impossible or out "
+                "of scope, call the `abandon_goal` tool with a reason and stop."
+            )
+        contract = self._contract_prompt(state)
+        body = f"{lead}\n\n{contract}" if contract else lead
+        body = f"{body}\n\n{_DRIVE_TACTIC}"
+        # A plain inbound message that arrived alongside an already-active goal (not a
+        # /goal command) is folded in so the operator's words aren't lost.
+        extra = (user_message or "").strip()
+        if extra and not extra.lower().startswith("/goal"):
+            body = f"{body}\n\nThe operator also said: {extra}"
+        return body
+
+    @staticmethod
+    def _chat_verifier_allowed(verifier: dict) -> bool:
+        """Allow-list for a verifier set from an (untrusted) /goal CHAT message (Phase 1,
+        #1407). Gate by the complement (R2): allow only the declarative, no-code-exec
+        types — `plugin`, `llm`, and `data` restricted to a plain `contains` substring.
+        Everything else (command/test/ci, and `data` carrying an `expr`) shells out or hits
+        a restricted-eval sink and stays operator-only."""
+        vtype = (verifier or {}).get("type", "llm")
+        if vtype in ("plugin", "llm"):
+            return True
+        if vtype == "data":
+            return (
+                "expr" not in verifier
+                and "contains" in verifier
+                and is_safe_workspace_relative_data_path(verifier.get("path"))
+            )
+        return False
+
+    @staticmethod
+    def unknown_plugin_verifier_error(verifier: dict | None) -> str | None:
+        """Error message when ``verifier`` is a ``plugin`` verifier whose ``check`` isn't in
+        the live plugin-verifier registry, else ``None`` (#3946). Such a goal is created but
+        can NEVER pass — it spins to the iteration cap and ends 'unachievable' — so every
+        set path (agent tool, plugin SDK, REST, chat ``/goal``) refuses it up front and
+        names the registered verifiers so the caller can pick a real one."""
+        if (verifier or {}).get("type") != "plugin":
+            return None
+        from graph.goals.verifiers import plugin_verifier_names
+
+        check = (verifier or {}).get("check") or ""
+        known = plugin_verifier_names()
+        if not check or check in known:
+            return None
+        avail = ", ".join(known) if known else "(none registered — enable a plugin that contributes a verifier)"
+        return f"unknown plugin verifier {check!r}. Available verifiers: {avail}."
+
+    # Verifier types safe to set PROGRAMMATICALLY (agent / plugin / REST). Only
+    # `plugin` qualifies (ADR 0028 D3): command/test/ci shell out, and `data`
+    # eval()s a spec expr — all code-exec sinks that stay operator-only (/goal).
+    SAFE_PROGRAMMATIC_VERIFIERS = frozenset({"plugin"})
+
+    def set_goal_safe(
+        self,
+        session_id: str,
+        condition: str,
+        verifier: dict,
+        max_iterations: int | None = None,
+        no_progress_limit: int | None = None,
+        *,
+        outcome: str = "",
+        constraints: list[str] | None = None,
+        boundaries: list[str] | None = None,
+        stop_when: str = "",
+    ) -> tuple[bool, str]:
+        """Set a goal from a NON-operator caller (an agent tool, a plugin, REST).
+        Accepts ONLY a `plugin` verifier — refuses command/test/ci/data/llm so a
+        programmatic set can never reach a shell or `eval` sink (ADR 0028 D3). The
+        operator `/goal` path keeps full access. The optional completion-contract
+        fields (ADR 0073) shape the continuation prompt only — the verifier still
+        decides DONE. Returns (ok, message)."""
+        vtype = (verifier or {}).get("type")
+        if vtype not in self.SAFE_PROGRAMMATIC_VERIFIERS:
+            return (
+                False,
+                f"programmatic goals must use a 'plugin' verifier (got {vtype!r}); "
+                "command/test/ci/data verifiers are operator-only — set them with /goal.",
+            )
+        if not condition:
+            return (False, "a goal condition is required.")
+        if problem := goal_budget_problem(max_iterations, no_progress_limit):
+            return (False, problem)
+        if not (verifier.get("check")):
+            return (False, "a plugin verifier needs a 'check' (the <plugin-id>:<name>).")
+        if err := self.unknown_plugin_verifier_error(verifier):
+            return (False, err)
+        state = GoalState(
+            session_id=session_id,
+            # The setting turn's model pick (#3957) — re-drives without one run on it.
+            model=current_turn_model(),
+            condition=condition,
+            verifier=verifier,
+            max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
+            no_progress_limit=no_progress_limit,
+            outcome=outcome or "",
+            constraints=_coerce_str_list(constraints),
+            boundaries=_coerce_str_list(boundaries),
+            stop_when=stop_when or "",
+            # The setting turn's tool fence (``[]`` outside a turn) — see ``_finish``.
+            fence=current_fence(),
+        )
+        self._store.set(state)
+        return (True, f"Goal set. {state.status_line()}")
+
+    def set_goal_operator(
+        self,
+        session_id: str,
+        condition: str,
+        verifier: dict,
+        max_iterations: int | None = None,
+        no_progress_limit: int | None = None,
+        *,
+        outcome: str = "",
+        constraints: list[str] | None = None,
+        boundaries: list[str] | None = None,
+        stop_when: str = "",
+    ) -> tuple[bool, str]:
+        """Set a goal from the TRUSTED OPERATOR surface — ``POST /api/goals``, gated to
+        operator-tier by the ADR 0066 ``/api`` path ceiling. Unlike ``set_goal_safe``
+        (agent/plugin/programmatic → ``plugin``-verifier only), this accepts ANY verifier
+        type (command/test/ci/data included) because the caller is the authenticated
+        operator — the same power the operator ``/goal`` chat path had before Phase 1.
+        The optional completion-contract fields (ADR 0073) shape the continuation prompt
+        only — the verifier still decides DONE. Returns (ok, message)."""
+        from graph.goals.verifiers import VERIFIERS
+
+        if not condition:
+            return (False, "a goal condition is required.")
+        if problem := goal_budget_problem(max_iterations, no_progress_limit):
+            return (False, problem)
+        verifier = verifier or {"type": "llm"}
+        vtype = verifier.get("type", "llm")
+        if vtype not in VERIFIERS:
+            return (False, f"unknown verifier type {vtype!r}; known: {', '.join(sorted(VERIFIERS))}.")
+        if vtype == "plugin" and not verifier.get("check"):
+            return (False, "a plugin verifier needs a 'check' (the <plugin-id>:<name>).")
+        if err := self.unknown_plugin_verifier_error(verifier):
+            return (False, err)
+        state = GoalState(
+            session_id=session_id,
+            # The setting turn's model pick (#3957) — re-drives without one run on it.
+            model=current_turn_model(),
+            condition=condition,
+            verifier=verifier,
+            max_iterations=max_iterations or getattr(self._config, "goal_max_iterations", 8),
+            no_progress_limit=no_progress_limit,
+            outcome=outcome or "",
+            constraints=_coerce_str_list(constraints),
+            boundaries=_coerce_str_list(boundaries),
+            stop_when=stop_when or "",
+        )
+        self._store.set(state)
+        return (True, f"Goal set. {state.status_line()}")
+
+    # --- agent goal-loop tools (retired the <goal_plan>/<goal_unachievable> XML) ---
+
+    def record_plan(self, session_id: str, plan: str) -> tuple[bool, str]:
+        """Persist the agent's running plan (its "orient" world-model) for the active goal —
+        called by the ``update_goal_plan`` tool DURING a turn. Writes the durable ``GoalStore``
+        plan artifact for EVERY goal (ADR 0079 — no fresh-context fork), so the next continuation
+        prompt feeds it back and the trace ``orient``/``loop_shape`` signal sees it uniformly.
+        Returns (ok, msg)."""
+        state = self.active_goal(session_id)
+        if state is None:
+            return (False, "no active goal for this session.")
+        plan = (plan or "").strip()
+        if not plan:
+            return (False, "a plan is required.")
+        self._store.write_plan(state.session_id, plan)
+        return (True, "plan recorded.")
+
+    def request_abandon(self, session_id: str, reason: str) -> tuple[bool, str]:
+        """Flag the active goal as unachievable at the agent's request — called by the
+        ``abandon_goal`` tool DURING a turn (replaces the old ``<goal_unachievable/>``
+        tag). Recorded on the goal state; the post-turn ``evaluate`` honours it AFTER the
+        verifier, so a goal the world already satisfies still finishes ``achieved``.
+        Returns (ok, msg)."""
+        state = self.active_goal(session_id)
+        if state is None:
+            return (False, "no active goal for this session.")
+        state.abandon_reason = (reason or "").strip() or "agent flagged the goal unachievable"
+        self._store.set(state)
+        return (True, "goal will stop after this turn (flagged unachievable).")
+
+    def _parse_set(self, rest: str):
+        """Return (verifier_spec, condition, max_iterations|None, no_progress_limit|None,
+        fresh_context, contract) — ``contract`` carries the optional ADR 0073 fields
+        (outcome/constraints/boundaries/stop_when) from a JSON spec; ``{}`` for free text.
+        The contract is directive prose (no code-exec), so it's safe from an untrusted chat
+        set — no trust-gate, unlike the verifier."""
+        if rest.lstrip().startswith("{"):
+            try:
+                data = json.loads(rest)
+            except json.JSONDecodeError:
+                return ({}, None, None, None, False, {})
+            condition = data.get("condition")
+            if not condition:
+                return ({}, None, None, None, False, {})
+            verifier = data.get("verifier") or {"type": "llm"}
+            if "type" not in verifier:
+                verifier["type"] = "llm"
+            fresh_context = bool(data.get("fresh_context", False))
+            contract = {
+                "outcome": data.get("outcome") or "",
+                "constraints": _coerce_str_list(data.get("constraints")),
+                "boundaries": _coerce_str_list(data.get("boundaries")),
+                "stop_when": data.get("stop_when") or "",
+            }
+            return (
+                verifier,
+                condition,
+                data.get("max_iterations"),
+                data.get("no_progress_limit"),
+                fresh_context,
+                contract,
+            )
+        # plain text → fuzzy goal judged by the llm verifier
+        return ({"type": "llm"}, rest, None, None, False, {})
+
+    # --- evaluation --------------------------------------------------------
+
+    async def evaluate(self, session_id: str, *, last_text: str, tool_summary: str = "") -> Decision | None:
+        state = self.active_goal(session_id)
+        if state is None:
+            return None
+
+        # 1. Run the verifier first — ground truth overrides the model's
+        # self-assessment. If the external world already satisfies the goal,
+        # a same-turn abandon_goal give-up must not mask that.
+        result = await run_verifier(state.verifier, self._verify_ctx(state, last_text, tool_summary))
+
+        if result.met:
+            return await self._finish(state, "achieved", result.reason or "verifier passed", evidence=result.evidence)
+
+        # 2. Verifier not met — honour an explicit give-up. The agent records it
+        # DURING its turn via the `abandon_goal` tool (persisted to the goal state); we
+        # read it here, AFTER the verifier, so ground truth still wins over give-up.
+        if state.abandon_reason:
+            return await self._finish(state, "unachievable", state.abandon_reason)
+
+        # 3. Not met — track progress, decide continue vs stop. No-progress detection needs a
+        # per-iteration fingerprint that is stable ⟺ the agent made no real progress:
+        #   • DETERMINISTIC verifiers (command/test/ci/data/plugin): the verifier's own
+        #     (reason, evidence) IS that fingerprint — an identical failure repeated is a stall.
+        #   • The fuzzy `llm` verifier: `reason` is model free-text that varies every call and
+        #     `evidence` is always "" (see verifiers._verify_llm), so that fingerprint would
+        #     NEVER repeat — no_progress_limit could never fire and a fuzzy goal would only ever
+        #     stop at the iteration cap. Fingerprint the agent's PLAN artifact instead: an llm
+        #     goal whose recorded plan is unchanged across turns is spinning; while the agent
+        #     keeps recording new progress (updating the plan) it runs to the cap as before.
+        signature = self._progress_signature(state, result)
+        signature_unchanged = signature == state.last_progress_signature
+        state.no_progress_streak = (state.no_progress_streak + 1) if signature_unchanged else 0
+        state.last_progress_signature = signature
+        state.last_reason = result.reason
+        state.last_evidence = result.evidence
+        state.iteration += 1
+
+        limit = state.no_progress_limit or getattr(self._config, "goal_no_progress_limit", 3)
+        if state.iteration >= state.max_iterations:
+            return await self._finish(
+                state, "exhausted", f"ran out of iteration budget ({state.max_iterations})", evidence=result.evidence
+            )
+        if state.no_progress_streak >= limit:
+            return await self._finish(
+                state,
+                "unachievable",
+                f"no progress after {state.no_progress_streak} attempts: {result.reason}",
+                evidence=result.evidence,
+            )
+
+        self._record_history(state, "continue", result.reason, result.evidence)
+        self._store.set(state)
+        # Realtime goal-loop progress (ADR 0051 Slice 3) — only goal.achieved/failed were
+        # on the bus; surface each continuation too so a console can show the loop working.
+        # Best-effort, same channel as the terminal events.
+        try:
+            from graph.plugins.host import HOST
+
+            if HOST.publish:
+                HOST.publish(
+                    "goal.iteration",
+                    {
+                        "session_id": getattr(state, "session_id", "") or "",
+                        "condition": getattr(state, "condition", "") or "",
+                        "iteration": state.iteration,
+                        "max_iterations": state.max_iterations,
+                        "reason": result.reason,
+                    },
+                )
+        except Exception:  # noqa: BLE001 — a bus hiccup must never break the goal loop
+            pass
+        return Decision(
+            action="continue",
+            state=state,
+            message=self._continuation(state, result),
+            note=f"goal not met (iteration {state.iteration}/{state.max_iterations}): {result.reason}",
+        )
+
+    def _verify_ctx(self, state: GoalState, last_text: str = "", tool_summary: str = "") -> VerifyContext:
+        return VerifyContext(
+            config=self._config,
+            condition=state.condition,
+            last_text=last_text or "",
+            tool_summary=tool_summary or "",
+            cwd=os.getcwd(),
+            # A goal is keyed by its session (one per session), so id == session_id (#1641).
+            invoker=VerifierInvoker(kind="goal", id=state.session_id, session_id=state.session_id),
+        )
+
+    def can_probe(self, session_id: str) -> bool:
+        """Whether :meth:`probe` would run a verifier for this session right now."""
+        state = self.active_goal(session_id)
+        return state is not None and (state.verifier or {}).get("type", "llm") in _PROBE_TYPES
+
+    async def probe(self, session_id: str):
+        """Run the active goal's verifier MID-TURN without touching the goal state — no
+        iteration, no history, no events. The goal-checkpoint middleware calls it (debounced)
+        after a tool round, so a turn that already met the goal ends there instead of
+        narrating "the goal is already complete" for several more rounds before the
+        post-turn ``evaluate`` (which still decides, and records, the outcome).
+
+        Only the mechanical verifier types are probed: the ``llm`` judge reads the turn's
+        final text (which doesn't exist yet) and costs a model call. Returns the
+        ``VerifyResult``, or ``None`` when there is nothing to probe. Never raises."""
+        state = self.active_goal(session_id)
+        if state is None:
+            return None
+        vtype = (state.verifier or {}).get("type", "llm")
+        if vtype not in _PROBE_TYPES:
+            return None
+        try:
+            return await run_verifier(state.verifier, self._verify_ctx(state))
+        except Exception:  # noqa: BLE001 — a probe is advisory; evaluate() is the ground truth
+            log.warning("[goal] mid-turn verifier probe failed for %s", session_id, exc_info=True)
+            return None
+
+    async def finish_mid_turn(self, session_id: str, result) -> str:
+        """Record the active goal ACHIEVED on a passing mid-turn probe (``probe``'s result) —
+        the same terminal path as ``evaluate`` (history, hooks, ``goal.achieved``), before
+        the turn's closing call. Returns the terminal note, or ``""`` when there is no
+        active goal any more."""
+        state = self.active_goal(session_id)
+        if state is None or result is None or not result.met:
+            return ""
+        decision = await self._finish(state, "achieved", result.reason or "verifier passed", evidence=result.evidence)
+        return decision.note
+
+    @staticmethod
+    def _record_history(state: GoalState, status: str, reason: str, evidence: str) -> None:
+        """Append a per-iteration event to the goal's timeline (capped). Reason/evidence are
+        truncated so the persisted JSON stays bounded even for a long or re-armed loop."""
+        from time import time
+
+        event = {
+            "iteration": state.iteration,
+            "at": time(),
+            "status": status,
+            "reason": (reason or "")[:500],
+            "evidence": (evidence or "")[:500],
+        }
+        state.history = (list(state.history) + [event])[-_HISTORY_CAP:]
+
+    def remember_model(self, session_id: str, model: str) -> None:
+        """An explicit pick on a turn that drives this goal becomes the goal's model
+        (#3957), so the next re-drive without a pick (a watch / schedule fire) uses it."""
+        state = self.active_goal(session_id)
+        if state is None or state.model == (model or ""):
+            return
+        state.model = model or ""
+        self._store.set(state)
+
+    def note_round_cap(self, session_id: str, reason: str) -> None:
+        """Record on the goal's timeline that the drive paused because a goal-driven turn hit
+        its per-turn round cap (#3957). The goal stays ACTIVE (a pause, like the ADR 0079
+        handoff) — the next operator message or trigger drives it again."""
+        state = self.active_goal(session_id)
+        if state is None:
+            return
+        self._record_history(state, "round_cap", reason, "")
+        self._store.set(state)
+
+    def rearm(self, session_id: str, *, add_iterations: int = 0) -> tuple[bool, str, bool, GoalState | None]:
+        """Re-arm a goal so its drive loop can (re)start. On an ACTIVE goal this only raises
+        the iteration budget (``add_iterations``) — the running loop picks up the higher cap.
+        On a TERMINAL goal (exhausted / unachievable / achieved) it REACTIVATES: status→active,
+        clears finished_at / abandon_reason, resets the iteration + no-progress counters for a
+        fresh attempt (the timeline ``history`` is preserved), and adds any extra budget. The
+        caller kicks a turn when ``resumed`` is True. Returns (ok, message, resumed, state)."""
+        state = self._store.get(session_id)
+        if state is None:
+            return (False, "no goal for this session.", False, None)
+        add = max(0, int(add_iterations or 0))
+        resumed = not state.active
+        if resumed:
+            state.status = "active"
+            state.finished_at = None
+            state.abandon_reason = ""
+            state.iteration = 0
+            state.no_progress_streak = 0
+            state.last_progress_signature = ""
+        if add:
+            state.max_iterations += add
+        elif not resumed:
+            # Active goal, no budget added → nothing to do (avoid a pointless write/kick).
+            return (False, "goal is already active — add iterations to extend it.", False, state)
+        self._store.set(state)
+        verb = "restarted" if resumed else "budget extended"
+        return (True, f"Goal {verb}. {state.status_line()}", resumed, state)
+
+    def _progress_signature(self, state: GoalState, result) -> str:
+        """A per-iteration fingerprint that stays constant ⟺ the agent made no progress
+        (drives ``no_progress_streak``). Verifier-type-aware: the fuzzy ``llm`` verifier's
+        free-text reason can't serve as a stall signal (it varies every call, evidence is
+        always ""), so a fuzzy goal fingerprints its PLAN artifact; every other
+        (deterministic) verifier fingerprints its own ``(reason, evidence)``. Never returns
+        "" for a real computation, so the default-"" baseline can't false-match on turn 1."""
+        if state.verifier.get("type", "llm") == "llm":
+            plan = self._store.read_plan(state.session_id)
+            return "plan:" + hashlib.sha256(plan.encode("utf-8")).hexdigest()
+        return f"rv:{result.reason}\x00{result.evidence}"
+
+    async def _finish(self, state: GoalState, status: str, reason: str, *, evidence: str = "") -> Decision:
+        from time import time
+        from graph.goals.hooks import fire_goal_hooks
+
+        state.status = status
+        state.last_reason = reason
+        if evidence:
+            state.last_evidence = evidence
+        state.finished_at = time()
+        self._record_history(state, status, reason, evidence or state.last_evidence)
+        self._store.set(state)
+        # The reactions below may enqueue turns (``run_in_session`` from a hook or a bus
+        # subscriber): they run under the fence of the turn that SET the goal (graph/fence_scope).
+        goal_fence = getattr(state, "fence", None)
+        with fence_scope(goal_fence):
+            # Plugin lifecycle reactions (ADR 0028 D4) — notify / record / set next goal.
+            await fire_goal_hooks(status, state)
+            # The self-improvement review (`/self-improve`, a bounded reviewer with its own
+            # tool policy that may edit SOUL/skills) is skipped for a goal a FENCED turn set:
+            # its work was steered by a party the operator fenced, and a fenced turn can't
+            # run the slash command anyway — the review would only fail closed.
+            if status == "achieved" and not goal_fence:
+                from graph.self_improvement import schedule_review
+
+                schedule_review(self._config, self._scheduler, state)
+            # Broadcast on the event bus (ADR 0039) so ANY plugin or the console can react to a
+            # terminal goal — no goal_hook plugin required, no cross-dependency. `goal.achieved`
+            # on success; `goal.failed` on exhausted/unachievable. Best-effort: a bus hiccup must
+            # never break finish.
+            try:
+                from graph.plugins.host import HOST
+
+                if HOST.publish:
+                    HOST.publish(
+                        "goal.achieved" if status == "achieved" else "goal.failed",
+                        {
+                            "session_id": state.session_id,
+                            "condition": state.condition,
+                            "status": status,
+                            "reason": reason,
+                            "evidence": evidence or state.last_evidence or "",
+                        },
+                    )
+            except Exception:  # noqa: BLE001
+                log.debug("[goals] goal.* bus emit failed", exc_info=True)
+        glyph = {"achieved": "✓", "exhausted": "⏳", "unachievable": "✗", "expired": "⌛"}.get(status, "•")
+        return Decision(action="done", state=state, note=f"{glyph} goal {status}: {reason}")
+
+    def _continuation(self, state: GoalState, result) -> str:
+        # Re-state the completion contract every drive turn (ADR 0073) — mirrors
+        # Hermes' contract-directed continuation. It is directive ONLY: the DONE
+        # decision still comes from the verifier (see `evaluate`). A goal with no
+        # contract appends nothing, so its continuation prompt is byte-for-byte
+        # unchanged from before contracts existed (backward-compat).
+        base = self._continuation_base(state, result)
+        contract = self._contract_prompt(state)
+        body = f"{base}\n\n{contract}" if contract else base
+        return f"{body}\n\n{_DRIVE_TACTIC}"
+
+    @staticmethod
+    def _verifier_summary(verifier: dict) -> str:
+        """Compact human summary of a verifier spec for the contract directive, e.g.
+        ``command: pytest -q``, ``ci PR #12``, ``plugin demo:probe``, ``llm judgment``."""
+        v = verifier or {}
+        vt = v.get("type", "llm")
+        if vt in ("command", "test"):
+            cmd = (v.get("command") or "").strip()
+            return f"{vt}: {cmd}" if cmd else vt
+        if vt == "ci":
+            if v.get("pr") is not None:
+                return f"ci PR #{v.get('pr')}"
+            if v.get("branch"):
+                return f"ci branch {v.get('branch')}"
+            return "ci"
+        if vt == "data":
+            return f"data check on {v.get('path')}" if v.get("path") else "data check"
+        if vt == "plugin":
+            return f"plugin {v.get('check')}" if v.get("check") else "plugin verifier"
+        if vt == "llm":
+            return "llm judgment"
+        return vt
+
+    def _contract_prompt(self, state: GoalState) -> str:
+        """Render the goal's completion contract (ADR 0073) into one compact directive
+        block for the continuation prompt. Only the non-empty fields appear; a goal with
+        no contract renders to ``""`` (so its continuation is unchanged). This is
+        directive text — the verifier, NOT this block, decides DONE."""
+        if not state.has_contract:
+            return ""
+        parts = [
+            f"Contract for this goal: it is DONE only when the verifier passes "
+            f"({self._verifier_summary(state.verifier)})."
+        ]
+        outcome = (state.outcome or "").strip()
+        if outcome:
+            parts.append(f"Required outcome: {outcome}.")
+        constraints = [c for c in state.constraints if str(c).strip()]
+        if constraints:
+            parts.append("Constraints (do NOT violate): " + "; ".join(constraints) + ".")
+        boundaries = [b for b in state.boundaries if str(b).strip()]
+        if boundaries:
+            parts.append("Stay within these boundaries: " + "; ".join(boundaries) + ".")
+        stop_when = (state.stop_when or "").strip()
+        if stop_when:
+            # follow-up (ADR 0073 D4): stop_when is prompt-injected in v1 — the agent
+            # self-parks via abandon_goal when it recognizes the condition. A future
+            # option is a `stop_when`-as-verifier auto-check that could park the drive
+            # loop DETERMINISTICALLY (reusing the verifier surface) when the stop
+            # condition is mechanically checkable.
+            parts.append(
+                f"If {stop_when}, STOP and ask the operator instead of continuing "
+                "(call the `abandon_goal` tool with that reason to park the goal)."
+            )
+        return " ".join(parts)
+
+    def _continuation_base(self, state: GoalState, result) -> str:
+        if state.fresh_context:
+            plan = self._store.read_plan(state.session_id) or "(no plan yet — create one)"
+            evidence = (result.evidence or "").strip()
+            evidence_block = f"Evidence:\n{evidence}\n" if evidence else ""
+            vtype = state.verifier.get("type", "llm")
+            return (
+                f"[goal continuation {state.iteration}/{state.max_iterations} — fresh context]\n"
+                f"Goal: {state.condition}\n"
+                f"Verifier ({vtype}) last result: {result.reason}\n"
+                + (evidence_block + "\n" if evidence_block else "\n")
+                + f"Plan from last iteration:\n{plan}\n\n"
+                f"Take ONE concrete step toward the goal. Read the plan — it records what's "
+                f"been tried, what's next, and what failed. Record your updated running plan "
+                f"by calling the `update_goal_plan` tool (it is persisted for the next "
+                f"iteration). If you determine the goal is impossible or out of scope, call "
+                f"the `abandon_goal` tool with a reason and stop."
+            )
+        evidence = (result.evidence or "").strip()
+        evidence_block = f"\nEvidence:\n{evidence}\n" if evidence else "\n"
+        plan_block = self._store.read_plan(state.session_id).strip() or "(no plan yet — create one)"
+        vtype = state.verifier.get("type", "llm")
+        return (
+            f"[goal continuation {state.iteration}/{state.max_iterations}]\n"
+            f"The goal is NOT yet met.\n"
+            f"Verifier ({vtype}): {result.reason}"
+            f"{evidence_block}\n"
+            f"Current plan:\n{plan_block}\n\n"
+            f'Keep working toward the goal: "{state.condition}".\n'
+            f"Record your running plan by calling the `update_goal_plan` tool (update it "
+            f"each turn — it is fed back to you here). If you determine the goal is "
+            f"impossible or out of scope, call the `abandon_goal` tool with a reason and "
+            f"stop. Otherwise take the next concrete step now."
+        )

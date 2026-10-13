@@ -18,12 +18,16 @@ answer = await sdk.complete('Summarize the changelog')
 ```
 
 Import it lazily (inside the function that uses it) if your plugin must also run
-host-free in its own test suite. Generated from `graph/sdk.py`; the sections below are
+host-free in its own test suite. Generated from `src/graph/sdk.py`; the sections below are
 the module's own.
 
 ## Contents
 
-**Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types)
+**Plugin services (the plugin↔plugin call seam, ADR 0116)** — [`record_friction()`](#sdk-record-friction), [`service()`](#sdk-service)
+
+**Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`renders_ui()`](#sdk-renders-ui), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types), [`turn_stop_reason()`](#sdk-turn-stop-reason)
+
+**Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)** — [`llm_lanes()`](#sdk-llm-lanes), [`llm_priority()`](#sdk-llm-priority)
 
 **Knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge")** — [`knowledge_add()`](#sdk-knowledge-add), [`knowledge_purge()`](#sdk-knowledge-purge), [`knowledge_search()`](#sdk-knowledge-search)
 
@@ -35,13 +39,68 @@ the module's own.
 
 **Plugin-owned recurring jobs (#1642)** — [`cancel_plugin_jobs()`](#sdk-cancel-plugin-jobs), [`cancel_scheduled()`](#sdk-cancel-scheduled), [`plugin_job_prefix()`](#sdk-plugin-job-prefix), [`schedule_recurring()`](#sdk-schedule-recurring)
 
-**Plugin state (own the file, never core's)** — [`plugin_store()`](#sdk-plugin-store)
+**Plugin state (own the file, never core's)** — [`deleted_chat_sessions()`](#sdk-deleted-chat-sessions), [`plugin_store()`](#sdk-plugin-store)
 
 **Plugin metric timeseries (#1632)** — [`metric_history()`](#sdk-metric-history), [`metric_last()`](#sdk-metric-last), [`record_metric()`](#sdk-record-metric)
 
 **Run tracing (one Langfuse trace per multi-step plugin run)** — [`trace_attributes()`](#sdk-trace-attributes), [`trace_run()`](#sdk-trace-run)
 
 **Delegation ledger (who handed what work to whom)** — [`record_delegation()`](#sdk-record-delegation)
+
+**Managed Python runtime (ADR 0094 — the provisioned child interpreter)** — [`managed_python_exe()`](#sdk-managed-python-exe)
+
+## Plugin services (the plugin↔plugin call seam, ADR 0116)
+
+### `sdk.service` {#sdk-service}
+
+```python
+sdk.service(name: str) -> Callable | None
+```
+
+The callable another plugin offers as `name` (`"<plugin_id>.<name>"`), or `None`.
+
+The way one plugin CALLS another without importing it: the provider registers it with
+`registry.register_service` and you resolve it here, at call time — never at
+`register()` time, since plugins load in no guaranteed order and a reload can swap the
+provider in or out. `None` means no loaded plugin provides it (disabled, not installed,
+or a core older than the provider needs): degrade with an actionable message rather than
+fail. Guard the lookup itself with `getattr(sdk, "service", None)` on cores older than
+this seam. The callable's signature and return shape are the PROVIDER's documented API —
+read its docstring (`help(sdk.service("artifact.show"))`). The reference provider is the
+artifact plugin's `artifact.show`::
+
+    show = sdk.service("artifact.show")
+    if show is None:
+        return "The Artifact plugin is off — enable it to see charts."
+    r = show(kind="vega-lite", code=spec_json, title="Sales by weekday")
+    return r["message"] + r["ref"]   # the artifact-ref chip tail goes LAST
+
+### `sdk.record_friction` {#sdk-record-friction}
+
+```python
+sdk.record_friction(kind: str, summary: str, detail: str = '', severity: str = 'minor', *, source: str) -> str | None
+```
+
+Record a friction point in THIS instance's friction ledger from plugin code.
+
+The agent's `record_friction` tool only captures what goes wrong inside a turn. A
+plugin's background work (a loop, a poller, a scheduled job) fails outside any turn, so
+without this its failures never reach the agent's friction review. Writes through the
+friction plugin's `friction.record` service ([ADR 0116](/adr/0116-local-first-data-analyst-duckdb-and-vega-lite-charts)): the same ledger, grouping and
+review as the tool.
+
+- `kind`: `"harness"` (tooling/infrastructure got in the way) or `"model"`.
+- `summary`: one line, kept STABLE across occurrences, because the ledger groups by
+  `(kind, summary)`: no ids, timestamps or counts in it. Put those in `detail`.
+- `severity`: `"minor"` or `"major"` (anything else records as minor).
+- `source`: your plugin id; the record is stamped `plugin:<source>`.
+
+Returns the grouped row's id, `""` when the provider refused the input or the write
+failed, and `None` when the friction plugin is off (or the core is older than the
+services seam). It never raises, and it is synchronous (one small file append), so it is
+safe from a worker thread or a background loop. It does not rate-limit: a caller whose
+failure can repeat every tick should dedupe before calling. Guard the call itself with
+`getattr(sdk, "record_friction", None)` on cores older than this seam.
 
 ## Agent + model access (the plugin↔agent channel, ADR 0043)
 
@@ -88,7 +147,7 @@ Ids of the configured subagents — for validating/listing recipe steps.
 ### `sdk.run_subagent` {#sdk-run-subagent}
 
 ```python
-await sdk.run_subagent(subagent_type: str, prompt: str, *, description: str, extra_tools: Any = None, truncate: int | None = None) -> str
+await sdk.run_subagent(subagent_type: str, prompt: str, *, description: str, extra_tools: Any = None, truncate: int | None = None, turn_model: str | None = None) -> str
 ```
 
 Run a subagent to completion and return its text output.
@@ -103,6 +162,44 @@ a plugin tool (the review-finder's `github_pr_diff`, a finance backtester)
 must see it here too, or every SDK-driven workflow step silently degrades to
 "No tools available". Pass an explicit list (even `[]`) to override.
 
+`turn_model` is the calling turn's model override; `None` (the default) reads it
+from the in-flight turn (`graph.subagent_model.current_turn_model`, bound by the
+chat drivers), so a workflow step follows the model the operator picked for the
+turn — under the one precedence: the subagent's pin > the override >
+`routing.aux_model` > the main model ([#3944](https://github.com/protoLabsAI/protoAgent/issues/3944), [#3955](https://github.com/protoLabsAI/protoAgent/issues/3955)). Outside a turn there is
+none and the step resolves pin > aux > main, as before.
+
+### `sdk.renders_ui` {#sdk-renders-ui}
+
+```python
+sdk.renders_ui(state: Any) -> bool
+```
+
+Whether the client of the turn a tool runs in can display rendered UI — an artifact,
+a component chip — read from the tool's injected graph state ([#4144](https://github.com/protoLabsAI/protoAgent/issues/4144)).
+
+`False` for a plain API client that receives only the reply text (`/v1/chat/completions`,
+`POST /api/chat`, a relay plugin's `HOST.invoke` turn such as Discord); `True` for the
+console and A2A, and whenever the state doesn't say (a host that predates the flag, a direct
+call). Read it the way you read the session id — from `state: Annotated[Any,
+InjectedState]`, since per-turn contextvars are empty inside a tool body — and pass it on to
+a provider that shapes its reply by it, e.g. `sdk.service("artifact.show")(...,
+renders_ui=sdk.renders_ui(state))`. A text-only reply should say what was made and that
+this client can't show it, never point at a view the client doesn't have.
+
+### `sdk.turn_stop_reason` {#sdk-turn-stop-reason}
+
+```python
+sdk.turn_stop_reason() -> str
+```
+
+Why the turn this code runs under was stopped from above, or `""`.
+
+Read it on a `CancelledError` to tell the two apart ([#3940](https://github.com/protoLabsAI/protoAgent/issues/3940)): `""` is a plain
+cancel (an operator's A2A `CancelTask`, a shutdown); otherwise the stall guard ended
+the turn because it stopped making progress, and this is its message — a failure,
+not a cancel. See `graph.turn_liveness`.
+
 ### `sdk.complete` {#sdk-complete}
 
 ```python
@@ -116,6 +213,64 @@ a one-shot classifier/summarizer). Distinct from `run_subagent`, which runs a
 full tool-using subagent. Uses the live config's model through the gateway; pass
 `model_name` to target a different model on the same gateway, `system` for a
 system instruction.
+
+## Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)
+
+### `sdk.llm_priority` {#sdk-llm-priority}
+
+```python
+sdk.llm_priority(cls: str) -> _LlmPriorityScope
+```
+
+Run a block of model calls under the [ADR 0115](/adr/0115-gateway-inflight-limiter) D6 priority class `cls` on the gateway
+in-flight limiter, restoring the previous class on exit.
+
+When a lane is saturated the limiter serves waiters by class — `interactive` (a chat
+turn an operator is watching) first, then `default` (A2A / background / scheduled
+turns), then `bulk` (wide fan-outs, sweeps, review-panel finders) — with a slot
+reserved for interactive callers. A plugin running a burst of non-urgent model work marks
+it `bulk` so it queues behind an operator's chat instead of racing it::
+
+    from graph import sdk
+
+    async with sdk.llm_priority("bulk"):
+        await asyncio.gather(*(run_finder(f) for f in finders))
+
+Usable as either `with` or `async with` — pick whichever the call site is. The class
+is carried in a `contextvars.ContextVar`, so any subagent / `asyncio` task spawned
+inside the block inherits it, and nested scopes restore the enclosing class on exit. When
+the limiter is off (`model.max_inflight: 0`, the default) the class is still set but
+costs nothing — acquisition is a pass-through.
+
+**Args:**
+
+- `cls` — one of `"interactive"` / `"default"` / `"bulk"`.
+
+**Raises:**
+
+- `ValueError` — if `cls` is not one of the three classes — the message names the valid ones.
+
+
+### `sdk.llm_lanes` {#sdk-llm-lanes}
+
+```python
+sdk.llm_lanes() -> dict
+```
+
+The [ADR 0115](/adr/0115-gateway-inflight-limiter) D8 gateway in-flight-limiter snapshot for this process, read straight
+out of memory (no HTTP, no DB).
+
+The same payload the operator console reads over `GET /api/telemetry/llm-lanes`, but
+a plugin running *inside* the agent process (pr-reviewer's review panels, say) reads it
+here without a round-trip. Use it to tell a lane that is *deliberately* queuing from a
+gateway that has gone slow: high `queued` / `wait_p90_s_5m` or `saturated: true`
+with slots full is local back-pressure this process is applying on purpose; retries or
+timeouts while slots are NOT saturated point at the gateway itself.
+
+**Returns:**
+
+`{"enabled": bool, "generated_at": iso, "lanes": [...]}`. `enabled` is false (and `lanes` empty) when the limiter is off (`model.max_inflight: 0`, the default). Each lane entry carries `lane`, `limit`, `reserve`, `inflight`, `queued`, `queued_by_priority` (interactive/default/bulk), `oldest_wait_s`, `wait_p50_s_5m` / `wait_p90_s_5m`, `queue_timeouts_5m` and `saturated` (`queued > 0` held continuously for 60 s or more).
+
 
 ## Knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge")
 
@@ -496,6 +651,23 @@ Also useful to a plugin that wants to tear down its whole cadence at once.
 
 ## Plugin state (own the file, never core's)
 
+### `sdk.deleted_chat_sessions` {#sdk-deleted-chat-sessions}
+
+```python
+sdk.deleted_chat_sessions(session_ids) -> set[str] | None
+```
+
+Which of these console chat session ids the operator has DELETED.
+
+A deleted chat leaves a durable tombstone ([ADR 0104](/adr/0104-session-turns-read-api); never count-evicted), so a session id
+in the returned set is gone for good: no transcript of it survives to point at anything a
+plugin keeps for it. Use it to retire per-session state only once its chat is gone — e.g.
+the artifact store keeps an inline answer while any chat that shows it still exists ([#4138](https://github.com/protoLabsAI/protoAgent/issues/4138)).
+
+Returns `None` when it can't tell (no task store at this instance, or it can't be read).
+Treat `None` as "every one may still exist" — never delete on a guess. Synchronous and
+cheap (one indexed read); safe from sync code in any runtime process.
+
 ### `sdk.plugin_store` {#sdk-plugin-store}
 
 ```python
@@ -673,3 +845,36 @@ understates every rollup built on the column.
 Best-effort and never raises: a ledger failure must not break a dispatch.
 
 Returns the new `edge_id`, or None when no store is wired or the write failed.
+
+## Managed Python runtime (ADR 0094 — the provisioned child interpreter)
+
+### `sdk.managed_python_exe` {#sdk-managed-python-exe}
+
+```python
+sdk.managed_python_exe() -> Path | None
+```
+
+The managed Python runtime's interpreter, or None when it isn't provisioned.
+
+This is the interpreter `execute_code` spawns on the packaged desktop app, where
+`sys.executable` is the frozen server binary and cannot run a script. It is a
+pinned CPython the host downloads on demand into the box-shared data dir
+(`runtime.python_install`), shared by every instance on the machine.
+
+Returns the interpreter's `Path` only when a *working* install is
+present — the executable actually exists — so a half-extracted, wiped or
+never-provisioned runtime reads as None rather than as a path that fails to spawn.
+On None, a source run can fall back to `sys.executable` (what `execute_code`
+itself does); a frozen one should tell the operator to provision the managed Python
+runtime rather than guess at a system Python of arbitrary version.
+
+Cheap (one `stat`), never spawns, never raises.
+
+```python
+import sys
+from graph import sdk
+
+exe = sdk.managed_python_exe()
+if exe is None and not getattr(sys, "frozen", False):
+    exe = Path(sys.executable)  # source run: this process's own interpreter
+```

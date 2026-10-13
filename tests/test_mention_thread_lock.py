@@ -17,6 +17,8 @@ import pytest
 import runtime.state as rs
 
 sc = importlib.import_module("server.chat")
+# The room exchange lives in server.chat_rooms (#3838) — patch it there.
+rooms = importlib.import_module("server.chat_rooms")
 
 
 class _Reg:
@@ -53,7 +55,7 @@ async def test_two_concurrent_addresses_on_one_thread_never_overlap(roster, monk
         inside -= 1
         return "reply", None
 
-    monkeypatch.setattr(sc, "_at_delegate_exchange", _slow)
+    monkeypatch.setattr(rooms, "_at_delegate_exchange", _slow)
 
     async def _drive():
         return [f async for f in sc._chat_langgraph_stream_impl("@proto hi", "same-session")]
@@ -75,7 +77,7 @@ async def test_different_sessions_are_not_blocked_by_each_other(roster, monkeypa
         inside -= 1
         return "reply", None
 
-    monkeypatch.setattr(sc, "_at_delegate_exchange", _slow)
+    monkeypatch.setattr(rooms, "_at_delegate_exchange", _slow)
 
     async def _drive(sid):
         return [f async for f in sc._chat_langgraph_stream_impl("@proto hi", sid)]
@@ -96,7 +98,7 @@ async def test_the_non_streaming_driver_takes_the_lock_too(roster, monkeypatch):
         inside -= 1
         return "reply", None
 
-    monkeypatch.setattr(sc, "_at_delegate_exchange", _slow)
+    monkeypatch.setattr(rooms, "_at_delegate_exchange", _slow)
     await asyncio.gather(
         sc._chat_langgraph_impl("@proto hi", "same-session"),
         sc._chat_langgraph_impl("@proto hi", "same-session"),

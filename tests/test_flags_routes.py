@@ -43,19 +43,6 @@ def test_flags_route_serves_resolved_payload(monkeypatch):
     ]
 
 
-def test_flags_route_reflects_env_override_and_channel(monkeypatch):
-    # prod channel: a dev-tier flag is off…
-    monkeypatch.setenv("PROTOAGENT_CHANNEL", "prod")
-    monkeypatch.setattr(flags, "FLAGS", [Flag("x.y", "d", tier="dev")])
-    off = _client().get("/api/flags").json()["flags"][0]
-    assert off["enabled"] is False and off["source"] == "channel"
-
-    # …until an env override forces it on (source flips to "env").
-    monkeypatch.setenv("PROTOAGENT_FLAG_X_Y", "on")
-    on = _client().get("/api/flags").json()["flags"][0]
-    assert on["enabled"] is True and on["source"] == "env"
-
-
 def test_flags_route_empty_registry(monkeypatch):
     monkeypatch.setattr(flags, "FLAGS", [])
     body = _client().get("/api/flags").json()

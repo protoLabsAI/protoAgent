@@ -145,7 +145,11 @@ reopened.
 
 The view's **Resolve** button affects only the row you clicked. It matches the full
 summary and the kind exactly. `/friction <text>` and the agent's `resolve_friction`
-match a substring, so they can clear several rows at once.
+match a substring (ignoring case, extra whitespace and curly-vs-straight quotes), so
+they can clear several rows at once. The agent can also resolve one row exactly by its
+id: `friction_review` prints a short `[id]` per row, and `resolve_friction(id=...)`
+takes it. When nothing matches, the tool lists the open rows' ids and summaries; when
+the match was already resolved, it says so instead of reporting no match.
 
 Only resolve a row when the rough edge is actually fixed, or when you've decided it
 isn't one. A live problem marked resolved is worse than an unrecorded one, because
@@ -218,7 +222,7 @@ The end of each line tells the agent what to do next:
 
 - `use <tool>` for a shell command that duplicated a first-class tool,
 - `tool: <name>` for a tool error,
-- `resolve_friction when fixed` for a row the agent recorded itself.
+- `resolve_friction id=<id> when fixed` for a row the agent recorded itself.
 
 **Counts are bucketed.** Counts up to 9 are exact. Above that they are shown as `x10+`,
 `x100+` or `x1000+`. The line is re-rendered into the prompt every turn, and an exact

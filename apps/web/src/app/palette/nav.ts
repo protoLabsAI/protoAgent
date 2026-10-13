@@ -12,6 +12,17 @@ import { agentHref } from "../../lib/api";
 import { seedKnowledgeSearch } from "../../knowledge/searchSeed";
 import { runBindingById } from "../../keybindings/useKeybindings";
 
+// A dock opened programmatically must open at a usable size. The DS AppShell width is
+// CONTROLLED and stored verbatim (a drag streams transients down to 0 — that's how it
+// collapses), so a dock can be persisted at 0 px while collapsed. Uncollapsing it as-is drew
+// a 0-px panel: "Open in panel" on an inline artifact showed nothing (#4076). Opening is not a
+// drag, so restoring the default here doesn't fight the gesture; the minimums match the DS
+// AppShell's own `minRightWidth` / `minBottomHeight` defaults, and the defaults the store's.
+const MIN_OPEN_RIGHT_WIDTH = 280;
+const DEFAULT_RIGHT_WIDTH = 360;
+const MIN_OPEN_BOTTOM_HEIGHT = 120;
+const DEFAULT_BOTTOM_HEIGHT = 240;
+
 /** Open any view by id, routed to the dock it actually lives on (and uncollapsed).
  *  Reads live state via the store's `getState()` so it isn't a render subscription.
  *  A HIDDEN surface (railOrder.hidden — enabled but not shown) is un-hidden first: the
@@ -26,9 +37,11 @@ export function openView(id: string) {
   // never renders. Set both; `mobileActive` is inert on desktop.
   ui.setMobileActive(id);
   if (ro.right.includes(id)) {
+    if (ui.rightWidth < MIN_OPEN_RIGHT_WIDTH) ui.setRightWidth(DEFAULT_RIGHT_WIDTH);
     ui.setRightCollapsed(false);
     ui.setRightPanel(id);
   } else if (ro.bottom.includes(id)) {
+    if (ui.bottomHeight < MIN_OPEN_BOTTOM_HEIGHT) ui.setBottomHeight(DEFAULT_BOTTOM_HEIGHT);
     ui.setBottomCollapsed(false);
     ui.setBottomPanel(id);
   } else {
@@ -139,7 +152,7 @@ export function applyNavIntent(intent: NavIntent) {
       // does not check the id it is handed: for a session deleted in that window (another
       // browser tab's cross-tab merge, a background job) it still sets `currentSessionId` and
       // pushes the phantom id into `activeSessions` — evicting a real tab — after which
-      // ChatSurface's `useSession` finds nothing and mounts a DEAD SLOT.
+      // ChatSessionSlot's `useSession` finds nothing and mounts a DEAD SLOT.
       //
       // The check belongs HERE and not in the row's `run()`: in the desktop launcher `run()`
       // executes in a different JS context from the store that is about to be mutated, so a

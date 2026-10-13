@@ -39,6 +39,8 @@ from graph.middleware.request_context import request_metadata_scope
 from graph.plugins.host import HOST
 from tools import onboard_tools
 
+pytestmark = pytest.mark.platform_sensitive
+
 posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX system-directory layout")
 
 

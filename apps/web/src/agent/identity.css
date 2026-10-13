@@ -3,7 +3,7 @@
 .identity-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--pl-space-3);
   overflow: hidden; /* the SOUL preview/textarea scrolls internally, not the whole body */
 }
 .soul-field {
@@ -11,13 +11,13 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .soul-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .soul-field .soul-textarea {
   flex: 1;
@@ -31,10 +31,10 @@
   overflow: auto;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 12px 18px;
+  padding: var(--pl-space-3) 18px;
   background: color-mix(in srgb, var(--pl-color-fg) 3%, transparent);
   color: var(--pl-color-fg);
-  font-family: var(--pl-font-sans, inherit);
+  font-family: var(--pl-font-sans);
   cursor: text;
 }
 .soul-preview > :first-child { margin-top: 0; }
@@ -42,7 +42,7 @@
 /* Helper line above the SOUL.md editor (what "Save & reload" does). Small + tight —
    the .identity-body gap owns the vertical rhythm, so no extra margin here. */
 .soul-hint {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   margin: 0;
 }
 
@@ -51,10 +51,10 @@
 .soul-head-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .soul-history-empty {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   margin: 0;
 }
 .soul-history-list {
@@ -63,7 +63,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
   /* Grow with the content so the dialog is sized to its list (no dead space under a short list),
      but cap at most of the viewport so a long history scrolls inside the dialog rather than
      pushing it past the screen. The DS dialog itself is content-sized (max-height 100vh). */
@@ -82,18 +82,18 @@
 .soul-history-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px 6px 6px;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-1_5) var(--pl-space-2) var(--pl-space-1_5) var(--pl-space-1_5);
 }
 .soul-history-toggle {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   background: none;
   border: 0;
-  padding: 2px;
+  padding: var(--pl-space-0_5);
   cursor: pointer;
   color: var(--pl-color-fg);
   text-align: left;
@@ -102,18 +102,18 @@
 .soul-history-toggle > svg { flex-shrink: 0; opacity: 0.6; }
 .soul-history-when {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-variant-numeric: tabular-nums;
   color: color-mix(in srgb, var(--pl-color-fg) 78%, transparent);
 }
 .soul-history-badge {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  padding: 1px 7px;
-  border-radius: 999px;
+  padding: 1px var(--pl-space-2);
+  border-radius: var(--pl-radius-pill);
   background: color-mix(in srgb, var(--pl-color-accent, var(--pl-color-fg)) 18%, transparent);
   color: color-mix(in srgb, var(--pl-color-accent, var(--pl-color-fg)) 90%, var(--pl-color-fg));
 }
@@ -123,24 +123,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: color-mix(in srgb, var(--pl-color-fg) 52%, transparent);
 }
 .soul-history-confirm {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   flex-shrink: 0;
 }
 .soul-history-body {
-  margin: 0 8px 8px;
-  padding: 10px 12px;
+  margin: 0 var(--pl-space-2) var(--pl-space-2);
+  padding: var(--pl-space-2_5) var(--pl-space-3);
   max-height: 260px;
   overflow: auto;
   border-radius: var(--pl-radius);
   background: color-mix(in srgb, var(--pl-color-fg) 4%, transparent);
-  font-family: var(--pl-font-mono, monospace);
-  font-size: 12px;
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-font-size-xs);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;

@@ -5,7 +5,7 @@
 # Plugin CLI
 
 `python -m server plugin …` — scaffold, install, and manage plugins from a shell.
-Generated from the argparse definition in `graph/plugins/cli.py`.
+Generated from the argparse definition in `src/graph/plugins/cli.py`.
 
 Two deliberate non-behaviors, because both are consent boundaries
 ([ADR 0027](/adr/0027-install-plugins-from-git-url)): **install does not enable** a

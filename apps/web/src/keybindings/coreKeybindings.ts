@@ -92,7 +92,7 @@ registerKeybinding({
 });
 // Escape-to-stop (#2968, the Claude.ai/ChatGPT convention): streaming → stop the turn;
 // streaming with queued steers → cancel the newest steer first (LIFO, one per press);
-// idle → no-op. The behavior lives with the state it reads (ChatSurface registers an
+// idle → no-op. The behavior lives with the state it reads (ChatSessionSlot registers an
 // imperative handler on the escapeStop seam); this binding just invokes it. When the
 // slash menu is open, the composer's own onKeyDown preventDefaults Escape (dismissing
 // the menu) and the keydown host skips defaultPrevented events — no double-fire.

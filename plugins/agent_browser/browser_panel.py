@@ -132,7 +132,7 @@ def build_panel_data_router(cfg: dict | None):
         # task drains it. Under load this DROPS stale frames instead of letting ws.send_bytes
         # block — the backpressure buildup was what stalled the socket (frozen frames → the
         # proxy idle-closes it → the "live" dot flaps offline).
-        latest: dict = {"jpeg": None, "wh": None}
+        latest: dict = {"jpeg": None, "wh": None, "nav": None}
         pending = asyncio.Event()
 
         async def on_frame(jpeg: bytes, md: dict):
@@ -140,15 +140,28 @@ def build_panel_data_router(cfg: dict | None):
             latest["wh"] = (md.get("deviceWidth"), md.get("deviceHeight"))
             pending.set()
 
+        async def on_nav(state: dict):
+            # Where the tab went (agent open / link click / form submit / redirect /
+            # back-forward) → the address bar + back/forward state. Stashed like a frame and
+            # sent by the one sender, so it never races a frame write on the socket.
+            latest["nav"] = state
+            pending.set()
+
         async def sender():
             sent_wh = None
+            sent_nav = None
             try:
                 while True:
                     await pending.wait()
                     pending.clear()
+                    nav = latest["nav"]
+                    if nav is not None and nav != sent_nav:
+                        sent_nav = nav
+                        await ws.send_json({"t": "nav", **nav})
                     jpeg, wh = latest["jpeg"], latest["wh"]
                     if jpeg is None:
                         continue
+                    latest["jpeg"] = None   # a nav-only wake must not resend the last frame
                     if wh != sent_wh:
                         sent_wh = wh
                         await ws.send_json({"t": "meta", "w": wh[0], "h": wh[1]})
@@ -158,7 +171,7 @@ def build_panel_data_router(cfg: dict | None):
 
         send_task = None
         try:
-            async with browser_stream.CDPStream(page_ws, on_frame, quality=quality) as cdp:
+            async with browser_stream.CDPStream(page_ws, on_frame, quality=quality, nav_cb=on_nav) as cdp:
                 await cdp.start_screencast()
                 send_task = asyncio.create_task(sender())
                 while True:
@@ -246,8 +259,8 @@ document.getElementById("dskit").href=BASE+"/_ds/plugin-kit.css";
     border:var(--pl-border-width,1px) solid var(--pl-color-border,#444);box-shadow:0 4px 16px rgba(0,0,0,.25)}
 </style></head><body>
   <div class="bar">
-    <button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" title="Back" onclick="nav('back')">◀</button>
-    <button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" title="Forward" onclick="nav('forward')">▶</button>
+    <button id="back" class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" title="Back" onclick="nav('back')" disabled>◀</button>
+    <button id="fwd" class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" title="Forward" onclick="nav('forward')" disabled>▶</button>
     <button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" title="Reload" onclick="nav('reload')">⟳</button>
     <input id="url" class="pl-input" placeholder="example.com — Enter to open" autocomplete="off">
     <button class="pl-btn pl-btn--primary pl-btn--sm" onclick="go()">Go</button>
@@ -286,9 +299,37 @@ async function nav(action,url){
   }catch(_){ setStatus("err","offline"); }
   if(!connected) connect();   // a just-created session now has a page to stream
 }
-function go(){ let u=$("url").value.trim(); if(!u)return; if(!/^https?:\/\//.test(u))u="https://"+u; nav("open",u); }
+function go(){ let u=$("url").value.trim(); if(!u)return; if(!/^https?:\/\//.test(u))u="https://"+u;
+  urlDirty=false; nav("open",u); }
 window.nav=nav; window.go=go;
-$("url").addEventListener("keydown",(e)=>{ if(e.key==="Enter") go(); });
+$("url").addEventListener("keydown",(e)=>{
+  if(e.key==="Enter") go();
+  else if(e.key==="Escape"){ urlDirty=false; $("url").value=navView(navState,false,false).value; $("url").blur(); }
+});
+$("url").addEventListener("input",()=>{ urlDirty=true; });
+
+// ── the address bar follows the tab (server → {t:"nav", url, title, canBack, canForward}) ──
+// Every top-frame move — the agent's browser_open, a clicked link, a form submit, a redirect,
+// back/forward — arrives as a nav message. Like a real browser's bar it updates live, EXCEPT
+// while the operator is mid-edit (focused AND typed since the last nav/Enter/Escape): then
+// their text stays put, and the next nav after they leave the bar repaints it.
+let navState={url:"",title:"",canBack:false,canForward:false}, urlDirty=false;
+function navView(m, barFocused, barDirty){
+  const url=String((m&&m.url)||""), title=String((m&&m.title)||"");
+  return {
+    value: (barFocused && barDirty) ? null : (url==="about:blank" ? "" : url),   // null ⇒ leave the bar alone
+    tip: title ? (title + " — " + url) : url,
+    docTitle: title ? (title + " · Browser") : "Browser",
+    backDisabled: !(m&&m.canBack), fwdDisabled: !(m&&m.canForward),
+  };
+}
+function applyNav(m){
+  navState=m;
+  const bar=$("url"), v=navView(m, document.activeElement===bar, urlDirty);
+  if(v.value!==null){ bar.value=v.value; urlDirty=false; }
+  bar.title=v.tip; document.title=v.docTitle;
+  $("back").disabled=v.backDisabled; $("fwd").disabled=v.fwdDisabled;
+}
 
 function setStatus(s,label){ $("dot").className="dot"+(s?(" "+s):""); $("cs").textContent=label; }
 function live(){ return (devW&&devH) ? ("live · "+devW+"×"+devH) : "live"; }  // show the real viewport size
@@ -342,6 +383,7 @@ async function onMsg(ev){
   if(typeof ev.data==="string"){
     let m; try{ m=JSON.parse(ev.data); }catch(_){ return; }
     if(m.t==="meta"){ if(m.w) devW=m.w; if(m.h) devH=m.h; setStatus("ok",live()); }
+    else if(m.t==="nav"){ applyNav(m); }
     else if(m.t==="error"){ setStatus("err","no page"); showStart(m.msg); }
     return;
   }

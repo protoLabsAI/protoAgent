@@ -1,18 +1,8 @@
 # Eval your fork
 
-The template ships an eval harness under `evals/` so a fresh fork has
-a working test suite for its tools, memory, and A2A protocol surface
-on day one. Cases assert across three independent channels — audit
-log, reply text, and knowledge-store side effects — so a model that
-hallucinates a tool result still gets caught.
-
-## When to read this
-
-- You forked the template and want a baseline pass-rate before you
-  ship.
-- You added a new tool and want to lock in its intent — "when the
-  operator says X, fire tool Y".
-- You changed a prompt or model and want to measure regression.
+Measure tool use, memory, and A2A behavior before shipping a fork or changing a
+prompt or model. You need a running agent with the tools used by the selected
+cases. The harness checks audit records, reply text, and stored side effects.
 
 ## Run the suite
 

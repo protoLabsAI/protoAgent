@@ -13,6 +13,8 @@ from langchain_core.messages import ToolMessage
 from graph.components import encode_component, extract_component, strip_component, validate_component_props
 from tools.fs_tools import build_fs_tools
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture(autouse=True)
 def _unwired_host_config(monkeypatch):

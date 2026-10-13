@@ -16,6 +16,10 @@ export type FieldSchema = {
   items?: FieldSchema; // element schema for a multi-select (`type: "array"`)
   format?: string;
   default?: unknown;
+  // Bounds for a `number` / `integer` field (JSON-schema names) — rendered as the input's
+  // min/max so the browser's own stepper and validity UI respect them.
+  minimum?: number;
+  maximum?: number;
   // Opt a bare `enum` into card rendering (otherwise an enum stays a dropdown).
   "x-display"?: string;
   // Conditional visibility (mirrors the settings `depends_on` convention): this field

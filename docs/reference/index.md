@@ -1,19 +1,25 @@
 # Reference
 
-Information-oriented. Look up exact shapes and values here, grouped by **domain** (same order as the other sections).
+Look up API shapes, configuration fields, environment variables, and protocols.
 
 ## Agent core & runtime
 
 | Page | Contents |
 |---|---|
-| [Configuration](/reference/configuration) | `config/langgraph-config.yaml` schema |
-| [Environment variables](/reference/environment-variables) | Every env knob |
+| [Configuration](/reference/configuration) | Live config locations and `langgraph-config.yaml` schema |
+| [Environment variables](/reference/environment-variables) | Runtime environment variables |
 
 ## Skills, subagents & workflows
 
 | Page | Contents |
 |---|---|
 | [Skills (SKILL.md)](/reference/skills) | Frontmatter fields, source tags, the `skills:` config block |
+
+## Knowledge & memory
+
+| Page | Contents |
+|---|---|
+| [Knowledge settings and tools](/reference/knowledge) | Retrieval defaults, delivery controls, memory tools, and commons |
 
 ## A2A, fleet & delegates
 
@@ -22,6 +28,7 @@ Information-oriented. Look up exact shapes and values here, grouped by **domain*
 | [A2A endpoints](/reference/a2a-endpoints) | JSON-RPC methods, SSE stream, well-known paths |
 | [A2A conformance](/reference/a2a-conformance) | What of A2A 1.0 is implemented — methods, states, transports, gaps — plus the runnable prober |
 | [Agent card](/reference/agent-card) | Card shape with every supported field |
+| [Agent snapshots](/reference/agent-snapshots) | Export/import commands, contents, exclusions, and optional knowledge seeds |
 | [Extensions](/reference/extensions) | A2A extensions — URI-keyed metadata (`cost-v1`, `worldstate-delta-v1`, `tool-call-v1`) + MIME-typed DataParts + `a2a.trace` |
 
 ## Tools, MCP & plugins
@@ -41,4 +48,5 @@ Information-oriented. Look up exact shapes and values here, grouped by **domain*
 
 | Page | Contents |
 |---|---|
+| [Command palette extensions](/reference/command-palette) | Manifest actions, search ranking, and frontend registration |
 | [Operator REST API](/reference/operator-api) | The console's `/api/*` control-plane endpoints, grouped by area |

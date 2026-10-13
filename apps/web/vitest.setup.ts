@@ -63,3 +63,10 @@ if (!isUsableStorage("localStorage") || !isUsableStorage("sessionStorage")) {
     });
   }
 }
+
+// Resolve the lazily split markdown renderer before any test renders (#4018). Its Suspense
+// fallback is deliberately EMPTY (it never paints raw markdown source), so a component test that
+// mounts `<Markdown>` and reads text synchronously would otherwise race the module load — green
+// on a warm local run, red on a cold CI worker. Once resolved, LazyMarkdown's lazy factory takes
+// its synchronous path and every mount renders on its first commit, as it does in the app.
+await (await import("./src/chat/LazyMarkdown")).preloadMarkdown();

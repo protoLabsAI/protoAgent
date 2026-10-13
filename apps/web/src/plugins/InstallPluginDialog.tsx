@@ -96,7 +96,7 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
   // The deps prompt takes over the modal slot (one dialog at a time, not a stack).
   if (depsDialog) return <>{depsDialog}</>;
   return (
-    <Dialog open onClose={onClose} title="Install a plugin from a git URL" width="min(620px, 94vw)">
+    <Dialog open onClose={onClose} title="Install a plugin from a git URL" width="min(620px, 94vw)" padding="roomy">
       <p className="settings-section-sub">
         Installing <strong>enables and runs it</strong> immediately. Only install code you trust;
         for untrusted code use an{" "}
@@ -110,6 +110,7 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           aria-label="plugin git URL"
+          className="plugin-install-url"
         />
         <Input
           type="text"
@@ -117,7 +118,7 @@ export function InstallPluginDialog({ open, onClose }: { open: boolean; onClose:
           value={ref}
           onChange={(e) => setRef(e.target.value)}
           aria-label="git ref"
-          style={{ maxWidth: 200 }}
+          className="plugin-install-ref"
         />
         <Button
           variant="primary"

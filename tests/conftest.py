@@ -100,6 +100,17 @@ def _isolate_injection_log(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_surface_reconcile_state(monkeypatch):
+    """A surface reconcile leaves its task (bound to that test's loop) and any stuck
+    surfaces on STATE; the plugin routes read both to answer ``restart_recommended``.
+    Start every test with neither, so one test's reconcile can't flip another's flag."""
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "plugin_surface_reconcile", None, raising=False)
+    monkeypatch.setattr(STATE, "plugin_surfaces_stuck", {}, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_prompt_snapshots(tmp_path, monkeypatch):
     """Point the prompt snapshot store (#2243) at a per-test temp DB.
 
@@ -127,6 +138,32 @@ def _isolate_host_config(tmp_path, monkeypatch):
     Windows failure). Per-test tmp keeps mirror writes real AND isolated; a test
     that wants its own layer still wins with monkeypatch.setenv."""
     monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(tmp_path / "host-config.yaml"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_goal_verifier_registry(monkeypatch):
+    """Snapshot/restore the process-global plugin goal-verifier registry.
+
+    Any test that runs plugin wiring calls ``set_plugin_verifiers``, which REBINDS the
+    module globals — and nothing rebinds them back. Serially that leak was invisible
+    only because of file order; under pytest-xdist a later test on the same worker
+    (e.g. "no verifiers registered → set_goal absent") saw a stranger's verifiers.
+    monkeypatch restores the original bindings at teardown."""
+    from graph.goals import verifiers
+
+    monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIERS", verifiers._PLUGIN_VERIFIERS)
+    monkeypatch.setattr(verifiers, "_PLUGIN_VERIFIER_META", verifiers._PLUGIN_VERIFIER_META)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_plugin_service_registry(monkeypatch):
+    """The same snapshot/restore for the plugin-service table (ADR 0116): plugin wiring
+    rebinds it with ``set_plugin_services``, so a test that wires plugins (or sets fakes)
+    would otherwise hand its services to whichever test runs next on that xdist worker."""
+    from graph import plugin_services
+
+    monkeypatch.setattr(plugin_services, "_SERVICES", plugin_services._SERVICES)
+    monkeypatch.setattr(plugin_services, "_SERVICE_META", plugin_services._SERVICE_META)
 
 
 @pytest.fixture(autouse=True)
@@ -185,3 +222,38 @@ def _reset_a2a_auth_guard():
     auth._FLEET[0] = None
     auth._API_KEY[0] = ""
     auth._API_KEY_DEPRECATION_LOGGED[0] = False
+
+
+@pytest.fixture(autouse=True)
+def _reset_sse_shutdown_flag():
+    """Clear sse-starlette's process-global shutdown flag after each test.
+
+    Importing ``sse_starlette`` (a2a-sdk's SSE response) rebinds ``uvicorn.Server.handle_exit``
+    to ``AppStatus.handle_exit``, which sets ``AppStatus.should_exit = True`` — and nothing
+    ever sets it back. From then on every ``EventSourceResponse`` in the process cancels
+    itself on start, before its final ``more_body: False`` body message, so httpx's
+    ``ASGITransport`` fails with a bare ``assert response_complete.is_set()``. One test that
+    calls the real ``handle_exit`` (the production server's exit-signal wiring) therefore
+    broke whichever A2A streaming test the xdist scheduler put after it on the same worker.
+    Not imported here: it is only reset if some test already loaded it."""
+    yield
+    sse = sys.modules.get("sse_starlette.sse")
+    if sse is not None:
+        sse.AppStatus.should_exit = False
+
+
+@pytest.fixture(autouse=True)
+def _reset_delegate_health_caches():
+    """Dispatch now updates health too; no delegate evidence may leak between tests."""
+    import sys
+
+    def clear():
+        health = sys.modules.get("plugins.delegates.health")
+        if health is not None:
+            for name in ("_HEALTH", "_PROBES", "_FAILURES", "_SUCCESSES", "_NEXT_DUE"):
+                getattr(health, name).clear()
+            health._last_observed = 0.0
+
+    clear()
+    yield
+    clear()

@@ -14,7 +14,8 @@ import logging
 import httpx
 import pytest
 
-from tests.test_a2a_handler import A2A_HEADERS, _build_app
+from tests._a2a_app import A2A_HEADERS
+from tests._a2a_app import build_app as _build_app
 
 # ≥4KB, and chunked small enough, to force many flushes at any realistic
 # _FLUSH_CHARS value — the scenario the teardown-race concern was originally

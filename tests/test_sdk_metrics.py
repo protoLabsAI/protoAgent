@@ -212,7 +212,7 @@ def test_record_succeeds_while_another_connection_holds_the_write_lock(store):
 
     t = threading.Thread(target=contended_write)
     t.start()
-    time.sleep(0.8)  # long enough that an unguarded WAL pragma has already blown up
+    time.sleep(0.3)  # long enough that an unguarded WAL pragma has already blown up
     blocker.rollback()  # release the lock — the busy-waiting writer should now land
     blocker.close()
     t.join(timeout=10)

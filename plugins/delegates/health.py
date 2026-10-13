@@ -28,12 +28,15 @@ log = logging.getLogger("protoagent.plugins.delegates")
 
 # name -> {ok, latency_ms?, error?, detail?, checked_at}
 _HEALTH: dict[str, dict] = {}
+# Preserve probe evidence when a successful dispatch supersedes reachability.
+_PROBES: dict[str, dict] = {}
 # Per-delegate adaptive backoff state: consecutive-failure count + the monotonic-ish
 # wall-clock time the delegate is next due for a probe. A healthy delegate is probed
 # every base interval; each consecutive failure roughly doubles the wait, capped.
 _FAILURES: dict[str, int] = {}
 _NEXT_DUE: dict[str, float] = {}
 _INTERVAL_S = 120.0
+_STALE_AFTER_S = 3 * _INTERVAL_S
 _INITIAL_DELAY_S = 15.0
 _BACKOFF_BASE_S = 120.0
 _BACKOFF_MAX_S = 960.0
@@ -62,12 +65,35 @@ _last_observed = 0.0
 def health_snapshot() -> dict[str, dict]:
     """Current cached health per delegate name (copy).
 
-    Also the "someone is looking" signal — see ``_OBSERVED_WINDOW_S``. Both callers
-    qualify: the console panel renders this to draw the badge, and the agent's
-    ``list_agents`` tool reads it when it's about to pick a delegate."""
+    Also the console's "someone is looking" signal — see ``_OBSERVED_WINDOW_S``.
+    Agent tools use ``health_peek`` so reads do not accelerate ACP probing."""
     global _last_observed
     _last_observed = time.time()
     return {k: dict(v) for k, v in _HEALTH.items()}
+
+
+def health_peek() -> dict[str, dict]:
+    """Copy cached reachability, probe evidence and next due time without I/O or observation."""
+    return {
+        name: {
+            **entry,
+            "probe": dict(_PROBES.get(name, entry if entry.get("source") != "dispatch" else {})),
+            "next_due": _NEXT_DUE.get(name),
+        }
+        for name, entry in _HEALTH.items()
+    }
+
+
+def record_dispatch_success(name: str) -> None:
+    """A completed dispatch proves reachability and clears probe failure backoff."""
+    previous = _HEALTH.get(name)
+    if previous and previous.get("source") != "dispatch":
+        _PROBES[name] = dict(previous)
+    now = time.time()
+    _HEALTH[name] = {"ok": True, "checked_at": now, "source": "dispatch", "detail": "dispatch succeeded"}
+    _FAILURES.pop(name, None)
+    _SUCCESSES.pop(name, None)
+    _NEXT_DUE[name] = now + _INTERVAL_S
 
 
 def _observed() -> bool:
@@ -123,16 +149,23 @@ async def _probe_all(now: float | None = None) -> None:
         # (its cached health is left intact) so we don't ping-pong a known-bad peer.
         if now < _NEXT_DUE.get(name, 0.0):
             continue
+        previous = _HEALTH.get(name)
         try:
             d = adapter.parse(raw)
             res = await adapter.probe(d)
         except Exception as exc:  # noqa: BLE001 — a bad delegate shouldn't kill the loop
-            res = {"ok": False, "error": str(exc)[:200]}
+            res = {"ok": False, "error": (str(exc) or type(exc).__name__)[:200]}
         res["checked_at"] = now
+        _PROBES[name] = dict(res)
+        # A dispatch that completed while this probe awaited is newer evidence.
+        # Retain the probe for diagnostics without restoring its failed backoff.
+        if _HEALTH.get(name) is not previous:
+            continue
         _HEALTH[name] = res
         _record_result(name, bool(res.get("ok")), now)
     for stale in [n for n in _HEALTH if n not in seen]:
         _HEALTH.pop(stale, None)
+        _PROBES.pop(stale, None)
         _FAILURES.pop(stale, None)
         _SUCCESSES.pop(stale, None)
         _NEXT_DUE.pop(stale, None)

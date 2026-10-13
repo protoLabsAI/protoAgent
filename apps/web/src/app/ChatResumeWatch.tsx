@@ -27,7 +27,7 @@ import { originForSession } from "../chat/server-turn-store";
 // browser, so this event is the operator's only live view of them — and a crashed one used
 // to arrive as a normal bubble whose text just stopped mid-sentence, which reads as the
 // agent finishing rather than dying. The bubble is parked at status "error" (matching
-// ChatSurface's own `failed ? "error" : "done"`) with the server's reason appended, and the
+// ChatSessionSlot's own `failed ? "error" : "done"`) with the server's reason appended, and the
 // toast is toned to match. A crash before any text produces an error-only bubble — the
 // turn is visible either way.
 

@@ -14,6 +14,7 @@ that must hold *without* it (legacy ``.doc`` refusal, the zip guard, the broken-
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 import os
 import re
@@ -44,6 +45,8 @@ from ingestion import (
     extract_url,
 )
 from ingestion import engine
+
+pytestmark = pytest.mark.platform_sensitive
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 # The OLE2 compound-file signature every legacy binary .doc starts with.
@@ -172,6 +175,10 @@ def _worst_accepted_docx() -> bytes:
     return _package(_body(b"<w:p>" + filler + b"</w:p>" + text))
 
 
+# Building a bomb is the slow part (deflating 1 GiB of padding is ~2.5s; the payload
+# SIZE is the point, so it is not shrunk) and the same bomb feeds more than one test.
+# The bytes are immutable and deterministic: memoize, never rebuild.
+@functools.cache
 def _media_bomb_docx(pad_bytes: int) -> bytes:
     """A real document whose ``word/media/image1.png`` inflates to ``pad_bytes``. Media
     parts carry no text and are re-packed EMPTY, so this must cost nothing."""
@@ -189,6 +196,7 @@ def _media_bomb_docx(pad_bytes: int) -> bytes:
     return buf.getvalue()
 
 
+@functools.cache  # see _media_bomb_docx
 def _lying_size_docx(pad_bytes: int, method: int) -> bytes:
     """``word/document.xml`` inflates to ``len(_HELLO) + pad_bytes`` while its headers
     DECLARE only ``len(_HELLO)`` — with the CRC of that prefix, so zipfile's
@@ -448,7 +456,7 @@ def _peak_rss_growth_mb(data: bytes, tmp_path, *, repeats: int = 1) -> tuple[int
         """
     )
     # PYTHONPATH, not the inherited cwd: the child has to import THIS checkout's engine.
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
     done = subprocess.run(
         [sys.executable, "-c", program, str(path), str(repeats)],
         capture_output=True,
@@ -517,7 +525,7 @@ def _rss_after_extractions(data: bytes, tmp_path, *, repeats: int) -> int:
         print(resident_kb() // 1024)
         """
     )
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
     done = subprocess.run(
         [sys.executable, "-c", program, str(path), str(repeats)],
         capture_output=True,

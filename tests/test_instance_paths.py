@@ -13,6 +13,8 @@ import pytest
 
 import infra.paths as paths
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):

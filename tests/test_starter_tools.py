@@ -82,6 +82,40 @@ async def test_calculator_handles_syntax_error():
     assert result.startswith("Error:")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expression", ["2 ** 1000000000000", "2 ** -1000000000000", "999999999999999999 ** 4096"])
+async def test_calculator_refuses_expensive_power_before_calling_operator(monkeypatch, expression):
+    import ast
+
+    from tools import lg_tools
+
+    calls = []
+
+    def record_power(left, right):
+        calls.append((left, right))
+        return 0  # never evaluate an unbounded power even if the regression returns
+
+    monkeypatch.setitem(lg_tools._BIN_OPS, ast.Pow, record_power)
+    result = await lg_tools.calculator.ainvoke({"expression": expression})
+    assert result.startswith("Error:") and "limit" in result
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expression", [
+    "9" * 1400,  # large literal, before any operators
+    "(2 ** 2000) * (2 ** 2000) * (2 ** 2000)",  # oversized intermediate
+    "1+" * 300 + "1",  # too many AST nodes
+    "-" * 100 + "1",  # too much recursion even with few nodes
+    " " * 5000 + "1",  # parser input budget
+], ids=["literal", "intermediate", "node-count", "depth", "input-length"])
+async def test_calculator_bounds_input_and_intermediate_work(expression):
+    from tools.lg_tools import calculator
+
+    result = await calculator.ainvoke({"expression": expression})
+    assert result.startswith("Error:") and "limit" in result
+
+
 # ── current_time ─────────────────────────────────────────────────────────────
 
 
@@ -127,6 +161,53 @@ async def test_fetch_url_rejects_non_http_scheme():
     ):
         result = await fetch_url.ainvoke({"url": bad})
         assert result.startswith("Error:"), f"accepted unsafe url: {bad!r}"
+
+
+def _mock_httpx(monkeypatch, handler):
+    """Route fetch_url's AsyncClient through an in-process transport."""
+    import httpx
+
+    real = httpx.AsyncClient
+
+    class _Client(real):
+        def __init__(self, *a, **k):
+            k["transport"] = httpx.MockTransport(handler)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_reports_a_redirect_loop_instead_of_the_30x_body(monkeypatch):
+    """Past the hop cap the last response is still a redirect; its stub body used to
+    come back as the page's content under a `[302]` header."""
+    import httpx
+
+    from tools.lg_tools import fetch_url
+
+    def _loop(request):
+        n = int(request.url.params.get("n", "0"))
+        return httpx.Response(302, headers={"location": f"/r?n={n + 1}"}, text="Moved")
+
+    _mock_httpx(monkeypatch, _loop)
+    result = await fetch_url.ainvoke({"url": "https://example.com/r"})
+    assert result.startswith("Error: too many redirects"), result
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_follows_a_short_redirect_chain(monkeypatch):
+    import httpx
+
+    from tools.lg_tools import fetch_url
+
+    def _handler(request):
+        if request.url.path == "/final":
+            return httpx.Response(200, headers={"content-type": "text/plain"}, text="the page")
+        return httpx.Response(301, headers={"location": "/final"})
+
+    _mock_httpx(monkeypatch, _handler)
+    result = await fetch_url.ainvoke({"url": "https://example.com/start"})
+    assert result.startswith("[200]") and "the page" in result, result
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,6 +44,7 @@ def _tree(root: Path) -> set[str]:
     return {str(p.relative_to(root)) for p in root.rglob("*")} if root.exists() else set()
 
 
+@pytest.mark.platform_sensitive
 def test_a_hostile_spawner_env_cannot_reach_the_live_stores(tmp_path):
     """Export a live agent's instance env, run the suite's worst offenders, and check
     that not one byte landed in that agent's roots."""

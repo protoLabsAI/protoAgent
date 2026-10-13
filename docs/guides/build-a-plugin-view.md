@@ -1,0 +1,68 @@
+# Build a plugin view
+
+A plugin adds a console surface by **serving its own page** and declaring it in the manifest; the
+console renders it in a sandboxed **iframe**. You need a source checkout for the example files and a running agent. For the
+full view contract, see [Building a plugin view](/guides/building-react-plugin-views).
+
+## Copy the example
+
+[`examples/plugins/chat_example`](https://github.com/protoLabsAI/protoAgent/tree/main/examples/plugins/chat_example)
+is a single-page chat view. Run `protoagent config explain` (or
+`uv run python -m server config explain` in a checkout) to locate the instance's
+plugins directory. Copy the example into it:
+
+```bash
+cp -r examples/plugins/chat_example <instance_root>/plugins/
+```
+
+Open **Settings → Plugins → Installed** and enable **Chat panel (example)**. Save, then
+open the Chat surface to see the plugin's greeting and composer. The example
+claims the chat slot; a normal view adds a rail icon instead. If it does not load,
+check the plugin status, server log, and browser console for errors.
+
+## The four rules
+
+1. **Serve the path you declare** — the manifest's `views[].path` MUST equal a path your
+   `register_router` serves (default prefix `/plugins/<id>`; a custom prefix is fine, just keep them
+   in sync). A mismatch is a blank iframe.
+2. **Gate by default** — mount data routes under `prefix="/api/plugins/<id>"` so they inherit the
+   operator bearer gate. Use the ungated `/plugins/<id>` prefix only for genuinely public assets (the
+   page itself — an iframe page-load can't carry an `Authorization` header).
+3. **Same-origin, slug-aware, never hardcode** — derive `base = location.pathname.split("/plugins/")[0]`
+   and prefix every fetch/asset. Never hardcode `/api/.../`, `/plugins/.../`, or `http://localhost:PORT`
+   — it breaks the `/agents/<slug>/` fleet proxy and the same-origin token handshake.
+4. **Link the DS kit** — `<base>/_ds/plugin-kit.css` + `<base>/_ds/plugin-kit.js` instead of
+   hardcoding hex or a CDN. The kit's `--pl-*` tokens re-skin to the operator's live theme.
+
+## The kit helper API (`plugin-kit.js`)
+
+The console serves the design-system kit same-origin at `<base>/_ds/plugin-kit.{css,js}`.
+**`plugin-kit.js` is an ES module** — a classic `<script src>` throws
+`Unexpected token 'export'` and never runs it, so load it with a **dynamic `import()`**
+(the slug-aware URL can't be a static import specifier):
+
+| Helper | What it does |
+|---|---|
+| `initPluginView(onInit?)` | Listens for the `protoagent:init` handshake (bearer + theme) **and** live `protoagent:theme` re-themes, mapping the console theme onto the DS `--pl-*` tokens. Call once on load. |
+| `getToken()` | The captured operator bearer (null until the handshake delivers one). |
+| `apiFetch(input, init?)` | Same-origin `fetch` with `Authorization: Bearer <token>` attached when present, resolved slug-aware — pass a bare `/api/...`, no manual base. For every gated `/api/...` call. |
+
+```html
+<script type="module">
+  const base = location.pathname.split("/plugins/")[0];   // "" or "/agents/<slug>"
+  const kit = await import(base + "/_ds/plugin-kit.js");
+  kit.initPluginView();                                   // handshake + live re-theme, hands-free
+  const res = await kit.apiFetch("/api/plugins/mychart/data"); // slug-aware, no manual base
+</script>
+```
+
+If the kit import fails, **fail loudly** (render an error naming the kit) — do **not**
+substitute a bare `fetch`. The bearer arrives *through* the kit's `protoagent:init`
+handshake, so a tokenless fallback can only 401 your gated data routes, silently or with
+a message that blames auth instead of the missing `/_ds` bundle (#2392).
+
+## Next
+
+- **[Building a plugin view](/guides/building-react-plugin-views)** — the full guide: the `slot: "chat"`
+  panel (ADR 0045), the event-bus bridge (ADR 0039), the sandbox split (ADR 0026 D6), and references.
+- **[Plugins](/guides/plugins)** — the rest of the plugin contract (tools, subagents, config, MCP).

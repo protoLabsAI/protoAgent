@@ -47,11 +47,12 @@ test("copies a finished job's full result, tail included", async ({ page }) => {
 
   await page.goto("/app/", { waitUntil: "load" });
 
-  // Open the Background-agents panel from the utility-bar pill, then expand the row.
+  // Open the Background-agents panel from the utility-bar pill, then expand the row via
+  // its DS Accordion trigger (the row's only collapsed disclosure control).
   await page.getByRole("button", { name: /^Background agents/ }).click();
   const row = page.locator(".bg-jobs-row").first();
   await expect(row).toBeVisible();
-  await row.locator(".bg-jobs-rowmain").click();
+  await row.getByRole("button", { expanded: false }).click();
   await expect(row.locator(".bg-jobs-result")).toBeVisible();
 
   const copyBtn = row.getByRole("button", { name: "Copy result to clipboard" });
@@ -66,4 +67,41 @@ test("copies a finished job's full result, tail included", async ({ page }) => {
   expect(clip).toContain(TAIL_MARKER);
   expect(clip).toContain("Result line 1 of");
   expect(clip.length).toBeGreaterThan(2000); // > the 2000-char background.completed preview
+});
+
+// A job with nothing to show — no result and no tool feed — must not be expandable. The DS
+// AccordionItem is rendered `disabled`, so its trigger is inert (the old raw disclosure
+// button was likewise `disabled` when !canExpand). Guards the "no button-in-button" markup:
+// the only collapsed control in the row is the accordion trigger itself.
+test("a job with no result and no tools cannot be expanded", async ({ page }) => {
+  await page.route("**/api/background", (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        jobs: [
+          {
+            id: "bg-empty0001",
+            origin_session: "chat-not-open",
+            subagent_type: "delegate",
+            description: "finished with an empty reply",
+            status: "completed",
+            result: "",
+            created_at: "2026-08-01T10:00:00+00:00",
+            completed_at: "2026-08-01T10:04:00+00:00",
+          },
+        ],
+      },
+    }),
+  );
+
+  await page.goto("/app/", { waitUntil: "load" });
+  await page.getByRole("button", { name: /^Background agents/ }).click();
+
+  const row = page.locator(".bg-jobs-row").first();
+  await expect(row).toBeVisible();
+
+  // The accordion trigger is disabled → the row can't open, and no result panel exists.
+  const trigger = row.locator(".pl-accordion__trigger");
+  await expect(trigger).toBeDisabled();
+  await expect(row.locator(".bg-jobs-result")).toHaveCount(0);
 });

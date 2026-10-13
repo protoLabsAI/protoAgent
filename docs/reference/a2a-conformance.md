@@ -27,7 +27,7 @@ Exit codes: `0` all required checks passed · `1` a required check failed · `2`
 | `SubscribeToTask` | `tasks/resubscribe` | ✅ served | prober `lifecycle`; SDK active-task registry |
 | `ListTasks` | — | ✅ served | SDK `DefaultRequestHandler` |
 | `CreateTaskPushNotificationConfig` | `tasks/pushNotificationConfig/set` | ✅ served | prober `push` (opt-in) |
-| `GetTaskPushNotificationConfig` | `tasks/pushNotificationConfig/get` | ✅ served | `tests/test_a2a_push_store.py` |
+| `GetTaskPushNotificationConfig` | `tasks/pushNotificationConfig/get` | ✅ served | `tests/test_a2a_stores.py` (`ValidatingPushNotificationConfigStore`) |
 | `ListTaskPushNotificationConfigs` | `tasks/pushNotificationConfig/list` | ✅ served | prober `push` |
 | `DeleteTaskPushNotificationConfig` | `tasks/pushNotificationConfig/delete` | ✅ served | prober `push` |
 | `GetExtendedAgentCard` | `agent/getAuthenticatedExtendedCard` | ✅ served | SDK default |

@@ -147,7 +147,7 @@ export function WatchCreateDialog({
   // falls through to `watchFormPayload`'s core-type default.
   const { data: catalog } = useQuery({ ...verifiersQuery(), enabled: open });
   return (
-    <Dialog open={open} onClose={onClose} width="min(560px, 94vw)" className="watch-create-modal">
+    <Dialog open={open} onClose={onClose} width="min(560px, 94vw)" padding="roomy" className="watch-create-modal">
       <div data-testid="watch-create-dialog">
         <HitlForm
           payload={watchFormPayload(catalog)}

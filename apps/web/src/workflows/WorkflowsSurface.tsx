@@ -1,6 +1,6 @@
 import "./workflows.css";
 
-import { DropdownSelect, Input } from "@protolabsai/ui/forms";
+import { DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import {
   useMutation,
@@ -50,7 +50,7 @@ import { WorkflowBuilder } from "./WorkflowBuilder";
 // One paused run's card: recipe name, the parked step id, its RENDERED prompt (inputs +
 // prior outputs already substituted), and Approve / Edit / Reject. Edit swaps the prompt
 // for an inline textarea pre-filled with it; Save & run resumes with the edited text.
-function PendingGateCard({
+export function PendingGateCard({
   run,
   busy,
   onApprove,
@@ -75,7 +75,7 @@ function PendingGateCard({
       </div>
 
       {editing ? (
-        <textarea
+        <Textarea
           className="workflow-gate-edit"
           value={draft}
           rows={6}

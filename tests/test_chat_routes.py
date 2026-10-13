@@ -2,6 +2,8 @@
 
 import json
 import re
+import sqlite3
+import time
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -124,6 +126,26 @@ def test_openai_completion_reports_real_usage(monkeypatch):
     c = _client(monkeypatch, chat_reply=reply)
     body = c.post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "hi"}]}).json()
     assert body["usage"] == {"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20}
+
+
+def test_openai_completion_rejects_malformed_messages_with_an_openai_400(monkeypatch):
+    # #3929: no user message used to come back as a 200 `[{"error": …}, 400]` (a
+    # Flask-style tuple FastAPI serialised as-is); a non-list `messages` raised
+    # AttributeError → plain 500. Both are OpenAI-shaped 400s now, and no turn runs.
+    seen: dict = {}
+    c = _client(monkeypatch, seen=seen)
+    for payload in (
+        {"messages": [{"role": "system", "content": "be terse"}]},  # no user message
+        {"messages": []},
+        {"messages": "hi"},  # not a list
+        {"messages": {"role": "user", "content": "hi"}},
+        {"messages": ["hi"]},  # entries aren't objects
+    ):
+        resp = c.post("/v1/chat/completions", json=payload)
+        assert resp.status_code == 400, payload
+        err = resp.json()["error"]
+        assert err["type"] == "invalid_request_error" and err["param"] == "messages" and err["message"], payload
+    assert "origin" not in seen  # rejected before a turn was started
 
 
 def test_openai_completion_usage_defaults_to_zero(monkeypatch):
@@ -251,11 +273,234 @@ def test_delete_session_harvest_is_opt_in(monkeypatch):
     ]
 
 
-def test_delete_session_forget_is_opt_in_and_runs_before_retirement(monkeypatch):
-    """#3493: deleting a chat can forget what it already wrote to memory — only when
-    asked (`?forget=true`, the dialog's second switch), for this session's threads,
-    and BEFORE retirement, so a harvest ticked alongside it writes a summary that
-    survives rather than one the forget immediately removes."""
+def _uuid6(ts: float) -> str:
+    """A UUIDv6 checkpoint id dated ``ts`` (what LangGraph's sqlite saver writes)."""
+    import uuid
+
+    g = int((ts + 12219292800) * 1e7)
+    hex_ = f"{g >> 12:012x}6{g & 0xFFF:03x}"
+    return f"{hex_[:8]}-{hex_[8:12]}-{hex_[12:16]}-8000-{uuid.uuid4().hex[:12]}"
+
+
+def _forget_fixture(monkeypatch, tmp_path, *, retire=None):
+    """A real KnowledgeStore holding a chat's memory: an archive, a harvested summary and a
+    fact — plus another chat's fact that must never be touched. ``retire`` replaces the
+    retirement (default: a harvest that re-derives the SAME fact and a fresh summary, the
+    way ``harvest_thread`` does against whatever the store still shows)."""
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+    from graph.memory_facts import consolidate_and_store as _store_facts
+    from knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(tmp_path / "kb.db")
+    store.add_chunk("archived turns", domain="conversation", namespace="chat-archive:s1", source="a2a:s1")
+    store.add_chunk("old summary", domain="conversation", source="a2a:s1", source_type="harvest")
+    _store_facts(store, ["The user's favourite colour is teal."], source="a2a:s1")
+    _store_facts(store, ["The user lives in Lisbon."], source="a2a:other")
+    calls: list[tuple] = []
+
+    # A real checkpoint file: the chat's thread has history from before any delete began.
+    # Retirement deletes it; the route settles a failed retirement by checkpoint age.
+    from graph.checkpoint_prune import delete_thread
+
+    ck = str(tmp_path / "checkpoints.db")
+    conn = sqlite3.connect(ck)
+    conn.execute("CREATE TABLE checkpoints (thread_id TEXT, checkpoint_id TEXT)")
+    conn.execute("CREATE TABLE writes (thread_id TEXT)")
+    conn.execute("INSERT INTO checkpoints VALUES ('a2a:s1', ?)", (_uuid6(time.time() - 3600),))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(rs.STATE, "checkpoint_path", ck, raising=False)
+
+    retired: set[str] = set()
+
+    async def _harvesting_retire(thread_id, *, harvest=None, cascade=True):
+        calls.append((thread_id, harvest))
+        first = thread_id not in retired
+        retired.add(thread_id)  # its checkpoints are gone: a later harvest finds nothing
+        delete_thread(ck, thread_id, cascade=cascade)
+        if harvest and first:
+            store.add_chunk("fresh summary", domain="conversation", source=thread_id, source_type="harvest")
+            # Dedupes against what the store SHOWS — so it only writes the fact if the
+            # chat's own earlier copy is hidden (the #3957 review's lost-fact bug).
+            _store_facts(store, ["The user's favourite colour is teal."], source=thread_id)
+        return "chunk" if harvest else None
+
+    monkeypatch.setattr(cr, "_retire_thread", retire or _harvesting_retire)
+    c = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "thread_id_resolver", None, raising=False)
+    return c, store, calls
+
+
+def _contents(store):
+    return sorted(ch.content for ch in store.list_chunks(limit=500, include_invalidated=True))
+
+
+def test_delete_session_forget_is_opt_in(monkeypatch, tmp_path):
+    c, store, calls = _forget_fixture(monkeypatch, tmp_path)
+    before = _contents(store)
+
+    assert c.delete("/api/chat/sessions/s1").json() == {"deleted": True, "harvested": False, "forgotten": 0}
+    assert _contents(store) == before  # nothing forgotten unless asked
+
+
+def test_delete_session_forget_with_harvest_keeps_exactly_what_the_harvest_produced(monkeypatch, tmp_path):
+    """#3957 review: the harvest used to dedupe its facts against the chat's own older rows,
+    which the forget then deleted — so a re-derived fact vanished. Now the chat's rows are
+    hidden before retirement and deleted after it, and the harvest writes afresh."""
+    c, store, calls = _forget_fixture(monkeypatch, tmp_path)
+
+    body = c.delete("/api/chat/sessions/s1?forget=true&harvest=true").json()
+
+    assert body == {"deleted": True, "harvested": True, "forgotten": 3}
+    assert calls == [("a2a:s1", True), ("chat:s1", False)]
+    assert _contents(store) == sorted(["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."])
+    (fact,) = [ch for ch in store.list_chunks(limit=500) if "teal" in ch.content]
+    assert fact.source == "a2a:s1" and fact.invalidated_at is None
+
+
+def test_delete_session_retirement_failure_forgets_nothing(monkeypatch, tmp_path):
+    import pytest
+
+    async def _boom(thread_id, *, harvest=None, cascade=True):
+        raise OSError("checkpoint db locked")
+
+    c, store, _ = _forget_fixture(monkeypatch, tmp_path, retire=_boom)
+    visible = sorted(ch.content for ch in store.list_chunks(limit=500))
+
+    with pytest.raises(OSError, match="checkpoint db locked"):
+        c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+
+    assert sorted(ch.content for ch in store.list_chunks(limit=500)) == visible  # un-hidden, all of it
+
+
+def test_delete_session_forget_retry_keeps_the_first_attempts_harvest(monkeypatch, tmp_path):
+    """#3957 review: a forget that failed AFTER retirement was retried with a fresh cutoff
+    and deleted the summary the first attempt had harvested. A retry now finishes the
+    earlier attempt's forget and hides nothing new."""
+    import pytest
+
+    c, store, calls = _forget_fixture(monkeypatch, tmp_path)
+    real_finish = store.delete_forget_pending
+    state = {"fail": True}
+
+    def _flaky_finish(marker):
+        if state.pop("fail", False):
+            raise RuntimeError("store locked")
+        return real_finish(marker)
+
+    store.delete_forget_pending = _flaky_finish
+    with pytest.raises(RuntimeError, match="store locked"):
+        c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+    # The chat's old rows stay hidden meanwhile — out of recall, not yet gone.
+    assert "old summary" not in [ch.content for ch in store.list_chunks(limit=500)]
+
+    calls.clear()
+    body = c.delete("/api/chat/sessions/s1?forget=true&harvest=true").json()  # the retry
+
+    assert body["forgotten"] == 3
+    assert _contents(store) == sorted(["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."])
+
+
+def test_delete_session_forget_failure_fails_the_delete(monkeypatch, tmp_path):
+    """Phase 1 (hiding the chat's rows) failing must fail the delete cleanly: nothing is
+    retired and nothing is forgotten, so the console keeps the tab and the operator can
+    retry."""
+    import pytest
+
+    retired: list[str] = []
+
+    async def _fake_retire(thread_id, *, harvest=None, cascade=True):
+        retired.append(thread_id)
+
+    c, store, _ = _forget_fixture(monkeypatch, tmp_path, retire=_fake_retire)
+    before = sorted((ch.content, ch.invalidated_at) for ch in store.list_chunks(limit=500, include_invalidated=True))
+
+    def _locked(*_a, **_k):
+        raise RuntimeError("store locked")
+
+    store.mark_forget_pending = _locked
+    with pytest.raises(RuntimeError, match="store locked"):
+        c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+
+    assert retired == []
+    after = sorted((ch.content, ch.invalidated_at) for ch in store.list_chunks(limit=500, include_invalidated=True))
+    assert after == before
+
+
+def test_delete_session_double_failure_retry_keeps_the_harvest(monkeypatch, tmp_path):
+    """CodeRabbit (chat_routes): attempt 1 retires (and harvests) but its final delete
+    fails; the retry resumes the marker and its retirement fails too. A resumed marker
+    doesn't prove retirement is incomplete — restoring there let attempt 3 hide and delete
+    attempt 1's harvest. The route now restores only when a checkpoint predates the hide."""
+    import pytest
+
+    c, store, calls = _forget_fixture(monkeypatch, tmp_path)
+    import operator_api.chat_routes as cr
+
+    real_retire = cr._retire_thread
+    real_finish = store.delete_forget_pending
+    fail = {"finish": True, "retire": False}
+
+    def _flaky_finish(marker):
+        if fail.pop("finish", False):
+            raise RuntimeError("store locked")
+        return real_finish(marker)
+
+    async def _flaky_retire(thread_id, **kw):
+        if fail.get("retire"):
+            raise OSError("checkpoint db locked")
+        return await real_retire(thread_id, **kw)
+
+    store.delete_forget_pending = _flaky_finish
+    monkeypatch.setattr(cr, "_retire_thread", _flaky_retire)
+
+    with pytest.raises(RuntimeError, match="store locked"):  # attempt 1: finish fails
+        c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+    fail["retire"] = True
+    with pytest.raises(OSError, match="checkpoint db locked"):  # attempt 2: retirement fails
+        c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+    # Retirement HAD completed (attempt 1): the old rows stay hidden, not restored.
+    assert "old summary" not in [ch.content for ch in store.list_chunks(limit=500)]
+    fail["retire"] = False
+    c.delete("/api/chat/sessions/s1?forget=true&harvest=true")  # attempt 3
+
+    assert _contents(store) == sorted(["fresh summary", "The user's favourite colour is teal.", "The user lives in Lisbon."])
+
+
+def test_delete_session_resumed_marker_with_incomplete_retirement_still_restores(monkeypatch, tmp_path):
+    """The other half of the rule: a marker resumed by a retry whose retirement never got
+    as far as the checkpoints is restored — the chat is still there, so is its memory."""
+    import pytest
+
+    async def _boom(thread_id, *, harvest=None, cascade=True):
+        raise OSError("checkpoint db locked")
+
+    c, store, _ = _forget_fixture(monkeypatch, tmp_path, retire=_boom)
+    visible = sorted(ch.content for ch in store.list_chunks(limit=500))
+    real_restore = store.restore_forget_pending
+    state = {"fail": True}
+
+    def _flaky_restore(marker):
+        if state.pop("fail", False):
+            raise RuntimeError("store locked")
+        return real_restore(marker)
+
+    store.restore_forget_pending = _flaky_restore
+    with pytest.raises(OSError):  # attempt 1: retirement fails, and so does the restore
+        c.delete("/api/chat/sessions/s1?forget=true")
+    assert store.forget_pending_markers()  # the marker survived
+    with pytest.raises(OSError):  # attempt 2 resumes it; retirement fails again
+        c.delete("/api/chat/sessions/s1?forget=true")
+
+    assert sorted(ch.content for ch in store.list_chunks(limit=500)) == visible
+    assert store.forget_pending_markers() == {}
+
+
+def test_delete_session_forget_falls_back_to_one_step_for_a_plain_store(monkeypatch):
+    """A store that can't hide rows (a plugin backend) gets the one-step delete — after
+    retirement, so a failed retirement still forgets nothing."""
     import graph.conversation_harvest as ch
     import operator_api.chat_routes as cr
     import runtime.state as rs
@@ -263,58 +508,201 @@ def test_delete_session_forget_is_opt_in_and_runs_before_retirement(monkeypatch)
     order: list[tuple] = []
 
     async def _fake_retire(thread_id, *, harvest=None, cascade=True):
-        order.append(("retire", thread_id, harvest))
-        return "chunk-1" if harvest else None
-
-    store = object()
+        order.append(("retire", thread_id))
 
     def _fake_forget(knowledge_store, session_id, thread_ids):
-        order.append(("forget", knowledge_store is store, session_id, list(thread_ids)))
+        order.append(("forget", session_id, list(thread_ids)))
         return 5
 
     monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
     monkeypatch.setattr(ch, "forget_conversation_memory", _fake_forget)
     c = _client(monkeypatch)
-    monkeypatch.setattr(rs.STATE, "knowledge_store", store, raising=False)
+    monkeypatch.setattr(rs.STATE, "knowledge_store", object(), raising=False)
     monkeypatch.setattr(rs.STATE, "thread_id_resolver", None, raising=False)
 
-    assert c.delete("/api/chat/sessions/s1").json()["forgotten"] == 0
-    assert not [o for o in order if o[0] == "forget"]  # default: nothing forgotten
-
-    order.clear()
-    body = c.delete("/api/chat/sessions/s2?forget=true&harvest=true").json()
-    assert body == {"deleted": True, "harvested": True, "forgotten": 5}
-    assert order[0] == ("forget", True, "s2", ["a2a:s2", "chat:s2", "a2a:s2"])
-    assert order[1:] == [("retire", "a2a:s2", True), ("retire", "chat:s2", False)]
-
-    order.clear()  # clear-but-keep-tab takes the same opt-in
-    assert c.delete("/api/chat/sessions/s3?forget=true&retire=false").json()["forgotten"] == 5
-    assert order[0][:3] == ("forget", True, "s3")
+    assert c.delete("/api/chat/sessions/s2?forget=true").json()["forgotten"] == 5
+    # Thread ids deduped: the default resolver answers `a2a:s2` again.
+    assert order == [("retire", "a2a:s2"), ("retire", "chat:s2"), ("forget", "s2", ["a2a:s2", "chat:s2"])]
 
 
-def test_delete_session_forget_failure_fails_the_delete(monkeypatch):
-    """A forget that fails must not report success: the delete fails before anything is
-    retired, so the console keeps the tab and the operator can retry."""
-    import graph.conversation_harvest as ch
+def _seeded_task_engine(tmp_path, name, rows):
+    """A real SQLite A2A task store holding ``rows`` ({id, context_id, state, at})."""
+    import asyncio
+
+    from a2a.server.tasks.database_task_store import Base, TaskModel
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/{name}.db")
+
+    async def _seed():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            for row in rows:
+                await conn.execute(
+                    TaskModel.__table__.insert(),
+                    {
+                        "id": row["id"],
+                        "context_id": row["context_id"],
+                        "kind": "task",
+                        "status": {"state": row["state"]},
+                        "artifacts": [],
+                        "history": [],
+                        "last_updated": row["at"],
+                    },
+                )
+
+    asyncio.run(_seed())
+    return engine
+
+
+def _tombstoned_ids(engine) -> list[str]:
+    import asyncio
+
     import operator_api.chat_routes as cr
-    import pytest
+    from sqlalchemy import select
+
+    async def _read():
+        async with engine.begin() as conn:
+            table = await cr._ensure_chat_tombstones(conn)
+            return [r[0] for r in (await conn.execute(select(table.c.context_id))).fetchall()]
+
+    return asyncio.run(_read())
+
+
+def test_delete_session_retire_false_records_no_tombstone(monkeypatch, tmp_path):
+    """`retire=false` is clear-but-keep-tab: today's durable turns go, but NO tombstone is
+    written — the tab stays live, so its next turn must reappear in discovery. The default
+    (`retire=true`) is the one that records durable retirement."""
+    from datetime import datetime, timezone
+
+    import operator_api.chat_routes as cr
     import runtime.state as rs
 
-    retired: list[str] = []
+    at = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    engine = _seeded_task_engine(
+        tmp_path,
+        "retire-false",
+        [
+            {"id": "t-keep", "context_id": "chat-keep", "state": "TASK_STATE_COMPLETED", "at": at},
+            {"id": "t-gone", "context_id": "chat-gone", "state": "TASK_STATE_COMPLETED", "at": at},
+        ],
+    )
 
-    async def _fake_retire(thread_id, *, harvest=None, cascade=True):
-        retired.append(thread_id)
-
-    def _boom(*_a, **_k):
-        raise RuntimeError("store locked")
+    async def _fake_retire(_thread_id, *, harvest=False, cascade=True):
+        return None
 
     monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
-    monkeypatch.setattr(ch, "forget_conversation_memory", _boom)
-    c = _client(monkeypatch)
-    monkeypatch.setattr(rs.STATE, "knowledge_store", object(), raising=False)
-    with pytest.raises(RuntimeError, match="store locked"):
-        c.delete("/api/chat/sessions/s1?forget=true")
-    assert retired == []
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    assert client.delete("/api/chat/sessions/chat-keep?retire=false").json()["deleted"] is True
+    assert _tombstoned_ids(engine) == []  # cleared, NOT retired
+    assert client.get("/api/chat/sessions/chat-keep/turns").json()["turns"] == []  # history wiped
+
+    assert client.delete("/api/chat/sessions/chat-gone").json()["deleted"] is True
+    assert _tombstoned_ids(engine) == ["chat-gone"]  # the default does retire
+
+
+def test_session_summary_route_reports_known_unknown_and_deleted(monkeypatch, tmp_path):
+    """GET /api/chat/sessions/{id} (the Zed shim's busy poll): a known session reports its
+    turn count, newest update and newest state; an unknown id and a tombstoned one are 404
+    ``not_found``; a turn running on a session with no stored rows yet still reports it,
+    ``active: true``."""
+    from datetime import datetime, timezone
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+    from runtime import turn_activity
+
+    early = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    late = datetime(2026, 9, 1, 12, 5, tzinfo=timezone.utc)
+    engine = _seeded_task_engine(
+        tmp_path,
+        "summary",
+        [
+            {"id": "t1", "context_id": "chat-sum", "state": "TASK_STATE_COMPLETED", "at": early},
+            {"id": "t2", "context_id": "chat-sum", "state": "TASK_STATE_INPUT_REQUIRED", "at": late},
+            {"id": "t3", "context_id": "chat-del", "state": "TASK_STATE_COMPLETED", "at": early},
+        ],
+    )
+
+    async def _fake_retire(_thread_id, *, harvest=False, cascade=True):
+        return None
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    body = client.get("/api/chat/sessions/chat-sum").json()
+    assert body["session_id"] == "chat-sum"
+    assert body["active"] is False
+    assert body["turn_count"] == 2
+    assert body["last_state"] == "TASK_STATE_INPUT_REQUIRED"  # the NEWEST turn's state
+    assert body["last_updated"].startswith("2026-09-01T12:05")
+
+    missing = client.get("/api/chat/sessions/chat-never")
+    assert missing.status_code == 404 and missing.json()["detail"]["code"] == "not_found"
+
+    assert client.delete("/api/chat/sessions/chat-del").json()["deleted"] is True
+    gone = client.get("/api/chat/sessions/chat-del")
+    assert gone.status_code == 404 and gone.json()["detail"]["code"] == "not_found"
+
+    turn_activity.begin("chat-running")
+    try:
+        running = client.get("/api/chat/sessions/chat-running").json()
+    finally:
+        turn_activity.end("chat-running")
+    assert running["active"] is True and running["turn_count"] == 0
+
+
+def test_session_routes_emit_zoned_utc_timestamps(monkeypatch, tmp_path):
+    """#4145: the task store keeps ``last_updated`` as a NAIVE UTC datetime; every chat
+    session/turn route must send it with its zone, or a browser reads it as local time (an
+    operator at UTC-7 saw 11:11 PM as 6:11 AM). The index, the parked index, the summary and
+    the turns all agree on the same zoned instant."""
+    from datetime import datetime, timezone
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+
+    naive_utc = datetime(2026, 10, 10, 6, 11, 4)  # the SDK's spelling: UTC, no tzinfo
+    engine = _seeded_task_engine(
+        tmp_path,
+        "zoned",
+        [{"id": "t1", "context_id": "chat-tz", "state": "TASK_STATE_INPUT_REQUIRED", "at": naive_utc}],
+    )
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+
+    stamps = [
+        client.get("/api/chat/sessions").json()["sessions"][0]["last_updated"],
+        client.get("/api/chat/sessions?parked=true").json()["sessions"][0]["last_updated"],
+        client.get("/api/chat/sessions/chat-tz").json()["last_updated"],
+        client.get("/api/chat/sessions/chat-tz/turns").json()["turns"][0]["last_updated"],
+    ]
+    assert stamps == ["2026-10-10T06:11:04+00:00"] * 4
+    for stamp in stamps:
+        assert datetime.fromisoformat(stamp) == naive_utc.replace(tzinfo=timezone.utc)
+
+    # The helper: naive is UTC, an aware value is converted, a stored string is normalized.
+    assert cr._utc_iso(None) is None
+    assert cr._utc_iso(naive_utc) == "2026-10-10T06:11:04+00:00"
+    assert cr._utc_iso(datetime.fromisoformat("2026-10-09T23:11:04-07:00")) == "2026-10-10T06:11:04+00:00"
+    assert cr._utc_iso("2026-10-10 06:11:04") == "2026-10-10T06:11:04+00:00"
+
+
+def test_session_summary_route_without_a_task_store_reports_known(monkeypatch):
+    import runtime.state as rs
+
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    assert client.get("/api/chat/sessions/chat-x").json() == {
+        "session_id": "chat-x",
+        "active": False,
+        "turn_count": None,
+        "last_updated": None,
+        "last_state": None,
+    }
 
 
 def test_delete_session_purges_prompt_snapshots(monkeypatch):
@@ -532,7 +920,7 @@ def test_steer_enqueue_then_cancel_roundtrip(monkeypatch):
     # cancels a still-queued message, and a second DELETE reports too-late.
     from graph import steering
 
-    steering._QUEUES.clear()
+    steering._reset()
     c = _client(monkeypatch)
     posted = c.post("/api/chat/sessions/s1/steer", json={"id": "m1", "text": "do X instead"}).json()
     assert posted == {"ok": True, "id": "m1", "pending": 1}
@@ -545,7 +933,7 @@ def test_steer_enqueue_then_cancel_roundtrip(monkeypatch):
     assert c.delete("/api/chat/sessions/s1/steer/m1").json() == {"removed": True, "pending": 0}
     # ✕ again (or after it's drained) → too late, nothing removed.
     assert c.delete("/api/chat/sessions/s1/steer/m1").json() == {"removed": False, "pending": 0}
-    steering._QUEUES.clear()
+    steering._reset()
 
 
 def test_steer_read_reports_what_a_turn_folded_in(monkeypatch):
@@ -556,8 +944,7 @@ def test_steer_read_reports_what_a_turn_folded_in(monkeypatch):
     from graph import steering
     from graph.middleware.steering import SteeringMiddleware
 
-    steering._QUEUES.clear()
-    steering._DRAINED.clear()
+    steering._reset()
     c = _client(monkeypatch)
     try:
         c.post("/api/chat/sessions/s1/steer", json={"id": "m1", "text": "yes 2024 as proposed"})
@@ -569,8 +956,7 @@ def test_steer_read_reports_what_a_turn_folded_in(monkeypatch):
         read = c.get("/api/chat/sessions/s1/steer").json()
         assert read["pending"] == [] and read["drained"] == ["m1"]
     finally:
-        steering._QUEUES.clear()
-        steering._DRAINED.clear()
+        steering._reset()
 
 
 def test_server_turn_interject_is_task_scoped_and_noops_when_stale(monkeypatch):
@@ -578,14 +964,14 @@ def test_server_turn_interject_is_task_scoped_and_noops_when_stale(monkeypatch):
 
     from graph import steering
 
-    chat_mod = importlib.import_module("server.chat")
-    steering._QUEUES.clear()
-    chat_mod._LIVE_SERVER_TURNS.clear()
-    chat_mod._ATTENDED_SESSIONS.clear()
+    turn_control = importlib.import_module("server.turn_control")
+    steering._reset()
+    turn_control._LIVE_SERVER_TURNS.clear()
+    turn_control._ATTENDED_SESSIONS.clear()
     c = _client(monkeypatch)
-    chat_mod.mark_session_attended("s1")
+    turn_control.mark_session_attended("s1")
     try:
-        chat_mod.register_live_server_turn("s1", "task-1", origin="scheduler", trigger="job-1")
+        turn_control.register_live_server_turn("s1", "task-1", origin="scheduler", trigger="job-1")
         posted = c.post(
             "/api/chat/sessions/s1/server-turns/task-1/interject",
             json={"id": "m1", "text": "change course"},
@@ -606,16 +992,16 @@ def test_server_turn_interject_is_task_scoped_and_noops_when_stale(monkeypatch):
         assert wrong == {"ok": False, "reason": "not_live", "pending": 0}
         assert steering.pending("s2") == 0
 
-        chat_mod.finish_live_server_turn("s1", "task-1")
+        turn_control.finish_live_server_turn("s1", "task-1")
         stale = c.post(
             "/api/chat/sessions/s1/server-turns/task-1/interject",
             json={"id": "m3", "text": "too late"},
         ).json()
         assert stale == {"ok": False, "reason": "not_live", "pending": 0}
     finally:
-        steering._QUEUES.clear()
-        chat_mod._LIVE_SERVER_TURNS.clear()
-        chat_mod._ATTENDED_SESSIONS.clear()
+        steering._reset()
+        turn_control._LIVE_SERVER_TURNS.clear()
+        turn_control._ATTENDED_SESSIONS.clear()
 
 
 def test_delegation_list_and_cancel_roundtrip(monkeypatch):
@@ -919,6 +1305,33 @@ def test_aside_session_route(monkeypatch):
     assert body["found"] is True and body["answer"] == "42"
 
 
+def test_aside_session_route_reports_a_model_error_structurally(monkeypatch):
+    # #3929: a provider error inside the side turn used to escape as a plain-text 500.
+    # It is now the endpoint's own {found, answer, reason, message} shape at 502 — the
+    # REAL aside_session + run_aside run here; only the graph's model call fails.
+    import runtime.state as rs
+
+    class _Snap:
+        values = {"messages": []}
+
+    class _FailingGraph:
+        async def aget_state(self, config):
+            return _Snap()
+
+        async def ainvoke(self, graph_input, config):
+            raise RuntimeError("Error code: 429 - rate limited")
+
+    c = _client(monkeypatch, graph=_FailingGraph())
+    monkeypatch.setattr(rs.STATE, "checkpointer", object(), raising=False)
+    monkeypatch.setattr(rs.STATE, "checkpoint_path", None, raising=False)
+    resp = c.post("/api/chat/sessions/s1/aside", json={"question": "what did we decide?"})
+    assert resp.status_code == 502
+    body = resp.json()
+    assert body["found"] is False and body["answer"] == "" and body["reason"] == "model_error"
+    assert "rate limited" in body["message"]
+    assert body["detail"] == body["message"]  # the console's generic error parser reads `detail`
+
+
 def test_fork_session_route(monkeypatch):
     # Thin pass-through to server.chat.fork_session (#2803) — forwards the path
     # session_id, the new_session_id, and the rewind-shaped target spec.
@@ -1008,7 +1421,7 @@ def test_session_index_is_bounded_recent_and_grouped(monkeypatch, tmp_path):
         "sessions": [
             {
                 "session_id": "chat-a",
-                "last_updated": "2026-08-19T12:03:00",
+                "last_updated": "2026-08-19T12:03:00+00:00",
                 "turn_count": 2,
             }
         ]
@@ -1043,6 +1456,73 @@ def test_session_index_breaks_equal_timestamps_by_context_id(monkeypatch, tmp_pa
     monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
     rows = _client(monkeypatch).get("/api/chat/sessions?limit=2").json()["sessions"]
     assert [row["session_id"] for row in rows] == ["chat-b", "chat-a"]
+
+
+def test_session_index_parked_lists_sessions_whose_newest_turn_waits(monkeypatch, tmp_path):
+    """``?parked=true`` (#3957): only console sessions whose NEWEST turn is parked on the
+    operator, newest first, each with ``last_state`` — however old, so a fresh browser can
+    pin them past the newest-N index. A context whose parked row is not its newest turn
+    (a pause moved on, or an orphan a later turn ran past), a non-console context and a
+    deleted session are left out; ``limit`` bounds the list."""
+    from datetime import datetime, timedelta, timezone
+
+    import operator_api.chat_routes as cr
+    import runtime.state as rs
+
+    t0 = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+    at = lambda minutes: t0 + timedelta(minutes=minutes)  # noqa: E731
+    rows = [
+        # Parked long ago, then 60 newer sessions bury it under the newest-N index.
+        {"id": "old-1", "context_id": "chat-old-parked", "state": "TASK_STATE_COMPLETED", "at": at(0)},
+        {"id": "old-2", "context_id": "chat-old-parked", "state": "TASK_STATE_INPUT_REQUIRED", "at": at(1)},
+        {"id": "auth-1", "context_id": "chat-auth", "state": "TASK_STATE_AUTH_REQUIRED", "at": at(2)},
+        # A parked row a newer turn ran past: the session is not parked.
+        {"id": "past-1", "context_id": "chat-ran-past", "state": "TASK_STATE_INPUT_REQUIRED", "at": at(3)},
+        {"id": "past-2", "context_id": "chat-ran-past", "state": "TASK_STATE_COMPLETED", "at": at(4)},
+        {"id": "act-1", "context_id": "activity:scheduler", "state": "TASK_STATE_INPUT_REQUIRED", "at": at(5)},
+        {"id": "del-1", "context_id": "chat-deleted", "state": "TASK_STATE_INPUT_REQUIRED", "at": at(6)},
+    ] + [
+        {"id": f"bulk-{i}", "context_id": f"chat-bulk-{i:02d}", "state": "TASK_STATE_COMPLETED", "at": at(10 + i)}
+        for i in range(60)
+    ]
+    engine = _seeded_task_engine(tmp_path, "parked-index", rows)
+
+    async def _fake_retire(_thread_id, *, harvest=False, cascade=True):
+        return None
+
+    monkeypatch.setattr(cr, "_retire_thread", _fake_retire)
+    client = _client(monkeypatch)
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", engine, raising=False)
+    assert client.delete("/api/chat/sessions/chat-deleted").json()["deleted"] is True
+
+    newest = client.get("/api/chat/sessions?limit=50").json()["sessions"]
+    assert "chat-old-parked" not in {row["session_id"] for row in newest}  # the bug's premise
+
+    body = client.get("/api/chat/sessions?limit=50&parked=true").json()
+    assert body["sessions"] == [
+        {
+            "session_id": "chat-auth",
+            "last_updated": "2026-09-01T12:02:00+00:00",
+            "turn_count": 1,
+            "last_state": "TASK_STATE_AUTH_REQUIRED",
+        },
+        {
+            "session_id": "chat-old-parked",
+            "last_updated": "2026-09-01T12:01:00+00:00",
+            "turn_count": 2,
+            "last_state": "TASK_STATE_INPUT_REQUIRED",
+        },
+    ]
+    capped = client.get("/api/chat/sessions?limit=1&parked=true").json()["sessions"]
+    assert [row["session_id"] for row in capped] == ["chat-auth"]
+
+
+def test_session_index_parked_degrades_without_a_store(monkeypatch):
+    import runtime.state as rs
+
+    monkeypatch.setattr(rs.STATE, "a2a_task_engine", None, raising=False)
+    body = _client(monkeypatch).get("/api/chat/sessions?parked=true").json()
+    assert body["sessions"] == [] and "not initialized" in body["reason"]
 
 
 def test_session_index_degrades_without_a_store(monkeypatch):
@@ -1081,10 +1561,12 @@ def test_session_turns_reads_the_task_store(monkeypatch, tmp_path):
 
             await conn.execute(
                 TaskModel.__table__.insert(),
+                # Inserted in CREATION order, as the SDK store writes them (a task row is
+                # inserted once, when the task starts) — the route orders by that (#3963).
                 [
+                    row("t-1", 1, "TASK_STATE_COMPLETED", "first answer", history=[{"role": "ROLE_AGENT", "parts": []}]),
                     row("t-2", 5, "TASK_STATE_COMPLETED", "second answer"),
                     row("t-3", 5, "TASK_STATE_WORKING", "latest partial"),
-                    row("t-1", 1, "TASK_STATE_COMPLETED", "first answer", history=[{"role": "ROLE_AGENT", "parts": []}]),
                     {  # a different session must not leak in
                         "id": "t-x",
                         "context_id": "sess-OTHER",
@@ -1105,8 +1587,9 @@ def test_session_turns_reads_the_task_store(monkeypatch, tmp_path):
     c = _client(monkeypatch)
     body = c.get("/api/chat/sessions/sess-1/turns?limit=2").json()
     # The bounded tail includes the newest/nonterminal task, then returns it in
-    # chronology. Equal timestamps break by task id deterministically.
+    # chronology (creation order), and names the turn still in flight.
     assert [t["task_id"] for t in body["turns"]] == ["t-2", "t-3"]
+    assert body["live_task_id"] == "t-3"
     assert body["turns"][0]["text"] == "second answer"
     assert body["turns"][1]["state"] == "TASK_STATE_WORKING"
     assert all(t["task_id"] != "t-x" for t in body["turns"])
@@ -1255,3 +1738,59 @@ def test_v1_completions_tags_its_turns_with_an_origin(monkeypatch):
     c = _client(monkeypatch, seen=seen)
     c.post("/v1/chat/completions", json={"model": "protoagent", "messages": [{"role": "user", "content": "hi"}]})
     assert seen["origin"] == "v1"
+
+
+async def test_concurrent_deletes_of_one_chat_run_one_at_a_time(monkeypatch):
+    """A slow delete (harvest runs a model call) invited a retry, and two retirements of one
+    thread raced for the checkpoint DB write lock: one failed "database is locked". Deletes of
+    the same chat now queue; a different chat is not held up; the lock map empties after."""
+    import asyncio
+
+    import httpx
+
+    import operator_api.chat_routes as cr
+
+    active: dict[str, int] = {}
+    peak: dict[str, int] = {}
+    order: list[str] = []
+
+    async def _slow_retire(thread_id, *, harvest=None, cascade=True):
+        sid = thread_id.split(":", 1)[1]
+        active[sid] = active.get(sid, 0) + 1
+        peak[sid] = max(peak.get(sid, 0), active[sid])
+        order.append(thread_id)
+        await asyncio.sleep(0.05)
+        active[sid] -= 1
+        return None
+
+    monkeypatch.setattr(cr, "_retire_thread", _slow_retire)
+    app = _client(monkeypatch).app
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as ac:
+        rs = await asyncio.gather(
+            ac.delete("/api/chat/sessions/s1?harvest=true"),
+            ac.delete("/api/chat/sessions/s1?harvest=false"),
+            ac.delete("/api/chat/sessions/s2"),
+        )
+    assert [r.status_code for r in rs] == [200, 200, 200]
+    assert peak == {"s1": 1, "s2": 1}  # never two retirements of the same chat at once
+    first_s1 = order.index("a2a:s1")
+    assert order[first_s1 + 1 :].index("chat:s1") < order[first_s1 + 1 :].index("a2a:s1")  # sequential
+    assert cr._DELETE_LOCKS == {}
+
+
+async def test_a_queued_delete_cancelled_while_waiting_leaves_no_lock_behind(monkeypatch):
+    import asyncio
+
+    import operator_api.chat_routes as cr
+
+    async with cr._delete_lock("s1"):
+        waiter = asyncio.create_task(cr._delete_lock("s1").__aenter__())
+        await asyncio.sleep(0)
+        assert cr._DELETE_LOCKS["s1"][1] == 2
+        waiter.cancel()
+        try:
+            await waiter
+        except asyncio.CancelledError:
+            pass
+        assert cr._DELETE_LOCKS["s1"][1] == 1
+    assert cr._DELETE_LOCKS == {}

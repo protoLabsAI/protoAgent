@@ -62,6 +62,20 @@ Replace per-turn retrieval with **progressive disclosure**:
    index" (relabelled in Settings). `skills.announce` (the chip toggle) and the unused
    `skills.max_tokens` knob are removed.
 
+5. **Missing tools are flagged in the index (amendment).** A skill's frontmatter
+   `tools:` (advisory, already stored as `tools_used`) now rides along in
+   `skill_summaries()`. When the agent's bound tool names are known — the native graph
+   passes its assembled tool surface (the same set stamped as `graph.bound_tools`) to
+   `KnowledgeMiddleware`, which sets `ProjectionOptions.bound_tool_names` — a row whose
+   declared tools aren't all bound carries `missing_tools="a,b"` (declared order,
+   capped at 5 names + `+N more`), on full and name-only rows alike, and the block gains
+   one comment explaining the attribute. The skill is **never hidden**: a partly-usable
+   procedure can still be the right one, and a missing tool may be reachable another way
+   (a subagent via `task()`). With no bound set (an external runtime, a test) no absence
+   claim is made — the same conservative rule `load_skill`'s "Unavailable in this
+   context" note follows, so the model now sees the gap *before* loading rather than
+   partway through the procedure.
+
 `user_only` skills remain withheld from the index (`skill_summaries`) but resolvable by
 `get_skill`, so a `/slash` invocation still loads one. The **external-brain feed**
 (`runtime/context.py`, the ACP operator-MCP bridge) lists the same index and exposes

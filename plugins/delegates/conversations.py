@@ -245,7 +245,7 @@ def forget_one(conversation_key: str, delegate: str, url: str, credential: str =
 
     * **The peer PARKED** on a HITL interrupt (``input_required``). Its thread now holds a
       pending interrupt, and a protoAgent peer holds a *fresh* message on such a thread in
-      its steering queue and re-yields the same interrupt (``server.chat._hold_if_hitl_pending``
+      its steering queue and re-yields the same interrupt (``server.turn_control._hold_if_hitl_pending``
       — origin ``a2a`` is deliberately not autonomous). So a later ``@member`` sent into
       that context is never answered: it parks a second task with the identical question,
       and the round after that a third. Only the lead's ``delegate_to(..., resume_task_id=…)``
@@ -316,6 +316,43 @@ def forget_pending(conversation_key: str, delegate: str, url: str, credential: s
             return False
         del _PENDING[key]
         return True
+
+
+def _task_slots(delegate: str, url: str, task_id: str, credential: str) -> list[tuple[str, str, str, str]]:
+    """Every pending key, in ANY conversation, that names this participant's ``task_id``.
+    Caller holds ``_LOCK``."""
+    digest = _digest(credential)
+    return [
+        key
+        for key, pending in _PENDING.items()
+        if key[1:] == (str(delegate or ""), str(url or ""), digest) and pending.task_id == str(task_id)
+    ]
+
+
+def pending_task_held(delegate: str, url: str, task_id: str, credential: str = "") -> bool:
+    """Whether some conversation still holds ``task_id`` pending for this participant — i.e.
+    a room collection may still be polling it (#3775)."""
+    if not task_id:
+        return False
+    with _LOCK:
+        return bool(_task_slots(delegate, url, task_id, credential))
+
+
+def forget_pending_task(delegate: str, url: str, task_id: str, credential: str = "") -> int:
+    """Drop every pending slot naming ``task_id`` for this participant; returns how many.
+
+    For a lead that collected the task ITSELF (``delegate_to(..., resume_task_id=…)``,
+    #3775): the room's ``late.collect`` re-checks its handle before and after every poll and
+    withdraws once it is gone, so the same outcome is not delivered a second time. A slot a
+    newer address re-filled with a different task is left alone.
+    """
+    if not task_id:
+        return 0
+    with _LOCK:
+        keys = _task_slots(delegate, url, task_id, credential)
+        for key in keys:
+            del _PENDING[key]
+        return len(keys)
 
 
 def forget(conversation_key: str) -> int:

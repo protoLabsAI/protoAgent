@@ -76,6 +76,44 @@ def test_schema_groups_and_values():
     assert next(f for f in FIELDS if f.key == "agent_runtime").ui_hidden is True
 
 
+def test_inflight_limiter_fields_surfaced_in_model_runtime():
+    """ADR 0115 D2 (#3760): the three limiter knobs render in Settings ▸ Model & runtime,
+    agent-scoped, hot-reloaded, minimum=0, with descriptions stating the per-process scope
+    and that the queue bound is separate from `request_timeout`."""
+    groups = build_schema(LangGraphConfig())
+    by_key = {f["key"]: f for g in groups for f in g["fields"]}
+
+    for key, attr in (
+        ("model.max_inflight", "llm_max_inflight"),
+        ("model.inflight_queue_timeout", "llm_inflight_queue_timeout"),
+        ("model.inflight_interactive_reserve", "llm_inflight_interactive_reserve"),
+    ):
+        f = by_key.get(key)
+        assert f is not None, f"{key} must render in the settings UI"
+        assert f["type"] == "number"
+        assert f["section"] == "Model & runtime"
+        assert f["scope"] == "agent"  # per-process budget, NOT box-wide (ADR 0115 D2)
+        assert f["restart"] is False  # hot-reloadable
+        schema_field = next(sf for sf in FIELDS if sf.key == key)
+        assert schema_field.attr == attr
+        assert schema_field.minimum == 0
+
+    # Defaults mirror the dataclass (off / 300 s / 1 reserved).
+    assert by_key["model.max_inflight"]["default"] == 0
+    assert by_key["model.inflight_queue_timeout"]["default"] == 300.0
+    assert by_key["model.inflight_interactive_reserve"]["default"] == 1
+
+    # The descriptions carry the two contract points the ADR requires operators to see.
+    assert "per-process" in by_key["model.max_inflight"]["description"].lower()
+    assert "request_timeout" in by_key["model.inflight_queue_timeout"]["description"]
+
+    # 0 is a valid value on each (limiter off / no wait / no reserve); negatives are not.
+    assert validate_flat({"model.max_inflight": 0})[0] is True
+    assert validate_flat({"model.max_inflight": -1})[0] is False
+    assert validate_flat({"model.inflight_queue_timeout": 0})[0] is True
+    assert validate_flat({"model.inflight_interactive_reserve": -1})[0] is False
+
+
 def test_fleet_autostart_row_toggle_schema_contract():
     """The Fleet rows resolve this exact host-scoped list from /api/settings/schema."""
     fields = {
@@ -358,3 +396,47 @@ def test_persona_and_media_are_not_swept_into_plugins():
     assert _category_for("Media") == "Plugins"  # interim (no Capabilities panel yet) — but EXPLICIT
     # A genuinely unknown (plugin) section still gets the Integrations default.
     assert _category_for("Discord") == "Plugins"
+
+
+# ── `multiple: true` on a `path` field — the list-of-folders control ──────────
+
+
+def test_core_path_field_emits_multiple(monkeypatch):
+    """A core `path` Field with `multiple=True` emits `multiple: true` so the console
+    renders one row per folder; every other field emits `false` (the key is always
+    present, like `path_kind`, so the client never needs a type check)."""
+    from graph.settings_schema import Field
+
+    many = Field("demo.dirs", "project_dir", "Dirs", "path", "Demo", multiple=True)
+    one = Field("demo.dir", "project_dir", "Dir", "path", "Demo")
+    # `multiple` is a path-only hint — a stray flag on another type is not emitted as true.
+    stray = Field("demo.name", "project_dir", "Name", "string", "Demo", multiple=True)
+    monkeypatch.setattr("graph.settings_schema.FIELDS", [many, one, stray])
+    entries = {e["key"]: e for g in build_schema(LangGraphConfig()) for e in g["fields"]}
+    assert entries["demo.dirs"]["multiple"] is True
+    assert entries["demo.dir"]["multiple"] is False
+    assert entries["demo.name"]["multiple"] is False
+
+
+def test_plugin_path_setting_emits_multiple_and_saves_a_newline_joined_string(monkeypatch):
+    """A plugin manifest `path` setting with `multiple: true` emits it (only a literal
+    true counts, and only on `path`); the stored value stays ONE string — the rows joined
+    with "\\n" — and validation still accepts exactly that, refusing a raw list."""
+    _fake_plugin_specs(
+        monkeypatch,
+        [
+            {"key": "data_dirs", "label": "Data folders", "type": "path", "path_kind": "dir", "multiple": True},
+            {"key": "one_dir", "label": "One", "type": "path"},
+            {"key": "truthy", "label": "Truthy", "type": "path", "multiple": "yes"},
+            {"key": "label", "label": "Label", "type": "string", "multiple": True},
+        ],
+    )
+    fields = {f["key"]: f for g in build_schema(LangGraphConfig()) for f in g["fields"]}
+    assert fields["artifact.data_dirs"]["multiple"] is True
+    assert fields["artifact.data_dirs"]["path_kind"] == "dir"
+    assert fields["artifact.one_dir"]["multiple"] is False
+    assert fields["artifact.truthy"]["multiple"] is False
+    assert fields["artifact.label"]["multiple"] is False
+    assert validate_flat({"artifact.data_dirs": "/srv/a\n/srv/b"}) == (True, None)
+    ok, msg = validate_flat({"artifact.data_dirs": ["/srv/a", "/srv/b"]})
+    assert ok is False and "string path" in (msg or "")

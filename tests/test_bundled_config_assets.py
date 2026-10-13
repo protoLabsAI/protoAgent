@@ -252,6 +252,71 @@ def test_design_system_archetype_row() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
+# The `# Personality` block is a golden: the persona refresh must leave it byte-identical.
+_DESIGN_SYSTEM_PERSONALITY = (
+    "# Personality\n"
+    "\n"
+    "- **Precise** — I cite the token, the component, the WCAG criterion; evidence over\n"
+    "  taste.\n"
+    "- **Consistent** — the system's coherence outranks any single clever screen.\n"
+    '- **Calibrated** — I say "the system doesn\'t cover this yet" rather than invent a\n'
+    "  one-off.\n"
+    "- **Accountable** — I never call something shipped that hasn't merged, and I never\n"
+    "  call something accessible that I haven't checked.\n"
+)
+
+
+def test_design_system_preset_is_pure_persona() -> None:
+    """The shipped Design System Engineer persona preset stays a PURE PERSONA (ADR 0079):
+    first-person capabilities and values only — no tool names, config keys, procedures, or
+    org-specific repo/package/agent/model names. It keeps its three top-level sections in
+    order, stays within budget, preserves `# Personality` verbatim, and advertises the
+    archetype's current reach (adherence audits, pattern breakdown, brand theming) and its
+    two-board operating model."""
+    preset = CONFIG / "soul-presets" / "design-system.md"
+    text = preset.read_text()
+    lines = text.splitlines()
+
+    # Budget: roughly the original size, never more than 60 lines total.
+    assert len(lines) <= 60, f"preset grew to {len(lines)} lines; keep it <= 60"
+
+    # Exactly the three top-level headings, in order.
+    headings = [ln for ln in lines if ln.startswith("# ")]
+    assert headings == ["# Identity", "# How I work", "# Personality"], headings
+
+    lower = text.lower()
+
+    # Capabilities: audit a codebase AND a live URL for adherence, returning a score with
+    # findings split into system gaps vs consumer fixes; decompose a rendered site into
+    # repeated patterns (covered / needs a variant / missing component); and generate a
+    # dark + light brand theme against the live token contract, every pair contrast-checked.
+    for needle in ("audit", "codebase", "url", "score", "variant", "missing",
+                   "theme", "contrast", "dark", "light", "token contract"):
+        assert needle in lower, f"capabilities description is missing {needle!r}"
+
+    # Two-board model: brief the consuming app's PM (title beside its number, file:line
+    # evidence, replacement token/component, acceptance criteria) instead of editing the
+    # app; a consumer change waits on a *published* version, verified merged AND published.
+    for needle in ("board", "brief", "published", "merged", "acceptance criteria"):
+        assert needle in lower, f"two-board model is missing {needle!r}"
+
+    # Every existing principle survives the refresh.
+    for needle in ("read before i write", "the tokens are law", "one concern per pr",
+                   "humans do", "accessibility is a requirement", "findings, not flags"):
+        assert needle in lower, f"an existing principle was dropped: {needle!r}"
+
+    # Pure persona / generic: no tool syntax, config keys, or org-specific names leak in.
+    banned = ("protoagent", "protocontent", "protolabs", "@protolabsai", "designsystem",
+              "claude", "anthropic", "opus", "sonnet", "python -m", "```", "slash command")
+    for token in banned:
+        assert token not in lower, f"preset leaks a non-persona/org-specific token {token!r}"
+
+    # `# Personality` is preserved byte-for-byte and remains the final section.
+    assert text.endswith(_DESIGN_SYSTEM_PERSONALITY), (
+        "the `# Personality` section must stay byte-identical to the shipped golden"
+    )
+
+
 def test_engineer_archetype_row() -> None:
     """The Engineer archetype (a hands-on navigator coding agent) ships as a standard
     picker row backed by the engineer-archetype bundle: unique id, a `soul_preset` that
@@ -277,31 +342,77 @@ def test_engineer_archetype_row() -> None:
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
-def test_social_marketing_archetype_is_held() -> None:
-    """The Social Marketing archetype is HELD from the picker (operator call,
-    2026-08-20: not ready for release). JSON has no comments, so 'commented out'
-    is a sibling ``held`` list the reader never serves. This pins BOTH directions:
-    the row must not ship in ``archetypes`` (it would become selectable again),
-    and it must survive intact in ``held`` — soul preset and bundle still valid —
-    so restoring it is one move, not an archaeology dig."""
+def test_brand_launch_replaces_social_marketing_and_is_held() -> None:
+    """Brand & Launch (a launch manager for any app: campaign plan, scripted recordings,
+    GIFs, cards, copy drafts, operator-only approval) REPLACES the Social Marketing
+    archetype (operator call, 2026-10-01). It ships HELD until the operator has tested it.
+    Pins every direction of that decision:
+
+    * ``social-marketing`` is gone — not served, not parked in ``held``, its soul preset
+      retired — so it can't be restored by accident alongside its replacement;
+    * ``brand-launch`` is not served in ``archetypes`` and is parked exactly once in
+      ``held`` with its `_held` note, a resolving soul preset and its bundle URL, so
+      listing it is one move (into ``archetypes`` before ``custom``, dropping `_held`)."""
     catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
     ids = [a["id"] for a in catalog["archetypes"]]
+    held = [a["id"] for a in catalog.get("held") or []]
 
-    assert "social-marketing" not in ids, (
-        f"'social-marketing' is held from release — it must not be in archetypes, got {ids}"
+    assert "social-marketing" not in ids + held, (
+        f"'social-marketing' was replaced by 'brand-launch' — it must be in neither list, got {ids} / {held}"
+    )
+    assert not (CONFIG / "soul-presets" / "social-marketing.md").exists(), (
+        "the social-marketing persona was retired with its row"
     )
 
-    held = [a["id"] for a in catalog.get("held") or []]
-    assert held.count("social-marketing") == 1, f"'social-marketing' must be parked exactly once in `held`, got {held}"
-    (row,) = (a for a in catalog["held"] if a["id"] == "social-marketing")
+    assert "brand-launch" not in ids, f"'brand-launch' is held until tested — it must not be in archetypes, got {ids}"
+    assert held.count("brand-launch") == 1, f"'brand-launch' must be parked exactly once in `held`, got {held}"
+    (row,) = (a for a in catalog["held"] if a["id"] == "brand-launch")
+    assert "Replaces social-marketing" in row.get("_held", ""), "the held row says why it's parked"
     preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
     assert preset.is_file(), (
-        f"held archetype 'social-marketing' points at soul_preset '{row['soul_preset']}' "
-        f"but {preset} does not exist — restoring the row would silently seed nothing."
+        f"held archetype 'brand-launch' points at soul_preset '{row['soul_preset']}' "
+        f"but {preset} does not exist — listing the row would silently seed nothing."
     )
-    assert row.get("bundle", "").startswith("https://github.com/protoLabsAI/"), (
-        "the held row must keep its bundle URL so restoration is one move"
+    assert row.get("bundle") == "https://github.com/protoLabsAI/brand-launch-archetype", (
+        "the held row must keep its bundle URL so listing it is one move"
     )
+
+    # Draft-only doctrine: the persona must keep its hard rules (never posts, never invents a
+    # number, operator is the only approver, nothing private on screen, sourced norms).
+    soul = preset.read_text().lower()
+    for needle in ("never post", "never invent a number", "only approver", "competitor",
+                   "home paths", "sources", "one checkpoint per phase"):
+        assert needle in soul, f"brand-launch persona lost a hard rule: {needle!r}"
+
+    assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
+
+
+def test_analyst_archetype_is_held() -> None:
+    """The Analyst archetype (answers questions from the operator's local data with read-only
+    SQL and one chart, via the data plugin) ships HELD until the operator has tested it
+    (2026-10-03). Pins both directions: not served in ``archetypes``, parked exactly once in
+    ``held`` with a resolving soul preset, its bundle URL and its capability contract, so
+    listing it is one move (into ``archetypes`` before ``custom``, dropping `_held`)."""
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    ids = [a["id"] for a in catalog["archetypes"]]
+    held = [a["id"] for a in catalog.get("held") or []]
+
+    assert "analyst" not in ids, f"'analyst' is held until tested — it must not be in archetypes, got {ids}"
+    assert held.count("analyst") == 1, f"'analyst' must be parked exactly once in `held`, got {held}"
+    (row,) = (a for a in catalog["held"] if a["id"] == "analyst")
+    assert row.get("_held"), "the held row says why it's parked"
+    assert row.get("bundle") == "https://github.com/protoLabsAI/analyst-archetype"
+    assert row.get("requires_tools") == ["data_query", "data_chart"]
+    preset = CONFIG / "soul-presets" / f"{row['soul_preset']}.md"
+    assert preset.is_file(), f"held archetype 'analyst' points at a missing soul preset {preset}"
+
+    # The persona's hard rules: never invents a number, cites the file, states assumptions,
+    # and on first run tells the operator where to set the (operator-only) data folders
+    # instead of trying to set them itself.
+    soul = preset.read_text().lower()
+    for needle in ("never invent a number", "cite the source file", "what i assumed",
+                   "settings ▸ plugins ▸ data analyst ▸ data folders", "operator-only"):
+        assert needle in soul, f"analyst persona lost a hard rule: {needle!r}"
 
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 

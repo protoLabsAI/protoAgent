@@ -620,7 +620,7 @@ async def test_a_park_drops_the_rooms_continuity_instead_of_re_parking_forever(w
     """THE livelock this closes. A park leaves the peer's thread holding a pending
     interrupt, and a room address is not a resume — a protoAgent peer queues a fresh
     message on such a thread as steering and re-yields the SAME interrupt (origin ``a2a``
-    is deliberately not autonomous, ``server.chat._hold_if_hitl_pending``). So re-sending
+    is deliberately not autonomous, ``server.turn_control._hold_if_hitl_pending``). So re-sending
     the room's context would hand the room the identical question back on every later
     address, parking another task each time, with no escape but a rewind or a restart:
     only ``delegate_to(..., resume_task_id=…)`` can answer a park, and that bypasses the

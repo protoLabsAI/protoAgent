@@ -1,3 +1,4 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { ChevronDown, ChevronLeft, Menu, Plus, Search } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
@@ -78,20 +79,22 @@ export function MobileShell({
       <header className="mshell-head">
         {showBack ? (
           <>
-            <button type="button" className="mshell-head-btn" aria-label="Back" onClick={onBack}>
+            <Button variant="ghost" size="md" icon type="button" aria-label="Back" onClick={onBack}>
               <ChevronLeft size={22} aria-hidden />
-            </button>
+            </Button>
             <span className="mshell-title mshell-title--static">
               <span className="mshell-title-text">{title}</span>
             </span>
             {/* Optically centres the title against the back chevron. */}
-            <span className="mshell-head-btn" aria-hidden />
+            <span className="mshell-head-spacer" aria-hidden />
           </>
         ) : (
           <>
-            <button
+            <Button
+              variant="ghost"
+              size="md"
+              icon
               type="button"
-              className="mshell-head-btn"
               aria-label="Menu"
               // Same hook as the desktop HamburgerMenu — one selector opens the drawer in
               // either shell, so drawer specs don't fork per breakpoint.
@@ -99,7 +102,7 @@ export function MobileShell({
               onClick={onOpenDrawer}
             >
               <Menu size={20} aria-hidden />
-            </button>
+            </Button>
             {/* The session title IS the switcher — tapping it opens the sheet. Replaces the
                 DS TabBar's `responsive` <select>, which ChatSurface suppresses on mobile. */}
             <button
@@ -121,25 +124,29 @@ export function MobileShell({
                 Reaches the intents store directly rather than taking a prop, matching the New
                 chat button beside it — this header already owns its own actions, and a prop
                 would mean a second edit at the App call site for no gain. */}
-            <button
+            <Button
+              variant="ghost"
+              size="md"
+              icon
               type="button"
-              className="mshell-head-btn"
               aria-label="Search commands"
               title="Search commands, surfaces and agents"
               onClick={() => useKbIntents.getState().togglePalette()}
             >
               <Search size={20} aria-hidden />
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="md"
+              icon
               type="button"
-              className="mshell-head-btn"
               aria-label="New chat"
               disabled={newChatIsNoop}
               title={newChatIsNoop ? "This chat is already empty" : "New chat"}
               onClick={() => chatStore.createSession()}
             >
               <Plus size={20} aria-hidden />
-            </button>
+            </Button>
           </>
         )}
       </header>

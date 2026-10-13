@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { GoalState, ScheduledJob, Task, WatchState } from "../lib/types";
 import {
   activeGoals,
+  agoLabel,
+  goalOutcomeLine,
+  recentGoals,
+  RECENT_GOAL_LIMIT,
   activeWatches,
   goalsPulse,
   schedulePulse,
@@ -67,6 +71,47 @@ describe("goals card", () => {
     expect(goalsPulse([goal({})])).toBe("1 driving · iteration 0/∞");
     expect(goalsPulse([])).toBe("");
     expect(goalsPulse([goal({ status: "achieved" })])).toBe("");
+  });
+});
+
+describe("goals card — recent (finished) goals", () => {
+  const now = Date.UTC(2026, 9, 1, 12, 0, 0);
+  const at = (minsAgo: number) => now / 1000 - minsAgo * 60;
+
+  it("keeps finished goals inside the window, newest first, capped", () => {
+    const goals = [
+      goal({ session_id: "live" }),
+      goal({ session_id: "old", status: "achieved", finished_at: at(120) }),
+      goal({ session_id: "a", status: "achieved", finished_at: at(5) }),
+      goal({ session_id: "b", status: "exhausted", finished_at: at(1) }),
+      goal({ session_id: "c", status: "unachievable", finished_at: at(10) }),
+      goal({ session_id: "d", status: "achieved", finished_at: at(20) }),
+    ];
+    const recent = recentGoals(goals, now);
+    expect(recent.map((g) => g.session_id)).toEqual(["b", "a", "c"]);
+    expect(recent).toHaveLength(RECENT_GOAL_LIMIT);
+  });
+
+  it("drops a dismissed goal, but not a later finish of the same session", () => {
+    const g1 = goal({ session_id: "a", status: "achieved", finished_at: at(5) });
+    expect(recentGoals([g1], now, new Set([`a:${at(5)}`]))).toEqual([]);
+    const again = { ...g1, finished_at: at(1) };
+    expect(recentGoals([again], now, new Set([`a:${at(5)}`]))).toHaveLength(1);
+  });
+
+  it("outcome line: verifier for a success, reason for a failure, plus when", () => {
+    const ok = goal({ status: "achieved", finished_at: at(4), last_reason: "command exited 0" });
+    expect(goalOutcomeLine(ok, "command: pytest -q", now)).toBe("achieved · command: pytest -q · 4m ago");
+    const bad = goal({ status: "exhausted", finished_at: at(0), last_reason: "ran out of iteration budget (8)" });
+    expect(goalOutcomeLine(bad, "command: pytest -q", now)).toBe("exhausted · ran out of iteration budget (8) · just now");
+    expect(agoLabel(at(180), now)).toBe("3h ago");
+  });
+
+  it("pulse mentions a goal that just landed", () => {
+    const done = goal({ session_id: "a", status: "achieved", finished_at: at(1) });
+    expect(goalsPulse([done], [done])).toBe("1 achieved recently");
+    const live = goal({ session_id: "b", iteration: 1, max_iterations: 8 });
+    expect(goalsPulse([live, done], [done])).toBe("1 driving · iteration 1/8 · 1 achieved recently");
   });
 });
 

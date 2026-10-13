@@ -19,6 +19,8 @@ from graph.self_improvement import (
     schedule_task_review,
 )
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 class _Scheduler:
     def __init__(self):

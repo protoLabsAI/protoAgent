@@ -9,6 +9,9 @@ from types import SimpleNamespace
 
 import plugins.workflows as wf
 from plugins.workflows.run_state import STATUS_DONE, STATUS_FAILED, STATUS_RUNNING, STATUS_SEEDED, WorkflowRunStore
+import pytest
+
+pytestmark = pytest.mark.platform_sensitive
 
 RECIPE = {
     "name": "demo",
@@ -255,3 +258,132 @@ def test_writable_dir_expands_tilde(monkeypatch):
     out = wf._writable_dir()
     assert "~" not in str(out)
     assert out.is_absolute()  # expanded to a real absolute dir (drive-anchored on Windows)
+
+
+def test_step_outputs_drop_the_subagent_completed_header(tmp_path, monkeypatch):
+    # #3946: `run_subagent` returns `[<type> completed: <description>]\n\n<body>` (graph/agent
+    # run_manual_subagent) — a tool-result marker for a lead model. In a workflow it leaked
+    # into the reply as a raw "[researcher completed: workflow demo:brief]" first line and
+    # into every downstream prompt. The clean-finish header is dropped; warning headers stay.
+    prompts: dict[str, str] = {}
+
+    async def run_subagent(subagent_type, prompt, description=""):
+        step = description.rsplit(":", 1)[-1]
+        prompts[step] = prompt
+        return f"[{subagent_type} completed: {description}]\n\n<{step}-out>"
+
+    _patch_sdk(monkeypatch, run_subagent)
+    store = WorkflowRunStore(tmp_path)
+    result = asyncio.run(wf._execute(_FakeReg(), "demo", {"topic": "ai"}, run_store=store))
+
+    assert result["output"] == "<brief-out>"
+    assert "completed:" not in prompts["brief"] and "<gather-out>" in prompts["brief"]
+    assert store.load(result["run_id"])["step_outputs"] == {"gather": "<gather-out>", "brief": "<brief-out>"}
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("[researcher completed: workflow demo:s]\n\nbody", "body"),
+        ("[researcher completed: workflow demo:s] -- no output produced.", "(no output produced)"),
+        # Warning headers carry real signal (treat the lane as a Gap) — kept verbatim.
+        (
+            "[researcher hard-stopped at max_turns: workflow demo:s — PARTIAL output; "
+            "unverified remainder is a Gap]\n\nbody",
+            None,
+        ),
+        ("[researcher ended without its deliverable: workflow demo:s] -- no output produced; x", None),
+        # Another subagent's / description's header is not ours to strip.
+        ("[coder completed: workflow demo:s]\n\nbody", None),
+        ("plain answer", None),
+    ],
+)
+def test_strip_completed_header(raw, expected):
+    out = wf._strip_completed_header(raw, "researcher", "workflow demo:s")
+    assert out == (raw if expected is None else expected)
+
+
+def test_workflows_plugin_config_section_does_not_collide_with_core(caplog):
+    # #3946: the manifest claimed `workflows`, core's reserved built-in section (the
+    # `workflows.dir` recipe root) — so its `max_runs` config never bound and every config
+    # load logged "config_section 'workflows' collides with a built-in". It has its own now.
+    import logging
+    from pathlib import Path
+
+    from graph.plugins.pconfig import _RESERVED_SECTIONS, discover_plugin_config
+
+    assert "workflows" in _RESERVED_SECTIONS  # core still owns `workflows:` — not unreserved
+    plugins_root = Path(wf.__file__).resolve().parent.parent
+    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+        schemas = discover_plugin_config([plugins_root], {"workflows"})
+    mine = [s for s in schemas if s.plugin_id == "workflows"]
+    assert len(mine) == 1 and mine[0].section not in _RESERVED_SECTIONS
+    assert mine[0].defaults.get("max_runs") == 200
+    assert not [r for r in caplog.records if "collides with a built-in" in r.getMessage()]
+
+
+# --- a cancelled run is recorded as cancelled, not failed (#3957) ---------------
+
+
+def _blocking_gather(started: asyncio.Event):
+    async def run_subagent(subagent_type, prompt, description=""):
+        if description.endswith(":gather"):
+            started.set()
+            await asyncio.sleep(3600)
+        return "brief-out"
+
+    return run_subagent
+
+
+def test_a_cancelled_run_is_recorded_cancelled_with_its_in_flight_step(tmp_path, monkeypatch):
+    """A run stopped from outside — its turn ended (CancelTask, the stall guard) — was
+    recorded ``failed``, indistinguishable from a step that broke. It is ``cancelled``,
+    and the step that was running is marked cancelled rather than left ``running`` on a
+    terminal record."""
+
+    async def scenario():
+        started = asyncio.Event()
+        _patch_sdk(monkeypatch, _blocking_gather(started))
+        store = WorkflowRunStore(tmp_path)
+        task = asyncio.create_task(wf._execute(_FakeReg(), "demo", {"topic": "ai"}, run_store=store))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return store
+
+    store = asyncio.run(scenario())
+    state = store.load(store.run_id)
+    assert state["status"] == "cancelled"
+    assert state["step_meta"]["gather"]["status"] == "cancelled"
+    assert state["step_meta"]["gather"].get("finished_at")
+
+
+def test_a_cancelled_run_is_terminal_for_pruning(tmp_path):
+    from plugins.workflows.run_state import STATUS_CANCELLED, TERMINAL
+
+    assert STATUS_CANCELLED in TERMINAL
+    store = WorkflowRunStore(tmp_path)
+    for _ in range(3):
+        store.start("demo", {})
+        store.finish(STATUS_CANCELLED)
+    assert store.prune(keep=1) == 2
+
+
+def test_a_run_that_raises_is_still_recorded_failed(tmp_path, monkeypatch):
+    """Only a cancel is ``cancelled`` — a run that crashes outside the engine's inline
+    step-failure handling is still ``failed``."""
+
+    async def run_subagent(subagent_type, prompt, description=""):
+        return "out"
+
+    _patch_sdk(monkeypatch, run_subagent)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("engine crashed")
+
+    monkeypatch.setattr(wf, "execute_workflow", _boom)
+    store = WorkflowRunStore(tmp_path)
+    with pytest.raises(RuntimeError):
+        asyncio.run(wf._execute(_FakeReg(), "demo", {"topic": "ai"}, run_store=store))
+    assert store.load(store.run_id)["status"] == STATUS_FAILED

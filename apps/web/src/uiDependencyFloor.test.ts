@@ -8,10 +8,13 @@ import { describe, expect, it } from "vitest";
 // silently reintroduces the unreadable-table regression. JSON module import (resolveJsonModule)
 // rather than node:fs: this tsconfig has no node types, and under vitest+jsdom `import.meta.url`
 // is an http: URL, so URL-relative filesystem access is a trap (see chatTabPalette.test.ts).
+// The floor is raised to 0.63.0 because that release carries the base `.pl-menu` scroll cap /
+// Tabs attached / Menu className / Count primitives that the console now relies on instead of
+// local overrides.
 import pkg from "../package.json";
 
 const deps = (pkg as { dependencies: Record<string, string> }).dependencies;
-const UI_FIX_FLOOR: readonly [number, number, number] = [0, 60, 2];
+const UI_FIX_FLOOR: readonly [number, number, number] = [0, 63, 0];
 
 // The lowest version a `^` / `~` / exact npm range can resolve to is its base version with the
 // operator stripped — caret and tilde only widen the ceiling, they never lower the floor. This

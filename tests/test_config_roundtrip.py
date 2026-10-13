@@ -113,6 +113,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "checkpoint_max_age_days": 30,
     "checkpoint_prune_interval_hours": 6,
     "checkpoint_vacuum": True,
+    "checkpoint_vacuum_legacy_on_start": True,
     "commons_path": "",
     "compaction_enabled": True,
     "compaction_keep_messages": 20,
@@ -141,6 +142,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "filesystem_projects": [],
     "filesystem_run_requires_approval": True,
     "filesystem_run_auto_approve": [],
+    "filesystem_run_command_env_passthrough": [],
     "fleet_autostart": [],
     "fleet_max_warm": 0,
     "fleet_trace_export_enabled": False,
@@ -151,6 +153,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "goal_max_iterations": 8,
     "goal_no_progress_limit": 3,
     "goal_verify_timeout": 120.0,
+    "goal_max_rounds_per_turn": 50,
     "watches_enabled": True,  # #2020 flag, back ON now the feature settled (example sets it)
     "watch_interval": 30.0,  # ADR 0067 global poll cadence (example keeps `interval:` commented)
     "watch_keep_terminal_h": 24.0,  # terminal-watch retention (example keeps it commented)
@@ -213,6 +216,11 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "knowledge_context_max_doc_chars": 12000,
     "knowledge_attach_inline_budget": 8000,
     "llm_max_retries": 2,
+    # In-flight limiter (ADR 0115 D2, #3760) — example ships no keys, so these resolve
+    # to the dataclass defaults: off (0), 300 s queue bound, 1 interactive-reserved slot.
+    "llm_max_inflight": 0,
+    "llm_inflight_queue_timeout": 300.0,
+    "llm_inflight_interactive_reserve": 1,
     "max_iterations": 2000,
     "turn_stall_timeout_seconds": 900.0,
     "round_nudge_after": 25,
@@ -242,6 +250,8 @@ FROM_YAML_EXAMPLE_FIELDS = {
     # legacy-lane floor never speaks for it (#3128).
     "providers_declared": True,
     "model_vision": False,
+    "image_max_side": 1568,
+    "max_images_per_request": 20,
     "operator_allowed_dirs": [],
     "operator_project_dir": "",
     "operator_mcp_enabled": False,
@@ -316,6 +326,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "tools_disabled": [],
     "tools_self_config_enabled": False,
     "tools_hidden": [],
+    "tools_subagent_only": [],
     "settings_hidden": [],
     "top_k": -1,
     "top_p": None,
@@ -662,6 +673,50 @@ def test_case7_key_rename_max_retries(tmp_path):
     path = _write_yaml(tmp_path, "model:\n  max_retries: 7\n")
     cfg = LangGraphConfig.from_yaml(path)
     assert cfg.llm_max_retries == 7
+
+
+def test_inflight_limiter_keys_parse_and_default(tmp_path):
+    """ADR 0115 D2 (#3760): model.max_inflight / inflight_queue_timeout /
+    inflight_interactive_reserve parse onto the renamed llm_* attrs; absent = defaults."""
+    # Absent → dataclass defaults (limiter off).
+    default_cfg = LangGraphConfig.from_yaml(_write_yaml(tmp_path, "model:\n  name: x\n"))
+    assert default_cfg.llm_max_inflight == 0
+    assert default_cfg.llm_inflight_queue_timeout == 300.0
+    assert default_cfg.llm_inflight_interactive_reserve == 1
+
+    # Explicit values parse from the model.* keys.
+    path = _write_yaml(
+        tmp_path,
+        """
+        model:
+          max_inflight: 6
+          inflight_queue_timeout: 45.5
+          inflight_interactive_reserve: 2
+        """,
+    )
+    cfg = LangGraphConfig.from_yaml(path)
+    assert cfg.llm_max_inflight == 6
+    assert cfg.llm_inflight_queue_timeout == 45.5
+    assert cfg.llm_inflight_interactive_reserve == 2
+
+
+def test_inflight_limiter_keys_survive_config_to_dict_round_trip(tmp_path):
+    """Non-default limiter values survive config_to_dict -> apply -> from_yaml, so a
+    Settings save is lossless (they ride the FIELDS-driven serialization)."""
+    cfg = LangGraphConfig()
+    cfg.llm_max_inflight = 8
+    cfg.llm_inflight_queue_timeout = 120.0
+    cfg.llm_inflight_interactive_reserve = 3
+
+    doc: dict = {}
+    apply_updates_to_yaml(doc, config_to_dict(cfg))
+    out = tmp_path / "langgraph-config.yaml"
+    save_yaml_doc(doc, out)
+    reloaded = LangGraphConfig.from_yaml(str(out))
+
+    assert reloaded.llm_max_inflight == 8
+    assert reloaded.llm_inflight_queue_timeout == 120.0
+    assert reloaded.llm_inflight_interactive_reserve == 3
 
 
 def test_case8a_researcher_partial_only_model(tmp_path):
@@ -1042,7 +1097,7 @@ def test_detect_soul_drift_compares_against_earliest_snapshot(monkeypatch, tmp_p
 def test_run_soul_drift_pass_publishes_when_over_threshold(monkeypatch, tmp_path):
     """The curation pass publishes `persona.drift_detected` (score + signals + rationale)
     to the event bus when the drift score crosses the configured threshold."""
-    from server import agent_init
+    from server import agent_init, maintenance_loops
 
     _seed_soul_history(
         monkeypatch,
@@ -1052,7 +1107,7 @@ def test_run_soul_drift_pass_publishes_when_over_threshold(monkeypatch, tmp_path
     )
     published = []
     monkeypatch.setattr(
-        agent_init,
+        maintenance_loops,  # the pass's home (#3807) — where its _event_bus resolves
         "_event_bus",
         SimpleNamespace(publish=lambda event, data=None: published.append((event, data))),
     )
@@ -1080,7 +1135,7 @@ def test_run_soul_drift_pass_publishes_when_over_threshold(monkeypatch, tmp_path
 def test_run_soul_drift_pass_silent_when_below_threshold(monkeypatch, tmp_path):
     """A near-identical persona scores below threshold -> the pass runs but publishes
     nothing (still returns the report for observability)."""
-    from server import agent_init
+    from server import agent_init, maintenance_loops
 
     _seed_soul_history(
         monkeypatch,
@@ -1090,7 +1145,7 @@ def test_run_soul_drift_pass_silent_when_below_threshold(monkeypatch, tmp_path):
     )
     published = []
     monkeypatch.setattr(
-        agent_init,
+        maintenance_loops,  # the pass's home (#3807) — where its _event_bus resolves
         "_event_bus",
         SimpleNamespace(publish=lambda event, data=None: published.append((event, data))),
     )
@@ -1102,7 +1157,7 @@ def test_run_soul_drift_pass_silent_when_below_threshold(monkeypatch, tmp_path):
 
 def test_run_soul_drift_pass_noop_when_disabled(monkeypatch, tmp_path):
     """soul_drift_enabled=False -> the pass is a no-op (no detection, no publish)."""
-    from server import agent_init
+    from server import agent_init, maintenance_loops
 
     _seed_soul_history(
         monkeypatch,
@@ -1112,7 +1167,7 @@ def test_run_soul_drift_pass_noop_when_disabled(monkeypatch, tmp_path):
     )
     published = []
     monkeypatch.setattr(
-        agent_init,
+        maintenance_loops,  # the pass's home (#3807) — where its _event_bus resolves
         "_event_bus",
         SimpleNamespace(publish=lambda event, data=None: published.append((event, data))),
     )
@@ -1123,17 +1178,19 @@ def test_run_soul_drift_pass_noop_when_disabled(monkeypatch, tmp_path):
 
 def test_maybe_run_soul_drift_pass_gates_to_interval(monkeypatch, tmp_path):
     """The interval gate runs the pass once, then suppresses further runs until the
-    cadence elapses (verified by counting detect_soul_drift calls)."""
-    from server import agent_init
+    cadence elapses (verified by counting detect_soul_drift calls).
 
-    monkeypatch.setattr(agent_init, "_last_soul_drift_check", 0.0)
+    The gate state and the pass both live on maintenance_loops (#3807) — patched there."""
+    from server import agent_init, maintenance_loops
+
+    monkeypatch.setattr(maintenance_loops, "_last_soul_drift_check", 0.0)
     calls = {"n": 0}
 
     def _fake_run(cfg):
         calls["n"] += 1
         return {"score": 0.0}
 
-    monkeypatch.setattr(agent_init, "_run_soul_drift_pass", _fake_run)
+    monkeypatch.setattr(maintenance_loops, "_run_soul_drift_pass", _fake_run)
     cfg = SimpleNamespace(soul_drift_enabled=True, soul_drift_interval_hours=24)
 
     assert agent_init._maybe_run_soul_drift_pass(cfg) is not None  # first tick runs
@@ -1141,7 +1198,7 @@ def test_maybe_run_soul_drift_pass_gates_to_interval(monkeypatch, tmp_path):
     assert calls["n"] == 1
 
     # interval_hours=0 disables the pass outright.
-    monkeypatch.setattr(agent_init, "_last_soul_drift_check", 0.0)
+    monkeypatch.setattr(maintenance_loops, "_last_soul_drift_check", 0.0)
     disabled = SimpleNamespace(soul_drift_enabled=True, soul_drift_interval_hours=0)
     assert agent_init._maybe_run_soul_drift_pass(disabled) is None
 

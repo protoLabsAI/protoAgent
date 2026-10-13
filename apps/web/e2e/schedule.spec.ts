@@ -153,7 +153,27 @@ test("editing a UTC job keeps it UTC and preserves an untouched schedule string 
   await page.getByTestId("schedule-detail-save").click();
   const body = (await put).postDataJSON();
   expect(body.schedule).toBe("0 09 * * *");
-  expect(body.timezone).toBeUndefined();
+  // Explicit null, never an omitted key: the PUT is partial (#3957), where a missing
+  // timezone means "keep the current one".
+  expect(body.timezone).toBeNull();
+});
+
+test("switching a zoned job to UTC sends timezone: null, not an omitted key (#3943 review)", async ({ page }) => {
+  await gotoSchedule(page);
+  // job-1 is stored in America/Chicago.
+  await page.getByTestId("schedule-row-job-1").click();
+  await page.getByTestId("schedule-detail-edit").click();
+  const detail = page.getByTestId("schedule-detail");
+  await detail.locator("#schedule-tz").click();
+  // The leading "UTC" item is the reset option (value ""); hosts whose zone list also
+  // carries an IANA "UTC" render a second item with the same label.
+  await page.getByRole("menuitemradio", { name: "UTC", exact: true }).first().click();
+  await expect(page.getByTestId("schedule-detail-save")).toBeEnabled();
+  const put = page.waitForRequest((r) => r.method() === "PUT" && r.url().includes("/api/scheduler/jobs/job-1"));
+  await page.getByTestId("schedule-detail-save").click();
+  const body = (await put).postDataJSON();
+  expect(body).toHaveProperty("timezone", null);
+  expect(body.schedule).toBe("0 9 * * *");
 });
 
 test("a job whose stored schedule can't validate still takes a prompt-only edit (#2439 review)", async ({ page }) => {

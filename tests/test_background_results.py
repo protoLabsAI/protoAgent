@@ -389,9 +389,10 @@ class TestResumeTurnIsAutonomous:
         from runtime.state import STATE
 
         chat_mod = importlib.import_module("server.chat")
+        turn_control = importlib.import_module("server.turn_control")
         monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
         fake = _HitlTurnStream()
-        monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+        monkeypatch.setattr(importlib.import_module("server.turn_stream"), "_run_turn_stream", fake)
 
         frames = [
             frame
@@ -405,7 +406,7 @@ class TestResumeTurnIsAutonomous:
         kinds = [k for k, _ in frames]
         assert "input_required" not in kinds  # never parks
         assert ("done", "Briefing delivered.") in frames
-        assert chat_mod._AUTONOMOUS_HITL_SENTINEL in fake.resume_values
+        assert turn_control._AUTONOMOUS_HITL_SENTINEL in fake.resume_values
 
     async def test_attended_nudge_parks_for_hitl(self, monkeypatch):
         """When the manager stamped the nudge ``attended`` (a live operator was connected to
@@ -418,7 +419,7 @@ class TestResumeTurnIsAutonomous:
         chat_mod = importlib.import_module("server.chat")
         monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
         fake = _HitlTurnStream()
-        monkeypatch.setattr(chat_mod, "_run_turn_stream", fake)
+        monkeypatch.setattr(importlib.import_module("server.turn_stream"), "_run_turn_stream", fake)
 
         frames = [
             frame
@@ -441,29 +442,29 @@ class TestServerTurnControlPlane:
 
         from graph import steering
 
-        chat_mod = importlib.import_module("server.chat")
-        steering._QUEUES.clear()
-        chat_mod._LIVE_SERVER_TURNS.clear()
-        chat_mod._ATTENDED_SESSIONS.clear()
+        turn_control = importlib.import_module("server.turn_control")
+        steering._reset()
+        turn_control._LIVE_SERVER_TURNS.clear()
+        turn_control._ATTENDED_SESSIONS.clear()
 
     def teardown_method(self):
         import importlib
 
         from graph import steering
 
-        chat_mod = importlib.import_module("server.chat")
-        steering._QUEUES.clear()
-        chat_mod._LIVE_SERVER_TURNS.clear()
-        chat_mod._ATTENDED_SESSIONS.clear()
+        turn_control = importlib.import_module("server.turn_control")
+        steering._reset()
+        turn_control._LIVE_SERVER_TURNS.clear()
+        turn_control._ATTENDED_SESSIONS.clear()
 
     def test_attended_server_turn_registers_control_payload_and_accepts_once(self):
         import importlib
 
         from graph import steering
 
-        chat_mod = importlib.import_module("server.chat")
-        chat_mod.mark_session_attended("chat-42")
-        payload = chat_mod.register_live_server_turn(
+        turn_control = importlib.import_module("server.turn_control")
+        turn_control.mark_session_attended("chat-42")
+        payload = turn_control.register_live_server_turn(
             "chat-42", "task-9", origin="background-resume", trigger="bg-1", attended=True
         )
 
@@ -475,11 +476,11 @@ class TestServerTurnControlPlane:
             "controllable": True,
             "operator_controllable": True,
         }
-        assert chat_mod.submit_server_turn_interjection(
+        assert turn_control.submit_server_turn_interjection(
             "chat-42", "task-9", "focus on the newest result", msg_id="m1"
         ) == {"ok": True, "id": "m1", "pending": 1}
         assert steering.pending_items("chat-42") == [{"id": "m1", "text": "focus on the newest result"}]
-        assert chat_mod.submit_server_turn_interjection(
+        assert turn_control.submit_server_turn_interjection(
             "chat-42", "task-9", "focus on the newest result", msg_id="m1"
         ) == {"ok": False, "reason": "duplicate", "id": "m1", "pending": 1}
         assert steering.pending("chat-42") == 1
@@ -489,23 +490,23 @@ class TestServerTurnControlPlane:
 
         from graph import steering
 
-        chat_mod = importlib.import_module("server.chat")
-        chat_mod.mark_session_attended("chat-a")
-        chat_mod.register_live_server_turn("chat-a", "task-a", origin="scheduler", trigger="job-a")
-        assert chat_mod.submit_server_turn_interjection(
+        turn_control = importlib.import_module("server.turn_control")
+        turn_control.mark_session_attended("chat-a")
+        turn_control.register_live_server_turn("chat-a", "task-a", origin="scheduler", trigger="job-a")
+        assert turn_control.submit_server_turn_interjection(
             "chat-b", "task-a", "wrong room", msg_id="x"
         )["reason"] == "not_live"
         assert steering.pending("chat-b") == 0
 
-        chat_mod.release_session_attended("chat-a")
-        assert chat_mod.submit_server_turn_interjection(
+        turn_control.release_session_attended("chat-a")
+        assert turn_control.submit_server_turn_interjection(
             "chat-a", "task-a", "nobody is watching", msg_id="y"
         )["reason"] == "uncontrollable"
         assert steering.pending("chat-a") == 0
 
-        chat_mod.mark_session_attended("chat-a")
-        chat_mod.finish_live_server_turn("chat-a", "task-a")
-        assert chat_mod.submit_server_turn_interjection(
+        turn_control.mark_session_attended("chat-a")
+        turn_control.finish_live_server_turn("chat-a", "task-a")
+        assert turn_control.submit_server_turn_interjection(
             "chat-a", "task-a", "too late", msg_id="z"
         )["reason"] == "not_live"
         assert steering.pending("chat-a") == 0
@@ -515,14 +516,14 @@ class TestServerTurnControlPlane:
 
         from graph import steering
 
-        chat_mod = importlib.import_module("server.chat")
-        payload = chat_mod.register_live_server_turn(
+        turn_control = importlib.import_module("server.turn_control")
+        payload = turn_control.register_live_server_turn(
             "chat-42", "task-9", origin="inbox", trigger="item-1", attended=False
         )
 
         assert payload["task_id"] == "task-9"
         assert payload["operator_controllable"] is False
-        assert chat_mod.submit_server_turn_interjection(
+        assert turn_control.submit_server_turn_interjection(
             "chat-42", "task-9", "please answer me", msg_id="m1"
         )["reason"] == "uncontrollable"
         assert steering.pending("chat-42") == 0
@@ -533,8 +534,8 @@ class TestServerTurnControlPlane:
         import server.a2a as a2a
         from graph import steering
 
-        chat_mod = importlib.import_module("server.chat")
-        chat_mod.mark_session_attended("chat-42")
+        turn_control = importlib.import_module("server.turn_control")
+        turn_control.mark_session_attended("chat-42")
         monkeypatch.setattr(a2a._event_bus, "publish", lambda *_a, **_kw: None)
         a2a._a2a_progress(
             "chat-42",
@@ -546,10 +547,10 @@ class TestServerTurnControlPlane:
                 "attended": True,
             },
         )
-        assert chat_mod.live_server_turn_control("chat-42", "task-9")["controllable"] is True
+        assert turn_control.live_server_turn_control("chat-42", "task-9")["controllable"] is True
         a2a._a2a_progress("chat-42", "task-9", {"phase": "input_required", "prompt": "Approve?"})
 
-        assert chat_mod.submit_server_turn_interjection(
+        assert turn_control.submit_server_turn_interjection(
             "chat-42", "task-9", "do something else", msg_id="m1"
         )["reason"] == "not_live"
         assert steering.pending("chat-42") == 0
@@ -643,7 +644,7 @@ class TestReportIndexing:
 class TestWorkJobTerminalResume:
     """``spawn_work`` (``knowledge_ingest``'s background path, ``delegate_to``) settles
     through ``BackgroundManager._run_work`` -> its ``on_terminal`` hook
-    (``server.agent_init._on_work_terminal``) -- a DIFFERENT completion path than the
+    (``server.stores._on_work_terminal``) -- a DIFFERENT completion path than the
     A2A terminal hook covered by ``TestTerminalHookResume`` (that one only fires for
     ``spawn`` subagent-TURN jobs). Before #1840, ``_on_work_terminal`` only ever fired
     the Activity-thread idle-wake, never the ADR 0070 D1 push-resume into the ORIGIN

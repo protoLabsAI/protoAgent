@@ -27,6 +27,8 @@ from graph.plugins import installer
 from tests.test_plugin_installer import _git
 from tests.test_plugin_routes import _client, _wire
 
+pytestmark = pytest.mark.platform_sensitive
+
 PKG = "leftpad-desktop-xyz"  # never importable in the host: a real "missing" dep
 
 

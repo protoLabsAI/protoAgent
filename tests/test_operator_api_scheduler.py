@@ -135,7 +135,9 @@ def test_add_honors_job_id_and_cancel() -> None:
     assert any(j["id"] == "nightly" for j in client.get("/api/scheduler/jobs").json()["jobs"])
 
     assert client.delete("/api/scheduler/jobs/nightly").json() == {"canceled": True}
-    assert client.delete("/api/scheduler/jobs/nightly").json() == {"canceled": False}
+    # A second delete finds nothing — a 404, not a 200 `{canceled: false}` (#3973).
+    gone = client.delete("/api/scheduler/jobs/nightly")
+    assert gone.status_code == 404 and "nightly" in gone.json()["detail"]
     assert client.get("/api/scheduler/jobs").json()["jobs"] == []
 
 

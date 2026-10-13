@@ -3,7 +3,7 @@
 //
 // A session's `streaming` status locks its composer: Stop shows, Send is disabled, and an
 // interjection queued for a server turn is held back as though this browser's own stream
-// will drain it. Several producers set it: a local turn (ChatSurface's runTurn), a reattach
+// will drain it. Several producers set it: a local turn (ChatSessionSlot's runTurn), a reattach
 // (reattach.ts), and boot (chat-store derives it from a transcript with a live turn). Each
 // is meant to settle it when it ends. A producer that ended without settling it, because it
 // was cancelled or never mounted, left the session locked for good (#3474 fixed one such
@@ -45,6 +45,11 @@ export function beginLocalTurn(sessionId: string): () => void {
   return claim(localTurns, sessionId);
 }
 
+/** Whether a local turn (runTurn, from its claim to its `finally`) is in flight for `sessionId`. */
+export function localTurnInFlight(sessionId: string): boolean {
+  return localTurns.has(sessionId);
+}
+
 /** Register a reattach as in flight for `sessionId`. Returns its end. */
 export function beginReattach(sessionId: string): () => void {
   return claim(reattaches, sessionId);
@@ -58,7 +63,12 @@ export function reconcileSessionStatus(sessionId: string): boolean {
   if (snap.sessionStatusMap[sessionId] !== "streaming") return false;
   if (reattaches.has(sessionId) || localTurns.has(sessionId)) return false;
   const session = snap.sessions.find((s) => s.id === sessionId);
-  if (!session || session.messages.some((message) => message.status === "streaming")) return false;
+  // A bubble PAUSED on the operator is streaming only in the sense that its turn is not
+  // over: nothing is producing into it until the answer continues the task, so it holds the
+  // session no more than a settled one does (#3956). Its reattach, if one runs, is claimed.
+  if (!session || session.messages.some((message) => message.status === "streaming" && !message.paused)) {
+    return false;
+  }
   chatStore.setSessionStatus(sessionId, "idle");
   return true;
 }

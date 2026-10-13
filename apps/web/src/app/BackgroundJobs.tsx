@@ -1,10 +1,12 @@
 import { Dialog, Tooltip } from "@protolabsai/ui/overlays";
 import { ToolCard, ToolCardList, ToolSection } from "@protolabsai/ui/tool-card";
 import { Spinner } from "@protolabsai/ui/data";
+import { Accordion, AccordionItem } from "@protolabsai/ui/navigation";
 import { Button } from "@protolabsai/ui/primitives";
 import { ArrowUpRight, Bot, Check, CheckCircle2, Copy, Square, Trash2, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { jobIdOf } from "../chat/backgroundJobStore";
 import { chatStore } from "../chat/chat-store";
 import { Markdown } from "../chat/LazyMarkdown";
 import { api } from "../lib/api";
@@ -62,9 +64,19 @@ export function BackgroundJobs() {
       .background()
       .then((d) => {
         setEnabled(!!d.enabled);
-        const m: Record<string, BackgroundJobDTO> = {};
-        for (const j of d.jobs || []) m[j.id] = j;
-        setJobs(m);
+        // The list is one page. A RUNNING job it doesn't mention (an older one paged out,
+        // or a start the bus delivered first) stays: dropping it would blink the pill's
+        // count and the dialog row until the next event re-added it. Finished jobs are
+        // the list's to own — a delete or clear elsewhere must drop them here too.
+        setJobs((prev) => {
+          const m: Record<string, BackgroundJobDTO> = {};
+          for (const [id, j] of Object.entries(prev)) if (j.status === "running") m[id] = j;
+          for (const j of d.jobs || []) {
+            const id = jobIdOf(j);
+            if (id) m[id] = { ...j, id };
+          }
+          return m;
+        });
       })
       .catch(() => {
         /* feature off / unreachable — the pill stays hidden */
@@ -239,9 +251,14 @@ export function BackgroundJobs() {
   return (
     <>
       <Tooltip label={info}>
-        <button
+        <Button
+          // A square icon button only when it holds just the icon: with the running count
+          // beside the spinner, a fixed square squeezed the spinner into an oval.
+          icon={running === 0}
+          size="xs"
+          variant="ghost"
           type="button"
-          className="util-btn bg-jobs-pill"
+          className={`bg-jobs-pill${running > 0 ? " bg-jobs-pill--running" : ""}`}
           onClick={() => {
             setOpen(true);
             // Persist past this session (#2692) — a reload must not re-show a badge
@@ -256,22 +273,27 @@ export function BackgroundJobs() {
           {running > 0 ? <Spinner size={13} /> : <Bot size={13} />}
           {running > 0 ? <span>{running}</span> : null}
           {unread > 0 ? <span className="bg-jobs-unread" aria-label={`${unread} finished`} /> : null}
-        </button>
+        </Button>
       </Tooltip>
       {open ? (
-        <Dialog open onClose={() => setOpen(false)} title="Background agents" width="min(640px, 94vw)">
+        <Dialog open padding="roomy" onClose={() => setOpen(false)} title="Background agents" width="min(640px, 94vw)">
           {list.length === 0 ? (
             <p className="bg-jobs-empty">No background agents have run yet.</p>
           ) : (
             <>
               {finished > 0 ? (
                 <div className="bg-jobs-toolbar">
-                  <button type="button" className="bg-jobs-clear" onClick={clearFinished}>
+                  {/* Ghost, not danger: this standing bulk-clear is visible at the top of
+                      the list whenever any job has finished, so it stays quiet while the
+                      per-row destructive icons (stop/delete) carry the danger emphasis —
+                      matching the old control, which was neutral-bordered and only
+                      reddened on hover. */}
+                  <Button size="sm" variant="ghost" onClick={clearFinished}>
                     <Trash2 size={12} /> Clear finished ({finished})
-                  </button>
+                  </Button>
                 </div>
               ) : null}
-              <ul className="bg-jobs-list">
+              <Accordion className="bg-jobs-list">
                 {list.map((j) => (
                   <BgJobRow
                     key={j.id}
@@ -282,7 +304,7 @@ export function BackgroundJobs() {
                     onJumpToChat={jumpToChat}
                   />
                 ))}
-              </ul>
+              </Accordion>
             </>
           )}
         </Dialog>
@@ -304,7 +326,6 @@ function BgJobRow({
   onDelete: (jobId: string) => void;
   onJumpToChat: (sessionId: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const running = job.status === "running";
   // Only offered when the origin session is ALREADY an open local tab — there's no
   // fetch-and-open path for a session that was never opened in this browser (#2692).
@@ -325,98 +346,116 @@ function BgJobRow({
   // Phase 3's deferred "rich live subagent card"), not just finished jobs.
   const canExpand = hasResult || hasTools;
   const recentTools = tools.slice(-3);
-  return (
-    <li className="bg-jobs-row">
-      <div className="bg-jobs-rowhead">
-        <button
-          type="button"
-          className="bg-jobs-rowmain"
-          onClick={() => canExpand && setExpanded((v) => !v)}
-          aria-expanded={canExpand ? expanded : undefined}
-          disabled={!canExpand}
-        >
-          <span className="bg-jobs-icon">{icon}</span>
-          <span className="bg-jobs-meta">
-            <span className="bg-jobs-title">
-              <strong>{job.subagent_type || "agent"}</strong> — {job.description || "(no description)"}
-            </span>
-            <span className="bg-jobs-sub">
-              {job.status}
-              {elapsed ? ` · ${elapsed}` : ""}
-              {canExpand ? (expanded ? " · hide details" : hasResult ? " · show result" : " · show activity") : ""}
-            </span>
-            {running && recentTools.length > 0 ? (
-              <span className="bg-jobs-tools">
-                {recentTools.map((t) => (
-                  <span key={t.id} className={`bg-jobs-tool ${t.error ? "is-err" : t.done ? "is-done" : "is-run"}`}>
-                    {t.error ? <XCircle size={11} /> : t.done ? <CheckCircle2 size={11} /> : <Spinner size={11} />} {t.tool}
-                  </span>
-                ))}
+
+  // The AccordionItem trigger's title: the status icon + meta (title/sub + a live
+  // recent-tools strip while running). The old " · show result / hide details" hint is
+  // gone — the DS chevron carries that affordance now. Icon and meta sit side-by-side (a
+  // small flex here since .pl-accordion__title isn't itself a flex box); 3b (bd-9wni)
+  // owns the .bg-jobs-* CSS.
+  const head = (
+    <span style={{ display: "flex", gap: 10, alignItems: "flex-start", minWidth: 0 }}>
+      <span className="bg-jobs-icon">{icon}</span>
+      <span className="bg-jobs-meta">
+        <span className="bg-jobs-title">
+          <strong>{job.subagent_type || "agent"}</strong> — {job.description || "(no description)"}
+        </span>
+        <span className="bg-jobs-sub">
+          {job.status}
+          {elapsed ? ` · ${elapsed}` : ""}
+        </span>
+        {running && recentTools.length > 0 ? (
+          <span className="bg-jobs-tools">
+            {recentTools.map((t) => (
+              <span key={t.id} className={`bg-jobs-tool ${t.error ? "is-err" : t.done ? "is-done" : "is-run"}`}>
+                {t.error ? <XCircle size={11} /> : t.done ? <CheckCircle2 size={11} /> : <Spinner size={11} />} {t.tool}
               </span>
-            ) : null}
+            ))}
           </span>
-        </button>
-        {originIsOpenTab ? (
-          <button
-            type="button"
-            className="bg-jobs-stop"
-            onClick={() => onJumpToChat(job.origin_session!)}
-            title="Jump to the chat this ran from"
-            aria-label="Jump to chat"
-          >
-            <ArrowUpRight size={12} />
-          </button>
         ) : null}
-        {running ? (
-          <button
-            type="button"
-            className="bg-jobs-stop"
-            onClick={() => onStop(job.id)}
-            title="Stop this background agent"
-            aria-label="Stop"
-          >
-            <Square size={12} />
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="bg-jobs-stop"
-            onClick={() => onDelete(job.id)}
-            title="Delete this entry"
-            aria-label="Delete"
-          >
-            <Trash2 size={12} />
-          </button>
-        )}
-      </div>
-      {expanded && canExpand ? (
-        <div className="bg-jobs-detail">
-          {hasTools ? (
-            <ToolCardList className="bg-jobs-feed">
-              {tools.map((t) => (
-                <ToolCard
-                  key={t.id}
-                  name={t.tool}
-                  status={t.error ? "error" : t.done ? "done" : "running"}
-                >
-                  {t.output ? <ToolSection label="output">{t.output}</ToolSection> : null}
-                </ToolCard>
-              ))}
-            </ToolCardList>
-          ) : null}
-          {hasResult ? (
-            <>
-              <div className="bg-jobs-resulthead">
-                <CopyResult text={job.result || ""} />
-              </div>
-              <div className="bg-jobs-result">
-                <Markdown>{job.result || ""}</Markdown>
-              </div>
-            </>
-          ) : null}
-        </div>
+      </span>
+    </span>
+  );
+
+  // The expanded body: the live/historical tool feed and/or the finished result (with its
+  // Copy affordance). Rendered inside the AccordionItem's panel.
+  const detail = (
+    <>
+      {hasTools ? (
+        <ToolCardList className="bg-jobs-feed">
+          {tools.map((t) => (
+            <ToolCard key={t.id} name={t.tool} status={t.error ? "error" : t.done ? "done" : "running"}>
+              {t.output ? <ToolSection label="output">{t.output}</ToolSection> : null}
+            </ToolCard>
+          ))}
+        </ToolCardList>
       ) : null}
-    </li>
+      {hasResult ? (
+        <>
+          <div className="bg-jobs-resulthead">
+            <CopyResult text={job.result || ""} />
+          </div>
+          <div className="bg-jobs-result">
+            <Markdown>{job.result || ""}</Markdown>
+          </div>
+        </>
+      ) : null}
+    </>
+  );
+
+  // The row actions sit BESIDE the accordion trigger — never nested inside it (no
+  // button-in-button): jump-to-chat is a ghost icon Button, stop/delete are danger.
+  const actions = (
+    <div style={{ display: "flex", flex: "none", alignItems: "flex-start" }}>
+      {originIsOpenTab ? (
+        <Button
+          icon
+          size="sm"
+          variant="ghost"
+          onClick={() => onJumpToChat(job.origin_session!)}
+          title="Jump to the chat this ran from"
+          aria-label="Jump to chat"
+        >
+          <ArrowUpRight size={12} />
+        </Button>
+      ) : null}
+      {running ? (
+        <Button
+          icon
+          size="sm"
+          variant="danger"
+          onClick={() => onStop(job.id)}
+          title="Stop this background agent"
+          aria-label="Stop"
+        >
+          <Square size={12} />
+        </Button>
+      ) : (
+        <Button
+          icon
+          size="sm"
+          variant="danger"
+          onClick={() => onDelete(job.id)}
+          title="Delete this entry"
+          aria-label="Delete"
+        >
+          <Trash2 size={12} />
+        </Button>
+      )}
+    </div>
+  );
+
+  // One AccordionItem per job. A job with neither a result nor a tool feed is `disabled`,
+  // so the DS trigger renders inert and the row can't be expanded. The action buttons are
+  // siblings of the AccordionItem (beside its trigger), so they're never nested in it.
+  return (
+    <div className="bg-jobs-row" style={{ display: "flex", alignItems: "flex-start" }}>
+      <div style={{ flex: "1 1 auto", minWidth: 0 }}>
+        <AccordionItem title={head} disabled={!canExpand}>
+          {detail}
+        </AccordionItem>
+      </div>
+      {actions}
+    </div>
   );
 }
 

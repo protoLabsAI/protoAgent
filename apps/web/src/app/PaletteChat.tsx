@@ -10,13 +10,14 @@ import { ChatMessageView } from "../chat/ChatMessageView";
 import { addToolRef, appendReasoning, appendText, replaceText } from "../chat/parts";
 import { api } from "../lib/api";
 import { chatStore, effectiveReasoningEffort } from "../chat/chat-store";
+import { isTaskFailed, isTaskStateUnknown, isTaskTerminal } from "../chat/taskState";
 import type { ChatMessage, ToolCall, ToolEvent } from "../lib/types";
 import { freshPaletteThread, loadPaletteThread, savePaletteThread } from "./paletteChatStore";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
 import "../chat/chat.css"; // .markdown / .tool-calls / .chat-user-text / .slash-menu styles
 
 // Upsert a streaming tool event onto a message's toolCalls AND its ordered `parts`
-// (mirrors ChatSurface's onToolCall): start → a running card (nested under its parent
+// (mirrors ChatSessionSlot's onToolCall): start → a running card (nested under its parent
 // `task` — authoritative `evt.parentId`, else last-open-task), and a top-level tool
 // opens/extends a `tools` part in emission order so text↔tool interleave renders live;
 // end → flip the matching card to done/error and stamp elapsed.
@@ -25,12 +26,15 @@ function upsertTool(message: ChatMessage, evt: ToolEvent): ChatMessage {
   const idx = calls.findIndex((c) => c.id === evt.id);
   const now = Date.now();
   let nextParts = message.parts;
-  if (evt.phase === "start") {
+  if (evt.phase === "start" && idx >= 0) {
+    // A re-announce of a known card (full args / an ACP refinement, #3691): fill it in,
+    // keeping its clock, nesting and position — no second ref, no reset elapsed time.
+    calls[idx] = { ...calls[idx], name: evt.name || calls[idx].name, input: evt.input ?? calls[idx].input };
+  } else if (evt.phase === "start") {
     const openTask = [...calls].reverse().find((c) => c.name === "task" && c.status === "running" && c.id !== evt.id);
     const parentId = evt.parentId ?? openTask?.id;
     const card: ToolCall = { id: evt.id, name: evt.name, input: evt.input, status: "running", startedAt: now, parentId };
-    if (idx >= 0) calls[idx] = { ...calls[idx], ...card };
-    else calls.push(card);
+    calls.push(card);
     // Children (parentId set) nest under their parent's card — only top-level tools get a block.
     if (parentId == null) nextParts = addToolRef(message.parts, evt.id);
   } else {
@@ -109,14 +113,13 @@ export function PaletteChat({
   // Reconnect an interrupted turn (ADR 0057 durability). Runs once per open: if the last
   // assistant message is stuck "streaming" with a durable taskId — the palette was closed
   // mid-turn — reconcile it against the server's A2A task (tasks/get), finalizing when
-  // terminal and polling briefly while it's genuinely still running. Mirrors ChatSurface's
+  // terminal and polling briefly while it's genuinely still running. Mirrors ChatSessionSlot's
   // self-heal so a reopened palette shows the turn still running, or its finished result.
   useEffect(() => {
     if (abortRef.current) return; // a live turn in this session owns the stream
     const last = messagesRef.current[messagesRef.current.length - 1];
     if (!last || last.role !== "assistant" || last.status !== "streaming" || !last.taskId) return;
     const taskId = last.taskId;
-    const TERMINAL = /completed|failed|canceled|cancelled/i;
     let cancelled = false;
     let polls = 0;
     const MAX_POLLS = 40; // ~2 min at 3s, then unlock and let the next open re-poll
@@ -130,8 +133,11 @@ export function PaletteChat({
         return; // best-effort — leave it for the next open to retry
       }
       if (cancelled) return;
-      if (!res.state || TERMINAL.test(res.state)) {
-        const failed = /fail|cancel/i.test(res.state);
+      // Settled: gone from the store (no state), terminal, or a state the server cannot
+      // name (`unknown` / UNSPECIFIED) — no producer will ever move that one on, so polling
+      // it only holds the composer locked for the whole budget (taskState.ts, #3972).
+      if (!res.state || isTaskTerminal(res.state) || isTaskStateUnknown(res.state)) {
+        const failed = isTaskFailed(res.state);
         update((m) => ({ ...finalize(m), content: res.text || m.content, status: failed ? "error" : "done" }));
         setStreaming(false);
         return;

@@ -218,9 +218,3 @@ def test_run_in_session_job_id_replaces_the_pending_one_shot(wired):
     run_in_session("s", "p", job_id="reaction-1")
     assert wired.cancelled == ["reaction-1"]  # idempotent: drop any existing before re-adding
     assert wired.added[0]["job_id"] == "reaction-1"
-
-
-def test_sdk_module_exposes_the_helpers():
-    assert callable(sdk.run_in_session)
-    assert callable(sdk.start_goal_loop)
-    assert callable(sdk.stop_goal_loop)

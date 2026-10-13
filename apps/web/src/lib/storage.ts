@@ -61,6 +61,8 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   { id: "authToken", area: "local", pattern: /^protoagent\.authToken$/, category: "auth", slug: noSlug, evictable: false },
   { id: "deviceId", area: "local", pattern: /^protoagent\.deviceId$/, category: "auth", slug: noSlug, evictable: false },
   { id: "apiBase", area: "local", pattern: /^protoagent\.apiBase$/, category: "auth", slug: noSlug, evictable: false },
+  { id: "frame.sendTrust", area: "local", pattern: /^protoagent:frame-send-trust:v1$/, category: "auth", slug: noSlug, evictable: false },
+  { id: "frame.openLinkTrust", area: "local", pattern: /^protoagent:frame-openlink-trust:v1$/, category: "auth", slug: noSlug, evictable: false },
   // ── tenant ──
   { id: "tenant.uid", area: "local", pattern: /^protoagent\.tenant\.uid$/, category: "tenant", slug: noSlug, evictable: false },
   { id: "tenant.switched", area: "session", pattern: /^protoagent\.tenant\.switched$/, category: "ephemeral", slug: noSlug, evictable: false },
@@ -88,7 +90,9 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   { id: "chat.dismissedScheduled", area: "local", pattern: /^protoagent\.chat\.dismissedScheduled$/, category: "dismissals", slug: noSlug, evictable: false },
   { id: "chat.dismissedToolCalls", area: "local", pattern: /^protoagent\.chat\.dismissedToolCalls$/, category: "dismissals", slug: noSlug, evictable: false },
   { id: "bgjobs.seen", area: "local", pattern: /^protoagent\.bgjobs\.seen$/, category: "dismissals", slug: noSlug, evictable: false },
+  { id: "goals.dismissed", area: "local", pattern: /^protoagent\.goals\.dismissed$/, category: "dismissals", slug: noSlug, evictable: false },
   // ── prefs ──
+  { id: "newAgent.showPreviewArchetypes", area: "local", pattern: /^protoagent\.newAgent\.showPreviewArchetypes$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "keybindings", area: "local", pattern: /^protoagent\.keybindings$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "chat.inputHistory", area: "local", pattern: /^protoagent\.chat\.inputHistory$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "fleet.recent", area: "local", pattern: /^protoagent\.fleet\.recent$/, category: "prefs", slug: noSlug, evictable: false },

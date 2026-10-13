@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useUI } from "../state/uiStore";
 import { setCodePaneEnabled } from "./enabled";
-import { CODE_PANE_WIDTH, FOLLOW_THROTTLE_MS, followCode, openCode, placeCodeSurface, resetFollowThrottle } from "./open";
+import {
+  CODE_PANE_WIDTH,
+  FOLLOW_THROTTLE_MS,
+  followCode,
+  followDiff,
+  openCode,
+  placeCodeSurface,
+  resetFollowThrottle,
+} from "./open";
 import { resetCodeViewer, setFollow, setPinned, useCodeViewer } from "./store";
 
 function setMobile(on: boolean) {
@@ -189,6 +197,43 @@ describe("followCode", () => {
     setFollow(true);
     followCode({ project: "p", path: "a.ts" }, 10_000);
     expect(useUI.getState().rightCollapsed).toBe(true);
+  });
+});
+
+// A coding delegate's edit (`fs.changed` from the bus): follow moves to that file's DIFF.
+describe("followDiff", () => {
+  it("does nothing while follow is OFF, pinned, or on a phone", () => {
+    followDiff("app", "src/a.ts", 10_000);
+    setFollow(true);
+    setPinned(true);
+    followDiff("app", "src/a.ts", 20_000);
+    setPinned(false);
+    setMobile(true);
+    followDiff("app", "src/a.ts", 30_000);
+    expect(useCodeViewer.getState().diffFocus).toBeNull();
+    expect(useCodeViewer.getState().tab).toBe("file");
+  });
+
+  it("switches to the Diff tab on that project with the file picked; never re-routes docks", () => {
+    setFollow(true);
+    followDiff("app", "./src//a.ts", 10_000);
+    const s = useCodeViewer.getState();
+    expect(s.tab).toBe("diff");
+    expect(s.diffProject).toBe("app");
+    expect(s.diffFocus).toEqual({ project: "app", path: "src/a.ts", seq: 1 });
+    expect(useUI.getState().rightCollapsed).toBe(true);
+  });
+
+  it("shares followCode's throttle: a burst lands on the LAST edit", () => {
+    vi.useFakeTimers();
+    setFollow(true);
+    const t0 = Date.now();
+    followCode({ project: "app", path: "read.ts" }, t0);
+    followDiff("app", "b.ts", t0 + 100);
+    followDiff("app", "c.ts", t0 + 200);
+    expect(useCodeViewer.getState().diffFocus).toBeNull();
+    vi.advanceTimersByTime(FOLLOW_THROTTLE_MS);
+    expect(useCodeViewer.getState().diffFocus?.path).toBe("c.ts");
   });
 });
 

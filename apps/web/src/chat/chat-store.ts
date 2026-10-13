@@ -43,6 +43,13 @@ export type ChatSession = {
   // convenience, and refusing to route `@somebody-else` would be a surprise, not a
   // safety property.
   participants?: string[];
+  // The server's durable turn count (`/api/chat/sessions` `turn_count`) this copy was last
+  // reconciled against at boot. A later count above it — and above the turns this copy
+  // already holds — means another client added turns this cache never saw, so boot
+  // hydration reads the session's turns again (sessionHydration.isBehindServer). Recorded
+  // even when that read added nothing, so a count this copy can never match (a turn
+  // regenerated away, a tail past the read window) is not re-fetched on every boot.
+  serverTurnCount?: number;
 };
 
 // Reasoning is ON by default in the console (auto-enable) — a fresh tab thinks at
@@ -142,6 +149,18 @@ const locallyDeletedIds = new Set<string>(locallyDismissedIds);
 export type HydrationEligibility = {
   sessionId: string;
   localSession: ChatSession | null;
+  /** A non-empty local copy the server has turns beyond (another client added them):
+   *  reconciled through `reconcileSessions`, not filled through `hydrateSessions`. */
+  behind?: boolean;
+};
+
+/** A boot reconcile of a non-empty local session that fell behind the server: the
+ *  transcript to adopt (`messages`, or null when there was nothing to add) and the server
+ *  count it now answers for. Applied only while the session is still `token.localSession`. */
+export type SessionReconcile = {
+  token: HydrationEligibility;
+  messages: ChatMessage[] | null;
+  serverTurnCount: number;
 };
 
 function hydrationCanRepairMessage(message: ChatMessage | undefined): message is ChatMessage {
@@ -251,6 +270,11 @@ export function takeGoalKickoff(sessionId: string): string | null {
   const prompt = pendingGoalKickoffs.get(sessionId);
   if (prompt != null) pendingGoalKickoffs.delete(sessionId);
   return prompt ?? null;
+}
+
+/** Whether `sessionId` has a kickoff queued (the slot's gate reads it before deciding). */
+export function hasGoalKickoff(sessionId: string): boolean {
+  return pendingGoalKickoffs.has(sessionId);
 }
 
 function id(prefix: string) {
@@ -375,10 +399,18 @@ export function mergeSessions(
   return out.slice(0, MAX_SESSIONS);
 }
 
+/** A session whose live turn is parked on the operator: its lead bubble is still open
+ *  (`streaming`) and marked paused (an `ask_human` question, a form, an approval). */
+export function isParkedSession(session: ChatSession): boolean {
+  const last = [...session.messages].reverse().find((message) => message.role === "assistant");
+  return Boolean(last?.status === "streaming" && last.paused && last.taskId);
+}
+
 /** Fold server-recovered sessions into the local-first store (#2888).
- * Non-empty local transcripts always win because they carry richer ordered
- * parts and client-only annotations. A locally empty copy may be recovered,
- * and server-only sessions fill only the remaining cap. The sole auto-created
+ * Non-empty local transcripts win here because they carry richer ordered
+ * parts and client-only annotations — a local copy the server has turns BEYOND
+ * goes through `reconcileSessions` instead (sessionHydration.isBehindServer). A locally empty copy may be recovered,
+ * and server-only sessions fill only the remaining cap (parked ones first, #3957). The sole auto-created
  * blank tab is a boot placeholder, so a successful recovery replaces it. */
 export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[]): ChatState {
   if (!incoming.length) return current;
@@ -425,7 +457,15 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
   const missing = incoming
     .filter((session) => session.messages.length > 0 && !existingIds.has(session.id))
     .sort((a, b) => a.updatedAt - b.updatedAt);
-  const additions = slots ? missing.slice(-slots) : [];
+  // The newest fill the free slots — but a session PARKED on the operator (its question
+  // or approval still waiting) is kept first, however old: dropping it here would lose the
+  // one tab that still needs the operator (#3957). Drawn oldest-first either way.
+  const kept = new Set(
+    [...missing.filter(isParkedSession).reverse(), ...missing.filter((session) => !isParkedSession(session)).reverse()]
+      .slice(0, slots)
+      .map((session) => session.id),
+  );
+  const additions = missing.filter((session) => kept.has(session.id));
   for (const session of additions) {
     byId.set(session.id, session);
     hydratedIds.add(session.id);
@@ -452,7 +492,8 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
   for (const session of sessions) {
     if (!hydratedIds.has(session.id)) continue;
     const last = [...session.messages].reverse().find((message) => message.role === "assistant");
-    if (last?.status === "streaming" && last.taskId) sessionStatusMap[session.id] = "streaming";
+    // A parked (paused) turn is not producing — same rule as bootLiveTurns (#3956).
+    if (last?.status === "streaming" && last.taskId && !last.paused) sessionStatusMap[session.id] = "streaming";
     else if (last?.status === "error") sessionStatusMap[session.id] = "error";
   }
   return { ...current, sessions, currentSessionId, activeSessions, sessionStatusMap };
@@ -664,23 +705,36 @@ let initial = loadPersisted();
 // persistence: the transcript is already the durable truth, and a persisted
 // status map could lie about a turn that ended while the tab was closed —
 // the reattach settles each derived `streaming` to idle/error from the task.
-function sessionsWithLiveTurns(persisted: PersistedChatState): string[] {
-  return persisted.sessions
-    .filter((session) => {
-      const last = [...session.messages].reverse().find((m) => m.role === "assistant");
-      return last?.status === "streaming" && !!last.taskId;
-    })
-    .map((session) => session.id);
+//
+// A turn PARKED on the operator (its bubble paused — an `ask_human` question, a form, an
+// approval, #3956) is in flight too, and still comes back active so its reattach brings the
+// form back — but it is NOT marked `streaming`: nothing is producing into it. Only
+// MAX_ACTIVE_SESSIONS slots mount, and a parked session past that cap would otherwise hold
+// a streaming tab dot, the rail's any-streaming dot and a retirement block until opened.
+// Opening it mounts its slot, and the reattach runs off the bubble, not the status.
+export function bootLiveTurns(
+  persisted: PersistedChatState,
+): Pick<ChatState, "activeSessions" | "sessionStatusMap"> {
+  const working: string[] = [];
+  const parked: string[] = [];
+  for (const session of persisted.sessions) {
+    const last = [...session.messages].reverse().find((m) => m.role === "assistant");
+    if (last?.status !== "streaming" || !last.taskId) continue;
+    (last.paused ? parked : working).push(session.id);
+  }
+  // Mount order: the focused tab, then turns still producing, then parked ones.
+  const activeSessions = [
+    ...new Set([...(persisted.currentSessionId ? [persisted.currentSessionId] : []), ...working, ...parked]),
+  ].slice(0, MAX_ACTIVE_SESSIONS);
+  return {
+    activeSessions,
+    sessionStatusMap: Object.fromEntries(working.map((id) => [id, "streaming" as SessionStatus])),
+  };
 }
 
-const resumeIds = sessionsWithLiveTurns(initial);
 let state: ChatState = {
   ...initial,
-  activeSessions: [
-    ...(initial.currentSessionId ? [initial.currentSessionId] : []),
-    ...resumeIds.filter((id) => id !== initial.currentSessionId),
-  ].slice(0, MAX_ACTIVE_SESSIONS),
-  sessionStatusMap: Object.fromEntries(resumeIds.map((id) => [id, "streaming" as SessionStatus])),
+  ...bootLiveTurns(initial),
   pendingDeleteRequest: null,
   pendingClearRequest: null,
   serverTurnControls: {},
@@ -812,11 +866,43 @@ export const chatStore = {
     return session;
   },
 
-  captureHydrationEligibility(sessionId: string): HydrationEligibility | null {
+  captureHydrationEligibility(sessionId: string, opts: { behind?: boolean } = {}): HydrationEligibility | null {
     if (locallyDeletedIds.has(sessionId) || locallyDismissedIds.has(sessionId)) return null;
     const localSession = state.sessions.find((session) => session.id === sessionId) ?? null;
+    if (opts.behind) return localSession?.messages.length ? { sessionId, localSession, behind: true } : null;
     if (localSession?.messages.length && !needsDurableHydration(localSession)) return null;
     return { sessionId, localSession };
+  },
+
+  /** Commit boot reconciles of local sessions that fell behind the server (another
+   *  client's turns). Each applies only if the session is still the exact object read
+   *  before the fetch — any local edit in between (a send, a reattach settling a turn, a
+   *  delete) vetoes it, and the next boot tries again. */
+  reconcileSessions(updates: SessionReconcile[]) {
+    if (!updates.length) return;
+    setState((current) => {
+      let changed = false;
+      const sessionStatusMap = { ...current.sessionStatusMap };
+      const sessions = current.sessions.map((session) => {
+        const update = updates.find((candidate) => candidate.token.sessionId === session.id);
+        if (!update || session !== update.token.localSession) return session;
+        if (locallyDeletedIds.has(session.id) || locallyDismissedIds.has(session.id)) return session;
+        changed = true;
+        if (!update.messages) return { ...session, serverTurnCount: update.serverTurnCount };
+        const last = [...update.messages].reverse().find((message) => message.role === "assistant");
+        // The adopted tail can end on a turn still running elsewhere: mark it like a
+        // hydrated session's live turn (mergeHydratedSessions), so the slot reattaches.
+        if (last?.status === "streaming" && last.taskId && !last.paused) sessionStatusMap[session.id] = "streaming";
+        // A newer `updatedAt` so a sibling tab's merge (mergeSessions) takes this copy.
+        return {
+          ...session,
+          messages: update.messages,
+          serverTurnCount: update.serverTurnCount,
+          updatedAt: Math.max(session.updatedAt, Date.now()),
+        };
+      });
+      return changed ? { ...current, sessions, sessionStatusMap } : current;
+    });
   },
 
   hydrateSessions(sessions: ChatSession[], eligibility: HydrationEligibility[] = []) {

@@ -1007,6 +1007,7 @@ def test_launch_hub_keeps_the_box_root_of_a_scoped_instance_under_a_custom_box(t
     """Round 2: the child got only PROTOAGENT_HOME, so a scoped instance under this shell's
     PROTOAGENT_BOX_ROOT resolved its box to ~/.protoagent — wrong Host layer, commons,
     credential store, and a heartbeat under the wrong .instances/."""
+    import os
     import subprocess
     import sys
     from pathlib import Path
@@ -1034,7 +1035,7 @@ def test_launch_hub_keeps_the_box_root_of_a_scoped_instance_under_a_custom_box(t
     assert env["PROTOAGENT_HOME"] == str(dev) and env["PROTOAGENT_BOX_ROOT"] == str(box) and "PROTOAGENT_INSTANCE" not in env
     # what the CHILD resolves from that env — a real interpreter, this checkout, no server
     repo = Path(__file__).resolve().parents[1]
-    env["PYTHONPATH"] = str(repo)
+    env["PYTHONPATH"] = os.pathsep.join((str(repo / "src"), str(repo)))
     out = real_run([sys.executable, "-c", "from infra.paths import instance_paths as p; print(p().box_root); print(p().instance_root)"], env=env, capture_output=True, text=True, cwd=str(repo), timeout=60)
     child_box, child_root = out.stdout.strip().splitlines()[-2:]
     assert (Path(child_box), Path(child_root)) == (box, dev), out.stderr
@@ -1128,6 +1129,7 @@ def test_fleet_all_strips_control_characters_from_what_a_peer_or_hub_said(monkey
     body = json.loads(capsys.readouterr().out)
     assert body["hubs"][0]["name"] == evil and body["hubs"][0]["version"] == "1\x9b0"  # raw, for scripts
 
+@pytest.mark.platform_sensitive
 def test_the_non_interactive_verbs_never_load_textual(tmp_path):
     """S6 (#3473): `fleet --all --json` reached the hub enumerator through `deck.hubs`, whose
     module top imports the Textual screen — a frozen build without Textual would have died
@@ -1139,7 +1141,7 @@ def test_the_non_interactive_verbs_never_load_textual(tmp_path):
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[1]
-    env = dict(os.environ, PYTHONPATH=str(repo), PROTOAGENT_HOME=str(tmp_path / "inst"), PROTOAGENT_BOX_ROOT=str(tmp_path / "box"))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(repo / "src"), str(repo))), PROTOAGENT_HOME=str(tmp_path / "inst"), PROTOAGENT_BOX_ROOT=str(tmp_path / "box"))
     probe = "import sys; from graph.fleet import cli\ntry:\n    rc = cli.run_fleet_cli({argv!r})\nexcept SystemExit as e:\n    rc = e.code\nprint('textual' in sys.modules, 'deck.hubs' in sys.modules, rc)"
     for argv in (["--all", "--offline", "--json"], ["ls", "--offline", "--json"], ["--help"]):
         out = subprocess.run([sys.executable, "-c", probe.format(argv=argv)], env=env, capture_output=True, text=True, cwd=str(repo), timeout=120)

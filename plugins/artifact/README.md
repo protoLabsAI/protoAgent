@@ -7,29 +7,31 @@ same isolation model as Claude Artifacts / Open WebUI. Generated code runs, but 
 console. React artifacts can `import` a curated **offline** set — charts, icons, and the protoLabs
 **design-system** components.
 
-It's also the **reference external plugin**: pure Python + a self-served iframe page + a bundled
-skill — no host build, no federation. Installable from this git URL.
+It ships Python tools, a self-served iframe page, and a bundled skill. Plugin
+authors can use it as an example of a view that needs no host frontend build.
 
 ## Install
 
-In the protoAgent console: **Plugins → Download → install from a git URL**, or in config:
+Artifact is bundled and enabled by default. To re-enable it, use **Settings →
+Plugins → Installed**, or declare it in config:
 
 ```yaml
 plugins:
   enabled: [artifact]
 ```
 
-then install `https://github.com/protoLabsAI/artifact-plugin` (ADR 0027). Restart to mount its
-console view.
+Save the enabled state to mount its console view live. For everyday file creation
+and downloads, see [Work with documents and files](../../docs/guides/documents-and-files.md).
 
 ## What it adds
 
 - **Tools** — an artifact is a **version chain** (the Claude "update vs rewrite" model), so editing
   iterates the same artifact instead of flooding the panel with near-duplicates:
   - `show_artifact(kind, code, title, links?)` — **create** (`kind` ∈ `html` · `markdown` · `svg` ·
-    `mermaid` · `react`). `markdown` renders with design-system prose styling (` ```mermaid ` fences
-    become live diagrams); `react` can `import` the curated libraries below. `links` (mermaid) —
-    see **Code-linked diagrams** below.
+    `mermaid` · `vega-lite` · `react`). `markdown` renders with design-system prose styling
+    (` ```mermaid ` fences become live diagrams); `vega-lite` is a **chart** — see **Charts** below;
+    `react` can `import` the curated libraries below. `links` (mermaid) — see **Code-linked
+    diagrams** below.
   - `update_artifact(old_string, new_string, artifact_id?, links?)` — **targeted edit**
     (string-replace, must match once) → new version. The fast path for small changes. A
     diagram's links carry over unless `links` is passed (`{}` clears them).
@@ -62,6 +64,12 @@ console view.
     doesn't reopen it. On a phone nothing opens by itself — a tap pushes the panel (ADR 0086);
   - a chip for an **older version** opens that version, reads `v2 of 5`, and turns the panel's
     follow-newest off so the next agent edit doesn't yank the operator away from it;
+  - the panel **belongs to the active chat tab**: its follow-newest jumps only to a panel artifact
+    that chat made or revised (the artifact's `chat_sessions`, which the tools stamp for console
+    chats). An artifact from another chat tab, a `/v1`/A2A/ACP client, or a record from before
+    the stamp never takes the panel over; it stays in the picker, and **Open in panel** still
+    shows it. Switching tabs moves a following panel to that chat's newest panel artifact (or
+    leaves it where it is when that chat has none);
   - a **deleted/evicted** artifact (or a version trimmed at the *Versions per artifact* cap)
     renders the chip inert — "no longer available" — and a chip whose panel is off (plugin
     disabled) renders inert too;
@@ -136,13 +144,18 @@ show_artifact(kind="mermaid", code="sequenceDiagram\n  C->>A: ask(q)\n  A->>T: r
 
 `react` artifacts can `import` from a curated, **fully-offline** set (resolved by an
 [import map](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script/type/importmap) to the
-same-origin `vendor/` modules — no network):
+same-origin `vendor/` modules — no network). `html` artifacts get the same import map, so a
+`<script type="module">` in one can `import * as THREE from "three"`, `import * as d3 from "d3"`
+or `import { animate } from "animejs"` too. An `html` artifact that ships its own `<script type="importmap">` keeps it: the shell merges
+the two into one map, and the author's entries win.
 
 | Specifier | What |
 |---|---|
 | `@pl/ui` | protoLabs **design-system** wrappers that match the console theme — enough to prototype real **layouts** + **components**, not just widgets. Layout: `AppShell` · `Header` · `SideNav`/`SideNavItem` · `Container` · `Section` · `Panel` · `Grid` · `Row` · `Hero` · `Divider`. Nav: `Tabs`/`Tab` · `Segmented`/`SegmentedButton` · `Menu`/`MenuItem`/`MenuSeparator`. Data: `Table` · `Board` · `Stats`/`Stat` · `Steps`/`Step` · `Progress` · `Accordion`/`AccordionItem` · `Avatar` · `Empty`. Overlays: `Dialog` · `Drawer` · `Callout` · `Tip`. Forms: `Field` · `Input` · `Textarea` · `Select` · `Switch` · `Checkbox`. Primitives/type: `Button` · `IconButton` · `Card` · `Badge` · `Tag` · `Kbd` · `Link` · `Dot` · `Spinner` · `Skeleton` · `Alert` · `Heading` · `Eyebrow` · `Lead` · `Prose` · `Icon` (lucide by `name`). |
 | `chart.js` | `import { Chart } from 'chart.js'` (controllers pre-registered) — quick charts onto a `<canvas>`. |
 | `d3` | `import * as d3 from 'd3'` — bespoke data-driven SVG. |
+| `three` | `import * as THREE from 'three'` — 3D scenes onto a `<canvas>` (three.js r170, MIT; notices in `vendor/three.LICENSES.txt`). |
+| `animejs` | `import { animate } from 'animejs'` — animation, e.g. `animate(el, { translateX: 100, duration: 400 })` (anime.js 4.5.0 v4 API, MIT; notices in `vendor/anime.LICENSES.txt`). |
 | `lucide` | the raw icon library (if not using `@pl/ui`'s `Icon`). |
 | `react`, `react-dom/client` | resolve to the same React the UMD globals use (one shared instance). |
 
@@ -153,6 +166,152 @@ layouts + components rather than hand-rolling class strings. Those classes and t
 are injected into every `html` / `react` / `markdown` artifact (via the host-served
 `/_ds/plugin-kit.css`), so even plain elements (`className="pl-btn pl-btn--primary"`) follow the
 live theme — reach for a raw element with `className="pl-…"` for any component `@pl/ui` doesn't wrap.
+
+## Charts (`vega-lite`, ADR 0116)
+
+A chart is a [Vega-Lite](https://vega.github.io/vega-lite/) spec with its rows **inline** in
+`data.values` — a few hundred bytes of JSON instead of a hand-written component, which is what
+makes a chart fast to produce. The panel draws it with the vendored `vega` 6.4.0 / `vega-lite`
+6.4.3 / `vega-embed` 7.3.0 (BSD-3-Clause; their own UMD builds, byte-for-byte, notices in
+`vendor/vega.LICENSES.txt`), SRI-pinned like the other UMD libs.
+
+- **Themed for you.** The chart takes the console's own data-viz tokens — `--pl-color-chart-series1…8`
+  as the categorical palette, `--pl-color-chart-axis`/`-grid` for guides, the theme's fg/bg/font —
+  and redraws on a live theme switch. Leave colours and background out of the spec; a spec's own
+  `config` still wins when you mean one. A single view fills the panel width.
+- **Inline data only.** A `url` inside any data definition is refused when the version is written
+  (create, update and rewrite), with a reason. In the frame, Vega's loader refuses every load
+  (`data.url`, a spec by URL, image marks), the CSP has no network (`connect-src 'none'`, images and
+  fonts `data:` only), expressions run as the CSP-safe interpreter (no `eval`, so no
+  `'unsafe-eval'`), and a spec's `usermeta.embedOptions` — which vega-embed would otherwise let
+  override the embed options, loader included — is stripped. No export/editor action menu.
+- **From another plugin.** The `artifact.show` plugin service creates one without importing this
+  plugin — `graph.sdk.service("artifact.show")(kind="vega-lite", code=spec_json, title=…)` → `{ok,
+  id, version, message, ref}`; append `ref` (the chat chip) last. The data plugin's `data_chart`
+  runs a query and hands its rows here this way. Pass `renders_ui=graph.sdk.renders_ui(state)`
+  from your tool's injected state: on a client that renders text only (`/v1`, `/api/chat`, a relay
+  plugin's turn) the reply then says the artifact was saved but can't be displayed, and `ref` is
+  empty (#4144).
+
+```json
+{"title": "Revenue by weekday", "mark": {"type": "bar", "tooltip": true},
+ "encoding": {"x": {"field": "weekday", "type": "nominal", "sort": "-y"},
+              "y": {"field": "revenue", "type": "quantitative", "axis": {"format": "$,.0f"}}},
+ "data": {"values": [{"weekday": "Sat", "revenue": 2310.5}, {"weekday": "Fri", "revenue": 1876}]}}
+```
+
+## File artifacts — what each type previews as
+
+`save_file_artifact(path, title?, artifact_id?, project?)` stores a generated file's bytes as a
+versioned artifact (Download button, version history) and previews it by type. `path` takes the
+fs tools' form: a project-relative path (pass `project`, or omit it when one project has the file)
+or an absolute path. Every version also keeps a **text projection** in `code`, so history stays
+diffable and screen readers / a failed render still have the content.
+
+| File | Preview | Safety gate |
+|---|---|---|
+| `.docx` | **Real pages** — Word styles, headings, lists, tables, images, headers/footers, footnotes; − / Fit / + zoom ([below](#word-documents-docx)) | save-time zip preflight (`_docx.py`) |
+| `.pdf` | **Real pages** — continuous scroll, zoom ([below](#pdfs-pdf)) | save-time stream preflight (`_pdfview.py`) |
+| `.pptx` | **Real slides** — current slide + filmstrip ([below](#slide-decks-pptx)) | save-time zip preflight (`_slides.py`) |
+| `.csv` / `.tsv` | **Table** — delimiter sniffed (`,` `;` tab `|`), Excel's byte-order mark stripped, numeric columns right-aligned, first 500 rows | — (text) |
+| `.xlsx` | **One table per sheet** (first 200 rows × 50 columns each) | — (text projection) |
+| `.md` | Rendered prose | — |
+| `.json` | Pretty-printed | — |
+| images | Thumbnail | — |
+| other text | Plain text | — |
+
+The text projection is capped by `max_preview_kb`; a clipped preview says so and points at Download.
+
+## Slide decks (.pptx)
+
+A `.pptx` saved with `save_file_artifact` previews as its **real slides**, not a text dump: a large
+current slide sized to the panel with a filmstrip under it. Arrow keys / PageUp / PageDown / Home /
+End page through it, clicking the slide advances (its left third goes back), and the filmstrip
+thumbnails jump. Slides are laid out as HTML/SVG, so text stays sharp at any width; the
+filmstrip only lays out the thumbnails near the visible strip, so a 300-slide deck opens as fast
+as a 6-slide one. The text outline stays under the slides (collapsed) for screen readers and
+copy-paste, and is the whole view when a deck can't be rendered.
+
+The renderer is [`@aiden0z/pptx-renderer`](https://github.com/aiden0z/pptx-renderer) 1.3.0
+(Apache-2.0; bundles JSZip, ECharts/ZRender and the MPL-2.0 `mtx-decompressor`, notices in
+`vendor/pptx-renderer.LICENSES.txt`), vendored as `vendor/pptx-renderer.min.js` and SRI-pinned like
+the other UMD libs. It supports theme colours and fonts, placeholders and master/layout
+inheritance, bullets, tables, images, preset shapes, gradients, charts and SmartArt fallbacks.
+Fonts a deck names but the machine lacks fall back to a system font, and EMF/WMF vector art without
+an embedded preview is not drawn.
+
+**Hostile files.** The deck renders inside the same no-same-origin sandbox as every artifact,
+under a nonce Content-Security-Policy (no inline handlers, no `javascript:` URLs, `connect-src
+'none'`, images/fonts/media from `blob:`/`data:` only), and only plain `http(s)` links keep an
+`href` (the sandbox can't open them anyway). The frame can't authenticate, so the shell fetches the
+gated blob and transfers the bytes in — and only for a version the save-time preflight
+**cleared**. That preflight (`_slides.py`) doesn't trust the zip's declared sizes: it inflates
+every entry's raw stream in bounded chunks against a running byte budget and a 15 s clock, then
+requires the real size and CRC to match the declared ones (a header that lies is a tampered
+zip). Its verdict is stamped on the version as `file.slides`, so a view never re-inflates
+anything; a refused deck, or one saved before slide previews existed, shows the outline. Caps
+(`PPTX_CAPS` in `shell.js` mirrors them, drift-guarded): 40 MB file, 4000 entries, 32 MB per
+inflated entry, 256 MB inflated in total, a 200:1 compression ratio on big entries, 1000 slides,
+50 megapixels per image and 150 MP across the deck (images past either become placeholders, never
+decoded). The frame re-applies them on its own inflate, one entry at a time so the first cap hit
+stops it, with a 20 s parse budget; a 45 s shell watchdog swaps in the outline card if the frame
+never answers.
+
+## PDFs (.pdf)
+
+A `.pdf` saved with `save_file_artifact` previews as its **real pages**: one continuous scroll,
+fitted to the panel width, with a page indicator (‹ 3 / 12 ›) and zoom (− / Fit / +, or the `-`,
+`0` and `+` keys). Pages are drawn to canvases only while they're near the visible area and freed
+when they scroll away, so a 500-page report opens as fast as a 3-page sheet; a drawn page's canvas
+is capped at 16 MP whatever the zoom. The extracted text stays underneath (collapsed) for screen
+readers, copying, and as the whole view when a file can't be rendered.
+
+The renderer is [pdf.js](https://github.com/mozilla/pdf.js) (`pdfjs-dist` 6.4.299, legacy build,
+Apache-2.0 — notices in `vendor/pdfjs.LICENSES.txt`), vendored byte-for-byte as
+`vendor/pdfjs.min.mjs` + `vendor/pdfjs-worker.min.mjs` and SRI-pinned. It runs on the frame's
+**main thread**: the worker module only registers pdf.js's message handler on `globalThis`, so the
+frame never starts a Worker (its CSP forbids them). No wasm decoders, cMaps or standard-font data
+are vendored: JPEG 2000 / JBIG2 images draw blank and non-embedded fonts fall back to system fonts.
+There's no text or link layer (pages are pictures; use the extracted text to copy).
+
+**Hostile files.** Same sandbox and nonce CSP as slides, plus `worker-src 'none'` and no network of
+any kind (`useWasm:false`, no streaming or range loads). pdf.js has no decompression limits of its
+own, so the save-time preflight (`_pdfview.py`) decodes every stream the renderer will decode —
+each page's content streams, its image and form XObjects (forms recursively) and embedded font
+programs — through pypdf's bounded filters, against a 64 MB per-stream and 512 MB whole-document
+budget and a 15 s clock. Image sizes come from the image dictionaries (no decode): 50 MP per
+image, 150 MP drawn on one page. Password-protected files, unreadable files and anything over
+40 MB or 2000 pages are refused. The verdict is stamped on the version as `file.pdf`; a refused
+PDF, or one saved before page previews existed, shows the extracted-text card with the reason.
+`PDF_CAPS` in `shell.js` mirrors the caps (drift-guarded); the frame adds a 20 s parse budget and
+the shell's 45 s watchdog swaps in the text card if the frame never answers.
+
+## Word documents (.docx)
+
+A `.docx` saved with `save_file_artifact` previews as its **real pages**: the document's own page
+size and margins, Word paragraph/character styles, headings, numbered and bulleted lists, tables,
+embedded images, headers, footers, footnotes and endnotes, fitted to the panel width with a page
+indicator and zoom (− / Fit / +, or the `-` `0` `+` keys). Scaling uses CSS `zoom`, so text is
+re-laid-out and stays sharp (a scaling transform is blurred by WKWebView, #1517). The extracted text
+stays underneath (collapsed). Word's Symbol/Wingdings bullet code points are swapped for real
+Unicode bullets after rendering, since browsers don't ship those fonts.
+
+The renderer is [docx-preview](https://github.com/VolodymyrBaydalka/docxjs) 0.4.1 (Apache-2.0) on
+[JSZip](https://github.com/Stuk/jszip) 3.10.2 (MIT), both vendored byte-for-byte as UMD builds
+(`vendor/jszip.min.js`, `vendor/docx-preview.min.js`) and SRI-pinned; notices in
+`vendor/docx-preview.LICENSES.txt`. Not rendered: tracked changes and comments (off), and
+**altChunks** (raw HTML embedded in a document — never rendered). Legacy binary `.doc` files keep
+the text card.
+
+**Hostile files.** Same sandbox and nonce CSP as slides/pages (no network, no workers). A .docx is a
+zip, so the save-time preflight (`_docx.py`) reuses the slide preflight's bounded inflater: every
+entry is actually inflated against per-entry (32 MB) and whole-archive (256 MB) budgets and a 15 s
+clock, and its real size + CRC must match the directory. Images are measured from their headers:
+over 50 MP for one, or 400 MP for the whole document, refuses the preview with the reason. Anything
+over 40 MB, unreadable, or without `word/document.xml` keeps the text card. The verdict is stamped
+on the version as `file.docx`. `DOCX_CAPS` in `shell.js` mirrors the caps (drift-guarded); the frame
+adds a 20 s parse budget and the shell's 45 s watchdog swaps in the text card if it never answers.
+Only plain `http(s)` and in-document `#` links keep an `href`.
 
 ## Configuration
 
@@ -165,13 +324,24 @@ environment variable of the same knob overrides the UI for headless / ACP setups
 | **Interactive artifacts** | `ARTIFACT_ASK_ENABLED` | _off_ | Let artifacts call back to the agent via `window.protoArtifact.ask()` (below). |
 | **Ask system instruction** | `ARTIFACT_ASK_SYSTEM` | _(none)_ | Optional system prompt wrapping every `ask()`. |
 | **Ask prompt limit (chars)** | `ARTIFACT_ASK_MAX_CHARS` | `4000` | Max prompt length for an `ask()`. |
-| **Artifacts kept** | `ARTIFACT_HISTORY` | `20` | How many unpinned artifacts to keep (oldest evicted; pinned ones don't count). |
+| **Artifacts kept** | `ARTIFACT_HISTORY` | `200` | How many unpinned artifacts to keep. Past it, the oldest artifact that **no surviving chat still shows** is evicted: an artifact whose `artifact-ref` (an inline answer or a chip) went out in a console chat stays until every such chat is deleted (#4138). When every one is still shown, the store keeps them all and logs a warning rather than delete a live answer. Pinned ones don't count. |
 | **Versions per artifact** | `ARTIFACT_MAX_VERSIONS` | `50` | Max versions kept per artifact, pinned or not (oldest edits trimmed). |
 | **Pinned artifacts** | `ARTIFACT_MAX_PINNED` | `10` | Max pinned artifacts; a pin past this is refused. `0` refuses all new pins. Lowering it (to `0` included) doesn't unpin anything: existing pins stay protected until unpinned. |
 | **Max artifact size (KB)** | `ARTIFACT_MAX_CODE_KB` | `512` | Max source size per version (a larger render is rejected). |
 
-`ARTIFACT_DIR` (`~/.protoagent/artifact`) is env-only — where state is stored (instance-scoped by
-`PROTOAGENT_INSTANCE`).
+State (`history.json` plus the sidecar `blobs/`) lives in the instance's plugin store —
+`<instance_root>/artifact` (ADR 0004 / ADR 0065), so a box-scoped server (`PROTOAGENT_BOX_ROOT`)
+and every fleet member get their own copy. `ARTIFACT_DIR` is an env-only override of that directory
+(still `/<PROTOAGENT_INSTANCE>`-scoped when set). Legacy data from before instance scoping is
+migrated into the new location automatically on first access — the `history.json` and its `blobs/`
+move together (moving only the JSON would break file-artifact downloads). The migration source is
+the store's OLD location, `~/.protoagent/artifact[/<PROTOAGENT_INSTANCE>]` — HOME-relative, exactly
+where the pre-scoping code wrote it, **independent of `PROTOAGENT_BOX_ROOT` / `PROTOAGENT_HOME`**.
+That matters because the desktop and containers point the box root at their own directory (Tauri's
+config dir; `/sandbox`) while the old store was still written under HOME: reading the legacy source
+from HOME is what keeps a desktop or container upgrade from silently losing its history and pins.
+Sibling instance subdirectories under a bare legacy dir are left where they are, and if the new
+location already has a `history.json` it wins outright — no migration.
 
 ## Interactive artifacts (calling back to the agent)
 
@@ -213,17 +383,20 @@ The chat chip's deep-link is an inbound `protoArtifact:select {id, ver}` message
 it only from the window that **embeds** it (`e.source === window.parent`, and `e.origin` must equal
 `location.ancestorOrigins[0]` where the browser provides it) — never from the nested artifact
 frame, so model-authored code can't drive the panel's selection. The console posts it only after
-the page announces it is listening (`protoagent:ready`), targeted at the page's own origin.
+the page announces it is listening (`protoagent:ready`), targeted at the page's own origin. The
+console's `protoArtifact:context {session}` (the active chat tab, re-sent on every tab switch and to
+every fresh load of the panel) is held to the same rule.
 
 > **Offline / no network.** Everything is **vendored** under `vendor/` and served same-origin from
 > `/plugins/artifact/vendor/…`, so every artifact kind renders **fully offline** — no `cdnjs`, no
 > outbound network at all (`capabilities.network: []` is literally true):
-> - **UMD `<script>` libs** — React, ReactDOM, Babel, Mermaid (`*.min.js`). Pinned with **Subresource
+> - **UMD `<script>` libs** — React, ReactDOM, Babel, Mermaid, the `.pptx` slide renderer, the `.docx` renderer (JSZip + docx-preview), and Vega / Vega-Lite / vega-embed (`*.min.js`). The `.pdf` renderer (pdf.js) is the same idea as ES modules (`pdfjs*.min.mjs`, `<script type="module">`, also SRI-pinned). Pinned with **Subresource
 >   Integrity** (`integrity` + `crossorigin="anonymous"` — required because the sandbox is an opaque
 >   origin, so the load is cross-origin); a tampered served file won't execute. To bump one, replace
 >   the file, recompute its `sha512`, and update the `LIB` map in the shell page.
-> - **ESM modules** (the `react` import map) — `d3.mjs`, `chartjs.mjs`, `lucide.mjs`, `marked.mjs`
->   (esbuild-bundled, self-contained) plus the authored `pl-ui.mjs` + `react*.shim.mjs`. These are
+> - **ESM modules** (the `react` / `html` import map) — `d3.mjs`, `chartjs.mjs`, `lucide.mjs`, `marked.mjs`
+>   (esbuild-bundled, self-contained), three.js's own `three.module.min.js` and anime.js's own
+>   `anime.esm.min.js` builds (byte-for-byte, also SRI-pinned in the `LIB` map), plus the authored `pl-ui.mjs` + `react*.shim.mjs`. These are
 >   same-origin and **install-pinned** (the `plugins.lock` commit sha pins the exact bytes) rather
 >   than SRI-pinned — import-map `integrity` isn't yet broadly supported. To bump a curated lib,
 >   re-bundle it into `vendor/` (`esbuild --bundle --format=esm --minify`).

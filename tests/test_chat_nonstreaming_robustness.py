@@ -147,7 +147,9 @@ async def test_wait_yield_turn_falls_back_to_tool_text(monkeypatch):
     )
     out = await chat("wait a bit then resume", "sessC")
     content = out[0]["content"]
-    assert content and "Wait scheduled" in content  # not a blank reply
+    # Not a blank reply, and not the raw confirmation either: its "Will resume to: …" is the
+    # agent's note to its future self, which read in chat as the agent prompting itself.
+    assert content == "I'll pick this back up in 30 seconds."
 
 
 def test_vision_human_message_gates_on_model_vision(monkeypatch, tmp_path):

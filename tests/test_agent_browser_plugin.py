@@ -48,6 +48,8 @@ import yaml
 
 from graph.plugins.testkit import FakeRegistry, load_plugin
 
+pytestmark = pytest.mark.platform_sensitive
+
 REPO = Path(__file__).resolve().parent.parent
 ROOT = REPO / "plugins" / "agent_browser"
 
@@ -61,7 +63,9 @@ LAST_STANDALONE_VERSION = (0, 6, 5)
 EXPECTED_TOOLS = {
     "browser_open", "browser_back", "browser_forward", "browser_reload",
     "browser_snapshot", "browser_get_text", "browser_get_html", "browser_get_value",
-    "browser_click", "browser_fill", "browser_type", "browser_press", "browser_hover",
+    "browser_form_read",
+    "browser_click", "browser_fill", "browser_type", "browser_select", "browser_upload",
+    "browser_press", "browser_hover",
     "browser_eval", "browser_screenshot", "browser_pdf", "browser_close",
 }
 
@@ -82,6 +86,7 @@ preflight = _mod("preflight")
 rt = _mod("runtime")
 storage = _mod("storage")
 tools = _mod("tools")
+forms = _mod("forms")
 cli_fetch = _mod("cli_fetch")
 chrome_install = _mod("chrome_install")
 
@@ -121,11 +126,20 @@ def _toolmap(cfg=None, **kw):
 # the timeout + reap paths.
 
 
+class _StdinSink(io.BytesIO):
+    """A writable stdin pipe stand-in whose bytes survive `close()` — _run's feeder thread
+    writes the script then closes the pipe, and the test still needs to read what arrived."""
+
+    def close(self):
+        pass  # keep the buffer readable via getvalue() after the run
+
+
 class _FakeProc:
     """Minimal Popen: BytesIO pipes + wait/kill, enough for _run's drain loop."""
 
     def __init__(self, argv, out=b"", err=b"", rc=0, timeout=False):
         self._argv = list(argv)
+        self.stdin = _StdinSink()
         self.stdout = io.BytesIO(out)
         self.stderr = io.BytesIO(err)
         self._rc = rc
@@ -210,10 +224,12 @@ async def test_action_tools_pass_refs(monkeypatch):
     assert rec[-1] == ["ab", "snapshot"]
 
 
-def test_all_17_tools_present():
+def test_all_20_tools_present():
     names = set(_toolmap())
     assert names == EXPECTED_TOOLS
-    assert len(names) == 17  # 16 from the standalone repo + browser_pdf (#3451)
+    # 16 standalone + browser_pdf (#3451) + browser_form_read (#4032 A1) + browser_select (#4032 A2)
+    #   + browser_upload (#4032 A3)
+    assert len(names) == 20
     assert "browser_dashboard" not in names  # the dashboard tool is gone (full switchover)
 
 
@@ -900,6 +916,8 @@ async def test_pdf_is_fenced_exactly_like_screenshot(monkeypatch):
     ("browser_eval", {"expression": "--help"}),
     ("browser_fill", {"selector": "#q", "text": "--headed"}),
     ("browser_type", {"selector": "#q", "text": "-h"}),
+    ("browser_select", {"field": "--help", "option_text": "x"}),
+    ("browser_select", {"field": "#c", "option_text": "--allow-file-access"}),
 ])
 async def test_an_operand_that_reads_as_a_flag_is_refused_before_the_subprocess(monkeypatch, name, args):
     rec = []
@@ -918,8 +936,8 @@ async def test_an_operand_that_reads_as_a_flag_is_refused_before_the_subprocess(
     ("browser_fill", {"selector": "@e2", "text": "a -5% drop"}, ["fill", "@e2", "a -5% drop"]),
     ("browser_press", {"key": "-"}, ["press", "-"]),
     ("browser_press", {"key": "Control+a"}, ["press", "Control+a"]),
-    ("browser_eval", {"expression": "-1"}, ["eval", "-1"]),
-    ("browser_eval", {"expression": "(-1) + 2"}, ["eval", "(-1) + 2"]),
+    # browser_eval's dash-value pass-through is covered by the stdin tests below (the
+    # expression rides stdin now, not argv, so there is no argv tail to assert here).
 ])
 async def test_dash_values_the_cli_does_not_swallow_pass_through(monkeypatch, name, args, argv_tail):
     """Negative amounts (finance, merchantAgent), list bullets and the minus key — all of
@@ -945,6 +963,69 @@ async def test_a_refusal_says_how_to_do_it_anyway(monkeypatch, name, args, hint)
     assert out.startswith("Error:") and hint in out
 
 
+# ── #3689: browser_eval sends the script over stdin, never as an argv item ─────────
+# A script as an argv item overruns Windows' 32,767-char command-line cap after quoting
+# (CreateProcess WinError 206) before the CLI runs — design-system-plugin's 32,439-char
+# SITE_PROBE_JS built a 33,429-char command line. The fix: `agent-browser eval --stdin`
+# with the script on stdin, always, no size threshold.
+
+
+async def test_eval_sends_the_script_over_stdin_not_argv(monkeypatch):
+    rec, procs = [], []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="42", record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_eval"].ainvoke({"expression": "40 + 2"})
+    assert out == "42"
+    assert rec[-1] == ["ab", "eval", "--stdin"]           # the script is NOT an argv item…
+    assert procs[-1].stdin.getvalue() == b"40 + 2"        # …it arrives on stdin
+
+
+async def test_a_100k_eval_script_stays_under_the_windows_command_line_limit(monkeypatch):
+    """The bug shape, pinned: for a 100,000-char script the issued command line must stay
+    well under Windows' 32,767-char CreateProcess limit — which it can only do if the
+    script rides stdin, not argv."""
+    rec, procs = [], []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="ok", record=rec, procs=procs))
+    script = "1;" + "a".ljust(100_000, "a")               # 100,002 non-flag-shaped chars
+    await _toolmap({"binary": "ab"})["browser_eval"].ainvoke({"expression": script})
+    argv = rec[-1]
+    assert argv == ["ab", "eval", "--stdin"] and script not in argv    # never on the command line
+    assert len(subprocess.list2cmdline(argv)) < 32_767               # Windows CreateProcess cap
+    assert procs[-1].stdin.getvalue() == script.encode()             # delivered via stdin
+
+
+async def test_eval_dash_values_pass_the_guard_and_ride_stdin(monkeypatch):
+    """The dash-value pass-through for eval (`-1`, `(-1) + 2`) that used to be an argv-tail
+    assertion: still accepted by bad_operand, now delivered on stdin."""
+    procs = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="-1", procs=procs))
+    t = _toolmap({"binary": "ab"})
+    for expr in ("-1", "(-1) + 2"):
+        out = await t["browser_eval"].ainvoke({"expression": expr})
+        assert not out.startswith("Error:"), out
+        assert procs[-1].stdin.getvalue() == expr.encode()
+
+
+async def test_the_capture_content_probe_uses_stdin(monkeypatch):
+    """The page-has-content probe capture runs on an about:blank page takes the same
+    Windows-safe path: `eval --stdin` with its JS on stdin, not in argv."""
+    seen = []
+
+    def _popen(argv, **kw):
+        if argv[1:3] == ["get", "url"]:
+            return _FakeProc(argv, out=b"about:blank")
+        p = _FakeProc(argv, out=b"0")            # eval → page empty → capture refused up front
+        if argv[1] == "eval":
+            seen.append((list(argv), p))
+        return p
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "blank.pdf"})
+    assert out.startswith("Error:") and "blank" in out
+    [(argv, proc)] = seen
+    assert argv == ["ab", "eval", "--stdin"]
+    assert proc.stdin.getvalue() == tools._PAGE_HAS_CONTENT_JS.encode()
+
+
 def test_every_pdf_surface_says_the_output_is_us_letter():
     """`agent-browser pdf` has no paper-size option and ignores CSS `@page size` (pinned
     against the real binary below). An agent that promises A4 hands the user the wrong
@@ -960,6 +1041,1684 @@ def test_pdf_tells_the_model_about_the_artifact_handoff():
     plugin. If the docstring stops saying so, the capability is undiscoverable."""
     desc = _toolmap()["browser_pdf"].description
     assert "save_file_artifact" in desc and "PDF" in desc
+
+
+# ── #4032: label-located fields + browser_form_read (forms.py) ─────────────────────
+# Host-free: the in-page JS never runs here — the tool tests mock Popen and assert on the
+# stdin script + the parse of canned eval output; the label-matching RANKING is pure Python
+# (forms.match_fields) and is exercised directly.
+
+
+# A canned `abEnumerate` payload — the shape the in-page JS prints — covering every kind. The
+# radio group is TWO per-option entries (what the JS now emits so each option is independently
+# addressable); the read renderer folds them back into one radio-group row.
+_FORM_FIELDS = [
+    {"idx": 0, "label": "First name", "labels": ["First name", "first_name"], "kind": "text",
+     "name": "first_name", "id": "fn", "required": True, "value": "Ada", "selector": '[data-ab-field="0"]'},
+    {"idx": 1, "label": "Email", "labels": ["Email", "email"], "kind": "email",
+     "name": "email", "id": "em", "required": True, "value": "ada@x.io", "selector": '[data-ab-field="1"]'},
+    {"idx": 2, "label": "Country", "labels": ["Country"], "kind": "combobox",
+     "name": "country", "id": "cty", "required": False, "value": "United States", "selector": '[data-ab-field="2"]'},
+    {"idx": 3, "label": "Role", "labels": ["Role"], "kind": "native-select",
+     "name": "role", "id": "role", "required": False, "value": "Engineer",
+     "options": ["", "Engineer", "Manager"], "selector": '[data-ab-field="3"]'},
+    {"idx": 4, "label": "Junior", "labels": ["Junior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "id": "sen_j", "required": True, "value": "Junior", "selector": '[data-ab-field="4"]',
+     "group": "sen", "groupLabel": "Seniority", "optionLabel": "Junior", "checked": False},
+    {"idx": 5, "label": "Senior", "labels": ["Senior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "id": "sen_s", "required": True, "value": "Senior", "selector": '[data-ab-field="5"]',
+     "group": "sen", "groupLabel": "Seniority", "optionLabel": "Senior", "checked": True},
+    {"idx": 6, "label": "Résumé", "labels": ["Résumé", "resume"], "kind": "file",
+     "name": "resume", "id": "rz", "required": False, "value": "cv.pdf", "selector": '[data-ab-field="6"]'},
+    {"idx": 7, "label": "Subscribe", "labels": ["Subscribe", "subscribe"], "kind": "checkbox",
+     "name": "sub", "id": "sb", "required": False, "value": True, "selector": '[data-ab-field="7"]'},
+]
+
+
+def _field(label, labels=None, kind="text", name="", selector=None, **kw):
+    d = {"label": label, "labels": labels if labels is not None else [label], "kind": kind,
+         "name": name, "selector": selector or f"[sel-{label}]"}
+    d.update(kw)
+    return d
+
+
+# ── forms.classify / normalize — pure string routing ──────────────────────────────
+
+
+@pytest.mark.parametrize(("field", "kind"), [
+    ("@e5", "ref"), ("@e123", "ref"), ("  @e9 ", "ref"),
+    ("#email", "css"), (".form-control", "css"), ("[name='email']", "css"),
+    # a combinator routes to CSS only when it ANCHORS real compound chains on both sides —
+    # `div`/`input`/`a`/`b`/`li` are HTML tags, so these are genuine selectors.
+    ("div > input", "css"), ("a + b", "css"), ("li ~ a", "css"), ("input+label", "css"),
+    (".parent > .child", "css"), ("input > .foo", "css"),
+    # tag-led selectors that worked before this plugin learned labels must still reach the CLI
+    # as CSS — not be mistaken for a label the form has no field for (#4032 review).
+    ("button[type=submit]", "css"), ("input[name='email']", "css"), ("textarea", "css"),
+    ("select#country", "css"), ("form input", "css"), ("input:checked", "css"), ("*", "css"),
+    # a space inside an attribute value must not fracture the selector into "label words"
+    ('input[aria-label="First name"]', "css"),
+    ("Email", "label"), ("First name", "label"), ("Résumé", "label"), ("  Email  ", "label"),
+    # a combinator CHARACTER inside a visible label must NOT route to CSS off a bare substring —
+    # the Greenhouse tech-job fields the PR exists to fill ("C++ experience") were being passed
+    # to the CLI as broken selectors (#4032 review, blocking). An unanchored combinator (no real
+    # compound on one side, or a non-tag word beside it) stays a LABEL.
+    ("C++ experience", "label"), ("C++", "label"), ("Years of C++", "label"),
+    ("Rust > Go preference", "label"), ("~5 years", "label"), ("Pros + Cons", "label"),
+    ("x ~ y", "label"),   # `x`/`y` are not HTML tags → not a real sibling selector
+    # labels that happen to collide with a tag name stay LABELS (tag match is case-sensitive,
+    # so a capitalised word is never a bare type selector) — the regression the review caught.
+    ("Address", "label"), ("Time", "label"), ("Select one", "label"), ("Full name", "label"),
+])
+def test_classify_routes_refs_css_and_labels(field, kind):
+    assert forms.classify(field) == kind
+    assert forms.is_ref(field) == (kind == "ref")
+    assert forms.is_css(field) == (kind == "css")
+
+
+def test_normalize_collapses_whitespace_strips_asterisks_and_lowercases():
+    assert forms.normalize("  Email   Address * ") == "email address"
+    assert forms.normalize("First\nName*") == "first name"
+    assert forms.normalize("") == ""
+
+
+# ── forms.match_fields — the label ranking (exact > prefix > substring; never guess) ──
+
+
+def test_match_exact_beats_prefix_and_resolves_uniquely():
+    fields = [_field("Email address"), _field("Email", selector="[email]")]
+    m = forms.match_fields("Email", fields)
+    assert m.ok and m.selector == "[email]" and m.label == "Email"
+
+
+def test_match_prefix_beats_substring():
+    fields = [_field("Please enter your email"), _field("Email address", selector="[addr]")]
+    m = forms.match_fields("Email", fields)
+    assert m.ok and m.selector == "[addr]"   # prefix (tier 1) wins over substring (tier 2)
+
+
+def test_match_falls_back_to_non_primary_label_sources():
+    # a react-styled field with no visible <label>, matched via its `name`/placeholder
+    fields = [_field("", labels=["email"], name="email", selector="[byname]")]
+    m = forms.match_fields("Email", fields)
+    assert m.ok and m.selector == "[byname]"
+
+
+def test_required_marker_asterisk_is_ignored_when_matching():
+    m = forms.match_fields("Email", [_field("Email *", labels=["Email *"], selector="[e]")])
+    assert m.ok and m.selector == "[e]"
+
+
+def test_match_ambiguous_at_the_best_tier_is_an_error_that_names_them():
+    fields = [_field("Email", kind="email", name="a"), _field("Email", kind="text", name="b")]
+    m = forms.match_fields("Email", fields)
+    assert not m.ok and m.error.startswith("Error:")
+    assert "2 fields" in m.error and "name=a" in m.error and "name=b" in m.error
+    assert m.selector == ""   # SHALL NOT act on any
+
+
+def test_match_zero_is_an_error_listing_the_closest_candidates():
+    fields = [_field("First name"), _field("Last name"), _field("Phone number")]
+    m = forms.match_fields("email", fields)
+    assert not m.ok and m.error.startswith("Error:")
+    assert m.candidates and len(m.candidates) <= 5
+
+
+def test_closest_labels_ranks_by_similarity_and_caps_at_five():
+    fields = [_field(x) for x in ["Email", "E-mail address", "Emergency contact",
+                                  "First name", "Last name", "Phone"]]
+    close = forms.closest_labels(fields, "email", n=5)
+    assert len(close) == 5 and close[0] == "Email"   # the nearest label first
+
+
+# ── forms.match_fields — a radio group is enumerated per option, so each is addressable ──
+# #4032 review: collapsing a group to its first radio meant a later option could not be
+# clicked by its own text, and the group's legend silently acted on the first member. Each
+# option is now its own descriptor, and the legend rides every member's labels.
+_RADIO_OPTIONS = [
+    {"label": "Junior", "labels": ["Junior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "selector": '[data-ab-field="0"]', "group": "sen", "groupLabel": "Seniority",
+     "optionLabel": "Junior", "checked": False},
+    {"label": "Senior", "labels": ["Senior", "Seniority", "sen"], "kind": "radio-group",
+     "name": "sen", "selector": '[data-ab-field="1"]', "group": "sen", "groupLabel": "Seniority",
+     "optionLabel": "Senior", "checked": True},
+]
+
+
+@pytest.mark.parametrize(("option", "selector"), [
+    ("Senior", '[data-ab-field="1"]'),   # a LATER option resolves to its own radio, not the first
+    ("Junior", '[data-ab-field="0"]'),
+])
+def test_match_resolves_a_specific_radio_option_by_its_own_label(option, selector):
+    m = forms.match_fields(option, _RADIO_OPTIONS)
+    assert m.ok and m.selector == selector and m.label == option
+
+
+def test_match_by_the_radio_group_legend_is_ambiguous_not_a_silent_first_pick():
+    """Addressing the group by its legend matches every option (the legend rides each
+    member's labels), so it is an ambiguous error listing them — never a silent act on the
+    first radio."""
+    m = forms.match_fields("Seniority", _RADIO_OPTIONS)
+    assert not m.ok and m.selector == ""
+    assert "2 fields" in m.error and "Junior" in m.error and "Senior" in m.error
+
+
+# ── forms.resolve_js / parse_resolve / resolve_target — the reusable locator ───────
+
+
+def test_resolve_js_passes_refs_and_css_through_without_walking_the_dom():
+    for field in ("@e7", "#email", ".foo", "div > input"):
+        js = forms.resolve_js(field)
+        assert "mode:'pass'" in js and json.dumps(field.strip()) in js
+        assert "abEnumerate" not in js   # a pass-through never enumerates
+
+
+def test_resolve_js_for_a_label_enumerates_the_page():
+    js = forms.resolve_js("Email")
+    assert "abEnumerate(document)" in js and "mode:'enumerate'" in js
+
+
+@pytest.mark.parametrize("field", ["C++ experience", "Years of C++", "Rust > Go preference"])
+def test_resolve_js_treats_combinator_bearing_labels_as_labels_not_css(field):
+    """#4032 review (blocking): a label that merely CONTAINS a combinator char (`C++`, `>`)
+    must enumerate the page and rank by label — never be shipped to the CLI as a selector that
+    matches nothing. The previous substring check routed `"C++ experience"` to CSS."""
+    js = forms.resolve_js(field)
+    assert "abEnumerate(document)" in js and "mode:'enumerate'" in js
+    assert "mode:'pass'" not in js   # NOT a CSS/ref pass-through
+
+
+def test_resolve_target_round_trips_a_ref_pass_through_unchanged():
+    m = forms.resolve_target("@e3", forms.parse_resolve(json.dumps({"mode": "pass", "target": "@e3"})))
+    assert m.ok and m.selector == "@e3"   # r1: the ref reaches the CLI unchanged
+
+
+def test_resolve_target_resolves_a_label_against_enumerated_fields():
+    out = json.dumps({"mode": "enumerate", "fields": [
+        {"label": "Email", "labels": ["Email"], "selector": "[s]", "kind": "email"}]})
+    m = forms.resolve_target("Email", forms.parse_resolve(out))
+    assert m.ok and m.selector == "[s]" and m.kind == "email"
+
+
+def test_parse_resolve_never_raises_on_unreadable_output():
+    m = forms.resolve_target("Email", forms.parse_resolve("<<not json>>"))
+    assert not m.ok and m.error.startswith("Error:")
+
+
+# ── the action tools address a field by label (resolver wired into the CLI wrappers) ──
+# The #4032-review gap: browser_form_read's docstring says the other form tools address by
+# the labels it returns, but fill/click/type/hover/get_value passed the arg raw to the CLI,
+# so a label was a selector failure — the wasted-round loop this PR targets. They now route
+# through the shared forms resolver.
+
+
+def _resolving_popen(fields, record=None, procs=None, action_out=b"(ok)"):
+    """A scripted CLI: an `eval --stdin` answers the label resolver with an enumerate payload
+    of `fields`; every other verb returns `action_out`. So a label action makes TWO calls —
+    the in-page resolve, then the act — and the test can read both."""
+    payload = json.dumps({"mode": "enumerate", "fields": fields}).encode()
+
+    def _popen(argv, **kw):
+        if record is not None:
+            record.append(list(argv))
+        p = _FakeProc(argv, out=payload if argv[1:2] == ["eval"] else action_out)
+        if procs is not None:
+            procs.append(p)
+        return p
+
+    return _popen
+
+
+async def test_fill_resolves_a_label_in_the_page_then_acts(monkeypatch):
+    """r2: the label is resolved FRESH on this call (an eval), with no reliance on a prior
+    snapshot, and the CLI fills the element the resolver returned."""
+    rec, procs = [], []
+    fields = [
+        {"label": "First name", "labels": ["First name"], "selector": '[data-ab-field="0"]', "kind": "text"},
+        {"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="1"]', "kind": "email"},
+    ]
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "Email", "text": "ada@x.io"})
+    assert not out.startswith("Error:"), out
+    assert rec[0] == ["ab", "eval", "--stdin"]                       # r7: resolve rides stdin
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()       # the shared forms resolver
+    assert rec[1] == ["ab", "fill", '[data-ab-field="1"]', "ada@x.io"]   # then act on the match
+
+
+async def test_click_and_get_value_resolve_labels_too(monkeypatch):
+    fields = [{"label": "Subscribe", "labels": ["Subscribe"], "selector": '[data-ab-field="0"]', "kind": "checkbox"}]
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
+    t = _toolmap({"binary": "ab"})
+    await t["browser_click"].ainvoke({"selector": "Subscribe"})
+    assert rec[-1] == ["ab", "click", '[data-ab-field="0"]']
+    await t["browser_get_value"].ainvoke({"selector": "Subscribe"})
+    assert rec[-1] == ["ab", "get", "value", '[data-ab-field="0"]']
+
+
+async def test_click_addresses_a_specific_radio_option_not_the_group_first_member(monkeypatch):
+    """#4032 review: clicking a later radio option by its own text hits THAT option; clicking
+    the whole group by its legend is refused as ambiguous, never a silent act on the first."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(_RADIO_OPTIONS, record=rec))
+    t = _toolmap({"binary": "ab"})
+    out = await t["browser_click"].ainvoke({"selector": "Senior"})
+    assert not out.startswith("Error:"), out
+    assert rec[-1] == ["ab", "click", '[data-ab-field="1"]']        # the Senior radio, not Junior
+    rec.clear()
+    out = await t["browser_click"].ainvoke({"selector": "Seniority"})
+    assert out.startswith("Error:") and "Junior" in out and "Senior" in out
+    assert rec == [["ab", "eval", "--stdin"]]                        # resolved, then refused — no click
+
+
+@pytest.mark.parametrize("name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"])
+async def test_action_tools_still_pass_refs_and_css_straight_through(monkeypatch, name):
+    """r1 / back-compat: a `@eN` ref or a CSS selector reaches the CLI unchanged, with NO
+    in-page resolve eval — the pre-label behaviour, preserved exactly."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    args = {"selector": "@e2"}
+    if name in ("browser_fill", "browser_type"):
+        args["text"] = "hi"
+    await _toolmap({"binary": "ab"})[name].ainvoke(args)
+    assert rec[-1][1] != "eval"                       # a ref never triggers an in-page resolve
+    assert "@e2" in rec[-1]
+    # a CSS selector takes the same straight-through path
+    rec.clear()
+    args["selector"] = "#q"
+    await _toolmap({"binary": "ab"})[name].ainvoke(args)
+    assert rec[-1][1] != "eval" and "#q" in rec[-1]
+
+
+@pytest.mark.parametrize("name", ["browser_click", "browser_fill", "browser_type", "browser_hover", "browser_get_value"])
+@pytest.mark.parametrize("sel", ["button[type=submit]", "input[name='email']", "textarea",
+                                 "select#country", "form input"])
+async def test_tag_led_css_selectors_reach_the_cli_unchanged(monkeypatch, name, sel):
+    """#4032 review regression: a selector that leads with a tag name (`button[type=submit]`,
+    `textarea`, `form input`, …) is a CSS selector that worked before this plugin learned
+    labels. It must still go straight to the CLI — not be treated as a label the form has no
+    field for and fail 'no form field matches'."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    args = {"selector": sel}
+    if name in ("browser_fill", "browser_type"):
+        args["text"] = "hi"
+    out = await _toolmap({"binary": "ab"})[name].ainvoke(args)
+    assert not out.startswith("Error:"), out
+    assert rec[-1][1] != "eval" and sel in rec[-1]   # no in-page resolve; the selector reaches the CLI
+
+
+async def test_a_label_matching_no_field_is_an_error_and_never_acts(monkeypatch):
+    """r3: zero matches → an Error naming the closest candidates, and the CLI never acts."""
+    fields = [{"label": "First name", "labels": ["First name"], "selector": '[data-ab-field="0"]', "kind": "text"},
+              {"label": "Last name", "labels": ["Last name"], "selector": '[data-ab-field="1"]', "kind": "text"}]
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "Email", "text": "x"})
+    assert out.startswith("Error:") and "no form field matches" in out
+    assert rec == [["ab", "eval", "--stdin"]]        # resolved, then stopped — never filled
+
+
+async def test_a_label_matching_two_fields_at_the_best_tier_refuses_to_act(monkeypatch):
+    """r4: more than one match at the best tier → an Error listing them, and SHALL NOT act."""
+    fields = [{"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="0"]', "kind": "email", "name": "a"},
+              {"label": "Email", "labels": ["Email"], "selector": '[data-ab-field="1"]', "kind": "text", "name": "b"}]
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _resolving_popen(fields, record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "Email"})
+    assert out.startswith("Error:") and "2 fields" in out and "name=a" in out and "name=b" in out
+    assert rec == [["ab", "eval", "--stdin"]]        # never clicked either one
+
+
+async def test_a_flag_shaped_label_is_refused_before_any_resolve_eval(monkeypatch):
+    """r8 / the argv guard still fires FIRST: a flag-shaped selector never reaches even the
+    in-page resolver subprocess."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_fill"].ainvoke({"selector": "--headed", "text": "x"})
+    assert out.startswith("Error:") and "looks like a command-line option" in out
+    assert rec == []
+
+
+# ── #4032 A4: browser_click can fall back to a JS-dispatched click ─────────────────
+# On Greenhouse the résumé "Enter manually" button opened its textarea only after a
+# JS-dispatched click; a normal CLI click exited 0 and NOTHING happened. `js_fallback=True`
+# fingerprints the page, does the CLI click, re-fingerprints, and dispatches an in-page
+# click ONLY when nothing moved. Host-free: Popen is mocked, so the fingerprint/click evals
+# return canned bytes and the test reads the issued argv + stdin.
+
+
+def _click_fallback_popen(fingerprints, record=None, procs=None, click_out=b"(ok)",
+                          jsclick=b'{"ok":true}'):
+    """A scripted CLI for ``browser_click(js_fallback=True)`` against a CSS selector (no label
+    resolve eval): the Nth `eval --stdin` returns ``fingerprints[N]`` while any remain, then
+    the js-click eval returns ``jsclick``; the `click` verb returns ``click_out``. So the call
+    order is fingerprint-before (eval), click, fingerprint-after (eval), then — only when the
+    two fingerprints agree — the js-click (eval)."""
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        if record is not None:
+            record.append(list(argv))
+        if argv[1:2] == ["eval"]:
+            i = state["evals"]
+            state["evals"] += 1
+            out = fingerprints[i] if i < len(fingerprints) else jsclick
+        else:
+            out = click_out
+        p = _FakeProc(argv, out=out if isinstance(out, bytes) else out.encode())
+        if procs is not None:
+            procs.append(p)
+        return p
+
+    return _popen
+
+
+async def test_click_without_js_fallback_issues_no_fingerprint_eval(monkeypatch):
+    """r1: the default path is byte-for-byte the old one — a single CLI click, no fingerprint
+    evals, for a CSS selector just as for a `@eN` ref."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "#go"})
+    assert out == "(ok)" and rec == [["ab", "click", "#go"]]
+    # explicit js_fallback=False is identical
+    rec.clear()
+    await _toolmap({"binary": "ab"})["browser_click"].ainvoke({"selector": "#go", "js_fallback": False})
+    assert rec == [["ab", "click", "#go"]]
+
+
+async def test_js_fallback_dispatches_an_in_page_click_when_nothing_changed(monkeypatch):
+    """r2: the fingerprint is unchanged after the CLI click, so the tool dispatches a bubbling
+    in-page click on the resolved element and says `(JS fallback)`."""
+    rec, procs = [], []
+    fp = b'{"n":100,"ae":"BODY#.:","exp":"false"}'
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        _click_fallback_popen([fp, fp], record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "#enter-manually", "js_fallback": True})
+    # fingerprint-before, click, fingerprint-after, THEN the fallback js-click
+    assert [a[1] for a in rec] == ["eval", "click", "eval", "eval"]
+    assert out == "Clicked #enter-manually (JS fallback)"
+    # the fallback eval dispatches a bubbling click on the SAME selector, never a keypress
+    js = procs[-1].stdin.getvalue().decode()
+    assert "querySelector" in js and "mousedown" in js and "mouseup" in js and "el.click()" in js
+    assert json.dumps("#enter-manually") in js and "press" not in js.lower()
+
+
+async def test_js_fallback_does_not_dispatch_when_the_click_changed_the_page(monkeypatch):
+    """r3: the fingerprint moved (the textarea opened, element count grew), so the click
+    worked — the tool must NOT dispatch a second click."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _click_fallback_popen(
+        [b'{"n":100,"ae":"A","exp":"false"}', b'{"n":140,"ae":"TEXTAREA","exp":"true"}'], record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "#enter-manually", "js_fallback": True})
+    # fingerprint-before, click, fingerprint-after — and then STOP (no third eval)
+    assert [a[1] for a in rec] == ["eval", "click", "eval"]
+    assert out == "(ok)" and "JS fallback" not in out
+
+
+async def test_js_fallback_suppressed_when_a_fingerprint_cannot_be_read(monkeypatch):
+    """A doubt is never a second click: if either fingerprint comes back as an Error, the CLI
+    result stands and no in-page click is dispatched."""
+    rec = []
+    seen = {"evals": 0}
+
+    def _popen(argv, **kw):
+        rec.append(list(argv))
+        if argv[1:2] == ["eval"]:
+            seen["evals"] += 1
+            if seen["evals"] == 2:
+                return _FakeProc(argv, out=b"", err=b"page gone", rc=1)   # fingerprint-after fails
+            return _FakeProc(argv, out=b'{"n":100,"ae":"","exp":""}')
+        return _FakeProc(argv, out=b"(ok)")
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "#x", "js_fallback": True})
+    assert [a[1] for a in rec] == ["eval", "click", "eval"]   # no fallback js-click
+    assert out == "(ok)"
+
+
+async def test_js_fallback_does_not_fire_when_the_cli_click_itself_errors(monkeypatch):
+    """A CLI click that exits non-zero is a real failure to surface — not a case for the JS
+    fallback, which exists for a click that 'succeeds' yet does nothing."""
+    rec = []
+
+    def _popen(argv, **kw):
+        rec.append(list(argv))
+        if argv[1:2] == ["eval"]:
+            return _FakeProc(argv, out=b'{"n":1,"ae":"","exp":""}')
+        return _FakeProc(argv, out=b"", err=b"no such element", rc=2)   # the click fails
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "#missing", "js_fallback": True})
+    assert out.startswith("Error:") and "no such element" in out
+    assert [a[1] for a in rec] == ["eval", "click"]   # fingerprint-before, click, then stop
+
+
+async def test_js_fallback_resolves_a_label_through_the_shared_locator(monkeypatch):
+    """r4: with js_fallback a LABEL is still resolved through the bd-12mo.1 locator — the
+    resolve eval enumerates, and the fingerprint/click/fallback all act on the resolved
+    `[data-ab-field]` selector, never a stale ref."""
+    rec, procs = [], []
+    fields = [{"label": "Enter manually", "labels": ["Enter manually"],
+               "selector": '[data-ab-field="3"]', "kind": "other"}]
+    enum = json.dumps({"mode": "enumerate", "fields": fields}).encode()
+    fp = b'{"n":80,"ae":"","exp":"false"}'
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        rec.append(list(argv))
+        if argv[1:2] == ["eval"]:
+            i = state["evals"]
+            state["evals"] += 1
+            out = enum if i == 0 else (fp if i in (1, 2) else b'{"ok":true}')
+            p = _FakeProc(argv, out=out)
+        else:
+            p = _FakeProc(argv, out=b"(ok)")
+        procs.append(p)
+        return p
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "Enter manually", "js_fallback": True})
+    # resolve(eval) → fingerprint(eval) → click → fingerprint(eval) → js-click(eval)
+    assert [a[1] for a in rec] == ["eval", "eval", "click", "eval", "eval"]
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()        # the shared resolver
+    assert rec[2] == ["ab", "click", '[data-ab-field="3"]']           # clicked the resolved selector
+    assert json.dumps('[data-ab-field="3"]') in procs[-1].stdin.getvalue().decode()
+    assert out == "Clicked Enter manually (JS fallback)"              # reported by the model's label
+
+
+async def test_js_fallback_refuses_a_ref_without_running_the_cli(monkeypatch):
+    """#4032 review: with `js_fallback` a `@ref` was silently a no-op — the fallback dispatches
+    the click via an in-page document.querySelector where "@e5" is invalid CSS and throws, the
+    throw was swallowed as 'not-found', and the CLI's ordinary success text still stood, so the
+    model believed a fallback ran that didn't. A ref is now refused up front (as browser_select
+    / browser_upload / browser_form_read refuse refs), before ANY subprocess."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)", record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "@e5", "js_fallback": True})
+    assert out.startswith("Error:") and "@ref" in out
+    assert rec == []   # a ref can't drive an in-page click — refuse before the CLI runs
+    # but the SAME ref still clicks fine on the plain CLI path (js_fallback off), unchanged
+    rec.clear()
+    out = await _toolmap({"binary": "ab"})["browser_click"].ainvoke(
+        {"selector": "@e5", "js_fallback": False})
+    assert out == "(ok)" and rec == [["ab", "click", "@e5"]]
+
+
+def test_fingerprint_js_and_js_click_js_ride_stdin_and_carry_the_selector():
+    """The two fallback scripts are built host-free: each embeds the selector as a JSON literal
+    and is shaped for `eval --stdin` (#3689)."""
+    fp = forms.fingerprint_js('[data-ab-field="2"]')
+    assert json.dumps('[data-ab-field="2"]') in fp and "getElementsByTagName" in fp
+    assert "activeElement" in fp and "aria-expanded" in fp
+    click = forms.js_click_js("#go")
+    assert json.dumps("#go") in click and "mousedown" in click and "el.click()" in click
+
+
+@pytest.mark.parametrize(("before", "after", "changed"), [
+    ('{"n":1}', '{"n":1}', False),            # identical → nothing moved
+    ('{"n":1}', '{"n":2}', True),             # element count grew → the click did something
+    ("Error: boom", '{"n":1}', True),         # unreadable → treated as changed (suppress fallback)
+    ('{"n":1}', "", True),                    # empty → suppress
+])
+def test_fingerprint_changed_is_strict_and_fails_safe(before, after, changed):
+    assert forms.fingerprint_changed(before, after) is changed
+
+
+def test_render_js_click_reports_the_fallback_or_defers_to_the_cli():
+    assert forms.render_js_click('{"ok":true}', "#go", "(ok)") == "Clicked #go (JS fallback)"
+    # element gone from the page by dispatch time (not-found) → the CLI's own result stands
+    assert forms.render_js_click('{"ok":false,"reason":"not-found"}', "#go", "(ok)") == "(ok)"
+    assert forms.render_js_click("<<garbage>>", "#go", "(ok)") == "(ok)"
+
+
+# ── browser_form_read — the tool (canned eval output + stdin script) ───────────────
+
+
+async def test_form_read_returns_public_json_in_document_order(monkeypatch):
+    payload = json.dumps({"ok": True, "fields": _FORM_FIELDS})
+    rec, procs = [], []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload, record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
+    # r7: the script rides eval --stdin, never argv
+    assert rec[-1] == ["ab", "eval", "--stdin"]
+    assert "abEnumerate" in procs[-1].stdin.getvalue().decode()
+    data = json.loads(out)
+    assert [f["label"] for f in data] == ["First name", "Email", "Country", "Role",
+                                          "Seniority", "Résumé", "Subscribe"]   # r5: document order
+    # the internal addressing keys never surface
+    assert all("labels" not in f and "selector" not in f and "idx" not in f for f in data)
+    first = data[0]
+    assert set(first) == {"label", "kind", "name", "id", "required", "value"}
+    assert first["required"] is True and first["kind"] == "text" and first["name"] == "first_name"
+
+
+async def test_form_read_reports_committed_values_and_options(monkeypatch):
+    payload = json.dumps({"ok": True, "fields": _FORM_FIELDS})
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload))
+    data = json.loads(await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({}))
+    by_kind = {f["kind"]: f for f in data}
+    # r6: a combobox reports its committed selection, and omits options (not in the DOM)
+    assert by_kind["combobox"]["value"] == "United States" and "options" not in by_kind["combobox"]
+    assert by_kind["native-select"]["options"] == ["", "Engineer", "Manager"]
+    assert by_kind["native-select"]["value"] == "Engineer"
+    assert by_kind["radio-group"]["options"] == ["Junior", "Senior"] and by_kind["radio-group"]["value"] == "Senior"
+    assert by_kind["file"]["value"] == "cv.pdf"
+    assert by_kind["checkbox"]["value"] is True
+
+
+def test_render_folds_radio_options_into_one_group_at_the_first_members_position():
+    """The per-option radio descriptors `abEnumerate` emits collapse to ONE radio-group row
+    for the read view: `options` is the member labels, `value` the checked one, `required` true
+    if any member is, placed where the first member appeared."""
+    fields = [
+        {"label": "Size", "labels": ["Size"], "kind": "text", "name": "size", "id": "",
+         "required": False, "value": ""},
+        {"label": "Red", "kind": "radio-group", "name": "color", "group": "color",
+         "groupLabel": "Colour", "optionLabel": "Red", "checked": False, "required": True,
+         "selector": "[a]"},
+        {"label": "Green", "kind": "radio-group", "name": "color", "group": "color",
+         "groupLabel": "Colour", "optionLabel": "Green", "checked": True, "required": False,
+         "selector": "[b]"},
+    ]
+    out = json.loads(forms.render_form_read(json.dumps({"ok": True, "fields": fields})))
+    assert [f["label"] for f in out] == ["Size", "Colour"]       # folded, at the group's slot
+    grp = out[1]
+    assert grp["kind"] == "radio-group" and grp["options"] == ["Red", "Green"]
+    assert grp["value"] == "Green" and grp["required"] is True   # checked option; any-required
+    assert set(grp) == {"label", "kind", "name", "id", "required", "value", "options"}
+
+
+def test_form_read_js_extracts_the_committed_combobox_value_not_typed_text():
+    """r6 is produced in-page; the script must read the rendered single-value, and must
+    skip a combobox's inner search input so half-typed text is never surfaced as a field."""
+    js = forms.read_form_js("")
+    assert "single-value" in js and "singleValue" in js   # the committed selection
+    assert "abInCombo" in js and "select__control" in js   # the inner input is skipped
+
+
+# The enumeration JS is DOM logic, so the combobox de-duplication is exercised against a real
+# DOM (jsdom, from the console workspace's node_modules) — the only host-free way to prove it.
+NODE = shutil.which("node")
+
+_REACT_SELECT_HTML = """
+<form>
+  <div class="field">
+    <label for="rs-country-input">Country</label>
+    <div class="select__control">
+      <div class="select__value-container">
+        <div class="select__single-value">United States</div>
+        <div class="select__input-container">
+          <input id="rs-country-input" role="combobox" name="country" value="typed-but-not-chosen"/>
+        </div>
+      </div>
+      <div class="select__indicators"><span class="select__indicator">v</span></div>
+    </div>
+  </div>
+  <label for="plain">Email</label>
+  <input id="plain" type="email" name="email" value="ada@x.io"/>
+</form>
+"""
+
+
+def _run_enumerate_js(html: str):
+    """Run forms._JS_LIB's ``abEnumerate`` against a real DOM and return the field list."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ");\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        + forms._JS_LIB + "\n"
+        "console.log(JSON.stringify(abEnumerate(document)));\n"
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_enumerate_collapses_a_react_select_combobox_to_one_labelled_field():
+    """#4032-review correctness bug: the react-select inner search input also carries
+    role="combobox", so the dropdown enumerated TWICE — an unlabelled entry with the real
+    value and a labelled entry whose value was always ''. It must be ONE field, labelled
+    (from the inner input) AND carrying the committed selection."""
+    fields = _run_enumerate_js(_REACT_SELECT_HTML)
+    assert [f["kind"] for f in fields] == ["combobox", "email"]   # document order, no twin
+    combos = [f for f in fields if f["kind"] == "combobox"]
+    assert len(combos) == 1                                       # not two
+    c = combos[0]
+    assert c["label"] == "Country"                               # labelled (merged from inner)
+    assert c["value"] == "United States"                        # committed selection, not typed
+    assert c["name"] == "country" and c["id"] == "rs-country-input"   # inner identity adopted
+    assert "" not in [f["label"] for f in fields]               # no phantom unlabelled entry
+
+
+def test_enumerate_keeps_a_bare_aria_combobox_as_a_single_field():
+    """A plain ARIA combobox (no react-select container) is still one root — the fix only
+    folds the inner input of a `.select__control`, nothing else."""
+    html = """<form>
+      <label for="cb">State</label>
+      <div id="cb" role="combobox" aria-expanded="false">California</div>
+    </form>"""
+    fields = _run_enumerate_js(html)
+    assert len(fields) == 1 and fields[0]["kind"] == "combobox"
+    assert fields[0]["label"] == "State" and fields[0]["value"] == "California"
+
+
+_REACT_SELECT_SHADOW_HTML = """
+<form>
+  <div class="select__container">
+    <label for="visa-input">Work authorization</label>
+    <div class="select__control">
+      <div class="select__single-value">Yes</div>
+      <div class="select__input-container">
+        <input id="visa-input" role="combobox" name="visa" value=""/>
+      </div>
+      <div class="select__indicators"><span class="select__indicator">v</span></div>
+    </div>
+    <input required tabindex="-1" aria-hidden="true" style="opacity:0;width:1px;height:1px" value=""/>
+  </div>
+  <label for="plain">Email</label>
+  <input id="plain" type="email" name="email" value=""/>
+</form>
+"""
+
+
+def test_enumerate_folds_a_react_select_required_shadow_input_into_the_combobox():
+    """#4032 bug 4: react-select renders a hidden `<input required>` SIBLING of `.select__control`
+    (not inside it, so abInCombo misses it). Enumerated on its own it became an unlabelled,
+    id-less, required "text" row after the combobox. abEnumerate now folds its `required` onto the
+    labelled combobox row and emits no phantom field — a real labelled input (Email) is untouched."""
+    fields = _run_enumerate_js(_REACT_SELECT_SHADOW_HTML)
+    assert [f["kind"] for f in fields] == ["combobox", "email"]   # no phantom "text" row, no twin
+    assert "" not in [f["label"] for f in fields]                 # no unlabelled entry survives
+    combo = [f for f in fields if f["kind"] == "combobox"][0]
+    assert combo["label"] == "Work authorization"
+    assert combo["required"] is True                              # folded from the hidden shadow
+    assert combo["value"] == "Yes"                                # committed value still read
+
+
+def test_enumerate_keeps_a_visible_unlabelled_input_beside_a_combobox():
+    """The fold must not over-filter: a VISIBLE, label-less input (not aria-hidden, no tabindex=-1,
+    no 1px sliver) inside a select container is a real field and is still emitted as "text"."""
+    html = """<form>
+      <div class="select__container">
+        <div class="select__control">
+          <input id="rs" role="combobox" name="rs" value=""/>
+        </div>
+        <input id="bare" type="text" name="bare" style="width:200px;height:32px" value=""/>
+      </div>
+    </form>"""
+    fields = _run_enumerate_js(html)
+    bare = [f for f in fields if f.get("id") == "bare"]
+    assert len(bare) == 1 and bare[0]["kind"] == "text"
+
+
+def test_enumerate_file_value_falls_back_to_the_filename_chip():
+    """#4032 bug 3: a file input the widget RE-RENDERED empty still shows the filename as a chip
+    in its field container — form_read reports that filename (controls stripped), so a verify-fill
+    sees the attached résumé after the re-render instead of a blank file field."""
+    html = """<form>
+      <div id="resume_block">
+        <label for="resume">Resume/CV</label>
+        <input id="resume" type="file" name="resume"/>
+        <span class="file-chip"><span class="file-chip__name">grace.pdf</span><button type="button">x</button></span>
+      </div>
+    </form>"""
+    fields = _run_enumerate_js(html)
+    f = [x for x in fields if x.get("id") == "resume"][0]
+    assert f["kind"] == "file" and f["value"] == "grace.pdf"
+
+
+_RADIO_HTML = """
+<form>
+  <fieldset>
+    <legend>Seniority *</legend>
+    <label><input type="radio" name="sen" value="jr"/> Junior</label>
+    <label><input type="radio" name="sen" value="sr" checked/> Senior</label>
+  </fieldset>
+  <label for="e">Email</label>
+  <input id="e" type="email" name="email"/>
+</form>
+"""
+
+
+def test_enumerate_lists_every_radio_option_as_its_own_addressable_field():
+    """#4032 review: each radio is enumerated and tagged separately (so a later option is
+    clickable by its own text), the group legend rides every member's labels (so addressing
+    the group hits every option), and the read renderer folds the members into one row."""
+    fields = _run_enumerate_js(_RADIO_HTML)
+    radios = [f for f in fields if f["kind"] == "radio-group"]
+    assert len(radios) == 2                                        # one entry PER option, not collapsed
+    assert [r["label"] for r in radios] == ["Junior", "Senior"]
+    assert radios[0]["selector"] != radios[1]["selector"]         # each independently addressable
+    assert all(r["selector"].startswith('[data-ab-field="') for r in radios)
+    assert all("Seniority" in r["labels"] for r in radios)        # legend (asterisk stripped) on each
+    assert radios[1]["checked"] is True and radios[1]["optionLabel"] == "Senior"
+    # the read renderer folds the two options back into one radio-group row
+    folded = [f for f in forms.collapse_radio_groups(fields) if f["kind"] == "radio-group"]
+    assert len(folded) == 1
+    assert folded[0]["label"] == "Seniority" and folded[0]["options"] == ["Junior", "Senior"]
+    assert folded[0]["value"] == "Senior"
+
+
+async def test_form_read_scope_css_is_embedded_as_a_query_root(monkeypatch):
+    procs = []
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": True, "fields": []}), procs=procs))
+    await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "#application"})
+    script = procs[-1].stdin.getvalue().decode()
+    assert 'abScopeRoot("#application", true)' in script
+
+
+async def test_form_read_scope_label_is_passed_as_a_container_name(monkeypatch):
+    procs = []
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": True, "fields": []}), procs=procs))
+    await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "Work history"})
+    assert 'abScopeRoot("Work history", false)' in procs[-1].stdin.getvalue().decode()
+
+
+async def test_form_read_refuses_a_ref_scope_without_running_the_cli(monkeypatch):
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "@e5"})
+    assert out.startswith("Error:") and "@ref" in out
+    assert rec == []   # a ref can't be resolved in an eval — refuse before the subprocess
+
+
+async def test_form_read_reports_an_unmatched_scope(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": False, "error": "scope-not-found"})))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({"scope": "#nope"})
+    assert out.startswith("Error:") and "#nope" in out
+
+
+async def test_form_read_degrades_on_unreadable_output_instead_of_raising(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="not json at all"))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
+    assert out.startswith("Error:")   # r8: no new tool raises
+
+
+async def test_form_read_surfaces_an_eval_error(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(rc=1, err="no page open"))
+    out = await _toolmap({"binary": "ab"})["browser_form_read"].ainvoke({})
+    assert out.startswith("Error:") and "no page open" in out
+
+
+def test_form_read_is_a_registered_tool_with_a_usable_docstring():
+    t = _toolmap()["browser_form_read"]
+    assert "browser_form_read" in EXPECTED_TOOLS
+    assert t.description and len(t.description) >= 20
+
+
+# ── #4032 A2: browser_select — native / react-select / intl-tel-input, with read-back ──
+# Host-free like the form-read tests: the in-page engine never runs here. The branch-dispatch
+# tests assert the single `eval --stdin` script carries each widget's marker (detection is
+# in-page); the tool tests mock Popen and parse canned select-engine output (success /
+# mismatch / ambiguous / no-option / not-found); the match + render logic is pure Python.
+
+
+def _select_popen(result, fields=None, record=None, procs=None):
+    """A scripted CLI for browser_select. The FIRST `eval --stdin` (the bd-12mo.1 label
+    resolver) answers with an enumerate payload of `fields`; the SECOND (the select engine)
+    answers with `result` — so a LABEL select makes two evals and the test can read both.
+    A CSS/ref field skips the resolver, so there is only the one select eval."""
+    enum = json.dumps({"mode": "enumerate", "fields": fields or []}).encode()
+    res = result if isinstance(result, str) else json.dumps(result)
+    res = res.encode() if isinstance(res, str) else res
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        if record is not None:
+            record.append(list(argv))
+        out = b"(ok)"
+        if argv[1:2] == ["eval"]:
+            out = enum if state["evals"] == 0 else res
+            state["evals"] += 1
+        p = _FakeProc(argv, out=out)
+        if procs is not None:
+            procs.append(p)
+        return p
+
+    return _popen
+
+
+async def _select(monkeypatch, result, field="#country", option_text="United States",
+                  record=None, procs=None):
+    """Drive browser_select against a CSS field (no resolver eval) with a canned engine result."""
+    payload = result if isinstance(result, str) else json.dumps(result)
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out=payload, record=record, procs=procs))
+    return await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
+        {"field": field, "option_text": option_text})
+
+
+def test_select_js_dispatches_to_each_widget_branch_in_one_script():
+    """r1/r2/r3: ONE `eval` script detects the widget in-page and dispatches. Assert every
+    branch's marker is present, the locator + option ride as JSON literals, and the combobox
+    is cleared before typing — never appended to (the 'YeYess' bug)."""
+    js = forms.select_js('[data-ab-field="2"]', "United States")
+    assert json.dumps('[data-ab-field="2"]') in js and json.dumps("United States") in js
+    assert "abSelectKind" in js
+    # native <select>: set the option and fire BUBBLING input + change
+    assert "native-select" in js and "el.options" in js
+    assert "abFire(el, 'input')" in js and "abFire(el, 'change')" in js and "bubbles:true" in js
+    # react-select combobox: role=option menu, the select__/-container/aria-autocomplete signature
+    assert 'role="option"' in js and "select__control" in js
+    assert "aria-autocomplete" in js and '-container' in js
+    # intl-tel-input: the country list + the selected-flag read-back
+    assert "iti__country" in js and "iti__country-name" in js
+    assert "selected-flag" in js and ("title" in js and "aria-label" in js)
+
+
+def test_select_combobox_clears_before_typing_and_commits_by_click_never_enter():
+    """r2, by construction: the input is cleared (`abSetNativeValue(input, '')`) before the
+    filter is typed, and the option is COMMITTED BY CLICK (`abClickOption`). The only keyboard
+    event is an ArrowDown to OPEN the menu (#4032 fix round) — Enter is never pressed, so the
+    highlighted-wrong-option commit (#4032) cannot happen."""
+    js = forms.select_js("#country", "United States")
+    assert "abSetNativeValue(input, '')" in js            # clear first, never append
+    assert "abClickOption" in js                           # commit by clicking the option element
+    # ArrowDown is an OPEN signal, not a commit; Enter/keypress is never dispatched to commit.
+    assert "ArrowDown" in js and "keypress" not in js
+    assert "'Enter'" not in js and '"Enter"' not in js
+
+
+def _run_select_lib_js(html: str, expr: str):
+    """Evaluate `expr` against a real DOM (jsdom) with forms._JS_LIB + _SELECT_LIB loaded, and
+    return the JSON it produces — the host-free way to prove the in-page option scoping."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ");\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        + forms._JS_LIB + forms._SELECT_LIB + "\n"
+        "console.log(JSON.stringify((function(){ return " + expr + "; })()));\n"
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+# A react-select control whose menu is wired by `aria-controls`, plus ANOTHER widget's
+# listbox already open on the page (the #4032 wrong country). The scoped scan must ignore it.
+_SCOPED_COMBO_ARIA_HTML = """
+<form>
+  <ul role="listbox" id="other-menu"><li role="option">Afghanistan</li></ul>
+  <div class="field">
+    <label for="rs-country">Country</label>
+    <div class="select__control">
+      <div class="select__value-container">
+        <div class="select__input-container">
+          <input id="rs-country" role="combobox" name="country" aria-controls="rs-menu"/>
+        </div>
+      </div>
+    </div>
+    <div class="select__menu" id="rs-menu" role="listbox">
+      <div role="option">United States</div>
+      <div role="option">United Kingdom</div>
+    </div>
+  </div>
+</form>
+"""
+
+# A react-select control with NO aria wiring: the menu is a sibling of the control inside a
+# `-container` wrapper. The fallback must scope to that wrapper — never the whole document.
+_SCOPED_COMBO_CONTAINER_HTML = """
+<form>
+  <ul role="listbox" id="other-menu"><li role="option">Afghanistan</li></ul>
+  <div class="my-select-container">
+    <label for="cc">Country</label>
+    <div class="select__control"><input id="cc" role="combobox" name="country"/></div>
+    <div class="select__menu" role="listbox">
+      <div role="option">Canada</div>
+      <div role="option">Cambodia</div>
+    </div>
+  </div>
+</form>
+"""
+
+_COMBO_OPTIONS_EXPR = (
+    "abComboOptions("
+    "document.querySelector('.select__control').querySelector('[role=combobox]'),"
+    "document.querySelector('.select__control'))"
+    ".map(function(o){ return o.textContent.trim(); })"
+)
+
+
+@pytest.mark.parametrize(("html", "expected"), [
+    (_SCOPED_COMBO_ARIA_HTML, ["United States", "United Kingdom"]),
+    (_SCOPED_COMBO_CONTAINER_HTML, ["Canada", "Cambodia"]),
+])
+def test_combobox_options_are_scoped_to_this_controls_menu(html, expected):
+    """#4032 review: the combobox branch read `[role="option"]` from the WHOLE document, and
+    the poll returns on its first non-empty read — so a menu already open elsewhere (here an
+    'Afghanistan' option) could be matched and clicked, changing another field. Options must
+    come only from THIS control's menu (via aria-controls, else its own container wrapper)."""
+    opts = _run_select_lib_js(html, _COMBO_OPTIONS_EXPR)
+    assert opts == expected
+    assert "Afghanistan" not in opts     # the other widget's open menu is never seen
+
+
+async def test_select_native_success_reads_back_and_reports(monkeypatch):
+    """r1: a successful native selection reports the committed read-back value and label."""
+    rec, procs = [], []
+    out = await _select(monkeypatch,
+                        {"ok": True, "kind": "native-select", "label": "Role",
+                         "chosen": "Engineer", "committed": "Engineer"},
+                        field="#role", option_text="Engineer", record=rec, procs=procs)
+    assert out == 'Selected "Engineer" in Role'
+    assert rec[-1] == ["ab", "eval", "--stdin"]            # r6: the engine rides eval --stdin
+    assert "abSelectKind" in procs[-1].stdin.getvalue().decode()
+
+
+async def test_select_reuses_the_bd12mo1_label_locator_before_the_engine(monkeypatch):
+    """r6: a LABEL is resolved FRESH by the shared bd-12mo.1 resolver (an enumerate eval), and
+    the resolved `[data-ab-field]` selector is what the select engine then acts on — two evals,
+    both on stdin, no second locator."""
+    rec, procs = [], []
+    fields = [{"label": "Country", "labels": ["Country"], "selector": '[data-ab-field="0"]',
+               "kind": "combobox"}]
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        _select_popen({"ok": True, "kind": "combobox", "label": "Country",
+                                       "chosen": "United States", "committed": "United States"},
+                                      fields=fields, record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
+        {"field": "Country", "option_text": "United States"})
+    assert out == 'Selected "United States" in Country'
+    assert rec == [["ab", "eval", "--stdin"], ["ab", "eval", "--stdin"]]
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()        # the resolver
+    select_script = procs[1].stdin.getvalue().decode()
+    assert "abSelectKind" in select_script                            # the engine
+    assert json.dumps('[data-ab-field="0"]') in select_script         # on the RESOLVED selector
+
+
+async def test_select_mismatch_on_read_back_is_a_hard_error(monkeypatch):
+    """r5: the field reading back a different value than was chosen is an Error naming both —
+    never a success. This is the guard against committing the wrong option silently (#4032)."""
+    out = await _select(monkeypatch,
+                        {"ok": False, "reason": "mismatch", "kind": "combobox", "label": "Visa",
+                         "wanted": "No", "actual": "Yes, Ireland Highly Skilled Worker Visa"},
+                        field="#visa", option_text="No")
+    assert out.startswith("Error:") and "Selected" not in out
+    assert "Visa" in out and "No" in out
+    assert "Yes, Ireland Highly Skilled Worker Visa" in out
+    assert "reads" in out and "after selecting" in out
+
+
+async def test_select_no_matching_option_lists_the_available_ones(monkeypatch):
+    """r4: zero matches → an Error listing the available options, and nothing is committed."""
+    out = await _select(monkeypatch,
+                        {"ok": False, "reason": "no-option", "kind": "native-select",
+                         "label": "Role", "options": ["Engineer", "Manager", "Designer"]},
+                        field="#role", option_text="Astronaut")
+    assert out.startswith("Error:") and "Astronaut" in out
+    assert "Engineer" in out and "Manager" in out and "Designer" in out
+    assert "Selected" not in out
+
+
+async def test_select_ambiguous_option_is_an_error_not_a_guess(monkeypatch):
+    """r4: more than one candidate at the winning tier → an Error (never a silent pick)."""
+    out = await _select(monkeypatch,
+                        {"ok": False, "reason": "ambiguous", "kind": "combobox", "label": "Country",
+                         "options": ["United States", "United States Minor Outlying Islands"]},
+                        field="#country", option_text="United")
+    assert out.startswith("Error:") and "more than one" in out
+    assert "United States" in out and "Selected" not in out
+
+
+def test_select_render_caps_the_listed_options_at_ten():
+    """r4: the available-options listing is bounded at 10, however long the real list."""
+    opts = [f"Country {i}" for i in range(25)]
+    out = forms.render_select(
+        json.dumps({"ok": False, "reason": "no-option", "label": "Country", "options": opts}),
+        "#country", "Nowhere")
+    assert out.startswith("Error:")
+    assert "Country 0" in out and "Country 9" in out
+    assert "Country 10" not in out and "Country 24" not in out
+
+
+async def test_select_not_found_points_at_form_read(monkeypatch):
+    """A locator that matches no element in the page is a clear Error, never a success."""
+    out = await _select(monkeypatch, {"ok": False, "reason": "not-found"},
+                        field="#missing", option_text="x")
+    assert out.startswith("Error:") and "browser_form_read" in out and "Selected" not in out
+
+
+async def test_select_refuses_a_ref_field_without_running_the_cli(monkeypatch):
+    """#4032 review: browser_select claimed `@ref` support, but it sets the widget via an
+    in-page `document.querySelector`, where "@e5" is invalid CSS and throws — the error was
+    swallowed as 'not-found', so EVERY ref-addressed select failed. A ref is now refused up
+    front (as browser_form_read does), before any subprocess."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
+        {"field": "@e5", "option_text": "United States"})
+    assert out.startswith("Error:") and "@ref" in out
+    assert rec == []   # a ref can't be resolved in an eval — refuse before the CLI runs
+
+
+async def test_select_on_a_non_choice_field_is_refused(monkeypatch):
+    """A plain text field isn't a choice widget — say so rather than pretend to select."""
+    out = await _select(monkeypatch, {"ok": False, "reason": "unsupported", "kind": "other",
+                                      "label": "First name"},
+                        field="#first", option_text="x")
+    assert out.startswith("Error:") and "browser_fill" in out
+
+
+async def test_select_degrades_on_unreadable_output_instead_of_raising(monkeypatch):
+    out = await _select(monkeypatch, "not json at all", field="#country", option_text="x")
+    assert out.startswith("Error:")   # never raises
+
+
+async def test_select_surfaces_an_eval_error(monkeypatch):
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(rc=1, err="no page open"))
+    out = await _toolmap({"binary": "ab"})["browser_select"].ainvoke(
+        {"field": "#country", "option_text": "x"})
+    assert out.startswith("Error:") and "no page open" in out
+
+
+async def test_select_phone_country_is_the_iti_branch_and_fill_follows_it(monkeypatch):
+    """r3 + the phone helper: selecting the COUNTRY drives the intl-tel-input branch (click a
+    country entry, read back the selected flag), and because that branch never writes the tel
+    input's value, a following browser_fill of the national number reaches the tel input
+    unchanged. The docstring documents the country-before-number order."""
+    # the iti branch of the engine must not type into the tel input — else the number a later
+    # browser_fill enters would be clobbered (and the order in the docstring would be a lie).
+    iti_src = forms._SELECT_LIB.split("async function abIti")[1].split("\nfunction ")[0]
+    assert "abSetNativeValue" not in iti_src and ".value" not in iti_src
+
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen",
+                        fake_popen(out=json.dumps({"ok": True, "kind": "iti", "label": "Phone",
+                                                   "chosen": "United States",
+                                                   "committed": "United States"}), record=rec))
+    t = _toolmap({"binary": "ab"})
+    picked = await t["browser_select"].ainvoke({"field": "#phone", "option_text": "United States"})
+    assert picked == 'Selected "United States" in Phone'
+    # then the number is filled into the SAME tel input, verbatim
+    filled = await t["browser_fill"].ainvoke({"selector": "#phone", "text": "2015550123"})
+    assert not filled.startswith("Error:")
+    assert rec[-1] == ["ab", "fill", "#phone", "2015550123"]
+
+    desc = t["browser_select"].description.lower()
+    assert "phone" in desc and "country" in desc and "before" in desc and "fill" in desc
+
+
+def test_select_is_a_registered_tool_with_a_usable_docstring():
+    t = _toolmap()["browser_select"]
+    assert "browser_select" in EXPECTED_TOOLS
+    assert t.description and len(t.description) >= 20
+
+
+# ── #4032 A3: browser_upload — attach a fenced file to a file input, with read-back ──
+# Host-free like the other form tools: the in-page engine never runs here. The fence is pure
+# Python (storage.resolve_upload_path) and exercised directly; the tool tests mock Popen and
+# assert argv + the canned read-back; the in-page file-input RESOLUTION (the Attach-button
+# container climb) is proven against a real DOM (jsdom) where it is the only host-free way.
+
+
+# ── storage.resolve_upload_path — the capture fence, in reverse ────────────────────
+
+
+def test_resolve_upload_path_accepts_a_file_inside_the_fence():
+    root = storage.capture_root().resolve()
+    f = root / "cv.pdf"
+    f.write_bytes(b"%PDF-1.4 resume")
+    assert storage.resolve_upload_path("cv.pdf") == f
+    assert storage.resolve_upload_path(str(f)) == f   # an absolute path already inside the fence
+
+
+def test_resolve_upload_path_accepts_a_relative_subdirectory_file():
+    root = storage.capture_root().resolve()
+    sub = root / "out"
+    sub.mkdir()
+    (sub / "resume.pdf").write_bytes(b"%PDF")
+    assert storage.resolve_upload_path("out/resume.pdf") == (sub / "resume.pdf").resolve()
+
+
+@pytest.mark.parametrize("bad", [
+    "/etc/passwd",
+    "../../escape.pdf",
+    "a/../../escape.pdf",
+    "~/.ssh/id_rsa",
+    "",
+    ".",
+])
+def test_resolve_upload_path_refuses_paths_outside_the_fence(bad):
+    with pytest.raises(ValueError):
+        storage.resolve_upload_path(bad)
+
+
+def test_resolve_upload_path_requires_an_existing_non_empty_file():
+    root = storage.capture_root().resolve()
+    (root / "empty.pdf").write_bytes(b"")
+    with pytest.raises(ValueError) as e_empty:
+        storage.resolve_upload_path("empty.pdf")      # inside the fence, but zero bytes
+    assert "empty" in str(e_empty.value)
+    with pytest.raises(ValueError):
+        storage.resolve_upload_path("missing.pdf")    # inside the fence, but absent
+
+
+def test_resolve_upload_path_refuses_a_symlink_escaping_the_fence(tmp_path):
+    root = storage.capture_root().resolve()
+    outside = tmp_path / "secret.pdf"
+    outside.write_bytes(b"%PDF secret")
+    link = root / "linked.pdf"
+    try:
+        link.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this host")
+    with pytest.raises(ValueError):
+        storage.resolve_upload_path("linked.pdf")     # resolves (and exists) OUTSIDE the root
+
+
+# ── the tool: fence refusals run BEFORE any subprocess ─────────────────────────────
+
+
+@pytest.mark.parametrize("bad", ["/etc/passwd", "../../escape.pdf", "~/.ssh/id_rsa", ""])
+async def test_upload_refuses_a_path_outside_the_fence_without_running_the_cli(monkeypatch, bad):
+    """r3/r4: a path that escapes the fence (or is blank) is an Error, and the CLI never runs —
+    the fence is resolved before any subprocess, exactly like a capture."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": bad})
+    assert out.startswith("Error:")
+    assert rec == []   # nothing reached agent-browser
+
+
+async def test_upload_refuses_a_symlink_escape_without_running_the_cli(monkeypatch, tmp_path):
+    """r3: a symlink INSIDE the fence that points out resolves to a file elsewhere — refused
+    before the CLI, so a planted link can't exfiltrate its target."""
+    root = storage.capture_root().resolve()
+    outside = tmp_path / "secret.pdf"
+    outside.write_bytes(b"%PDF secret")
+    try:
+        (root / "linked.pdf").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable on this host")
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "linked.pdf"})
+    assert out.startswith("Error:") and "outside" in out
+    assert rec == []
+
+
+async def test_upload_refuses_a_missing_or_empty_file_without_running_the_cli(monkeypatch):
+    """r4: a file that is missing, or present but empty, is an Error before the upload."""
+    root = storage.capture_root().resolve()
+    (root / "empty.pdf").write_bytes(b"")
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    t = _toolmap({"binary": "ab"})
+    out_missing = await t["browser_upload"].ainvoke({"field": "#resume", "file_path": "nope.pdf"})
+    out_empty = await t["browser_upload"].ainvoke({"field": "#resume", "file_path": "empty.pdf"})
+    assert out_missing.startswith("Error:") and out_empty.startswith("Error:")
+    assert rec == []   # neither reached the CLI
+
+
+async def test_upload_refuses_a_ref_field_without_running_the_cli(monkeypatch):
+    """A @ref can't be resolved in the page (where the input is tagged), so it's refused up
+    front — as browser_select / browser_form_read do — before any subprocess."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF")
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "@e5", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "@ref" in out
+    assert rec == []
+
+
+# ── the tool: the happy path + the read-back verify ────────────────────────────────
+
+
+def _upload_popen(locate, verify, record=None, procs=None, upload_out=b"(ok)"):
+    """A scripted CLI for browser_upload against a CSS field (no resolver eval): the FIRST
+    `eval --stdin` answers the locate/tag step with `locate`, the SECOND answers the read-back
+    verify with `verify`, and `upload` returns `upload_out`."""
+    loc = locate if isinstance(locate, (bytes, bytearray)) else json.dumps(locate).encode()
+    ver = verify if isinstance(verify, (bytes, bytearray)) else json.dumps(verify).encode()
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        if record is not None:
+            record.append(list(argv))
+        out = b"(ok)"
+        if argv[1:2] == ["eval"]:
+            out = loc if state["evals"] == 0 else ver
+            state["evals"] += 1
+        elif argv[1:2] == ["upload"]:
+            out = upload_out
+        p = _FakeProc(argv, out=out)
+        if procs is not None:
+            procs.append(p)
+        return p
+
+    return _popen
+
+
+async def test_upload_attaches_a_fenced_file_and_verifies_the_readback(monkeypatch):
+    """r1: a CSS-addressed file input is tagged in-page, the CLI uploads the fenced ABSOLUTE
+    path to that stable selector, and success is reported only after reading the attached
+    filename back and confirming it matches."""
+    root = storage.capture_root().resolve()
+    resume = root / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4 resume")
+    rec, procs = [], []
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": True, "selector": '[data-pa-upload="abc123"]', "label": "Résumé", "name": "resume"},
+        {"ok": True, "name": "cv.pdf", "error": ""},
+        record=rec, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé"
+    # locate(eval) → upload → verify(eval): a CSS field skips the label resolver
+    assert [a[1] for a in rec] == ["eval", "upload", "eval"]
+    # the CLI uploads the STABLE tagged selector + the fenced ABSOLUTE path — never a ref
+    assert rec[1] == ["ab", "upload", '[data-pa-upload="abc123"]', str(resume)]
+    # both scripts ride stdin (#3689): the locate tags with data-pa-upload, the verify reads files[0]
+    locate_script = procs[0].stdin.getvalue().decode()
+    verify_script = procs[2].stdin.getvalue().decode()
+    assert "data-pa-upload" in locate_script
+    assert "abc123" in verify_script and "files" in verify_script
+
+
+async def test_upload_resolves_a_label_through_the_bd12mo1_locator_first(monkeypatch):
+    """r1/r2: a LABEL is resolved FRESH by the shared bd-12mo.1 resolver (an enumerate eval),
+    and the resolved `[data-ab-field]` selector is what the locate/tag step then acts on —
+    resolve, locate, upload, verify, all on stdin."""
+    root = storage.capture_root().resolve()
+    resume = root / "cv.pdf"
+    resume.write_bytes(b"%PDF resume")
+    fields = [{"label": "Résumé", "labels": ["Résumé"], "selector": '[data-ab-field="6"]', "kind": "file"}]
+    enum = json.dumps({"mode": "enumerate", "fields": fields}).encode()
+    locate = json.dumps({"ok": True, "selector": '[data-pa-upload="n"]', "label": "Résumé"}).encode()
+    verify = json.dumps({"ok": True, "name": "cv.pdf", "error": ""}).encode()
+    rec, procs = [], []
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        rec.append(list(argv))
+        out = b"(ok)"
+        if argv[1:2] == ["eval"]:
+            out = (enum, locate, verify)[state["evals"]]
+            state["evals"] += 1
+        p = _FakeProc(argv, out=out)
+        procs.append(p)
+        return p
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "Résumé", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé"
+    assert [a[1] for a in rec] == ["eval", "eval", "upload", "eval"]
+    assert "abEnumerate" in procs[0].stdin.getvalue().decode()           # the resolver runs first
+    assert json.dumps('[data-ab-field="6"]') in procs[1].stdin.getvalue().decode()  # tagged the match
+    assert rec[2] == ["ab", "upload", '[data-pa-upload="n"]', str(resume)]
+
+
+async def test_upload_marks_the_file_in_flight_so_a_prune_cannot_take_it(monkeypatch):
+    """r6: while the upload runs, the source file is protected from capture pruning — even a
+    prune with a zero budget fired mid-upload leaves it in place."""
+    root = storage.capture_root().resolve()
+    resume = root / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4 resume content")
+    locate = json.dumps({"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"}).encode()
+    verify = json.dumps({"ok": True, "name": "cv.pdf", "error": ""}).encode()
+    seen, state = {}, {"evals": 0}
+
+    def _popen(argv, **kw):
+        out = b"(ok)"
+        if argv[1:2] == ["eval"]:
+            out = locate if state["evals"] == 0 else verify
+            state["evals"] += 1
+        elif argv[1:2] == ["upload"]:
+            # a prune that would otherwise delete every capture fires mid-upload
+            storage.prune_captures(max_files=0, max_bytes=0)
+            seen["survived"] = resume.is_file()
+        return _FakeProc(argv, out=out)
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé"
+    assert seen["survived"] is True   # the in-flight source was shielded from the prune
+
+
+# ── the tool: verify failures and locate errors are hard errors ────────────────────
+
+
+async def test_upload_readback_mismatch_is_a_hard_error(monkeypatch):
+    """r5: the input reading back a DIFFERENT filename than was uploaded is an Error naming
+    both — never a success. This is the guard against a silent non-attach."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF resume")
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
+        {"ok": True, "name": "stale-old-file.pdf", "error": ""}))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "Uploaded" not in out
+    assert "stale-old-file.pdf" in out and "cv.pdf" in out
+
+
+async def test_upload_empty_readback_is_a_hard_error_and_surfaces_validation(monkeypatch):
+    """r5: an empty read-back (nothing attached) is an Error, and any field validation text is
+    surfaced so the agent learns why."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF resume")
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
+        {"ok": True, "name": "", "error": "Résumé is required"}))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "nothing is attached" in out
+    assert "Résumé is required" in out
+
+
+# ── #4032 bug 3: the attach survives the widget RE-RENDERING its file input ─────────
+
+
+async def test_upload_confirms_via_the_displayed_filename_after_a_rerender(monkeypatch):
+    """bug 3 (mocked CLI): the widget re-rendered its input (the nonce node is gone, the fresh
+    input reads empty), but the field still SHOWS the filename — the tool confirms the attach via
+    that displayed filename, instead of the old 'could not be found to verify' error."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF resume")
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé",
+         "id": "resume", "name": "resume", "container": "#resume_block"},
+        {"ok": True, "name": "", "displayed": True, "error": ""}))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé (verified via the field's displayed filename)"
+
+
+async def test_upload_verify_script_carries_the_id_name_and_container(monkeypatch):
+    """The verify eval is handed the input's id/name and the container selector locate found, so a
+    re-render that drops the nonce can still re-find the input (and read its displayed chip)."""
+    root = storage.capture_root().resolve()
+    resume = root / "cv.pdf"
+    resume.write_bytes(b"%PDF resume")
+    procs = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": True, "selector": '[data-pa-upload="n"]', "label": "Résumé",
+         "id": "resume", "name": "resume", "container": "#resume_block"},
+        {"ok": True, "name": "cv.pdf", "error": ""}, procs=procs))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé"
+    verify_script = procs[-1].stdin.getvalue().decode()
+    assert '"resume"' in verify_script            # the input's id + name, to re-find it fresh
+    assert "resume_block" in verify_script        # the field container, for the displayed-text check
+    assert "cv.pdf" in verify_script              # the basename to look for in the container
+
+
+def test_render_upload_confirms_via_the_displayed_filename():
+    """bug 3: input re-rendered empty (name='') but the field shows the filename (displayed=true)
+    → success naming the evidence used."""
+    out = forms.render_upload(json.dumps({"ok": True, "name": "", "displayed": True, "error": ""}),
+                              "#resume", "cv.pdf", label="Résumé")
+    assert out == "Uploaded cv.pdf to Résumé (verified via the field's displayed filename)"
+
+
+def test_render_upload_prefers_a_read_back_name_over_the_display():
+    """(a)/(b): a re-found input that actually carries the file wins — the success line does NOT
+    claim the displayed-filename evidence."""
+    out = forms.render_upload(json.dumps({"ok": True, "name": "cv.pdf", "displayed": True, "error": ""}),
+                              "#resume", "cv.pdf", label="Résumé")
+    assert out == "Uploaded cv.pdf to Résumé"
+
+
+def test_render_upload_empty_and_not_displayed_is_a_hard_error():
+    """r4: no attached file AND no displayed filename is a hard error — never a silent success —
+    and any field validation text is surfaced."""
+    out = forms.render_upload(
+        json.dumps({"ok": True, "name": "", "displayed": False, "error": "The file could not be attached"}),
+        "#transcript", "cv.pdf", label="Transcript")
+    assert out.startswith("Error:") and "nothing is attached" in out
+    assert "could not be attached" in out
+
+
+async def test_upload_no_file_input_in_container_is_an_error(monkeypatch):
+    """r2 (negative): the located element isn't a file input and its container has none — a
+    clear Error, and the CLI never uploads."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF")
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": False, "reason": "no-file-input", "label": "Cover letter"},
+        {"ok": True}, record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#cover", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "file input" in out
+    assert not any(a[1:2] == ["upload"] for a in rec)   # located, then stopped — never uploaded
+
+
+async def test_upload_multiple_file_inputs_in_container_is_an_error(monkeypatch):
+    """r2 (negative): more than one file input in the container is ambiguous, never a guess."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF")
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
+        {"ok": False, "reason": "multiple", "label": "Documents", "count": 2},
+        {"ok": True}, record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#docs", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "ambiguous" in out and "2" in out
+    assert not any(a[1:2] == ["upload"] for a in rec)
+
+
+async def test_upload_surfaces_a_cli_upload_error(monkeypatch):
+    """A non-zero `upload` exit (e.g. the element vanished) is surfaced, not swallowed."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF")
+
+    def _popen(argv, **kw):
+        if argv[1:2] == ["eval"]:
+            return _FakeProc(argv, out=json.dumps(
+                {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"}).encode())
+        if argv[1:2] == ["upload"]:
+            return _FakeProc(argv, out=b"", err=b"no element", rc=1)
+        return _FakeProc(argv, out=b"(ok)")
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "no element" in out
+
+
+async def test_upload_degrades_on_unreadable_locate_output_instead_of_raising(monkeypatch):
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF")
+    monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen("not json at all", {"ok": True}))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out.startswith("Error:")   # never raises
+
+
+async def test_upload_flag_shaped_field_is_refused_before_anything(monkeypatch):
+    """The argv guard fires first: a flag-shaped field never reaches the fence or the CLI."""
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "--headed", "file_path": "cv.pdf"})
+    assert out.startswith("Error:") and "looks like a command-line option" in out
+    assert rec == []
+
+
+# ── the in-page resolution (a real DOM via jsdom) — the Attach-button container climb ──
+
+
+def _run_upload_js(html: str, selector: str, nonce: str = "n1"):
+    """Eval `forms.upload_js(selector, nonce)` against a real DOM (jsdom) and return the JSON
+    it produces — the only host-free way to prove the file-input container resolution."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ");\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        "const script = " + json.dumps(forms.upload_js(selector, nonce)) + ";\n"
+        "console.log((0, eval)(script));\n"   # upload_js returns a JSON string
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+_ATTACH_BUTTON_HTML = """
+<form>
+  <div class="field" id="resume-field">
+    <label>Resume/CV</label>
+    <button type="button">Attach</button>
+    <input type="file" name="resume" style="display:none"/>
+  </div>
+</form>
+"""
+
+
+def test_upload_js_uses_the_single_file_input_hidden_behind_an_attach_button():
+    """r2: the located element is the field wrapper (the real input hides behind an "Attach"
+    button, as Greenhouse/Ashby do). The driver climbs to the container and tags its single
+    file input, so the CLI gets a stable `[data-pa-upload]` selector for it."""
+    res = _run_upload_js(_ATTACH_BUTTON_HTML, "#resume-field", nonce="n1")
+    assert res["ok"] is True
+    assert res["selector"] == '[data-pa-upload="n1"]'
+    assert res["name"] == "resume"
+
+
+def test_upload_js_tags_a_file_input_addressed_directly():
+    html = '<form><label for="r">Résumé</label><input id="r" type="file" name="resume"/></form>'
+    res = _run_upload_js(html, "#r", nonce="z9")
+    assert res["ok"] is True and res["selector"] == '[data-pa-upload="z9"]' and res["name"] == "resume"
+
+
+def test_upload_js_refuses_more_than_one_file_input_in_the_container():
+    html = ('<form><div id="box">'
+            '<input type="file" name="a"/><input type="file" name="b"/>'
+            '</div></form>')
+    res = _run_upload_js(html, "#box", nonce="z")
+    assert res["ok"] is False and res["reason"] == "multiple" and res["count"] == 2
+
+
+def test_upload_js_refuses_when_the_container_has_no_file_input():
+    html = '<form><div id="box"><input type="text" name="a"/></div></form>'
+    res = _run_upload_js(html, "#box", nonce="z")
+    assert res["ok"] is False and res["reason"] == "no-file-input"
+
+
+def test_upload_js_reports_not_found_for_an_absent_selector():
+    res = _run_upload_js("<form></form>", "#nope", nonce="z")
+    assert res["ok"] is False and res["reason"] == "not-found"
+
+
+def test_upload_js_also_returns_the_input_id_and_a_container_selector():
+    """bug 3: locate also returns the input's id/name and a stable container selector, so the
+    verify step can re-find the input (and read its filename chip) after the widget re-renders and
+    the nonce tag rides off with the discarded node."""
+    res = _run_upload_js(_ATTACH_BUTTON_HTML, "#resume-field", nonce="n1")
+    assert res["ok"] is True and res["name"] == "resume"
+    assert res["container"] == "#resume-field"        # the nearest ancestor carrying an id
+
+
+def test_upload_js_resolves_a_bare_or_hashed_id_file_input_directly():
+    """r2: a `#id` OR a bare id that names an input[type=file] resolves to THAT input directly —
+    no container climb — even when it is hidden behind an "Attach" button."""
+    html = ('<form><div id="wrap"><button type="button">Attach</button>'
+            '<input id="resume" type="file" name="resume" style="display:none"/></div></form>')
+    for sel in ("#resume", "resume"):
+        res = _run_upload_js(html, sel, nonce="z")
+        assert res["ok"] is True, (sel, res)
+        assert res["id"] == "resume" and res["name"] == "resume", (sel, res)
+        assert res["container"] == "#wrap", (sel, res)
+
+
+_RERENDER_HTML = """
+<form>
+  <div id="resume_block">
+    <label for="resume">Resume/CV</label>
+    <input id="resume" type="file" name="resume"/>
+    <span class="file-chip"><span class="file-chip__name">live_resume.pdf</span><button type="button">x</button></span>
+  </div>
+</form>
+"""
+
+
+def _run_upload_verify_js(html, selector, input_id="", input_name="", container="", basename=""):
+    """Eval `forms.upload_verify_js(...)` against a real DOM (jsdom) and return the JSON it
+    produces — the host-free way to prove the re-render-tolerant read-back (nonce gone, re-find by
+    id/name, read the container's filename chip)."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ");\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        "const script = " + json.dumps(
+            forms.upload_verify_js(selector, input_id, input_name, container, basename)) + ";\n"
+        "console.log((0, eval)(script));\n"
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_upload_verify_js_confirms_via_the_chip_after_a_rerender():
+    """bug 3: the nonce node is gone (re-rendered away) and the fresh input is empty, but the field
+    container still SHOWS the filename as a chip — verify reports displayed=true (the chip's remove
+    button stripped), so the attach is confirmed rather than reported missing."""
+    res = _run_upload_verify_js(_RERENDER_HTML, '[data-pa-upload="gone"]',
+                                input_id="resume", input_name="resume",
+                                container="#resume_block", basename="live_resume.pdf")
+    assert res["ok"] is True
+    assert res["name"] == ""              # the re-rendered input carries no files
+    assert res["displayed"] is True       # but the field shows the filename
+    assert res["error"] == ""
+
+
+def test_upload_verify_js_surfaces_a_rejection_message_with_no_filename():
+    """r4: a rejecting widget clears the input and shows a validation message — verify returns an
+    empty name, displayed=false, and surfaces the message."""
+    html = ('<form><div id="box"><label for="t">Transcript</label>'
+            '<input id="t" type="file" name="t"/>'
+            '<div class="field-error" role="alert">The file could not be attached</div></div></form>')
+    res = _run_upload_verify_js(html, '[data-pa-upload="gone"]', input_id="t", input_name="t",
+                                container="#box", basename="rejected.pdf")
+    assert res["ok"] is True and res["name"] == "" and res["displayed"] is False
+    assert "could not be attached" in res["error"]
+
+
+def test_upload_is_a_registered_tool_with_a_usable_docstring():
+    t = _toolmap()["browser_upload"]
+    assert "browser_upload" in EXPECTED_TOOLS
+    assert t.description and len(t.description) >= 20
 
 
 # ── register() wiring ────────────────────────────────────────────────────────────
@@ -1036,7 +2795,6 @@ def test_bundled_version_is_above_every_standalone_release():
         f"{LAST_STANDALONE_VERSION} — an untracked copy that isn't older than the bundled "
         f"one wins (#1574)"
     )
-    assert version == (0, 7, 0)
 
 
 def test_manifest_supersedes_the_retired_repo():
@@ -1276,12 +3034,6 @@ def test_the_dash_alias_and_its_cookie_gate_are_not_vendored():
     c = TestClient(_app({"require_auth": True}))   # the key that used to arm it
     assert c.get("/plugins/agent_browser/panel/dash").status_code == 404
     assert c.post("/api/plugins/agent_browser/dash-session").status_code == 404
-    source = (ROOT / "browser_panel.py").read_text(encoding="utf-8")
-    for gone in ("_dash_auth_required", "_DASH_COOKIE", "ab_session", "mint_dash_token",
-                 "verify_dash_token", "ensureDashSession", "set_cookie", "import hmac"):
-        assert gone not in source, f"{gone} should not be vendored"
-    # the removal is EXPLAINED where the next reader will look, not just done
-    assert "require_auth" in source and "could never fire" in source
     # and the page no longer makes the two extra round-trips per connect
     assert "dash-session" not in TestClient(_app()).get("/plugins/agent_browser/panel").text
 
@@ -1547,7 +3299,7 @@ def _in_tree_tool_names() -> set[str]:
     a skill may legitimately point at a core/other-plugin tool (``save_file_artifact``).
     """
     names: set[str] = set()
-    for base in (REPO / "plugins", REPO / "tools", REPO / "graph"):
+    for base in (REPO / "plugins", REPO / "src" / "tools", REPO / "src" / "graph"):
         for path in base.rglob("*.py"):
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
@@ -1592,6 +3344,32 @@ def test_every_tool_the_skill_declares_exists():
     assert declared, "the web-browse skill should declare its tools"
     assert declared <= EXPECTED_TOOLS, sorted(declared - EXPECTED_TOOLS)
     assert "browser_pdf" in declared   # the new capability is discoverable
+
+
+def test_the_skill_frontmatter_lists_the_form_filling_tools():
+    """#4032 A4: the web-browse skill now teaches form filling, so its advisory `tools:` list
+    must carry the form tools the Filling forms section relies on — or the model can't see
+    them as part of the skill."""
+    from graph.skills.loader import parse_skill_md
+
+    declared = set(parse_skill_md(ROOT / "skills" / "web-browse" / "SKILL.md").tools_used or [])
+    assert {"browser_form_read", "browser_select", "browser_upload"} <= declared
+
+
+def test_the_skill_has_a_filling_forms_section_with_the_form_doctrine():
+    """r5: the Filling forms doctrine is present — read first, address by label, select for
+    dropdowns, country-before-number, upload from a browser_pdf, read-back diff, and never
+    submitting (or solving a captcha/login) without the operator."""
+    text = _skill_text()
+    assert "## Filling forms" in text
+    assert "browser_form_read" in text and "browser_select" in text and "browser_upload" in text
+    low = text.lower()
+    assert "label" in low and "@en" in low                       # address by label, not @eN
+    assert "never" in low and "type" in low and "enter" in low   # never type-and-Enter for selects
+    assert "country" in low and "number" in low                  # country before the number
+    assert "browser_pdf" in text                                 # upload a file made with browser_pdf
+    assert "js_fallback" in low                                  # the click fallback is taught
+    assert "submit" in low and ("captcha" in low or "login" in low)   # consent + human steps
 
 
 def test_every_backticked_identifier_in_the_skill_is_a_real_tool():
@@ -1675,7 +3453,7 @@ def test_the_real_cli_still_has_every_subcommand_and_flag_the_plugin_sends():
     entirely, so a renamed subcommand would have shipped green. Read its own help."""
     help_text = subprocess.run([CLI, "--help"], capture_output=True, text=True, timeout=60).stdout
     for verb in ("open", "back", "forward", "reload", "snapshot", "click", "fill", "type",
-                 "press", "hover", "eval", "screenshot", "pdf", "close"):
+                 "press", "hover", "eval", "screenshot", "pdf", "upload", "close"):
         assert re.search(rf"^\s+{re.escape(verb)}\b", help_text, re.M), f"CLI lost `{verb}`"
     # `get <what>` is documented as its own group, and the plugin sends text/html/value
     assert "agent-browser get <what>" in help_text

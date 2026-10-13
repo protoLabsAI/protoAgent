@@ -65,6 +65,6 @@ generated PDFs. Report the verified page count with the saved path.
 
 Once the file is written and verified, register it in the Artifact panel with
 `save_file_artifact(path, title=…)` when that tool is available (the artifact plugin, protoAgent
-v0.107.0+). It stores the bytes, shows a Download card with a readable preview (the extracted text), and keeps
+v0.107.0+). It stores the bytes, shows the PDF's real pages in the panel with a Download button, and keeps
 an edit history — pass the same `artifact_id` to save a later revision as v2/v3. Report the saved
 path *and* that it's in the panel. If the tool isn't available, just report the path.

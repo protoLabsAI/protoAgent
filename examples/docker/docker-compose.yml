@@ -17,15 +17,11 @@ services:
       # a trusted network boundary — set PROTOAGENT_ALLOW_OPEN=1.
       A2A_AUTH_TOKEN: ${A2A_AUTH_TOKEN:?set an operator token}
     ports:
-      - "7870:7870"
+      - "127.0.0.1:7870:7870"
     volumes:
-      # NAMED config volume: protoAgent seeds the live config here on first boot, then
-      # console edits persist across reboots + image rolls. Re-seed = remove it
-      # (`docker volume rm <project>_agent-config`). Do NOT rely on the image's
-      # anonymous VOLUME — it silently shadows config.
-      - agent-config:/opt/protoagent/config
+      # The entrypoint uses /sandbox as the instance root. Persist config,
+      # credentials, chats, and all other stores together.
       - agent-sandbox:/sandbox
 
 volumes:
-  agent-config:
   agent-sandbox:

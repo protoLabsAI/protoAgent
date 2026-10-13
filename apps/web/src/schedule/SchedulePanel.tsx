@@ -62,6 +62,7 @@ export function ScheduleModal({
   return (
     <Dialog
       open={open}
+      padding="roomy"
       onClose={onClose}
       title={<><CalendarClock size={16} /> New schedule</>}
       width="min(560px, 94vw)"
@@ -106,7 +107,7 @@ function ScheduleDetailDialog({
 }: {
   job: ScheduledJob | null;
   onClose: () => void;
-  onSave: (id: string, body: { prompt: string; schedule: string; timezone?: string }) => void;
+  onSave: (id: string, body: { prompt: string; schedule: string; timezone: string | null }) => void;
   onDelete: (id: string) => void;
   busy: boolean;
 }) {
@@ -136,6 +137,7 @@ function ScheduleDetailDialog({
   return (
     <Dialog
       open={!!job}
+      padding="roomy"
       onClose={onClose}
       title={<><CalendarClock size={16} /> {editing ? "Edit schedule" : "Scheduled job"}</>}
       width="min(560px, 94vw)"
@@ -154,7 +156,9 @@ function ScheduleDetailDialog({
               onClick={() => onSave(job.id, {
                 prompt: prompt.trim(),
                 schedule: scheduleChanged ? out.schedule : job.schedule,
-                timezone: out.timezone,
+                // Always present: the PUT is partial (#3957), so a dropped key would mean
+                // "keep the current zone" — `null` is how "UTC" (or a one-shot) is said.
+                timezone: out.timezone ?? null,
               })}
             >
               Save changes
@@ -250,7 +254,7 @@ function ScheduleBody() {
   // Atomic in-place edit (PUT) — id / created_at / last_fire preserved, next_fire
   // recomputed server-side; a bad schedule 400s without touching the job.
   const edit = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: { prompt: string; schedule: string; timezone?: string } }) =>
+    mutationFn: ({ id, body }: { id: string; body: { prompt: string; schedule: string; timezone: string | null } }) =>
       api.updateSchedule(id, body),
     onSuccess: () => {
       setDetailId(null);

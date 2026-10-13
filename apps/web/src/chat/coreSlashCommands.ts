@@ -11,10 +11,10 @@ import { errMsg } from "../lib/format";
 import { queryClient } from "../lib/queryClient";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { ChatMessage, HitlPayload } from "../lib/types";
-import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS } from "./chat-store";
+import { chatStore, DEFAULT_REASONING_EFFORT, REASONING_EFFORTS, registerGoalKickoff } from "./chat-store";
 import { exportChatToFile } from "./exportChat";
 import { openPublishDialog } from "./publishDialogStore";
-import { buildGoalSetBody, goalFormPayload } from "./goalForm";
+import { buildGoalSetBody, goalFormPayload, goalSetDetail } from "./goalForm";
 import { buildWatchCreateBody, watchFormPayload } from "./watchForm";
 import type { VerifierCatalog } from "../lib/types";
 import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type ModelPickerData } from "./modelForm";
@@ -166,7 +166,7 @@ registerSlashCommand({
 
 registerSlashCommand({
   name: "prompt",
-  // NB: the slash menu filters on name OR description (ChatSurface) — keep every
+  // NB: the slash menu filters on name OR description (ChatSessionSlot) — keep every
   // other command's NAME out of this text, or typing that command surfaces /prompt
   // above it and Enter runs the wrong one (the /model e2e caught exactly this).
   description: "Show the exact system prompt behind this session's latest reply — never saved",
@@ -657,11 +657,20 @@ function openGoalForm(
           ctx.focusComposer();
           return;
         }
+        // Drive the goal IN THIS TAB (ADR 0090 D1, same as the Work-panel flow): set it with
+        // `kick: false`, then fire the hidden kickoff from this tab once the POST resolves, so
+        // the drive loop streams live here — tool cards, text, every continuation. The
+        // default headless kick ran it as a server-fired turn that only surfaced as a
+        // collapsed result card. A tab already mid-turn can't start a second one, so it keeps
+        // the headless kick (now rendered as a goal run — see effectiveOrigin).
+        const busy = chatStore.getSnapshot().sessionStatusMap[sid] === "streaming";
         void api
-          .setGoal(body)
-          .then((res) =>
-            ctx.noteToThread(`**Goal set.** ${res.message ?? ""}`.trim(), { tone: "success" }),
-          )
+          .setGoal({ ...body, kick: busy })
+          .then((res) => {
+            ctx.noteToThread(`**Goal set.** ${goalSetDetail(res.message)}`.trim(), { tone: "success" });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.goals });
+            if (!busy) registerGoalKickoff(sid, `Start working toward the goal: ${body.condition}`);
+          })
           // A rejected verifier / disabled goal mode comes back as HTTP 400 → request() throws.
           .catch((e) => ctx.noteToThread(`Couldn't set goal: ${errMsg(e)}`, { tone: "danger" }));
         ctx.focusComposer();

@@ -621,6 +621,27 @@ class TestImportRoute:
         assert body["plugins"][0]["url"].endswith("github-plugin")
         assert not list(ws_root.glob("*")) if ws_root.exists() else True
 
+    @pytest.mark.parametrize("headroom", [-1, 0, 1])
+    def test_upload_read_is_bounded_and_limit_is_inclusive(self, client, monkeypatch, headroom):
+        from starlette.datastructures import UploadFile
+
+        from operator_api import snapshot_routes
+
+        data = _snapshot()
+        limit = len(data) + headroom
+        monkeypatch.setattr(snapshot_routes, "MAX_UPLOAD_BYTES", limit)
+        original_read = UploadFile.read
+        reads = []
+
+        async def recording_read(upload, size=-1):
+            reads.append(size)
+            return await original_read(upload, size)
+
+        monkeypatch.setattr(UploadFile, "read", recording_read)
+        response = client.post("/api/agent/import", files={"file": ("s.zip", data, "application/zip")})
+        assert response.status_code == (413 if headroom < 0 else 200)
+        assert reads and all(0 < size <= limit + 1 for size in reads)
+
     def test_a_hostile_archive_is_400_not_500(self, client):
         """Traversal must be a clean, explained refusal — a 500 reads as our bug and tells
         the operator nothing about the file they were handed."""
@@ -738,6 +759,8 @@ from types import SimpleNamespace  # noqa: E402 — section-local
 
 from graph.config import LangGraphConfig  # noqa: E402
 from graph.llm import create_llm  # noqa: E402
+
+pytestmark = pytest.mark.platform_sensitive
 
 KEY = "sk-" + "livekey" + "q" * 24
 LEGACY_PINNED = {"model": {"provider": "openai", "name": "protolabs/reasoning", "api_base": "https://src.example/v1"}}

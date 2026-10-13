@@ -91,7 +91,12 @@ def _build_delegate_to(registry: DelegateRegistry):
                 answer first (ask your own operator with ask_human if you have it —
                 your question bubbles up the chain the same way), THEN resume.
                 Never re-delegate the original task instead of resuming — that
-                starts the work over.
+                starts the work over. The same id also COLLECTS a delegation that
+                timed out while the peer was still working: when a reply says the
+                delegate is "still running … on task <id>", call this tool with the
+                same target, any short `query` (e.g. "collect the result") and that
+                id — it waits on the SAME task (re-sending nothing) and returns the
+                peer's answer once it lands.
             timeout: max seconds to wait for the delegate's reply before failing,
                 overriding the delegate's configured timeout for THIS call only.
                 Leave 0 (the default) to use the configured timeout. Raise it for a
@@ -148,18 +153,25 @@ def _build_delegate_to(registry: DelegateRegistry):
                 summary=summary,
                 project=scope,
             )
+        from graph.delegate_progress import progress_sink
+
         try:
-            return await _dispatch_into_room(
-                registry,
-                target,
-                query,
-                state,
-                tool_call_id=tool_call_id,
-                item_id=item_id or None,
-                resume_task_id=resume_task_id or None,
-                timeout=timeout_s,
-                project=scope,
-            )
+            # A coding delegate reports its live progress into this delegation's ask row
+            # (#3979) — a LangChain custom event under THIS tool's run, which the turn
+            # stream keys to the row by run id. Foreground only: the background branch
+            # above returned already, and reports through its job instead.
+            with progress_sink(_tool_progress_sink()):
+                return await _dispatch_into_room(
+                    registry,
+                    target,
+                    query,
+                    state,
+                    tool_call_id=tool_call_id,
+                    item_id=item_id or None,
+                    resume_task_id=resume_task_id or None,
+                    timeout=timeout_s,
+                    project=scope,
+                )
         except DelegateError as exc:
             # A stopped member of THIS box's fleet is recoverable: ask, start, retry.
             # Anything else — a remote peer, a timeout, an HTTP error, an operatorless
@@ -184,6 +196,29 @@ def _build_delegate_to(registry: DelegateRegistry):
 
     delegate_to.description = f"{delegate_to.description}\n\nAvailable delegates: {listing or '(none configured)'}."
     return delegate_to
+
+
+def _tool_progress_sink():
+    """A ``graph.delegate_progress`` sink that re-emits each snapshot as a
+    ``delegate_progress`` custom event under the CALLING tool's run, or None outside one.
+
+    The run config is captured NOW, in the tool body: the snapshots are produced on the
+    ACP client's reader task, whose context holds no LangChain run, so a bare
+    ``adispatch_custom_event`` there would have no parent run to attach to."""
+    try:
+        from langchain_core.callbacks import adispatch_custom_event
+        from langchain_core.runnables.config import ensure_config
+
+        config = ensure_config()
+    except Exception:  # noqa: BLE001 — no run context (a unit test, a CLI call): no live view
+        return None
+    if not config.get("callbacks"):
+        return None
+
+    async def _sink(snapshot: dict) -> None:
+        await adispatch_custom_event("delegate_progress", snapshot, config=config)
+
+    return _sink
 
 
 async def _offer_start_and_retry(
@@ -226,7 +261,7 @@ async def _offer_start_and_retry(
         # cannot come up must degrade to the plain error, not re-prompt every call.
         return None
 
-    from tools.lg_tools import _session_id_from
+    from tools.session import _session_id_from
 
     session_id = _session_id_from(state) or ""
     if not granted(session_id):
@@ -338,7 +373,7 @@ async def _dispatch_into_room(
         from graph.mention_op import catchup_caps, dispatch_into_room
         from graph.thread_ids import resolve_thread_id
         from runtime.state import STATE
-        from tools.lg_tools import _session_id_from
+        from tools.session import _session_id_from
 
         from . import conversations
 
@@ -351,7 +386,7 @@ async def _dispatch_into_room(
         # resolved conversation key (#3362). `dispatch_into_room` reaches `registry.dispatch`
         # through host-free `graph/mention_op`, which can't carry a new argument, so the
         # session rides a ContextVar the registry reads. Same session that scopes a later
-        # session-DELETE cleanup — the `@` path binds it identically in `server.chat`.
+        # session-DELETE cleanup — the `@` path binds it identically in `server.chat_rooms`.
         from .projects import project_scope
 
         # The project scope rides a ContextVar across host-free `graph/mention_op` for the
@@ -376,16 +411,33 @@ async def _dispatch_into_room(
     if outcome["ok"]:
         result = outcome["reply"]
     else:
-        result = f"Error: delegate {target!r} failed: {outcome['error'] or 'unknown error'}"
+        from .base import KIND_STILL_RUNNING
+
+        still_running = outcome.get("error_kind") == KIND_STILL_RUNNING
+        if still_running:
+            # Not a failure: the peer took the work and is still on it. The adapter's message
+            # already names the task id, last state/status and the exact collect call
+            # (#3700/#3775) — "failed" in front of it would read as "the work is lost".
+            result = f"Error: {outcome['error']}"
+        else:
+            result = f"Error: delegate {target!r} failed: {outcome['error'] or 'unknown error'}"
         # The same late collection the `@` room gets (#3360b): a peer that was still working
         # when this gave up keeps its task, and its answer comes back to this session on a
         # later turn instead of being lost. Said to the lead so it neither re-delegates the
         # work (a duplicate task) nor tells the operator the answer is gone.
         incognito = bool(state.get("incognito")) if isinstance(state, dict) else False
-        if registry.collect_late(thread_id, target, session_id=session_id, incognito=incognito):
+        collecting = registry.collect_late(thread_id, target, session_id=session_id, incognito=incognito)
+        if collecting and not still_running:
             result += (
                 "\n\nIt may still be working — its answer will be delivered to you automatically on "
                 "a later turn if it finishes. Do not re-delegate this."
+            )
+        elif still_running and not collecting and "delivered automatically" in result:
+            # The message promised a collection the room could not start after all — say so
+            # rather than leave the lead waiting on a delivery that never comes.
+            result += (
+                "\n\n(Automatic delivery could not be started — collect it yourself with the "
+                "resume_task_id call above.)"
             )
     # A Command update needs the matching ToolMessage: ToolNode validates that every
     # model tool call has exactly one terminator. It also leaves the usual result in the
@@ -441,7 +493,7 @@ async def _spawn_background_delegation(
         )
 
     try:
-        from tools.lg_tools import _session_id_from
+        from tools.session import _session_id_from
 
         # Injected graph state, not the tracing contextvar (empty in a tool body) — the
         # session id is what the completion drains back to (ADR 0050).
@@ -492,29 +544,62 @@ async def _spawn_background_delegation(
 
 def _build_list_agents(registry: DelegateRegistry):
     @tool
-    def list_agents() -> str:
-        """List the agents/delegates you can reach with `delegate_to`, with each one's
-        type, description, and current reachability (🟢 reachable · 🔴 down · ⚪ unknown).
+    def list_agents(detail: bool = False) -> str:
+        """List configured delegates with cached reachability and evidence age.
 
-        Read this before assuming who's available — the roster is configuration, not a
-        fixed set, and it changes as delegates are added or removed."""
-        try:
-            from .health import health_snapshot
+        🟢 recently reachable · 🔴 recent probe failure · ⚪ stale or never probed.
+        Results older than 6 minutes are stale, not proof a peer is down. A successful
+        dispatch clears an older failed probe. Read this before choosing a delegate.
+        Set detail=true for probe timestamps, errors, next probe and last dispatch.
+        Both modes read in-memory caches only: no network, subprocess, or probe refresh.
+        """
+        import json
+        import time
 
-            health = health_snapshot() or {}
-        except Exception:  # noqa: BLE001 — prober not running; reachability stays unknown
-            health = {}
+        from .health import _STALE_AFTER_S, health_peek
+        from .status import snapshot
+
+        health, dispatches, now = health_peek(), snapshot(), time.time()
         roster = registry.roster()
         if not roster:
             return "No delegates configured."
-        lines = []
+
+        def evidence(entry, timestamp):
+            if not entry:
+                return None
+            at = entry.get(timestamp)
+            return {**entry, "age_seconds": max(0, int(now - at)) if at is not None else None}
+
+        lines, rows = [], []
         for r in roster:
-            ok = (health.get(r["name"]) or {}).get("ok")
-            badge = "🟢" if ok is True else "🔴" if ok is False else "⚪"
+            cached = health.get(r["name"]) or {}
+            checked = evidence({k: v for k, v in cached.items() if k not in {"probe", "next_due"}}, "checked_at")
+            age = checked["age_seconds"] if checked else None
+            stale = age is None or age > _STALE_AFTER_S
+            ok = cached.get("ok")
+            badge = "⚪" if stale or ok is None else "🟢" if ok else "🔴"
+            source = cached.get("source", "probe")
+            reason = cached.get("error") or cached.get("detail") or "no reason recorded"
+            if not cached:
+                summary = "never probed (age unknown)"
+            else:
+                when = f"{age}s ago" if age is not None else "age unknown"
+                outcome = "succeeded" if ok is True else "failed" if ok is False else "unknown"
+                summary = f"{'stale; ' if stale else ''}{source} {outcome}, {when}"
+                if ok is not True:
+                    summary += f": {reason}"
             typ = f" ({r['type']})" if r["type"] else ""
             desc = f" — {r['description']}" if r["description"] else ""
-            lines.append(f"{badge} {r['name']}{typ}{desc}")
-        return "\n".join(lines)
+            lines.append(f"{badge} {r['name']}{typ}{desc} — {summary}")
+            rows.append({
+                "name": r["name"], "type": r["type"], "description": r["description"],
+                "summary": summary, "stale": stale, "health": checked,
+                "probe": evidence(cached.get("probe"), "checked_at"),
+                "probe_state": "recorded" if cached.get("probe") else "never probed",
+                "last_dispatch": evidence(dispatches.get(r["name"]), "at"),
+                "next_probe_at": cached.get("next_due"),
+            })
+        return json.dumps(rows, ensure_ascii=False) if detail else "\n".join(lines)
 
     return list_agents
 

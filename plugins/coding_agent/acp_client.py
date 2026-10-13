@@ -42,11 +42,19 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from infra import clock
 from infra.proc import child_env, group_kwargs, signal_tree, track_tree, untrack_tree
 
 # A repeated chunk shorter than this is plausibly deliberate ("...", a bullet, a short
 # chant), so only a substantial verbatim repeat is treated as the emit-side doubling.
 _DUPLICATE_CHUNK_FLOOR = 24
+
+# The SEGMENT replay (#3979): claude-agent-acp streams a text block as deltas, then can
+# re-send the whole block as ONE more chunk — "I'll look at calc.py first.I'll look at
+# calc.py first." Shorter than this, a segment that equals the next chunk is left alone.
+_SEGMENT_REPLAY_FLOOR = 8
+
+PlanCallback = Callable[[list], Awaitable[None]]
 
 logger = logging.getLogger("protoagent.plugins.coding_agent")
 
@@ -117,6 +125,28 @@ def _tool_output_preview(update: dict, limit: int = 300) -> str:
     return " ".join(o for o in out if o).strip()[:limit]
 
 
+def _tool_kind_and_locations(update: dict) -> dict:
+    """ACP's ``kind`` (read/edit/execute/search/…) and ``locations`` ({path, line}) off a
+    ``tool_call``/``tool_call_update`` — only the keys the update actually carries, capped
+    and sanitized, so a refinement never blanks what the start already said."""
+    out: dict = {}
+    kind = update.get("kind")
+    if isinstance(kind, str) and kind:
+        out["kind"] = kind[:32]
+    locs = update.get("locations")
+    if isinstance(locs, list) and locs:
+        clean = []
+        for loc in locs[:4]:
+            if isinstance(loc, dict) and isinstance(loc.get("path"), str) and loc["path"]:
+                entry: dict = {"path": loc["path"][:400]}
+                if isinstance(loc.get("line"), int):
+                    entry["line"] = loc["line"]
+                clean.append(entry)
+        if clean:
+            out["locations"] = clean
+    return out
+
+
 def _split_tool_title(title: str) -> tuple[str, str]:
     """Split an ACP tool ``title`` into (label, inline_input). Many agents format the
     title as ``tool_name (… MCP Server): {json args}`` — the inline JSON blows out the
@@ -143,6 +173,49 @@ def _short_tool_name(title: str) -> str:
     # peels only the mcp+server segment; a non-namespaced name (`read_file`) is untouched.
     label = re.sub(r"^mcp__.+?__", "", label).strip()
     return (label or (title or "").strip() or "tool")[:80]
+
+
+#: How long a closed coding agent's relay registration outlives it (its exit-time flush).
+_RELAY_GRACE_S = 30.0
+
+
+def _current_span_ids() -> tuple[str, str] | None:
+    """``(trace_id, span_id)`` as hex of the current span when tracing is on, else None."""
+    from observability import tracing
+
+    if not tracing.in_active_trace():
+        return None
+    from opentelemetry import trace as otel_trace
+
+    ctx = otel_trace.get_current_span().get_span_context()
+    return f"{ctx.trace_id:032x}", f"{ctx.span_id:016x}"
+
+
+#: How much of a coder's reasoning (the tail) and of one tool call's input a trace keeps.
+_THOUGHTS_TRACE_CHARS = 4000
+_TOOL_TRACE_CHARS = 2000
+
+
+def _tool_refinement(update: dict) -> tuple[str, Any] | None:
+    """A ``tool_call_update``'s refinement of an open call as ``(title, raw_input)``, or
+    None when it carries no usable arguments.
+
+    Structured ``rawInput`` wins. Failing that, an agent may inline JSON args in the
+    title. Only a title that PARSES counts (parsed back to data, so key-based redaction
+    rules see the keys). A fragment that doesn't, such as ``awk '{print $1}'`` repeated
+    on the completion update, must not overwrite a real refinement.
+    """
+    title = str(update.get("title") or "")
+    raw_input = update.get("rawInput")
+    if raw_input in (None, "", {}, []):
+        _, inline = _split_tool_title(title)
+        try:
+            raw_input = json.loads(inline) if inline else None
+        except (TypeError, ValueError, RecursionError):
+            raw_input = None
+        if not isinstance(raw_input, (dict, list)):
+            return None
+    return title, raw_input
 
 
 def _coder_session_id(name: str, cwd: str) -> str:
@@ -424,6 +497,7 @@ class AcpClient:
         mcp_servers: list[dict] | None = None,
         session_id_path: Path | None = None,
         record_runs: bool = True,
+        native_tracing: bool | None = None,
     ) -> None:
         self.command = command
         self.args = list(args or [])
@@ -433,6 +507,10 @@ class AcpClient:
         # spawned coder's inherited environment (see ``_launch_env``). Additive ``env``
         # above is overlaid AFTER this removal, so a var can be removed-then-set.
         self.env_remove = list(env_remove or [])
+        # Export the coding agent's own OTel spans into our trace through the local relay
+        # (#3742). None = auto: on for Claude Code agents while tracing is enabled.
+        self.native_tracing = native_tracing
+        self._relay_token: str | None = None
         self.name = name
         # Where the session id is persisted so a restart can ``session/load`` the
         # same thread instead of starting fresh (ADR 0024 / #970). ``None`` ⇒ the
@@ -461,11 +539,11 @@ class AcpClient:
         #
         # For the chat turn, note what the exclusion does and does not buy. On the
         # streaming/A2A path that turn is ALREADY booked under the same ``acp:<agent>``
-        # label — ``server.chat._acp_drive_turn`` yields a usage frame the executor's
+        # label — ``server.chat_acp._acp_drive_turn`` yields a usage frame the executor's
         # terminal hook records — so a row from here would double it. On the
         # NON-streaming driver (``/v1/chat/completions``, ``/api/chat``, the ADR 0018
         # ``HOST.invoke()`` seam) that turn is booked NOWHERE: the ACP branch of
-        # ``server.chat._chat_langgraph_impl`` returns before the usage callback exists,
+        # ``server.turn_sync._chat_langgraph_impl`` returns before the usage callback exists,
         # so ``_record_local_turn``'s sink is empty and it bails. That blind spot
         # predates #3015 and survives it — recording it from here would file a CHAT turn
         # under a ``coder:`` key and count it as coder work, which is a worse answer than
@@ -483,6 +561,9 @@ class AcpClient:
         # project board's live monitor) sample it like last_usage; None until the
         # agent sends one (not every coder plans).
         self.last_plan: list | None = None
+        # The model the agent reports for its session (ACP ``models.currentModelId`` on
+        # session/new or session/load), for labelling the coder's generation in traces.
+        self._model_id: str | None = None
         # Captured from the `initialize` response (was previously discarded).
         self._auth_methods: list[dict] = []
         self._agent_capabilities: dict = {}
@@ -518,6 +599,10 @@ class AcpClient:
         self._text_after_tool = False
         # The previous chunk verbatim, for the adjacent-duplicate guard (#3407).
         self._last_chunk = ""
+        # The narration since the last tool call (or turn start) and how many chunks
+        # built it, for the segment-replay guard (#3979).
+        self._segment = ""
+        self._segment_chunks = 0
         # How many tool calls the coder made this turn — counted in ``_handle_update``
         # off the wire, NOT off ``tool_callback``, because the delegates adapter wires
         # no callback at all and its runs would otherwise all record zero (#3015).
@@ -531,13 +616,30 @@ class AcpClient:
         # ``_handle_update`` runs on the reader task, whose context predates the span — a
         # pooled client's reader outlives every turn it reports on.
         self._turn_span: Any = None
-        self._turn_tool_starts: dict[str, tuple[float, str, str]] = {}
+        self._turn_tool_starts: dict[str, Any] = {}
+        # What the agent reported about THIS turn, for its trace: token usage (the
+        # session/prompt response's ``usage``), cost (``usage_update.cost.amount``), and
+        # the tail of its reasoning (``agent_thought_chunk``). Reset per turn.
+        self._turn_usage: dict | None = None
+        self._turn_cost_usd: float | None = None
+        self._turn_thoughts = ""
+        self._turn_plan: list | None = None
+        # The session's running cost total as last reported. claude-agent-acp's
+        # ``cost.amount`` is its SDK's ``total_cost_usd``: CUMULATIVE across the session's
+        # turns (and carried over a resumed session), so a turn's cost is the change.
+        # 0.0 after session/new; None after session/load until a first reading sets the
+        # baseline (that reading mixes pre-resume spend with this turn's, so it isn't
+        # attributed).
+        self._session_cost_seen: float | None = None
         # Read at turn start for the same reason: an incognito turn (ADR 0069 D3b)
         # records the coder's tool spans without their content.
         self._turn_trace_io = True
         # Tool calls already ended this turn. ACP lets a call arrive terminal AND still
         # send the (recommended) follow-up update; end it once.
         self._turn_ended_tool_ids: set[str] = set()
+        # Tool calls started this turn → their card name, so a later refinement can be
+        # sent as an ``update`` for a call the UI actually has a card for (#3691).
+        self._turn_open_tools: dict[str, str] = {}
         # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
         # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
         # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
@@ -546,6 +648,7 @@ class AcpClient:
         self._on_tool: ToolCallback | None = None
         self._on_text: ProgressCallback | None = None
         self._on_thought: ProgressCallback | None = None
+        self._on_plan: PlanCallback | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -622,7 +725,7 @@ class AcpClient:
                 # AND the delegate's env_remove matches (#2117) so a spawned backend
                 # doesn't inherit host identity/credentials or refuse to launch "inside
                 # another Claude Code session" (#1296); the delegate's env is overlaid last.
-                env=_launch_env(self.env, self.env_remove),
+                env=_launch_env({**(self.env or {}), **self._native_tracing_env()} or None, self.env_remove),
                 # Anchor the agent as its OWN tree root so teardown can kill the
                 # WHOLE tree (the adapter *and* the backend it spawns). Without
                 # this, terminate() signals only the adapter; its child reparents
@@ -675,6 +778,81 @@ class AcpClient:
         ``signal.SIGKILL`` doesn't exist on Windows.)"""
         signal_tree(proc.pid, force=force)
 
+    def _drop_relay(self) -> None:
+        """Let go of this process's relay registration, after a grace period: the agent
+        flushes its last spans as it exits."""
+        if self._relay_token is not None:
+            from observability import otlp_relay
+
+            otlp_relay.unregister(self._relay_token, delay=_RELAY_GRACE_S)
+            self._relay_token = None
+
+    def _uses_claude_code(self) -> bool:
+        launch = " ".join([os.path.basename(self.command), *self.args])
+        return "claude-agent-acp" in launch or "claude-code-acp" in launch
+
+    def _native_tracing_env(self) -> dict[str, str]:
+        """Env that makes the coding agent export its own OTel spans to the local relay,
+        joined under the CURRENT span (this run's ``acp:`` span), or {} when off.
+
+        The relay strips account identity and maps usage before anything reaches
+        Langfuse, and forwards with this process's credentials: the agent exports to a
+        127.0.0.1 URL with a per-process token.
+        """
+        self._drop_relay()  # a respawn gets a fresh registration under the new span
+        enabled = self.native_tracing
+        if enabled is None:
+            # Auto: Claude Code agents only, unless opted out, and never over a delegate
+            # that configures its own telemetry (this would overwrite its OTEL_* pipeline).
+            own = any(k.startswith("OTEL_") or k == "CLAUDE_CODE_ENABLE_TELEMETRY" for k in (self.env or {}))
+            enabled = (
+                self._uses_claude_code() and not own and os.environ.get("PROTOAGENT_ACP_NATIVE_TRACING", "1") != "0"
+            )
+        if not enabled:
+            return {}
+        ids = _current_span_ids()
+        if ids is None:
+            return {}
+        from observability import otlp_relay
+
+        registered = otlp_relay.register(*ids)
+        if registered is None:
+            return {}
+        token, port = registered
+        self._relay_token = token
+        otlp_relay.begin_turn(token, *ids, time.time_ns())
+        return {
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+            "OTEL_TRACES_EXPORTER": "otlp",
+            "OTEL_METRICS_EXPORTER": "none",
+            "OTEL_LOGS_EXPORTER": "none",
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL": "http/protobuf",
+            "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION": "none",
+            # Export within a second rather than the SDK's 5s default: the relay's first
+            # delivery is what lets later runs drop their turn-level generation.
+            "OTEL_BSP_SCHEDULE_DELAY": "1000",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": f"http://127.0.0.1:{port}/{token}/v1/traces",
+            # The relay authenticates by the URL token; headers are ignored there (an
+            # inherited OTEL_EXPORTER_OTLP_HEADERS still only ever reaches 127.0.0.1).
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-protoagent-relay=1",
+            "OTEL_METRICS_INCLUDE_ACCOUNT_UUID": "false",
+            "OTEL_METRICS_INCLUDE_SESSION_ID": "false",
+            "OTEL_SERVICE_NAME": f"{os.environ.get('AGENT_NAME', 'protoagent')}-acp-{self.name}",
+            "TRACEPARENT": f"00-{ids[0]}-{ids[1]}-01",
+        }
+
+    def _begin_relay_turn(self) -> None:
+        """Tell the relay a new turn started, so a pooled process's later spans (which
+        still carry the spawn trace) are moved into this turn's trace."""
+        if self._relay_token is None:
+            return
+        ids = _current_span_ids()
+        if ids is not None:
+            from observability import otlp_relay
+
+            otlp_relay.begin_turn(self._relay_token, *ids, time.time_ns())
+
     def kill_now(self) -> None:
         """Synchronously SIGKILL the agent's whole process group — no awaits, so it's
         safe from a CancelledError handler where awaiting cleanup would itself be
@@ -687,6 +865,7 @@ class AcpClient:
         for task in (self._reader_task, self._stderr_task):
             if task and not task.done():
                 task.cancel()
+        self._drop_relay()
 
     async def close(self) -> None:
         """Cancel the I/O tasks and reap the subprocess TREE. Crucially this ``await``s
@@ -699,6 +878,7 @@ class AcpClient:
         direct child, so the backend it spawned dies with it instead of reparenting to
         init. The kill is a synchronous syscall, so even if this runs on a cancelled
         task the tree still dies."""
+        self._drop_relay()
         with contextlib.suppress(Exception):
             await self._close_session()
         for task in (self._reader_task, self._stderr_task):
@@ -896,7 +1076,27 @@ class AcpClient:
                         text[:48],
                     )
                     return
+                # The SEGMENT replay (#3979): the agent streamed a text block as deltas and
+                # then re-sent the WHOLE block as one more chunk. The adjacent guard above
+                # cannot see it (no single delta equals the block), and the halving collapse
+                # only catches a reply that is ONE block — so a reply that narrates, calls a
+                # tool, then answers came back with its opening sentence twice. Exact
+                # whole-segment equality after >=2 chunks: a model deliberately restating its
+                # entire preceding paragraph with no joiner is not a thing; this bug is.
+                if self._segment_chunks >= 2 and len(text) >= _SEGMENT_REPLAY_FLOOR and text == self._segment:
+                    logger.warning(
+                        "[acp/%s] dropped a replayed text block (%d chars, session=%s) — the agent "
+                        "re-sent the narration it had just streamed: %r",
+                        self.name,
+                        len(text),
+                        params.get("sessionId"),
+                        text[:48],
+                    )
+                    self._last_chunk = text
+                    return
                 self._last_chunk = text
+                self._segment += text
+                self._segment_chunks += 1
                 # Narration resumed after a tool call: start a paragraph instead of gluing
                 # it to the previous sentence (#3408). Without this the reply reads as one
                 # wall — "…both PRs first.Both PRs are open…" — because every run between
@@ -912,6 +1112,10 @@ class AcpClient:
             # for parity with the native runtime's thinking stream.
             text = _content_text(update.get("content"))
             if text:
+                # Keep the tail for the trace (the conclusion is at the end), with headroom:
+                # it is redacted BEFORE the final cut, so a key straddling the window's
+                # start still matches its pattern.
+                self._turn_thoughts = (self._turn_thoughts + text)[-2 * _THOUGHTS_TRACE_CHARS :]
                 await self._emit_thought(text)
         elif kind == "tool_call":
             self._turn_tool_calls += 1
@@ -922,6 +1126,7 @@ class AcpClient:
             # narration. (QA panel finding on this PR.)
             self._text_after_tool = True
             self._last_chunk = ""
+            self._segment, self._segment_chunks = "", 0
             # A tool call STARTED — narrate its title + emit a structured start event so the
             # UI can render a card (parity with the native runtime's tool_start). The card
             # NAME is a short label; the verbose args (structured rawInput, else the title's
@@ -938,12 +1143,16 @@ class AcpClient:
             else:
                 _, inline = _split_tool_title(title)
                 tool_input = inline or str(update.get("kind") or "")
+            self._turn_open_tools[str(update.get("toolCallId") or title)] = name
             await self._emit_tool(
                 {
                     "phase": "start",
                     "id": str(update.get("toolCallId") or title),
                     "name": name,
                     "input": tool_input,
+                    # ACP's own classification + the files it touches — additive keys a
+                    # live view renders ("edit · calc.py:12"); older consumers ignore them.
+                    **_tool_kind_and_locations(update),
                 },
                 raw_input=raw_input,
             )
@@ -969,18 +1178,46 @@ class AcpClient:
             # A streaming agent opens the call before its arguments exist: claude-agent-acp
             # sends ``tool_call`` at content_block_start with ``rawInput: {}`` and a generic
             # title ("Read File"), then REFINES it with a ``tool_call_update`` carrying the
-            # real ``rawInput`` and title. Without this the trace recorded only the kind.
+            # real ``rawInput`` and title. Without this the trace recorded only the kind and
+            # the chat card showed "Read File" with a body of `read`.
             try:
-                self._refine_tool_start(tool_id, update)
-            except Exception:  # noqa: BLE001 — a trace refinement must never cost the end event
+                refinement = _tool_refinement(update)
+            except Exception:  # noqa: BLE001 — a refinement must never cost the end event
                 logger.debug("[acp/%s] could not refine tool call %s", self.name, tool_id, exc_info=True)
+                refinement = None
+            if refinement is not None and tool_id in self._turn_open_tools and tool_id not in self._turn_ended_tool_ids:
+                title, raw_input = refinement
+                self._refine_tool_start(tool_id, title, raw_input)
+                name = _short_tool_name(title) if title else self._turn_open_tools[tool_id]
+                self._turn_open_tools[tool_id] = name
+                try:
+                    tool_input = json.dumps(raw_input, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    tool_input = str(raw_input)
+                # A separate ``update`` phase, not a second ``start``: consumers that count
+                # or list starts (a plugin's recent-tools feed) would double a call, and an
+                # old consumer that knows only start/end ignores it harmlessly (#3691).
+                await self._emit_tool(
+                    {
+                        "phase": "update",
+                        "id": tool_id,
+                        "name": name,
+                        "input": tool_input,
+                        **_tool_kind_and_locations(update),
+                    }
+                )
             if status in ("completed", "failed") and tool_id not in self._turn_ended_tool_ids:
                 self._turn_ended_tool_ids.add(tool_id)
+                end_title = str(update.get("title") or "")
                 await self._emit_tool(
                     {
                         "phase": "end",
                         "id": tool_id,
-                        "name": _short_tool_name(str(update.get("title") or "")),
+                        # A completion update usually carries no title; name the end after
+                        # the (refined) card rather than the placeholder "tool".
+                        "name": _short_tool_name(end_title)
+                        if end_title
+                        else self._turn_open_tools.get(tool_id, "tool"),
                         "output": _tool_output_preview(update),
                         "status": status,
                     }
@@ -994,6 +1231,19 @@ class AcpClient:
                 self.last_usage = {"used": int(update.get("used") or 0), "size": int(update.get("size") or 0)}
             except (TypeError, ValueError):
                 logger.debug("[acp/%s] unparseable usage_update %r", self.name, update)
+            # claude-agent-acp attaches the query's cost (its SDK's ``total_cost_usd``,
+            # the API-equivalent price) — latest wins, as the final result carries the
+            # whole query's. Trace-only: a subscription run is not billed per token, so it
+            # stays out of the telemetry row (see _record_run_telemetry).
+            cost = update.get("cost")
+            if isinstance(cost, dict) and isinstance(cost.get("amount"), (int, float)):
+                total = float(cost["amount"])
+                seen = self._session_cost_seen
+                self._session_cost_seen = total
+                if seen is not None:
+                    # A drop means the agent's counter restarted: the new total is all new.
+                    delta = total - seen if total >= seen else total
+                    self._turn_cost_usd = (self._turn_cost_usd or 0.0) + delta
         elif kind == "plan":
             # The coder's execution plan (its live todo list) — the sharpest
             # "where is it in the work" signal an ACP agent sends. The update carries
@@ -1001,7 +1251,7 @@ class AcpClient:
             # malformed agent can't bloat the client.
             entries = update.get("entries")
             if isinstance(entries, list):
-                self.last_plan = [
+                self._turn_plan = self.last_plan = [
                     {
                         "content": str(e.get("content") or "")[:200],
                         "status": str(e.get("status") or ""),
@@ -1010,6 +1260,12 @@ class AcpClient:
                     for e in entries[:40]
                     if isinstance(e, dict)
                 ]
+                # A plan update is a work boundary like a tool call (claude-agent-acp turns
+                # its task-list tool into plan updates, not tool calls): narration after it
+                # starts a new paragraph instead of "…the 3-item plan.Plan created." (#3408).
+                # The replay guard's segment is deliberately NOT reset here.
+                self._text_after_tool = True
+                await self._emit_plan(self._turn_plan)
         elif kind:
             # current_mode_update / available_commands_update —
             # not surfaced yet, but logged so they're visibly dropped, not silent.
@@ -1056,35 +1312,49 @@ class AcpClient:
                 logger.warning("[acp/%s] progress_callback raised: %s", self.name, exc)
 
     def _trace_tool(self, event: dict, raw_input: Any = None) -> None:
-        """Record a finished coder tool call as a child of the turn's ``acp:`` span.
+        """Trace a coder tool call as a child of the turn's ``acp:`` span: opened at its
+        start event and closed at its end, so the span's duration is the call's.
 
         ``raw_input`` is the STRUCTURED ``rawInput``, redacted as data before it is
         stringified: the event's ``input`` is already JSON text, where key-based rules
         (``api_key``, …) can no longer see the keys.
         """
-        if self._turn_span is None:
-            return
-        tool_id = str(event.get("id") or "")
-        if event.get("phase") == "start":
-            safe_input = self._safe_tool_input(raw_input) or self._safe_tool_input(str(event.get("input") or ""))
-            self._turn_tool_starts[tool_id] = (time.monotonic(), str(event.get("name") or ""), safe_input)
-            return
-        started, name, tool_input = self._turn_tool_starts.pop(tool_id, (time.monotonic(), "", ""))
+        if self._turn_span is None or event.get("phase") == "update":
+            return  # an update is folded into the open span by ``_refine_tool_start``
         from graph.middleware.redaction import redact
         from observability import tracing
 
-        # Redacted like every other tool span (AuditMiddleware): a coder running `env`
-        # or `cat .env` must not ship the values to Langfuse.
+        tool_id = str(event.get("id") or "")
+        # Redacted like every other tool span (AuditMiddleware): a coder running `env` or
+        # `cat .env` must not ship the values to Langfuse. The NAME is content too: an
+        # agent's title can be the whole command line (an `export` of an API key, say), so it
+        # is redacted, and an incognito turn sends none of it.
         io = self._turn_trace_io
-        # The NAME is content too: an agent's title can be the whole command line
-        # (`export OPENAI_API_KEY=…`). Redact it, and send none of it in an incognito turn.
-        name = name or str(event.get("name") or "tool")
+        if event.get("phase") == "start":
+            safe_input = self._safe_tool_input(raw_input) or self._safe_tool_input(str(event.get("input") or ""))
+            name = str(event.get("name") or "tool")
+            self._turn_tool_starts[tool_id] = tracing.start_child(
+                self._turn_span,
+                f"tool:{redact(name) if io else 'coder'}",
+                as_type="tool",
+                input={"input": safe_input[:_TOOL_TRACE_CHARS] if io else ""},
+                metadata={"session_id": self._turn_session_id or ""},
+            )
+            return
+        ok = event.get("status") == "completed"
+        output = redact(str(event.get("output") or ""))[:1000] if io else ""
+        span = self._turn_tool_starts.pop(tool_id, None)
+        if span is not None:
+            tracing.end_child(span, output=output, level="DEFAULT" if ok else "ERROR")
+            return
+        # No open span (the start predates this turn's span): record it in one shot.
+        name = str(event.get("name") or "tool")
         tracing.trace_tool_call(
             redact(name) if io else "coder",
-            {"input": tool_input if io else ""},
-            redact(str(event.get("output") or "")) if io else "",
-            int((time.monotonic() - started) * 1000),
-            event.get("status") == "completed",
+            {"input": ""},
+            output,
+            0,
+            ok,
             session_id=self._turn_session_id or "",
             parent=self._turn_span,
         )
@@ -1101,32 +1371,32 @@ class AcpClient:
             return redact(raw_input)
         return json.dumps(redact(raw_input), ensure_ascii=False, default=str)
 
-    def _refine_tool_start(self, tool_id: str, update: dict) -> None:
-        """Fold a ``tool_call_update``'s later ``rawInput`` / title into the open call's
-        trace record, so the span shows the real arguments and not just the kind."""
-        start = self._turn_tool_starts.get(tool_id)
-        if start is None:
+    def _refine_tool_start(self, tool_id: str, title: str, raw_input: Any) -> None:
+        """Fold a refinement (see ``_tool_refinement``) into the open call's span, so it
+        shows the real arguments and title, not just the kind."""
+        span = self._turn_tool_starts.get(tool_id)
+        if span is None:
             return
-        started, name, tool_input = start
-        title = str(update.get("title") or "")
-        raw_input = update.get("rawInput")
-        if raw_input in (None, "", {}, []):
-            # No structured input: an agent may still inline JSON args in the title. Only
-            # a title that PARSES counts (parsed back to data, so key-based redaction rules
-            # see the keys). A fragment that doesn't, such as ``awk '{print $1}'`` repeated
-            # on the completion update, must not overwrite a real refinement.
-            _, inline = _split_tool_title(title)
-            try:
-                raw_input = json.loads(inline) if inline else None
-            except (TypeError, ValueError, RecursionError):
-                raw_input = None
-            if not isinstance(raw_input, (dict, list)):
-                return
-        self._turn_tool_starts[tool_id] = (
-            started,
-            _short_tool_name(title) if title else name,
-            self._safe_tool_input(raw_input) or tool_input,
-        )
+        from graph.middleware.redaction import redact
+        from observability import tracing
+
+        fields: dict = {}
+        if title:
+            fields["name"] = f"tool:{redact(_short_tool_name(title)) if self._turn_trace_io else 'coder'}"
+        safe_input = self._safe_tool_input(raw_input)
+        if safe_input and self._turn_trace_io:
+            fields["input"] = {"input": safe_input[:_TOOL_TRACE_CHARS]}
+        if fields:
+            tracing.update_span(span, **fields)
+
+    def _end_open_tool_spans(self) -> None:
+        """Close tool spans still open when the turn ends (a call the agent never
+        finished, or a turn cut short), marked as such rather than left dangling."""
+        from observability import tracing
+
+        for span in self._turn_tool_starts.values():
+            tracing.end_child(span, level="WARNING", status_message="the turn ended before this tool call did")
+        self._turn_tool_starts.clear()
 
     async def _emit_tool(self, event: dict, *, raw_input: Any = None) -> None:
         self._trace_tool(event, raw_input)
@@ -1135,6 +1405,13 @@ class AcpClient:
                 await self._on_tool(event)
             except Exception as exc:  # best-effort — tool cards never break a turn
                 logger.warning("[acp/%s] tool_callback raised: %s", self.name, exc)
+
+    async def _emit_plan(self, entries: list) -> None:
+        if self._on_plan:
+            try:
+                await self._on_plan(list(entries))
+            except Exception as exc:  # best-effort — a live view never breaks a turn
+                logger.warning("[acp/%s] plan_callback raised: %s", self.name, exc)
 
     async def _emit_text(self, delta: str) -> None:
         if self._on_text and delta:
@@ -1169,7 +1446,9 @@ class AcpClient:
         self._pending[rid] = fut
         await self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
         try:
-            return await asyncio.wait_for(fut, timeout)
+            # Sleep-aware: a coder dispatched on a sleeping Mac must not hold an 1800s bound
+            # for hours of wall time (#3724). Awake, this is asyncio.wait_for.
+            return await clock.wait_for(fut, timeout)
         except asyncio.TimeoutError as exc:
             self._pending.pop(rid, None)
             # "timed out" alone can't distinguish a wedged agent from a working one that
@@ -1295,7 +1574,7 @@ class AcpClient:
         ``null``. Caller gates this on the agent's ``loadSession`` capability."""
         self._loading = True
         try:
-            await self._request(
+            result = await self._request(
                 "session/load",
                 {"sessionId": session_id, "cwd": self.cwd, "mcpServers": self.mcp_servers},
                 timeout=60.0,
@@ -1303,6 +1582,24 @@ class AcpClient:
         finally:
             self._loading = False
         self._session_id = session_id
+        self._session_cost_seen = None  # a resumed total: baseline on the first reading
+        self._note_model(result)
+
+    def _note_model(self, result: Any) -> None:
+        """Remember the session's model from a session/new or session/load response:
+        ``models.currentModelId``, or (the newer ACP shape claude-agent-acp sends) the
+        ``configOptions`` entry with ``id: "model"``."""
+        if not isinstance(result, dict):
+            return
+        models = result.get("models")
+        model = models.get("currentModelId") if isinstance(models, dict) else None
+        if not model:
+            for opt in result.get("configOptions") or []:
+                if isinstance(opt, dict) and opt.get("id") == "model":
+                    model = opt.get("currentValue")
+                    break
+        if isinstance(model, str) and model.strip():
+            self._model_id = model.strip()
 
     def _read_persisted_session_id(self) -> str | None:
         """The session id saved for this launch signature, or None. Guards on a
@@ -1352,6 +1649,8 @@ class AcpClient:
                 ) from exc
             raise
         self._session_id = (result or {}).get("sessionId")
+        self._session_cost_seen = 0.0
+        self._note_model(result)
         if not self._session_id:
             raise AcpError("session/new returned no sessionId")
         self._persist_session_id(self._session_id)
@@ -1366,6 +1665,7 @@ class AcpClient:
         tool_callback: ToolCallback | None = None,
         text_callback: ProgressCallback | None = None,
         thought_callback: ProgressCallback | None = None,
+        plan_callback: PlanCallback | None = None,
         timeout: float = 600.0,
     ) -> str:
         """Send one user turn; return the agent's accumulated message text.
@@ -1374,7 +1674,8 @@ class AcpClient:
         start/end events to ``tool_callback`` (UI tool cards), answer-text deltas to
         ``text_callback`` (token-ish streaming), and the coder's reasoning deltas to
         ``thought_callback`` (``agent_thought_chunk``; falls back to ``progress_callback``)
-        as the agent works. Raises ``AcpError`` on transport/protocol failure.
+        as the agent works, and each ``plan`` update (the coder's whole todo list, sanitized)
+        to ``plan_callback``. Raises ``AcpError`` on transport/protocol failure.
 
         Turns are serialized per client: a concurrent call queues (bounded by its own
         ``timeout``) instead of interleaving prompts into the one session — the per-turn
@@ -1401,6 +1702,14 @@ class AcpClient:
         session_id = ""
         reply = ""
         stop_reason: str | None = None
+        # Per-turn signals, read while the lock is held (see the finally below) and
+        # traced after it is released. None/empty when the run never got the lock.
+        usage: dict | None = None
+        cost_usd: float | None = None
+        thoughts, plan = "", None
+        native = False
+        relay_token: str | None = None
+        failure: BaseException | None = None
         from graph.middleware.redaction import redact as _redact
         from observability import tracing
 
@@ -1420,6 +1729,7 @@ class AcpClient:
                 f"acp:{self.name}",
                 metadata={"command": self.command, "cwd": self.cwd},
                 as_type="agent",
+                root=is_root,
             ) as span,
             tracing.trace_attributes(
                 session_id=_coder_session_id(self.name, self.cwd) if is_root else "",
@@ -1436,7 +1746,7 @@ class AcpClient:
                 if self._turn_lock.locked():
                     logger.info("[acp/%s] prompt queued behind an in-flight turn", self.name)
                 try:
-                    await asyncio.wait_for(self._turn_lock.acquire(), timeout=timeout)
+                    await clock.wait_for(self._turn_lock.acquire(), timeout=timeout)
                 except TimeoutError:
                     raise AcpError(
                         f"{self.name}: still queued behind an in-flight turn after {int(timeout)}s"
@@ -1446,6 +1756,7 @@ class AcpClient:
                 # in-flight turn's tool calls onto its own span.
                 self._turn_span = span
                 self._turn_trace_io = tracing.io_allowed()
+                self._begin_relay_turn()
                 try:
                     answer = await self._prompt_locked(
                         text,
@@ -1453,6 +1764,7 @@ class AcpClient:
                         tool_callback=tool_callback,
                         text_callback=text_callback,
                         thought_callback=thought_callback,
+                        plan_callback=plan_callback,
                         timeout=timeout,
                     )
                 finally:
@@ -1462,8 +1774,12 @@ class AcpClient:
                     # rather than this one's numbers (#3040).
                     tool_calls = self._turn_tool_calls
                     session_id = self._turn_session_id or ""
+                    usage, cost_usd = self._turn_usage, self._turn_cost_usd
+                    relay_token = self._relay_token
+                    native = relay_token is not None
+                    thoughts, plan = self._turn_thoughts, self._turn_plan
+                    self._end_open_tool_spans()
                     self._turn_span = None
-                    self._turn_tool_starts.clear()
                     self._turn_lock.release()
                 # Returning is not the same as succeeding: `prompt()` is typed -> str, so a
                 # refusal, a deliberate cancel and a reply truncated at the output-token
@@ -1478,19 +1794,122 @@ class AcpClient:
                 # per turn, so a failed one would report the previous run's.
                 reply, stop_reason = answer, self.last_stop_reason
                 return answer
+            except BaseException as exc:
+                failure = exc
+                raise
             finally:
                 self._record_run_telemetry(state, started, tool_calls, session_id)
+                io = tracing.io_allowed()
+                if (usage or cost_usd) and not native:
+                    self._trace_generation(usage, cost_usd, started, session_id)
+                elif (usage or cost_usd) and relay_token is not None:
+                    # Native spans carry per-call generations; the relay records these
+                    # agent-reported totals only if none of them arrive for this turn.
+                    self._relay_fallback(relay_token, usage, cost_usd)
+                output = reply
+                if state != "completed":
+                    # A failed run has no reply, so without this its trace had no output
+                    # at all: say why it failed (timeout, agent error, cancel, cut off).
+                    output = f"[{state}] {self._failure_reason(failure, stop_reason)}" + (
+                        f"\n\n{reply}" if reply else ""
+                    )
+                metadata = {
+                    "state": state,
+                    "stop_reason": stop_reason,
+                    "tool_calls": tool_calls,
+                    "acp_session_id": session_id,
+                }
+                if self._model_id:
+                    metadata["model"] = self._model_id
+                if native:
+                    # The agent's own spans carry per-call generations (usage + cost) via
+                    # the relay: a turn-level generation too would count the spend twice.
+                    metadata["native_tracing"] = True
+                    if usage:
+                        metadata["reported_usage"] = usage
+                    if cost_usd:
+                        metadata["reported_cost_usd"] = cost_usd
+                if plan and io:  # task text: content, so none of it in an incognito turn
+                    metadata["plan"] = [{**e, "content": _redact(e.get("content") or "")} for e in plan]
+                if thoughts and io:
+                    metadata["reasoning_tail"] = _redact(thoughts)[-_THOUGHTS_TRACE_CHARS:]
                 tracing.update_span(
                     span,
-                    output=_redact(reply[:2000]) if tracing.io_allowed() else "",
-                    metadata={
-                        "state": state,
-                        "stop_reason": stop_reason,
-                        "tool_calls": tool_calls,
-                        "acp_session_id": session_id,
-                    },
+                    output=_redact(output)[: tracing.MAX_IO_CHARS] if io else "",
+                    metadata=metadata,
                     level="DEFAULT" if state == "completed" else "ERROR",
                 )
+
+    def _trace_generation(self, usage: dict | None, cost_usd: float | None, started: float, session_id: str) -> None:
+        """The coder's own model usage, as a generation under the run's ``acp:`` span.
+
+        The coding agent calls its model itself, so no gateway callback or middleware ever
+        sees those calls; before this a coder run's trace carried no tokens and no cost.
+        claude-agent-acp reports the turn's usage (session/prompt ``usage``, camelCase)
+        and its cost (``usage_update``). The cost is the API-equivalent price the agent's
+        SDK computes, labelled as such: a subscription run is not billed per token.
+        """
+        from observability import tracing
+
+        u = usage or {}
+
+        def n(key: str) -> int:
+            try:
+                return int(u.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        tracing.trace_generation(
+            name=f"acp:{self.name}-model",
+            model=self._model_id or f"acp:{self.name}",
+            usage={
+                "input_tokens": n("inputTokens"),
+                "output_tokens": n("outputTokens"),
+                "cache_read_input_tokens": n("cachedReadTokens"),
+                "cache_creation_input_tokens": n("cachedWriteTokens"),
+                "total_tokens": n("totalTokens"),
+            },
+            cost_usd=cost_usd or 0.0,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            # Captured while the turn lock was held: by now a queued turn may have reset it.
+            session_id=session_id,
+            metadata={"usage_source": "reported by the coding agent", "cost_basis": "API-equivalent"},
+        )
+
+    def _relay_fallback(self, token: str, usage: dict | None, cost_usd: float | None) -> None:
+        ids = _current_span_ids()  # still this run's acp: span
+        if ids is None:
+            return
+        from observability import otlp_relay
+
+        u = usage or {}
+        otlp_relay.end_turn(
+            token,
+            ids[1],
+            time.time_ns(),
+            {
+                "name": f"acp:{self.name}-model",
+                "service": f"{os.environ.get('AGENT_NAME', 'protoagent')}-acp-{self.name}",
+                "model": self._model_id or f"acp:{self.name}",
+                "usage": {
+                    "input": u.get("inputTokens"),
+                    "output": u.get("outputTokens"),
+                    "cache_read_input_tokens": u.get("cachedReadTokens"),
+                    "cache_creation_input_tokens": u.get("cachedWriteTokens"),
+                    "total": u.get("totalTokens"),
+                },
+                "cost_usd": cost_usd,
+            },
+        )
+
+    def _failure_reason(self, failure: BaseException | None, stop_reason: str | None) -> str:
+        """Why a run failed, in a line: the exception, else the wire stop reason."""
+        if isinstance(failure, asyncio.CancelledError):
+            return "cancelled"
+        if failure is not None:
+            text = str(failure).strip()
+            return f"{type(failure).__name__}: {text}" if text else type(failure).__name__
+        return self.unfinished_reason() or (f"stop reason {stop_reason}" if stop_reason else "no reply")
 
     def _record_run_telemetry(self, state: str, started: float, tool_calls: int, session_id: str) -> None:
         """One durable telemetry row per coder run (#3015). Best-effort; never raises.
@@ -1499,7 +1918,7 @@ class AcpClient:
         an agent turn, and per-turn telemetry is written from a turn's terminal hook — so
         it structurally could not see them. The live PM recorded $2,809 across 331 turns,
         all of it its own reasoning, while the coders that actually wrote the PRs
-        contributed zero rows. Both dispatch paths (``plugins.delegates.adapters``, and
+        contributed zero rows. Both dispatch paths (``plugins.delegates.acp_adapter``, and
         the project board's tapped seam, which deliberately bypasses that adapter) funnel
         through ``prompt()``, which is why the instrumentation lives here and not one
         layer up where half the callers would miss it — and why ``record_runs`` exists to
@@ -1508,7 +1927,7 @@ class AcpClient:
         Tokens and cost are recorded as ZERO deliberately. The coding agent bills its own
         subscription and protoAgent never observes those numbers; the ``acp:<name>`` model
         label is the honest "this turn was not gateway-metered" marker, the same
-        convention ``server.chat._acp_drive_turn`` uses, and #3006 settled that a
+        convention ``server.chat_acp._acp_drive_turn`` uses, and #3006 settled that a
         half-wired or invented field here is worse than an absent one. ``tool_calls`` is
         the one non-zero effort figure we can honestly claim: it is counted off the wire,
         not inferred.
@@ -1564,6 +1983,7 @@ class AcpClient:
         text_callback: ProgressCallback | None,
         thought_callback: ProgressCallback | None,
         timeout: float,
+        plan_callback: PlanCallback | None = None,
     ) -> str:
         # Per-turn state is cleared BEFORE the start attempt, not after it. This client
         # is pooled, and `_ensure_started` raises on every start-failure mode there is —
@@ -1574,13 +1994,20 @@ class AcpClient:
         self._answer = ""
         self._text_after_tool = False
         self._last_chunk = ""
+        self._segment, self._segment_chunks = "", 0
         self._turn_tool_calls = 0
         self._turn_ended_tool_ids = set()
+        self._turn_open_tools = {}
+        self._turn_usage = None
+        self._turn_cost_usd = None
+        self._turn_thoughts = ""
+        self._turn_plan = None
         self._turn_session_id = None
         self._progress = progress_callback
         self._on_tool = tool_callback
         self._on_text = text_callback
         self._on_thought = thought_callback
+        self._on_plan = plan_callback
         try:
             await self._ensure_started()
             # Now — and only now — does this run have a session of its own to be
@@ -1625,7 +2052,10 @@ class AcpClient:
             self._on_tool = None
             self._on_text = None
             self._on_thought = None
+            self._on_plan = None
         self.last_stop_reason = str((result or {}).get("stopReason") or "") or None
+        usage = (result or {}).get("usage")
+        self._turn_usage = usage if isinstance(usage, dict) else None
         logger.info("[acp/%s] turn complete (stopReason=%s)", self.name, self.last_stop_reason)
         # Collapse BEFORE stripping: a doubled reply is text+text byte-for-byte, and the
         # common shape ends in whitespace ("…blockers: none\n" twice) — stripping first
@@ -1691,7 +2121,7 @@ class AcpClient:
 
         The OUTCOME question, as against ``dead_end()``'s retry question. They differ on
         ``max_tokens``: the coder hit its output-token limit mid-generation, so the reply
-        is truncated — ``plugins.delegates.adapters`` stamps that on it and the caller
+        is truncated — ``plugins.delegates.acp_adapter`` stamps that on it and the caller
         re-dispatches — while a bigger tier or a narrower query is still worth trying.
         A run that ends that way is a failed run and a retryable one at the same time,
         so "did it succeed" cannot be answered by asking "should we retry" (#3015).

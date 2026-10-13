@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from graph.plugins.manifest import load_manifest
 
 # Lives in examples/ (NOT plugins/) on purpose: it's a copy-me reference, not a
@@ -60,3 +62,41 @@ def test_panel_route_serves_the_contract_page() -> None:
     assert "protoagent:init" in body  # bearer + theme handshake (ADR 0038)
     assert 'split("/plugins/")' in body  # slug-aware base (ADR 0042)
     assert "/api/chat" in body  # the documented non-streaming turn
+
+
+def _panel_error_detail_fn() -> str:
+    import re
+
+    text = (_PLUGIN_DIR / "panel.html").read_text(encoding="utf-8")
+    m = re.search(r"^  function errorDetail\(body, fallback\) \{\n.*?^  \}\n", text, re.S | re.M)
+    assert m, "panel.html must keep its errorDetail(body, fallback) helper"
+    return m.group(0)
+
+
+@pytest.mark.platform_sensitive  # runs node in a subprocess
+def test_panel_reads_the_message_of_an_object_detail() -> None:
+    """`POST /api/chat` answers a failed turn with an object detail (#3973); the panel
+    authors copy must show its message, not "Turn failed: [object Object]"."""
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    cases = [
+        (
+            {"detail": {"code": "server_error", "message": "The model provider closed the stream."}},
+            "The model provider closed the stream.",
+        ),
+        ({"detail": "tasks not enabled"}, "tasks not enabled"),
+        ({"detail": [{"msg": "Field required"}]}, "Field required"),
+        ({"detail": {"code": "x"}}, "500 Internal Server Error"),
+        ({}, "500 Internal Server Error"),
+    ]
+    script = _panel_error_detail_fn() + (
+        "const cases = " + json.dumps([c[0] for c in cases]) + ";\n"
+        "process.stdout.write(JSON.stringify(cases.map((b) => errorDetail(b, '500 Internal Server Error'))));\n"
+    )
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30, check=True).stdout
+    assert json.loads(out) == [c[1] for c in cases]

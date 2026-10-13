@@ -1,3 +1,4 @@
+import { Button } from "@protolabsai/ui/primitives";
 import { Spinner } from "@protolabsai/ui/data";
 
 import { useUI } from "../state/uiStore";
@@ -25,9 +26,9 @@ export function BackgroundWorkStrip({ sessionId }: { sessionId: string }) {
       <span className="chat-bgwork-list" title={labels.join("\n")}>
         <strong>{count}</strong> · {labels.join(" · ")}
       </span>
-      <button type="button" className="chat-bgwork-open" onClick={openBackgroundJobs}>
+      <Button variant="ghost" size="sm" onClick={openBackgroundJobs}>
         View
-      </button>
+      </Button>
     </div>
   );
 }

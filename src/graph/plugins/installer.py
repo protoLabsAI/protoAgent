@@ -1,0 +1,2210 @@
+"""Install plugins from a git URL (ADR 0027).
+
+Fetches a plugin repo into the **live** plugins dir (``<config_dir>/plugins/<id>``,
+the one ``loader._plugin_roots`` already discovers), pinned to a resolved commit
+SHA and recorded in a committed ``plugins.lock`` for reproducibility.
+
+Safety model (ADR 0027): **install ≠ enable ≠ trust**. This module only puts code
+on disk + reads the manifest (data) — it never imports the plugin and never
+pip-installs its deps (``requires_pip`` is declared, installed explicitly later).
+Enabling (``plugins.enabled`` → ``register()``) is the separate trust decision.
+For *untrusted* code use MCP (out-of-process), not a git plugin.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import io
+import json
+import logging
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+from graph.plugins.manifest import MANIFEST_FILENAME, PluginManifest, is_swap_leftover, load_manifest
+from infra.paths import instance_paths
+
+log = logging.getLogger(__name__)
+
+
+def bundled_plugins_dir() -> Path:
+    """In-tree bundled (built-in) plugins root — ``app_root/plugins``. Resolved at
+    call time so the env (PyInstaller _MEIPASS) is honored, never import-time."""
+    return instance_paths().app_root / "plugins"
+
+
+def _is_builtin(plugin_id: str) -> bool:
+    """True iff ``plugins/<id>`` is a REAL bundled plugin or bundle — i.e. it holds
+    a manifest (``protoagent.plugin.yaml``) or bundle file (``protoagent.bundle.yaml``),
+    mirroring how the loader (:func:`load_manifest`) decides a directory is a plugin.
+
+    A bare directory is NOT a built-in: a ``__pycache__``-only leftover from a
+    core→standalone extraction (git doesn't track it, so it survives on every
+    machine that ever imported the old plugin) must not block installing or
+    uninstalling the standalone successor of the same id (#1731).
+
+    Also true for any id a bundled manifest DECLARES, whatever its folder is called — the
+    loader keys plugins by manifest id, so the guard has to as well."""
+    d = bundled_plugins_dir() / plugin_id
+    return (d / MANIFEST_FILENAME).exists() or (d / BUNDLE_FILENAME).exists() or plugin_id in _bundled_index()
+
+
+# ── Supersession: an external plugin that moved into core (``supersedes``) ─────────
+# A bundled plugin can declare the git URLs of the standalone repo(s) it replaces
+# (PluginManifest.supersedes). A URL listed there is "superseded": installing from it
+# fetches nothing (the plugin already ships with protoAgent), updating a copy installed
+# from it is refused with a clear reason instead of a 400 from the built-in guard, and
+# uninstalling that copy removes only the ignored files — never the enable state the
+# bundled copy runs on. The loader's half (the bundled copy wins) is in
+# ``loader.discover_plugins``.
+#
+# "Which copy of <id> runs?" has ONE answer, the loader's: every question here goes
+# through ``_bundled_index`` (bundled copies keyed by MANIFEST id, via the loader's own
+# ``discover_plugins``), ``_lock_entry`` (one lock row per id, the same one the loader
+# reads) and ``effective_copies`` (the loader's full precedence rule).
+
+# bundled-tree path → (manifest stamps, {id: manifest}). Re-read when any manifest changes.
+_BUNDLED_INDEX_CACHE: dict[str, tuple[tuple, dict[str, PluginManifest]]] = {}
+
+
+def _bundled_index() -> dict[str, PluginManifest]:
+    """``{plugin id: bundled copy}`` for the in-tree ``plugins/`` tree — keyed by MANIFEST
+    id exactly as the loader keys it, so a folder named ``agent-browser`` holding id
+    ``agent_browser`` is found under ``agent_browser`` here too. Cached per tree; the
+    cache key is every manifest's name + CONTENT (``_content_stamp``), so an edit is picked
+    up at once on every filesystem. Measured on the real tree (13 manifests, ~30 KB):
+    hashing adds ~0.25 ms to a ~0.55 ms lookup, against a ~26 ms re-parse on a miss. A
+    stat-only key was cheaper, but it missed a same-size rewrite inside one mtime tick,
+    and on Windows every such rewrite."""
+    root = bundled_plugins_dir()
+    try:
+        children = sorted(c for c in root.iterdir() if (c / MANIFEST_FILENAME).is_file())
+        stamp = tuple((c.name, *_content_stamp((c / MANIFEST_FILENAME).read_bytes())) for c in children)
+    except OSError:
+        return {}
+    hit = _BUNDLED_INDEX_CACHE.get(str(root))
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    from graph.plugins.loader import discover_plugins
+
+    index = {m.id: m for m in discover_plugins([root], tracked_sources={})}
+    if len(_BUNDLED_INDEX_CACHE) > 8:
+        _BUNDLED_INDEX_CACHE.clear()  # one root per process in the field; a test suite makes many
+    _BUNDLED_INDEX_CACHE[str(root)] = (stamp, index)
+    return index
+
+
+def _bundled_manifest(plugin_id: str) -> PluginManifest | None:
+    """The bundled copy of ``plugin_id``, or ``None`` if protoAgent doesn't ship one."""
+    return _bundled_index().get(plugin_id)
+
+
+def bundled_superseding(plugin_id: str, source_url: str) -> PluginManifest | None:
+    """The bundled copy of ``plugin_id`` when it supersedes ``source_url`` — i.e. a copy
+    of that id installed from that URL is retired — else ``None``."""
+    if not source_url:
+        return None
+    from graph.plugins.manifest import supersedes_source
+
+    bundled = _bundled_manifest(plugin_id)
+    return bundled if bundled is not None and supersedes_source(bundled, source_url) else None
+
+
+def superseding_plugin(url: str) -> PluginManifest | None:
+    """The bundled plugin whose ``supersedes`` names ``url``, or ``None``.
+
+    Answered from the bundled tree alone — no fetch — so an install or an archetype
+    member listing a retired repo resolves even when that repo is archived, deleted,
+    or unreachable."""
+    from graph.plugins.manifest import supersedes_source
+
+    return next((m for m in _bundled_index().values() if m.supersedes and supersedes_source(m, url)), None)
+
+
+def _content_stamp(data: bytes) -> tuple[int, bytes]:
+    """A cache key from a file's CONTENT: its length and a 128-bit BLAKE2b digest.
+
+    A stat-based key (mtime, size, inode, ctime) can't see every edit. mtime is coarse on
+    HFS+ (1 s), FAT/exFAT (2 s) and some network mounts. On Windows ``st_ctime`` is the
+    CREATION time, and an in-place rewrite keeps the NTFS file index. So a same-size save
+    inside one tick left every stat field identical, and the cache served the old value
+    until a restart (#3455 Windows CI). Hashing the bytes costs ~50 µs for a 30 KB config,
+    against the ~20 ms YAML parse the cache exists to skip."""
+    return (len(data), hashlib.blake2b(data, digest_size=16).digest())
+
+
+# config path → ((size, digest), override). `live_plugins_dir()` resolves the override on
+# every call and a plugins request makes several, so parsing the YAML each time is real
+# work: 11.7 ms per call against a 30 KB config here, ~6 calls on GET /api/plugins/installed.
+_PLUGINS_DIR_CACHE: dict[str, tuple[tuple[int, bytes], str]] = {}
+
+
+def configured_plugins_dir() -> str:
+    """``plugins.dir`` from the live config file — the operator's override of the live
+    plugins root — read without a config object (the ``configured_allowlist`` pattern).
+    ``""`` when unset, unreadable, or refused (a relative value). Cached per config file
+    on its content, so any edit is picked up at once, on every filesystem."""
+    try:
+        from graph.config_io import config_yaml_path
+
+        cfg_path = config_yaml_path()
+        try:
+            raw = cfg_path.read_bytes()
+        except OSError:
+            return ""  # no live config yet — the instance default applies
+        # Keyed on the bytes, not the file's stat (see `_content_stamp`); the same bytes are
+        # what gets parsed on a miss, so the key can never describe a different read.
+        stamp = _content_stamp(raw)
+        hit = _PLUGINS_DIR_CACHE.get(str(cfg_path))
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+        import yaml
+
+        from graph.plugins.pconfig import valid_plugins_dir_override
+
+        data = yaml.safe_load(raw) or {}
+        # Vetted by the one shared validator (a relative value is refused, with a reason)
+        # so the file read and the config-object read can't disagree.
+        value = valid_plugins_dir_override((data.get("plugins") or {}).get("dir"))
+        if len(_PLUGINS_DIR_CACHE) > 8:
+            _PLUGINS_DIR_CACHE.clear()  # one config per process in the field; a suite makes many
+        _PLUGINS_DIR_CACHE[str(cfg_path)] = (stamp, value)
+        return value
+    except Exception:  # noqa: BLE001 — a config read must never break resolution
+        return ""
+
+
+def loader_roots() -> list[Path]:
+    """The roots the LOADER discovers, in its order: bundled tree first, then the live
+    plugins dir — the same pair as ``loader._plugin_roots`` and
+    ``pconfig.plugin_roots_from``, including the ``plugins.dir`` override that
+    ``live_plugins_dir`` resolves.
+
+    Public because the loader itself needs it where it has no config object (the frozen
+    ``--mcp-plugin`` shim): the installer owns where installed copies live, so it answers
+    the question rather than a third copy of the pair drifting from the other two."""
+    return [bundled_plugins_dir(), live_plugins_dir()]
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    """Same directory, as spelled or after following symlinks (either match counts, so a
+    live root symlinked at the bundled tree is recognised as the same place)."""
+    forms = []
+    for p in (a, b):
+        variants = {os.path.normcase(os.path.abspath(str(p)))}
+        try:
+            variants.add(os.path.normcase(str(Path(p).resolve())))
+        except OSError:
+            pass
+        forms.append(variants)
+    return bool(forms[0] & forms[1])
+
+
+def effective_copies() -> dict[str, PluginManifest]:
+    """``{plugin id: the copy the loader runs}`` across the loader's own roots — computed
+    by the loader's own ``discover_plugins``, so ``supersedes``, tracked overrides and the
+    #1574 untracked rule all apply exactly as at load. Use it for anything that acts on
+    "the plugin" rather than on a particular folder: its deps, its description, its
+    version."""
+    from graph.plugins.loader import discover_plugins
+
+    return {m.id: m for m in discover_plugins(loader_roots())}
+
+
+def effective_source_url(plugin_id: str) -> str:
+    """Where the copy that RUNS came from: ``""`` when that is the bundled copy — nothing
+    was fetched for it, so there is no source to re-check or ask consent for, even if an
+    ignored, superseded git copy is still recorded — else the ``plugins.lock`` origin
+    (``""`` for an untracked folder).
+
+    Fails closed in every ambiguous case, because this waives a consent/allowlist gate:
+    an id the resolver can't place keeps its recorded origin, and a copy is only "the
+    bundled one" when it sits in the bundled tree AND that tree is not itself the live
+    plugins root (with ``plugins.dir`` or ``PROTOAGENT_PLUGINS_DIR`` aimed at the app's
+    own tree, a git-installed plugin lands there too, and a parent-dir comparison alone
+    would call it bundled)."""
+    running = effective_copies().get(plugin_id)
+    if running is not None:
+        bundled_root, live_root = loader_roots()
+        if _same_dir(running.path.parent, bundled_root) and not _same_dir(bundled_root, live_root):
+            return ""
+    return recorded_source_url(plugin_id)
+
+
+def superseded_reason(plugin_id: str, source_url: str, bundled: PluginManifest) -> str:
+    """One sentence an operator can act on: why a copy is ignored and what to do."""
+    from graph.plugins.manifest import display_source
+
+    return (
+        f"{plugin_id!r} now ships with protoAgent (bundled v{bundled.version}), which supersedes "
+        f"{display_source(source_url)} — the copy installed from there is ignored and has nothing to "
+        f"update. The bundled copy updates with protoAgent itself; uninstall the old copy to clean "
+        f"it up (your settings and enabled state are kept)."
+    )
+
+
+def lock_path() -> Path:
+    """The ``plugins.lock`` for THIS instance — ``instance_paths().plugins_lock``
+    (honors ``PROTOAGENT_PLUGINS_LOCK``)."""
+    return instance_paths().plugins_lock
+
+
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+# A git ref we'll accept from a caller — branch/tag/sha shapes only. Keeps a ref
+# from being interpolated into the GitHub API URL (path/query injection) or passed
+# to git as an option (a leading `-`). Permissive enough for real refs
+# (`release/1.2`, `v1.0.0`, a 40-char sha) but no `..`, control chars, or schemes.
+_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+_ALLOWED_SCHEMES = ("https://", "http://", "git://", "ssh://", "git@", "file://", "/")
+
+# `git ls-remote` network safety (check_updates): a bounded timeout so a slow/dead
+# remote can't hang the UI poll, and a small module-level TTL cache keyed by
+# (source_url, ref) so repeated polls don't ls-remote the same source every call.
+# The caches + the ls-remote/check code live in graph/plugins/updates.py (#3823);
+# these knobs stay HERE because tests patch them on this module.
+_LSREMOTE_TIMEOUT_S = 5.0
+_LSREMOTE_TTL_S = 300.0  # ~5 min
+# A git clone of a slow/large remote is bounded so it can't hang an install thread
+# indefinitely (the operator install/update routes offload to a thread, so this
+# caps the worst case rather than wedging a pool worker forever).
+_CLONE_TIMEOUT_S = 600.0
+
+
+class InstallError(RuntimeError):
+    """A plugin install/uninstall/sync failed (bad URL, manifest, git, collision)."""
+
+
+class DepsInstallBusy(InstallError):
+    """Another dependency install is already running into the same Python environment.
+    Refused at once rather than queued (see ``deps_install_lock``); the console route
+    answers it with a 409."""
+
+
+class BundleNotInstalledError(InstallError):
+    """The named bundle has no ``plugins.lock`` row — typed so HTTP adapters can map
+    "doesn't exist" to 404 without string-matching. Raised by the op itself, so the
+    mapping stays correct even when a concurrent DELETE removes the bundle just
+    before the op runs (there is no route-level pre-check to race)."""
+
+
+def live_plugins_dir() -> Path:
+    """Where git-installed plugins live — the live dir the LOADER discovers: the
+    ``plugins.dir`` config override when set, else ``instance_paths().plugins_dir``
+    (honoring ``PROTOAGENT_PLUGINS_DIR``).
+
+    The override is read HERE, not only in ``loader._plugin_roots``, so every lifecycle
+    operation acts on the dir the loader actually reads — install, uninstall (a
+    superseded copy's removal included), the installed inventory, sync, and scaffolding.
+    Honoring it in only some of those is how a removal drops a lock row while leaving the
+    copy on disk: the copy then loads as an UNTRACKED one and can shadow the bundled
+    plugin again under the #1574 rule."""
+    override = configured_plugins_dir()
+    return Path(override).expanduser() if override else instance_paths().plugins_dir
+
+
+def _git(*args: str, cwd: Path | None = None, timeout: float | None = None, env: dict | None = None) -> str:
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=str(cwd) if cwd else None,
+        env=env,  # None ⇒ inherit os.environ (default); a dict carries scoped auth (see _git_auth_env)
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if proc.returncode != 0:
+        raise InstallError(f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}")
+    return proc.stdout.strip()
+
+
+def _validate_url(url: str) -> None:
+    if any(url.startswith(s) for s in _ALLOWED_SCHEMES):
+        return
+    if re.match(r"^[A-Za-z]:[\\/]", url):
+        return  # a Windows drive-absolute local path (C:\src\my-plugin) — the "/" entry's sibling
+    raise InstallError(f"unsupported source {url!r} — use https://, ssh://, git@, or a local path.")
+
+
+def _validate_ref(ref: str) -> None:
+    """Reject a ref that could escape the GitHub API URL path / inject a query, or
+    reach git as an option. Empty = the default branch (resolved separately)."""
+    if ".." in ref or not _REF_RE.match(ref):
+        raise InstallError(f"invalid ref {ref!r} — use a branch, tag, or commit SHA.")
+
+
+def _source_allowed(url: str, allow: list[str] | None) -> bool:
+    """Optional fork lock-down (ADR 0027 D3): if an allowlist is configured, the
+    URL must match one of its host/org globs (e.g. ``github.com/protoLabsAI/*``).
+
+    The predicate is ``trust.source_matches`` — ONE function shared with the trust
+    matcher (they drifted byte-for-byte twice; the 2739 panel asked for one home):
+    path-boundary widening (never bare ``pat*``), both sides normalized, with the
+    ``.git`` trim applied only to glob-free entries (a glob's ``.git`` suffix is
+    semantics, not spelling)."""
+    if allow is None:
+        return True  # key absent — open (the documented default)
+    if not allow:
+        return False  # EXPLICIT empty list — deny-all (#2743 item 1)
+    from graph.plugins.trust import source_matches
+
+    return source_matches(url, allow)
+
+
+def _normalize_lock(data: object) -> dict:
+    """Return the canonical lock shape and absorb the legacy wheel-deps layout.
+
+    ADR 0027 owns ``plugins.lock`` as a top-level ``plugins`` list. The original
+    ADR 0093 writer instead added ``{plugin_id: {deps: [...]}}`` beside that list.
+    Normalize those released entries in memory so the next ordinary write
+    persists one schema without dropping dependency pins.
+    """
+    if not isinstance(data, dict):
+        return {"plugins": []}
+    normalized = dict(data)
+    plugins = normalized.get("plugins")
+    if not isinstance(plugins, list):
+        plugins = []
+        normalized["plugins"] = plugins
+
+    by_id = {
+        plugin_id: e for e in plugins if isinstance(e, dict) and isinstance(plugin_id := e.get("id"), str) and plugin_id
+    }
+    for key, value in list(normalized.items()):
+        if key in {"plugins", "bundles"} or not isinstance(value, dict) or not isinstance(value.get("deps"), list):
+            continue
+        entry = by_id.get(key)
+        if entry is None:
+            entry = {"id": key}
+            plugins.append(entry)
+            by_id[key] = entry
+        entry["deps"] = value["deps"]
+        del normalized[key]
+    return normalized
+
+
+def _read_lock() -> dict:
+    lock = lock_path()
+    if lock.exists():
+        try:
+            return _normalize_lock(json.loads(lock.read_text()))
+        except (json.JSONDecodeError, OSError):
+            log.warning("[plugins] %s is unreadable — starting a fresh lock", lock)
+    return {"plugins": []}
+
+
+def _lock_rows_by_id(lock: dict | None = None) -> dict[str, dict]:
+    """``{plugin id: its plugins.lock row}`` — THE row choice for every reader. An install
+    rewrites one row per id, but a hand-edited or merged lock can carry two; the LAST one
+    wins (the loader, the inventory and uninstall must agree on which copy is recorded —
+    reading different rows let the banner say "uninstall" while uninstall refused, or
+    deleted a live fork override as "superseded")."""
+    rows: dict[str, dict] = {}
+    for e in (lock if lock is not None else _read_lock()).get("plugins") or []:
+        if isinstance(e, dict) and isinstance(e.get("id"), str) and e["id"]:
+            rows[e["id"]] = e
+    return rows
+
+
+def _lock_entry(plugin_id: str) -> dict | None:
+    """``plugin_id``'s ``plugins.lock`` row (see ``_lock_rows_by_id``), or ``None``."""
+    return _lock_rows_by_id().get(plugin_id)
+
+
+def _write_lock(data: dict) -> None:
+    data = _normalize_lock(data)
+    data["plugins"].sort(key=lambda e: e.get("id", "") if isinstance(e, dict) and isinstance(e.get("id"), str) else "")
+    lock = lock_path()
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    # Atomic + concurrency-safe: a crash mid-write must not leave a truncated lock
+    # that _read_lock treats as FRESH (silently dropping every pin), and each writer
+    # stages to its OWN temp file — a shared ".tmp" path let two concurrent writes
+    # interleave into a corrupt replace (coderabbit on the 2739 thread).
+    fd, tmp_name = tempfile.mkstemp(dir=lock.parent, prefix=lock.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(data, indent=2) + "\n")
+        os.replace(tmp_name, lock)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def _audit(action: str, args: dict, summary: str, *, success: bool = True) -> None:
+    """Record install/uninstall/install-deps to the audit log (ADR 0027 D5)."""
+    try:
+        from observability.audit import audit_logger
+
+        audit_logger.log(
+            session_id="plugins",
+            tool=f"plugin.{action}",
+            args=args,
+            result_summary=summary,
+            duration_ms=0,
+            success=success,
+        )
+    except Exception:  # noqa: BLE001 — auditing must never block the operation
+        log.debug("[plugins] audit log failed for %s", action, exc_info=True)
+
+
+def _allow_unbundled_deps() -> bool:
+    """`plugins.allow_unbundled_deps` read from the live config file (ADR 0093 opt-in).
+    Read here rather than threaded through ``install_deps`` — the CLI + the route both
+    call it without a loaded LangGraphConfig. Default off; any read error = off."""
+    try:
+        import yaml
+
+        from graph.config_io import config_yaml_path
+
+        cfg_path = config_yaml_path()
+        if not cfg_path.exists():
+            return False
+        data = yaml.safe_load(cfg_path.read_text()) or {}
+        return bool((data.get("plugins") or {}).get("allow_unbundled_deps", False))
+    except Exception:  # noqa: BLE001 — a config read must never flip the gate ON by accident
+        return False
+
+
+def configured_allowlist() -> list[str] | None:
+    """`plugins.sources.allow` read from the live config file (for the CLI, which
+    runs without a loaded LangGraphConfig). ``None`` = key absent (open);
+    ``[]`` = explicit deny-all (#2743 item 1); non-empty = the allowlist."""
+    try:
+        import yaml
+
+        from graph.config_io import config_yaml_path
+
+        cfg_path = config_yaml_path()
+        if not cfg_path.exists():
+            return None
+        data = yaml.safe_load(cfg_path.read_text()) or {}
+        sources = ((data.get("plugins") or {}).get("sources")) or {}
+        if "allow" not in sources:
+            return None  # key absent — open
+        # Explicit [] survives as [] (deny-all, #2743 item 1) — the old `or None`
+        # collapsed it back to open, exactly the ambiguity this distinction removes.
+        return [str(x) for x in (sources.get("allow") or [])]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _summary(m: PluginManifest, *, source: str, ref: str, sha: str) -> dict:
+    return {
+        "id": m.id,
+        "name": m.name,
+        "version": m.version,
+        "description": m.description,
+        "source_url": source,
+        "requested_ref": ref,
+        "resolved_sha": sha,
+        "repository": m.repository,
+        "homepage": m.homepage,
+        "capabilities": m.capabilities,
+        "requires_env": m.requires_env,
+        "requires_pip": m.requires_pip,
+        "optional_pip": m.optional_pip,
+        "min_protoagent_version": m.min_protoagent_version,
+        # what it contributes — surfaced in the install review (ADR 0027 D3)
+        "contributes": {
+            "tools": bool(m.config_section),  # heuristic; real tool list needs import
+            "views": [v.get("label") for v in m.views],
+            "secrets": m.secrets,
+            "settings": [s.get("key") for s in m.settings],
+        },
+    }
+
+
+def _git_auth_env(url: str) -> dict[str, str]:
+    """Env that hands ``git`` a GitHub auth header for an ``https://github.com/`` URL when a
+    ``GITHUB_TOKEN`` / ``GH_TOKEN`` is set — so a runtime ``plugin install`` of a **private**
+    repo works on the DEFAULT git path (the "git handles private auth" design intent), not only
+    the archive path. Without it a plain ``git clone`` of a private HTTPS repo in a container
+    (no ssh key, no credential helper — just the token env) fails with
+    ``could not read Username for 'https://github.com'``.
+
+    Delivered via ``GIT_CONFIG_*`` env, deliberately:
+    - **not argv** → the token never shows up in ``ps`` (unlike ``-c http.extraheader=…``),
+    - **not the clone's ``.git/config``** → env-config is per-command, so the token never lands
+      on disk in the cloned repo,
+    - **scoped** to ``http.https://github.com/.extraheader`` → the header never rides a redirect
+      to a non-github host.
+
+    SSH / ``git@`` / non-github / no-token → ``{}`` (git's own auth — ssh keys, credential
+    helpers — applies unchanged)."""
+    token = (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    if not token or not url.startswith("https://github.com/"):
+        return {}
+    import base64
+
+    # GitHub accepts Basic ``x-access-token:<token>`` for git-over-HTTPS (the pattern
+    # actions/checkout uses); the archive path uses a Bearer header for the API/codeload.
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}",
+    }
+
+
+def _clone(url: str, ref: str | None, dest: Path) -> str:
+    """Clone ``url`` at ``ref`` into ``dest``; return the resolved commit SHA.
+
+    A plain LOCAL path is rewritten to a ``file://`` URL first. Without it git
+    uses its "local transport" — a readdir+copy of the source's ``.git/objects``
+    — which silently ignores ``--depth`` and races anything concurrently writing
+    the source repo: ``git commit`` spawns a DETACHED ``git maintenance run
+    --auto``, and on CI that background maintenance renamed a ``tmp_rev_*`` pack
+    file mid-copy → ``fatal: failed to copy file … No such file or directory``
+    (#1600). ``file://`` forces the regular pack transport (upload-pack streams a
+    fresh pack; nothing enumerates the source's raw object files), which is
+    immune to that race — exactly what git's own warning recommends.
+    ``--no-hardlinks`` stays as the belt for any local-transport clone that
+    slips through (it avoids the older ``hardlink different from source`` race);
+    it's a no-op for the file:// and remote cases."""
+    if url.startswith("/"):
+        url = Path(url).resolve().as_uri()
+    # Authenticate a private github HTTPS clone with the token env (scoped, off-argv, off-disk).
+    # ``None`` for local/ssh/non-github/no-token ⇒ git inherits os.environ unchanged. Only the
+    # network op (clone) needs it; checkout/rev-parse are local.
+    auth = _git_auth_env(url)
+    clone_env = {**os.environ, **auth} if auth else None
+    if ref and _SHA_RE.match(ref):
+        # A specific commit: full clone (shallow can't reliably check out an
+        # arbitrary SHA), then check it out.
+        _git(
+            "clone",
+            "--no-hardlinks",
+            "--no-recurse-submodules",
+            url,
+            str(dest),
+            timeout=_CLONE_TIMEOUT_S,
+            env=clone_env,
+        )
+        _git("checkout", ref, cwd=dest)
+    elif ref:
+        # A tag or branch: shallow clone of just that ref.
+        _git(
+            "clone",
+            "--depth",
+            "1",
+            "--no-hardlinks",
+            "--no-recurse-submodules",
+            "--branch",
+            ref,
+            url,
+            str(dest),
+            timeout=_CLONE_TIMEOUT_S,
+            env=clone_env,
+        )
+    else:
+        _git(
+            "clone",
+            "--depth",
+            "1",
+            "--no-hardlinks",
+            "--no-recurse-submodules",
+            url,
+            str(dest),
+            timeout=_CLONE_TIMEOUT_S,
+            env=clone_env,
+        )
+    return _git("rev-parse", "HEAD", cwd=dest)
+
+
+# --- Git-less fetch for the frozen desktop app (ADR 0058 D1) ---------------
+# The frozen PyInstaller sidecar has no `git` (and no `pip`), but the loader
+# already discovers + importlib-loads plugins from the live root in frozen mode.
+# So the only gap is *fetching* the code: download a GitHub archive tarball over
+# HTTPS (the bundled httpx) and extract it — an on-disk result identical to a
+# shallow clone. `git` stays the path on a dev/server box (history, ssh, and
+# private auth — over ssh keys / credential helpers, or a github HTTPS token via
+# `_git_auth_env`); the archive path is preferred when git is absent or we're frozen.
+
+_GH_RE = re.compile(r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$")
+
+
+def _frozen_like() -> bool:
+    """True in the frozen desktop sidecar (no git/pip). ``PROTOAGENT_PLUGIN_FROZEN``
+    lets a dev box simulate it for testing."""
+    return bool(getattr(sys, "frozen", False)) or os.environ.get("PROTOAGENT_PLUGIN_FROZEN") == "1"
+
+
+def _prefer_archive() -> bool:
+    """Use the git-less HTTPS-archive fetch instead of ``git clone``? Forced either
+    way by ``PROTOAGENT_PLUGIN_FETCH=archive|git`` (testing); otherwise when we're
+    frozen or git isn't on PATH."""
+    mode = os.environ.get("PROTOAGENT_PLUGIN_FETCH", "").strip().lower()
+    if mode == "archive":
+        return True
+    if mode == "git":
+        return False
+    return _frozen_like() or shutil.which("git") is None
+
+
+def _github_owner_repo(url: str) -> tuple[str, str]:
+    m = _GH_RE.search(url.strip())
+    if not m:
+        raise InstallError(
+            f"git-less install needs a github.com URL (the desktop runtime can't run git) — got {url!r}."
+        )
+    return m.group(1), m.group(2)
+
+
+def _http_get(url: str, *, accept: str | None = None) -> "object":
+    """GET ``url`` following redirects (codeload), raising InstallError on failure.
+    Sends a GitHub token from ``GITHUB_TOKEN``/``GH_TOKEN`` if set (private repos +
+    higher rate limits)."""
+    import httpx
+
+    headers = {"User-Agent": "protoAgent-plugin-installer"}
+    if accept:
+        headers["Accept"] = accept
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=30.0)
+        resp.raise_for_status()
+        return resp
+    except httpx.HTTPError as e:
+        raise InstallError(f"fetch failed for {url}: {e}") from e
+
+
+def _resolve_sha_github(owner: str, repo: str, ref: str | None) -> str:
+    """Resolve ``ref`` (branch/tag, or the default branch when empty) to a full
+    commit SHA via the GitHub API — the git-less equivalent of ``git ls-remote``."""
+    api = f"https://api.github.com/repos/{owner}/{repo}/commits/{ref or 'HEAD'}"
+    resp = _http_get(api, accept="application/vnd.github.sha")
+    sha = resp.text.strip()
+    if not _SHA_RE.match(sha) or len(sha) != 40:
+        raise InstallError(f"could not resolve {ref or 'HEAD'} at {owner}/{repo} (got {sha[:80]!r}).")
+    return sha
+
+
+def _safe_extract_tar(data: bytes, dest: Path) -> None:
+    """Extract a GitHub ``tar.gz`` into ``dest``, stripping the single top-level
+    ``<repo>-<sha>/`` component. Path-traversal-safe (rejects abs paths / ``..``)
+    and ignores symlinks/special files — a plugin repo is plain files + dirs."""
+    dest = dest.resolve()
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for m in tar.getmembers():
+            inner = m.name.split("/", 1)[1] if "/" in m.name else ""
+            if not inner:
+                continue
+            target = (dest / inner).resolve()
+            if target != dest and not str(target).startswith(str(dest) + os.sep):
+                raise InstallError(f"unsafe path in archive: {m.name!r}")
+            if m.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif m.isfile():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                src = tar.extractfile(m)
+                if src is not None:
+                    target.write_bytes(src.read())
+            # symlinks/devices are skipped on purpose (a supply-chain vector)
+
+
+def _fetch_archive(url: str, ref: str | None, dest: Path) -> str:
+    """Git-less fetch: resolve ``ref`` → SHA, download the GitHub archive at that
+    SHA, extract into ``dest``. Returns the resolved SHA (pinned in the lock)."""
+    owner, repo = _github_owner_repo(url)
+    sha = ref if (ref and _SHA_RE.match(ref) and len(ref) == 40) else _resolve_sha_github(owner, repo, ref)
+    resp = _http_get(f"https://codeload.github.com/{owner}/{repo}/tar.gz/{sha}")
+    dest.mkdir(parents=True, exist_ok=True)
+    _safe_extract_tar(resp.content, dest)
+    return sha
+
+
+def _fetch(url: str, ref: str | None, dest: Path) -> str:
+    """Fetch the plugin repo at ``ref`` into ``dest``; return the resolved SHA.
+    ``git`` on a dev/server box; the git-less HTTPS archive (GitHub) when git is
+    unavailable or in the frozen desktop app (ADR 0058 D1)."""
+    if _prefer_archive():
+        return _fetch_archive(url, ref, dest)
+    return _clone(url, ref, dest)
+
+
+# --- Bundled-dep gate for the frozen app (ADR 0058 D2) ---------------------
+# The frozen runtime has no pip, so a plugin can only run if its declared
+# `requires_pip` are ALREADY importable in the bundle. Gate at install time with
+# a clear refusal rather than a cryptic enable-time ImportError.
+
+_PKG_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def _dep_pkg_name(spec: str) -> str:
+    """The distribution name from a PEP 508 spec (``websockets>=12`` → ``websockets``)."""
+    m = _PKG_NAME_RE.match(spec or "")
+    return m.group(1) if m else ""
+
+
+def _importable(pkg: str) -> bool:
+    """Is ``pkg`` present in this runtime? Distribution metadata first, then a
+    best-effort module-name probe (covers deps whose .dist-info isn't bundled)."""
+    import importlib.metadata as md
+    import importlib.util as iu
+
+    try:
+        md.version(pkg)
+        return True
+    except md.PackageNotFoundError:
+        pass
+    except Exception:  # noqa: BLE001 — metadata read is best-effort
+        pass
+    try:
+        return iu.find_spec(pkg.replace("-", "_")) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _marker_environment() -> dict | None:
+    """Overrides for the PEP 508 marker environment — None means "this process, as-is".
+    A seam: ``packaging`` (26.3+) caches the process environment on first use, so a test
+    can't evaluate "as if on Windows" by patching ``sys.platform``; it patches this."""
+    return None
+
+
+def _dep_applies(spec: str) -> bool:
+    """Does ``spec`` apply to THIS platform/Python — i.e. is its PEP 508 environment marker
+    (``; sys_platform == 'win32'``, ``; python_version < '3.12'``) true here?
+
+    A dep whose marker is false is NOT REQUIRED on this machine: pip itself skips it, so
+    every "what's missing" answer must too. Without this the Terminal plugin's Windows-only
+    ``pywinpty>=2.0; sys_platform == 'win32'`` read as missing forever on macOS/Linux —
+    Install deps "succeeded" (``_spec_satisfied`` already honoured the marker) while the
+    banner and the Plugins row kept asking for it. No marker → applies. An unparsable spec,
+    or a marker that can't be evaluated, also counts as applying: that keeps the name-only
+    behaviour this had before markers were read, and ``_validate_pip_specs`` / pip still
+    get the final say on the spec itself."""
+    if ";" not in str(spec or ""):
+        return True
+    try:
+        from packaging.requirements import Requirement
+
+        req = Requirement(str(spec))
+        return req.marker is None or bool(req.marker.evaluate(_marker_environment()))
+    except Exception:  # noqa: BLE001 — unparsable/unevaluable: keep the name-only answer
+        return True
+
+
+def applicable_deps(specs: list[str]) -> list[str]:
+    """The subset of ``specs`` whose environment marker holds here (see ``_dep_applies``),
+    in order — what this machine would actually install."""
+    return [s for s in specs or [] if _dep_applies(s)]
+
+
+def missing_deps(specs: list[str], scopes: dict[str, str] | None = None) -> list[str]:
+    """Clean dist names of the ``specs`` that apply here and aren't satisfied — the public
+    face of ``_deps_satisfied`` for callers outside this module (the operator API)."""
+    return _deps_satisfied(list(specs or []), scopes)[1]
+
+
+def missing_deps_detail(manifest: PluginManifest) -> list[dict]:
+    """The deps this plugin still needs HERE, as ``[{"name", "spec", "optional"}]`` —
+    hard deps first, then optional, each in manifest order. ``spec`` is the exact PEP 508
+    requirement pip will be handed (what an operator consents to); ``name`` the clean dist
+    name to show. Marker-excluded deps never appear. Same answer as the loader's
+    ``deps_missing`` (both go through ``_deps_satisfied``)."""
+    scopes = getattr(manifest, "pip_scopes", {}) or {}
+    out: list[dict] = []
+    for specs, optional in ((list(manifest.requires_pip or []), False), (list(manifest.optional_pip or []), True)):
+        if not specs:
+            continue
+        missing = set(_deps_satisfied(specs, scopes)[1])
+        for spec in specs:
+            name = _dep_pkg_name(spec)
+            if name in missing and _dep_applies(spec):
+                out.append({"name": name, "spec": str(spec).strip(), "optional": optional})
+    return out
+
+
+def _deps_satisfied(deps: list[str], scopes: dict[str, str] | None = None) -> tuple[bool, list[str]]:
+    """(all satisfied?, [missing dist names]) for a plugin's ``requires_pip``.
+
+    Only deps that APPLY here count (``_dep_applies``): a spec whose PEP 508 marker is
+    false on this platform/Python is not required, so it is neither missing nor installed.
+
+    A dep is satisfied when it's importable in THIS process — or, in the frozen desktop
+    app, when it's installed in the managed Python runtime (ADR 0094 P2). The two have
+    separate site-packages: a compute plugin's deps live in the child runtime (its
+    ``execute_code`` skills import them there), never in the host, so a host-only check
+    would report them forever-missing and the "Install deps" action could never clear.
+
+    ``scopes`` (#2246) carves out the opposite error. A ``host``-scoped dep is one the
+    plugin imports IN-PROCESS, so the managed runtime cannot satisfy it — and accepting
+    the runtime's copy made the gate answer "satisfied" about the wrong interpreter:
+    install passed, then every tool call died with ``ModuleNotFoundError``. Host-scoped
+    deps are therefore judged by host importability alone. Unscoped deps default to
+    ``runtime`` (the compute-plugin pattern), so existing manifests are unaffected.
+
+    Known blind spot, deliberately left in place: an unscoped dep is checked against the
+    HOST first, and anything core or the doc stack bundles into the frozen app (pypdf,
+    python-docx, lxml, httpx, …) is importable there — so it reads "satisfied" even when
+    the plugin only imports it inside ``execute_code``, where the host's PYZ copy is
+    unreachable. Judging unscoped deps by the runtime alone would refuse every plugin
+    whose tools import a bundled lib in-process until the runtime is provisioned, and
+    ``scope: runtime`` isn't recorded (only ``host`` is), so it can't be told apart. What
+    covers the document skills instead is the managed runtime's baseline
+    (``apps/desktop/sidecar/requirements-docs.txt``) listing every library they import —
+    pypdf was missing from it, which is how "read a PDF via execute_code" broke on desktop."""
+    runtime_dists = _managed_runtime_dists()
+    scopes = scopes or {}
+    missing = []
+    for spec in deps:
+        name = _dep_pkg_name(spec)
+        if not name:
+            continue
+        # A marker that rules the dep out here means it isn't needed here (pip would skip it
+        # too) — never "missing", never installed. Same rule as ``_spec_satisfied``.
+        if not _dep_applies(spec):
+            continue
+        if _importable(name):
+            continue
+        # A host-scoped dep can only be satisfied by THIS interpreter, never the child.
+        if scopes.get(name) == "host" or _normalize_dist(name) not in runtime_dists:
+            missing.append(name)
+    return (not missing, missing)
+
+
+def _spec_satisfied(spec: str) -> bool:
+    """Is ``spec`` already met in THIS interpreter — installed AND at a version it allows?
+
+    The install-time pre-check (#3450). ``_deps_satisfied`` answers "is it importable" by
+    NAME, which is the right question for the loader's deps gap, but the wrong one for
+    deciding whether to run pip: pip used to upgrade a too-old dep as a side effect of
+    re-installing everything, and a name-only skip would silently stop doing that. A dist
+    with no metadata (no version to compare) counts as met only when the spec pins none.
+    A marker that rules the dep out on this platform/Python counts as met.
+    """
+    name = _dep_pkg_name(spec)
+    if not name:
+        return False
+    try:
+        from packaging.requirements import Requirement
+
+        req = Requirement(spec)
+    except Exception:  # noqa: BLE001 — _validate_pip_specs vetted it; when unsure, let pip decide
+        return False
+    if not _dep_applies(spec):
+        return True
+    import importlib.metadata as md
+
+    try:
+        version = md.version(req.name)
+    except md.PackageNotFoundError:
+        return not req.specifier and _importable(req.name)
+    except Exception:  # noqa: BLE001 — metadata read is best-effort; let pip decide
+        return False
+    return req.specifier.contains(version, prereleases=True)
+
+
+def _managed_runtime_dists() -> set[str]:
+    """Normalized dist names in the managed runtime — only consulted in the frozen app
+    (a source run's ``sys.executable`` IS the host, so host-importability already
+    covers it). Best-effort: never let a runtime read break dep resolution."""
+    if not _frozen_like():
+        return set()
+    try:
+        from infra.python_runtime import managed_runtime_distributions
+
+        return managed_runtime_distributions()
+    except Exception:  # noqa: BLE001 — runtime discovery must never break enable/install
+        log.debug("[plugins] managed runtime read failed (ignored)", exc_info=True)
+        return set()
+
+
+def _normalize_dist(name: str) -> str:
+    from infra.python_runtime import normalize_dist as _norm
+
+    return _norm(name)
+
+
+def _refuse_frozen_host_scoped(pid: str, missing: list[str], scopes: dict[str, str] | None = None) -> None:
+    """Frozen desktop: refuse a plugin whose MISSING hard deps include a ``host``-scoped one
+    (#2246). Such a dep must be importable in THIS process, and the frozen app has no pip
+    for its own interpreter — the managed Python runtime (where deps get installed) only
+    serves execute_code children, a separate site-packages. Installing it there would
+    "succeed" while leaving the in-process import that actually needs it just as broken, so
+    the dep is genuinely unsatisfiable here: say so, and why, before any code lands —
+    rather than passing the gate and crashing at tool time. Applies whether or not deps are
+    installed at install time (a consent dialog can't fix it either)."""
+    host_scoped = [n for n in missing if (scopes or {}).get(n) == "host"]
+    if host_scoped:
+        raise InstallError(
+            f"{pid!r} needs {', '.join(host_scoped)} as a HOST-scoped dep, which a frozen app "
+            f"cannot satisfy: the plugin imports it in this process, and the managed Python "
+            f"runtime (which is where deps get installed) only serves execute_code children — "
+            f"separate site-packages. Vendor the code, drop the dependency, or ship it in the "
+            f"app bundle. (Declare scope: runtime if it is only imported by execute_code.)"
+        )
+
+
+def _frozen_install_missing_deps(
+    pid: str, requires_pip: list[str], missing: list[str], scopes: dict[str, str] | None = None
+) -> None:
+    """Frozen desktop, hard deps missing at install/update time, and the CALLER OPTED IN
+    (``install(..., install_runtime_deps=True)`` — the non-interactive provisioning paths:
+    fleet/archetype workspace creation and snapshot import, via the CLI's
+    ``--install-runtime-deps``): pip them into the managed Python runtime (ADR 0094 P2) —
+    the same target ``install_deps`` uses. Refuses only when the runtime isn't provisioned
+    (naming the install route) or the install itself fails (surfacing pip's real error).
+
+    Without the opt-in the frozen install no longer pips at all (it used to, #2226): it
+    lands the plugin and the missing deps are reported like on a server, so the console's
+    consent dialog / the deps banner / ``plugin install-deps`` install them on an explicit
+    act — pip runs the packages' own install code.
+
+    A ``host``-scoped dep (#2246) is refused up front and NOT sent to the runtime (see
+    ``_refuse_frozen_host_scoped``)."""
+    # Module (not from-) imports: callables resolve through the source module at call
+    # time, so test monkeypatches on infra.python_runtime / runtime.python_install bind.
+    import infra.python_runtime as pr
+    import runtime.python_install as pi
+
+    _refuse_frozen_host_scoped(pid, missing, scopes)
+
+    # Only the specs that apply here: a name can appear twice with complementary markers
+    # (``foo; sys_platform == 'win32'`` + ``foo>=2; sys_platform != 'win32'``).
+    to_install = [s for s in applicable_deps(requires_pip) if _dep_pkg_name(s) in missing]
+    _validate_pip_specs(pid, to_install)
+    if pr.managed_python_exe() is None:
+        raise InstallError(
+            f"{pid!r} needs {', '.join(missing)} which isn't in the desktop runtime — "
+            f"provision the managed Python runtime first (POST /api/runtime/python/install "
+            f"or Settings ▸ Tools), then retry."
+        )
+    try:
+        # The same environment Install deps writes into, so the same one-at-a-time hold.
+        with deps_install_lock(pid):
+            pi.install_requirements_into_managed_runtime(to_install)
+    except pi.PythonRuntimeError as exc:
+        _audit(
+            "install_deps",
+            {"id": pid, "deps": to_install, "targets": ["managed-runtime"]},
+            "managed runtime install failed",
+            success=False,
+        )
+        raise InstallError(
+            f"{pid!r} needs {', '.join(missing)} — installing into the managed runtime failed: {exc}"
+        ) from exc
+    _audit("install_deps", {"id": pid, "deps": to_install, "targets": ["managed-runtime"]}, "ok")
+    log.info("[plugins] %s: installed %d missing dep(s) into the managed runtime", pid, len(to_install))
+
+
+def install(
+    url: str,
+    ref: str | None = None,
+    *,
+    force: bool = False,
+    by: str = "cli",
+    allow: list[str] | None = None,
+    install_runtime_deps: bool = False,
+) -> dict:
+    """Clone a plugin from ``url`` (at ``ref``) into the live plugins dir, pinned
+    to its resolved SHA, and record it in ``plugins.lock``. Does NOT enable it or
+    install its deps. Returns the install summary.
+
+    ``install_runtime_deps`` is the explicit opt-in for NON-interactive callers on the
+    frozen desktop app (fleet/archetype provisioning, snapshot import — the CLI's
+    ``--install-runtime-deps``): missing hard deps are pip'd into the managed Python
+    runtime as part of the install, as every frozen install did before the consent dialog.
+    Default off: a frozen install lands the plugin and leaves missing deps to the console's
+    consent dialog / deps banner / ``plugin install-deps``, exactly like a server install.
+    It does nothing off the frozen app (a server install never pips — ADR 0027 D4), and it
+    never overrides the HOST-scoped refusal. A bundle passes it to every member.
+
+    A ``url`` a bundled plugin ``supersedes`` fetches nothing: that plugin ships with
+    protoAgent now, so the summary describes the bundled copy and carries
+    ``superseded: True`` (``--force`` doesn't change that — override a bundled plugin
+    from a fork URL instead). Checked before the allowlist and the fetch: no code comes
+    from that source, and the retired repo may no longer be reachable."""
+    _validate_url(url)
+    if ref:
+        _validate_ref(ref)  # before it reaches git or the GitHub API URL (PR #1140 QA)
+    bundled = superseding_plugin(url)
+    if bundled is not None:
+        log.info(
+            "[plugins] %s ships with protoAgent (bundled v%s, supersedes %s) — nothing to fetch",
+            bundled.id,
+            bundled.version,
+            url,
+        )
+        summary = _summary(bundled, source=url, ref=ref or "", sha="")
+        summary["superseded"] = True
+        return summary
+    if not _source_allowed(url, allow):
+        detail = (
+            "plugins.sources.allow is an explicit empty list (deny-all) — list the origins you trust, "
+            "or remove the key to allow any source."
+            if allow is not None and not allow
+            else f"source {url!r} is not on plugins.sources.allow — add it or install from an allowed origin."
+        )
+        raise InstallError(detail)
+
+    target_root = live_plugins_dir()
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="pa-plugin-") as tmp:
+        staging = Path(tmp) / "repo"
+        sha = _fetch(url, ref, staging)
+
+        # A bundle repo (protoagent.bundle.yaml) carries no code — it names a set of
+        # plugin repos to install together. Fan out to per-plugin install().
+        bundle = load_bundle(staging)
+        if bundle is not None:
+            return _install_bundle(
+                bundle, url, sha, ref, force=force, by=by, allow=allow, install_runtime_deps=install_runtime_deps
+            )
+
+        manifest = load_manifest(staging)
+        if manifest is None:
+            raise InstallError(
+                f"{url!r} has no protoagent.plugin.yaml or protoagent.bundle.yaml — not a protoAgent plugin or bundle."
+            )
+        pid = manifest.id
+
+        # No silent shadowing of a built-in (repo) plugin. A manifest-less ghost
+        # dir (e.g. a __pycache__ leftover) is not a built-in and must not block.
+        if _is_builtin(pid):
+            raise InstallError(f"plugin id {pid!r} is a built-in — cannot install over it.")
+
+        # Frozen runtime (desktop): no host pip. A missing hard dep used to be a flat
+        # ADR 0058 D2 refusal, then (#2226) was pip'd into the managed Python runtime
+        # (ADR 0094 P2) right here, silently. Now the install asks nothing of pip: the
+        # plugin lands, and the missing deps are reported exactly as on a server — the
+        # install route's `deps_needed` drives the console's consent dialog (the specs,
+        # the source, "into the desktop app's managed Python runtime"), and confirming
+        # runs the existing install-deps route, which targets that runtime. Only an
+        # explicit `install_runtime_deps=True` (non-interactive provisioning) still pips
+        # here. A HOST-scoped hard dep stays a refusal either way: the managed runtime
+        # can't satisfy an in-process import, so no dialog could fix it (#2246).
+        # OPTIONAL deps (#1953) don't gate: the plugin degrades gracefully without
+        # them, so a missing one warns (in the summary + log) and install proceeds.
+        warnings: list[str] = []
+        if _frozen_like():
+            if manifest.requires_pip:
+                ok, missing = _deps_satisfied(manifest.requires_pip, manifest.pip_scopes)
+                if not ok:
+                    if install_runtime_deps:
+                        _frozen_install_missing_deps(pid, manifest.requires_pip, missing, manifest.pip_scopes)
+                    else:
+                        _refuse_frozen_host_scoped(pid, missing, manifest.pip_scopes)
+                        log.info(
+                            "[plugins] %s: required dep(s) %s aren't in the desktop runtime — installing the "
+                            "plugin; they install on the operator's confirm (install-deps)",
+                            pid,
+                            ", ".join(missing),
+                        )
+            if manifest.optional_pip:
+                _, soft_missing = _deps_satisfied(manifest.optional_pip, manifest.pip_scopes)
+                if soft_missing:
+                    warn = (
+                        f"optional dep(s) {', '.join(soft_missing)} aren't in the desktop runtime — "
+                        f"installed anyway; the features of {pid!r} that need them degrade until they're available."
+                    )
+                    warnings.append(warn)
+                    log.warning("[plugins] %s: %s", pid, warn)
+
+        target = target_root / pid
+        if target.exists():
+            # Re-install from the plugin's OWN recorded origin is a CONVERGE, not a
+            # conflict: same commit → no-op, moved pin/ref → update — so re-running a
+            # bundle install never dies on its own already-installed members. --force
+            # stays the lever for the real conflicts: an id-colliding install from a
+            # DIFFERENT source, or a dir the lock doesn't know (a working-tree /
+            # hand-copied plugin that a git install must not silently clobber).
+            prior = _lock_entry(pid)
+            same_source = prior is not None and prior.get("source_url") == url
+            if not force and not same_source:
+                origin = f"from {prior.get('source_url')!r}" if prior else "untracked (no plugins.lock entry)"
+                raise InstallError(f"plugin {pid!r} already installed — {origin}; use --force to replace.")
+            if not force and same_source and prior.get("resolved_sha") == sha:
+                log.info("[plugins] %s already at %s from %s — up to date", pid, sha[:10], url)
+                summary = _summary(manifest, source=url, ref=ref or "", sha=sha)
+                summary["up_to_date"] = True
+                if warnings:
+                    summary["warnings"] = warnings
+                return summary
+
+        _force_rmtree(staging / ".git")  # drop git metadata; lock holds provenance
+
+        # Land the staged tree with a swap, not rmtree-then-move (#3075): the old sequence
+        # deleted the installed copy first, so a move that died mid-copy (disk full,
+        # permissions) left NO old version and half a new one. Rename the existing install
+        # aside instead — same parent dir, so it's an atomic same-filesystem rename — move
+        # the staged tree in, and only then drop the backup; any failure renames the old
+        # version back. (`plugins.lock` already lands atomically via `_write_lock`.)
+        backup = _free_backup_path(target)  # clears leftovers; never collides with one
+        backed_up = False
+        if target.exists() or _is_link(target):
+            try:
+                _rename(target, backup)
+                backed_up = True
+            except OSError as exc:
+                raise InstallError(
+                    f"could not set aside the installed copy of {pid!r} before update "
+                    f"(it was left untouched): {exc}"
+                ) from exc
+        try:
+            shutil.move(str(staging), str(target))
+        except Exception as exc:
+            # A cross-filesystem move copies then deletes — it can fail half-copied.
+            _force_rmtree(target)
+            restored = ""
+            if backed_up:
+                try:
+                    _rename(backup, target)
+                    restored = " — the previous version was restored"
+                except OSError:
+                    restored = f" — the previous version was left at {backup}"
+            raise InstallError(f"could not move staged plugin {pid!r} into place{restored}: {exc}") from exc
+        if backed_up:
+            _discard(backup)
+
+        manifest = load_manifest(target) or manifest  # re-read from final path
+
+    summary = _summary(manifest, source=url, ref=ref or "", sha=sha)
+    if warnings:
+        summary["warnings"] = warnings
+    lock = _read_lock()
+    prior_entry = _lock_rows_by_id(lock).get(pid)
+    entry = {
+        "id": pid,
+        "source_url": url,
+        "requested_ref": ref or "",
+        "resolved_sha": sha,
+        "installed_at": datetime.now(timezone.utc).isoformat(),
+        "by": by,
+    }
+    if prior_entry is not None and isinstance(prior_entry.get("deps"), list):
+        entry["deps"] = prior_entry["deps"]
+    lock["plugins"] = [e for e in lock["plugins"] if e.get("id") != pid]
+    lock["plugins"].append(entry)
+    _write_lock(lock)
+    _audit("install", {"url": url, "ref": ref or "", "sha": sha, "id": pid}, f"installed {pid}@{sha[:10]}")
+    log.info("[plugins] installed %s@%s from %s", pid, sha[:10], url)
+    return summary
+
+
+def _clean_config_refs(plugin_id: str, section: str, purge: bool) -> bool:
+    """Remove the plugin's references from the live langgraph-config.yaml (ADR 0027):
+    always the `plugins.enabled`/`disabled` entry (a dangling enabled entry is just
+    broken); with ``purge`` also the plugin's `config_section` block. Comment-safe
+    (ruamel). Returns True if anything changed."""
+    from graph.config_io import CONFIG_WRITE_LOCK, config_yaml_path, load_yaml_doc, save_yaml_doc
+
+    cfg = config_yaml_path()
+    if not cfg.exists():
+        return False
+    # Across the read AND the write (#2743): the server's applier rewrites this file
+    # under the same lock, so a scrub interleaved with it either resurrects the
+    # uninstalled id or drops an enable that landed in between.
+    with CONFIG_WRITE_LOCK:
+        doc = load_yaml_doc(cfg)
+        if not isinstance(doc, dict):
+            return False
+        changed = False
+        plugins = doc.get("plugins")
+        if isinstance(plugins, dict):
+            for key in ("enabled", "disabled"):
+                lst = plugins.get(key)
+                if isinstance(lst, list) and plugin_id in lst:
+                    while plugin_id in lst:
+                        lst.remove(plugin_id)
+                    changed = True
+        if purge and section in doc:
+            del doc[section]
+            changed = True
+        if changed:
+            save_yaml_doc(doc, cfg)
+    return changed
+
+
+def _clean_secrets(section: str) -> bool:
+    """Remove the plugin's section from the live secrets.yaml overlay (purge only)."""
+    from graph.config_io import CONFIG_WRITE_LOCK, load_yaml_doc, save_yaml_doc, secrets_yaml_path
+
+    sec = secrets_yaml_path()
+    if not sec.exists():
+        return False
+    # Same lock as the applier's `save_secrets` read-modify-write (#2743): interleaved,
+    # one drops the other's secret update or brings the purged section back.
+    with CONFIG_WRITE_LOCK:
+        doc = load_yaml_doc(sec)
+        if isinstance(doc, dict) and section in doc:
+            del doc[section]
+            save_yaml_doc(doc, sec)
+            return True
+    return False
+
+
+def uninstall(plugin_id: str, *, purge: bool = False) -> dict:
+    """Remove a git-installed plugin and its references. ALWAYS removes the code
+    dir, the `plugins.lock` entry, and the `plugins.enabled`/`disabled` reference.
+    With ``purge=True`` ALSO removes the plugin's config section + its secrets.
+    Built-ins are refused; pip deps are NEVER auto-removed (shared venv) — they're
+    returned for the operator to remove. Returns a report dict.
+
+    A built-in id is accepted only when there is an installed copy of it to remove — one
+    the loader is ignoring in favour of the bundled copy (see ``_uninstall_superseded``):
+    either recorded from a URL the bundled manifest ``supersedes``, or UNTRACKED (no lock
+    row at all — a folder dropped in or symlinked by hand). Both used to be refused with
+    "is a built-in"; for the untracked one that was a regression the moment a plugin moved
+    into core, since removing it worked right up until then. A copy recorded from some
+    OTHER url — a deliberate fork override — is still refused: it is the running copy and
+    a recorded choice, not a leftover.
+
+    What gets deleted is never "whatever sits at <live>/<id>" — only the path the loader
+    itself found as that plugin's copy (``_removable_copy``). A different plugin's folder,
+    a folder with no plugin in it, and the bundled tree can never be that path. The
+    ordinary (non-bundled) uninstall applies the same rule (``_plain_copy_refusal``): since
+    #3452 ``<live>`` is ``plugins.dir`` when set, often a folder of checkouts. A dangling
+    link at exactly ``<live>/<id>`` is unlinked (it has no target to harm) and named in
+    the report as ``dangling_link``."""
+    if _is_builtin(plugin_id):
+        bundled = _bundled_manifest(plugin_id)
+        recorded = recorded_source_url(plugin_id)
+        # A copy RECORDED from a URL the bundled copy doesn't supersede is a deliberate fork
+        # override — refused, unchanged. (No bundled manifest at all: a bundle dir.)
+        if bundled is None or (recorded and bundled_superseding(plugin_id, recorded) is None):
+            raise InstallError(f"{plugin_id!r} is a built-in plugin — not removable via uninstall.")
+        target, why_not = _removable_copy(plugin_id)
+        if target is None and not recorded:
+            # Untracked, and nothing the loader vouches for: refuse, delete nothing.
+            raise InstallError(
+                why_not
+                or f"{plugin_id!r} ships with protoAgent and there is no installed copy of it in "
+                f"{live_plugins_dir()} — nothing to uninstall. To turn the plugin off, disable it instead."
+            )
+        # A tracked superseded row still gets its lock entry cleared — which removes no files.
+        # If something IS on disk that the guards refused, that reason rides along in the
+        # report (`left_in_place`) instead of vanishing behind a "removed: lock" success.
+        return _uninstall_superseded(plugin_id, bundled, purge=purge, target=target, left_in_place=why_not)
+    live_root = live_plugins_dir()
+    target = live_root / plugin_id
+    dangling = _is_link(target) and not target.exists()
+    # Read the manifest BEFORE deleting — purge needs the config section + we report
+    # the declared deps.
+    manifest = None if dangling else (load_manifest(target) if (target / MANIFEST_FILENAME).exists() else None)
+    refusal = _plain_copy_refusal(plugin_id, target, live_root, manifest, dangling=dangling)
+    if refusal:
+        raise InstallError(refusal)
+    section = (manifest.config_section if manifest else "") or plugin_id
+    deps_left = applicable_deps([*manifest.requires_pip, *manifest.optional_pip]) if manifest else []
+
+    removed: list[str] = []
+    if target.exists() or _is_link(target):
+        # Rename aside first (atomic, same parent dir), then delete (#3075): an
+        # interrupted removal leaves `<id>.bak` — never a half-deleted live plugin
+        # dir. A leftover backup is cleared by the next install of the same id.
+        _remove_installed_copy(target)
+        removed.append("code")
+    lock = _read_lock()
+    before = len(lock["plugins"])
+    lock["plugins"] = [e for e in lock["plugins"] if not (isinstance(e, dict) and e.get("id") == plugin_id)]
+    if len(lock["plugins"]) != before:
+        _write_lock(lock)
+        removed.append("lock")
+    if _clean_config_refs(plugin_id, section, purge):
+        removed.append("config" if purge else "enabled-ref")
+    if purge and _clean_secrets(section):
+        removed.append("secrets")
+
+    if not removed:
+        raise InstallError(f"plugin {plugin_id!r} is not installed.")
+
+    # Plugin-owned scheduler jobs (#1642): cancel `plugin:<id>:*` so an uninstalled
+    # plugin's recurring cadence can't keep firing prompts about a plugin that's gone.
+    # The loader's disable-sweep can't cover this case — the manifest is gone from
+    # disk. Best-effort: in a CLI process there's no live scheduler (STATE.scheduler
+    # is None → 0); the console uninstall route runs in the live server where it works.
+    try:
+        from graph.sdk import cancel_plugin_jobs
+
+        jobs_cancelled = cancel_plugin_jobs(plugin_id)
+        from graph.plugins import setup_gaps as _setup_gaps
+
+        _setup_gaps.clear_plugin(plugin_id)  # its setup-gap banner must not outlive it
+    except Exception:  # noqa: BLE001 — job hygiene must never fail the uninstall
+        jobs_cancelled = 0
+    if jobs_cancelled:
+        removed.append("jobs")
+
+    _audit("uninstall", {"id": plugin_id, "purge": purge}, f"uninstalled {plugin_id} ({', '.join(removed)})")
+    log.info("[plugins] uninstalled %s (%s)", plugin_id, ", ".join(removed))
+    report = {
+        "id": plugin_id,
+        "removed": removed,
+        "deps_left": deps_left,
+        "purged": purge,
+        "jobs_cancelled": jobs_cancelled,
+    }
+    if dangling:
+        report["dangling_link"] = str(target)
+    return report
+
+
+def _uninstall_superseded(
+    plugin_id: str, bundled: PluginManifest, *, purge: bool, target: Path | None, left_in_place: str = ""
+) -> dict:
+    """Remove the IGNORED installed copy of a plugin that now ships with protoAgent —
+    whether the bundled manifest superseded its source or #1574 demoted it (an untracked
+    copy, which has no lock row to remove and is often a symlinked dev checkout).
+
+    Only that copy's files and its ``plugins.lock`` entry go. Everything keyed by the
+    plugin id belongs to the bundled copy that is actually running, so it all stays —
+    even under ``purge``: the ``plugins.enabled``/``disabled`` entry (dropping it would
+    switch the bundled plugin off), the config section and secrets, its scheduler jobs,
+    and its own setup gaps (only the loader's "superseded" banner is cleared). Declared
+    deps aren't reported for removal either — the bundled copy may import the same ones.
+
+    ``superseded_by_bundled`` in the report tells callers the bundled copy keeps running.
+    ``was_loaded`` says whether THIS process had imported the copy just removed — true
+    only when protoAgent was upgraded under a running server (it loaded the git copy at
+    boot, before a bundled copy superseded it). Then the running code has lost its files
+    and callers must unload it like any other removal (purge + reload; a mounted router
+    needs a restart); otherwise there is nothing to unload."""
+    from graph.plugins.manifest import display_source
+
+    source_url = recorded_source_url(plugin_id)
+    # `target` is the ONE path `_removable_copy` verified — or None: nothing on disk to
+    # remove (a tracked row whose files are already gone). Nothing else is touched.
+    was_loaded = _running_copy_is(plugin_id, target) if target is not None else False
+    dangling = target is not None and _is_link(target) and not target.exists()
+    removed: list[str] = []
+    if target is not None:
+        # Same rename-aside-then-delete as a normal uninstall (#3075); a symlinked copy
+        # (the #2298 live-checkout workflow) is unlinked, never followed.
+        _remove_installed_copy(target)
+        removed.append("code")
+    lock = _read_lock()
+    before = len(lock["plugins"])
+    lock["plugins"] = [e for e in lock["plugins"] if not (isinstance(e, dict) and e.get("id") == plugin_id)]
+    if len(lock["plugins"]) != before:
+        _write_lock(lock)
+        removed.append("lock")
+    try:
+        from graph.plugins import setup_gaps as _setup_gaps
+        from graph.plugins.loader import SUPERSEDED_GAP_KEY
+
+        _setup_gaps.report(plugin_id, SUPERSEDED_GAP_KEY, None)
+    except Exception:  # noqa: BLE001 — banner hygiene must never fail the uninstall
+        pass
+    _audit(
+        "uninstall",
+        {
+            "id": plugin_id,
+            "purge": purge,
+            "superseded_by_bundled": bundled.version,
+            "source_url": display_source(source_url),
+        },
+        f"removed the superseded copy of {plugin_id} ({', '.join(removed)}); bundled v{bundled.version} kept",
+    )
+    log.info(
+        "[plugins] removed the superseded copy of %s from %s (%s) — the bundled v%s keeps running%s",
+        plugin_id,
+        display_source(source_url),
+        ", ".join(removed),
+        bundled.version,
+        " (this process was still running the removed copy — unload it)" if was_loaded else "",
+    )
+    report = {
+        "id": plugin_id,
+        "removed": removed,
+        "deps_left": [],
+        "purged": False,
+        "jobs_cancelled": 0,
+        "superseded_by_bundled": bundled.version,
+        "was_loaded": was_loaded,
+    }
+    if dangling:
+        report["dangling_link"] = str(target)
+    if target is None and left_in_place:
+        report["left_in_place"] = left_in_place
+        log.warning("[plugins] %s: lock entry cleared, but %s", plugin_id, left_in_place)
+    return report
+
+
+def _removable_copy(plugin_id: str) -> tuple[Path | None, str]:
+    """The ONE path uninstall may delete for a built-in id — ``(path, "")`` — or
+    ``(None, why)`` with a reason the operator can act on.
+
+    Never "whatever sits at <live>/<id>": that folder can hold a DIFFERENT plugin (a
+    renamed fork running alongside the bundled one), the operator's own work with no
+    manifest at all, or — with ``plugins.dir`` aimed at the app's tree — the bundled
+    plugin itself; deleting it wholesale did all three. The candidate is only ever a copy
+    the LOADER itself found for this id in the live root: the one it ignored (the very
+    path its banner names, whatever the folder is called) or, for an untracked copy that
+    isn't older, the one it runs. Even then every guard must hold: the live root is not
+    the bundled tree, the path sits directly in the live root, and it holds a manifest
+    whose id is ``plugin_id``. The one exception is a DANGLING link at exactly
+    ``<live>/<id>``: nothing is there to verify, and unlinking it harms nothing.
+    ``(None, "")`` means there is nothing on disk at all."""
+    from graph.plugins.loader import discover_plugins
+
+    bundled_root, live_root = loader_roots()
+    if _same_dir(bundled_root, live_root):
+        return None, (
+            f"{plugin_id!r}: the live plugins dir is protoAgent's own bundled plugins tree, so nothing "
+            "in it is an installed copy — uninstall won't delete from it. Point plugins.dir somewhere else."
+        )
+    notes: dict = {}
+    running = {m.id: m for m in discover_plugins([bundled_root, live_root], superseded=notes)}
+    note = notes.get(plugin_id)
+    if note:
+        candidate: Path | None = Path(note["installed_path"])
+    else:
+        run = running.get(plugin_id)
+        candidate = run.path if run is not None and _same_dir(run.path.parent, live_root) else None
+    if candidate is None:
+        stray = live_root / plugin_id
+        if _is_link(stray) and not stray.exists():
+            # A dangling link at exactly <live>/<id> (the checkout it pointed at moved): it has
+            # no target, so unlinking it can't touch anything else — it goes, rather than
+            # leaving the operator to `rm` it by hand.
+            return stray, ""
+        if stray.exists():
+            return None, (
+                f"{stray} doesn't hold a copy of {plugin_id!r} (it holds another plugin, or none) — "
+                f"uninstall won't delete it. {plugin_id!r} ships with protoAgent; to turn it off, disable it."
+            )
+        return None, ""  # nothing on disk at all
+    if not _same_dir(candidate.parent, live_root):
+        return None, f"{candidate} is outside the live plugins dir {live_root} — refusing to delete it."
+    manifest = load_manifest(candidate)
+    if manifest is None or manifest.id != plugin_id:
+        return None, f"{candidate} does not hold plugin {plugin_id!r} — refusing to delete it."
+    return candidate, ""
+
+
+def _is_link(path: Path) -> bool:
+    """A symlink OR a Windows directory junction — the no-admin way to link a dev checkout
+    (#2298). Either is UNLINKED, never followed: treated as a real folder, a junction was
+    renamed aside, ``rmtree`` refused it, and ``ignore_errors`` left an inert ``.bak``.
+    ``Path.is_junction`` is 3.12+, hence the ``getattr``. (Junction handling is untested
+    on real Windows; the unit test simulates one.)"""
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    try:
+        return bool(is_junction and is_junction())
+    except OSError:
+        return False
+
+
+def _unlink_link(path: Path) -> None:
+    """Remove the LINK itself. A junction is a directory reparse point: ``os.rmdir``
+    removes it and never touches the files it points at (``unlink`` refuses one)."""
+    if path.is_symlink():
+        path.unlink()
+    else:
+        os.rmdir(path)
+
+
+def _plain_copy_refusal(
+    plugin_id: str, target: Path, live_root: Path, manifest: PluginManifest | None, *, dangling: bool
+) -> str | None:
+    """Why the ordinary uninstall must NOT delete ``target`` (``<live>/<id>``), else None.
+
+    Since #3452 ``<live>`` is ``plugins.dir`` when set — often a folder of checkouts, not a
+    folder only the installer writes — so "a folder is there" proves nothing. It goes only
+    when it IS this plugin: a manifest with this id, or (no readable manifest) a
+    ``plugins.lock`` row saying the installer put it there, so a broken install stays
+    removable. Never from the bundled tree. A dangling link has no target, so unlinking
+    it touches nothing else."""
+    if not (target.exists() or _is_link(target)):
+        return None  # nothing on disk — only the lock row / config refs to clear
+    if _same_dir(bundled_plugins_dir(), live_root):
+        return (
+            f"{target} is in protoAgent's own bundled plugins tree (plugins.dir points there) — "
+            "uninstall won't delete from it. Point plugins.dir somewhere else."
+        )
+    if dangling:
+        return None
+    if manifest is not None:
+        if manifest.id == plugin_id:
+            return None
+        return f"{target} holds plugin {manifest.id!r}, not {plugin_id!r} — uninstall won't delete it."
+    if plugin_id in _lock_rows_by_id():
+        return None
+    return (
+        f"{target} holds no plugin and plugins.lock has no entry for {plugin_id!r}, so it isn't an "
+        "install — uninstall won't delete it. If it's yours to remove, delete it by hand."
+    )
+
+
+# Windows refuses to delete a read-only file (git writes its objects read-only) and,
+# for a moment, one another process holds open (an AV scan of a freshly written .pyc): a
+# plain ``rmtree(ignore_errors=True)`` left the whole folder behind SILENTLY. Each pass
+# clears read-only bits as it goes; a pass that still leaves something waits and retries.
+_RMTREE_ATTEMPTS = 4
+_RMTREE_BACKOFF_S = 0.1
+
+
+def _force_rmtree(path: Path) -> bool:
+    """Delete a real directory tree, Windows-robustly. True when it's gone. Never raises:
+    a tree that survives every attempt is logged with the error that kept it."""
+    errors: list[BaseException] = []
+
+    def _on_error(func, failed, exc) -> None:
+        # The failing entry may be read-only (Windows), or its directory may lack write
+        # permission (POSIX) — make both writable and try the same operation once more.
+        # Only a removal is retried here: rmtree also reports a failed ``os.open`` /
+        # ``os.scandir`` of an unreadable directory, and ``os.open(path)`` without flags
+        # raises TypeError. Those just get the chmod — the next pass re-walks the tree. And
+        # nothing may escape: this helper must never raise (a leftover .bak would 500 every
+        # update, and the failed-move rollback would skip restoring the backup).
+        exc = exc[1] if isinstance(exc, tuple) else exc  # onerror passes exc_info
+        try:
+            os.chmod(failed, stat.S_IRWXU if os.path.isdir(failed) else stat.S_IREAD | stat.S_IWRITE)
+            parent = os.path.dirname(failed)
+            if parent:
+                os.chmod(parent, stat.S_IRWXU)
+            if func in (os.unlink, os.rmdir, os.remove):
+                func(failed)
+            else:
+                errors.append(exc)
+        except FileNotFoundError:
+            pass
+        except Exception as again:  # noqa: BLE001 — recorded + logged below, never raised
+            errors.append(again or exc)
+
+    for attempt in range(_RMTREE_ATTEMPTS):
+        if not os.path.lexists(path):
+            return True
+        errors.clear()
+        try:
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(path, onexc=_on_error)
+            else:  # pragma: no cover — 3.11
+                shutil.rmtree(path, onerror=_on_error)
+        except Exception as exc:  # noqa: BLE001 — e.g. a link, which rmtree refuses before any callback
+            errors.append(exc)
+        if not os.path.lexists(path):
+            return True
+        if attempt + 1 < _RMTREE_ATTEMPTS:
+            time.sleep(_RMTREE_BACKOFF_S * (2**attempt))
+    log.warning(
+        "[plugins] could not delete %s: %s — it is inert (*.bak is never loaded); remove it by hand",
+        path,
+        errors[-1] if errors else "still present",
+    )
+    return False
+
+
+def _rename(src: Path, dst: Path) -> None:
+    """``os.rename`` that rides out a transient Windows sharing violation (another process
+    briefly holding a file inside ``src``). A real failure — including ``dst`` existing,
+    which Windows refuses outright — raises after the last attempt."""
+    for attempt in range(_RMTREE_ATTEMPTS):
+        try:
+            os.rename(src, dst)
+            return
+        except FileExistsError:
+            raise
+        except PermissionError as exc:
+            # Only a Windows sharing violation / access-denied (``winerror`` 32 / 5) can
+            # clear on its own; a POSIX EACCES is permanent, so it raises at once.
+            if getattr(exc, "winerror", None) not in (5, 32) or attempt + 1 == _RMTREE_ATTEMPTS:
+                raise
+            time.sleep(_RMTREE_BACKOFF_S * (2**attempt))
+
+
+def _backup_leftovers(target: Path) -> list[Path]:
+    """Every swap leftover for ``target``: ``<id>.bak`` and the uniquely named
+    ``<id>.<n>.bak`` used when that one couldn't be cleared."""
+    parent = target.parent
+    if not parent.is_dir():
+        return []
+    return [
+        p
+        for p in parent.iterdir()
+        if p.name == target.name + ".bak" or (p.name.startswith(target.name + ".") and p.name.endswith(".bak"))
+    ]
+
+
+def _free_backup_path(target: Path) -> Path:
+    """Clear ``target``'s swap leftovers (best effort) and return a set-aside path that
+    is FREE. Windows ``os.rename`` refuses an existing destination, so a ``<id>.bak`` an
+    earlier swap couldn't delete used to fail every later update and uninstall of that
+    plugin with WinError 183; a leftover that still won't go now just gets a unique
+    sibling (``<id>.<n>.bak`` — still ``*.bak``, so never discovered or loaded)."""
+    for leftover in _backup_leftovers(target):
+        _discard(leftover)
+    backup = target.parent / (target.name + ".bak")
+    n = 1
+    while os.path.lexists(backup):
+        backup = target.parent / f"{target.name}.{n}.bak"
+        n += 1
+    return backup
+
+
+def _discard(path: Path) -> None:
+    """Best-effort removal of an install/uninstall swap leftover (``<id>.bak``). A
+    link (symlink or junction) is unlinked, never followed — ``shutil.rmtree`` refuses
+    links, and with ``ignore_errors`` that refusal used to leave the link behind silently."""
+    try:
+        if _is_link(path):
+            _unlink_link(path)
+        elif path.exists():
+            _force_rmtree(path)
+    except OSError:
+        log.warning("[plugins] could not remove %s — delete it by hand", path, exc_info=True)
+
+
+def _remove_installed_copy(target: Path) -> None:
+    """Delete one installed plugin folder. A symlink (the #2298 live-checkout install) is
+    UNLINKED — the checkout it points at is the developer's and is never touched. A real
+    folder is renamed aside and then deleted (#3075), so an interruption leaves
+    ``<id>.bak``, never a half-deleted live plugin — and discovery skips ``*.bak``, so a
+    leftover can never load in place of anything."""
+    if _is_link(target):  # re-checked HERE, at delete time — a folder swapped for a link since the guards ran
+        _unlink_link(target)
+        return
+    backup = _free_backup_path(target)
+    try:
+        _rename(target, backup)
+    except OSError as exc:
+        # Callers (the REST routes, the ops layer, the CLI) handle InstallError; a bare
+        # OSError escaping from here is a 500 / traceback instead of "couldn't remove it".
+        raise InstallError(
+            f"could not remove the installed copy at {target} (it was left in place): {exc}"
+        ) from exc
+    _discard(backup)  # logs (with the cause) if it survives; the next swap retries it
+
+
+def _running_copy_is(plugin_id: str, target: Path) -> bool:
+    """True when THIS process imported ``plugin_id`` from ``target``: deleting ``target``
+    would pull the files out from under running code, and the next lazy ``from . import x``
+    in it would fail. Compares the live module's ``__path__``/``__file__`` with ``target``
+    both as spelled and resolved (a symlinked copy imports through the link's path)."""
+    import sys
+
+    from graph.plugins.loader import _plugin_module_name
+
+    module = sys.modules.get(_plugin_module_name(plugin_id))
+    if module is None:
+        return False
+
+    def _forms(p: str) -> set[str]:
+        out = {os.path.normcase(os.path.abspath(p))}
+        try:
+            out.add(os.path.normcase(str(Path(p).resolve())))
+        except OSError:
+            pass
+        return out
+
+    roots = _forms(str(target))
+    for loc in [*(getattr(module, "__path__", None) or []), getattr(module, "__file__", None) or ""]:
+        if not loc:
+            continue
+        for form in _forms(str(loc)):
+            if any(form == r or form.startswith(r + os.sep) for r in roots):
+                return True
+    return False
+
+
+def _validate_pip_specs(plugin_id: str, deps: list[str]) -> None:
+    """Reject ``requires_pip`` entries that aren't plain package requirements — a
+    pip option (``--index-url``/``-e``), a VCS/URL/direct reference, or junk — so a
+    plugin manifest can't inject pip flags (index hijack) or arbitrary build code
+    beyond the named packages an operator reviewed. ``--`` before the specs in the
+    pip argv is the belt to this suspenders."""
+    for d in deps:
+        s = str(d).strip()
+        low = s.lower()
+        if not s or s.startswith("-"):
+            raise InstallError(
+                f"plugin {plugin_id!r}: requires_pip entry {d!r} looks like a pip option, not a package."
+            )
+        if "://" in s or "@" in s or low.startswith(("git+", "hg+", "svn+", "bzr+", "file:")):
+            raise InstallError(
+                f"plugin {plugin_id!r}: requires_pip entry {d!r} is a VCS/URL/direct reference, which is not allowed."
+            )
+        if not _PKG_NAME_RE.match(s):
+            raise InstallError(
+                f"plugin {plugin_id!r}: requires_pip entry {d!r} is not a valid PEP 508 package requirement."
+            )
+
+
+def recorded_source_url(plugin_id: str) -> str:
+    """The plugin's install origin from ``plugins.lock``, or "" when untracked.
+
+    Empty for a bundled/built-in plugin and for a hand-copied working-tree dir —
+    neither has a recorded origin to re-validate, and both are the operator's own
+    deliberate placement rather than a fetched source. (``_lock_entry`` skips the
+    non-dict members a hand-edited lock can carry, and picks the same row as the loader.)"""
+    return str((_lock_entry(plugin_id) or {}).get("source_url") or "")
+
+
+def deps_install_target() -> tuple[Path, str]:
+    """The Python environment ``install_deps`` writes into, and its name for messages.
+
+    On the frozen desktop app that is the managed runtime (ADR 0094 P2). The runtime root,
+    not ``current/``, because a reprovision swaps ``current/`` out whole. The ADR 0093
+    wheel-deps dir is only ever filled within the same call, so it rides the same hold.
+    Anywhere else it is this server's own interpreter environment, ``sys.prefix``, which
+    is where ``sys.executable -m pip`` installs."""
+    if _frozen_like():
+        from infra.python_runtime import managed_python_root
+
+        return managed_python_root(), "the desktop app's managed Python runtime"
+    return Path(sys.prefix), "this server's Python environment"
+
+
+@contextlib.contextmanager
+def deps_install_lock(plugin_id: str):
+    """Hold the deps target environment for one install, or raise :class:`DepsInstallBusy`
+    at once when an install into it is already running: in this process (a second click,
+    another tab, another plugin's Install deps) or in another one (a sibling instance on
+    the same venv, a fleet member on the same managed runtime, the CLI).
+
+    It refuses rather than queueing, because a queued HTTP request would sit behind a pip
+    run that can take minutes, and could be for a different plugin whose result it
+    couldn't share. Reentrant on the owning thread: the route holds it across install AND
+    refresh, and ``install_deps`` takes it again inside."""
+    from infra.install_lock import InstallBusy, install_lock
+
+    env, label = deps_install_target()
+    with contextlib.ExitStack() as stack:
+        try:
+            info = stack.enter_context(install_lock(env, label=label, what=plugin_id))
+        except InstallBusy as exc:
+            raise DepsInstallBusy(str(exc)) from exc
+        yield info
+
+
+def deps_install_running() -> dict | None:
+    """``{"id", "target", "since"}`` for the dependency install this process is running, or
+    None. The console uses it to show a busy row, including for an install started in
+    another tab. It only sees this process: see ``infra.install_lock.holder``."""
+    from infra.install_lock import holder
+
+    env, label = deps_install_target()
+    info = holder(env)
+    if info is None:
+        return None
+    return {"id": str(info.get("what") or ""), "target": label, "since": info.get("since")}
+
+
+def _host_pip() -> list[str]:
+    """The argv prefix for pip in THIS interpreter's environment, the target
+    ``deps_install_target`` names outside the frozen app. It is a seam so that a test can
+    stand a real pip-like process in for pip without touching an actual environment."""
+    return [sys.executable, "-m", "pip"]
+
+
+def install_deps(
+    plugin_id: str, *, failed: list[str] | None = None, newly_installed: list[str] | None = None
+) -> list[str]:
+    """``_install_deps`` holding the target environment (``deps_install_lock``), so two
+    installs never run pip into one environment at once. Raises :class:`DepsInstallBusy`
+    when one already is."""
+    with deps_install_lock(plugin_id):
+        return _install_deps(plugin_id, failed=failed, newly_installed=newly_installed)
+
+
+def _install_deps(
+    plugin_id: str, *, failed: list[str] | None = None, newly_installed: list[str] | None = None
+) -> list[str]:
+    """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
+    step that ``install`` deliberately skips (ADR 0027 D4). Optional deps (#1953)
+    ride along best-effort: a failed optional install warns instead of failing
+    the command. Returns the deps actually installed/satisfied.
+
+    ``failed`` (an optional out-parameter, #3450) collects the dist names of optional
+    deps that could NOT be installed. That failure used to live only in the log, so a
+    plugin whose deps are ALL optional (the cowork pack) got ``[]`` back — the same
+    answer as "nothing to install" — and callers reported success to an operator whose
+    install had actually failed (no pip in a uv-only venv, an unreachable index).
+
+    ``newly_installed`` (optional out-parameter, #3450) collects the specs pip actually
+    installed on THIS call. The return value stays "what ended up satisfied" (the CLI
+    prints it as such, #2638); this is what changed, which is what a caller reports as
+    "installed" and what decides whether anything needs refreshing. Already-met deps
+    are pre-checked and never re-pipped.
+
+    Acts on the copy the loader RUNS (``effective_copies``) — not simply whichever
+    folder exists: with a bundled copy superseding an old git install, the git copy's
+    deps list is the wrong one, and installing it leaves the running plugin broken."""
+    manifest = effective_copies().get(plugin_id)
+    if manifest is None:
+        raise InstallError(f"plugin {plugin_id!r} is not installed.")
+    # Allowlist re-check at deps time (#2743): a plugin installed BEFORE the
+    # operator tightened ``plugins.sources.allow`` could otherwise still pull its
+    # declared deps — "was allowed then" must not imply "is allowed now" for a
+    # code-adjacent step. Same predicate ``install`` enforces, against the CURRENT
+    # allowlist; skipped when there is no recorded origin (bundled / working-tree).
+    # The CONSENT half (source_trusted) deliberately lives in the operator route,
+    # exactly where install's own consent gate lives — the CLI is the operator's
+    # explicit act, and only the console flow can render the ack dialog. The origin is
+    # the RUNNING copy's: a bundled copy (superseding or not) was never fetched.
+    source_url = effective_source_url(plugin_id)
+    if source_url and not _source_allowed(source_url, configured_allowlist()):
+        raise InstallError(
+            f"{plugin_id!r} was installed from {source_url!r}, which is no longer on "
+            f"plugins.sources.allow — re-add the source or reinstall from an allowed origin "
+            f"before installing its deps."
+        )
+    deps = list(manifest.requires_pip)
+    optional = list(manifest.optional_pip)
+    if not deps and not optional:
+        return []
+    _validate_pip_specs(plugin_id, [*deps, *optional])
+    # Frozen runtime (desktop): the host has no pip. Deps already bundled / on the
+    # wheel-deps path / in the managed runtime need nothing; anything still missing is
+    # installed into whichever target is available, turning ADR 0058 D2's "install it on
+    # a server instead" refusal into a one-click install. Two complementary targets:
+    #   • ADR 0093 — pure-Python wheels into a host sys.path deps dir (opt-in
+    #     `plugins.allow_unbundled_deps`), for deps the plugin's OWN module imports;
+    #   • ADR 0094 P2 — into the managed Python runtime (when provisioned), for deps the
+    #     plugin's execute_code SKILLS import.
+    # A dep that does NOT declare a scope could be either kind, so we satisfy every
+    # available target; at least one must succeed or we refuse, naming what to enable.
+    # A `scope: host` dep (#2246) is unambiguous — it must land where THIS process can
+    # import it, so the managed runtime doesn't count as satisfying it. Optional deps
+    # only warn (#1953).
+    if _frozen_like():
+        scopes = manifest.pip_scopes
+        ok, missing = _deps_satisfied(deps, scopes)
+        _, soft_missing = _deps_satisfied(optional, scopes)
+        if ok and not soft_missing:
+            log.info("[plugins] %s deps already satisfied (bundled / wheel-deps / managed runtime)", plugin_id)
+            return deps + optional
+        to_install = [s for s in applicable_deps(deps) if _dep_pkg_name(s) in missing]
+        to_install_soft = [s for s in applicable_deps(optional) if _dep_pkg_name(s) in soft_missing]
+        targets_tried: list[str] = []
+        errors: list[str] = []
+
+        # Target 1 (ADR 0093): host wheel-deps dir, opt-in.
+        if _allow_unbundled_deps():
+            from graph.plugins import wheel_installer
+
+            try:
+                wheel_installer.install(
+                    plugin_id,
+                    to_install + to_install_soft,
+                    already_satisfied=lambda n: _deps_satisfied([n], scopes)[0],
+                )
+                targets_tried.append("wheel-deps")
+            except wheel_installer.WheelInstallError as exc:
+                errors.append(f"wheel install: {exc}")
+
+        # Target 2 (ADR 0094 P2): managed runtime, when provisioned. HOST-scoped deps are
+        # withheld (#2246) — the runtime serves execute_code children, so installing an
+        # in-process import there would report success while leaving it just as broken.
+        runtime_specs = [s for s in to_install + to_install_soft if scopes.get(_dep_pkg_name(s)) != "host"]
+        from runtime.python_install import PythonRuntimeError, install_requirements_into_managed_runtime
+
+        if runtime_specs:
+            try:
+                install_requirements_into_managed_runtime(runtime_specs)
+                targets_tried.append("managed-runtime")
+            except PythonRuntimeError as exc:
+                errors.append(f"managed runtime: {exc}")
+
+        # A host-scoped dep is only really installed if THIS process can now import it.
+        # Verify rather than trusting "some target accepted it" — believing the wrong
+        # interpreter is the entire bug this scope exists to prevent.
+        still_missing_host = [n for n in _deps_satisfied(deps, scopes)[1] if scopes.get(n) == "host"]
+        if still_missing_host:
+            raise InstallError(
+                f"{plugin_id!r} needs {', '.join(still_missing_host)} importable in the HOST process "
+                f"(scope: host), and a frozen app can't provide that: the managed Python runtime only "
+                f"serves execute_code children, and pure-Python wheel deps require Settings ▸ Plugins ▸ "
+                f"'Install unbundled plugin deps'. Enable that, vendor the code, or ship the dep in the "
+                f"app bundle." + (f" [{'; '.join(errors)}]" if errors else "")
+            )
+
+        if not targets_tried:
+            # Nothing installed anywhere. Hard deps are fatal; a bare optional gap degrades.
+            hint = (
+                f"{plugin_id!r} needs {', '.join(missing)} which the desktop runtime doesn't have. "
+                "Enable Settings ▸ Plugins ▸ 'Install unbundled plugin deps' (pure-Python wheels) "
+                "and/or provision the Python runtime (Settings ▸ Tools), then retry."
+            )
+            if to_install:
+                raise InstallError(f"{hint} [{'; '.join(errors)}]" if errors else hint)
+            # Optional-only gap degrades with a warning that NAMES the deps (#1953).
+            # Only the MISSING optionals drop out of the return — already-satisfied
+            # ones stay, or callers would report the plugin degraded when it isn't.
+            log.warning(
+                "[plugins] %s: optional dep(s) %s aren't in the desktop runtime — the plugin "
+                "degrades without them (%s)",
+                plugin_id,
+                ", ".join(soft_missing),
+                "; ".join(errors) or "no target",
+            )
+            if failed is not None:
+                failed.extend(soft_missing)
+            return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing]
+        _audit("install_deps", {"id": plugin_id, "deps": to_install, "targets": targets_tried}, "ok")
+        if newly_installed is not None:
+            newly_installed.extend([*to_install, *to_install_soft])
+        return deps + [d for d in optional if _dep_pkg_name(d) not in soft_missing or d in to_install_soft]
+    # Pre-check (#3450): pip only what is actually missing — absent, or present at a
+    # version the spec rules out. Re-installing every declared dep reported packages that
+    # were already there as "installed", and made the caller refresh when nothing changed.
+    to_pip = [d for d in deps if not _spec_satisfied(d)]
+    to_pip_soft = [d for d in optional if not _spec_satisfied(d)]
+    if not to_pip and not to_pip_soft:
+        log.info("[plugins] %s deps already satisfied — nothing to install", plugin_id)
+        return deps + optional
+    newly: list[str] = []
+    if to_pip:
+        proc = subprocess.run(
+            [*_host_pip(), "install", "--", *to_pip],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            _audit("install_deps", {"id": plugin_id, "deps": to_pip}, "pip install failed", success=False)
+            raise InstallError(f"pip install failed: {(proc.stderr or proc.stdout).strip()[-400:]}")
+        newly += to_pip
+    soft_failed: list[str] = []
+    if to_pip_soft:
+        # Best-effort (#1953): the plugin runs without these, so a failure is
+        # audited + warned, never fatal — the hard deps above already landed.
+        proc = subprocess.run(
+            [*_host_pip(), "install", "--", *to_pip_soft],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            _audit(
+                "install_deps", {"id": plugin_id, "optional": to_pip_soft}, "optional pip install failed", success=False
+            )
+            log.warning(
+                "[plugins] %s: optional dep install failed (continuing without): %s",
+                plugin_id,
+                (proc.stderr or proc.stdout).strip()[-400:],
+            )
+            soft_failed = list(to_pip_soft)
+            if failed is not None:
+                failed.extend(_dep_pkg_name(d) for d in to_pip_soft)
+        else:
+            newly += to_pip_soft
+    if newly_installed is not None:
+        newly_installed.extend(newly)
+    _audit("install_deps", {"id": plugin_id, "deps": newly}, f"installed {len(newly)} dep(s)")
+    log.info("[plugins] installed %d dep(s) for %s", len(newly), plugin_id)
+    if newly:
+        # A dist pip just wrote must be findable by THIS process's next dep check — the
+        # refresh that clears the deps gap — without a restart: drop the finders' caches.
+        import importlib
+
+        importlib.invalidate_caches()
+    # What ENDED UP satisfied (the CLI prints it as such, #2638): every hard dep, plus
+    # each optional one that was already there or just landed.
+    return deps + [d for d in optional if d not in soft_failed]
+
+
+def list_installed() -> list[dict]:
+    """Inventory of installed plugins — **disk is the source of truth**.
+
+    Enumerates every plugin actually present in the live plugins dir (the SAME dir
+    the loader discovers, so "installed" == "loadable") and overlays its
+    ``plugins.lock`` provenance:
+
+    * on disk **and** in the lock → ``tracked: True`` — source + SHA known, so it can
+      be update-checked (``check_updates``) and re-synced.
+    * on disk, **no** lock entry → ``tracked: False`` — a hand-placed local/dev copy
+      (gitignored ``config/plugins/<id>``). Surfaced, not hidden: an enabled plugin
+      that was never `install()`-ed used to be invisible here while running fine,
+      because this only ever read the lock.
+    * in the lock but **missing** from disk → ``present: False`` — fresh checkout or
+      deleted code; ``sync`` refetches it at its pinned SHA.
+    """
+    root = live_plugins_dir()
+    lock_by_id = _lock_rows_by_id()
+    out: list[dict] = []
+    on_disk: set[str] = set()
+
+    if root.exists():
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or is_swap_leftover(child):
+                continue
+            manifest = load_manifest(child)
+            if manifest is None:
+                continue  # a dir without a manifest isn't a plugin (mirror the loader)
+            pid = manifest.id
+            on_disk.add(pid)
+            locked = lock_by_id.get(pid)
+            if locked is not None:
+                out.append({**locked, "present": True, "tracked": True})
+            else:
+                out.append(
+                    {
+                        "id": pid,
+                        "source_url": "",
+                        "requested_ref": "",
+                        "resolved_sha": "",
+                        "installed_at": "",
+                        "by": "local",
+                        "present": True,
+                        "tracked": False,
+                    }
+                )
+
+    # Locked but gone from disk — keep visible so the UI can offer `sync`.
+    for pid, locked in lock_by_id.items():
+        if pid not in on_disk:
+            out.append({**locked, "present": False, "tracked": True})
+
+    # Flag every row whose copy the LOADER ignores in favour of the bundled one — the
+    # resolver decides, so this covers both reasons: the bundled manifest supersedes the
+    # row's source, or (no lock row) #1574 demoted it on version. Update paths skip such a
+    # row and a UI can say why it's inert. The PLUGIN is present either way (it ships with
+    # protoAgent), so the row never reads as "missing on disk — sync": sync can't fetch it
+    # and nothing is missing. `copy_on_disk` keeps the disk truth about the copy itself.
+    running = effective_copies()
+    bundled_root, live_root = loader_roots()
+    for row in out:
+        run = running.get(str(row.get("id") or ""))
+        if run is None or _same_dir(bundled_root, live_root) or not _same_dir(run.path.parent, bundled_root):
+            continue
+        row["superseded"] = True
+        row["bundled_version"] = run.version
+        row["copy_on_disk"] = bool(row.get("present"))
+        row["present"] = True
+    # Same answer for a row that was never an install: the ADR 0093 wheel-deps pins a
+    # BUNDLED plugin gets are a lock row with no source_url and no folder of their own.
+    # Nothing was fetched and nothing can be re-fetched (``sync`` says "present" too), so
+    # the row must not read as "missing on disk — sync" forever.
+    for row in out:
+        if row.get("present") or row.get("source_url"):
+            continue
+        if _bundled_manifest(str(row.get("id") or "")) is not None:
+            row["copy_on_disk"] = False
+            row["present"] = True
+
+    out.sort(key=lambda e: e.get("id", ""))
+    return out
+
+
+# A release tag per the ADR 0049 pin lifecycle — `v1.2.3` / `1.2.3`. Prereleases and
+# anything fancier deliberately don't match (they fall back to the moving-ref compare).
+_SEMVER_TAG_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+
+
+def _semver_key(tag: str) -> tuple[int, int, int] | None:
+    """``(major, minor, patch)`` for a release tag, or ``None`` if not one."""
+    m = _SEMVER_TAG_RE.match((tag or "").strip())
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def is_compatible_upgrade(pinned: str, candidate: str) -> bool:
+    """True when moving ``pinned`` → ``candidate`` stays inside the compatible range.
+
+    Caret semantics, as npm/cargo define them: the boundary is the **leftmost non-zero**
+    version component, not the major. That distinction is the whole point here — every plugin
+    in this fleet is ``0.x``, where a MINOR bump is where breaking changes land
+    (``0.7.0 → 0.7.9`` compatible, ``0.7.0 → 0.8.0`` not). Bounding on the major alone would
+    treat every 0.x release as compatible, which is the same unbounded chase with extra steps.
+
+    A bundle's release-tag pin is a FLOOR (see ``install_bundle``): the installer adopts newer
+    member releases automatically, so this is the guard that keeps "automatically" from
+    including a deliberately breaking one.
+    """
+    a, b = _semver_key(pinned), _semver_key(candidate)
+    if a is None or b is None:
+        return False
+    if b < a:
+        return False  # never downgrade
+    if a[0] != 0:
+        return a[0] == b[0]                     # 1.x → same major
+    if a[1] != 0:
+        return b[0] == 0 and a[1] == b[1]       # 0.x → same minor
+    return b[0] == 0 and b[1] == 0              # 0.0.x → same patch series
+
+
+def is_release_tag(ref: str) -> bool:
+    """True when ``ref`` is a semver release tag (``v1.2.3`` / ``1.2.3``) — the pin
+    shape whose update moves tag → NEWER tag instead of re-fetching the same ref."""
+    return _semver_key(ref) is not None
+
+
+def sync(*, allow: list[str] | None = None) -> list[dict]:
+    """Re-clone every locked plugin at its pinned SHA (reproducible install set).
+    Missing ones are fetched; present ones are left as-is. A missing one whose source a
+    bundled plugin now supersedes isn't fetched (``status: superseded``) — the bundled
+    copy is what would load anyway.
+
+    A row with no ``source_url`` isn't an install at all — e.g. the ADR 0093 wheel-deps
+    pins a BUNDLED plugin gets — so there is nothing to re-clone: ``present`` when
+    protoAgent ships that id, else ``failed`` with the reason (it used to KeyError)."""
+    results = []
+    root = live_plugins_dir()
+    for pid, e in _lock_rows_by_id().items():
+        if (root / pid).exists():
+            results.append({"id": pid, "status": "present"})
+            continue
+        source_url = str(e.get("source_url") or "")
+        if bundled_superseding(pid, source_url) is not None:
+            results.append({"id": pid, "status": "superseded"})
+            continue
+        if not source_url:
+            if _bundled_manifest(pid) is not None:
+                results.append({"id": pid, "status": "present"})
+            else:
+                results.append({"id": pid, "status": "failed", "error": "no source_url recorded — nothing to re-fetch"})
+            continue
+        try:
+            install(
+                source_url,
+                e.get("resolved_sha") or e.get("requested_ref") or None,
+                force=True,
+                by="sync",
+                allow=allow,
+            )
+            results.append({"id": pid, "status": "installed"})
+        except InstallError as exc:
+            results.append({"id": pid, "status": "failed", "error": str(exc)})
+    return results
+
+
+# ── Split-out modules: bundles (#3849), update checks (#3823) ──────────────────
+# Re-exported (same objects) so ``installer._install_bundle`` / ``uninstall_bundle`` /
+# ``check_plugin_update`` etc. keep resolving, and so this module's own bare-name
+# callers (``install`` → ``load_bundle`` / ``_install_bundle``, ``_is_builtin`` →
+# ``BUNDLE_FILENAME``) go through THIS namespace, where a ``monkeypatch.setattr(installer,
+# ...)`` lands. The moved code reaches every collaborator through ``installer`` at call
+# time (``_inst().install(...)``, ``_inst().check_plugin_update(...)``). Imported last:
+# bundles.py and updates.py import installer lazily, so there is no cycle either way.
+from graph.plugins.bundles import (  # noqa: E402, F401 — re-exports
+    _ARCHETYPE_KEYS,
+    _CONFIG_INPUT_KEY_RE,
+    BUNDLE_FILENAME,
+    CONFIG_INPUT_RESERVED_SECTIONS,
+    CONFIG_INPUT_TYPES,
+    _bundle_ownership,
+    _checked_archetype_block,
+    _exclusively_owned,
+    _install_bundle,
+    bundle_config_overlay,
+    bundle_entry,
+    coerce_config_input_value,
+    load_bundle,
+    normalize_config_inputs,
+    orphaned_bundle_members,
+    uninstall_bundle,
+)
+from graph.plugins.updates import (  # noqa: E402, F401 — re-exports
+    _ls_remote_sha,
+    _ls_remote_tags,
+    _lsremote_cache,
+    _lstags_cache,
+    check_bundle_updates,
+    check_plugin_update,
+    check_updates,
+)

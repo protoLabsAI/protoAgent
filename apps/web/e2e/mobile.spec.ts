@@ -47,16 +47,23 @@ test("mobile shell: chat is the root, surfaces push over it", async ({ page }) =
 test("mobile shell: the session sheet replaces the tab strip", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
+  // The sheet is a DS `Drawer side="bottom"` (role=dialog, labelled by its "Chats" title).
+  const sheet = page.getByRole("dialog", { name: "Chats" });
+
   // Tapping the title opens the sheet; it lists the sessions and can start a new one.
   await page.locator(".mshell-title").click();
-  await expect(page.locator(".session-sheet")).toBeVisible();
+  await expect(sheet).toBeVisible();
   await expect(page.locator(".session-sheet-row")).not.toHaveCount(0);
 
   // The current chat is a pristine blank, so "New" would just hand it back — both the
   // sheet's New and the header "+" are disabled rather than reading as a dead tap.
   await expect(page.locator(".session-sheet-new")).toBeDisabled();
-  await page.locator(".session-sheet-backdrop").click();
-  await expect(page.locator(".session-sheet")).toHaveCount(0);
+
+  // Escape dismisses it (the DS Drawer owns Esc), and focus returns to the title trigger
+  // that opened it — the Drawer traps focus but the consumer restores it on close.
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+  await expect(page.locator(".mshell-title")).toBeFocused();
   await expect(page.locator('button[aria-label="New chat"]')).toBeDisabled();
 
   // Use the chat, and creating becomes available again.
@@ -64,12 +71,13 @@ test("mobile shell: the session sheet replaces the tab strip", async ({ page }) 
   await expect(page.locator('button[aria-label="New chat"]')).toBeEnabled();
   await page.locator(".mshell-title").click();
   await page.locator(".session-sheet-new").click();
-  await expect(page.locator(".session-sheet")).toHaveCount(0); // creating closes the sheet
+  await expect(sheet).toHaveCount(0); // creating closes the sheet
 
   await page.locator(".mshell-title").click();
   await expect(page.locator(".session-sheet-row")).toHaveCount(2);
-  await page.locator(".session-sheet-backdrop").click();
-  await expect(page.locator(".session-sheet")).toHaveCount(0);
+  // A click on the DS Drawer overlay (outside the sheet panel) also dismisses it.
+  await page.locator(".pl-overlay--drawer").click({ position: { x: 8, y: 8 } });
+  await expect(sheet).toHaveCount(0);
 });
 
 // Guards #2512: the sheet's Delete must run the SAME confirm lifecycle as the desktop
@@ -77,17 +85,19 @@ test("mobile shell: the session sheet replaces the tab strip", async ({ page }) 
 test("mobile shell: deleting from the session sheet confirms first", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
 
+  const sheet = page.getByRole("dialog", { name: "Chats" });
+
   // Two sessions so a delete is offered (a lone session has no ✕ in the sheet).
   await seedCurrentChat(page);
   await page.locator(".mshell-title").click();
   await page.locator(".session-sheet-new").click();
-  await expect(page.locator(".session-sheet")).toHaveCount(0);
+  await expect(sheet).toHaveCount(0);
 
   // Tap a row's ✕ → the sheet yields to the confirm dialog; nothing deleted yet.
   await page.locator(".mshell-title").click();
   await expect(page.locator(".session-sheet-row")).toHaveCount(2);
   await page.locator(".session-sheet-del").first().click();
-  await expect(page.locator(".session-sheet")).toHaveCount(0);
+  await expect(sheet).toHaveCount(0);
   const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
   await expect(dialog).toBeVisible();
 

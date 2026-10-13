@@ -223,10 +223,13 @@ def test_missing_optional_deps_are_surfaced_but_raise_no_global_banner(tmp_path,
     monkeypatch.setattr(plugin_loader, "_plugin_roots", lambda config: [tmp_path])
     _absent(monkeypatch, "nope-pkg-c")
 
-    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+    with caplog.at_level(_logging.INFO, logger="protoagent.plugins"):
         res = load_plugins(_cfg())
     assert next(m for m in res.meta if m["id"] == "softp")["deps_missing"] == ["nope-pkg-c"]
     assert "nope-pkg-c" in caplog.text and "install-deps softp" in caplog.text
+    # Logged at INFO, not WARNING: an optional-only gap isn't a fault, and a bare
+    # `uvx … protoagent serve` must not open with a warning about the default-on cowork pack.
+    assert not [r for r in caplog.records if r.levelno >= _logging.WARNING and "nope-pkg-c" in r.getMessage()]
     assert not _deps_gaps()
     setup_gaps.reset()
 

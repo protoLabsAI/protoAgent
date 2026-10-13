@@ -63,7 +63,7 @@ session start, so it sets the tone of every response.
 
 ## 3. Rewrite the system prompt
 
-`graph/prompts.py` has the template system prompt + the subagent
+`src/graph/prompts.py` has the template system prompt + the subagent
 sub-prompt. Rewrite both:
 
 - `build_system_prompt` — lead agent identity, goals, guardrails
@@ -74,7 +74,7 @@ handler's output extraction depends on it.
 
 ## 4. Add your real tools
 
-`tools/lg_tools.py` ships with a small keyless starter set so a
+`src/tools/lg_tools.py` ships with a small keyless starter set so a
 fresh clone can demonstrate a real research loop: `current_time`,
 `calculator` (safe AST eval — no `eval()`), `web_search` (DuckDuckGo
 via `ddgs`), and `fetch_url`.
@@ -113,14 +113,14 @@ Guidelines that have paid off across the protoLabs fleet:
 
 ## 5. Configure subagents (optional)
 
-`graph/subagents/config.py` ships with one example, a `researcher`.
+`src/graph/subagents/config.py` ships with one example, a `researcher`.
 Add more by registering `SubagentConfig` instances in
 `SUBAGENT_REGISTRY`. Each subagent gets a subset of tools and
 its own recursion budget.
 
 If your agent doesn't need the subagent pattern at all, delete
 the registry entry and call `create_agent_graph(config,
-include_subagents=False)` in `server/agent_init.py`.
+include_subagents=False)` in `src/server/agent_init.py`.
 
 ## 6. Declare the agent card
 
@@ -141,7 +141,7 @@ a2a:
 - `name` already follows `identity.name` (the setup wizard).
 - `capabilities.extensions` — `cost-v1` is declared by default
   (the runtime emits it automatically); add `effect-domain-v1`
-  in `server/a2a.py::_build_agent_card_proto` if your skills
+  in `src/server/a2a.py::_build_agent_card_proto` if your skills
   mutate shared state a planner should know about.
 
 ## 7. Set up the model

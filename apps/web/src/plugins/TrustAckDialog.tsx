@@ -69,9 +69,7 @@ export function TrustAckDialog({
     >
       <div className="plugin-trust-ack">
         <p>
-          <code>{source}</code> isn&apos;t an official source. Installing <strong>enables and runs
-          its code immediately</strong> with the agent&apos;s full privileges — there is no sandbox.
-          Only continue if you trust this repository; for untrusted code, use an MCP server instead.
+          <RunsCodeWarning source={source} />
         </p>
         <p>Confirming remembers this repository, so you won&apos;t be asked for it again.</p>
         <Checkbox
@@ -81,5 +79,18 @@ export function TrustAckDialog({
         />
       </div>
     </ConfirmDialog>
+  );
+}
+
+// The "this runs code" sentence itself — one copy, shared by this dialog and the New-agent
+// "From a bundle URL" trust step (a bundle installs plugins into the new agent, so it's the
+// same consent). `doing` names the act: "Installing" here, "Creating this agent" there.
+export function RunsCodeWarning({ source, doing = "Installing" }: { source: string; doing?: string }) {
+  return (
+    <>
+      <code>{source}</code> isn&apos;t an official source. {doing} <strong>enables and runs
+      its code immediately</strong> with the agent&apos;s full privileges — there is no sandbox.
+      Only continue if you trust this repository; for untrusted code, use an MCP server instead.
+    </>
   );
 }

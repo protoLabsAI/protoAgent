@@ -36,7 +36,7 @@ import {
 } from "./installed";
 import { api, ApiError } from "../lib/api";
 import { mergeDeps } from "../setup/depsReport";
-import { depsButtonState, depsInstallBusyId, toggleToast } from "./installed";
+import { PLUGIN_RESTART_HINT, depsButtonState, depsInstallBusyId, toggleToast } from "./installed";
 import type { CatalogPlugin, PluginUpdate, RuntimeStatus } from "../lib/types";
 
 type Plugin = NonNullable<RuntimeStatus["plugins"]>[number];
@@ -315,8 +315,10 @@ function LocalTab() {
       // schema, #1423) — one refresh definition for every path that mutates plugin
       // state, console- or agent-initiated (ADR 0096 D8).
       refreshAll();
-      // Enable hot-mounts the plugin's router (#822). Only DISABLE leaves a stale
-      // route/surface behind (FastAPI can't unmount) → restart_recommended on OFF.
+      // Enable hot-mounts the plugin's router (#822) and starts its surfaces; disable
+      // unmounts the router (ADR 0096) and stops them (ADR 0018). restart_recommended is
+      // set only for a surface the reload couldn't swap or stop (_restart_needed in
+      // operator_api/plugin_routes.py), and toggleToast says so.
       // On an enable, the response carries the plugin's missing packages (#3450), and
       // the toast names them — once, while the operator is looking at its row.
       toast(toggleToast(p.name, res));
@@ -425,7 +427,7 @@ function LocalTab() {
         toast({
           tone: res.restart_recommended ? "info" : "success",
           title: "Bundle updated",
-          message: `${b.name} re-pinned.${retired}${res.restart_recommended ? " Restart to serve the fresh routes." : ""}`,
+          message: `${b.name} re-pinned.${retired}${res.restart_recommended ? " A member's background surface couldn't be swapped live — restart to finish." : ""}`,
         });
       }
     },
@@ -667,13 +669,11 @@ function LocalTab() {
           </div>
         )}
 
-        {/* Server restart — a plugin's console view / background surface (and env / launch
-            flags) only fully (un)load on restart. The console reconnects on its own. */}
+        {/* Server restart — every plugin lifecycle action hot-reloads (views, routes and
+            surfaces included); env / launch flags only load at boot, and a surface that
+            can't be swapped live is flagged on its toast. The console reconnects on its own. */}
         <div className="plugin-restart-row">
-          <span className="settings-section-sub">
-            A plugin's console view or background surface — and env / launch-flag changes — need a
-            server restart to take effect.
-          </span>
+          <span className="settings-section-sub">{PLUGIN_RESTART_HINT}</span>
           <Button
             type="button"
             variant="default"

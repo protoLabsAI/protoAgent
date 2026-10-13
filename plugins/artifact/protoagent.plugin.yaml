@@ -1,6 +1,6 @@
 id: artifact
 name: Artifact
-version: 0.20.1
+version: 0.21.0
 # Needs the host to serve the DS plugin-kit at /_ds/ (protoAgent #893, v0.34.0) —
 # the shell page links it for theming + the authed handshake, and artifacts inject it
 # so `.pl-*` design-system classes work inside the sandbox.
@@ -28,23 +28,25 @@ capabilities:
 config:
   ask_enabled: false
   ask_system: ""
-  history: 20
+  history: 200
   max_versions: 50
   max_pinned: 10
   max_code_kb: 512
   max_blob_kb: 25600
   max_preview_kb: 64
   ask_max_chars: 4000
+  open_link_origins: []
 settings:
   - { key: ask_enabled, label: "Interactive artifacts", type: bool, description: "Let artifacts call back to the agent via window.protoArtifact.ask() — turns them into mini-apps (game NPCs, tutors, generators). Off by default: it lets artifact code trigger LLM calls." }
   - { key: ask_system, label: "Ask system instruction", type: string, description: "Optional system prompt wrapping every window.protoArtifact.ask() call (e.g. a persona or guardrails). Only used when interactive artifacts are on." }
   - { key: ask_max_chars, label: "Ask prompt limit (chars)", type: number, description: "Max characters for an artifact's ask() prompt." }
-  - { key: history, label: "Artifacts kept", type: number, description: "How many unpinned artifacts to keep in the panel; the oldest is evicted past this. Pinned artifacts don't count toward it." }
+  - { key: history, label: "Artifacts kept", type: number, description: "How many unpinned artifacts to keep; past this the oldest one that no surviving chat still shows is evicted. An artifact shown in a chat (an inline answer, an artifact chip) stays until that chat is deleted — so the store can sit above this number, with a warning logged. Pinned artifacts don't count toward it." }
   - { key: max_versions, label: "Versions per artifact", type: number, description: "Max edit-versions kept per artifact, pinned or not (oldest edits trimmed)." }
   - { key: max_pinned, label: "Pinned artifacts", type: number, description: "Max artifacts the agent may pin (pin_artifact). Pinned artifacts are never evicted and don't count toward Artifacts kept; at this cap a new pin is refused. 0 refuses all new pins; existing pins stay protected until unpinned." }
   - { key: max_code_kb, label: "Max artifact size (KB)", type: number, description: "Max source size per version; a larger render is rejected." }
   - { key: max_blob_kb, label: "Max file size (KB)", type: number, description: "Max size of a file saved via save_file_artifact (stored as a sidecar blob); a larger file is rejected." }
   - { key: max_preview_kb, label: "Max file preview (KB)", type: number, description: "Max extracted-text preview kept per file version (the diffable projection shown in the panel)." }
+  - { key: open_link_origins, label: "Allowed openLink origins", type: string_list, description: "Origins an artifact's window.protoArtifact.openLink(url) may open in a new tab (one per line, e.g. https://example.com). Empty = any https origin. Non-https links are always refused." }
 # The shell page is PUBLIC (an iframe page-load can't carry a bearer, and the page
 # derives its slug base from /plugins/…); its data routes are gated under
 # /api/plugins/artifact (plugin-view rule 2).
