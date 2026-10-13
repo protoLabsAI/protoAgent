@@ -221,6 +221,7 @@ def test_host_prune_failure_restores_both_config_layers(monkeypatch, isolated_co
     before = {p: p.read_bytes() for p in (leaf, host)}
 
     def broken_prune(config):
+        assert host.read_bytes() != before[host]
         leaf.write_text("model: {}\n")
         raise OSError("prune failed")
 
@@ -239,6 +240,7 @@ def test_leaf_write_failure_restores_preceding_secret_write(monkeypatch, isolate
     before = leaf.read_bytes()
 
     def fail_save(*args, **kwargs):
+        assert secrets.exists()
         raise OSError("leaf write failed")
 
     monkeypatch.setattr(cio, "save_yaml_doc", fail_save)
