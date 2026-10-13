@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.203.0",
+    "date": "2026-10-13",
+    "changes": [
+      "Artifact frame themes use the design system’s embed helpers (#4177).",
+      "Artifact controls use the shared design-system stylesheet (#4184).",
+      "Artifact frame stylesheet vendored (#577).",
+      "Artifact vendors the DS embed theme-handoff module (#577).",
+      "Delegate status shows fresh evidence and readable diagnostics (#4072).",
+      "Agent configuration inspection masks credential containers (#4181)."
+    ]
+  },
+  {
     "version": "v0.202.0",
     "date": "2026-10-12",
     "changes": [
