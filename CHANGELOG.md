@@ -15,6 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.203.0] - 2026-10-13
+
+### Changed
+- **Artifact frame themes use the design system’s embed helpers (#4177).** The shared token snapshot and CSS serializer replace the hand-maintained palette, reject unsafe CSS values, and preserve usable defaults when tokens or the embed module are unavailable.
+
+- **Artifact controls use the shared design-system stylesheet (#4184).** Frames load the vendored element defaults instead of a hand-maintained CSS string. Static spacing and line-height tokens preserve readable controls when theme loading fails, while live theme tokens and author CSS still override the defaults.
+
+- **Artifact frame stylesheet vendored (#577).** The design system's element-default sheet (`@protolabsai/ui-css` `styles/embed.css`) is now vendored verbatim as `plugins/artifact/vendor/pl-embed.css` and served same-origin from the artifact vendor route. The route picks its media type by extension, so the `.css` sheet is served as `text/css` (never `application/javascript`) with the existing CORS header, while the `.js`/`.mjs` libs beside it are unchanged. The streamed console preview now sources those DS element defaults by fetching the served route (the way it already fetches the plugin-kit stylesheet), rather than bundling the `ui-css` sheet at build time, so the vendored copy is the single source; the artifact shell is wired to embed it in a later slice.
+
+- **Artifact vendors the DS embed theme-handoff module (#577).** `@protolabsai/design`'s `./embed` module (`themeTokenSnapshot` / `snapshotToCss`) and its `./tokens.js` dependency are now vendored verbatim under `plugins/artifact/vendor/` and served same-origin by the vendor route, so the artifact shell can load them with no bundler at runtime. Both names are allowlisted together: `embed.js` is not self-contained, and a regression guard + DS drift test keep the pair closed and in sync with the installed package.
+
+### Fixed
+- **Delegate status shows fresh evidence and readable diagnostics (#4072).** Successful dispatches clear stale probe failures and reset backoff. `list_agents` shows evidence age, marks results older than six minutes as stale, and accepts `detail=true` for probe and dispatch diagnostics without triggering extra probes.
+
+### Security
+- **Agent configuration inspection masks credential containers (#4181).** Sensitive-named settings are now redacted even when their values are lists or mappings, preventing credentials from entering model context through full, selected, or paginated `show_config` responses. Empty settings remain distinguishable from configured secrets.
+
 ## [0.202.0] - 2026-10-12
 
 ### Added
