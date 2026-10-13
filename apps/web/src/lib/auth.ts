@@ -13,7 +13,7 @@
 // localhost-default + default-deny bearer-gate posture; the real lever beyond localhost is
 // a CSP connect-src egress limit. See docs/guides/deploy-docker.md → "Where the operator
 // token lives".
-import { readKey, removeKey, writeKeyStrict } from "./storage";
+import { readKey, removeKeyStrict, writeKeyStrict } from "./storage";
 
 const TOKEN_KEY = "protoagent.authToken";
 
@@ -60,7 +60,7 @@ export function saveAuthToken(token: string): { ok: true } | { ok: false; error:
   try {
     const t = token.trim();
     if (t) writeKeyStrict("local", TOKEN_KEY, t);
-    else removeKey("local", TOKEN_KEY);
+    else removeKeyStrict("local", TOKEN_KEY);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "could not save the token" };
   }

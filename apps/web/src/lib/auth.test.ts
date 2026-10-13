@@ -75,6 +75,17 @@ describe("saveAuthToken on a full quota", () => {
     expect(authRequired()).toBe(true);
   });
 
+  it.each(["throws", "unavailable"])("does not confirm token removal when storage %s", (mode) => {
+    const storage = new QuotaStorage(1000);
+    storage.setItem("protoagent.authToken", "old");
+    storage.removeItem = () => { throw new DOMException("Storage blocked", "SecurityError"); };
+    vi.stubGlobal("localStorage", mode === "throws" ? storage : undefined);
+    notifyAuthRequired();
+    expect(saveAuthToken(" ").ok).toBe(false);
+    expect(storage.getItem("protoagent.authToken")).toBe("old");
+    expect(authRequired()).toBe(true);
+  });
+
   it("reports success when it did save", () => {
     expect(saveAuthToken("t")).toEqual({ ok: true });
   });

@@ -191,7 +191,7 @@ export function keySizes(area: StorageArea = "local"): { key: string; bytes: num
 
 /** Total UTF-16 bytes used in `area`, counting every key. */
 export function usageBytes(area: StorageArea = "local"): number {
-  return keySizes(area).reduce((n, e) => n + e.bytes, 0);
+  return listKeys(area).reduce((n, key) => n + entryBytes(key, readKey(area, key) ?? ""), 0);
 }
 
 // ── dev flag: storage.simulateQuotaBytes (ADR 0068) ────────────────────────────────────
@@ -413,16 +413,21 @@ export function writeKeyStrict(area: StorageArea, key: string, value: string): v
   if (!res.ok) throw new StorageWriteError(key, res.reason);
 }
 
-/** Remove a key. Never throws. A localStorage removal releases the quota latch. */
-export function removeKey(area: StorageArea, key: string): void {
+/** Remove a credential, reporting unavailable storage instead of claiming success. */
+export function removeKeyStrict(area: StorageArea, key: string): void {
   const s = store(area);
-  if (!s) return;
+  if (!s) throw new Error(`Browser storage is unavailable — could not remove ${key}`);
+  const existed = s.getItem(key) !== null;
+  s.removeItem(key);
+  if (area === "local" && existed) releaseLatch();
+}
+
+/** Remove a key. Never throws. An actual localStorage removal releases the quota latch. */
+export function removeKey(area: StorageArea, key: string): void {
   try {
-    const existed = s.getItem(key) !== null;
-    s.removeItem(key);
-    if (area === "local" && existed) releaseLatch();
+    removeKeyStrict(area, key);
   } catch {
-    return;
+    /* Best-effort cache cleanup; credentials use removeKeyStrict directly. */
   }
 }
 

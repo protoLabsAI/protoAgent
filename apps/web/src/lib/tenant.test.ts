@@ -28,12 +28,14 @@ describe("tenantCheck", () => {
     localStorage.setItem("protoagent.tenant.uid", "uid-a");
     localStorage.setItem("protoagent.chat.sessions", "{}");
     localStorage.setItem("protoagent.chat.sessions:ava", "{}");
+    localStorage.setItem("protoagent.chat.sessions:ava.dismissed", '["old-session"]');
     localStorage.setItem("protoagent.ui", "{layout}"); // layout survives — cosmetic
     sessionStorage.setItem("protoagent.turnwatch.notified", "[]");
 
     expect(tenantCheck("uid-b")).toBe("switched");
     expect(localStorage.getItem("protoagent.chat.sessions")).toBeNull();
     expect(localStorage.getItem("protoagent.chat.sessions:ava")).toBeNull();
+    expect(localStorage.getItem("protoagent.chat.sessions:ava.dismissed")).toBeNull();
     expect(localStorage.getItem("protoagent.ui")).toBe("{layout}");
     expect(sessionStorage.getItem("protoagent.turnwatch.notified")).toBeNull();
     expect(sessionStorage.getItem("protoagent.tenant.switched")).toBe("1");

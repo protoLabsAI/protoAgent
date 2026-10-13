@@ -4,6 +4,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./app/App";
+import { PairingRecovery } from "./app/PairingRecovery";
 import { Launcher } from "./app/Launcher";
 import { AppCrash, ForcedQuotaCrash } from "./app/AppCrash";
 import { ErrorBoundary } from "./app/ErrorBoundary";
@@ -40,11 +41,10 @@ if (!launcher) void activateSlugAgent(); // cold-agent resume + keep-warm touch 
 // `.finally` rather than top-level await: TLA constrains the build target, and this must
 // render even if the claim rejects. With no `#pair=` fragment the promise resolves
 // synchronously-ish (no network call at all), so the normal boot is unaffected.
+let pairingError: string | null = null;
 void redeemPairingFromUrl()
   .then((res) => {
-    // A failed claim (expired code, or a token this browser couldn't store — ADR 0114 D1)
-    // falls through to the token gate; leave the reason where a bug report will find it.
-    if (res && !res.ok) console.error("[pairing] device pairing failed:", res.error);
+    if (res && !res.ok) pairingError = res.error;
   })
   .finally(() => {
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -59,7 +59,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         {/* Toasts anchor TOP-right (app-level notifications; clear of the bottom utility
             bar / composer) via the DS prop — no `.pl-toast-stack` CSS override needed
             since @protolabsai/ui 0.49 (ToastProvider `position`). */}
-        <ToastProvider position="top-right">{launcher ? <Launcher /> : <App />}</ToastProvider>
+        <ToastProvider position="top-right">
+          <PairingRecovery error={pairingError}>{launcher ? <Launcher /> : <App />}</PairingRecovery>
+        </ToastProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   </React.StrictMode>,
