@@ -106,7 +106,7 @@ model:
 - **A connection is resolved strictly from its own fields.** Its key is never borrowed from
   another connection, from `model.api_key` or from `OPENAI_API_KEY`.
 - **No `providers:` block** (the shipped template) means the loader builds the registry the
-  retiring fields imply: a `gateway` entry from `model.api_base` (App default
+  legacy fields imply: a `gateway` entry from `model.api_base` (App default
   `http://gateway:4000/v1`) keyed from `model.api_key` or `OPENAI_API_KEY`, plus the lead
   subscription when `model.provider` names one. **`providers: []`** is different — it is what
   removing the last connection writes, and it stays empty.
@@ -133,18 +133,16 @@ model:
 
 All sampling params are optional — omit to use the gateway / model-card defaults. `temperature`, `max_tokens`, `top_p`, and `presence_penalty` are standard OpenAI fields; `top_k`, `repetition_penalty`, and `chat_template_kwargs` are sent via `extra_body` for vLLM-compatible gateways.
 
-**Retiring: `model.provider`, `model.api_base`, `model.api_key`** (#3128). The `providers:`
-registry replaces all three, and Settings no longer renders them. They are still honored —
-a config with no `providers:` block has its registry built from them at load — and, until
-#3128 lands, a few paths still read them directly rather than through the registry: the
-unqualified default model route, knowledge embeddings and transcription, the plugin
-`gateway_client`, the context-window probe, the egress auto-allow (below) and `--setup`
-validation. A subscription *lead* therefore still wants `model.provider: anthropic-oauth`
-(or `openai-codex`) beside its qualified `name` for now.
+**Legacy compatibility: `model.provider`, `model.api_base`, `model.api_key`.**
+Use the `providers:` registry for new configuration; Settings exposes the registry.
+Legacy fields remain supported when loading older configuration without a `providers:`
+block. The removal proposed in #3128 is deferred; no removal version is scheduled.
+This retains compatibility readers and import/upgrade paths, not a second recommended
+configuration format. Declared API-key connections do not borrow unrelated environment credentials, and explicit `providers: []` resolves no model lanes.
 
 ## Secrets
 
-The **core** secrets are **never written to the tracked config YAML**: each model connection's key (`providers.<id>`; the retiring `model.api_key` on a config with no `providers:` block), the A2A `auth.token`, and the A2A `auth.federation_token` (ADR 0066). (Plugins may declare more — e.g. `discord.bot_token`, `google.client_secret` — which are routed and stripped the same way via a dynamic `secret_paths()`; ADR 0019.) The setup wizard and settings drawer persist them to an **untracked** sibling file, `config/secrets.yaml` (gitignored, dockerignored, written `0600`):
+The **core** secrets are **never written to the tracked config YAML**: each model connection's key (`providers.<id>`; the legacy `model.api_key` on a config with no `providers:` block), the A2A `auth.token`, and the A2A `auth.federation_token` (ADR 0066). (Plugins may declare more — e.g. `discord.bot_token`, `google.client_secret` — which are routed and stripped the same way via a dynamic `secret_paths()`; ADR 0019.) The setup wizard and settings drawer persist them to an **untracked** sibling file, `config/secrets.yaml` (gitignored, dockerignored, written `0600`):
 
 ```yaml
 # config/secrets.yaml — never committed
@@ -629,7 +627,7 @@ Any slot that takes a model name — `routing.fallback_models`, `routing.aux_mod
 | `openai-codex:gpt-5.6-sol` | your ChatGPT subscription |
 | `acp:claude` | that CLI coding agent over ACP |
 | `protolabs/coder` | the gateway (shorthand — a `/` implies a gateway alias) |
-| `claude-sonnet-5` | the lead provider — the retiring `model.provider` (the gateway by default) |
+| `claude-sonnet-5` | the lead provider — the legacy `model.provider` (the gateway by default) |
 
 Hold a gateway key and both subscriptions and you can mix all of them at once — Claude for review, Codex for code, the gateway for cheap bulk work — whatever the main brain runs on. The qualified form is the one to reach for when two providers could plausibly serve the same model id.
 
@@ -651,13 +649,13 @@ providers:
     type: anthropic-oauth
 model:
   name: anthropic-oauth:claude-sonnet-5        # main brain on your Claude subscription
-  provider: anthropic-oauth                    # retiring (#3128) — see the note under `model`
+  provider: anthropic-oauth                    # legacy compatibility — see the note under `model`
 routing:
   fallback_models: [gateway:protolabs/coder]   # degrade to the gateway if the subscription can't serve
   aux_model: gateway:protolabs/fast            # cheap calls never touch the subscription
 ```
 
-A `gateway:` slot needs that connection's endpoint (and its key, if it takes one). A bare `/`-alias slot under a subscription lead routes through the retiring single-gateway fields instead, so it needs `model.api_key` or `OPENAI_API_KEY`; without one the alias is ignored with a warning, since there'd be nothing to route to. A gateway alias as the **main** `model.name` under a native provider is still an error — that's a misconfiguration, not a fallback.
+A `gateway:` slot needs that connection's endpoint (and its key, if it takes one). A bare `/`-alias slot under a subscription lead routes through the legacy single-gateway fields instead, so it needs `model.api_key` or `OPENAI_API_KEY`; without one the alias is ignored with a warning, since there'd be nothing to route to. A gateway alias as the **main** `model.name` under a native provider is still an error — that's a misconfiguration, not a fallback.
 
 #### Removing a connection that slots still name
 
