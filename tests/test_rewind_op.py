@@ -380,3 +380,14 @@ def test_fork_resolves_the_clicked_occurrence_of_duplicate_content():
         fork_thread(g, object(), "a2a:src", "a2a:dst", target_content="same reply", occurrence=0)
     )
     assert res["found"] is True and res["kept"] == 2  # the FIRST duplicate, as clicked
+
+
+def test_safe_cut_does_not_absorb_unrelated_tool_response():
+    msgs = [
+        HumanMessage(content="question"),
+        AIMessage(content="", tool_calls=[{"id": "a", "name": "search", "args": {}}]),
+        ToolMessage(content="unrelated", tool_call_id="b"),
+        ToolMessage(content="answer", tool_call_id="a"),
+        AIMessage(content="", tool_calls=[{"id": "b", "name": "search", "args": {}}]),
+    ]
+    assert _safe_cut_end(msgs, 2) == 1

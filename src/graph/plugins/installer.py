@@ -489,13 +489,12 @@ def configured_allowlist() -> list[str] | None:
             return None
         data = yaml.safe_load(cfg_path.read_text()) or {}
         sources = ((data.get("plugins") or {}).get("sources")) or {}
-        if "allow" not in sources:
-            return None  # key absent — open
-        # Explicit [] survives as [] (deny-all, #2743 item 1) — the old `or None`
-        # collapsed it back to open, exactly the ambiguity this distinction removes.
-        return [str(x) for x in (sources.get("allow") or [])]
-    except Exception:  # noqa: BLE001
-        return None
+        from graph.config_load import _parse_sources_allow
+
+        return _parse_sources_allow(sources)
+    except Exception as exc:  # noqa: BLE001 — an unreadable policy must never mean open
+        raise InstallError(f"Cannot read plugin source allowlist: {exc}") from exc
+
 
 
 def _summary(m: PluginManifest, *, source: str, ref: str, sha: str) -> dict:

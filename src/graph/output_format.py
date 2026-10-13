@@ -32,7 +32,7 @@ _SCRATCH_RE = re.compile(r"(?<!`)<scratch_pad>[\s\S]*?</scratch_pad>", re.IGNORE
 # close. Eat to end; backtick-guarded so a literal tag *mention* in the answer is not
 # treated as a leak and truncated.
 _ORPHAN_THINK_OPEN_RE = re.compile(r"(?<!`)<think>[\s\S]*$", re.IGNORECASE)
-_ORPHAN_THINK_CLOSE_RE = re.compile(r"</think>\s*", re.IGNORECASE)
+_ORPHAN_THINK_CLOSE_RE = re.compile(r"(?<!`)</think>\s*", re.IGNORECASE)
 _ORPHAN_SCRATCH_OPEN_RE = re.compile(r"(?<!`)<scratch_pad>[\s\S]*$", re.IGNORECASE)
 
 

@@ -140,7 +140,7 @@ def register_fleet_routes(app) -> None:
 
         from graph.fleet import discovery
 
-        fleet = supervisor.status()
+        fleet = await asyncio.to_thread(supervisor.status)
         known = {("127.0.0.1", a["port"]) for a in fleet if a.get("port")}
         for a in fleet:  # registered remote members aren't 'discoveries' either
             if a.get("remote") and a.get("url"):
@@ -163,7 +163,7 @@ def register_fleet_routes(app) -> None:
         sessions persist + resume on a later visit). The host is this instance (always up) → no-op.
         """
         try:
-            agents = supervisor.status()
+            agents = await asyncio.to_thread(supervisor.status)
             host = next((a for a in agents if a.get("host")), None)
             if host and name in (host["name"], host["id"]):
                 return {"ok": True, "evicted": []}

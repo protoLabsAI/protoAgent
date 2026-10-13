@@ -434,7 +434,12 @@ def _parse_sources_allow(sources: dict):
     learns their config now hardens instead of silently changing behavior."""
     if "allow" not in sources:
         return None
-    allow = [str(x) for x in (sources.get("allow") or [])]
+    raw = sources.get("allow")
+    # Preserve the legacy explicit-null deny-all meaning, but never iterate a scalar
+    # string into characters or coerce malformed entries into source patterns.
+    if raw is not None and (not isinstance(raw, list) or any(not isinstance(x, str) for x in raw)):
+        raise ValueError("plugins.sources.allow must be a list of strings")
+    allow = list(raw or [])
     if not allow:
         import logging
 

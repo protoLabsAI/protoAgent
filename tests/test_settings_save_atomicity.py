@@ -210,3 +210,40 @@ def test_pure_reload_failure_touches_nothing(monkeypatch, isolated_config) -> No
     assert ok is False
     assert leaf.read_bytes() == before
     assert not any("rolled back" in m for m in messages), messages
+
+
+def test_host_prune_failure_restores_both_config_layers(monkeypatch, isolated_config):
+    import server.settings_apply as sa
+
+    leaf, _, host = isolated_config
+    leaf.write_text("model:\n  name: leaf-old\n")
+    host.write_text("model:\n  name: host-old\n")
+    before = {p: p.read_bytes() for p in (leaf, host)}
+
+    def broken_prune(config):
+        assert host.read_bytes() != before[host]
+        leaf.write_text("model: {}\n")
+        raise OSError("prune failed")
+
+    monkeypatch.setattr(sa, "_prune_shadowing_agent_keys", broken_prune)
+    ok, messages = sa._apply_settings_changes(config={"model": {"name": "new"}}, layer="host")
+    assert not ok and any("prune failed" in m for m in messages)
+    assert {p: p.read_bytes() for p in (leaf, host)} == before
+
+
+def test_leaf_write_failure_restores_preceding_secret_write(monkeypatch, isolated_config):
+    import graph.config_io as cio
+    import server.settings_apply as sa
+
+    leaf, secrets, _ = isolated_config
+    leaf.write_text("model:\n  name: old\n")
+    before = leaf.read_bytes()
+
+    def fail_save(*args, **kwargs):
+        assert secrets.exists()
+        raise OSError("leaf write failed")
+
+    monkeypatch.setattr(cio, "save_yaml_doc", fail_save)
+    ok, messages = sa._apply_settings_changes(config={"model": {"api_key": "sk-new"}})
+    assert not ok and any("leaf write failed" in m for m in messages)
+    assert leaf.read_bytes() == before and not secrets.exists()

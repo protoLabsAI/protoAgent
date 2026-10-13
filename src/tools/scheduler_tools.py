@@ -253,8 +253,11 @@ def _build_scheduler_tools(scheduler) -> list:
         """
         if not (then or "").strip():
             return "Error: `then` is required — describe what to do on resume."
-        secs = max(1, int(seconds))
-        when = (datetime.now(UTC) + timedelta(seconds=secs)).isoformat()
+        try:
+            secs = max(1, int(seconds))
+            when = (datetime.now(UTC) + timedelta(seconds=secs)).isoformat()
+        except (OverflowError, ValueError):
+            return "Error: seconds is outside the supported wake-up date range."
         # Resume in the SAME conversation: stamp the originating chat session
         # (== the turn's A2A contextId) onto the job so the scheduler fires the
         # resume into this thread, not the Activity thread — the agent wakes up

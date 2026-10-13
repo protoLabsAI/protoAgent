@@ -210,13 +210,12 @@ def test_multimodal_tool_result_downscales_the_live_failure_screenshot(big_png):
     assert max(_dims_b64(url.split(",", 1)[1])) <= 1568
 
 
-def test_render_fits_an_envelope_that_skipped_the_helper(big_png, tmp_path):
-    """A hand-built envelope (path image) is fitted on render, too."""
+def test_render_fits_an_envelope_that_skipped_the_helper(big_png):
+    """A hand-built envelope with embedded data is fitted on render, too."""
     from graph.multimodal import render_multimodal_content
 
-    p = tmp_path / "shot.png"
-    p.write_bytes(big_png)
-    blocks = render_multimodal_content({"text": "x", "images": [{"path": str(p), "mime": "image/png"}]}, vision=True)
+    b64 = base64.b64encode(big_png).decode()
+    blocks = render_multimodal_content({"text": "x", "images": [{"b64": b64, "mime": "image/png"}]}, vision=True)
     assert max(_dims_b64(blocks[1]["image_url"]["url"].split(",", 1)[1])) <= 1568
 
 
