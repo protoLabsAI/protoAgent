@@ -103,7 +103,7 @@ openshell sandbox exec --no-tty -- touch /opt/protoagent/x            # blocked 
 | CLI: `missing authorization header` | enabling gateway JWTs turns on auth for CLI calls too; `gateway.toml` sets `allow_unauthenticated_users = true` (local single-player only). |
 | sandbox crash-loop: `Policy fetch failed` / `h2 protocol error` | supervisor can't reach the gateway: published port ≠ bind port, wrong bridge IP (`DOCKER_BRIDGE_IP` — custom `bip` daemons aren't 172.17.0.1), or firewall DROP (see above). An `h2 protocol error` usually means it connected to some *other* service squatting the port. |
 | `Network namespace creation failed ... ip helper not found` | sandbox **image** must ship iproute2 (this repo's Dockerfile does). |
-| `No module named server` | the supervisor does not inherit image ENV; pass `--env PYTHONPATH=/opt/protoagent` (the script does). |
+| `No module named server` | the supervisor does not inherit image ENV; pass `--env PYTHONPATH=/opt/protoagent/src:/opt/protoagent` (the script does). |
 
 ## Kubernetes (starting template — not yet validated)
 

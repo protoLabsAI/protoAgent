@@ -122,17 +122,17 @@ def test_callers_resolve_apply_through_agent_init():
     and ``server/__init__`` never reads its re-exported copy."""
     root = Path(__file__).resolve().parent.parent
     for rel in ("server/maintenance_loops.py", "server/plugin_wiring.py", "server/settings_apply.py"):
-        tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        tree = ast.parse((root / "src" / rel).read_text(encoding="utf-8"))
         for node in tree.body:
             if isinstance(node, ast.ImportFrom) and node.module in {"server.agent_init", "server.settings_apply"}:
                 raise AssertionError(f"{rel}: module-level import from {node.module}")
     for rel in ("operator_api/config_routes.py", "operator_api/mcp_routes.py", "operator_api/plugin_routes.py"):
-        tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        tree = ast.parse((root / "src" / rel).read_text(encoding="utf-8"))
         for node in tree.body:
             if isinstance(node, ast.ImportFrom) and node.module in {"server.agent_init", "server.settings_apply"}:
                 names = {a.name for a in node.names}
                 assert "_apply_settings_changes" not in names, f"{rel}: module-level import of the apply path"
-    pkg = ast.parse((root / "server/__init__.py").read_text(encoding="utf-8"))
+    pkg = ast.parse((root / "src/server/__init__.py").read_text(encoding="utf-8"))
     reads = [
         n.lineno
         for n in ast.walk(pkg)

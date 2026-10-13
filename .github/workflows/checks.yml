@@ -184,7 +184,9 @@ jobs:
         # pyproject.toml; the import contracts (graph/ and the infra packages
         # must not import server/ or operator_api/) + the grandfathered burndown
         # list live in pyproject.toml [tool.importlinter].
-        run: pip install ruff==0.15.10 import-linter==2.11
+        run: |
+          pip install ruff==0.15.10 import-linter==2.11
+          pip install --no-deps -e .
       - uses: astral-sh/setup-uv@v7
         with:
           # Pinned like ruff/import-linter above, and for a sharper reason: uv's lock

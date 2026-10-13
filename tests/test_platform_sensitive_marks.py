@@ -91,7 +91,10 @@ def _is_mark(node: ast.AST) -> bool:
 def _platform_modules() -> frozenset[str]:
     out = set()
     for top in _FIRST_PARTY:
-        for path in (ROOT / top).rglob("*.py"):
+        source_root = ROOT if top in {"plugins", "scripts"} else ROOT / "src"
+        package = source_root / top
+        assert package.is_dir(), f"missing source directory: {package}"
+        for path in package.rglob("*.py"):
             if "node_modules" in path.parts:
                 continue
             try:
@@ -101,7 +104,7 @@ def _platform_modules() -> frozenset[str]:
             if any(
                 isinstance(n, ast.Attribute) and tuple(_dotted(n) or ())[-2:] in _PLATFORM_ATTRS for n in ast.walk(tree)
             ):
-                out.add(".".join(path.relative_to(ROOT).with_suffix("").parts).removesuffix(".__init__"))
+                out.add(".".join(path.relative_to(source_root).with_suffix("").parts).removesuffix(".__init__"))
     return frozenset(out - _HUB_MODULES)
 
 

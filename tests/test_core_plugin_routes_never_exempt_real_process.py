@@ -131,7 +131,7 @@ def server(tmp_path_factory):
         "PROTOAGENT_DISCOVERY_DISABLE": "1",
         "A2A_AUTH_TOKEN": BEARER,
         "A2A_FEDERATION_TOKEN": FEDERATION,
-        "PYTHONPATH": str(ROOT),
+        "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT))),
     }
     for k in ("PROTOAGENT_CONFIG_DIR", "PROTOAGENT_PLUGINS_DIR"):
         env.pop(k, None)

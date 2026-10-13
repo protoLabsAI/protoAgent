@@ -81,7 +81,7 @@ def main() -> int:
         env.pop("PYTHONPATH", None)
         base, cwd = [str(Path(args.bin_path).resolve())], str(home)
     else:
-        env["PYTHONPATH"] = str(ROOT)
+        env["PYTHONPATH"] = os.pathsep.join((str(ROOT / "src"), str(ROOT)))
         base, cwd = [sys.executable, "-m", "server"], str(ROOT)
 
     failed = 0

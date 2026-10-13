@@ -5,7 +5,7 @@
 # Plugin manifest
 
 Every field of `protoagent.plugin.yaml` — the file that makes a directory a plugin.
-Generated from the `PluginManifest` dataclass in `graph/plugins/manifest.py`, which is
+Generated from the `PluginManifest` dataclass in `src/graph/plugins/manifest.py`, which is
 the schema read by the loader. CI checks the generated page for drift.
 
 The manifest is **declarative on purpose**: it is parsed before the plugin's Python is

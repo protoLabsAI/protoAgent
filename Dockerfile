@@ -116,7 +116,7 @@ COPY --from=web-builder /build/apps/web/dist /opt/protoagent/apps/web/dist
 RUN mkdir -p /sandbox /tmp/sandbox /sandbox/audit /sandbox/knowledge \
     && chown -R sandbox:sandbox /sandbox /tmp/sandbox
 
-ENV PYTHONPATH=/opt/protoagent
+ENV PYTHONPATH=/opt/protoagent/src:/opt/protoagent
 # UI tier baked from the build arg (ADR 0010): the image runs `--ui $UI` (default
 # 'none' = API + A2A + /metrics only). server.py reads PROTOAGENT_UI.
 ENV PROTOAGENT_UI=${UI}

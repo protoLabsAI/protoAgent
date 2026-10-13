@@ -65,6 +65,7 @@ def test_status_reports_the_server_package(monkeypatch):
 
     assert status["supported"] is True
     assert status["server_package"] == str(autostart.REPO_ROOT / "server")
+    assert (autostart.REPO_ROOT / "server" / "__init__.py").is_file()
     assert "server_path" not in status  # the old single-file key
 
 

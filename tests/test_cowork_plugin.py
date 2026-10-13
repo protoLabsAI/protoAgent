@@ -465,7 +465,10 @@ def _in_tree_tool_names() -> set[str]:
     roots = ("tools", "graph", "plugins", "knowledge", "scheduler", "server", "operator_api", "runtime")
     names: set[str] = set()
     for root in roots:
-        for path in (REPO / root).rglob("*.py"):
+        source_root = REPO if root == "plugins" else REPO / "src"
+        package = source_root / root
+        assert package.is_dir(), f"missing source directory: {package}"
+        for path in package.rglob("*.py"):
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
             except SyntaxError:  # a fixture of deliberately broken source
@@ -521,7 +524,7 @@ def test_no_skill_backticks_an_unknown_tool_name():
 
 def test_the_watch_args_the_drop_folder_skill_names_are_real_create_watch_params():
     """drop-folder walks the operator through create_watch by parameter name."""
-    source = (REPO / "tools" / "scheduler_tools.py").read_text(encoding="utf-8")  # #3830 moved it
+    source = (REPO / "src" / "tools" / "scheduler_tools.py").read_text(encoding="utf-8")  # #3830 moved it
     tree = ast.parse(source)
     fn = next(
         node

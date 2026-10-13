@@ -130,7 +130,7 @@ def test_callers_reach_the_impl_through_turn_sync():
     """No caller in ``server/`` reads ``_chat_langgraph_impl`` by a bare binding — only as
     ``_turn_sync._chat_langgraph_impl``, so a patch on the owner is what runs."""
     offenders: list[str] = []
-    for path in sorted((_REPO / "server").rglob("*.py")):
+    for path in sorted((_REPO / "src" / "server").rglob("*.py")):
         if path.name == "turn_sync.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))

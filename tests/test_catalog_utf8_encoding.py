@@ -100,7 +100,7 @@ def test_no_bare_read_text_in_operator_api():
     dependency. AST-based (not a regex) so ``read_text(errors="ignore")`` —
     which still decodes with the locale — is caught too."""
     offenders = []
-    for py in (ROOT / "operator_api").rglob("*.py"):
+    for py in (ROOT / "src" / "operator_api").rglob("*.py"):
         tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
         for node in ast.walk(tree):
             if (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import snapshotOp from "../../../../graph/snapshot_op.py?raw";
+import snapshotOp from "../../../../src/graph/snapshot_op.py?raw";
 
 import {
   NON_CREDENTIAL_KINDS,
