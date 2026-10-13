@@ -58,8 +58,8 @@ class MultimodalToolResultMiddleware(AgentMiddleware):
     async def awrap_tool_call(self, request, handler):
         result = await handler(request)
         if isinstance(result, ToolMessage) and is_multimodal_result(result.content):
-            # Off-loop: the rewrite may base64-decode megabytes, read a file, or
-            # call the (sync, blocking) describe model.
+            # Off-loop: the rewrite may base64-decode megabytes or call the
+            # (sync, blocking) describe model.
             return await asyncio.to_thread(self._rewrite, result)
         return result
 

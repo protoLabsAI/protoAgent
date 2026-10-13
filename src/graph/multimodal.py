@@ -156,9 +156,10 @@ def render_multimodal_content(env: dict, *, vision: bool, describe_fn: DescribeF
 
     Guardrails are re-enforced here (the envelope may not have come from the
     helper): images beyond ``MAX_IMAGES_PER_RESULT`` or over ``MAX_IMAGE_BYTES``
-    decoded bytes are dropped with an inline note. May do blocking work (file
-    read for ``path`` images, a describe model call) — the middleware runs it
-    off-loop on the async path.
+    decoded bytes are dropped with an inline note. Only embedded image data is
+    accepted: the trusted helper resolves local paths before emitting an envelope.
+    A parsed tool-result path must never authorize a host file read. A describe
+    model call may block — the middleware runs it off-loop on the async path.
     """
     text = str(env.get("text") or "")
     notes: list[str] = []
@@ -179,9 +180,10 @@ def render_multimodal_content(env: dict, *, vision: bool, describe_fn: DescribeF
                 b64 = str(img["b64"])
                 raw = base64.b64decode(b64, validate=True)
             elif img.get("path"):
-                with open(img["path"], "rb") as f:
-                    raw = f.read()
-                b64 = base64.b64encode(raw).decode()
+                # Tool-result text is not authority to read the host filesystem.
+                # The trusted helper resolves paths before emitting an envelope.
+                notes.append(f"[image {i} dropped: local paths are not accepted in tool-result envelopes]")
+                continue
             else:
                 notes.append(f"[image {i} dropped: no 'b64' or 'path']")
                 continue
