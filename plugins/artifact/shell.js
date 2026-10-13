@@ -183,18 +183,6 @@
   // cascade order. No `</` inside: rides a srcdoc <style>.
   var EMBED_FLOW_CSS = 'html,body{height:auto !important;min-height:0 !important}';
   var EMBED_FILL_CSS = 'html,body{height:clamp(260px,62vw,760px) !important;min-height:0 !important}';
-  // Themed defaults for UNSTYLED elements, at zero specificity (:where), so an artifact that
-  // writes plain <input>/<button>/<select> still looks like the console in either theme — and
-  // any rule the author writes wins outright. Every value is a --pl-* token.
-  var DEFAULTS = ':where(html,body){font-family:var(--pl-font-sans,system-ui,sans-serif);line-height:1.5}'
-    + ':where(input,select,textarea){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-inset,transparent);'
-    + 'border:1px solid var(--pl-color-border);border-radius:var(--pl-radius,6px);padding:6px 8px}'
-    + ':where(input,select,textarea):focus{outline:2px solid var(--pl-color-accent);outline-offset:1px}'
-    + ':where(button){font:inherit;color:var(--pl-color-fg);background:var(--pl-color-bg-raised,transparent);'
-    + 'border:1px solid var(--pl-color-border);border-radius:var(--pl-radius,6px);padding:6px 12px;cursor:pointer}'
-    + ':where(button):hover{background:var(--pl-color-bg-hover,var(--pl-color-bg-raised))}'
-    + ':where(a){color:var(--pl-color-accent)}'
-    + ':where(table){border-collapse:collapse}:where(th,td){border-bottom:1px solid var(--pl-color-border);padding:6px 8px;text-align:left}';
   // Is the CONSOLE's ground dark? Decides the frame's color-scheme (native scrollbars, date
   // pickers, form controls). Read from the console's own --pl-color-bg — never the shell page's
   // computed color-scheme, which follows the OS and so drew light scrollbars on a dark console
@@ -226,9 +214,10 @@
     // Dynamic values cross into CSS only through the DS serializer.
     var bg="#0a0a0c", fg="#ededed";
     return '<style>:root{--pl-color-bg:#0a0a0c;--pl-color-fg:#ededed;--pl-color-accent:#9b87f2;--pl-color-border:rgba(255,255,255,.08);--pl-color-fg-muted:#9aa0aa}</style>'
+      + '<link rel="stylesheet" href="'+ORIGIN+'/plugins/artifact/vendor/pl-embed.css">'
       + '<style id="__artbase">'+rootCss
       + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}'
-      + DEFAULTS + '</style>'
+      + '</style>'
       + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT;
   }
   // Artifact libs are VENDORED + served same-origin (/plugins/artifact/vendor/…), so

@@ -963,6 +963,19 @@ def test_shell_base_token_css_uses_snapshotToCss(monkeypatch, tmp_path):
     assert "decl+=" not in js and "Object.keys(all).forEach" not in js
 
 
+def test_shell_base_uses_pl_embed_css_not_defaults_string(monkeypatch, tmp_path):
+    """shell.js must have NO hand-written DEFAULTS element-CSS string and must reference
+    /plugins/artifact/vendor/pl-embed.css so the DS embed defaults reach the frame as a
+    same-origin <link> (bd-8cfo slice 4/4, ADR 0118). The DEFAULTS var was a hand-written
+    :where() CSS block; the vendored pl-embed.css replaces it."""
+    art = _load(monkeypatch, tmp_path)
+    js = art._SHELL_JS
+    # The hand-written DEFAULTS var is gone — a literal "DEFAULTS" in shell.js is a regression.
+    assert "DEFAULTS" not in js
+    # base() must reference the vendored embed stylesheet.
+    assert "/plugins/artifact/vendor/pl-embed.css" in js
+
+
 # ── the new kinds: markdown + the react import map + the DS surface ──────────────
 
 
