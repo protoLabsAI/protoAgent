@@ -37,7 +37,7 @@ openshell sandbox create \
   --policy "$POLICY" \
   --from "$IMAGE" \
   --upload "$CONFIG:/sandbox/config/langgraph-config.yaml" \
-  --env PYTHONPATH=/opt/protoagent \
+  --env PYTHONPATH=/opt/protoagent/src:/opt/protoagent \
   --env "PROTOAGENT_INSTANCE=${PROTOAGENT_INSTANCE:-openshell}" \
   --forward "127.0.0.1:${PORT}" \
   --no-auto-providers \
