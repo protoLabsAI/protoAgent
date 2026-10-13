@@ -20,7 +20,10 @@ function note(content: string, tone: ChatMessage["noteTone"]): ChatMessage {
 }
 
 function append(sessionId: string, m: ChatMessage) {
-  chatStore.updateMessages(sessionId, (messages) => [...messages, m]);
+  chatStore.updateMessages(sessionId, [
+    ...(chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)?.messages ?? []),
+    m,
+  ]);
 }
 
 /**

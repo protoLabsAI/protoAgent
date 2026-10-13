@@ -84,6 +84,8 @@ registerSlashCommand({
     if (!ctx.sessionId) return false; // no session → fall through
     const sessionId = ctx.sessionId;
     const question = ctx.rest.trim();
+    const messagesOf = () =>
+      chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)?.messages ?? [];
     const note = (content: string, tone: ChatMessage["noteTone"]): ChatMessage => ({
       id: noteId(),
       role: "system",
@@ -97,8 +99,8 @@ registerSlashCommand({
     });
 
     if (!question) {
-      const hint = note("Ask a side question after `/btw`, e.g. `/btw what did we decide about the schema?` — it's answered from this chat's context but never becomes part of it.", "info");
-      chatStore.updateMessages(sessionId, (messages) => [...messages, hint]);
+      chatStore.updateMessages(sessionId, [...messagesOf(),
+        note("Ask a side question after `/btw`, e.g. `/btw what did we decide about the schema?` — it's answered from this chat's context but never becomes part of it.", "info")]);
       ctx.focusComposer();
       return true;
     }
@@ -107,27 +109,26 @@ registerSlashCommand({
     // They live in the chat store, never the server checkpoint — the side exchange is
     // overlaid on the conversation, not saved into it.
     const pendingId = noteId();
-    const asked = [
+    chatStore.updateMessages(sessionId, [
+      ...messagesOf(),
       note(`**↪ Aside:** ${question}`, "info"),
       { ...note("Thinking… (this won't be saved to the conversation)", "info"), id: pendingId },
-    ];
-    chatStore.updateMessages(sessionId, (messages) => [...messages, ...asked]);
+    ]);
     ctx.focusComposer();
 
-    // Swap the pending bubble for the outcome, against the CURRENT transcript.
-    const settle = (outcome: ChatMessage) =>
-      chatStore.updateMessages(sessionId, (messages) => [...messages.filter((m) => m.id !== pendingId), outcome]);
+    const withoutPending = () => messagesOf().filter((m) => m.id !== pendingId);
     void api
       .asideChatSession(sessionId, question)
       .then((res) => {
         if (!res.found) {
-          settle(note(res.message || "Nothing to answer against yet.", "warning"));
+          chatStore.updateMessages(sessionId, [...withoutPending(), note(res.message || "Nothing to answer against yet.", "warning")]);
           return;
         }
-        settle(note(`**↩ Aside answer** _(not saved to the conversation)_\n\n${res.answer}`, "info"));
+        chatStore.updateMessages(sessionId, [...withoutPending(),
+          note(`**↩ Aside answer** _(not saved to the conversation)_\n\n${res.answer}`, "info")]);
       })
       .catch((e) => {
-        settle(note(`Aside failed — ${errMsg(e)}`, "danger"));
+        chatStore.updateMessages(sessionId, [...withoutPending(), note(`Aside failed — ${errMsg(e)}`, "danger")]);
       });
     return true;
   },
@@ -263,18 +264,22 @@ registerSlashCommand({
   run: (ctx) => {
     if (!ctx.sessionId) return false; // no session → fall through
     const sessionId = ctx.sessionId;
+    const messagesOf = () =>
+      chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)?.messages ?? [];
 
     // Optimistic note (own id so we can drop it once the server responds).
     const pendingId = noteId();
-    const pendingNote: ChatMessage = {
-      id: pendingId,
-      role: "system",
-      content: "Compacting this conversation — archiving older history and summarizing…",
-      noteTone: "info",
-      createdAt: Date.now(),
-      status: "done",
-    };
-    chatStore.updateMessages(sessionId, (messages) => [...messages, pendingNote]);
+    chatStore.updateMessages(sessionId, [
+      ...messagesOf(),
+      {
+        id: pendingId,
+        role: "system",
+        content: "Compacting this conversation — archiving older history and summarizing…",
+        noteTone: "info",
+        createdAt: Date.now(),
+        status: "done",
+      },
+    ]);
     ctx.focusComposer();
 
     const note = (content: string, tone: ChatMessage["noteTone"]): ChatMessage => ({
@@ -286,7 +291,7 @@ registerSlashCommand({
       status: "done",
     });
     // Drop only the optimistic note — preserve anything that streamed in meanwhile.
-    const withoutPending = (messages: ChatMessage[]) => messages.filter((m) => m.id !== pendingId);
+    const withoutPending = () => messagesOf().filter((m) => m.id !== pendingId);
 
     void api
       .compactChatSession(sessionId)
@@ -294,25 +299,27 @@ registerSlashCommand({
         // Never-lossy: only drop history when the server actually rewrote the
         // checkpoint (archived + removed > 0). Otherwise just surface the status.
         if (res.refused || !res.archived || res.removed <= 0) {
-          const status = note(res.message, res.refused ? "warning" : "info");
-          chatStore.updateMessages(sessionId, (messages) => [...withoutPending(messages), status]);
+          chatStore.updateMessages(sessionId, [
+            ...withoutPending(),
+            note(res.message, res.refused ? "warning" : "info"),
+          ]);
           return;
         }
         // Mirror the server: replace the view with a summary bubble + the recent
         // tail. Slice from the CURRENT messages (minus the pending note) so nothing
         // that arrived during the compaction is lost.
+        const kept = res.kept > 0 ? withoutPending().slice(-res.kept) : [];
         const summary = note(
           `**Conversation compacted.** ${res.message}\n\n---\n\n${res.summary}`,
           "success",
         );
-        chatStore.updateMessages(sessionId, (messages) => {
-          const kept = res.kept > 0 ? withoutPending(messages).slice(-res.kept) : [];
-          return [summary, ...kept];
-        });
+        chatStore.updateMessages(sessionId, [summary, ...kept]);
       })
       .catch(() => {
-        const failed = note("Compaction failed — nothing was changed.", "danger");
-        chatStore.updateMessages(sessionId, (messages) => [...withoutPending(messages), failed]);
+        chatStore.updateMessages(sessionId, [
+          ...withoutPending(),
+          note("Compaction failed — nothing was changed.", "danger"),
+        ]);
       });
 
     return true;

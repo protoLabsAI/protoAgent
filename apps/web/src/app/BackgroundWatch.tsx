@@ -50,7 +50,8 @@ function appendSystem(
   report?: ChatMessage["report"],
   noteTone?: ChatMessage["noteTone"],
 ): boolean {
-  if (!chatStore.getSnapshot().sessions.some((s) => s.id === sessionId)) return false;
+  const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  if (!session) return false;
   const msg: ChatMessage = {
     id: `bg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     role: "system",
@@ -60,7 +61,7 @@ function appendSystem(
     ...(report ? { report } : {}),
     ...(noteTone ? { noteTone } : {}),
   };
-  chatStore.updateMessages(sessionId, (messages) => [...messages, msg]);
+  chatStore.updateMessages(sessionId, [...session.messages, msg]);
   return true;
 }
 

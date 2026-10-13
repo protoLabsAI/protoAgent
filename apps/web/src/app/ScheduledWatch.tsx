@@ -44,7 +44,8 @@ function markNotified(key: string) {
 /** Append a display-only scheduled-result message to a session IF it's open in this window.
  *  Returns false when the chat isn't local (the result still lives in Activity). */
 function appendScheduled(sessionId: string, scheduled: NonNullable<ChatMessage["scheduled"]>): boolean {
-  if (!chatStore.getSnapshot().sessions.some((s) => s.id === sessionId)) return false;
+  const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  if (!session) return false;
   const msg: ChatMessage = {
     id: `sched-${scheduled.jobId}-${scheduled.firedAt}`,
     role: "system",
@@ -56,7 +57,7 @@ function appendScheduled(sessionId: string, scheduled: NonNullable<ChatMessage["
     status: "done",
     scheduled,
   };
-  chatStore.updateMessages(sessionId, (messages) => [...messages, msg]);
+  chatStore.updateMessages(sessionId, [...session.messages, msg]);
   return true;
 }
 
