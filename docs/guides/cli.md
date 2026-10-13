@@ -13,16 +13,16 @@ protoagent --help                 # the command is `protoagent` (install name di
 
 Upgrade with `uv tool upgrade protolabs-agent` (or `pipx upgrade protolabs-agent`).
 
-A source checkout doesn't have the `protoagent` command: uv doesn't install the project itself
-into a checkout's environment (`[tool.uv] package = false`), so `uv run protoagent` fails with
-"Failed to spawn". Run the same subcommands through the server module instead:
+In a source checkout, install the project into its own environment first. The
+editable install exposes the same CLI while loading Python code from `src/`:
 
 ```bash
-uv run python -m server fleet --help   # the same as `protoagent fleet --help`
+uv sync
+uv run protoagent fleet --help
 ```
 
-`python -m server <subcommand>` keeps working — both front doors route through the
-same dispatcher (`server/cli.py::dispatch`), so they can never drift.
+`uv run python -m server <subcommand>` also works. Both front doors route through
+`src/server/cli.py::dispatch`.
 
 ## Commands
 

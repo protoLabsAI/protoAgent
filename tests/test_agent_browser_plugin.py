@@ -3299,7 +3299,7 @@ def _in_tree_tool_names() -> set[str]:
     a skill may legitimately point at a core/other-plugin tool (``save_file_artifact``).
     """
     names: set[str] = set()
-    for base in (REPO / "plugins", REPO / "tools", REPO / "graph"):
+    for base in (REPO / "plugins", REPO / "src" / "tools", REPO / "src" / "graph"):
         for path in base.rglob("*.py"):
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))

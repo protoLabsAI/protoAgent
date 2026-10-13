@@ -57,6 +57,7 @@ import httpx
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
+sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
 from evals import verify  # noqa: E402
 from evals.compare import _category_passed, _pct  # noqa: E402

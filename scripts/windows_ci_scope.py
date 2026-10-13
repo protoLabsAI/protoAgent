@@ -72,8 +72,8 @@ def _normalize(path: str) -> str:
 # workspace and fails if one isn't covered here.
 _WEB_EXTERNAL_PATHS = (
     "plugins/artifact/",
-    "runtime/flags.py",
-    "graph/snapshot_op.py",
+    "src/runtime/flags.py",
+    "src/graph/snapshot_op.py",
 )
 _WEB_ROOT_FILES = {".npmrc", ".nvmrc", "package.json", "package-lock.json"}
 

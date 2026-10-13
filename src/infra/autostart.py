@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
-REPO_ROOT = Path(__file__).parent.resolve()
+REPO_ROOT = Path(__file__).resolve().parents[1]  # import root (src/ in a checkout)
 
 
 # ---------------------------------------------------------------------------

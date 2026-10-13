@@ -27,7 +27,7 @@ from runtime.context import ContextAssembler
 
 log = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]  # repo root (where the `server` pkg lives)
+_REPO_ROOT = Path(__file__).resolve().parents[1]  # import root (src/ in a checkout; contains server)
 
 # Best-effort launch commands per agent, derived from the canonical catalog
 # (runtime/acp_agents.py) — ACP servers drift, so these are *defaults* the operator can

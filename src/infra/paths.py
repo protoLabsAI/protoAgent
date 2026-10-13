@@ -160,18 +160,12 @@ def _anchored_pyproject_version() -> str | None:
 
     - **Frozen (PyInstaller onefile):** the bundle root ``_MEIPASS``, where
       ``build_sidecar.py`` bundles ``pyproject.toml`` (#894).
-    - **Source checkout / ``COPY .`` image:** the repo root, exactly two levels up
-      (this module is ``<root>/infra/paths.py``).
+    - **Source checkout / ``COPY .`` image:** the repo root, including the
+      ``src/infra/paths.py`` layout recognized by ``_app_root``.
     - **Wheel install:** the anchor is ``site-packages`` — no pyproject there, so
       this returns ``None`` and installed metadata answers instead.
     """
-    import sys
-
-    here = Path(__file__).resolve()
-    if getattr(sys, "frozen", False):
-        root = Path(getattr(sys, "_MEIPASS", here.parent))
-    else:
-        root = here.parents[1]
+    root = _app_root()
     try:
         m = re.search(r'^version\s*=\s*"([^"]+)"', (root / "pyproject.toml").read_text(), re.MULTILINE)
     except OSError:
@@ -628,13 +622,31 @@ def colocation_warning() -> str | None:
 
 
 def _app_root() -> Path:
-    """Read-only bundle root: ``_MEIPASS`` when PyInstaller-frozen, else the repo
-    root (two levels up from this module)."""
-    import sys
+    """Read-only assets beside installed packages, or at the source/bundle root.
 
-    if getattr(sys, "frozen", False):  # PyInstaller onefile — bundle at _MEIPASS (#894)
-        return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
-    return Path(__file__).resolve().parents[1]
+    Only the immediate parent of a ``src`` import root is considered, and only
+    for this project's manifest. Never search upwards or consult the cwd: an
+    installed wheel may live inside an unrelated application's checkout.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", root))
+    if root.name == "src":
+        try:
+            manifest = tomllib.loads((root.parent / "pyproject.toml").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        else:
+            if manifest.get("project", {}).get("name") in {"protolabs-agent", "protoagent"}:
+                return root.parent
+    return root
+
+
+def app_root() -> Path:
+    """Read-only asset root shared by runtime consumers across deployment layouts."""
+    return _app_root()
 
 
 def box_root() -> Path:

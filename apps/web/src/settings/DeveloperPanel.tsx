@@ -77,7 +77,7 @@ export function DeveloperPanel() {
       <div className="stage-body">
         {flags.length === 0 ? (
           <Empty>
-            No developer flags are registered. Add one in <code>runtime/flags.py</code>.
+            No developer flags are registered. Add one in <code>src/runtime/flags.py</code>.
           </Empty>
         ) : (
           flags.map((f) => <FlagRow key={f.id} flag={f} />)

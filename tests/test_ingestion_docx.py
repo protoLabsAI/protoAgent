@@ -456,7 +456,7 @@ def _peak_rss_growth_mb(data: bytes, tmp_path, *, repeats: int = 1) -> tuple[int
         """
     )
     # PYTHONPATH, not the inherited cwd: the child has to import THIS checkout's engine.
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
     done = subprocess.run(
         [sys.executable, "-c", program, str(path), str(repeats)],
         capture_output=True,
@@ -525,7 +525,7 @@ def _rss_after_extractions(data: bytes, tmp_path, *, repeats: int) -> int:
         print(resident_kb() // 1024)
         """
     )
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
     done = subprocess.run(
         [sys.executable, "-c", program, str(path), str(repeats)],
         capture_output=True,

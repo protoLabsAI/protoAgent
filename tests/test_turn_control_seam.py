@@ -166,7 +166,7 @@ def test_callers_reach_the_patched_helpers_through_turn_control():
         "server/turn_stream.py",
         "server/goal_loop.py",
     ):
-        tree = ast.parse((_REPO / rel).read_text(encoding="utf-8"))
+        tree = ast.parse((_REPO / "src" / rel).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in _CALL_THROUGH:
                 offenders.append(f"{rel}:{node.lineno} bare {node.id}")
