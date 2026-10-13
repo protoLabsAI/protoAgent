@@ -1761,3 +1761,28 @@ def test_bundle_member_refuses_a_breaking_release(env, monkeypatch):
     installer.install(str(bundle))
     assert "v0.2.0" not in seen, "a breaking release was adopted automatically"
     assert "v0.1.0" in seen, f"did not fall back to the pinned floor: {seen}"
+
+
+@pytest.mark.parametrize("allow", ["https://example.com", {"github.com/acme/*": True}, 42, [42]])
+def test_source_allowlist_rejects_malformed_values_in_runtime_and_cli(tmp_path, monkeypatch, allow):
+    import yaml
+    from graph.config import LangGraphConfig
+    from graph.plugins.installer import InstallError, configured_allowlist
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.safe_dump({"plugins": {"sources": {"allow": allow}}}))
+    monkeypatch.setattr("graph.config_io.config_yaml_path", lambda: cfg)
+    with pytest.raises(ValueError, match=r"sources\.allow.*list of strings"):
+        LangGraphConfig.from_yaml(str(cfg))
+    with pytest.raises(InstallError, match=r"sources\.allow.*list of strings"):
+        configured_allowlist()
+
+
+def test_unreadable_source_policy_does_not_open_cli_installs(tmp_path, monkeypatch):
+    from graph.plugins.installer import InstallError, configured_allowlist
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("plugins: [\n")
+    monkeypatch.setattr("graph.config_io.config_yaml_path", lambda: cfg)
+    with pytest.raises(InstallError, match="Cannot read plugin source allowlist"):
+        configured_allowlist()

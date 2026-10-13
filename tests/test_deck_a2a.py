@@ -557,3 +557,22 @@ def test_a_repeated_tool_start_keeps_the_recorded_result():
     )
     (c1,) = t.tool_calls
     assert (c1.output, c1.output_chars, c1.status) == ("file.txt", 1234, "running") and c1.duration_ms is not None
+
+
+@pytest.mark.parametrize("message,expected", [({"parts": [{"text": "backend failed"}]}, "backend failed"), (None, "the turn failed")])
+def test_failed_snapshot_restores_failure_marker(message, expected):
+    turn = a2a.Turn(context_id=CID)
+    a2a.replay_task_snapshot(turn, {"status": {"state": "TASK_STATE_FAILED", "message": message}})
+    assert turn.done and turn.state == "failed"
+    assert turn.failed == expected
+
+
+@pytest.mark.parametrize("size,expected", [(0, 0), (None, 42)])
+def test_snapshot_tool_size_distinguishes_zero_from_missing(size, expected):
+    turn = fold(status(metadata=tool("completed", result="prior", outputChars=42)))
+    a2a.replay_task_snapshot(turn, {
+        "history": [{"role": "ROLE_AGENT", "metadata": tool("completed", result="", outputChars=size)}],
+        "status": {"state": "TASK_STATE_COMPLETED"},
+    })
+    assert turn.tool("c1").output == ""
+    assert turn.tool("c1").output_chars == expected

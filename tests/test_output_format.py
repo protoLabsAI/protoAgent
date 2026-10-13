@@ -49,3 +49,10 @@ def test_strip_reasoning_is_storage_guard_and_idempotent():
 
 def test_strip_reasoning_keeps_non_reasoning_content():
     assert strip_reasoning("a normal note about the project") == "a normal note about the project"
+
+
+def test_literal_reasoning_close_tag_is_preserved():
+    text = "Use `</think>` literally."
+    assert strip_reasoning(text) == text
+    assert extract_output(text) == text
+    assert strip_reasoning("</think>answer") == "answer"
