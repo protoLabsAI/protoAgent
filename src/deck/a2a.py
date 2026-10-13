@@ -547,7 +547,7 @@ def replay_task_snapshot(turn: Turn, task: dict) -> None:
         for c in fresh.tool_calls:  # a card seen live keeps its timing; new ones join in order
             live = known.get(c.id)
             if live is not None:
-                live.status, live.output, live.output_chars = c.status, c.output if c.output is not None else live.output, c.output_chars or live.output_chars
+                live.status, live.output, live.output_chars = c.status, c.output if c.output is not None else live.output, c.output_chars if c.output_chars is not None else live.output_chars
                 live.parent_id = live.parent_id or c.parent_id
                 merged.append(live)
             else:
@@ -572,6 +572,10 @@ def replay_task_snapshot(turn: Turn, task: dict) -> None:
     if is_paused(state):
         parts = (status.get("message") or {}).get("parts") if isinstance(status.get("message"), dict) else None
         turn.hitl = hitl_from_parts(parts) or {"question": _text_from_parts(parts) or "Input required."}
+    if state == "failed":
+        message = status.get("message")
+        parts = message.get("parts") if isinstance(message, dict) else None
+        turn.failed = _text_from_parts(parts) or "the turn failed"
     if is_terminal(state):
         turn.done = True
 
