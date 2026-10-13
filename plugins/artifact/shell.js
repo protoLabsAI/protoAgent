@@ -213,18 +213,20 @@
   }
   function base(kind){
     // themeTokenSnapshot reads all --pl-* tokens + color-scheme off the live root element;
-    // snapshotToCss guards values for <{};, names for --pl-* (ADR 0118). Falls back to an
-    // empty string when the embed module failed to load — artifacts still render, just without
-    // injected tokens. html/body read tokens through var() (literal fallback) so the SHIM's
+    // snapshotToCss guards values for <{};, names for --pl-* (ADR 0118). Falls back to a
+    // scheme-only rule when the embed module failed to load. html/body read tokens through
+    // var() (literal fallback) so the SHIM's
     // live re-theme reaches them by updating tokens alone — never by inline styles that would
     // override the author's own body colours (#4124). This rule precedes the author's CSS, so
     // theirs wins. __artKind lets ERRBOOT decide how to confirm a clean render.
     var snap=themeTokens();
-    var rootCss=snapshotToCss ? snapshotToCss(snap,":root") : "";
-    // Minimal hex fallbacks for the html,body rule only; snapshotToCss owns the :root block
-    // (including these tokens) when the embed module is present.
-    var bg=snap["--pl-color-bg"]||"#0a0a0c", fg=snap["--pl-color-fg"]||"#ededed";
-    return '<style id="__artbase">'+rootCss
+    var rootCss=snapshotToCss ? snapshotToCss(snap,":root") : ":root{color-scheme:"+(bgIsDark(snap["--pl-color-bg"])?"dark":"light")+"}";
+    // Static defaults precede the live rule, so missing tokens and module-load failures
+    // retain usable controls. Keep them outside __artbase: SHIM updates its first rule.
+    // Dynamic values cross into CSS only through the DS serializer.
+    var bg="#0a0a0c", fg="#ededed";
+    return '<style>:root{--pl-color-bg:#0a0a0c;--pl-color-fg:#ededed;--pl-color-accent:#9b87f2;--pl-color-border:rgba(255,255,255,.08);--pl-color-fg-muted:#9aa0aa}</style>'
+      + '<style id="__artbase">'+rootCss
       + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}'
       + DEFAULTS + '</style>'
       + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT;
@@ -253,7 +255,7 @@
   // into a flat record; snapshotToCss(snap,sel) serialises it to a safe CSS rule — values
   // carrying < { } ; are DROPPED (never escaped), so token CSS crossing into a frame is
   // sanitised (ADR 0118). If the module fails to load, all frames degrade to no injected
-  // tokens but still render (themeTokens() returns {} → snapshotToCss guarded at call site).
+  // tokens but still render with static defaults and a live color-scheme.
   var themeTokenSnapshot = null, snapshotToCss = null;
   try {
     var _dsEmbed = await import(ORIGIN + "/plugins/artifact/vendor/pl-design-embed.mjs");
@@ -1281,12 +1283,13 @@
   // ── theme tokens for a frame ────────────────────────────────────────────────────────────
   // The live theme as a flat snapshot, delivered by the DS embed layer (pl-design-embed.mjs:
   // themeTokenSnapshot + snapshotToCss, ADR 0118). Pushed into every frame on a re-theme
-  // (pushTheme) and baked into a chart's srcdoc (vegaDoc). Falls back to {} when the embed
-  // module is absent so callers that read individual keys (bgIsDark, vega cfg) get undefined
-  // rather than throwing.
+  // (pushTheme) and baked into a chart's srcdoc (vegaDoc). Even when the module fails,
+  // read the ground directly so the shell and frame color-scheme still follow the console.
   function themeTokens(){
     if(themeTokenSnapshot) return themeTokenSnapshot(document.documentElement);
-    return {};
+    var cs=getComputedStyle(document.documentElement);
+    return {"--pl-color-bg":cs.getPropertyValue("--pl-color-bg").trim()||"#0a0a0c",
+      "--pl-color-fg":cs.getPropertyValue("--pl-color-fg").trim()||"#ededed"};
   }
   // ── vega-lite charts (ADR 0116) ─────────────────────────────────────────────────────────
   // A chart is a Vega-Lite spec with its data INLINE (data.values): the model writes a small spec

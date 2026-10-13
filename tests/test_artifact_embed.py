@@ -568,3 +568,48 @@ def test_frame_color_scheme_follows_the_console_ground_not_the_os(monkeypatch, t
         " bgIsDark('rgb(10, 10, 12)'), bgIsDark('#000')]));"
     )
     assert _node(harness) == [True, False, False, True, True]
+
+
+def test_base_theme_css_and_module_failure_preserve_defaults(monkeypatch, tmp_path):
+    """Exercise the real DS serializer and frame builder, including the unavailable-module path."""
+    import json
+    from tests.test_artifact_plugin import ROOT
+
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    module_url = (ROOT / "vendor/pl-design-embed.mjs").as_uri()
+    harness = (
+        "var SHIM='', ERRBOOT='', DEFAULTS='', $frame=null;\n"
+        + _js_function(js, "themeTokens")
+        + _js_function(js, "bgIsDark")
+        + _js_function(js, "base")
+        + _js_function(js, "pushTheme")
+        + "\n(async()=>{const ds=await import(" + json.dumps(module_url) + ");\n"
+        + r"""
+let values={'--pl-color-bg':'#fafafa','--pl-color-fg':'#111'};
+const root={style:{colorScheme:'light'}};
+const computed=()=>({getPropertyValue:k=>k==='color-scheme'?root.style.colorScheme:values[k]||''});
+root.ownerDocument={defaultView:{getComputedStyle:computed}};
+global.document={documentElement:root,createElement:()=>{throw Error('no canvas');}};
+global.getComputedStyle=computed;
+themeTokenSnapshot=ds.themeTokenSnapshot; snapshotToCss=ds.snapshotToCss;
+const light=base('html');
+values['--pl-color-bg']='</style><script>evil()</script>';
+const hostile=base('html');
+values={}; const missing=base('html');
+values={'--pl-color-bg':'#fafafa'};
+themeTokenSnapshot=null; snapshotToCss=null;
+pushTheme(); const absent=base('html');
+console.log(JSON.stringify({light,hostile,missing,absent,scheme:root.style.colorScheme}));
+})().catch(e=>{console.error(e);process.exit(1);});
+"""
+    )
+    out = _node(harness)
+    for key in ("light", "hostile", "missing", "absent"):
+        assert "--pl-color-accent:#9b87f2" in out[key]
+        assert "--pl-color-border:rgba(255,255,255,.08)" in out[key]
+        assert "--pl-color-fg-muted:#9aa0aa" in out[key]
+        assert '<style id="__artbase">:root{' in out[key]
+    assert "--pl-color-bg:#fafafa" in out["light"]
+    assert "evil()" not in out["hostile"]
+    assert "color-scheme:light" in out["absent"]
+    assert out["scheme"] == "light"
