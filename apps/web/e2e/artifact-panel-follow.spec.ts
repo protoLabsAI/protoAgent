@@ -181,3 +181,33 @@ test("a context posted by the artifact's own frame is ignored", async ({ page })
   await page.waitForTimeout(3500);
   await expect(p.sel).toHaveValue("evil");
 });
+
+for (const moduleUnavailable of [false, true]) {
+  test(`artifact controls retain spacing and author overrides with embed module ${moduleUnavailable ? "unavailable" : "available"}`, async ({ page }) => {
+    let moduleBlocked = false;
+    if (moduleUnavailable) {
+      await page.route("**/plugins/artifact/vendor/pl-design-embed.mjs", (route) => {
+        moduleBlocked = true;
+        return route.abort();
+      });
+    }
+    await liveStore(page, {
+      artifacts: [art("controls", "html", '<style>body{font-size:16px}#custom{padding:3px}</style><input id="field"><button id="plain">Plain</button><button id="custom">Custom</button>', 100)],
+      current: "controls",
+    });
+    await page.goto(VIEW);
+    const frame = page.frameLocator("#frame");
+    await expect(frame.locator("#field")).toHaveCSS("padding", "6px 8px");
+    await expect(frame.locator("#plain")).toHaveCSS("padding", "6px 12px");
+    const lineHeight = moduleUnavailable ? "1.5" : await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--pl-font-line-height-body").trim());
+    await expect(frame.locator("body")).toHaveCSS("line-height", `${16 * Number(lineHeight)}px`);
+    if (moduleUnavailable) expect(moduleBlocked).toBe(true);
+    await expect(frame.locator("#custom")).toHaveCSS("padding", "3px");
+    if (!moduleUnavailable) {
+      await page.evaluate(() => document.documentElement.style.setProperty("--pl-space-1_5", "11px"));
+      await expect(frame.locator("#plain")).toHaveCSS("padding", "11px 12px");
+      await expect(frame.locator("#custom")).toHaveCSS("padding", "3px");
+    }
+  });
+}

@@ -213,7 +213,7 @@
     // retain usable controls. Keep them outside __artbase: SHIM updates its first rule.
     // Dynamic values cross into CSS only through the DS serializer.
     var bg="#0a0a0c", fg="#ededed";
-    return '<style>:root{--pl-color-bg:#0a0a0c;--pl-color-fg:#ededed;--pl-color-accent:#9b87f2;--pl-color-border:rgba(255,255,255,.08);--pl-color-fg-muted:#9aa0aa}</style>'
+    return '<style>:root{--pl-color-bg:#0a0a0c;--pl-color-fg:#ededed;--pl-color-accent:#9b87f2;--pl-color-border:rgba(255,255,255,.08);--pl-color-fg-muted:#9aa0aa;--pl-font-line-height-body:1.5;--pl-space-1_5:6px;--pl-space-2:8px;--pl-space-3:12px}</style>'
       + '<link rel="stylesheet" href="'+ORIGIN+'/plugins/artifact/vendor/pl-embed.css">'
       + '<style id="__artbase">'+rootCss
       + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}'
