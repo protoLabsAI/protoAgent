@@ -4,7 +4,12 @@ source session, stored date (date precision), and namespace, when set."""
 from __future__ import annotations
 
 import asyncio
+import re
 
+import pytest
+
+from knowledge.hybrid_store import HybridKnowledgeStore
+from knowledge.layered import LayeredKnowledgeStore
 from knowledge.store import KnowledgeStore
 from tools.lg_tools import _build_memory_tools, _memory_citation
 
@@ -29,6 +34,43 @@ def test_memory_citation_full_and_partial():
 
 
 # ── memory_recall renders the citation ──────────────────────────────────────
+
+
+@pytest.mark.parametrize("hybrid", [False, True])
+def test_recall_id_can_forget_a_chunk_outside_the_recent_window(tmp_path, hybrid):
+    path = str(tmp_path / "kb.db")
+    store = HybridKnowledgeStore(path, embed_fn=lambda text: [1.0, 0.0]) if hybrid else KnowledgeStore(path)
+    old_id = store.add_chunk("obsolete seedbox listen port", domain="conversation", source="chat-old")
+    for i in range(12):
+        store.add_chunk(f"newer unrelated record {i}", domain="general")
+    tools = _by_name(_build_memory_tools(store))
+    recent = asyncio.run(tools["memory_list"].ainvoke({}))
+    assert not re.search(rf"^#{old_id} ", recent, re.MULTILINE)
+    recalled = asyncio.run(tools["memory_recall"].ainvoke({"query": "seedbox", "domain": "conversation"}))
+    match = re.match(r"#(\d+) \[conversation\]", recalled)
+    assert match, recalled
+    assert int(match[1]) == old_id
+    assert "src: chat-old" in recalled
+    asyncio.run(tools["forget_memory"].ainvoke({"chunk_id": int(match[1]), "reason": "stale port"}))
+    assert store.get_chunk(old_id) is None
+    assert asyncio.run(tools["memory_recall"].ainvoke({"query": "seedbox", "domain": "conversation"})) == "No matches."
+    assert len(store.list_chunks(limit=20)) == 12
+
+
+def test_shared_recall_and_list_do_not_offer_a_private_deletion_handle(tmp_path):
+    private = KnowledgeStore(str(tmp_path / "private.db"))
+    commons = KnowledgeStore(str(tmp_path / "commons.db"))
+    private_id = private.add_chunk("private seedbox setting")
+    shared_id = commons.add_chunk("shared seedbox guidance")
+    assert private_id == shared_id  # each store allocates its own IDs
+    tools = _by_name(_build_memory_tools(LayeredKnowledgeStore(private, commons)))
+    for name, args in [("memory_recall", {"query": "seedbox"}), ("memory_list", {})]:
+        out = asyncio.run(tools[name].ainvoke(args))
+        lines = out.splitlines()
+        assert next(line for line in lines if "private seedbox" in line).startswith(f"#{private_id} ")
+        shared = next(line for line in lines if "shared seedbox" in line)
+        assert shared.startswith(f"commons:{shared_id} ")
+        assert "not deletable with forget_memory" in shared
 
 
 def test_memory_recall_cites_source_date_and_namespace(tmp_path):
