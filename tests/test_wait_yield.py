@@ -368,3 +368,14 @@ def test_wait_turn_reply_matches_the_real_tool_confirmation():
     wait = next(t for t in _build_scheduler_tools(_Sched()) if t.name == "wait")
     out = asyncio.run(wait.ainvoke({"seconds": 2700, "then": "Check the board.", "state": {}}))
     assert wait_turn_reply(out) == "I'll pick this back up in 45 minutes."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seconds", [10**100, 10**12])
+async def test_out_of_range_wait_preserves_pending_wakeup(seconds):
+    sched = _FakeScheduler()
+    sched.jobs["wait:activity"] = "existing wakeup"
+    out = await _wait_tool(sched).ainvoke({"seconds": seconds, "then": "Resume later"})
+    assert out.startswith("Error:")
+    assert sched.jobs == {"wait:activity": "existing wakeup"}
+    assert sched.cancelled == [] and sched.added == []

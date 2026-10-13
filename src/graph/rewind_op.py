@@ -78,7 +78,11 @@ def _safe_cut_end(messages: list, end: int) -> int:
         return end
     # Forward: while the kept prefix has unanswered tool calls and the very next
     # message is a ToolMessage answering the block, pull it in.
-    while end < n and isinstance(messages[end], ToolMessage) and _open_tool_calls(messages[:end]):
+    while (
+        end < n
+        and isinstance(messages[end], ToolMessage)
+        and messages[end].tool_call_id in _open_tool_calls(messages[:end])
+    ):
         end += 1
     # Back: if the prefix is still unbalanced (couldn't answer forward), retreat
     # before the requesting AIMessage(s) until nothing is orphaned.

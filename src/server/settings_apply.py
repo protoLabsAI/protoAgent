@@ -338,6 +338,16 @@ def _apply_settings_changes(
     # would destroy work to fix a mismatch that the persona didn't cause.
     snaps = _snapshot_config_files() if config is not None else None
 
+    def failed_write(reason: str) -> tuple[bool, list[str]]:
+        failure = [reason]
+        if snaps is not None:
+            restored = _restore_config_files(snaps)
+            if restored:
+                # A per-file restore can fail independently: name only confirmed
+                # restores rather than claiming every config file is unchanged.
+                failure.append("restored config file(s): " + ", ".join(restored))
+        return False, failure
+
     if config is not None:
         ok, err = validate_config_dict(config)
         if not ok:
@@ -365,7 +375,7 @@ def _apply_settings_changes(
                     )
             except Exception as e:
                 log.exception("[config] host YAML write failed")
-                return False, [f"host config write: {e}"]
+                return failed_write(f"host config write: {e}")
         else:
             try:
                 import graph.config_io as _cio
@@ -380,7 +390,7 @@ def _apply_settings_changes(
                 messages.append("config saved")
             except Exception as e:
                 log.exception("[config] YAML write failed")
-                return False, [f"config write: {e}"]
+                return failed_write(f"config write: {e}")
 
     if soul is not None:
         try:
@@ -388,7 +398,7 @@ def _apply_settings_changes(
             messages.append(f"SOUL saved ({len(paths)} path{'s' if len(paths) != 1 else ''})")
         except Exception as e:
             log.exception("[config] SOUL write failed")
-            return False, [f"soul write: {e}"]
+            return failed_write(f"soul write: {e}")
 
     # Drawer toggles of runtime.autostart_on_boot ride this path,
     # not the wizard's finish_setup, so the LaunchAgent plist has

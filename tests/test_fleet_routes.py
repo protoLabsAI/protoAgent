@@ -1065,3 +1065,22 @@ def test_create_rejects_bad_ref(client, monkeypatch, body):
 
     monkeypatch.setattr(manager, "create", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not create")))
     assert client.post("/api/fleet", json={"name": "x", "start": False, **body}).status_code == 400
+
+
+@pytest.mark.parametrize("method,path", [("get", "/api/fleet/discover"), ("post", "/api/fleet/host/activate")])
+def test_discovery_and_activation_status_run_without_event_loop(client, monkeypatch, method, path):
+    from graph.fleet import discovery, supervisor
+
+    def status():
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return [{"name": "host", "id": "host", "host": True}]
+        raise AssertionError("status probes must not block the event loop")
+
+    async def discover(**kwargs):
+        return []
+
+    monkeypatch.setattr(supervisor, "status", status)
+    monkeypatch.setattr(discovery, "discover", discover)
+    assert getattr(client, method)(path).status_code == 200
