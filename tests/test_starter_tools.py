@@ -82,6 +82,40 @@ async def test_calculator_handles_syntax_error():
     assert result.startswith("Error:")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expression", ["2 ** 1000000000000", "2 ** -1000000000000", "999999999999999999 ** 4096"])
+async def test_calculator_refuses_expensive_power_before_calling_operator(monkeypatch, expression):
+    import ast
+
+    from tools import lg_tools
+
+    calls = []
+
+    def record_power(left, right):
+        calls.append((left, right))
+        return 0  # never evaluate an unbounded power even if the regression returns
+
+    monkeypatch.setitem(lg_tools._BIN_OPS, ast.Pow, record_power)
+    result = await lg_tools.calculator.ainvoke({"expression": expression})
+    assert result.startswith("Error:") and "limit" in result
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expression", [
+    "9" * 1400,  # large literal, before any operators
+    "(2 ** 2000) * (2 ** 2000) * (2 ** 2000)",  # oversized intermediate
+    "1+" * 300 + "1",  # too many AST nodes
+    "-" * 100 + "1",  # too much recursion even with few nodes
+    " " * 5000 + "1",  # parser input budget
+], ids=["literal", "intermediate", "node-count", "depth", "input-length"])
+async def test_calculator_bounds_input_and_intermediate_work(expression):
+    from tools.lg_tools import calculator
+
+    result = await calculator.ainvoke({"expression": expression})
+    assert result.startswith("Error:") and "limit" in result
+
+
 # ── current_time ─────────────────────────────────────────────────────────────
 
 

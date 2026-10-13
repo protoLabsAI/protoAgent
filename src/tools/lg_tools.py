@@ -278,24 +278,47 @@ _UNARY_OPS: dict[type, object] = {
     ast.USub: _op.neg,
 }
 
+_CALC_MAX_CHARS = 4096
+_CALC_MAX_NODES = 512
+_CALC_MAX_DEPTH = 64
+_CALC_MAX_BITS = 4096
 
-def _safe_eval(node: ast.AST) -> float | int:
+
+def _bounded_number(value):
+    if isinstance(value, int) and value.bit_length() > _CALC_MAX_BITS:
+        raise ValueError(f"integer size limit is {_CALC_MAX_BITS} bits")
+    return value
+
+
+def _safe_eval(node: ast.AST, depth: int = 0) -> float | int:
+    if depth > _CALC_MAX_DEPTH:
+        raise ValueError(f"expression depth limit is {_CALC_MAX_DEPTH}")
     if isinstance(node, ast.Expression):
-        return _safe_eval(node.body)
+        return _safe_eval(node.body, depth + 1)
     if isinstance(node, ast.Constant):
         if isinstance(node.value, (int, float)):
-            return node.value
+            return _bounded_number(node.value)
         raise ValueError(f"unsupported constant: {node.value!r}")
     if isinstance(node, ast.BinOp):
         op = _BIN_OPS.get(type(node.op))
         if op is None:
             raise ValueError(f"unsupported binary op: {type(node.op).__name__}")
-        return op(_safe_eval(node.left), _safe_eval(node.right))
+        left = _safe_eval(node.left, depth + 1)
+        right = _safe_eval(node.right, depth + 1)
+        if isinstance(node.op, ast.Pow):
+            if abs(right) > _CALC_MAX_BITS:
+                raise ValueError(f"exponent magnitude limit is {_CALC_MAX_BITS}")
+            # Reject before pow allocates its result. Other integer operations have
+            # bounded operands and can grow by at most a factor of two in bit size.
+            if isinstance(left, int) and isinstance(right, int) and right > 0:
+                if left.bit_length() * right > _CALC_MAX_BITS:
+                    raise ValueError(f"power result size limit is {_CALC_MAX_BITS} bits (estimated)")
+        return _bounded_number(op(left, right))
     if isinstance(node, ast.UnaryOp):
         op = _UNARY_OPS.get(type(node.op))
         if op is None:
             raise ValueError(f"unsupported unary op: {type(node.op).__name__}")
-        return op(_safe_eval(node.operand))
+        return _bounded_number(op(_safe_eval(node.operand, depth + 1)))
     raise ValueError(f"unsupported expression node: {type(node).__name__}")
 
 
@@ -306,6 +329,8 @@ async def calculator(expression: str) -> str:
 
     Supports ``+ - * / // % **`` and unary ``-``. No names, no function
     calls, no variables — this is a pocket calculator, not a REPL.
+    Expression length, depth, operation count, and integer size are bounded;
+    oversized computations return an error before expensive exponentiation.
 
     Args:
         expression: A Python-style arithmetic expression, e.g.
@@ -314,7 +339,11 @@ async def calculator(expression: str) -> str:
     Returns a string with the result, or a readable error.
     """
     try:
+        if len(expression) > _CALC_MAX_CHARS:
+            raise ValueError(f"expression length limit is {_CALC_MAX_CHARS} characters")
         tree = ast.parse(expression, mode="eval")
+        if sum(1 for _ in ast.walk(tree)) > _CALC_MAX_NODES:
+            raise ValueError(f"expression complexity limit is {_CALC_MAX_NODES} AST nodes")
         result = _safe_eval(tree)
     except SyntaxError:
         return f"Error: not a valid expression: {expression!r}"
