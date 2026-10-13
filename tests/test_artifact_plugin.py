@@ -932,6 +932,37 @@ def test_the_vendored_embed_css_matches_the_installed_package():
     assert f"@protolabsai/ui-css@{version}" in vend, f"pl-embed.css header must name ui-css@{version}"
 
 
+# ── shell.js uses the DS embed layer for frame token injection (ADR 0118) ────────
+
+
+def test_shell_uses_embed_module_for_token_injection(monkeypatch, tmp_path):
+    """shell.js must have NO hand-written THEME_TOKENS list (deleted in favour of the DS embed
+    layer) and must reference the two DS embed functions it delegates to.  The embed module
+    itself is separately guarded by the drift + serve tests above; this test just confirms the
+    wiring in shell.js is present."""
+    art = _load(monkeypatch, tmp_path)
+    js = art._SHELL_JS
+    # The hand-written list is gone — a literal "THEME_TOKENS" in shell.js is a regression.
+    assert "THEME_TOKENS" not in js
+    # The DS embed functions must be referenced (called in themeTokens / base).
+    assert "snapshotToCss" in js
+    assert "themeTokenSnapshot" in js
+    # The module is loaded from the vendor path — same-origin like pl-design-vega.mjs.
+    assert "/plugins/artifact/vendor/pl-design-embed.mjs" in js
+
+
+def test_shell_base_token_css_uses_snapshotToCss(monkeypatch, tmp_path):
+    """base() must build the frame's :root CSS via snapshotToCss, not by manually
+    concatenating individual token declarations.  Guards ADR 0118: every token value
+    crossing into a frame passes through snapshotToCss's < { } ; guard."""
+    art = _load(monkeypatch, tmp_path)
+    js = art._SHELL_JS
+    # snapshotToCss called with the ":root" selector inside base().
+    assert 'snapshotToCss(snap,":root")' in js
+    # The old manual concatenation pattern must not be present.
+    assert "decl+=" not in js and "Object.keys(all).forEach" not in js
+
+
 # ── the new kinds: markdown + the react import map + the DS surface ──────────────
 
 

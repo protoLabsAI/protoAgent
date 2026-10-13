@@ -469,11 +469,13 @@ def test_frames_get_the_full_theme_palette_and_themed_defaults(monkeypatch, tmp_
     defaults so plain <input>/<button> look native while author CSS still wins."""
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
-    for tok in ("--pl-color-bg-raised", "--pl-color-bg-inset", "--pl-color-fg-muted", "--pl-color-border-strong",
-                "--pl-color-status-success", "--pl-radius", "--pl-font-mono"):
-        assert f'"{tok}"' in js, tok  # carried by themeTokens()
+    # Full palette is read dynamically by themeTokenSnapshot (all --pl-* tokens on the live
+    # root element); no hand-written list of token names needed — themeTokens() wraps it.
+    assert "themeTokenSnapshot" in js
     base = _js_function(js, "base")
-    assert "var all=themeTokens()" in base and "color-scheme:" in base and "DEFAULTS" in base
+    # base() takes a snapshot, serialises it via snapshotToCss (includes color-scheme), and
+    # appends DEFAULTS for zero-specificity element defaults.
+    assert "var snap=themeTokens()" in base and "snapshotToCss" in base and "DEFAULTS" in base
     assert ":where(input,select,textarea)" in js and ":where(button)" in js  # zero specificity: author wins
 
 
@@ -551,8 +553,13 @@ def test_frame_color_scheme_follows_the_console_ground_not_the_os(monkeypatch, t
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
     base = _js_function(js, "base")
-    assert 'var scheme=bgIsDark(bg)?"dark":"light";' in base
+    # color-scheme is now set on the shell root by pushTheme() (bgIsDark(--pl-color-bg) →
+    # document.documentElement.style.colorScheme), then captured by themeTokenSnapshot and
+    # serialised into the frame's :root CSS by snapshotToCss — not computed inline in base().
+    assert 'var scheme=bgIsDark(bg)?"dark":"light";' not in base
     assert "cs.colorScheme" not in base
+    push = _js_function(js, "pushTheme")
+    assert 'bgIsDark(tokens["--pl-color-bg"])?"dark":"light"' in push
     if not NODE:
         pytest.skip("node not on PATH")
     fn = _js_function(js, "bgIsDark")
@@ -561,3 +568,48 @@ def test_frame_color_scheme_follows_the_console_ground_not_the_os(monkeypatch, t
         " bgIsDark('rgb(10, 10, 12)'), bgIsDark('#000')]));"
     )
     assert _node(harness) == [True, False, False, True, True]
+
+
+def test_base_theme_css_and_module_failure_preserve_defaults(monkeypatch, tmp_path):
+    """Exercise the real DS serializer and frame builder, including the unavailable-module path."""
+    import json
+    from tests.test_artifact_plugin import ROOT
+
+    js = _load(monkeypatch, tmp_path)._SHELL_JS
+    module_url = (ROOT / "vendor/pl-design-embed.mjs").as_uri()
+    harness = (
+        "var SHIM='', ERRBOOT='', DEFAULTS='', $frame=null;\n"
+        + _js_function(js, "themeTokens")
+        + _js_function(js, "bgIsDark")
+        + _js_function(js, "base")
+        + _js_function(js, "pushTheme")
+        + "\n(async()=>{const ds=await import(" + json.dumps(module_url) + ");\n"
+        + r"""
+let values={'--pl-color-bg':'#fafafa','--pl-color-fg':'#111'};
+const root={style:{colorScheme:'light'}};
+const computed=()=>({getPropertyValue:k=>k==='color-scheme'?root.style.colorScheme:values[k]||''});
+root.ownerDocument={defaultView:{getComputedStyle:computed}};
+global.document={documentElement:root,createElement:()=>{throw Error('no canvas');}};
+global.getComputedStyle=computed;
+themeTokenSnapshot=ds.themeTokenSnapshot; snapshotToCss=ds.snapshotToCss;
+const light=base('html');
+values['--pl-color-bg']='</style><script>evil()</script>';
+const hostile=base('html');
+values={}; const missing=base('html');
+values={'--pl-color-bg':'#fafafa'};
+themeTokenSnapshot=null; snapshotToCss=null;
+pushTheme(); const absent=base('html');
+console.log(JSON.stringify({light,hostile,missing,absent,scheme:root.style.colorScheme}));
+})().catch(e=>{console.error(e);process.exit(1);});
+"""
+    )
+    out = _node(harness)
+    for key in ("light", "hostile", "missing", "absent"):
+        assert "--pl-color-accent:#9b87f2" in out[key]
+        assert "--pl-color-border:rgba(255,255,255,.08)" in out[key]
+        assert "--pl-color-fg-muted:#9aa0aa" in out[key]
+        assert '<style id="__artbase">:root{' in out[key]
+    assert "--pl-color-bg:#fafafa" in out["light"]
+    assert "evil()" not in out["hostile"]
+    assert "color-scheme:light" in out["absent"]
+    assert out["scheme"] == "light"
