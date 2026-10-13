@@ -474,9 +474,11 @@ def test_frames_get_the_full_theme_palette_and_themed_defaults(monkeypatch, tmp_
     assert "themeTokenSnapshot" in js
     base = _js_function(js, "base")
     # base() takes a snapshot, serialises it via snapshotToCss (includes color-scheme), and
-    # appends DEFAULTS for zero-specificity element defaults.
-    assert "var snap=themeTokens()" in base and "snapshotToCss" in base and "DEFAULTS" in base
-    assert ":where(input,select,textarea)" in js and ":where(button)" in js  # zero specificity: author wins
+    # links the vendored sheet for zero-specificity element defaults.
+    assert "var snap=themeTokens()" in base and "snapshotToCss" in base and "/plugins/artifact/vendor/pl-embed.css" in base
+    from tests.test_artifact_plugin import ROOT
+    css = (ROOT / "vendor/pl-embed.css").read_text(encoding="utf-8")
+    assert ":where(input, select, textarea)" in css and ":where(button)" in css
 
 
 # ── #4076: a refused send()/openLink() is a quiet outcome, not a red error overlay ──
@@ -578,7 +580,7 @@ def test_base_theme_css_and_module_failure_preserve_defaults(monkeypatch, tmp_pa
     js = _load(monkeypatch, tmp_path)._SHELL_JS
     module_url = (ROOT / "vendor/pl-design-embed.mjs").as_uri()
     harness = (
-        "var SHIM='', ERRBOOT='', DEFAULTS='', $frame=null;\n"
+        "var SHIM='', ERRBOOT='', ORIGIN='https://example.test/agent', $frame=null;\n"
         + _js_function(js, "themeTokens")
         + _js_function(js, "bgIsDark")
         + _js_function(js, "base")
@@ -608,6 +610,7 @@ console.log(JSON.stringify({light,hostile,missing,absent,scheme:root.style.color
         assert "--pl-color-accent:#9b87f2" in out[key]
         assert "--pl-color-border:rgba(255,255,255,.08)" in out[key]
         assert "--pl-color-fg-muted:#9aa0aa" in out[key]
+        assert 'href="https://example.test/agent/plugins/artifact/vendor/pl-embed.css"' in out[key]
         assert '<style id="__artbase">:root{' in out[key]
     assert "--pl-color-bg:#fafafa" in out["light"]
     assert "evil()" not in out["hostile"]
