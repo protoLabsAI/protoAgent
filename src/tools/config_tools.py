@@ -79,7 +79,9 @@ def redact_for_agent(value: Any, *, key: str = "") -> Any:
     if isinstance(value, dict):
         out: dict = {}
         for k, v in value.items():
-            if _sensitive(k) and not isinstance(v, (dict, list)):
+            if _sensitive(k):
+                # A credential may be a list or mapping; inspecting only its child
+                # keys loses the sensitive parent and exposes otherwise unnamed values.
                 out[k] = _REDACTED if v not in (None, "", [], {}) else v
             elif str(k).strip().lower() in _OPAQUE_MAPS and isinstance(v, dict):
                 # Every value, not just the sensibly-named ones: these maps are
