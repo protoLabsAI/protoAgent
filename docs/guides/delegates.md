@@ -25,6 +25,23 @@ Test checks only the initial handshake. The **last call failed** pill reports a
 failed dispatch separately; hover it for the reason. A successful later dispatch
 clears it.
 
+## Diagnose reachability from chat
+
+Ask the agent to call `list_agents()` for each delegate's cached status and age.
+A successful dispatch clears an older failed probe. Results older than six minutes
+show ⚪ **stale**; a delegate with no evidence shows ⚪ **never probed**.
+A red row includes the probe error and age, rather than asserting the peer is offline.
+
+Use `list_agents(detail=true)` for the last probe's timestamp, age, error and detail,
+the last dispatch outcome, and the next scheduled probe time. The probe record stays
+available after a dispatch proves the peer reachable. Both modes read only memory:
+they do not contact peers, launch coding agents, or increase background probe frequency.
+Use the console's **Test** action when you need a fresh probe.
+
+A2A probes fetch an agent card; dispatch sends work to the configured A2A endpoint.
+A card-fetch error can therefore coexist with a successful dispatch. Timeout errors
+include their exception name even when the underlying error has no message.
+
 ## Declare delegates
 
 For config-as-code, add a top-level `delegates` list to the instance's live

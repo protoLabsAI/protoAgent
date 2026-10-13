@@ -544,29 +544,62 @@ async def _spawn_background_delegation(
 
 def _build_list_agents(registry: DelegateRegistry):
     @tool
-    def list_agents() -> str:
-        """List the agents/delegates you can reach with `delegate_to`, with each one's
-        type, description, and current reachability (🟢 reachable · 🔴 down · ⚪ unknown).
+    def list_agents(detail: bool = False) -> str:
+        """List configured delegates with cached reachability and evidence age.
 
-        Read this before assuming who's available — the roster is configuration, not a
-        fixed set, and it changes as delegates are added or removed."""
-        try:
-            from .health import health_snapshot
+        🟢 recently reachable · 🔴 recent probe failure · ⚪ stale or never probed.
+        Results older than 6 minutes are stale, not proof a peer is down. A successful
+        dispatch clears an older failed probe. Read this before choosing a delegate.
+        Set detail=true for probe timestamps, errors, next probe and last dispatch.
+        Both modes read in-memory caches only: no network, subprocess, or probe refresh.
+        """
+        import json
+        import time
 
-            health = health_snapshot() or {}
-        except Exception:  # noqa: BLE001 — prober not running; reachability stays unknown
-            health = {}
+        from .health import _STALE_AFTER_S, health_peek
+        from .status import snapshot
+
+        health, dispatches, now = health_peek(), snapshot(), time.time()
         roster = registry.roster()
         if not roster:
             return "No delegates configured."
-        lines = []
+
+        def evidence(entry, timestamp):
+            if not entry:
+                return None
+            at = entry.get(timestamp)
+            return {**entry, "age_seconds": max(0, int(now - at)) if at is not None else None}
+
+        lines, rows = [], []
         for r in roster:
-            ok = (health.get(r["name"]) or {}).get("ok")
-            badge = "🟢" if ok is True else "🔴" if ok is False else "⚪"
+            cached = health.get(r["name"]) or {}
+            checked = evidence({k: v for k, v in cached.items() if k not in {"probe", "next_due"}}, "checked_at")
+            age = checked["age_seconds"] if checked else None
+            stale = age is None or age > _STALE_AFTER_S
+            ok = cached.get("ok")
+            badge = "⚪" if stale or ok is None else "🟢" if ok else "🔴"
+            source = cached.get("source", "probe")
+            reason = cached.get("error") or cached.get("detail") or "no reason recorded"
+            if not cached:
+                summary = "never probed (age unknown)"
+            else:
+                when = f"{age}s ago" if age is not None else "age unknown"
+                outcome = "succeeded" if ok is True else "failed" if ok is False else "unknown"
+                summary = f"{'stale; ' if stale else ''}{source} {outcome}, {when}"
+                if ok is not True:
+                    summary += f": {reason}"
             typ = f" ({r['type']})" if r["type"] else ""
             desc = f" — {r['description']}" if r["description"] else ""
-            lines.append(f"{badge} {r['name']}{typ}{desc}")
-        return "\n".join(lines)
+            lines.append(f"{badge} {r['name']}{typ}{desc} — {summary}")
+            rows.append({
+                "name": r["name"], "type": r["type"], "description": r["description"],
+                "summary": summary, "stale": stale, "health": checked,
+                "probe": evidence(cached.get("probe"), "checked_at"),
+                "probe_state": "recorded" if cached.get("probe") else "never probed",
+                "last_dispatch": evidence(dispatches.get(r["name"]), "at"),
+                "next_probe_at": cached.get("next_due"),
+            })
+        return json.dumps(rows, ensure_ascii=False) if detail else "\n".join(lines)
 
     return list_agents
 

@@ -1417,4 +1417,4 @@ class A2aAdapter(Adapter):
                 "detail": detail,
             }
         except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": str(exc)[:200]}
+            return {"ok": False, "error": (str(exc) or type(exc).__name__)[:200]}

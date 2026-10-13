@@ -240,3 +240,20 @@ def _reset_sse_shutdown_flag():
     sse = sys.modules.get("sse_starlette.sse")
     if sse is not None:
         sse.AppStatus.should_exit = False
+
+
+@pytest.fixture(autouse=True)
+def _reset_delegate_health_caches():
+    """Dispatch now updates health too; no delegate evidence may leak between tests."""
+    import sys
+
+    def clear():
+        health = sys.modules.get("plugins.delegates.health")
+        if health is not None:
+            for name in ("_HEALTH", "_PROBES", "_FAILURES", "_SUCCESSES", "_NEXT_DUE"):
+                getattr(health, name).clear()
+            health._last_observed = 0.0
+
+    clear()
+    yield
+    clear()

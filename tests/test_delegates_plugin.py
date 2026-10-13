@@ -375,14 +375,14 @@ def test_list_agents_lists_roster_with_health(monkeypatch):
         [{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m", "description": "a model"}], monkeypatch
     )
     la = next(t for t in r.tools if t.name == "list_agents")
-    monkeypatch.setattr("plugins.delegates.health.health_snapshot", lambda: {"opus": {"ok": True}})
+    monkeypatch.setattr("plugins.delegates.health.health_peek", lambda: {"opus": {"ok": True, "checked_at": H.time.time()}})
     assert "🟢 opus (openai) — a model" in la.invoke({})
 
 
 def test_list_agents_unknown_health_is_neutral(monkeypatch):
     r = _register([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}], monkeypatch)
     la = next(t for t in r.tools if t.name == "list_agents")
-    monkeypatch.setattr("plugins.delegates.health.health_snapshot", lambda: {})
+    monkeypatch.setattr("plugins.delegates.health.health_peek", lambda: {})
     assert "⚪ opus (openai)" in la.invoke({})
 
 
@@ -1445,3 +1445,122 @@ async def test_propose_delegate_refuses_a_name_taken_after_the_pre_check(monkeyp
     assert expects == ["absent"]
     assert "registered by someone else while parked" in out and "nothing written" in out
     assert reloads == []
+
+
+async def test_successful_dispatch_clears_probe_failure_and_backoff(monkeypatch):
+    H._HEALTH["codex"] = {"ok": False, "checked_at": 900, "error": "card timeout"}
+    H._FAILURES["codex"] = 4
+    H._NEXT_DUE["codex"] = 1800
+    monkeypatch.setattr(H.time, "time", lambda: 1000)
+    reg = _stub_registry(monkeypatch, lambda: "done")
+    await reg.dispatch("codex", "go")
+    assert H._HEALTH["codex"] == {
+        "ok": True, "checked_at": 1000, "source": "dispatch", "detail": "dispatch succeeded"
+    }
+    assert "codex" not in H._FAILURES
+    assert H._NEXT_DUE["codex"] == 1000 + H._INTERVAL_S
+    tool = P._build_list_agents(reg)
+    assert "🟢 codex" in tool.invoke({})
+    assert "dispatch succeeded, 0s ago" in tool.invoke({})
+    import json
+    row = json.loads(tool.invoke({"detail": True}))[0]
+    assert row["probe"]["error"] == "card timeout"
+    assert row["probe"]["age_seconds"] == 100
+    assert row["last_dispatch"]["ok"] is True
+    assert row["last_dispatch"]["age_seconds"] == 0
+
+
+@pytest.mark.parametrize("age,badge", [(0, "🔴"), (360, "🔴"), (361, "⚪")])
+def test_list_agents_failure_age_staleness_and_cached_detail(monkeypatch, age, badge):
+    import json
+    from plugins.delegates import status
+
+    monkeypatch.setattr(H.time, "time", lambda: 1000)
+    H._HEALTH["opus"] = {"ok": False, "checked_at": 1000-age, "error": "ReadTimeout", "detail": "agent-card"}
+    H._NEXT_DUE["opus"] = 1300
+    status.record_failure("opus", "HTTP 503")
+    reg = DelegateRegistry([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}])
+    tool = P._build_list_agents(reg)
+    text = tool.invoke({})
+    assert text.startswith(f"{badge} opus")
+    assert f"{age}s ago" in text and "ReadTimeout" in text
+    assert ("stale" in text) == (age > 360)
+    row = json.loads(tool.invoke({"detail": True}))[0]
+    assert row["probe"] == {**H._HEALTH["opus"], "age_seconds": age}
+    assert row["last_dispatch"] == {"ok": False, "at": 1000, "error": "HTTP 503", "age_seconds": 0}
+    assert row["next_probe_at"] == 1300
+    assert "url" not in row  # connection strings are not health diagnostics
+
+
+def test_agent_health_reads_do_not_probe_or_change_cadence(monkeypatch):
+    import json
+    from plugins.delegates import store
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("list_agents must only read memory")
+
+    reg = DelegateRegistry([{"name": "opus", "type": "openai", "url": "https://g/v1", "model": "m"}])
+    monkeypatch.setattr(store, "merged_delegates", forbidden)
+    monkeypatch.setattr(H, "health_snapshot", forbidden)
+    for adapter in ADAPTERS.values():
+        monkeypatch.setattr(adapter, "probe", forbidden)
+    monkeypatch.setattr(H.time, "time", lambda: 1000)
+    H._last_observed = 10
+    H._NEXT_DUE["opus"] = 1900
+    H._SUCCESSES["opus"] = 5
+    tool = P._build_list_agents(reg)
+    assert "⚪ opus" in tool.invoke({}) and "never probed" in tool.invoke({})
+    row = json.loads(tool.invoke({"detail": True}))[0]
+    assert row["probe_state"] == "never probed" and row["probe"] is None
+    assert row["last_dispatch"] is None
+    H._HEALTH["opus"] = {"ok": True, "checked_at": 1000}
+    assert "🟢 opus" in tool.invoke({})
+    assert "0s ago" in tool.invoke({})
+    tool.invoke({"detail": True})
+    assert H._last_observed == 10
+    assert H._NEXT_DUE["opus"] == 1900 and H._SUCCESSES["opus"] == 5
+    assert not H._observed()
+    copied = H.health_peek()
+    copied["opus"]["probe"]["ok"] = False
+    copied["opus"]["ok"] = False
+    assert H._HEALTH["opus"]["ok"] is True
+
+
+async def test_inflight_failed_probe_does_not_undo_new_dispatch(monkeypatch):
+    import asyncio
+    from plugins.delegates import store
+
+    reg = _stub_registry(monkeypatch, lambda: "done")
+    raw = {"name": "codex", "type": "acp", "command": "x", "workdir": "/tmp"}
+    monkeypatch.setattr(store, "merged_delegates", lambda: [raw])
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def probe(d):
+        started.set()
+        await finish.wait()
+        return {"ok": False, "error": "old timeout"}
+
+    monkeypatch.setattr(ADAPTERS["acp"], "probe", probe)
+    task = asyncio.create_task(H._probe_all())
+    await started.wait()
+    await reg.dispatch("codex", "go")
+    finish.set()
+    await task
+    assert H._HEALTH["codex"]["ok"] is True
+    assert H._HEALTH["codex"]["source"] == "dispatch"
+    assert "codex" not in H._FAILURES
+    assert H.health_peek()["codex"]["probe"]["error"] == "old timeout"
+
+
+async def test_a2a_probe_timeout_has_a_diagnostic_name(monkeypatch):
+    import httpx
+    from security import policy
+
+    class TimeoutClient(_CardClient):
+        async def get(self, url, **kw):
+            raise httpx.ReadTimeout("")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: TimeoutClient({}))
+    monkeypatch.setattr(policy, "check_url", lambda url: None)
+    d = ADAPTERS["a2a"].parse({"name": "p", "type": "a2a", "url": "https://p/a2a"})
+    assert await ADAPTERS["a2a"].probe(d) == {"ok": False, "error": "ReadTimeout"}
