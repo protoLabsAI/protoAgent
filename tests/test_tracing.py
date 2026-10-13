@@ -37,7 +37,7 @@ def _reload_tracing():
 
     if "tracing" in sys.modules:
         del sys.modules["observability.tracing"]
-    real_path = Path(__file__).parents[1] / "observability" / "tracing.py"
+    real_path = Path(__file__).parents[1] / "src" / "observability" / "tracing.py"
     spec = importlib.util.spec_from_file_location("observability.tracing", real_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules["observability.tracing"] = module
@@ -849,7 +849,7 @@ def test_server_inits_tracing_with_the_loaded_config():
     """
     from pathlib import Path
 
-    src = (Path(__file__).parents[1] / "server" / "__init__.py").read_text()
+    src = (Path(__file__).parents[1] / "src" / "server" / "__init__.py").read_text()
     assert "tracing.init(config=STATE.graph_config)" in src, (
         "tracing.init no longer receives the loaded config — the config fallback is dead again"
     )
@@ -994,7 +994,7 @@ def test_server_shutdown_hook_flushes_tracing():
     a full boot, so we lock the source contract)."""
     from pathlib import Path
 
-    src = (Path(__file__).parents[1] / "server" / "__init__.py").read_text()
+    src = (Path(__file__).parents[1] / "src" / "server" / "__init__.py").read_text()
     hook = src.split('@fastapi_app.on_event("shutdown")', 1)[1]
     hook = hook.split("register_chat_routes", 1)[0]  # the hook body ends before route registration
     assert "tracing.flush" in hook, "shutdown hook no longer flushes Langfuse tracing"

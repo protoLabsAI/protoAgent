@@ -51,6 +51,8 @@ if str(REPO) not in sys.path:
     # pytest the repo root is already first on the path, and re-inserting it would
     # reorder imports for every test that runs after this module is loaded.
     sys.path.insert(0, str(REPO))
+if str(REPO / "src") not in sys.path:
+    sys.path.insert(0, str(REPO / "src"))
 
 DOCS = REPO / "docs" / "reference"
 GITHUB = "https://github.com/protoLabsAI/protoAgent"
@@ -372,7 +374,7 @@ def _public_methods(cls: type) -> list[tuple[str, Any]]:
 def _section_banners(module: Any) -> dict[int, str]:
     """``# ── Title ── `` banner comments → ``{line number: title}``.
 
-    ``graph/sdk.py`` already groups itself with these; reusing them means the reference's
+    ``src/graph/sdk.py`` already groups itself with these; reusing them means the reference's
     contents page is the module's own organization, not a second one to keep in sync.
     """
     out: dict[int, str] = {}
@@ -415,7 +417,7 @@ def page_manifest() -> str:
         "# Plugin manifest",
         "",
         f"Every field of `{MANIFEST_FILENAME}` — the file that makes a directory a plugin.",
-        "Generated from the `PluginManifest` dataclass in `graph/plugins/manifest.py`, which is",
+        "Generated from the `PluginManifest` dataclass in `src/graph/plugins/manifest.py`, which is",
         "the schema read by the loader. CI checks the generated page for drift.",
         "",
         "The manifest is **declarative on purpose**: it is parsed before the plugin's Python is",
@@ -458,7 +460,7 @@ def page_registry() -> str:
         "# Plugin registry API",
         "",
         "The object your plugin's `register(registry)` receives — the whole Python extension",
-        "surface in one place. Generated from `graph/plugins/registry.py`.",
+        "surface in one place. Generated from `src/graph/plugins/registry.py`.",
         "",
         "```python",
         "def register(registry):",
@@ -505,7 +507,7 @@ def page_registry() -> str:
         "",
         "Services the *server* owns: calling the agent, the event bus, live config. The server",
         "populates them before any surface starts, so they are `None` at import time and in",
-        "host-free tests — **always guard**. Generated from `graph/plugins/host.py`.",
+        "host-free tests — **always guard**. Generated from `src/graph/plugins/host.py`.",
         "",
         "| Service | Type | Purpose |",
         "|---|---|---|",
@@ -556,7 +558,7 @@ def page_sdk() -> str:
         "```",
         "",
         "Import it lazily (inside the function that uses it) if your plugin must also run",
-        "host-free in its own test suite. Generated from `graph/sdk.py`; the sections below are",
+        "host-free in its own test suite. Generated from `src/graph/sdk.py`; the sections below are",
         "the module's own.",
         "",
         "## Contents",
@@ -592,7 +594,7 @@ def page_testkit() -> str:
         BANNER,
         "# Plugin testkit",
         "",
-        "`graph/plugins/testkit.py` — a **host-free** harness that loads a plugin exactly the way",
+        "`src/graph/plugins/testkit.py` — a **host-free** harness that loads a plugin exactly the way",
         "the runtime does (same synthetic package name, so relative imports and module-level",
         "`@tool` decorators work) while stubbing the parts of protoAgent that aren't installed.",
         "",
@@ -647,7 +649,7 @@ def page_cli() -> str:
         "# Plugin CLI",
         "",
         "`python -m server plugin …` — scaffold, install, and manage plugins from a shell.",
-        "Generated from the argparse definition in `graph/plugins/cli.py`.",
+        "Generated from the argparse definition in `src/graph/plugins/cli.py`.",
         "",
         "Two deliberate non-behaviors, because both are consent boundaries",
         "([ADR 0027](/adr/0027-install-plugins-from-git-url)): **install does not enable** a",
@@ -738,9 +740,9 @@ def _scan_topics() -> dict[str, dict]:
     """``topic -> {"keys": sorted keys, "sources": sorted repo-relative files}``."""
     found: dict[str, dict] = {}
     for d in EVENT_SOURCE_DIRS:
-        base = REPO / d
+        base = REPO / "src" / d
         if not base.is_dir():
-            continue
+            raise FileNotFoundError(f"missing event source directory: {base}")
         for path in sorted(base.rglob("*.py")):
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8"))

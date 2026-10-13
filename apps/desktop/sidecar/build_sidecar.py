@@ -97,7 +97,7 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     # The scaffolder vendors testkit.py into with_tests suites by reading it beside
     # its own __file__ — which lives in the PYZ with no source on disk when frozen.
     # Ship the one file as data so scaffold_plugin(with_tests=True) works on desktop.
-    ("graph/plugins/testkit.py", "graph/plugins"),
+    ("src/graph/plugins/testkit.py", "graph/plugins"),
     # The published docs corpus — the `docs` plugin reads it (`docs/` beside the bundled
     # `plugins/` under _MEIPASS) to power docs_search/docs_read + the Docs view. Only the
     # Diátaxis sections + ADRs; `docs/dev` (internal) and `.vitepress` (build) are excluded.
@@ -331,6 +331,10 @@ def main() -> None:
         str(work / "build"),
         "--specpath",
         str(work),
+        "--paths",
+        str(REPO / "src"),
+        "--paths",
+        str(REPO),
         *exclude,
         *hidden,
         *add_data,
@@ -339,7 +343,7 @@ def main() -> None:
         # entry point. PyInstaller bundles the whole `server` package and the
         # `--add-data` assets land at _MEIPASS top level (server/_bundle_root
         # resolves there when frozen).
-        str(REPO / "server" / "__main__.py"),
+        str(REPO / "src" / "server" / "__main__.py"),
     ]
     print("running:", " ".join(cmd))
     subprocess.run(cmd, check=True, cwd=str(REPO))

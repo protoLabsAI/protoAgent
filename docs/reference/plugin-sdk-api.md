@@ -18,7 +18,7 @@ answer = await sdk.complete('Summarize the changelog')
 ```
 
 Import it lazily (inside the function that uses it) if your plugin must also run
-host-free in its own test suite. Generated from `graph/sdk.py`; the sections below are
+host-free in its own test suite. Generated from `src/graph/sdk.py`; the sections below are
 the module's own.
 
 ## Contents

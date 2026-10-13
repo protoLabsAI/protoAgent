@@ -5,7 +5,7 @@
 # Plugin registry API
 
 The object your plugin's `register(registry)` receives — the whole Python extension
-surface in one place. Generated from `graph/plugins/registry.py`.
+surface in one place. Generated from `src/graph/plugins/registry.py`.
 
 ```python
 def register(registry):
@@ -624,7 +624,7 @@ prunes old files. A `media.saved` event is broadcast on the bus.
 
 Services the *server* owns: calling the agent, the event bus, live config. The server
 populates them before any surface starts, so they are `None` at import time and in
-host-free tests — **always guard**. Generated from `graph/plugins/host.py`.
+host-free tests — **always guard**. Generated from `src/graph/plugins/host.py`.
 
 | Service | Type | Purpose |
 |---|---|---|

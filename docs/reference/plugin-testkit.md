@@ -4,7 +4,7 @@
 
 # Plugin testkit
 
-`graph/plugins/testkit.py` — a **host-free** harness that loads a plugin exactly the way
+`src/graph/plugins/testkit.py` — a **host-free** harness that loads a plugin exactly the way
 the runtime does (same synthetic package name, so relative imports and module-level
 `@tool` decorators work) while stubbing the parts of protoAgent that aren't installed.
 

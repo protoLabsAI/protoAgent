@@ -162,7 +162,7 @@ def fleet(tmp_path_factory, fake_gateway):
             "PROTOAGENT_HOME": str(home),  # instance_root → config + every per-instance store under <home>
             "PROTOAGENT_HEADLESS_SETUP": "1",
             "OPENAI_API_KEY": "fake-integration-key",
-            "PYTHONPATH": str(ROOT),
+            "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT))),
         }
         env.pop("PROTOAGENT_BOX_ROOT", None)
         env.pop("PROTOAGENT_CONFIG_DIR", None)

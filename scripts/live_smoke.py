@@ -118,7 +118,7 @@ def main() -> int:
         # it. Disable just that automatic sweep for this spawned server; the smoke itself
         # never exercises fleet discovery, so nothing here is under test.
         "PROTOAGENT_DISCOVERY_DISABLE": "1",
-        "PYTHONPATH": str(ROOT),
+        "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT))),
     }
 
     ui_tier = "console" if args.expect_console else "none"

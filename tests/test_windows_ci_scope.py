@@ -159,8 +159,8 @@ def test_web_gate_runs_only_for_paths_the_web_job_consumes() -> None:
         "apps/web/e2e/palette.spec.ts",
         "package-lock.json",
         "plugins/artifact/shell.js",
-        "runtime/flags.py",
-        "graph/snapshot_op.py",
+        "src/runtime/flags.py",
+        "src/graph/snapshot_op.py",
         ".github/workflows/checks.yml",
         "scripts/windows_ci_scope.py",
     ):
