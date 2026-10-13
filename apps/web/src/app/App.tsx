@@ -38,6 +38,7 @@ import { Button } from "@protolabsai/ui/primitives";
 
 import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
+import { StorageWarning } from "./StorageWarning";
 import { AgentDownBanner } from "./AgentDownBanner";
 import { SignedOutBanner } from "./SignedOutBanner";
 import {
@@ -997,6 +998,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
               {visibleSetupGaps.map((gap) => (
                 <SetupGapBanner key={gapIdentity(gap)} gap={gap} onDismiss={() => dismissSetupGap(gap)} />
               ))}
+              <StorageWarning />
               <AgentDownBanner />
               <SignedOutBanner runtime={runtime} />
             </>
@@ -1048,6 +1050,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       {/* Focused fleet member stopped mid-session (the boot gate only catches boot-time
           down; a runtime stop otherwise surfaces only as plugin views 409-ing). Slim
           strip with a hub-routed Start; renders nothing on the host or a running agent. */}
+      <StorageWarning />
       <AgentDownBanner />
 
       {/* Deliberate OAuth signed-out state (#2513) — visible status + the reconnect

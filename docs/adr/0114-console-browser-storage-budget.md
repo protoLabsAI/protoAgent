@@ -1,5 +1,13 @@
 # 0114: Console browser storage — transcripts in IndexedDB, a budget, and a full quota never crashes
 
+> **October 13, 2026 closeout scope (#3703):** ship the shared storage wrapper,
+> quota-safe persistence, strict credential writes, visible storage-full warning,
+> and crash recovery. The IndexedDB migration, asynchronous load barrier, transcript
+> caps/automatic eviction, and Settings storage manager are deferred. S4's preparatory
+> load barrier is reverted because this release keeps synchronous localStorage reads.
+> The original design below remains a proposal for those deferred capabilities;
+> it is not a description of features delivered by this closeout.
+
 Status: **Proposed**
 
 Amends: ADR 0104 (the primary transcript store moves from `localStorage` to IndexedDB)

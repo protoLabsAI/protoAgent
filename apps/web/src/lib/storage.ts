@@ -213,8 +213,7 @@ const _querySimBytes: number | null = (() => {
   }
 })();
 
-// Gated like the Developer panel (ADR 0068): a dev build, or a runtime channel that isn't
-// prod (flags/flags.ts reports it once /api/flags answers). A production console ignores the
+// QA hooks are available only in dev builds or the dev runtime channel. A production console ignores the
 // knob and the crash hook, so a crafted link can't switch a real operator's saving off.
 let _devHooks: boolean = (() => {
   try {
@@ -323,8 +322,12 @@ function runEviction(key: string, bytes: number): number {
 }
 
 try {
-  // Another tab removed or rewrote something — space may have come back.
-  globalThis.addEventListener?.("storage", () => releaseLatch());
+  // A sibling tab must actually free space before clearing the warning.
+  globalThis.addEventListener?.("storage", (event: StorageEvent) => {
+    if (event.storageArea && event.storageArea !== store("local")) return;
+    if (event.key === null || (event.oldValue !== null &&
+        (event.newValue === null || event.newValue.length < event.oldValue.length))) releaseLatch();
+  });
 } catch {
   /* non-browser context */
 }
@@ -357,14 +360,15 @@ export function writeKey(area: StorageArea, key: string, value: string): WriteRe
     /* unreadable — treat as new */
   }
   // A write that doesn't grow usage (a chat deleted, a layout reset) can always go through —
-  // it frees space rather than taking it, so the latch must never block it.
-  const shrinking = prevBytes !== null && bytes <= prevBytes;
+  // it does not need extra space, so the latch must never block it.
+  const nonGrowing = prevBytes !== null && bytes <= prevBytes;
+  const shrinking = prevBytes !== null && bytes < prevBytes;
   const latched = area === "local" && _pressure.state === "failing";
   const evictable = matchKey(area, key)?.spec.evictable ?? false;
-  if (latched && evictable && !shrinking) return { ok: false, reason: "quota" };
+  if (latched && evictable && !nonGrowing) return { ok: false, reason: "quota" };
   try {
     rawSet(area, s, key, value);
-    if (area === "local" && shrinking) releaseLatch(); // usage didn't grow — space came back
+    if (area === "local" && shrinking) releaseLatch(); // only a strictly smaller write proves space came back
     return { ok: true };
   } catch (err) {
     if (!isQuotaError(err)) return { ok: false, reason: "unavailable" };
@@ -414,11 +418,12 @@ export function removeKey(area: StorageArea, key: string): void {
   const s = store(area);
   if (!s) return;
   try {
+    const existed = s.getItem(key) !== null;
     s.removeItem(key);
+    if (area === "local" && existed) releaseLatch();
   } catch {
     return;
   }
-  if (area === "local") releaseLatch();
 }
 
 /** The zustand `StateStorage` adapter (for `createJSONStorage(() => persistStorage(area))`).

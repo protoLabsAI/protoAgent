@@ -163,9 +163,8 @@ export const flagsQuery = () =>
     queryKey: queryKeys.flags,
     queryFn: async () => {
       const flags = await api.flags();
-      // Off the prod channel, the storage QA hooks go live (ADR 0114; gated like ADR 0068's
-      // Developer panel). A dev build has them on already.
-      if (flags?.channel && flags.channel !== "prod") setDevHooksEnabled(true);
+      // Beta/prod ignore destructive storage QA hooks; a dev build keeps them available.
+      setDevHooksEnabled(import.meta.env.DEV || flags?.channel === "dev");
       return flags;
     },
     staleTime: 5 * 60_000,

@@ -33,6 +33,7 @@ export function resetChatData() {
   listKeys("local")
     .filter((k) => k.startsWith("protoagent.chat.sessions"))
     .forEach((k) => removeKey("local", k));
+  broadcastStorageReset();
 }
 
 /** Below this, clearing transcripts didn't fix a full quota — the hog is something else
@@ -66,7 +67,7 @@ function formatBytes(n: number): string {
 /** e2e/QA hook (ADR 0114): with `globalThis.__protoagentForceQuotaCrash` set, render throws a
  *  quota error so the recovery path stays testable now that the storage seam never lets a
  *  real one reach a render. Rendered inside the root boundary by main.tsx; inert unless the
- *  storage dev hooks are live (a dev build or a non-prod channel — never in production). */
+ *  storage dev hooks are live (a dev build or the dev channel — never beta/prod). */
 export function ForcedQuotaCrash() {
   const enabled = useSyncExternalStore(subscribeDevHooks, devHooksEnabled, devHooksEnabled);
   if (enabled && (globalThis as NoFlushGlobals).__protoagentForceQuotaCrash) {

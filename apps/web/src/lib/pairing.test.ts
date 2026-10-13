@@ -55,10 +55,10 @@ describe("redeemPairingFromUrl", () => {
     setHash("#pair=expired");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: false, json: async () => ({ error: "invalid or expired pairing code" }) })),
+      vi.fn(async () => ({ ok: false, status: 400, json: async () => ({ error: "invalid or expired pairing code" }) })),
     );
     const res = await redeemPairingFromUrl();
-    expect(res).toEqual({ ok: false, error: "invalid or expired pairing code" });
+    expect(res).toEqual({ ok: false, error: "HTTP 400: invalid or expired pairing code" });
     // A dead code in the address bar is pure leak — no upside to keeping it.
     expect(window.location.hash).toBe("");
     expect(window.localStorage.getItem("protoagent.authToken")).toBeNull();
@@ -68,10 +68,10 @@ describe("redeemPairingFromUrl", () => {
     setHash("#pair=abc123");
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) })),
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) })),
     );
     const res = await redeemPairingFromUrl();
-    expect(res).toEqual({ ok: false, error: "pairing failed" });
+    expect(res).toEqual({ ok: false, error: "HTTP 200: pairing failed" });
     expect(window.localStorage.getItem("protoagent.authToken")).toBeNull();
   });
 
