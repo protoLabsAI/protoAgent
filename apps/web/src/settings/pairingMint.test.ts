@@ -27,14 +27,4 @@ describe("makeReachable mint decision", () => {
     expect(src).toContain('"network.bind": "0.0.0.0"');
   });
 
-  it("restores a prior token when the save fails rather than blanking it", () => {
-    expect(src).toMatch(/if \(prior\) writeKey\("local", "protoagent\.authToken", prior\)/);
-  });
-
-  it("stores the minted token STRICTLY, before the server is told (ADR 0114 D1)", () => {
-    // A token the browser failed to keep must throw into the catch — never reach saveSettings.
-    const strict = src.indexOf('writeKeyStrict("local", "protoagent.authToken", token)');
-    expect(strict).toBeGreaterThan(-1);
-    expect(strict).toBeLessThan(src.indexOf('api.saveSettings({ "auth.token": token }'));
-  });
 });

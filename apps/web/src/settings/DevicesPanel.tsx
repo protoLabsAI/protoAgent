@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { StatusPill } from "../app/StatusPill";
 import { formatCountdown, hostKindLabel, secondsLeft, tailnetFirst, type PairKind } from "../lib/agentPairing";
 import { api } from "../lib/api";
-import { readKey, removeKey, writeKey, writeKeyStrict } from "../lib/storage";
+import { PairingTokenRecoveryError, savePairingToken } from "./pairingToken";
 import { SettingsSubPanel } from "./SettingsSubPanel";
 import "./devices.css";
 
@@ -59,6 +59,7 @@ export function DevicesPanel() {
   // into this browser's localStorage. Every other client (the desktop app's own webview, the
   // CLI, another browser) then gets 401s with no way to know the secret. Surface it once.
   const [mintedToken, setMintedToken] = useState<string | null>(null);
+  const [recoveryToken, setRecoveryToken] = useState<string | null>(null);
   const [remaining, setRemaining] = useState(0);
   const [hostIdx, setHostIdx] = useState(0);
   // Every mutating action gets a visible pending state — a button that looks identical
@@ -223,16 +224,7 @@ export function DevicesPanel() {
         // would 401 this session if the browser weren't already holding it.
         // Strict (ADR 0114 D1): if the browser can't keep the token, throw into the catch
         // below BEFORE the server is told about a token this session wouldn't be sending.
-        const prior = readKey("local", "protoagent.authToken");
-        writeKeyStrict("local", "protoagent.authToken", token);
-        const res = await api.saveSettings({ "auth.token": token }, "agent");
-        if (!res.ok) {
-          // Restore what was there, don't blank it — this browser may hold a token that is
-          // still valid for something, and the save we just attempted never took effect.
-          if (prior) writeKey("local", "protoagent.authToken", prior);
-          else removeKey("local", "protoagent.authToken");
-          throw new Error(res.messages.join(" · ") || "could not set an auth token");
-        }
+        await savePairingToken(token, (value) => api.saveSettings({ "auth.token": value }, "agent"));
         setMintedToken(token);
       }
       // See the note above: 0.0.0.0, not addr.host — a specific bind kills loopback and with
@@ -242,6 +234,7 @@ export function DevicesPanel() {
       setUnreachable(null);
       setNeedsRestart(true);
     } catch (err) {
+      if (err instanceof PairingTokenRecoveryError) setRecoveryToken(err.priorToken);
       setPairError(err instanceof Error ? err.message : "could not update the bind address");
     } finally {
       setExposing(null);
@@ -308,6 +301,16 @@ export function DevicesPanel() {
       </p>
 
       {pairError && <p className="setting-desc devices-error">{pairError}</p>}
+
+      {recoveryToken !== null && (
+        <section className="devices-notice" aria-label="Recover previous token">
+          <p className="setting-desc">
+            Save your previous token before leaving this panel. After restoring browser storage,
+            use it to reconnect when prompted.
+          </p>
+          <div className="devices-token"><code>{recoveryToken}</code></div>
+        </section>
+      )}
 
       {needsRestart && (
         <section className="devices-notice" aria-label="Restart required">

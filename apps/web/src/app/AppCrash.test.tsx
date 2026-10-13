@@ -92,13 +92,13 @@ describe("freeTranscriptSpace", () => {
 });
 
 describe("resetChatData (the existing reset, kept)", () => {
-  it("still clears every protoagent.chat.sessions* key and stops the flush", () => {
+  it("clears session blobs, preserves dismissals and stops the flush", () => {
     seed(10);
     resetChatData();
     expect(posted).toEqual([{ name: "protoagent.storage", m: { type: "storage-reset" } }]);
     expect(window.localStorage.getItem("protoagent.chat.sessions")).toBeNull();
     expect(window.localStorage.getItem("protoagent.chat.sessions:gymBro")).toBeNull();
-    expect(window.localStorage.getItem("protoagent.authToken")).toBe("tok");
+    for (const [k, v] of Object.entries(KEEP)) expect(window.localStorage.getItem(k), k).toBe(v);
     expect((globalThis as G).__protoagentNoFlush).toBe(true);
   });
 });
@@ -162,7 +162,7 @@ describe("<AppCrash> on a quota error", () => {
     const clear = container.querySelector<HTMLButtonElement>('button[aria-label="Clear design-system.hog"]')!;
     act(() => clear.click());
     expect(window.localStorage.getItem("design-system.hog")).toBeNull();
-    expect(window.localStorage.getItem("protoagent.authToken")).toBe("tok");
+    for (const [k, v] of Object.entries(KEEP)) expect(window.localStorage.getItem(k), k).toBe(v);
     const after = [...container.querySelectorAll(".app-crash__keys li code")].map((c) => c.textContent);
     expect(after).not.toContain("design-system.hog");
   });

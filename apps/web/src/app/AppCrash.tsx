@@ -25,13 +25,13 @@ import "./app-crash.css";
 type NoFlushGlobals = { __protoagentForceQuotaCrash?: boolean };
 
 /** Clear the persisted chat sessions (all agents' slug-suffixed keys included) but
- *  keep layout/theme/authToken — the same selective scope as the tenant guard. A
+ *  keep dismissal sets, layout, theme and authToken. A
  *  corrupt saved session is the known way to brick render (issue #872); everything
  *  else persisted is cheap to keep. */
 export function resetChatData() {
   blockPersistInThisPage();
   listKeys("local")
-    .filter((k) => k.startsWith("protoagent.chat.sessions"))
+    .filter((k) => matchKey("local", k)?.spec.id === "chat.sessions")
     .forEach((k) => removeKey("local", k));
   broadcastStorageReset();
 }

@@ -19,7 +19,8 @@ export function tenantCheck(uid: string | undefined): "ok" | "switched" {
   if (stored === uid) return "ok";
 
   // A different backend owns this origin now — drop the previous tenant's chat view.
-  // (A prefix wipe; ADR 0114 slice 5 retires it in favour of per-uid databases.)
+  // Include its dismissal sets: session IDs belong to that backend, and retaining them
+  // could hide sessions from the new tenant. This is isolation, not quota eviction.
   listKeys("local")
     .filter((k) => k.startsWith("protoagent.chat.sessions"))
     .forEach((k) => removeKey("local", k));

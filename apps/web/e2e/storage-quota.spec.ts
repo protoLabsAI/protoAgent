@@ -167,3 +167,23 @@ for (const channel of ["beta", "prod"]) {
     expect(history).toContain("QA hooks must stay off");
   });
 }
+
+test("a claimed pairing token that cannot be stored shows recovery before the console", async ({ page }) => {
+  await page.route("**/api/pairing/claim", (route) => route.fulfill({
+    json: { token: "new-device-token", device: { id: "new-device" } },
+  }));
+  await page.addInitScript(() => {
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (key === "protoagent.authToken") throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+      return setItem.call(this, key, value);
+    };
+  });
+  await page.goto("/app/#pair=one-use-code");
+  await expect(page.getByRole("heading", { name: "Device pairing failed" })).toBeVisible();
+  await expect(page.getByText(/request a new pairing code/)).toBeVisible();
+  expect(new URL(page.url()).hash).toBe("");
+  expect(await page.evaluate(() => localStorage.getItem("protoagent.authToken"))).toBeNull();
+  await page.getByRole("button", { name: "Continue to console" }).click();
+  await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
+});
