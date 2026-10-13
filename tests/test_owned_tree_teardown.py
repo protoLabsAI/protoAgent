@@ -409,26 +409,42 @@ async def test_a_cancelled_shell_command_stays_owned_so_the_exit_still_reaches_i
 
 
 @posix_only
-async def test_a_cancelled_shell_command_is_forgotten_once_it_finishes_on_its_own():
+async def test_a_cancelled_shell_command_is_forgotten_once_it_finishes_on_its_own(tmp_path):
     """Staying tracked forever is not harmless: once the group is gone its pgid is free
     for reuse, and the exit sweep would signal whichever unrelated group took it."""
     from tools.shell import run_command
 
-    task = asyncio.create_task(run_command(["sleep", "0.6"]))
-    for _ in range(100):
-        if tracked_trees():
-            break
-        await asyncio.sleep(0.01)
-    [pid] = tracked_trees()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert tracked_trees() == [pid], "still running — the exit must still be able to reach it"
-    for _ in range(300):
-        if not tracked_trees():
-            break
-        await asyncio.sleep(0.01)
-    assert tracked_trees() == [], "finished on its own, but its (reusable) pgid is still tracked"
+    release = tmp_path / "release"
+    # Keep the real child alive until AFTER the ownership assertion. A fixed sleep
+    # can finish while a busy runner is resuming the cancelled task (#4187).
+    task = asyncio.create_task(run_command([
+        sys.executable, "-c",
+        "import pathlib,sys,time\np=pathlib.Path(sys.argv[1])\n"
+        "while not p.exists(): time.sleep(0.01)\n",
+        str(release),
+    ]))
+    try:
+        for _ in range(300):
+            if tracked_trees():
+                break
+            await asyncio.sleep(0.01)
+        [pid] = tracked_trees()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert tracked_trees() == [pid], "still running — the exit must still be able to reach it"
+        release.touch()
+        for _ in range(300):
+            if not tracked_trees():
+                break
+            await asyncio.sleep(0.01)
+        assert tracked_trees() == [], "finished on its own, but its (reusable) pgid is still tracked"
+    finally:
+        release.touch()
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
 
 @posix_only
