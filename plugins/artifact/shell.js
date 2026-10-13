@@ -212,24 +212,21 @@
     return l<=0.5;
   }
   function base(kind){
-    var cs = getComputedStyle(document.documentElement);
-    function tok(n,d){ return (cs.getPropertyValue(n) || d).trim(); }
-    var bg=tok("--pl-color-bg","#0a0a0c"), fg=tok("--pl-color-fg","#ededed"),
-        accent=tok("--pl-color-accent","#9b87f2"), border=tok("--pl-color-border","rgba(255,255,255,.08)");
-    // Carry the live theme's key tokens into the nested frame (plugin-kit.css ships only the
-    // DEFAULT palette); bg in the first style = no white flash; SHIM = the protoArtifact.ask bridge.
-    // html/body read the tokens through var() (literal fallback) so the SHIM's live re-theme
-    // reaches them by updating the tokens alone — never by inline styles that would override the
-    // author's own body colours (#4124). This rule precedes the author's CSS, so theirs wins.
-    // __artKind lets ERRBOOT decide how to confirm a clean render (on-load vs react mount).
-    // Every theme token the console defines (themeTokens), not just the four above, so .pl-*
-    // classes and var(--pl-…) in the artifact resolve to the operator's live palette.
-    var all=themeTokens(), decl="";
-    Object.keys(all).forEach(function(k){ decl+=k+':'+all[k]+';'; });
-    // color-scheme follows the console, so native controls (inputs, scrollbars, date pickers) are
-    // dark on a dark theme instead of glaring white.
-    var scheme=bgIsDark(bg)?"dark":"light";
-    return '<style id="__artbase">:root{--pl-color-bg:'+bg+';--pl-color-fg:'+fg+';--pl-color-accent:'+accent+';--pl-color-border:'+border+';'+decl+'color-scheme:'+scheme+'}'
+    // themeTokenSnapshot reads all --pl-* tokens + color-scheme off the live root element;
+    // snapshotToCss guards values for <{};, names for --pl-* (ADR 0118). Falls back to a
+    // scheme-only rule when the embed module failed to load. html/body read tokens through
+    // var() (literal fallback) so the SHIM's
+    // live re-theme reaches them by updating tokens alone — never by inline styles that would
+    // override the author's own body colours (#4124). This rule precedes the author's CSS, so
+    // theirs wins. __artKind lets ERRBOOT decide how to confirm a clean render.
+    var snap=themeTokens();
+    var rootCss=snapshotToCss ? snapshotToCss(snap,":root") : ":root{color-scheme:"+(bgIsDark(snap["--pl-color-bg"])?"dark":"light")+"}";
+    // Static defaults precede the live rule, so missing tokens and module-load failures
+    // retain usable controls. Keep them outside __artbase: SHIM updates its first rule.
+    // Dynamic values cross into CSS only through the DS serializer.
+    var bg="#0a0a0c", fg="#ededed";
+    return '<style>:root{--pl-color-bg:#0a0a0c;--pl-color-fg:#ededed;--pl-color-accent:#9b87f2;--pl-color-border:rgba(255,255,255,.08);--pl-color-fg-muted:#9aa0aa}</style>'
+      + '<style id="__artbase">'+rootCss
       + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}'
       + DEFAULTS + '</style>'
       + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT;
@@ -253,6 +250,17 @@
     var _dsVega = await import(ORIGIN + "/plugins/artifact/vendor/pl-design-vega.mjs");
     buildVegaConfig = _dsVega.buildVegaConfig; vegaTooltipTheme = _dsVega.vegaTooltipTheme;
   } catch (e) { /* surfaced per-chart in vegaDoc, never a dead panel */ }
+  // The embed-layer snapshot functions from the same @protolabsai/design package, loaded as a
+  // module like pl-design-vega. themeTokenSnapshot(el) reads all live --pl-* values off el
+  // into a flat record; snapshotToCss(snap,sel) serialises it to a safe CSS rule — values
+  // carrying < { } ; are DROPPED (never escaped), so token CSS crossing into a frame is
+  // sanitised (ADR 0118). If the module fails to load, all frames degrade to no injected
+  // tokens but still render with static defaults and a live color-scheme.
+  var themeTokenSnapshot = null, snapshotToCss = null;
+  try {
+    var _dsEmbed = await import(ORIGIN + "/plugins/artifact/vendor/pl-design-embed.mjs");
+    themeTokenSnapshot = _dsEmbed.themeTokenSnapshot; snapshotToCss = _dsEmbed.snapshotToCss;
+  } catch (e) { console.warn("[artifact] embed theme module failed to load — artifacts render without injected tokens:", e); }
   var LIB = {
     mermaid: ["mermaid.min.js",
       "sha512-6a80OTZVmEJhqYJUmYd5z8yHUCDlYnj6q9XwB/gKOEyNQV/Q8u+XeSG59a2ZKFEHGTYzgfOQKYEBtrZV7vBr+Q=="],
@@ -1273,28 +1281,15 @@
     post({type:"protoArtifact:pptx", state:"need"});
   }
   // ── theme tokens for a frame ────────────────────────────────────────────────────────────
-  // The live theme as literal values, read off the kit-managed --pl-* tokens on this page: a
-  // nested frame has no stylesheet access, so this is how it matches the console. The chart
-  // tokens are the design system's own data-viz palette (--pl-color-chart-axis / -grid /
-  // -series1…8), so a chart is drawn in the active theme's colours, dark or light. Pushed into
-  // every frame on a re-theme (pushTheme) and baked into a chart's srcdoc (vegaDoc).
-  // The FULL semantic palette (not just bg/fg/accent/border): an artifact styled with the kit's
-  // .pl-* classes or var(--pl-…) must get the operator's theme for raised/inset surfaces, muted
-  // text and status colours too — otherwise those fall back to the kit's default palette and the
-  // artifact half-matches the console. "" = carry only when the console defines it.
-  var THEME_TOKENS={"--pl-color-bg":"#0a0a0c","--pl-color-fg":"#ededed","--pl-color-fg-muted":"#9aa0aa",
-    "--pl-color-accent":"#9b87f2","--pl-color-border":"rgba(255,255,255,.08)","--pl-font-sans":"",
-    "--pl-color-bg-raised":"","--pl-color-bg-subtle":"","--pl-color-bg-hover":"","--pl-color-bg-inset":"",
-    "--pl-color-fg-subtle":"","--pl-color-fg-on-accent":"","--pl-color-accent-hover":"","--pl-color-accent-fg":"",
-    "--pl-color-border-strong":"","--pl-color-status-error":"","--pl-color-status-info":"",
-    "--pl-color-status-success":"","--pl-color-status-warning":"","--pl-font-mono":"",
-    "--pl-radius":"","--pl-radius-lg":"",
-    "--pl-color-chart-axis":"","--pl-color-chart-grid":""};
-  for(var _s=1;_s<=8;_s++) THEME_TOKENS["--pl-color-chart-series"+_s]="";
+  // The live theme as a flat snapshot, delivered by the DS embed layer (pl-design-embed.mjs:
+  // themeTokenSnapshot + snapshotToCss, ADR 0118). Pushed into every frame on a re-theme
+  // (pushTheme) and baked into a chart's srcdoc (vegaDoc). Even when the module fails,
+  // read the ground directly so the shell and frame color-scheme still follow the console.
   function themeTokens(){
-    var cs=getComputedStyle(document.documentElement), out={};
-    Object.keys(THEME_TOKENS).forEach(function(k){ var v=(cs.getPropertyValue(k)||"").trim()||THEME_TOKENS[k]; if(v) out[k]=v; });
-    return out;
+    if(themeTokenSnapshot) return themeTokenSnapshot(document.documentElement);
+    var cs=getComputedStyle(document.documentElement);
+    return {"--pl-color-bg":cs.getPropertyValue("--pl-color-bg").trim()||"#0a0a0c",
+      "--pl-color-fg":cs.getPropertyValue("--pl-color-fg").trim()||"#ededed"};
   }
   // ── vega-lite charts (ADR 0116) ─────────────────────────────────────────────────────────
   // A chart is a Vega-Lite spec with its data INLINE (data.values): the model writes a small spec

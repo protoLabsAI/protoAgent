@@ -365,7 +365,7 @@ def test_live_retheme_updates_the_frames_color_scheme_in_its_base_rule(monkeypat
     """The SHIM writes the pushed scheme into base()'s own :root rule (not inline), so an
     author's own color-scheme still wins, as at first render."""
     js = _load(monkeypatch, tmp_path)._SHELL_JS
-    assert "'<style id=\"__artbase\">:root{" in _js_function(js, "base")
+    assert '<style id="__artbase">' in _js_function(js, "base")
     push = _js_function(js, "pushTheme")
     assert 'bgIsDark(tokens["--pl-color-bg"])' in push and "scheme:scheme" in push
     harness = (
