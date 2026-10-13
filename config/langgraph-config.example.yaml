@@ -65,8 +65,8 @@ model:
   #                                            # Bootstraps from ~/.codex/auth.json, then
   #                                            # owns its refresh. ToS gray area — opt-in.
   #
-  # `provider`, `api_base` and `api_key` are RETIRING (#3128): the connections above
-  # replace them, so this template sets none of them. Until that lands a few paths still
+  # `provider`, `api_base` and `api_key` are legacy compatibility fields (#3128): the connections above
+  # are preferred, so this template sets none of them. Removal is deferred; some paths still
   # read them directly — the unqualified default route, embeddings / transcription, the
   # context-window probe, egress auto-allow and `--setup` validation — so a subscription
   # PRIMARY still wants `provider: anthropic-oauth` (or `openai-codex`) beside its name.
