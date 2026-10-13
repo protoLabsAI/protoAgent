@@ -122,6 +122,8 @@ describe("ActivityWidget — pill signalling", () => {
 
     const badge = testid("activity-badge")!;
     expect(badge).not.toBeNull();
+    // The badge is now the DS Count primitive (span.pl-count), keeping the alert modifier on top.
+    expect(badge.classList.contains("pl-count")).toBe(true);
     expect(badge.textContent).toBe("1");
     expect(badge.classList.contains("activity-badge--alert")).toBe(true);
     expect(badge.getAttribute("data-alert")).toBe("now");

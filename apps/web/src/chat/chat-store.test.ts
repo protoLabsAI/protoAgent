@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  bootLiveTurns,
   dedupeMessages,
   ensureActiveSessions,
   mergeHydratedSessions,
@@ -81,6 +82,44 @@ describe("ensureActiveSessions", () => {
   });
 });
 
+// #3956 review: a turn PARKED on the operator (paused bubble) still boots active so its
+// reattach brings the form back, but it is not "streaming" — only MAX_ACTIVE_SESSIONS slots
+// mount, and every parked session past the cap kept a streaming tab dot, the rail's
+// any-streaming dot and a retirement block until it was opened.
+describe("bootLiveTurns", () => {
+  const turn = (id: string, extra: Partial<ChatMessage>): ChatSession => ({
+    id,
+    title: id,
+    createdAt: 1,
+    updatedAt: 1,
+    messages: [
+      { id: `${id}-u`, role: "user", content: "pick a fruit", status: "done" },
+      { id: `${id}-a`, role: "assistant", content: "", status: "streaming", taskId: `task-${id}`, ...extra },
+    ],
+  });
+
+  it("marks no parked session streaming, however many there are", () => {
+    const parked = Array.from({ length: 7 }, (_, i) => turn(`n${i}`, { paused: true }));
+    const boot = bootLiveTurns({ version: 1, sessions: parked, currentSessionId: "n0" });
+    expect(boot.sessionStatusMap).toEqual({});
+    // …but they still come back active (up to the cap), so their slots mount and reattach.
+    expect(boot.activeSessions).toEqual(["n0", "n1", "n2", "n3", "n4"].slice(0, MAX_ACTIVE_SESSIONS));
+  });
+
+  it("a working turn is streaming and mounts ahead of parked ones; a settled one is neither", () => {
+    const sessions = [
+      turn("parked-a", { paused: true }),
+      turn("parked-b", { paused: true }),
+      turn("working", {}),
+      turn("settled", { status: "done" }),
+      turn("no-task", { taskId: undefined }),
+    ];
+    const boot = bootLiveTurns({ version: 1, sessions, currentSessionId: "settled" });
+    expect(boot.sessionStatusMap).toEqual({ working: "streaming" });
+    expect(boot.activeSessions).toEqual(["settled", "working", "parked-a", "parked-b"]);
+  });
+});
+
 describe("mergeHydratedSessions", () => {
   const session = (id: string, messages: ChatMessage[], updatedAt = 10): ChatSession => ({
     id,
@@ -90,6 +129,26 @@ describe("mergeHydratedSessions", () => {
     updatedAt,
   });
   const user = (content: string): ChatMessage => ({ role: "user", content, status: "done" });
+
+  it("a recovered PARKED turn is not marked streaming; a working one is (#3956)", () => {
+    const current = {
+      ...mkState([]),
+      version: 1,
+      sessions: [],
+      currentSessionId: null,
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+      serverTurnControls: {},
+    };
+    const live = (id: string, paused?: boolean): ChatSession =>
+      session(id, [
+        user("pick a fruit"),
+        { id: `${id}-a`, role: "assistant", content: "", status: "streaming", taskId: `task-${id}`, ...(paused ? { paused } : {}) },
+      ]);
+    const next = mergeHydratedSessions(current as never, [live("chat-parked", true), live("chat-working")]);
+    expect(next.sessionStatusMap["chat-parked"]).toBeUndefined();
+    expect(next.sessionStatusMap["chat-working"]).toBe("streaming");
+  });
 
   it("never overwrites richer non-empty local history", () => {
     const local = session("chat-a", [user("local")]);
@@ -199,7 +258,7 @@ describe("persist debouncing", () => {
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
     for (let i = 0; i < 50; i++) {
-      chatStore.updateMessages(sessionId, () => msg("token ".repeat(i + 1)));
+      chatStore.updateMessages(sessionId, msg("token ".repeat(i + 1)));
     }
     expect(setItem).not.toHaveBeenCalled(); // nothing synchronous
 
@@ -216,7 +275,7 @@ describe("persist debouncing", () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
-    chatStore.updateMessages(sessionId, () => msg("live"));
+    chatStore.updateMessages(sessionId, msg("live"));
     const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
     expect(session.messages[0]).toMatchObject({ content: "live" }); // before any timer fires
     expect(setItem).not.toHaveBeenCalled();
@@ -226,7 +285,7 @@ describe("persist debouncing", () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
-    chatStore.updateMessages(sessionId, () => msg("pending")); // debounced…
+    chatStore.updateMessages(sessionId, msg("pending")); // debounced…
     const created = chatStore.createSession(); // …structural change flushes NOW
     expect(setItem).toHaveBeenCalledTimes(1);
     const written = JSON.parse(setItem.mock.calls[0][1] as string);
@@ -285,7 +344,7 @@ describe("persist debouncing", () => {
     const first = chatStore.getSnapshot().currentSessionId!;
     // `first` has to be USED or createSession reuses it instead of making `b` — two
     // pristine blanks are interchangeable and the store now collapses them.
-    chatStore.updateMessages(first, () => [{ role: "user", content: "hi" }]);
+    chatStore.updateMessages(first, [{ role: "user", content: "hi" }]);
     const b = chatStore.createSession();
 
     chatStore.reorderSessions([b.id]); // omit `first`
@@ -296,8 +355,8 @@ describe("persist debouncing", () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
-    chatStore.updateMessages(sessionId, () => msg("final answer"));
-    chatStore.setSessionStatus(sessionId, "idle"); // ChatSurface's stream-done path
+    chatStore.updateMessages(sessionId, msg("final answer"));
+    chatStore.setSessionStatus(sessionId, "idle"); // ChatSessionSlot's stream-done path
     expect(setItem).toHaveBeenCalledTimes(1);
     const written = JSON.parse(setItem.mock.calls[0][1] as string);
     const session = written.sessions.find((s: { id: string }) => s.id === sessionId);
@@ -323,7 +382,7 @@ describe("persist debouncing", () => {
     const { chatStore } = await freshStore();
     const sessionId = chatStore.getSnapshot().currentSessionId!;
 
-    chatStore.updateMessages(sessionId, () => msg("about to navigate"));
+    chatStore.updateMessages(sessionId, msg("about to navigate"));
     window.dispatchEvent(new Event("pagehide"));
     expect(setItem).toHaveBeenCalledTimes(1);
 
@@ -529,7 +588,7 @@ describe("cross-tab persistence", () => {
   it("ephemeral messages (/btw asides, #2483) never reach the persisted blob", async () => {
     const { chatStore } = await import("./chat-store");
     const sid = chatStore.getSnapshot().currentSessionId!;
-    chatStore.updateMessages(sid, () => [
+    chatStore.updateMessages(sid, [
       { id: "m1", role: "user", content: "real turn" },
       { id: "a1", role: "system", content: "↪ Aside: saved nowhere", noteTone: "info", ephemeral: true },
       { id: "a2", role: "system", content: "↩ Aside answer", noteTone: "info", ephemeral: true },
@@ -576,7 +635,7 @@ describe("cross-tab persistence", () => {
 });
 
 // Incognito threads (ADR 0069 D3b): the flag lives ON the session (persisted with it)
-// so ChatSurface can stamp metadata.incognito onto EVERY send while it's on — the
+// so ChatSessionSlot can stamp metadata.incognito onto EVERY send while it's on — the
 // backend flag is per-message, and a mixed thread would leak earlier incognito content
 // into a later non-incognito turn's summary.
 describe("incognito sessions", () => {
@@ -629,7 +688,7 @@ describe("incognito sessions", () => {
   it("a used session is never reused — createSession makes a real one", async () => {
     const { chatStore } = await import("./chat-store");
     const s = chatStore.createSession();
-    chatStore.updateMessages(s.id, () => [{ role: "user", content: "hi" }]);
+    chatStore.updateMessages(s.id, [{ role: "user", content: "hi" }]);
     const before = chatStore.getSnapshot().sessions.length;
     const next = chatStore.createSession();
     expect(next.id).not.toBe(s.id);
@@ -639,7 +698,7 @@ describe("incognito sessions", () => {
   it("reusing a blank on another tab SWITCHES to it (the visible feedback)", async () => {
     const { chatStore } = await import("./chat-store");
     const used = chatStore.createSession();
-    chatStore.updateMessages(used.id, () => [{ role: "user", content: "hi" }]);
+    chatStore.updateMessages(used.id, [{ role: "user", content: "hi" }]);
     const blank = chatStore.createSession(); // only creates because `used` is now used
     chatStore.switchSession(used.id);
     const got = chatStore.createSession();

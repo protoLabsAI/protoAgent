@@ -251,8 +251,7 @@ def test_reclaim_never_raises_on_bad_path():
     assert res == {"wal_truncated": 0, "pages_reclaimed": 0}
 
 
-def test_reclaim_full_vacuum_fallback(tmp_path):
-    """On a legacy DB (auto_vacuum=NONE), reclaim falls back to full VACUUM."""
+def _legacy_db_with_free_pages(tmp_path) -> str:
     db = str(tmp_path / "c.db")
     conn = sqlite3.connect(db)
     # Deliberately do NOT set auto_vacuum — defaults to NONE.
@@ -263,6 +262,241 @@ def test_reclaim_full_vacuum_fallback(tmp_path):
     conn.execute("DELETE FROM t WHERE id > 5")
     conn.commit()
     conn.close()
+    return db
+
+
+def _page_count(db) -> int:
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("PRAGMA page_count").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_reclaim_skips_full_vacuum_on_a_legacy_db_by_default(tmp_path, monkeypatch):
+    """#3973: on a legacy DB (auto_vacuum=NONE) the periodic reclaim must NOT run a full
+    VACUUM — it rewrites the file under an exclusive lock, stalling live checkpoint
+    writes. The freed pages stay on the freelist (reused), the file just doesn't shrink."""
+    db = _legacy_db_with_free_pages(tmp_path)
+    before = _page_count(db)
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+
+    def _traced(*a, **kw):
+        conn = real_connect(*a, **kw)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", _traced)
 
     res = reclaim(db)
+
+    assert not [s for s in statements if s.strip().upper() == "VACUUM"], statements
+    assert res["pages_reclaimed"] == 0
+    assert _page_count(db) == before
+
+
+def test_reclaim_full_vacuum_is_opt_in_and_migrates_to_incremental(tmp_path):
+    """An offline / maintenance caller can opt in to the full VACUUM — and it MIGRATES the
+    DB to auto_vacuum=INCREMENTAL (#3973), so every later reclaim shrinks it cheaply. A
+    bare VACUUM shrank it once and left it NONE, never to shrink again."""
+    db = _legacy_db_with_free_pages(tmp_path)
+    res = reclaim(db, full_vacuum=True)
     assert res["pages_reclaimed"] > 0, "full VACUUM should reduce page_count after deletions on auto_vacuum=NONE"
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2  # INCREMENTAL
+        conn.execute("DELETE FROM t WHERE id > 1")
+        conn.commit()
+    finally:
+        conn.close()
+    assert reclaim(db)["pages_reclaimed"] > 0  # the periodic (non-opt-in) reclaim now shrinks it
+
+
+def test_reclaim_legacy_skip_hint_names_the_migrating_command(tmp_path, caplog):
+    """The skip's hint must name the command that actually fixes it — the mode switch AND
+    the VACUUM — not a bare VACUUM that leaves the DB unable to shrink (#3973)."""
+    import logging
+
+    db = _legacy_db_with_free_pages(tmp_path)
+    with caplog.at_level(logging.INFO, logger="protoagent.checkpoint_prune"):
+        reclaim(db)
+    assert "PRAGMA auto_vacuum=INCREMENTAL; VACUUM;" in caplog.text
+
+
+def test_vacuum_setting_help_does_not_promise_a_full_vacuum():
+    from graph.settings_schema import FIELDS
+
+    (field,) = [f for f in FIELDS if f.attr == "checkpoint_vacuum"]
+    assert "PRAGMA auto_vacuum=INCREMENTAL; VACUUM;" in field.description
+
+
+def _insert_cp(conn, thread_id, checkpoint_id, ns=""):
+    conn.execute(
+        "INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (thread_id, ns, checkpoint_id, None, "", b"{}", b"{}"),
+    )
+    conn.execute(
+        "INSERT INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (thread_id, ns, checkpoint_id, "", 0, "", "", b""),
+    )
+
+
+def test_delete_thread_cascade_treats_like_wildcards_in_the_id_literally(tmp_path):
+    """#3973: ``_`` / ``%`` in the thread id are literal in the cascade's LIKE — deleting
+    ``a2a:s_1`` must not take ``a2a:sX1:goal-iter-*`` (or anything ``%`` would match)."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("seed",), turns=1)
+    conn = sqlite3.connect(db)
+    tids = (
+        "a2a:s_1",
+        "a2a:s_1:goal-iter-1",
+        "a2a:sX1:goal-iter-1",
+        "a2a:p%",
+        "a2a:p%:goal-iter-1",
+        "a2a:pZZ:goal-iter-1",
+        # LIKE folds ASCII case: deleting chat-1 must not take CHAT-1's iterations.
+        "chat-1",
+        "chat-1:goal-iter-2",
+        "CHAT-1:goal-iter-3",
+        # A backslash is a literal too (the old escape char).
+        "a2a:b\\x",
+        "a2a:b\\x:goal-iter-1",
+        "a2a:b\\\\x:goal-iter-1",
+        "a2a:bx:goal-iter-1",
+    )
+    for i, tid in enumerate(tids):
+        _insert_cp(conn, tid, f"00000000-0000-6000-8000-{i:012x}")
+    conn.commit()
+    conn.close()
+
+    for tid in ("a2a:s_1", "a2a:p%", "chat-1", "a2a:b\\x"):
+        delete_thread(db, tid, cascade=True)
+
+    for gone in (
+        "a2a:s_1",
+        "a2a:s_1:goal-iter-1",
+        "a2a:p%",
+        "a2a:p%:goal-iter-1",
+        "chat-1",
+        "chat-1:goal-iter-2",
+        "a2a:b\\x",
+        "a2a:b\\x:goal-iter-1",
+    ):
+        assert _count(db, "checkpoints", gone) == 0 and _count(db, "writes", gone) == 0, gone
+    for kept in (
+        "a2a:sX1:goal-iter-1",
+        "a2a:pZZ:goal-iter-1",
+        "CHAT-1:goal-iter-3",
+        "a2a:b\\\\x:goal-iter-1",
+        "a2a:bx:goal-iter-1",
+    ):
+        assert _count(db, "checkpoints", kept) == 1 and _count(db, "writes", kept) == 1, kept
+
+
+def _uuid6(unix_s: float, seq: int) -> str:
+    ticks = int(unix_s * 1e7) + 0x01B21DD213814000
+    th, tm, tl = (ticks >> 28) & 0xFFFFFFFF, (ticks >> 12) & 0xFFFF, ticks & 0x0FFF
+    return f"{th:08x}-{tm:04x}-6{tl:03x}-8000-{seq:012x}"
+
+
+def _trace_statements(monkeypatch) -> list[str]:
+    statements: list[str] = []
+    real_connect = sqlite3.connect
+
+    def _traced(*a, **kw):
+        conn = real_connect(*a, **kw)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", _traced)
+    return statements
+
+
+def test_aged_lookup_and_prune_are_single_queries_not_n_plus_1(tmp_path, monkeypatch):
+    """#3973: ``find_aged_threads`` and ``prune_checkpoints`` used a query per thread (and
+    per namespace). Each lookup is now ONE query, whatever the thread count — with the
+    same result: old threads TTL'd, each (thread, ns) capped, background threads tighter."""
+    from graph.checkpoint_prune import find_aged_threads
+
+    now = time.time()
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("seed",), turns=1)
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM checkpoints")
+    conn.execute("DELETE FROM writes")
+    old, fresh = now - 40 * 86400, now - 60
+    for t in range(8):
+        for i in range(4):
+            _insert_cp(conn, f"old{t}", _uuid6(old + i, i))
+            _insert_cp(conn, f"live{t}", _uuid6(fresh + i, i))
+            _insert_cp(conn, f"live{t}", _uuid6(fresh + i, i), ns="sub")
+            _insert_cp(conn, f"a2a:background:{t}", _uuid6(fresh + i, i))
+    _insert_cp(conn, "undatable", "not-a-uuid")  # never TTL'd
+    conn.commit()
+    conn.close()
+
+    statements = _trace_statements(monkeypatch)
+    aged = find_aged_threads(db, 30 * 86400, now=now)
+    assert sorted(aged) == [f"old{t}" for t in range(8)]
+    assert len([s for s in statements if s.lstrip().upper().startswith("SELECT")]) == 1, statements
+
+    statements.clear()
+    res = prune_checkpoints(db, keep_per_thread=2, max_age_seconds=30 * 86400, now=now, background_keep=1)
+    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    assert len(selects) == 2, selects  # one aged-thread scan + one windowed cap query
+    assert res == {"threads_deleted": 8, "checkpoints_deleted": 8 * (2 + 2 + 3)}
+    for t in range(8):
+        assert _count(db, "checkpoints", f"old{t}") == 0
+        assert _count(db, "checkpoints", f"live{t}") == 4  # 2 per namespace
+        assert _count(db, "checkpoints", f"a2a:background:{t}") == 1
+        assert _count(db, "writes", f"live{t}") == 4
+    assert _count(db, "checkpoints", "undatable") == 1
+
+
+def test_age_ttl_scan_and_delete_are_one_write_transaction(tmp_path, monkeypatch):
+    """#3973: the TTL scan holds the write lock through its delete. A chat reopened while
+    the scan runs (a new turn on a thread the scan has judged idle) must either be held
+    off until the prune commits, or survive it — never be written and then deleted."""
+    from graph import checkpoint_prune as cp
+
+    now = time.time()
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("seed",), turns=1)
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM checkpoints")
+    conn.execute("DELETE FROM writes")
+    for i in range(3):
+        _insert_cp(conn, "old", _uuid6(now - 40 * 86400 + i, i))
+    conn.commit()
+    conn.close()
+
+    new_turn = _uuid6(now, 99)
+    outcome: list[str] = []
+    real = cp.uuidv6_unix_seconds
+
+    def _reopen_mid_scan(cid):
+        if not outcome:  # the live saver writes a new turn while the scan runs
+            live = sqlite3.connect(db, timeout=0)
+            try:
+                _insert_cp(live, "old", new_turn)
+                live.commit()
+                outcome.append("written")
+            except sqlite3.OperationalError as exc:
+                assert "locked" in str(exc)
+                outcome.append("held off")
+            finally:
+                live.close()
+        return real(cid)
+
+    monkeypatch.setattr(cp, "uuidv6_unix_seconds", _reopen_mid_scan)
+    prune_checkpoints(db, keep_per_thread=10, max_age_seconds=30 * 86400, now=now)
+
+    conn = sqlite3.connect(db)
+    try:
+        survived = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE checkpoint_id=?", (new_turn,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert outcome == ["held off"] or survived == 1, (outcome, survived)

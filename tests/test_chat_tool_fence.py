@@ -105,6 +105,7 @@ async def test_plugin_host_invoke_forwards_the_fence(monkeypatch):
     """The ADR 0018 host seam: ``HOST.invoke(prompt, session_id, tool_fence=…)`` reaches
     ``chat()``; the positional 2-arg form every existing surface uses still works."""
     import server.agent_init as ai
+    import server.plugin_wiring as pw
 
     seen = []
 
@@ -112,7 +113,8 @@ async def test_plugin_host_invoke_forwards_the_fence(monkeypatch):
         seen.append((prompt, session_id, tool_fence))
         return [{"role": "assistant", "content": "ok"}]
 
-    monkeypatch.setattr(ai, "chat", _fake_chat)
+    # _plugin_agent_invoke lives in plugin_wiring (#3821) — its bare-name `chat` resolves THERE.
+    monkeypatch.setattr(pw, "chat", _fake_chat)
     assert await ai._plugin_agent_invoke("hi", "s1") == "ok"
     assert await ai._plugin_agent_invoke("hi", "s1", tool_fence=["discord_read"]) == "ok"
     assert seen == [("hi", "s1", None), ("hi", "s1", ["discord_read"])]

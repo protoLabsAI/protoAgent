@@ -5,7 +5,7 @@
 # Plugin registry API
 
 The object your plugin's `register(registry)` receives — the whole Python extension
-surface in one place. Generated from `graph/plugins/registry.py`.
+surface in one place. Generated from `src/graph/plugins/registry.py`.
 
 ```python
 def register(registry):
@@ -68,6 +68,7 @@ Host services (agent invoke + event bus) a surface/route can use — the server 
 | [`register_mcp_server()`](#registry-register-mcp-server) | Contribute a **managed MCP server** the agent connects to ([ADR 0019](/adr/0019-plugin-config-settings-secrets)) |
 | [`register_middleware()`](#registry-register-middleware) | Add a plugin-contributed LangGraph `AgentMiddleware` ([ADR 0032](/adr/0032-pluggable-middleware)) |
 | [`register_router()`](#registry-register-router) | Mount a FastAPI `APIRouter` on the server ([ADR 0018](/adr/0018-plugin-surfaces-routes-subagents)) |
+| [`register_service()`](#registry-register-service) | Offer `fn` to OTHER plugins as the service `<plugin_id>.<name>` ([ADR 0116](/adr/0116-local-first-data-analyst-duckdb-and-vega-lite-charts)) |
 | [`register_setup_step()`](#registry-register-setup-step) | Register a SETUP STEP: the server-side half of a `plugin_setup` setup-gap action |
 | [`register_skill_dir()`](#registry-register-skill-dir) | Add a directory of `SKILL.md` skills bundled with the plugin |
 | [`register_subagent()`](#registry-register-subagent) | Add a `SubagentConfig` to `SUBAGENT_REGISTRY` ([ADR 0018](/adr/0018-plugin-surfaces-routes-subagents)) |
@@ -186,7 +187,7 @@ enabled plugin already registered keeps the first and warns (resolved in the loa
 ### `registry.register_component` {#registry-register-component}
 
 ```python
-registry.register_component(name: str, validator) -> None
+registry.register_component(name: str, validator, frame: str | None = None, reads=None) -> None
 ```
 
 Contribute a component-v1 KIND ([ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering)) the chat stream may carry — e.g. a chip
@@ -207,6 +208,25 @@ validator is refused with a warning. The kind is live only while the plugin is
 loaded — disabling it stops extraction on the next reload. `show_component` never
 builds a plugin kind. Guard with `getattr(registry, "register_component", None)` on
 hosts older than this seam.
+
+`frame` (optional, [ADR 0118](/adr/0118-interactive-answers-inline-artifacts-and-frame-components) D5) declares that the kind renders in a plugin-served
+PAGE instead of a compiled console renderer — a path RELATIVE to this plugin's public
+route prefix (`/plugins/<id>`), e.g. `"component.html"`. Because an opaque-origin
+frame iframe sends no bearer, the page must be auth-exempt: the frame is refused (same
+log-and-skip as a bad name) if it is absolute, contains a `..` segment, or is not
+covered by the manifest's `public_paths`. An accepted frame is stored on
+`component_frames[name]` for a later card to carry through the loader.
+
+`reads` (optional, [ADR 0118](/adr/0118-interactive-answers-inline-artifacts-and-frame-components) D5 amendment, [#4143](https://github.com/protoLabsAI/protoAgent/issues/4143)) lists the GET routes of THIS plugin's
+bearer-gated data router the frame may read through the host-mediated read channel —
+patterns RELATIVE to `/api/plugins/<id>/` (e.g. `["features", "features/*"]`), where
+`*` matches exactly one path segment. The frame posts `protoComponent:read {cid,
+path}`; the console host checks the path against these patterns, makes the authed GET
+itself and posts back only the JSON — the bearer never reaches the frame. `reads`
+requires `frame` (it is meaningless without one). Each refused pattern — one that
+escapes the plugin prefix, contains a `..`/`.`/empty segment, a query string, `**`
+or a partial `*` — is logged and skipped; `reads` without a frame is logged and
+ignored. Accepted patterns are stored on `component_reads[name]`.
 
 ### `registry.register_embedder` {#registry-register-embedder}
 
@@ -350,6 +370,31 @@ public view `/plugins/<id>` and the bearer-gated data router
 plugin-views.md, [ADR 0026](/adr/0026-plugin-contributed-console-surfaces)); a prefix outside both logs a WARNING ([#870](https://github.com/protoLabsAI/protoAgent/issues/870),
 [#1732](https://github.com/protoLabsAI/protoAgent/issues/1732)). The default-deny auth middleware guards all non-public paths
 regardless of prefix.
+
+### `registry.register_service` {#registry-register-service}
+
+```python
+registry.register_service(name: str, fn, description: str = '') -> None
+```
+
+Offer `fn` to OTHER plugins as the service `<plugin_id>.<name>` ([ADR 0116](/adr/0116-local-first-data-analyst-duckdb-and-vega-lite-charts)).
+
+The cross-plugin CALL seam: where the event bus (`emit`) is fire-and-forget, a
+service returns a result. A consumer resolves it at call time with
+`graph.sdk.service("<plugin_id>.<name>")` and gets your callable — or `None` when
+your plugin is disabled, so it must degrade (a service is an optional capability). It
+never imports your plugin, so you can refactor freely behind the name. The artifact
+plugin's `artifact.show` is the reference: the data plugin creates charts through it.
+
+The name is namespaced to this plugin: `"show"` registers `"<plugin_id>.show"`, and
+a name already under this plugin's namespace is kept as-is (a plugin may only provide
+under its own). The bare part is lowercase `[a-z][a-z0-9_]*`. Treat the callable's
+signature and return shape as a PUBLIC API — document them in its docstring, keep them
+backward compatible, and return refusals as data rather than raising for an expected
+"no". It runs in the CALLER's thread (often a tool body; sync or async is your call,
+say which). `description` is a one-line summary for status surfaces. Live while the
+plugin is loaded — a reload that disables it stops the name resolving. Guard with
+`getattr(registry, "register_service", None)` on hosts older than this seam.
 
 ### `registry.register_setup_step` {#registry-register-setup-step}
 
@@ -575,11 +620,11 @@ a header) while the store stays default-deny; `media.public: true`
 (core config) opts the whole store public, and `media.retention_days`
 prunes old files. A `media.saved` event is broadcast on the bus.
 
-## Host services — `registry.host`
+## Host services — `registry.host` {#host-services-registry-host}
 
 Services the *server* owns: calling the agent, the event bus, live config. The server
 populates them before any surface starts, so they are `None` at import time and in
-host-free tests — **always guard**. Generated from `graph/plugins/host.py`.
+host-free tests — **always guard**. Generated from `src/graph/plugins/host.py`.
 
 | Service | Type | Purpose |
 |---|---|---|

@@ -1,0 +1,338 @@
+# 0118 — Interactive answers: inline artifacts in chat, streamed previews, a send-to-chat bridge, and frame-rendered plugin components
+
+- Status: Accepted
+- Date: 2026-10-09
+- Builds on: [ADR 0038](./0038-generative-ui-artifacts-two-mode.md) (sandboxed artifacts, iframe vs `src/ext` UI), [ADR 0051](./0051-a2a-realtime-streaming-and-component-rendering.md) (`component-v1`, `show_component`, plugin kinds), [ADR 0061](./0061-frontend-extension-registries.md) (console extension registries), [ADR 0116](./0116-local-first-data-analyst-duckdb-and-vega-lite-charts.md) (the `vega-lite` kind, nonce CSP, vendoring, `--pl-color-chart-*` theming, `artifact.show` service), [ADR 0111](./0111-zed-operator-editor-acp-shim.md) D3 (tool-call args reach the wire only as an 800-char preview).
+- Amends: ADR 0051 (a fourth presentation tier between data components and the panel; plugin kinds can render without a console rebuild), ADR 0038 (one artifact, two placements).
+- Refs: [CopilotKit/OpenIntelligentUI](https://github.com/CopilotKit/OpenIntelligentUI) (MIT) at `f6e4388`, read 2026-10-09: its `generateSandboxedUi` renderer, Websandbox host bridge and visualization router.
+
+## Context
+
+protoAgent gives the model three ways to show something today:
+
+1. **Markdown text**, including mermaid fences, KaTeX and GFM tables (`apps/web/src/chat/Markdown.tsx`).
+2. **Data components.** `show_component` emits a `component-v1` DataPart. The core kinds are `table`, `keyvalue`, `timeline` and `code-ref` (`graph/components.py:28`). They are data only and validated server-side, and the console renders them from a registry (`apps/web/src/chat/ChatComponent.tsx`). Running no code is what makes them safe.
+3. **Artifacts.** `show_artifact(kind, code)` puts html / markdown / svg / mermaid / react / vega-lite in the Artifact panel's sandboxed frame. The chat gets only an `artifact-ref` chip.
+
+OpenIntelligentUI ("OIU") is CopilotKit's reference app for answers you can interact with: a calculator, a 3D explainer or a map, rendered **inside the conversation** as the model writes it. Reading its renderer against our stack shows five gaps.
+
+**G1 — A generated tool lives off to the side.** An interactive answer is a chip that opens a panel. Scrollback holds a pointer, not the answer, and two answers can't sit next to each other in the transcript.
+
+**G2 — Nothing renders until the tool call finishes.** The model can spend 30–60 s writing an artifact, and the operator watches a spinner the whole time. The server announces the tool card from the first `tool_call_chunks` with `input: ""` (`server/turn_stream.py`, `_on_chat_model_stream`). Args are filled only at `on_chat_model_end`, and reach the wire only as an 800-char preview (ADR 0111 D3). OIU streams the tool's arguments in a fixed order: `initialHeight → placeholderMessages → css → html → jsFunctions → jsExpressions`. It holds a placeholder until the CSS is complete, then morphs the partial HTML into a script-free preview frame. Scripts run only once the markup is whole.
+
+**G3 — UI can't talk back to the agent.** HITL forms are the only UI that resumes a turn. The artifact `ask` bridge (`plugins/artifact/_routes.py`, `/ask`) runs a *bare, invisible* completion and is opt-in because of cost. No component can do what OIU's `sendPrompt({text})` does: the user clicks "Ask about this scenario", and that starts a normal, visible turn carrying the selected values.
+
+**G4 — Plugins installed from git can't render inline.** A plugin can register a component *kind* (`registry.register_component`), but its renderer has to be a console `src/ext` module compiled into `apps/web/dist`. An installed plugin can't ship one, so its components show as `[unsupported component]` (ADR 0051 amendment #3617).
+
+**G5 — Nothing tells the model which presentation to use.** It gets six artifact kinds, four component kinds and markdown, but no guidance on which fits a request. OIU makes that choice before each turn with an external classifier and keeps an explicit quality bar for interactive output. That bar covers working controls, validated numeric inputs, provenance labels and reduced motion.
+
+We do **not** want OIU's stack:
+
+- **Its transport.** CopilotKit/AG-UI would replace A2A, and A2A clients degrade cleanly to text today (ADR 0051).
+- **Its library loading.** It uses an unpinned esm.sh import map, and its CSP allows `'unsafe-eval'` plus four CDNs, which ADR 0116 D5 forbids.
+- **Its state store.** The checkpointer is in process memory.
+- **Its router.** The router is a paid external API that fails the whole turn when it is down.
+
+We want its *patterns*, implemented on our existing seams.
+
+## Decision drivers
+
+- **The answer lives in the transcript.** An interactive answer scrolls, replays and reattaches with the conversation, like text does.
+- **One sandbox, one fence.** Inline UI must not open a second, weaker iframe security model. The artifact frame's nonce CSP, vendored SRI-pinned libraries and deny-everything loader (ADR 0116 D5) are the fence. No kind's CSP is widened by this ADR.
+- **The operator watches it being built.** The time to the first visible pixel should be close to the time the model starts writing markup, not the time it finishes.
+- **The user's click, the user's turn.** UI may start an agent turn only when the user confirms it (amended: a host confirm chip, D4), and the result must be indistinguishable in audit from the user typing. It never runs on load, on a timer or on input changes.
+- **A2A stays clean.** Everything new is an optional DataPart or a prop. A client that ignores it still gets the text and the chip.
+- **Plugins extend without forking or rebuilding** (the ADR 0038/0061 promise, kept for inline rendering too).
+
+## Options considered
+
+| Option | For | Against |
+|---|---|---|
+| Adopt CopilotKit + AG-UI wholesale | Mature hooks (`useComponent`, `useRenderTool`, `useHumanInTheLoop`), and OIU as a working reference | Replaces the A2A transport, the console chat runtime and our HITL. Adds a Next.js-shaped runtime route. Months of work for capabilities we can reach on our seams. |
+| A2UI-style declarative catalog only | Data-only like `component-v1`, safe, portable | Can't express a calculator, a simulation or a 3D explainer. We already have the declarative tier (`component-v1`) and vega-lite for charts. |
+| A new core `sandboxed-ui` component kind, separate from artifacts (OIU's shape) | Inline from day one | A second iframe host, CSP, vendoring path, theme bridge and render verdict, all already in the artifact shell. Two fences drift. |
+| **Inline placement of artifacts + streamed args + a bridge + frame-rendered plugin kinds (chosen)** | Reuses the artifact frame end to end (fence, libraries, theme, versioning, render verdict, `open in panel`). Each gap closes on an existing seam. | The inline path depends on the artifact plugin being on (it is first-party). Arg streaming is new wire surface. |
+
+For G2, we considered OIU's six-field ordered tool schema. **Rejected:** it forks `show_artifact`'s contract and the artifact store's single-`code` version model. We keep one `code` string and take the ordering as a convention the skill teaches (D3, D7).
+
+For G5, we considered a per-turn routing middleware like OIU's `JevVisualizationMiddleware`, which classifies the turn, filters out the non-matching render tools and injects that renderer's contract. **Deferred, not rejected** (D7).
+
+## Decision
+
+### D1 — Four presentation tiers; inline and panel are two placements of one artifact
+
+| Tier | Mechanism | Runs code? | Use for |
+|---|---|---|---|
+| Text | markdown (incl. mermaid fences) | no | facts, prose, code, small tables |
+| Data component | `show_component` → `component-v1` | no | exact values, records, steps, code pointers |
+| **Inline artifact** (new) | `show_artifact(…)` (the default for html/svg/mermaid/react/vega-lite) | yes, in the artifact sandbox | an answer the user interacts with *in the conversation*: calculator, explainer, chart, small tool |
+| Panel artifact | `show_artifact(…, placement="panel")` (and the default for markdown, decks, PDFs, files) | yes, same sandbox | a document or tool worked on over many turns, decks, PDFs, large apps |
+
+An inline artifact **is** an artifact. It has the same store, versions, render verdict, `update_artifact`/`rewrite_artifact` and "Open in panel". Only where it renders differs.
+
+### D2 — Inline placement: the `artifact-ref` chip hosts the artifact's own frame
+
+- **Tool.** `show_artifact` (and the `artifact.show` service from ADR 0116 D6) gains `placement: "panel" | "inline"`. **The default is `"inline"`** for the kinds inline supports (operator decision, 2026-10-10), so an interactive answer lands in the transcript unless the model asks for the panel with `placement="panel"`, as it should for a document or work product. Inline is allowed for `html`, `svg`, `mermaid`, `react` and `vega-lite`. Other kinds (`markdown`, decks, PDFs, `file`) fall back to the panel with a note in the tool result.
+- **Wire.** The `artifact-ref` component's props gain `inline: true` and an optional `height` hint (an int; 80–1200 px). The artifact plugin's validator accepts them. An older console ignores them and shows the chip, which is the degrade path.
+- **Shell embed mode.** The artifact shell gains a chrome-less embed mode (`/plugins/artifact/view?embed=<id>&v=<version>`). It renders exactly one version through the **same** frame builder as the panel: nonce CSP, vendored LIB map, theme tokens, loader lockdown and render-verdict reporting. There is no second frame builder.
+- **Console host.** `ArtifactRefChip` (`apps/web/src/artifacts/`) renders an inline ref as an embedded shell iframe. It uses the bearer/theme handshake `PluginView` already uses (`apps/web/src/app/PluginView.tsx`), **extracted into a shared module** rather than copied. The frame reports its content height. The host clamps it to **[80, 1200] px**, and anything taller scrolls inside the frame. The header shows the title, the version and an **Open in panel** button.
+- **Cost bounds.**
+  - Inline frames **mount lazily** when scrolled near the viewport (IntersectionObserver).
+  - At most **6** live inline frames exist per chat view. An older frame that scrolls away is replaced by a static "Click to resume" card, which remembers its last height so the layout doesn't jump.
+  - Hydration and reattach render inline refs the same way. History replays the stored version, and a deleted artifact or a disabled plugin degrades to today's inert chip.
+- **Live-only side effects stay live-only.** The chip's `onLive` hook (it opens the panel today) does **not** fire for an inline ref, because the answer is already in view.
+- **Panel auto-follow ignores inline artifacts and is scoped to the active chat** *(amended 2026-10-11, #4158/#4160, #4163)*. The panel follows the newest **panel-placed** artifact only, so an inline answer never moves it. It follows only artifacts the active chat tab made or revised (their `chat_sessions`, told to the panel by `protoArtifact:context`), so another chat's, a `/v1`/A2A/ACP client's or a legacy artifact never takes it over. Those stay in the picker. Explicit "Open in panel" always works.
+- **Focus: click-to-activate** *(amended 2026-10-11, #4154/#4159)*. An inline frame runs live but starts inactive. A click or Tab activates it, and focus returning to the page deactivates it. A frame that takes focus without a gesture is quarantined: unloaded and replaced by "This artifact tried to take keyboard focus" with **Run it**, with focus handed straight back to the composer. See Amendments for why `inert` was rejected.
+- **Store cap** *(amended 2026-10-11)*. The artifact store keeps 200 artifacts by default (`artifact.history`). An artifact still referenced by a live chat is never evicted.
+
+### D3 — Streamed preview: opt-in streaming of one string argument
+
+**Server: `stream_args`.** A tool can declare one string argument to stream, with tool metadata `{"stream_args": "code"}`. When the model streams `tool_call_chunks` for such a tool, `server/turn_stream.py` does the following:
+
+1. It accumulates the raw arg JSON per tool-call id.
+2. It **extracts the named string value incrementally on the server**: a small partial-JSON string scanner that handles escapes and stops at an unterminated escape. The console never parses partial JSON.
+3. It emits `("tool_args", {id, arg, offset, chunk, done})` frames. Flushing is time-or-size, at ≤4 Hz or every 2 KB, whichever comes first, plus a final `done: true`.
+
+Streaming stops silently once the value passes the artifact size cap. The executor relays these frames as a new optional DataPart, **`application/vnd.protolabs.tool-args-v1+json`**, on WORKING frames. Previews are live-only: they are not persisted to the task history and are not replayed on hydration or reattach. Once the tool has run, the finished artifact replaces the preview. The artifact plugin marks `show_artifact`, `update_artifact` and `rewrite_artifact` as `stream_args: "code"`.
+
+**Console preview.** `a2aStream.ts` decodes `tool-args-v1` into a per-tool-call buffer. For a streaming `show_artifact` with inline placement, the chat renders the inline card at once:
+
+- **Placeholder.** It shows the title as soon as it is known, plus a kind-aware status line.
+- **html/svg preview.** For `html` and `svg`, the card shows a **preview frame**. The fence:
+  - It uses `sandbox="allow-scripts"` with no same-origin.
+  - Its CSP is `default-src 'none'; script-src 'nonce-<n>'; style-src 'unsafe-inline'; img-src data: blob:`. The one script allowed is the host's own nonce'd morph script, which is the only script carrying the nonce.
+  - Before any markup reaches the preview frame, the partial markup is processed: an incomplete trailing tag is dropped, `<script>`, `<head>` and incomplete `<style>` blocks are stripped, and complete `<style>` blocks are hoisted. This is OIU's `processPartialHtml` pipeline (MIT; attribution in the file header).
+  - Inline event handlers are inert, because the CSP has no `'unsafe-inline'` for scripts.
+  - Model-written code therefore **never executes** in the preview.
+- **Gating.** The preview stays hidden until the first `<style>` block closes, or until 1.5 KB of body markup has arrived without one. This is OIU's "never unstyled" rule.
+- **Updates.** Updates are DOM-morphed (Idiomorph, vendored) so they don't flicker. They are throttled to 1 per second, with an immediate flush on milestones: the first style block closes, the body first appears, `done`.
+- **Other kinds.** `react`, `mermaid` and `vega-lite` show the placeholder only, because a partial program or spec has nothing safe to preview.
+- **Handover.** When the tool ends, the preview frame is swapped for the real inline frame (D2), keeping the last measured height so the layout doesn't jump.
+
+### D4 — The send-to-chat bridge: UI proposes a visible turn, the user confirms it
+
+Inside every artifact frame, inline or panel, the shell's shim adds two calls next to the existing `ask`:
+
+- **`window.protoArtifact.send(text)`** puts `text` into the chat **as a user message** and starts a normal turn.
+  - **Where it goes.** An inline frame sends to the session it is rendered in. The panel sends to the active chat tab.
+  - **Gates.** Every hop checks the request: shim → shell → console host. The console host enforces all of these:
+    - **The user confirms it** *(amended 2026-10-11, #4137)*. A send is a **proposal**: the host shows a confirm chip (`Send to chat: "…"` with **Send**, **Dismiss** and **Always allow from this artifact**) and posts only on Send. The chip never takes focus. "Always allow" is per artifact (per plugin kind for components) in this browser and still keeps the length, busy and rate gates. *This replaces the original user-activation gate, which an artifact could satisfy by focusing itself after any console click.*
+    - **Length.** 1–4000 characters.
+    - **Busy.** Not while the target session has a turn running. The call is rejected with "the agent is busy" and the frame shows it.
+    - **Rate.** At most 1 send per 2 s per frame.
+  - **Visibility.** The message is posted with origin metadata `{via: "artifact", artifact_id, version}`. It shows the user's text with a small "from *‹title›*" label and is audited as a user turn. Nothing is hidden: the operator sees exactly what was sent.
+  - **Default.** **On by default**, unlike `ask`. It costs exactly what typing costs and is just as visible. `ask` (a bare, invisible completion) stays opt-in and unchanged.
+- **`window.protoArtifact.openLink(url)`** opens the link in a new tab with no opener and no referrer, through the host. It accepts `https:` only, and an operator setting `artifact.open_link_origins` can narrow that to a list of origins. *(Amended 2026-10-11, #4159.)* It goes through the same confirm chip ("Open ‹host› in a new tab?") with its **own** "Always allow links" trust, separate from send trust. A dismissal or a blocked pop-up rejects the frame's Promise.
+- **Explicit values.** Frame control state is **not** synced to the agent. A UI that wants the agent to see a selection must put it in the `send` text. The skill teaches this (D7).
+
+### D5 — Frame-rendered plugin components: kinds render without a console rebuild
+
+- **Plugin declares a frame.** `registry.register_component(name, validator, frame="component.html")` declares that a plugin kind renders in a **plugin-served page**. The path is relative to the plugin's route prefix, and the manifest must list it under `public_paths`, because an opaque-origin frame sends no bearer.
+- **Catalog.** The loader carries the frame path, and a new `GET /api/components` lists the live kinds, each as `{name, plugin, frame_url | null, reads}`.
+- **Console resolution order.** It becomes: `registerChatComponent` (TS registry) → **frame** → `[unsupported component]`. A compiled renderer still wins, so first-party and fork kinds are unchanged.
+- **The frame host:**
+  - It uses `sandbox="allow-scripts"` with no same-origin, and it never receives the bearer.
+  - It gets the validated props and the theme tokens over `postMessage` in one `{type: "protoComponent:init", props, theme, nonce}`. The host sends it in answer to the frame's `{type: "protoComponent:ready", pair}`, which echoes the `#pair=` fragment of its URL. The frame then echoes `nonce` on every `read`, `send` and `openLink` (#4143; see Amendment 9). Props stay **data only, validated server-side** by the plugin's validator, exactly as today.
+  - It autosizes with the D2 clamp and lazy-mount rules.
+  - It gets the D4 `send` and `openLink` bridge, with the same gates.
+- **DS plugin kit.** The plugin kit CSS and JS (`/_ds/plugin-kit.*`) are served publicly, so a frame looks native without a build step.
+- **Limit.** A frame component can't call the plugin's gated routes itself. Anything it needs comes in its props, through `send`, or through the host-mediated read channel. A plugin that needs a live, authenticated UI uses a rail view (ADR 0038/0045) or an artifact.
+- **Read channel** *(amended 2026-10-12, #4143)*. A kind may declare `reads=[...]`, which are GET patterns under its own `/api/plugins/<id>/`. The frame posts `protoComponent:read {cid, path, nonce}`, and the host checks the path, makes the authed GET itself and posts back `protoComponent:readResult {cid, ok, status, json | error}`. The bearer never reaches the frame, and writes stay on `send`. The frame first posts `protoComponent:ready {pair}`, echoing the `#pair=` fragment the host put on its URL. That earns exactly one `protoComponent:init {…, nonce}`, and the frame must echo `nonce` on every `read`, `send` and `openLink`. Any sign of a second document revokes the mount. See Amendments.
+
+### D6 — Libraries and theme: vendored and token-driven, never CDN
+
+Inline frames, previews and frame components get only what ADR 0116 D5 set up:
+
+- **Libraries.** Vendored, SRI-pinned libraries served same-origin from the artifact vendor route.
+- **Theme.** The `--pl-*` tokens: `--pl-color-chart-series1…8`, axis/grid, fg/bg and fonts. Frames **re-theme live** when the console theme changes.
+
+There is no import map pointing at a CDN. Besides **Idiomorph** (0BSD, for D3's preview), **three.js, d3 and anime.js join the vendored LIB map** (operator decision, 2026-10-10; anime.js replaced gsap on 2026-10-10 over gsap's licence, #4133). Each is vendored byte-for-byte as its UMD/ESM build, SRI-pinned, served same-origin from the artifact vendor route, and noted in the vendor LICENSES file. Each loads only when an artifact asks for it. The skill documents them as available.
+
+### D7 — Choosing the presentation is a skill, not a router (for now)
+
+**Skill.** The artifact plugin's `rendering-artifacts` skill gains:
+
+- **A presentation ladder** (D1's table), with "prefer the lowest tier that answers the request" and "inline for an answer, panel for a work product".
+- **The html authoring order** that makes D3's preview good: `<style>` first, then markup that reads well before any script runs, then scripts last. This is OIU's ordered-field contract as a convention.
+- **OIU's quality bar for interactive answers:**
+  - every enabled control does real work;
+  - labels are connected to inputs, with keyboard operation and visible focus;
+  - numeric input is validated (`valueAsNumber`, `Number.isFinite`, domain bounds, no zero divisors), and NaN, Infinity or a stale result never shows as an answer;
+  - units and assumptions are shown;
+  - reduced motion is respected, with pause and reset for animation;
+  - sample, user-provided, retrieved and calculated values are labelled;
+  - `send` is used only from a labelled button and carries the selected values explicitly.
+
+**Router (deferred).** A routing middleware is **deferred**. Revisit it if the eval set from slice S9 shows the model choosing the wrong tier often enough to matter. If built, it must use the agent's own gateway (no external classifier), fail open to "all tiers available" rather than failing the turn, and add no latency to text-only turns.
+
+### D8 — Provenance on data: `table.source`
+
+The core `table` component gains an optional `source` prop: a string of at most 200 characters, rendered as a muted caption ("Source: …"). It is optional, so existing payloads stay valid. The `show_component` docstring and the skill ask for it whenever the rows aren't the user's own input. This is OIU's required-provenance Table rule, made optional for backward compatibility.
+
+## Consequences
+
+- **G1–G5 close on existing seams.** A2A clients that ignore the new DataPart, the new props and `/api/components` see exactly what they see today.
+- **Inline UI depends on the artifact plugin.** With the plugin off, `placement` doesn't exist and the model has tiers 1–2 only, which is today's floor.
+- **`tool-args-v1` is new wire surface,** live-only and capped. It also starts to close ADR 0111 D3: the ACP shim can later use it for streaming edit diffs.
+- **The `send` bridge is a new way to start turns.** Its gates are enforced in the host, not in untrusted frame code, and every send is visible and audited as a user turn. The threat it adds is "a frame makes the user's click send something they didn't read". The visible label and the confirm chip bound it, and HITL-gated tools still park as usual.
+- **Frame components trade capability for portability.** They get no bearer, props only and a public page. That is the intended boundary.
+- **Performance.** Lazy mounting plus the 6-live-frame cap bounds memory on long transcripts. The preview throttle bounds CPU while streaming.
+- **OIU code taken under MIT** (`processPartialHtml`, the throttle and flush rules, the height clamp, and the authoring guidance) is attributed in file headers.
+
+## Slices
+
+Each slice is independently mergeable into the epic branch. Dependencies are noted in brackets.
+
+| # | Slice | Area |
+|---|---|---|
+| S1 | `table.source` prop: validator, renderer, docstring, tests (D8) | core `graph/components.py`, `ChatComponent.tsx` |
+| S2 | `stream_args` tool metadata + server partial-string extraction + `tool_args` frames + `tool-args-v1` DataPart (D3, server) | `server/turn_stream.py`, `a2a_impl/executor.py`, `docs/reference/extensions.md` |
+| S3 | Console decode of `tool-args-v1` into a per-tool-call buffer [S2] | `apps/web/src/lib/api/a2aStream.ts`, chat store |
+| S4 | Artifact `placement` param + `artifact-ref` `inline`/`height` props + `stream_args` marks on the three write tools (D2/D3, plugin side) | `plugins/artifact/_tools.py`, `_ref.py` |
+| S5 | Artifact shell embed mode (D2) | `plugins/artifact/shell.js`, `shell.html`, `_routes.py` |
+| S6 | Extract the PluginView bearer/theme handshake into a shared module (no behavior change) | `apps/web/src/app/PluginView.tsx` + new module |
+| S7 | Inline host in `ArtifactRefChip`: embedded frame, height clamp, lazy mount, 6-frame cap, Open in panel [S4, S5, S6] | `apps/web/src/artifacts/` |
+| S8 | Streamed preview frame: partial-HTML processing, gating, Idiomorph vendoring, throttle, swap to the final frame [S3, S7] | `apps/web/src/artifacts/` |
+| S9 | `rendering-artifacts` skill: ladder, authoring order, quality bar, plus a small eval prompt set (D7) | `plugins/artifact/skills/` |
+| S10 | `send` / `openLink` bridge: shell shim + console host gates + origin-tagged user message (D4) [S7] | `plugins/artifact/shell.js`, console chat send path |
+| S11 | `register_component(…, frame=)` + loader + `GET /api/components` (D5, server) | `graph/plugins/registry.py`, loader, a route |
+| S12 | Console frame-component host + resolution order + bridge reuse [S6, S10, S11] | `apps/web/src/chat/ChatComponent.tsx`, `src/ext/componentRegistry.ts` |
+
+## Operator decisions (2026-10-10)
+
+1. **Inline by default: yes.** `show_artifact` defaults to `placement="inline"` for the kinds inline supports; documents and work products pass `placement="panel"` (D2).
+2. **Live-frame cap: 6**, as proposed (D2).
+3. **`send` on by default: yes**, behind the host-enforced busy, length and rate gates (D4); the gesture gate was later replaced by a confirm chip (see Amendments).
+4. **Libraries: vendor three.js, d3 and gsap** (D6); gsap was later swapped for anime.js (see Amendments).
+
+The status moves to **Accepted**.
+
+## Amendments (2026-10-11, shipped with epic #4076)
+
+Decisions taken during implementation and hands-on testing. Each is also written into the decision it changes (D2, D4, D5, D6):
+
+1. **Confirm chip instead of a gesture gate (D4, #4137).** `send` and `openLink` are proposals the operator confirms in a host-UI chip, with per-artifact "Always allow" trust. Send trust and link trust are stored separately. The user-activation check could be satisfied by a frame that focused itself after any console click.
+2. **anime.js instead of gsap (D6, #4133).** gsap's licence doesn't allow redistribution in our vendored LIB map. anime.js (MIT) covers the same tweening and timeline needs.
+3. **Click-to-activate frames (D2, #4154/#4159).** Inline frames run live (charts and animations keep moving) but start **inactive**. A click, or Tab navigation, activates a frame. Returning focus to the page deactivates it. A frame that takes focus without a gesture is **quarantined**: it's unloaded and replaced by "This artifact tried to take keyboard focus" with **Run it**, and focus goes back to the composer at once. `inert` was rejected: Chromium lets an inert frame's own script focus its own input, and WebKit honours it only until the first activation. Known limit: focus moving from one frame to another raises no host event, so frame-to-frame theft isn't caught.
+4. **Artifact store cap 200 (D2).** Raised from the original cap. Artifacts still referenced by a live chat are never evicted.
+5. **Panel follows panel artifacts only (D2, #4158/#4160).** Auto-follow of the newest artifact ignores inline placements. Inline answers never move the panel.
+6. **Panel auto-follow is scoped to the active chat (D2, #4163).** The console posts
+   `protoArtifact:context {session}` into the Artifact panel: the active chat tab's session id, at
+   start, on every tab switch, and again to each fresh load of the panel (a sticky delivery,
+   `setPluginViewContext` in `apps/web/src/lib/pluginViewInbox.ts`). The shell accepts it only from
+   its embedder. Auto-follow then follows only panel artifacts whose `chat_sessions` names that chat.
+   The artifact tools stamp `chat_sessions` on every create or revise from a console (`chat-`)
+   session. An artifact with **no** `chat_sessions` is **not** auto-followed: one made by a `/v1`,
+   A2A or ACP client, by a plugin calling `artifact.show` without a `session_id`, or a record from
+   before the stamp. It stays in the picker, and an explicit "Open in panel" (`protoArtifact:select`)
+   still shows any artifact. A tab switch moves a following panel to that chat's newest panel
+   artifact, or leaves it where it is when that chat has none. A pinned selection never moves. A
+   shell that never receives a context (an older console) follows every panel artifact, as before.
+7. **Opening a dock restores a usable size (#4163).** "Open in panel" goes through `openView`, which
+   now restores the default width (or height) when the dock is stored below the AppShell minimum. A
+   drag-to-collapse can leave the dock stored at 0 px, and the panel then opened 0 px wide. The
+   width setter still stores values verbatim.
+8. **Embed height re-measures until the content settles (D2, #4163).** The height reporter
+   (`HEIGHTJS`) re-measures on DOM changes (throttled), on font loads, on load and on a short settle
+   schedule, and a `protoArtifact:measure` always gets a reply. In a flow frame whose box is no
+   taller than its viewport, it also measures the rendered elements' extent, overflow included.
+   Otherwise a viewport-sized wrapper (`height: 100vh`, centred) only reports the frame's own height
+   back: a measure taken before the content settled held the frame at the 80 px floor, with the
+   heading clipped. Fill frames (svg, mermaid, decks, PDFs) keep their fixed box.
+9. **Host-mediated read channel for frame components (D5, #4143).** A frame component holds no
+   bearer, so it couldn't show live state (a board card's current status, an updating verdict).
+   It now gets one narrow read path:
+   - **Declaration.** `registry.register_component(name, validator, frame=..., reads=[...])`.
+     Each pattern is a GET path relative to the plugin's own `/api/plugins/<id>/` (an absolute
+     spelling must start with exactly that prefix, which is stripped). `*` matches exactly one
+     path segment and must be the whole segment. A pattern that escapes the prefix, or has a
+     `.`/`..`/empty segment, a query string, a fragment, `**`, a partial `*` or a non-URL-safe
+     character, is logged and skipped, as `frame=` refusals are. `reads` without `frame=` is
+     logged and ignored. The testkit `FakeRegistry` raises `ValueError` on the same refusals.
+   - **Catalog.** The loader carries the accepted patterns, and `GET /api/components` reports each
+     kind as `{name, plugin, frame_url, reads}`. `reads` is always a list, and it's empty for core
+     widgets and frame-less kinds.
+   - **Protocol.** The frame posts `{type: "protoComponent:read", cid, path, nonce}`, where `path` is
+     relative to the plugin prefix (for example `features/bd-vbyd.24`). The host replies
+     `{type: "protoComponent:readResult", cid, ok, status, json}` on success or
+     `{type: "protoComponent:readResult", cid, ok: false, status, error}` on failure. `status` is
+     the HTTP status, or `0` when the host refused before making a request.
+   - **The handshake: fragment pairing, then a one-shot nonce.** `e.source === contentWindow`
+     alone isn't an identity. A `WindowProxy` survives navigation, and `sandbox="allow-scripts"`
+     doesn't stop a frame from navigating itself, for example through a rendered link or
+     `location.href`. Without more, a page that replaced the plugin page would inherit its reads,
+     and its `send`/`openLink` too, which a kind's "Always allow" makes silent.
+
+     Two designs were rejected:
+     - *A nonce pushed in `init` on the first `load`.* A navigation during parse fires only the
+       replacing page's `load`, so that page would be sent the nonce.
+     - *Timed `init` re-posts.* A page that navigates inside the re-post window catches one, then
+       stalls its own `load` so the navigation is never seen.
+
+     The chosen design binds the capability to a secret only the **declared page's URL** carries:
+     1. **Pairing.** For each iframe mount, the host mints `pair` (128 random bits, 32 hex chars) and
+        loads the frame at `<frame_url>#pair=<pair>`. A fragment is never sent to a server and
+        never appears in a `Referer`, and a new navigation drops it. A document that replaced the
+        plugin page therefore can't know `pair`.
+     2. **Ready.** Once its script runs, the frame posts
+        `{type: "protoComponent:ready", pair}` **exactly once**, echoing the value from
+        `location.hash`.
+     3. **Init.** The host answers with **exactly one** `{type: "protoComponent:init", props, theme, nonce}`,
+        and never sends init again. It answers only a ready that meets all of these:
+        - it comes from this frame's window;
+        - its `pair` matches;
+        - the mount hasn't been initialised yet;
+        - the mount has seen at most one `load`.
+
+        `nonce` is a second, fresh 128-bit value (`crypto.getRandomValues`), and `init` is the only
+        message that ever carries it. There are no timed re-posts.
+     4. **Use.** Every `protoComponent:read`, `protoComponent:send` and `protoComponent:openLink`
+        must carry that `nonce`. A missing or wrong one is refused (`error: "missing or invalid nonce"`)
+        and raises no console UI.
+     5. **Revocation.** Any sign of a second document revokes the mount at once:
+        - a second `load` of the element;
+        - a second `ready`;
+        - a `ready` with a missing or wrong `pair`;
+        - a `ready` that arrives after a second load.
+
+        Revoking means the host drops the nonce, aborts reads in flight, and unloads the frame for
+        a "navigated away" notice. The notice's **Reload** mounts a new iframe at the declared URL
+        with a fresh `pair`. An opaque frame's location can't be read, so the host never re-trusts
+        a navigated document in place.
+
+     Residual risk, by design: the declared page can still give away its own capability. It could
+     put `pair` into a URL it navigates to, or navigate in the instant between posting `ready` and
+     receiving `init`. Both are the plugin's own code, which already holds the plugin's reads.
+   - **Artifact frames get the same treatment.** The console host gates on the artifact embed
+     **shell**: a same-origin, first-party page that never navigates itself and that the nested
+     frame can't navigate (its sandbox has no `allow-top-navigation`). The model-authored nested
+     srcdoc frame *can* navigate itself, though. The shell's relay used to gate on
+     `e.source === $frame.contentWindow`, so a replacing page kept `send`/`openLink`/`ask`. Now:
+     - `frameNavigator` (`plugins/artifact/shell.js`) replaces the shim's `NONCE_SLOT` with a fresh
+       128-bit nonce on every srcdoc assignment. Content comparison still ignores the nonce, so
+       identical content never re-navigates.
+     - The shim echoes the nonce as `nonce` on `protoArtifact:ask`, `protoArtifact:send` and
+       `protoArtifact:openLink`.
+     - The shell answers these only for a matching nonce (`capabilityOk`).
+     - Any second `load` of the nested frame after an assignment revokes the nonce.
+
+     A replacing page never sees the srcdoc, so it can't learn the nonce. The shell stays vanilla,
+     CSP-locked JS.
+   - **Host checks** (`FrameComponentHost`, `apps/web/src/chat/frameComponentReads.ts`), all made
+     by the host and none trusted from the frame:
+     - The message source is this frame's own window.
+     - The path matches a declared read.
+     - The request is GET only (any other `method` is refused).
+     - The frame has at most 4 reads per rolling second and 2 in flight.
+     - The frame is mounted and near the viewport, and the console tab is visible. Otherwise the
+       read is refused with `paused`, which also keeps a polling card cheap.
+   - **Host action.** It makes an authed GET with the console's own auth and slug routing
+     (`fetchComponentRead` in `apps/web/src/lib/api/components.ts`). The GET follows no redirects
+     and only accepts a JSON content type. The body is streamed and cut off at 256 KB, and the
+     whole read times out after 10 s, which frees the in-flight slot. Only the parsed JSON, or a
+     short reason, goes back to the frame. An error's `detail` is passed through only from a JSON
+     error body; any other error body becomes `HTTP <status>`. The bearer, the response headers
+     and any non-JSON body never reach the frame. Reads in flight are aborted on unmount,
+     eviction, quarantine and navigation.
+   - **Reads only.** Writes and actions stay on the `send` bridge (D4), so every mutation remains a
+     visible, confirmed user turn.

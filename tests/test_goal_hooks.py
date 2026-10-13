@@ -13,6 +13,8 @@ from graph.goals.types import VerifyResult
 from graph.goals.verifiers import set_plugin_verifiers
 from graph.plugins.registry import PluginRegistry
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.mark.asyncio
 async def test_fire_routes_achieved_vs_failed():

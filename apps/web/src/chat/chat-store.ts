@@ -43,6 +43,13 @@ export type ChatSession = {
   // convenience, and refusing to route `@somebody-else` would be a surprise, not a
   // safety property.
   participants?: string[];
+  // The server's durable turn count (`/api/chat/sessions` `turn_count`) this copy was last
+  // reconciled against at boot. A later count above it — and above the turns this copy
+  // already holds — means another client added turns this cache never saw, so boot
+  // hydration reads the session's turns again (sessionHydration.isBehindServer). Recorded
+  // even when that read added nothing, so a count this copy can never match (a turn
+  // regenerated away, a tail past the read window) is not re-fetched on every boot.
+  serverTurnCount?: number;
 };
 
 // Reasoning is ON by default in the console (auto-enable) — a fresh tab thinks at
@@ -58,31 +65,6 @@ export function effectiveReasoningEffort(session?: { reasoningEffort?: string } 
 }
 
 export type SessionStatus = "idle" | "streaming" | "error";
-
-/** ADR 0114 D2 load barrier. A session's transcript is `loaded` once its stored record
- *  has been read (today: synchronously at boot; S5: asynchronously from IndexedDB).
- *  `pending` is a read still in flight, `failed` a read that errored or timed out.
- *  Never persisted — it describes this page's read, not the record. */
-export type SessionLoadState = "pending" | "loaded" | "failed";
-
-/** The only shape a message mutation takes (ADR 0114 D2): a function of the CURRENT
- *  transcript, never a replacement array built from a snapshot the caller read earlier.
- *  A caller whose target message is missing returns its input unchanged (a no-op). */
-export type MessagesUpdater = (messages: ChatMessage[]) => ChatMessage[];
-
-/** Replace the message with `id` by `fn(message)` — or hand `messages` back untouched when
- *  there is no such message, so an updater built on it is a no-op for a missing target. */
-export function mapMessageById(
-  messages: ChatMessage[],
-  id: string,
-  fn: (message: ChatMessage) => ChatMessage,
-): ChatMessage[] {
-  const index = messages.findIndex((message) => message.id === id);
-  if (index < 0) return messages;
-  const next = messages.slice();
-  next[index] = fn(messages[index]);
-  return next;
-}
 
 export type ServerTurnControlState = {
   sessionId: string;
@@ -117,23 +99,7 @@ export type ChatState = PersistedChatState & {
   // durable task and republishes control frames while the turn is live; persisting this
   // would leave stale Stop/interjection controls after a completed turn.
   serverTurnControls: Record<string, ServerTurnControlState>;
-  // ADR 0114 D2 load barrier: sessions whose transcript is NOT loaded, by id. A session
-  // absent from the map is `loaded` (every session born in this tab, and every session
-  // read synchronously at boot). Ephemeral, never persisted — read it through
-  // `sessionLoadState`.
-  loadStateMap: Record<string, Exclude<SessionLoadState, "loaded">>;
 };
-
-/** A session's load state (ADR 0114 D2). Absent from the map means `loaded`. */
-export function sessionLoadState(state: Pick<ChatState, "loadStateMap">, sessionId: string): SessionLoadState {
-  return state.loadStateMap?.[sessionId] ?? "loaded";
-}
-
-/** True only for a session whose transcript has been read — the one state in which its
- *  `messages` are the transcript rather than a placeholder for it. */
-export function isSessionLoaded(state: Pick<ChatState, "loadStateMap">, sessionId: string): boolean {
-  return sessionLoadState(state, sessionId) === "loaded";
-}
 
 // Chat sessions are PER AGENT — namespace the persisted key by the URL slug (ADR 0042 slug
 // routing), exactly like the per-agent layout. Without this every agent's window restores the
@@ -183,6 +149,18 @@ const locallyDeletedIds = new Set<string>(locallyDismissedIds);
 export type HydrationEligibility = {
   sessionId: string;
   localSession: ChatSession | null;
+  /** A non-empty local copy the server has turns beyond (another client added them):
+   *  reconciled through `reconcileSessions`, not filled through `hydrateSessions`. */
+  behind?: boolean;
+};
+
+/** A boot reconcile of a non-empty local session that fell behind the server: the
+ *  transcript to adopt (`messages`, or null when there was nothing to add) and the server
+ *  count it now answers for. Applied only while the session is still `token.localSession`. */
+export type SessionReconcile = {
+  token: HydrationEligibility;
+  messages: ChatMessage[] | null;
+  serverTurnCount: number;
 };
 
 function hydrationCanRepairMessage(message: ChatMessage | undefined): message is ChatMessage {
@@ -292,6 +270,11 @@ export function takeGoalKickoff(sessionId: string): string | null {
   const prompt = pendingGoalKickoffs.get(sessionId);
   if (prompt != null) pendingGoalKickoffs.delete(sessionId);
   return prompt ?? null;
+}
+
+/** Whether `sessionId` has a kickoff queued (the slot's gate reads it before deciding). */
+export function hasGoalKickoff(sessionId: string): boolean {
+  return pendingGoalKickoffs.has(sessionId);
 }
 
 function id(prefix: string) {
@@ -416,10 +399,18 @@ export function mergeSessions(
   return out.slice(0, MAX_SESSIONS);
 }
 
+/** A session whose live turn is parked on the operator: its lead bubble is still open
+ *  (`streaming`) and marked paused (an `ask_human` question, a form, an approval). */
+export function isParkedSession(session: ChatSession): boolean {
+  const last = [...session.messages].reverse().find((message) => message.role === "assistant");
+  return Boolean(last?.status === "streaming" && last.paused && last.taskId);
+}
+
 /** Fold server-recovered sessions into the local-first store (#2888).
- * Non-empty local transcripts always win because they carry richer ordered
- * parts and client-only annotations. A locally empty copy may be recovered,
- * and server-only sessions fill only the remaining cap. The sole auto-created
+ * Non-empty local transcripts win here because they carry richer ordered
+ * parts and client-only annotations — a local copy the server has turns BEYOND
+ * goes through `reconcileSessions` instead (sessionHydration.isBehindServer). A locally empty copy may be recovered,
+ * and server-only sessions fill only the remaining cap (parked ones first, #3957). The sole auto-created
  * blank tab is a boot placeholder, so a successful recovery replaces it. */
 export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[]): ChatState {
   if (!incoming.length) return current;
@@ -434,9 +425,6 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
   for (const recovered of incoming) {
     if (!recovered.messages.length) continue;
     const existing = byId.get(recovered.id);
-    // ADR 0114 D2: a session whose record hasn't been read is never "locally empty" —
-    // server hydration must not fill (and so persist over) an unread transcript.
-    if (existing && !isSessionLoaded(current, existing.id)) continue;
     if (existing?.messages.length) {
       const messages = repairHydratedMessages(existing.messages, recovered.messages);
       if (!messages) continue;
@@ -469,7 +457,15 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
   const missing = incoming
     .filter((session) => session.messages.length > 0 && !existingIds.has(session.id))
     .sort((a, b) => a.updatedAt - b.updatedAt);
-  const additions = slots ? missing.slice(-slots) : [];
+  // The newest fill the free slots — but a session PARKED on the operator (its question
+  // or approval still waiting) is kept first, however old: dropping it here would lose the
+  // one tab that still needs the operator (#3957). Drawn oldest-first either way.
+  const kept = new Set(
+    [...missing.filter(isParkedSession).reverse(), ...missing.filter((session) => !isParkedSession(session)).reverse()]
+      .slice(0, slots)
+      .map((session) => session.id),
+  );
+  const additions = missing.filter((session) => kept.has(session.id));
   for (const session of additions) {
     byId.set(session.id, session);
     hydratedIds.add(session.id);
@@ -496,7 +492,8 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
   for (const session of sessions) {
     if (!hydratedIds.has(session.id)) continue;
     const last = [...session.messages].reverse().find((message) => message.role === "assistant");
-    if (last?.status === "streaming" && last.taskId) sessionStatusMap[session.id] = "streaming";
+    // A parked (paused) turn is not producing — same rule as bootLiveTurns (#3956).
+    if (last?.status === "streaming" && last.taskId && !last.paused) sessionStatusMap[session.id] = "streaming";
     else if (last?.status === "error") sessionStatusMap[session.id] = "error";
   }
   return { ...current, sessions, currentSessionId, activeSessions, sessionStatusMap };
@@ -547,31 +544,6 @@ function loadPersisted(): PersistedChatState {
   };
 }
 
-// ── load barrier: what a write may carry (ADR 0114 D2) ─────────────────────────
-// The last copy of each session known to be on disk — the record its load resolved
-// with. A session that is not `loaded` is written as THIS (or as the on-disk copy the
-// write is about to merge with), never as its in-memory placeholder: "no put ever runs
-// for a session that isn't loaded", so a slow or failed read can't overwrite history.
-const lastPersistedSessions = new Map<string, ChatSession>();
-
-/** The session list a write may carry: loaded sessions as they are in memory, every
- *  other session as its on-disk (else last-known persisted) copy — or not at all. */
-function diskSafeSessions(state: ChatState, onDisk: ChatSession[] | null): ChatSession[] {
-  const unloaded = state.loadStateMap;
-  if (!unloaded || !Object.keys(unloaded).length) return state.sessions;
-  const diskById = new Map((onDisk ?? []).map((session) => [session.id, session]));
-  const out: ChatSession[] = [];
-  for (const session of state.sessions) {
-    if (!unloaded[session.id]) {
-      out.push(session);
-      continue;
-    }
-    const persisted = diskById.get(session.id) ?? lastPersistedSessions.get(session.id);
-    if (persisted) out.push(persisted);
-  }
-  return out;
-}
-
 // Storage recovery (ADR 0114 D6): after AppCrash's "Free up space & reload" (this page) or a
 // `storage-reset` broadcast (another tab), this store stops writing — see lib/storageReset.ts.
 function persist(state: ChatState) {
@@ -581,12 +553,12 @@ function persist(state: ChatState) {
     // don't have (or newer copies) since our last read. Fold them in so our write never
     // clobbers another tab's chats (the last-writer-wins data-loss bug). Our own
     // streaming sessions stay authoritative; locally-deleted ones are not resurrected.
-    let sessions = diskSafeSessions(state, null);
+    let sessions = state.sessions;
     try {
       const raw = readKey("local", STORAGE_KEY);
       const onDisk = raw ? sanitizePersisted(JSON.parse(raw)) : null;
       if (onDisk) {
-        sessions = mergeSessions(diskSafeSessions(state, onDisk.sessions), onDisk.sessions, {
+        sessions = mergeSessions(state.sessions, onDisk.sessions, {
           streamingIds: streamingIds(state),
           deletedIds: locallyDeletedIds,
         });
@@ -685,9 +657,6 @@ export function unusedSession(
   const wantIncognito = Boolean(opts.incognito);
   return state.sessions.find(
     (s) =>
-      // ADR 0114 D2: an unread (`pending`) or unreadable (`failed`) transcript is never
-      // "empty" — reusing or discarding it as a blank would lose its history.
-      isSessionLoaded(state, s.id) &&
       s.messages.length === 0 &&
       s.title === DEFAULT_SESSION_TITLE &&
       Boolean(s.incognito) === wantIncognito,
@@ -736,47 +705,58 @@ let initial = loadPersisted();
 // persistence: the transcript is already the durable truth, and a persisted
 // status map could lie about a turn that ended while the tab was closed —
 // the reattach settles each derived `streaming` to idle/error from the task.
-function sessionsWithLiveTurns(persisted: PersistedChatState): string[] {
-  return persisted.sessions
-    .filter((session) => {
-      const last = [...session.messages].reverse().find((m) => m.role === "assistant");
-      return last?.status === "streaming" && !!last.taskId;
-    })
-    .map((session) => session.id);
+//
+// A turn PARKED on the operator (its bubble paused — an `ask_human` question, a form, an
+// approval, #3956) is in flight too, and still comes back active so its reattach brings the
+// form back — but it is NOT marked `streaming`: nothing is producing into it. Only
+// MAX_ACTIVE_SESSIONS slots mount, and a parked session past that cap would otherwise hold
+// a streaming tab dot, the rail's any-streaming dot and a retirement block until opened.
+// Opening it mounts its slot, and the reattach runs off the bubble, not the status.
+export function bootLiveTurns(
+  persisted: PersistedChatState,
+): Pick<ChatState, "activeSessions" | "sessionStatusMap"> {
+  const working: string[] = [];
+  const parked: string[] = [];
+  for (const session of persisted.sessions) {
+    const last = [...session.messages].reverse().find((m) => m.role === "assistant");
+    if (last?.status !== "streaming" || !last.taskId) continue;
+    (last.paused ? parked : working).push(session.id);
+  }
+  // Mount order: the focused tab, then turns still producing, then parked ones.
+  const activeSessions = [
+    ...new Set([...(persisted.currentSessionId ? [persisted.currentSessionId] : []), ...working, ...parked]),
+  ].slice(0, MAX_ACTIVE_SESSIONS);
+  return {
+    activeSessions,
+    sessionStatusMap: Object.fromEntries(working.map((id) => [id, "streaming" as SessionStatus])),
+  };
 }
 
-const resumeIds = sessionsWithLiveTurns(initial);
 let state: ChatState = {
   ...initial,
-  activeSessions: [
-    ...(initial.currentSessionId ? [initial.currentSessionId] : []),
-    ...resumeIds.filter((id) => id !== initial.currentSessionId),
-  ].slice(0, MAX_ACTIVE_SESSIONS),
-  sessionStatusMap: Object.fromEntries(resumeIds.map((id) => [id, "streaming" as SessionStatus])),
+  ...bootLiveTurns(initial),
   pendingDeleteRequest: null,
   pendingClearRequest: null,
   serverTurnControls: {},
-  loadStateMap: {},
 };
 
 const listeners = new Set<() => void>();
 
 function setState(
   updater: (current: ChatState) => ChatState,
-  persistMode: "immediate" | "debounced" | "none" = "immediate",
+  persistMode: "immediate" | "debounced" = "immediate",
 ) {
   state = updater(state);
   if (persistMode === "immediate") {
     persistDirty = true;
     flushChatPersist(); // cancels any pending timer and writes the full state
-  } else if (persistMode === "debounced") {
+  } else {
     schedulePersist();
   }
   listeners.forEach((listener) => listener());
 }
 
 function removeLocalSession(sessionId: string) {
-  forgetSessionLoad(sessionId);
   setState((current) => {
     const sessions = current.sessions.filter((session) => session.id !== sessionId);
     const currentSessionId =
@@ -785,11 +765,8 @@ function removeLocalSession(sessionId: string) {
     const serverTurnControls = { ...current.serverTurnControls };
     delete sessionStatusMap[sessionId];
     delete serverTurnControls[sessionId];
-    const loadStateMap = { ...current.loadStateMap };
-    delete loadStateMap[sessionId];
     return {
       ...current,
-      loadStateMap,
       sessions,
       currentSessionId,
       activeSessions: ensureActiveSessions(
@@ -841,201 +818,6 @@ try {
   // non-browser context (tests without a full window)
 }
 
-// ── the load barrier (ADR 0114 D2) ──────────────────────────────────────────────
-// Today every session is read synchronously at boot, so every session is `loaded` and
-// none of this engages. It exists so that when transcripts load asynchronously (S5,
-// IndexedDB), a slow or failed read can never be overwritten:
-//
-//   * a message updater for a session that isn't `loaded` is QUEUED, and replayed in
-//     order on top of the record once it loads;
-//   * a `failed` session (read errored, or `pending` for SESSION_LOAD_TIMEOUT_MS) also
-//     shows its queued updaters in memory — marked unsaved — and the read is retried on
-//     `pageshow` / `visibilitychange`; a late success replays the queue onto the record;
-//   * no write ever carries a non-loaded session's in-memory copy (diskSafeSessions).
-//
-// `chatLoadBarrier` is the seam: S5 plugs its IndexedDB read in as the loader; tests
-// use it to boot sessions `pending` and resolve or fail them later.
-
-export const SESSION_LOAD_TIMEOUT_MS = 10_000;
-
-/** Reads one session's stored record. `null` = no record exists (a genuinely empty
- *  session); a rejection = the read failed. */
-export type SessionRecordLoader = (sessionId: string) => Promise<ChatSession | null>;
-
-const queuedUpdaters = new Map<string, MessagesUpdater[]>();
-const loadBaselines = new Map<string, ChatMessage[]>();
-const loadTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const sessionLoaders = new Map<string, SessionRecordLoader>();
-const loadListeners = new Set<(sessionId: string) => void>();
-
-/** Apply updaters to a session. Identity-preserving when nothing changed, so a no-op
- *  updater (missing target) neither bumps `updatedAt` nor reads as a local edit. */
-function applyMessagesUpdaters(session: ChatSession, updaters: MessagesUpdater[]): ChatSession {
-  let messages = session.messages;
-  for (const updater of updaters) messages = updater(messages);
-  if (messages === session.messages) return session;
-  const deduped = dedupeMessages(messages);
-  return {
-    ...session,
-    title: session.title === DEFAULT_SESSION_TITLE ? titleFromMessages(deduped) : session.title,
-    messages: deduped,
-    updatedAt: Date.now(),
-  };
-}
-
-function withSession(
-  current: ChatState,
-  sessionId: string,
-  fn: (session: ChatSession) => ChatSession,
-): ChatSession[] {
-  let changed = false;
-  const sessions = current.sessions.map((session) => {
-    if (session.id !== sessionId) return session;
-    const next = fn(session);
-    if (next !== session) changed = true;
-    return next;
-  });
-  return changed ? sessions : current.sessions;
-}
-
-function clearLoadTimer(sessionId: string) {
-  const timer = loadTimers.get(sessionId);
-  if (timer !== undefined) clearTimeout(timer);
-  loadTimers.delete(sessionId);
-}
-
-function forgetSessionLoad(sessionId: string) {
-  clearLoadTimer(sessionId);
-  queuedUpdaters.delete(sessionId);
-  loadBaselines.delete(sessionId);
-  sessionLoaders.delete(sessionId);
-}
-
-function attemptSessionLoad(sessionId: string) {
-  const loader = sessionLoaders.get(sessionId);
-  if (!loader) return;
-  void Promise.resolve()
-    .then(() => loader(sessionId))
-    .then(
-      (record) => resolveSessionLoad(sessionId, record),
-      () => failSessionLoad(sessionId),
-    );
-}
-
-function resolveSessionLoad(sessionId: string, record: ChatSession | null) {
-  if (isSessionLoaded(state, sessionId)) return; // first answer wins; a late duplicate is ignored
-  const queue = queuedUpdaters.get(sessionId) ?? [];
-  const baseline = loadBaselines.get(sessionId);
-  forgetSessionLoad(sessionId);
-  if (record) lastPersistedSessions.set(sessionId, record);
-  setState(
-    (current) => {
-      const loadStateMap = { ...current.loadStateMap };
-      delete loadStateMap[sessionId];
-      const sessions = withSession(current, sessionId, (session) => {
-        const base: ChatSession = record
-          ? { ...session, ...record, id: session.id }
-          : { ...session, messages: baseline ?? session.messages };
-        return applyMessagesUpdaters(base, queue);
-      });
-      // Boot derives `streaming` for a transcript with a live turn (S2); a transcript
-      // that arrives late gets the same derivation, so its slot reattaches.
-      const loaded = sessions.find((session) => session.id === sessionId);
-      const last = loaded ? [...loaded.messages].reverse().find((m) => m.role === "assistant") : undefined;
-      const sessionStatusMap =
-        last?.status === "streaming" && last.taskId && !current.sessionStatusMap[sessionId]
-          ? { ...current.sessionStatusMap, [sessionId]: "streaming" as SessionStatus }
-          : current.sessionStatusMap;
-      return { ...current, sessions, loadStateMap, sessionStatusMap };
-    },
-    // The record is already on disk; only queued edits make this a write.
-    queue.length ? "immediate" : "none",
-  );
-  loadListeners.forEach((listener) => listener(sessionId));
-}
-
-function failSessionLoad(sessionId: string) {
-  if (sessionLoadState(state, sessionId) !== "pending") return;
-  clearLoadTimer(sessionId);
-  const queue = queuedUpdaters.get(sessionId) ?? [];
-  setState(
-    (current) => ({
-      ...current,
-      loadStateMap: { ...current.loadStateMap, [sessionId]: "failed" },
-      // In memory only: the queue stays queued, to replay onto the record on a retry.
-      sessions: withSession(current, sessionId, (session) => applyMessagesUpdaters(session, queue)),
-    }),
-    "none",
-  );
-}
-
-/** Re-read every `failed` session (the tab came back: `pageshow`, `visibilitychange`). */
-function retryFailedSessionLoads() {
-  for (const [sessionId, loadState] of Object.entries(state.loadStateMap)) {
-    if (loadState === "failed") attemptSessionLoad(sessionId);
-  }
-}
-
-try {
-  window.addEventListener("pageshow", retryFailedSessionLoads);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "hidden") retryFailedSessionLoads();
-  });
-} catch {
-  // non-browser context (tests without a full window)
-}
-
-/** The load-barrier seam (ADR 0114 D2). S5 passes its IndexedDB read as the loader;
- *  tests pass a deferred promise to hold sessions `pending`. */
-export const chatLoadBarrier = {
-  /** Mark `sessionIds` `pending` and read each through `loader`. A read still pending
-   *  after SESSION_LOAD_TIMEOUT_MS becomes `failed`; a later success still loads it. */
-  begin(sessionIds: string[], loader: SessionRecordLoader) {
-    const ids = sessionIds.filter((id) => state.sessions.some((session) => session.id === id));
-    if (!ids.length) return;
-    for (const id of ids) {
-      clearLoadTimer(id);
-      if (isSessionLoaded(state, id)) {
-        loadBaselines.set(id, state.sessions.find((session) => session.id === id)!.messages);
-      }
-      sessionLoaders.set(id, loader);
-      loadTimers.set(
-        id,
-        setTimeout(() => {
-          loadTimers.delete(id);
-          failSessionLoad(id);
-        }, SESSION_LOAD_TIMEOUT_MS),
-      );
-    }
-    setState(
-      (current) => ({
-        ...current,
-        loadStateMap: {
-          ...current.loadStateMap,
-          ...Object.fromEntries(ids.map((id) => [id, "pending" as const])),
-        },
-      }),
-      "none",
-    );
-    ids.forEach(attemptSessionLoad);
-  },
-
-  /** Retry every `failed` read now (what `pageshow` / `visibilitychange` do). */
-  retryFailed: retryFailedSessionLoads,
-
-  /** Called with a session id each time a session becomes `loaded` through the barrier.
-   *  Returns the unsubscribe. */
-  onLoaded(listener: (sessionId: string) => void): () => void {
-    loadListeners.add(listener);
-    return () => loadListeners.delete(listener);
-  },
-
-  /** Updaters waiting for this session's record (tests / diagnostics). */
-  queuedCount(sessionId: string): number {
-    return queuedUpdaters.get(sessionId)?.length ?? 0;
-  },
-};
-
 export const chatStore = {
   subscribe(listener: () => void) {
     listeners.add(listener);
@@ -1084,13 +866,43 @@ export const chatStore = {
     return session;
   },
 
-  captureHydrationEligibility(sessionId: string): HydrationEligibility | null {
+  captureHydrationEligibility(sessionId: string, opts: { behind?: boolean } = {}): HydrationEligibility | null {
     if (locallyDeletedIds.has(sessionId) || locallyDismissedIds.has(sessionId)) return null;
-    // ADR 0114 D2: an unread transcript is never "locally empty" or "needs repair".
-    if (!isSessionLoaded(state, sessionId)) return null;
     const localSession = state.sessions.find((session) => session.id === sessionId) ?? null;
+    if (opts.behind) return localSession?.messages.length ? { sessionId, localSession, behind: true } : null;
     if (localSession?.messages.length && !needsDurableHydration(localSession)) return null;
     return { sessionId, localSession };
+  },
+
+  /** Commit boot reconciles of local sessions that fell behind the server (another
+   *  client's turns). Each applies only if the session is still the exact object read
+   *  before the fetch — any local edit in between (a send, a reattach settling a turn, a
+   *  delete) vetoes it, and the next boot tries again. */
+  reconcileSessions(updates: SessionReconcile[]) {
+    if (!updates.length) return;
+    setState((current) => {
+      let changed = false;
+      const sessionStatusMap = { ...current.sessionStatusMap };
+      const sessions = current.sessions.map((session) => {
+        const update = updates.find((candidate) => candidate.token.sessionId === session.id);
+        if (!update || session !== update.token.localSession) return session;
+        if (locallyDeletedIds.has(session.id) || locallyDismissedIds.has(session.id)) return session;
+        changed = true;
+        if (!update.messages) return { ...session, serverTurnCount: update.serverTurnCount };
+        const last = [...update.messages].reverse().find((message) => message.role === "assistant");
+        // The adopted tail can end on a turn still running elsewhere: mark it like a
+        // hydrated session's live turn (mergeHydratedSessions), so the slot reattaches.
+        if (last?.status === "streaming" && last.taskId && !last.paused) sessionStatusMap[session.id] = "streaming";
+        // A newer `updatedAt` so a sibling tab's merge (mergeSessions) takes this copy.
+        return {
+          ...session,
+          messages: update.messages,
+          serverTurnCount: update.serverTurnCount,
+          updatedAt: Math.max(session.updatedAt, Date.now()),
+        };
+      });
+      return changed ? { ...current, sessions, sessionStatusMap } : current;
+    });
   },
 
   hydrateSessions(sessions: ChatSession[], eligibility: HydrationEligibility[] = []) {
@@ -1100,7 +912,6 @@ export const chatStore = {
         if (locallyDeletedIds.has(session.id) || locallyDismissedIds.has(session.id)) return false;
         if (!tokens.has(session.id)) return eligibility.length === 0;
         const now = current.sessions.find((candidate) => candidate.id === session.id) ?? null;
-        if (now && !isSessionLoaded(current, now.id)) return false;
         const tokenSession = tokens.get(session.id);
         return now === tokenSession && (!now?.messages.length || (now != null && needsDurableHydration(now)));
       });
@@ -1194,46 +1005,28 @@ export const chatStore = {
     });
   },
 
-  /** Change a session's transcript through `updater` — a function of the CURRENT
-   *  messages (ADR 0114 D2; there is no array form). For a session that isn't `loaded`
-   *  the updater is queued and replayed once it loads (a `failed` session also shows it
-   *  in memory, unsaved). An updater whose target is missing returns its input. */
-  updateMessages(sessionId: string, updater: MessagesUpdater) {
-    const loadState = sessionLoadState(state, sessionId);
-    if (loadState !== "loaded") {
-      if (!state.sessions.some((session) => session.id === sessionId)) return;
-      queuedUpdaters.set(sessionId, [...(queuedUpdaters.get(sessionId) ?? []), updater]);
-      if (loadState === "failed") {
-        setState(
-          (current) => ({
-            ...current,
-            sessions: withSession(current, sessionId, (session) => applyMessagesUpdaters(session, [updater])),
-          }),
-          "none",
-        );
-      }
-      return;
-    }
+  updateMessages(sessionId: string, messages: ChatMessage[]) {
     // Fires per streamed SSE frame (~24 chars) and per reveal-queue tick
     // (~word-sized, #2993) — debounce the localStorage write. The stream-done
     // path flushes via setSessionStatus right after the final updateMessages,
     // so the terminal state always lands immediately.
-    // A no-op (missing target, e.g. another window's progress frame) changes nothing, so it
-    // neither notifies nor schedules a write — a streaming turn elsewhere would otherwise
-    // cost a full read/parse/merge/write every debounce tick.
-    const sessions = withSession(state, sessionId, (session) => applyMessagesUpdaters(session, [updater]));
-    if (sessions === state.sessions) return;
-    setState((current) => ({ ...current, sessions }), "debounced"); // synchronous: current === state
-  },
-
-  /** This session's load state (ADR 0114 D2). */
-  loadState(sessionId: string): SessionLoadState {
-    return sessionLoadState(state, sessionId);
-  },
-
-  /** A `failed` session holding edits that exist only in memory until its read succeeds. */
-  hasUnsavedEdits(sessionId: string): boolean {
-    return sessionLoadState(state, sessionId) === "failed" && (queuedUpdaters.get(sessionId)?.length ?? 0) > 0;
+    const deduped = dedupeMessages(messages);
+    setState(
+      (current) => ({
+        ...current,
+        sessions: current.sessions.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                title: session.title === DEFAULT_SESSION_TITLE ? titleFromMessages(deduped) : session.title,
+                messages: deduped,
+                updatedAt: Date.now(),
+              }
+            : session,
+        ),
+      }),
+      "debounced",
+    );
   },
 
   renameSession(sessionId: string, title: string) {

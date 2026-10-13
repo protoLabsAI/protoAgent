@@ -44,6 +44,7 @@ test("boots, navigates and reloads with localStorage filled to the real quota", 
     }
   });
   expect(rawWrite).toBe("QuotaExceededError");
+  await expect(page.getByText("Browser storage is full", { exact: true })).toBeVisible();
 
   // Layout setters (useUI) and a chat turn all persist — every write fails, none throws.
   await page.getByTestId("settings-widget").click();
@@ -65,7 +66,7 @@ test("the simulateQuotaBytes dev flag fails writes without crashing", async ({ p
   page.on("pageerror", (e) => errors.push(e.message));
   // A 1 KB "quota" the pre-seeded key already exceeds. The knob is gated like the Developer
   // panel (ADR 0068): this is a production build, so it goes live once /api/flags reports the
-  // mock's non-prod channel — every seam write to localStorage fails from then on.
+  // mock's dev channel — every seam write to localStorage fails from then on.
   await page.addInitScript(() => localStorage.setItem("e2e.seed", "z".repeat(2048)));
   const flags = page.waitForResponse((r) => r.url().includes("/api/flags"));
   await page.goto("/app/?flag:storage.simulateQuotaBytes=1024", { waitUntil: "load" });
@@ -88,7 +89,7 @@ test("a render-time quota crash recovers through Free up space & reload", async 
   // A >64 KB saved transcript (the realistic hog) plus keys the recovery must NOT touch.
   // While the transcript key exists, the e2e hook forces a render-time quota throw — so the
   // crash reproduces on every load until the recovery actually clears it (a Reload loop). The
-  // hook is gated like the Developer panel; the mock's non-prod channel turns it on.
+  // hook is gated like the Developer panel; the mock's dev channel turns it on.
   await page.addInitScript(() => {
     if (!sessionStorage.getItem("e2e.seeded")) {
       sessionStorage.setItem("e2e.seeded", "1");
@@ -142,3 +143,27 @@ test("a render-time quota crash recovers through Free up space & reload", async 
   const transcript = await page.evaluate(() => localStorage.getItem("protoagent.chat.sessions") ?? "");
   expect(transcript).not.toContain("lorem ipsum");
 });
+
+for (const channel of ["beta", "prod"]) {
+  test(`${channel} ignores destructive storage QA hooks`, async ({ page }) => {
+    await page.route("**/api/flags", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, channel } });
+    });
+    await page.addInitScript(() => {
+      (window as unknown as { __protoagentForceQuotaCrash?: boolean }).__protoagentForceQuotaCrash = true;
+    });
+    const flags = page.waitForResponse((r) => r.url().includes("/api/flags"));
+    await page.goto("/app/?flag:storage.simulateQuotaBytes=0");
+    await flags;
+    const composer = page.getByPlaceholder(/Message protoAgent/i);
+    await expect(composer).toBeVisible();
+    await composer.fill("QA hooks must stay off");
+    await composer.press("Enter");
+    await expect(page.locator(".pl-message--user").last()).toContainText("QA hooks must stay off");
+    await expect(page.locator(".app-crash")).toHaveCount(0);
+    const history = await page.evaluate(() => localStorage.getItem("protoagent.chat.inputHistory"));
+    expect(history).toContain("QA hooks must stay off");
+  });
+}

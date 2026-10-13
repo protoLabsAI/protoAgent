@@ -35,6 +35,8 @@ from cryptography.x509.oid import NameOID
 
 import server
 
+pytestmark = pytest.mark.platform_sensitive
+
 _ORIGINAL_SSL_CONTEXT = ssl.SSLContext  # captured before any test in this file can inject
 
 # Whether it's safe to mutate the REAL system/user certificate trust store: only on a

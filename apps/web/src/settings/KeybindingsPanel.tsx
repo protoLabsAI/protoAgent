@@ -1,6 +1,7 @@
 import "./keybindings.css";
 
 import { Button, Kbd } from "@protolabsai/ui/primitives";
+import { RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 
@@ -199,15 +200,17 @@ export function KeybindingsPanel() {
                         {recording ? "Press keys… (Esc to cancel)" : formatCombo(effectiveCombo(b))}
                       </button>
                       {overridden ? (
-                        <button
+                        <Button
                           type="button"
-                          className="kb-reset"
+                          variant="ghost"
+                          size="xs"
+                          icon
                           title="Reset to default"
                           aria-label={`Reset ${b.label} to default`}
                           onClick={() => resetBinding(b.id)}
                         >
-                          ↺
-                        </button>
+                          <RotateCcw aria-hidden />
+                        </Button>
                       ) : null}
                     </div>
                     {conflict?.id === b.id ? (

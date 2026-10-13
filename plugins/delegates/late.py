@@ -239,6 +239,100 @@ async def collect(
             )
 
 
+async def collect_task(
+    d: Delegate,
+    task_id: str,
+    *,
+    sleep: Callable[[float], Awaitable] | None = None,
+    clock: Callable[[], float] | None = None,
+    max_wait_s: float | None = None,
+) -> tuple[str, str, str, str]:
+    """Poll ONE task id read-only (``GetTask``) at a low, backing-off cadence until it settles
+    or the bounded window closes — the bare-task counterpart to :func:`collect`, with no
+    conversation handle to hold, release or re-learn.
+
+    Returns ``(outcome, text, last_state, last_status_message)``:
+
+    * ``ANSWERED`` — ``text`` is the peer's reply;
+    * ``PARKED`` — the task stopped on a question, ``text`` carries it + the resume handle;
+    * ``FAILED`` — the peer failed/canceled it, we lost touch, or the window closed while it
+      was still working (``text`` says which, in words for the operator);
+    * ``WITHDRAWN`` — the peer no longer knows the task (a restart, or its retention expired).
+
+    ``last_state`` / ``last_status_message`` are the last non-terminal observation, so a
+    caller that gives up can report where the peer had reached (#3700). Never raises
+    ``DelegateError``.
+
+    A background ``delegate_to`` reuses this to keep waiting on a peer PAST its dispatch
+    deadline and deliver a late completion as the job result (#3700), the same
+    ``poll_timeout_s`` deadline that once returned a bare FAILED with the finished reply lost.
+    The room's own late collection (:func:`collect`) is this same GetTask poll with the
+    pending-handle / continuity bookkeeping layered on top — here there is no key, so none of
+    that applies.
+    """
+    from tools.a2a_parse import _extract_text, _is_input_required, classify_answer, state_name
+
+    from .adapters import _status_message_text
+
+    adapter = ADAPTERS["a2a"]
+    # Resolved per call so the running module's own sleep/clock (or a test's) are used.
+    sleep = sleep or asyncio.sleep
+    clock = clock or time.monotonic
+    # Read the ceiling at call time (not as a default) so a test can monkeypatch it.
+    ceiling = _COLLECT_MAX_S if max_wait_s is None else max_wait_s
+
+    started = clock()
+    wait = _FIRST_POLL_S
+    failures = 0
+    last_state = ""
+    last_msg = ""
+    while True:
+        await sleep(wait)
+        wait = min(wait * _BACKOFF, _MAX_POLL_S)
+        # Past the ceiling this is the LAST look, not a skipped one: a task that finished in
+        # the final interval is still collected.
+        last_look = clock() - started >= ceiling
+        try:
+            result = await adapter.get_task(d, task_id)
+        except Exception as exc:  # noqa: BLE001 — DelegateError, or a reply we could not read
+            failures += 1
+            if failures >= _MAX_TRANSPORT_FAILURES or last_look:
+                return FAILED, f"lost touch with @{d.name} while waiting for its task: {exc}", last_state, last_msg
+            continue
+        failures = 0
+        if result is None:
+            # The peer no longer knows the task — it restarted, or its retention expired.
+            return WITHDRAWN, "", last_state, last_msg
+        state = ((result.get("task", result) or {}).get("status") or {}).get("state")
+        if _is_input_required(state):
+            question = (_extract_text(result) or "").strip()
+            return PARKED, _park_message(d.name, task_id, question), state, question
+        verdict = classify_answer(result)
+        if verdict.answerable:
+            text = (_extract_text(result) or "").strip()
+            if not text:
+                return FAILED, f"@{d.name} finished its task but returned no text (state={state}).", state, ""
+            return ANSWERED, text, state, ""
+        if verdict.failed:
+            diag = " ".join((_extract_text(result) or "").split())[:500]
+            return (
+                FAILED,
+                f"@{d.name} {state_name(state)} its task (state={state})" + (f": {diag}" if diag else ""),
+                state,
+                diag,
+            )
+        # Still working — record where it is and keep waiting.
+        last_state = state or last_state
+        last_msg = _status_message_text(result) or last_msg
+        if last_look:
+            return (
+                FAILED,
+                f"stopped waiting for @{d.name}'s task after {int(ceiling // 60)} minutes — it was still working.",
+                last_state,
+                last_msg,
+            )
+
+
 async def deliver(
     name: str, task_id: str, session_id: str, outcome: str, text: str, *, incognito: bool = False
 ) -> bool:

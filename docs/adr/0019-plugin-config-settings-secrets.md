@@ -101,6 +101,31 @@ only once a token exists). Added under this ADR:
   change (Google's Connect flow flips `enabled` and reloads). The desktop sidecar
   bundles the `plugins/` tree so plugins load in the frozen app.
 
+## 3b. Addendum — settings that name a program to spawn (2026-10)
+
+The agent's guarded `set_config` tool (`tools.self_config_enabled`) may write plugin
+sections — that is how an agent repoints a board at a different coder. It must never
+*define* an executable, and a plugin section can't be enumerated in advance, so the
+fence works on key names below the section, plus one manifest field:
+
+- **Name rule (convention, no author action).** A key segment that *is*, or has as a
+  `_`/`-`/camelCase token, one of `command` `cmd` `args` `argv` `binary` `bin` `exe`
+  `executable` `interpreter` `entrypoint` is refused — `local_gate_cmd`, `proxy_command`,
+  `rh_bin`, `binary_path`, `browserArgs`. Applies at any depth, including keys hidden
+  inside a dict or list *value*.
+- **`settings[].spawns: true` (author declaration).** For a key the name rule can't see
+  (`ffmpeg_path`), the plugin marks its setting `spawns: true`. The fence reads the marker
+  from **every installed** plugin, enabled or not (a value planted while a plugin is off
+  would otherwise spawn when it's turned on), and refuses plugin-section writes if that
+  discovery fails. Older cores ignore the field, so it is safe to declare unconditionally.
+- **Not a blanket `*_path` rule.** Across the bundled plugins and the catalog, `*_path`
+  keys are mostly *data* (`brand_kit_path` in two plugins); refusing them would take away
+  repointing that is legitimately the agent's. Every spawn-naming setting surveyed is
+  caught by the name rule except `ffmpeg_path`, which declares the marker.
+
+This fences only the *agent's* writer. The operator sets these keys freely from
+Settings, the CLI, and `PATCH /api/config`.
+
 ## 4. Alternatives considered
 
 - **Imperative `register_config()` in `register()`.** Rejected — config/secrets/

@@ -1,0 +1,1905 @@
+"""Main LangGraph agent for protoAgent.
+
+Builds the agent graph with middleware, tools, and subagent support.
+Uses langchain's create_agent() with AgentMiddleware for the DeerFlow pattern.
+"""
+
+import logging
+from typing import Annotated, Any
+
+from langchain.agents import create_agent
+from langchain.agents.middleware import ModelFallbackMiddleware
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import BaseTool
+from langgraph.constants import START
+from langgraph.errors import GraphBubbleUp
+from langgraph.prebuilt import InjectedState
+
+from graph.config import LangGraphConfig
+from graph.llm import create_llm
+from graph.prompts import build_system_prompt, build_subagent_prompt
+from graph.middleware.audit import AuditMiddleware
+from graph.middleware.knowledge import KnowledgeMiddleware
+from graph.middleware.memory import SessionSummaryMiddleware
+from graph.middleware.message_capture import MessageCaptureMiddleware
+from graph.state import ProtoAgentState
+from graph.subagents.config import SUBAGENT_REGISTRY
+from tools.lg_tools import HITL_TOOL_NAMES, drop_disabled_tools, get_all_tools
+from tools.session import _session_id_from
+
+logger = logging.getLogger(__name__)
+
+
+def _model_label(model) -> str:
+    """A human-readable name for a chat-model instance (gateway clients expose
+    ``model_name``; fall back to ``model``, then the class name)."""
+    return getattr(model, "model_name", None) or getattr(model, "model", None) or model.__class__.__name__
+
+
+def _emit_fallback_event(primary_exc: Exception, fallback_model, index: int) -> None:
+    """Publish ``model.fallback`` to the event bus (ADR 0039) — best-effort.
+
+    The bus is server-owned; graph code reaches it through the plugin-host seam
+    (``HOST.publish``), which is ``None`` outside a running server (tests, CLI).
+    A missing or failing bus never touches the turn — the fallback already served it.
+    """
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish is not None:
+            HOST.publish(
+                "model.fallback",
+                {
+                    "primary_error": primary_exc.__class__.__name__,
+                    "fallback_model": _model_label(fallback_model),
+                    "fallback_index": index,
+                },
+            )
+    except Exception:  # noqa: BLE001 — observability must never break the turn
+        logger.exception("[routing] failed to publish model.fallback event")
+
+
+class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
+    """langchain's ModelFallbackMiddleware with logging + event emission (#2956).
+
+    The upstream middleware fails over SILENTLY — a successful fallback is
+    indistinguishable from a normal turn, so the operator's first clue of a
+    degraded primary is a quality drop days later. Same retry semantics (try
+    fallbacks in order, re-raise when all fail), plus two signals when a
+    fallback actually serves the turn: a WARNING log line and a
+    ``model.fallback`` bus event (ADR 0039) for plugins/telemetry.
+
+    Unlike the base class, a ``GraphBubbleUp`` (a HITL interrupt propagating
+    out of the model call) is re-raised untouched — it is control flow, not a
+    model failure, and must never trigger a fallback retry. All-fallbacks-fail
+    re-raises the PRIMARY exception (the failure worth diagnosing), not the
+    last fallback's.
+    """
+
+    def _observe_fallback(self, primary_exc: Exception, fallback_model, index: int) -> None:
+        logger.warning(
+            "Fallback activated: primary failed (%s), using fallback[%d] %s",
+            primary_exc.__class__.__name__,
+            index,
+            _model_label(fallback_model),
+        )
+        _emit_fallback_event(primary_exc, fallback_model, index)
+
+    def wrap_model_call(self, request, handler):
+        try:
+            return handler(request)
+        except GraphBubbleUp:
+            raise
+        except Exception as primary_exc:
+            logger.warning(
+                "Primary model failed, trying fallback models: %s",
+                primary_exc.__class__.__name__,
+            )
+            for i, fallback_model in enumerate(self.models):
+                try:
+                    result = handler(request.override(model=fallback_model))
+                except GraphBubbleUp:
+                    raise
+                except Exception:  # noqa: BLE001 — try the next fallback
+                    continue
+                self._observe_fallback(primary_exc, fallback_model, i)
+                return result
+            raise primary_exc
+
+    async def awrap_model_call(self, request, handler):
+        try:
+            return await handler(request)
+        except GraphBubbleUp:
+            raise
+        except Exception as primary_exc:
+            logger.warning(
+                "Primary model failed, trying fallback models: %s",
+                primary_exc.__class__.__name__,
+            )
+            for i, fallback_model in enumerate(self.models):
+                try:
+                    result = await handler(request.override(model=fallback_model))
+                except GraphBubbleUp:
+                    raise
+                except Exception:  # noqa: BLE001 — try the next fallback
+                    continue
+                self._observe_fallback(primary_exc, fallback_model, i)
+                return result
+            raise primary_exc
+
+
+def _build_middleware(
+    config: LangGraphConfig,
+    knowledge_store=None,
+    skills_index=None,
+    extra_middleware=None,
+    stable_sections=None,
+    bound_tool_names: frozenset[str] | None = None,
+    subagent_only: frozenset[str] = frozenset(),
+):
+    middleware = []
+
+    # Self-heal a thread left with a dangling tool_call (a tool that hung while
+    # the user sent the next message, an interrupted turn, …) before anything
+    # else touches the history — otherwise the provider 400s every later turn
+    # ("insufficient tool messages following tool_calls"). No-op on a healthy
+    # history, so it never affects a normal turn.
+    from graph.middleware.tool_call_repair import ToolCallRepairMiddleware
+
+    middleware.append(ToolCallRepairMiddleware())
+
+    # End the turn after the `wait` tool runs (yield-and-resume instead of
+    # busy-polling) — and end a goal-driven turn once its verifier passes, probed
+    # (debounced) after each tool round (graph/middleware/goal_checkpoint.py). No-op on
+    # any other turn.
+    from graph.middleware.wait_yield import WaitYieldMiddleware
+
+    middleware.append(WaitYieldMiddleware())
+
+    # Break a no-progress tool loop (#1446) — the same tool + args returning the
+    # same result over and over. Nudge once, then end the turn instead of spinning
+    # to the recursion limit. No-op on any healthy/varied history.
+    from graph.middleware.stall_guard import StallGuardMiddleware
+
+    middleware.append(StallGuardMiddleware())
+
+    # Round governance (#2710, ADR 0101 D8) — the stall guard's sibling for a
+    # different failure: not a stuck loop, a LONG one. One re-grounding nudge at
+    # N rounds (adherence decays with round count — the duplicate-card incident),
+    # optional hard cap, and a goal-turn-only cap (#3957: an unsatisfiable goal spun
+    # one turn for 130+ model calls). No-op until the soft threshold / a cap.
+    from graph.middleware.round_governor import RoundGovernorMiddleware
+
+    middleware.append(
+        RoundGovernorMiddleware(
+            nudge_after=getattr(config, "round_nudge_after", 25),
+            hard_cap=getattr(config, "round_hard_cap", 0),
+            goal_cap=getattr(config, "goal_max_rounds_per_turn", 0),
+        )
+    )
+
+    # Mid-turn user steering (spike) — fold queued user input into the running
+    # turn at the next model call, so a user can redirect ongoing work without
+    # stopping the stream. No-op when nothing was injected this turn.
+    from graph.middleware.steering import SteeringMiddleware
+
+    middleware.append(SteeringMiddleware())
+
+    # Per-turn model override (per chat tab). Outermost wrap_model_call so the
+    # PromptCache below sees the ACTUAL model when deciding caching. No-op unless
+    # the turn carries state["model"].
+    from graph.middleware.model_override import ModelOverrideMiddleware
+
+    middleware.append(ModelOverrideMiddleware(config))
+
+    # Trajectory writer (ADR 0102 S1, #2806) — one request/response ref event
+    # per model call. Inside ModelOverride (real model) but OUTSIDE PromptCache:
+    # the refs hash STORED message bytes so reconstruction joins the checkpoint;
+    # the cache decoration is a wire concern (wire_capture's job).
+    from graph.middleware.trajectory import TrajectoryMiddleware
+
+    middleware.append(TrajectoryMiddleware())
+
+    # Prompt caching + knowledge-context delivery (wrap_model_call). Added
+    # first/outermost so the cache breakpoint lands on the stable system
+    # prefix; KnowledgeMiddleware's context is delivered just after it.
+    from graph.middleware.prompt_cache import PromptCacheMiddleware
+
+    middleware.append(
+        PromptCacheMiddleware(
+            enabled=config.prompt_cache_enabled,
+            ttl=config.prompt_cache_ttl,
+            force=config.prompt_cache_force,
+        )
+    )
+
+    # Tool results directly after their calls (view-only). A foreground delegate_to once
+    # wrote room envelopes AHEAD of its ToolMessage, and a native Anthropic model rejects
+    # that history on every later turn. Inside PromptCache (Trajectory, outside it, hashes
+    # the STORED order), outside PromptCapture (which records what the model saw).
+    from graph.middleware.tool_call_repair import ToolResultOrderMiddleware
+
+    middleware.append(ToolResultOrderMiddleware())
+
+    # Who is in this chat (#3049) — one system-SUFFIX line naming the delegates that
+    # have spoken on this thread, so the lead knows who is already caught up and
+    # prefers them for follow-ups. Awareness, never permission; no-op on a thread with
+    # no room participants (every ordinary chat). Placed INSIDE PromptCache — a suffix
+    # block never disturbs the prefix the cache anchors on — and OUTSIDE PromptCapture,
+    # which must see the final prompt, cast line included.
+    from graph.middleware.room_cast import RoomCastMiddleware
+
+    middleware.append(RoomCastMiddleware(lead_name=getattr(config, "identity_name", "") or ""))
+
+    # Prompt snapshot capture (#2243) — records the EXACT system prompt each
+    # model call received. After PromptCache and every prompt mutator above (the
+    # ordering IS the correctness: it must see the final assembled system message,
+    # and nothing downstream mutates the prompt). Best-effort; a capture failure
+    # never touches the turn.
+    if config.prompt_capture_enabled:
+        from graph.middleware.prompt_capture import PromptCaptureMiddleware
+
+        middleware.append(
+            PromptCaptureMiddleware(
+                retention_days=config.prompt_capture_retention_days,
+                max_calls=config.prompt_capture_max_calls,
+                stable_sections=stable_sections,
+            )
+        )
+
+    # Fleet tracing: stamp the active Langfuse trace context onto each gateway
+    # LLM call (extra_body.metadata existing_trace_id/parent_observation_id) so
+    # the gateway's own Langfuse callback lands its generations in OUR trace.
+    # Inside ModelOverride (it must stamp the ACTUAL per-tab model) and inside
+    # PromptCache (whose locked [ModelOverride, PromptCache] wrapper order and
+    # caching decisions stay untouched — this only copies extra_body). No-op
+    # when tracing is disabled.
+    from graph.middleware.trace_context import TraceContextMiddleware
+
+    middleware.append(TraceContextMiddleware())
+
+    # Enforcement gate first (outermost) so disallowed/rate-limited tool
+    # calls are blocked before any execution. Opt-in via config.
+    if config.enforcement_enabled and (config.enforcement_disallowed_tools or config.enforcement_rate_limits):
+        from graph.middleware.enforcement import EnforcementMiddleware
+
+        middleware.append(
+            EnforcementMiddleware(
+                disallowed_tools=config.enforcement_disallowed_tools,
+                rate_limits=config.enforcement_rate_limits,
+            )
+        )
+
+    # Per-turn subagent tool fence for detached background runs (#1639) — sits with
+    # the enforcement gate (block before execution). Always on: it's a no-op unless
+    # the turn's state carries `subagent_fence` (stamped only by the background fire
+    # path for registry subagents), so ordinary turns pay one dict lookup.
+    from graph.middleware.subagent_fence import SubagentFenceMiddleware
+
+    middleware.append(SubagentFenceMiddleware())
+    # Subagent-only tools (ADR 0117): hidden from and blocked for the lead's unfenced
+    # passes; a fenced (background subagent) pass is left to the fence above.
+    if subagent_only:
+        from graph.middleware.subagent_only import SubagentOnlyMiddleware
+
+        middleware.append(SubagentOnlyMiddleware(subagent_only))
+
+    # Multimodal tool results (#1930) — a tool that opts in (via the
+    # graph.multimodal sentinel envelope) can return an image the vision model
+    # SEES as ToolMessage content blocks; on a text-only model it degrades to
+    # the text part (optionally described via knowledge.image_describe_model).
+    # Always on: inert for every ordinary tool (one startswith per result).
+    from graph.middleware.multimodal_tool import build_multimodal_middleware
+
+    middleware.append(build_multimodal_middleware(config))
+
+    # KnowledgeMiddleware also carries the always-on skill index (the
+    # <available_skills> injection, ADR 0060). Build it when knowledge OR skills
+    # is active, so skills work even on a KB-less agent (the store is None-tolerant).
+    _skills_index = skills_index if config.skills_enabled else None
+    if (config.knowledge_middleware and knowledge_store) or _skills_index is not None:
+        # ONE wiring (ADR 0108 D6/D8): every delivery knob — RAG top-k, namespace
+        # scope, trust floor, the skill-index caps (~2% of the model window as chars,
+        # 8KB when no window is reported, #2867) and the projected-context budget
+        # (`context.budget_pct`) — is read off the config by
+        # ProjectionOptions.from_config, the same reader the external runtime uses,
+        # so the two paths cannot drift.
+        from graph.projection import ProjectionOptions
+
+        middleware.append(
+            KnowledgeMiddleware(
+                knowledge_store if config.knowledge_middleware else None,
+                skills_index=_skills_index,
+                options=ProjectionOptions.from_config(config),
+                # …and the config itself, so the window-derived knobs can be
+                # re-read against a per-chat model override (the graph is
+                # compiled once, but each tab picks its own model).
+                config=config,
+                # The assembled tool surface, so the skill index can flag skills whose
+                # declared tools this agent doesn't have (ADR 0060 amendment).
+                bound_tool_names=bound_tool_names,
+            )
+        )
+
+    # Runtime toolset changes (#2640), announced once to the next turn. ALWAYS on:
+    # an agent that refuses work it can now do is a worse failure than a missed
+    # injection, so this must not ride a switchable subsystem.
+    #
+    # Both this and KnowledgeMiddleware deliver via wrap_model_call
+    # (request.override, ADR 0108 D2) — ephemeral, never checkpointed.
+    # KnowledgeMiddleware is outer in the wrap_model_call chain so it strips
+    # stale frames before ToolDelta appends its fresh note.
+    from graph.middleware.tool_delta import ToolDeltaMiddleware
+
+    middleware.append(ToolDeltaMiddleware())
+
+    # Deferred-tool disclosure (ADR 0005 #3) — trims the per-call tool set to
+    # base + agent-loaded. Opt-in; the search_tools meta-tool is added to the
+    # tool list in create_agent_graph when this is on.
+    if config.tools_deferred_enabled:
+        from graph.middleware.tool_deferral import ToolDeferralMiddleware
+        from tools.lg_tools import resolve_deferred_keep
+
+        middleware.append(ToolDeferralMiddleware(resolve_deferred_keep(config.tools_deferred_keep)))
+
+    if config.audit_middleware:
+        middleware.append(AuditMiddleware())
+
+    if config.memory_middleware:
+        middleware.append(SessionSummaryMiddleware(knowledge_store))
+
+    # In-history tool-result pruning (#2782, ADR 0101 D3/D4) — registered BEFORE
+    # compaction on purpose: relief has an order (prune near-lossless, THEN
+    # summarize lossy), and before_model hooks run in registration order, so a
+    # pruning pass at 0.6 of the window often keeps the 0.8 valve from firing.
+    if getattr(config, "pruning_enabled", True):
+        from graph.middleware.tool_result_pruner import ToolResultPrunerMiddleware
+        from graph.model_window import context_window_for
+
+        try:
+            _window = context_window_for(config)
+        except Exception:  # noqa: BLE001 — no profile → the middleware's fixed fallback
+            _window = None
+        middleware.append(
+            ToolResultPrunerMiddleware(
+                max_input_tokens=_window,
+                at_fraction=getattr(config, "pruning_at_fraction", 0.6),
+                keep_messages=getattr(config, "pruning_keep_messages", 20),
+                min_chars=getattr(config, "pruning_min_chars", 4000),
+                # Same reason as KnowledgeMiddleware: the trigger is sized off the
+                # window, so it has to follow a per-chat model override.
+                config=config,
+            )
+        )
+
+    # Context compaction — summarize old history near the context limit.
+    # CountingSummarizationMiddleware adds a Prometheus compaction counter on top
+    # of langchain's SummarizationMiddleware (ADR 0006 — proves the lever fires).
+    if config.compaction_enabled:
+        from graph.middleware.compaction import CountingSummarizationMiddleware
+
+        summ_model = create_llm(config, model_name=_resolve_aux_model(config, config.compaction_model))
+        keep = ("messages", config.compaction_keep_messages)
+        try:
+            mw = CountingSummarizationMiddleware(
+                model=summ_model,
+                trigger=_parse_compaction_trigger(config.compaction_trigger),
+                keep=keep,
+                # Archive-first (#2784, ADR 0101 D5): the pre-compaction transcript
+                # lands in the knowledge store before the rewrite is committed.
+                knowledge_store=knowledge_store,
+            )
+        except ValueError:
+            # `fraction:`/`tokens:` triggers need the model's context-window
+            # profile, which custom gateway aliases don't expose — langchain
+            # raises here. Fall back to a message-count trigger so compaction
+            # still runs instead of taking down the whole graph at load.
+            import logging
+
+            fallback = max(config.compaction_keep_messages * 3, 60)
+            logging.getLogger(__name__).warning(
+                "[compaction] trigger %r needs a model profile that %r lacks; falling back to messages:%d",
+                config.compaction_trigger,
+                config.model_name,
+                fallback,
+            )
+            mw = CountingSummarizationMiddleware(
+                model=summ_model, trigger=("messages", fallback), keep=keep, knowledge_store=knowledge_store
+            )
+        middleware.append(mw)
+
+    # Model routing / failover — retry on fallback models (same gateway).
+    # Observable wrapper (#2956): the stock middleware fails over silently.
+    if config.routing_fallback_models:
+        fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
+        middleware.append(ObservableModelFallbackMiddleware(*fallbacks))
+
+    # Self-heal the other thread-bricking history defect (ADR 0097): a replayed
+    # encrypted-reasoning blob the provider cannot verify — a cross-issuer replay
+    # after a model swap, a rotated credential, a relay that doesn't really persist
+    # reasoning state. Left alone it 400s every later turn in the thread.
+    #
+    # INSIDE the failover wrapper on purpose: a fallback attempt is exactly when a
+    # thread's reasoning items meet an endpoint that didn't mint them, and the
+    # failover middleware swallows each attempt's error and re-raises the PRIMARY
+    # one — so from outside it, that 400 is invisible. Outside provider shaping, so
+    # the retried request is still shaped for whichever model it lands on. No-op
+    # unless that specific error actually fires.
+    from graph.middleware.codex_reasoning_replay import CodexReasoningReplayRecoveryMiddleware
+
+    middleware.append(CodexReasoningReplayRecoveryMiddleware())
+
+    # Plugin-contributed middleware (ADR 0032) — appended after the core chain but
+    # before MessageCapture, so their before/after-model + tool hooks run and the
+    # turn is still captured. Each is already an instance (factories resolved in
+    # agent_init); skip falsy entries (a factory may opt out by returning None).
+    for mw in extra_middleware or []:
+        if mw is not None:
+            middleware.append(mw)
+
+    middleware.extend(provider_shape_middleware(config))
+    middleware.append(MessageCaptureMiddleware())
+
+    return middleware
+
+
+def provider_shape_middleware(config) -> list:
+    """Per-call native-OAuth wire shaping, innermost-last (ADR 0097).
+
+    EVERY stack that sends a system prompt on a native-OAuth provider needs
+    these, not just the lead agent: Anthropic's OAuth infra refuses traffic
+    whose system prompt doesn't LEAD with the Claude Code identity line, and the
+    Codex Responses backend rejects a system-role input item outright. The
+    subagent stack built its own middleware list without them, so every
+    delegation (task/task_batch, dream, distill, the QA tier) failed on both
+    providers while the lead agent worked — the #2519 lesson at a different
+    seam, which is why this now lives in ONE function both callers use.
+
+    Appended AFTER every prompt-composing middleware so the transform sees the
+    final system message, and trailed by the wire observer (#2527) so what the
+    call actually carries is recorded rather than assumed.
+    """
+    # Always mounted: model overrides and fallback retries can change providers
+    # after graph compilation. The dispatcher reads request.model's explicit
+    # identity for EACH attempt and applies exactly one (or zero) transforms.
+    from graph.middleware.provider_shape import ProviderShapeMiddleware
+
+    out: list = [ProviderShapeMiddleware()]
+    # Innermost observer (#2527): stash what each call ACTUALLY carries — after
+    # the transforms above — so PromptCapture records wire-vs-composed divergence
+    # instead of showing a prompt the wire never carried (#2519's invisibility).
+    # Same gate as PromptCapture: no capture, no observer.
+    if getattr(config, "prompt_capture_enabled", False):
+        from graph.middleware.wire_capture import WirePromptCaptureMiddleware
+
+        out.append(WirePromptCaptureMiddleware())
+    return out
+
+
+def _resolve_aux_model(config, specific: str = "") -> str | None:
+    """Pick the model for an auxiliary call: a specific override, else the
+    shared ``routing.aux_model`` fast alias, else None (→ the main model)."""
+    for candidate in (specific, getattr(config, "aux_model", "")):
+        cleaned = (candidate or "").strip()
+        if cleaned:
+            return cleaned
+    return None
+
+
+def _incognito_from(state: Any) -> bool:
+    """Whether the CURRENT turn is incognito, read from injected graph state (the
+    same source ``_session_id_from`` uses — the tracing contextvar is not visible
+    in tool bodies). Propagated onto spawned background jobs (ADR 0070) so their
+    completions honor the no-memory-trail contract (ADR 0069 D3b)."""
+    return bool(state.get("incognito")) if isinstance(state, dict) else False
+
+
+def _turn_id_from(state: Any) -> str | None:
+    """The id of the EMITTING assistant turn — the ``AIMessage`` carrying the tool
+    calls (``messages[-1]`` at tool-execution time). Used as the fan-out batch key
+    (#1766): every background job a single turn spawns (task_batch's N specs, or a
+    lone ``task(run_in_background=True)``) shares this id, so their completions
+    coalesce into ONE push-resume when the last member settles. Best-effort — returns
+    ``None`` on any miss, so the job simply falls back to the singleton path (its own
+    push-resume), same as before."""
+    if not isinstance(state, dict):
+        return None
+    try:
+        messages = state.get("messages") or []
+        last = messages[-1] if messages else None
+        # Only the AIMessage carrying tool calls is a valid turn key; a ToolMessage or
+        # a bare AIMessage without tool_calls is not the fan-out's emitter.
+        if last is not None and getattr(last, "tool_calls", None):
+            return getattr(last, "id", None) or None
+    except Exception:  # noqa: BLE001 — batch keying is best-effort; None → singleton path
+        return None
+    return None
+
+
+def _auto_background_seconds() -> float:
+    """Time budget (seconds) after which a *foreground* ``task`` delegation transparently
+    detaches to the background (ADR 0051). ``BACKGROUND_AUTO_S`` env; 0 (default) = off."""
+    import os
+
+    try:
+        return max(0.0, float(os.environ.get("BACKGROUND_AUTO_S", "0")))
+    except ValueError:
+        return 0.0
+
+
+def _parse_compaction_trigger(spec: str):
+    """Parse 'fraction:0.8' / 'tokens:120000' / 'messages:80' → langchain trigger tuple."""
+    try:
+        kind, _, val = spec.partition(":")
+        kind = kind.strip().lower()
+        if kind == "fraction":
+            return ("fraction", float(val))
+        if kind in ("tokens", "messages"):
+            return (kind, int(val))
+    except (ValueError, AttributeError):
+        pass
+    return ("fraction", 0.8)
+
+
+class SubagentError(RuntimeError):
+    """A subagent delegation failed hard (the subagent itself raised). The ``task``
+    tool converts this into a ``status="error"`` ToolMessage so the console renders
+    the delegation card as a failure (X) — not a green "done" wrapping an ``Error:``
+    string (which read as success). ``task_batch`` reports it inline and continues."""
+
+
+def _subagent_tools(sub_config, tool_map: dict) -> list:
+    """Resolve a subagent's bound tools from its allowlist, hard-denying the lead-only HITL
+    interrupt tools (``HITL_TOOL_NAMES``) even if the config lists them. A subagent runs on a
+    checkpointer-less graph, so ``ask_human`` / ``request_user_input`` would fail opaquely
+    mid-delegation — this is the enforced backstop to the convention that no subagent allowlist
+    names them, so a fork can't enable one by editing a ``SubagentConfig.tools`` list."""
+    blocked = [n for n in sub_config.tools if n in HITL_TOOL_NAMES]
+    if blocked:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "[subagent] '%s' lists HITL tool(s) %s — dropping them; a subagent can't resume a "
+            "LangGraph interrupt (no checkpointer). Remove them from its tools list.",
+            sub_config.name,
+            blocked,
+        )
+    return [tool_map[name] for name in sub_config.tools if name in tool_map and name not in HITL_TOOL_NAMES]
+
+
+def _policy_tool_map(config, subagent_type: str, tool_map: dict) -> dict:
+    """Apply built-in subagent policy gates before an allowlist resolves."""
+    if subagent_type != "self-improve":
+        return tool_map
+    from graph.self_improvement import review_tool_names
+
+    allowed = review_tool_names(config)
+    return {name: tool for name, tool in tool_map.items() if name in allowed}
+
+
+def _extract_subagent_usage(messages, *, subagent_type: str, fallback_model: str = "") -> list[dict]:
+    """Per-model-call usage rows from a finished sub-graph's message list (#2872).
+
+    One row per ``AIMessage`` carrying ``usage_metadata`` (LangChain stamps it on
+    every model reply; ``stream_usage=True`` in graph/llm.py guarantees it on
+    streamed calls too), in the shape the executor's turn accumulator already
+    sums — ``{input_tokens, output_tokens, cache_read_input_tokens,
+    cache_creation_input_tokens, cost_usd, model}`` — plus a ``subagent_type``
+    tag so the accumulator can keep delegated calls out of the LEAD thread's
+    context-window fill while still billing their spend. The model is the
+    per-reply routed name when the gateway reports one, else ``fallback_model``
+    (the pinned/aux resolution) — so a model-pinned subagent attributes to ITS
+    model, not the lead's. Never raises: telemetry must never break a delegation.
+    """
+    from observability import pricing
+
+    rows: list[dict] = []
+    for msg in messages:
+        try:
+            if not isinstance(msg, AIMessage):
+                continue
+            usage = getattr(msg, "usage_metadata", None)
+            if not isinstance(usage, dict) or not usage:
+                continue
+            # Prefix-tolerant: a response carrying a service tier reports
+            # `{tier}_cache_read`, and reading the bare key alone records a real
+            # cache read as zero (observability.pricing.cache_tokens).
+            cache_read, cache_creation = pricing.cache_tokens(usage)
+            row = {
+                "input_tokens": int(usage.get("input_tokens", 0) or 0),
+                "output_tokens": int(usage.get("output_tokens", 0) or 0),
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_creation,
+            }
+            model = (getattr(msg, "response_metadata", None) or {}).get("model_name") or fallback_model or "model"
+            row["cost_usd"] = pricing.cost_usd(model, row)
+            row["model"] = model
+            row["subagent_type"] = subagent_type
+            rows.append(row)
+        except Exception:  # noqa: BLE001 — a malformed message must not kill the delegation
+            continue
+    return rows
+
+
+async def _emit_subagent_usage(usage_rows: list[dict]) -> None:
+    """Surface a delegation's collected usage rows onto the parent turn's stream (#2872).
+
+    Dispatched from the ``task``/``task_batch`` TOOL BODY as custom ``usage``
+    events: the tool body runs under the lead graph's own callback context, so
+    ``astream_events`` surfaces them reliably — unlike the sub-graph's model
+    events, whose contextvar-propagated callbacks don't survive every delegation
+    path. ``_run_turn_stream`` translates each into the same ``("usage", …)``
+    frame the executor already accumulates, so the turn's models list, token
+    sums, and cost_usd include delegated work. Best-effort: no run context
+    (unit tests, the manual console runner) is not an error.
+    """
+    if not usage_rows:
+        return
+    try:
+        from langchain_core.callbacks import adispatch_custom_event
+
+        for row in usage_rows:
+            await adispatch_custom_event("usage", dict(row))
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        import logging
+
+        logging.getLogger(__name__).debug("[subagent] usage rows not dispatched to the turn stream", exc_info=True)
+
+
+# Node-name suffixes `create_agent` gives middleware hooks that run ONCE per invocation
+# (entry / exit), as opposed to once per model pass (`.before_model` / `.after_model`).
+_RUN_ONCE_NODE_SUFFIXES = (".before_agent", ".after_agent")
+
+
+def _subagent_recursion_limit(agent_graph: Any, max_turns: int) -> int:
+    """The LangGraph ``recursion_limit`` that gives a subagent exactly ``max_turns`` tool rounds.
+
+    ``max_turns`` caps tool rounds. That is what ``SubagentConfig`` documents, and what
+    every subagent prompt promises the model ("hard stop at max_turns"). LangGraph's
+    ``recursion_limit`` counts something else: super-steps, one per graph NODE executed,
+    and ``create_agent`` compiles each middleware ``before_model`` / ``after_model`` hook
+    into a node of its own. The old code passed ``max_turns`` through raw, which bought
+    about half the promised rounds on a bare stack and about a third once #3199 added a
+    ``before_model`` node. ``max_turns=4`` then hard-stopped right after its first tool
+    result (#3510).
+
+    The step costs are read from the COMPILED graph's node set rather than a constant,
+    so a middleware added to the subagent stack later moves the budget with it instead
+    of quietly shrinking it:
+
+    - once per run: ``__start__`` and every ``*.before_agent`` / ``*.after_agent`` node;
+    - per model pass: ``model``, every ``*.before_model`` / ``*.after_model`` node, and
+      any node not recognised here (over-budgeting is safe; under-budgeting is the bug);
+    - per tool round: one model pass plus ``tools``. Parallel tool calls in one round
+      are a single super-step.
+
+    ``max_turns`` rounds plus the answering pass fit exactly: a run completes only if it
+    needs at most ``recursion_limit`` steps. The model call that would open round
+    ``max_turns + 1`` still runs, since it might have been the answer. LangGraph lets one
+    node past the limit execute before it raises (``stop = step + limit + 1``, checked
+    before it knows nothing is left to run), so that round's tool calls execute too. The
+    model never sees their results, though: the run hard-stops there and the caller
+    salvages it as before. The raw budget had the same one-node overrun.
+    """
+    once = per_pass = 0
+    has_tools = False
+    for name in getattr(agent_graph, "nodes", None) or ():
+        if name == "tools":
+            has_tools = True
+        elif name == START or name.endswith(_RUN_ONCE_NODE_SUFFIXES):
+            once += 1
+        else:
+            per_pass += 1
+    if not per_pass:
+        # Not a compiled graph (a test double): budget a bare start + model + tools loop.
+        once, per_pass, has_tools = 1, 1, True
+    per_round = per_pass + (1 if has_tools else 0)
+    return max(0, max_turns) * per_round + per_pass + once
+
+
+async def _run_subagent(
+    *,
+    config,
+    tool_map: dict,
+    available_subagents: str,
+    description: str,
+    prompt: str,
+    subagent_type: str,
+    truncate: int | None = None,
+    parent_task_id: str | None = None,
+    usage_sink: list[dict] | None = None,
+    session_id: str = "",
+    turn_model: str = "",
+) -> str:
+    """Run a subagent delegation, recording the edge in the delegation ledger.
+
+    The ledger wrapper lives on this seam because this is the ONE funnel every
+    in-process delegation goes through — ``task``, ``task_batch``, and
+    ``sdk.run_subagent`` (via ``run_manual_subagent``). Recording at the call sites
+    instead would leave the next one that forgets unmeasured, which is precisely how
+    CLI coding-agent runs stayed invisible to turn telemetry (#3015).
+
+    The edge's ``cost_usd`` is the delegation's own model spend (#3565): the sum of the
+    per-call rows ``_extract_subagent_usage`` prices — the same numbers the parent turn is
+    billed through ``usage_sink`` (#2872) and Langfuse records on each generation. It is a
+    per-edge VIEW of spend the parent turn already counts, so a rollup must never add
+    ``delegations.cost_usd`` to ``turns.cost_usd`` for the same work. It is stored anyway
+    because the ``turns`` join does not exist for most delegations: ``turns`` holds A2A
+    turns only, so a workflow step (``sdk.run_subagent``) had no queryable cost outside
+    Langfuse.
+
+    ``cost_usd`` stays NULL — never ``0`` — when no model call reported usage (a provider
+    or native-OAuth path that returns no ``usage_metadata``, or a delegation that failed
+    before its first call): unknown is not free. Rows are collected even when the caller
+    passed no ``usage_sink``, and the cost is recorded on the failure path too — rows are
+    extracted in place, so a salvaged or raising run still bills what it spent.
+    """
+    from graph import delegation_usage, ledger
+
+    rows: list[dict] = []
+    with ledger.dispatch(
+        to_kind="subagent",
+        to_name=subagent_type,
+        what=description,
+        session_id=session_id,
+        parent_task_id=parent_task_id or "",
+        origin="task",
+    ) as edge:
+        try:
+            return await _run_subagent_inner(
+                config=config,
+                tool_map=tool_map,
+                available_subagents=available_subagents,
+                description=description,
+                prompt=prompt,
+                subagent_type=subagent_type,
+                truncate=truncate,
+                parent_task_id=parent_task_id,
+                usage_sink=rows,
+                session_id=session_id,
+                turn_model=turn_model,
+            )
+        finally:
+            if usage_sink is not None:
+                usage_sink.extend(rows)
+            # A short-circuit `/<subagent>` / `/<workflow>` run has no lead-graph stream to
+            # carry these rows to its turn's telemetry — it binds a collector instead (#3957).
+            delegation_usage.note(rows)
+            edge.cost_usd = _delegation_cost_usd(rows)
+
+
+def _delegation_cost_usd(rows: list[dict]) -> float | None:
+    """Total priced spend across a delegation's usage rows, or None when unknown.
+
+    None when no row carries a numeric ``cost_usd`` — nothing reported usage, so the
+    ledger records the cost as unknown rather than a confident ``0`` that would make an
+    unmeasured delegation look free (see ``graph/ledger.py::record_delegation``).
+    """
+    costs = [float(r["cost_usd"]) for r in rows if isinstance(r.get("cost_usd"), (int, float))]
+    return round(sum(costs), 6) if costs else None
+
+
+async def _run_subagent_inner(
+    *,
+    config,
+    tool_map: dict,
+    available_subagents: str,
+    description: str,
+    prompt: str,
+    subagent_type: str,
+    truncate: int | None = None,
+    parent_task_id: str | None = None,
+    usage_sink: list[dict] | None = None,
+    session_id: str = "",
+    turn_model: str = "",
+) -> str:
+    """Run a single subagent delegation and return its output text.
+
+    Shared by the single ``task`` tool and the concurrent ``task_batch`` tool.
+    ``truncate`` (chars) bounds the returned body so a wide fan-out can't blow
+    the parent context; ``None`` means unbounded (single-task path).
+    ``parent_task_id`` is the delegating ``task``/``task_batch`` tool-call id; when
+    set, every event the subagent emits is tagged with it so the console can nest
+    the subagent's own tool cards under the delegation card.
+    ``usage_sink`` (when given) receives one usage row per model call the
+    sub-graph made — extended IN PLACE as soon as the sub-graph settles, so rows
+    already collected survive a later failure — letting the callers bill
+    delegated work to the parent turn's telemetry (#2872).
+    """
+    sub_config = SUBAGENT_REGISTRY.get(subagent_type)
+    if not sub_config:
+        return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
+
+    # Bare dispatch (`/dream`, scheduled `schedule_task "/dream"`) arrives with an
+    # EMPTY user message — OpenAI-compat gateways reject empty content, and when
+    # they don't the model stalls. Self-contained subagents declare a
+    # `default_prompt`; substituting it HERE covers every dispatch path (slash,
+    # scheduler, task/task_batch, console) at one seam. A subagent without one
+    # keeps the empty prompt passing through unchanged.
+    if not (prompt or "").strip() and getattr(sub_config, "default_prompt", ""):
+        prompt = sub_config.default_prompt
+
+    tool_map = _policy_tool_map(config, subagent_type, tool_map)
+    sub_tools = _subagent_tools(sub_config, tool_map)
+    if not sub_tools and getattr(sub_config, "tools", None):
+        # The subagent DECLARED tools and none resolved — a misconfiguration
+        # (denylisted / not bound on this instance), not a text-only design.
+        return f"Error: No tools available for subagent '{subagent_type}'."
+    # A subagent whose config declares tools=[] is a deliberate TEXT-ONLY
+    # transform (edit/summarize/classify passes) — legal, and load-bearing for
+    # model-pinned passes whose backing lane rejects tools-bearing requests
+    # (e.g. a creative-tuned vLLM lane with supports_function_calling: false).
+    # The agent below runs with an empty toolset: one model call, text out.
+
+    # Subagent model (#3944, graph/subagent_model.py): the subagent's own pinned
+    # model → the delegating turn's model override → routing.aux_model → main model.
+    from graph.subagent_model import resolve_subagent_model
+
+    sub_model = resolve_subagent_model(
+        config, subagent_type, turn_model, pinned=getattr(sub_config, "model", "") or ""
+    )
+    sub_llm = create_llm(config, model_name=sub_model)
+
+    # Subagents do real work (tool calls), so the enforcement rail (ADR 0003) should
+    # cover them too — not just the lead agent. Mirror the lead's gate so a disallowed/
+    # rate-limited tool is blocked inside a delegation. (Per-instance limiter: each
+    # subagent run gets its own window — a per-delegation cap, not a shared budget.)
+    # TraceContextMiddleware mirrors the lead chain too: the subagent's gateway LLM
+    # calls join the SAME Langfuse trace (nested under the subagent boundary span).
+    from graph.middleware.trace_context import TraceContextMiddleware
+
+    # Multimodal tool results (#1930) mirror the lead chain too — otherwise an
+    # opt-in tool called inside a delegation would leak its raw base64 envelope
+    # into the subagent's context. Vision only when the delegation runs on the
+    # MAIN model (`sub_model is None`): `model.vision` describes that model, and
+    # an aux/per-subagent override may be text-only — those degrade to text.
+    from graph.middleware.multimodal_tool import build_multimodal_middleware
+
+    # Prompt caching mirrors the lead stack (#2778, ADR 0101 D1): a subagent's
+    # system prompt is static per build, so every `task`/`task_batch` delegation
+    # paying full uncached input on it was free money left on the table — repeat
+    # delegations to the same subagent type (and every call inside one
+    # delegation's tool loop) now read the prefix from cache. Same knobs as the
+    # lead; the middleware's own denylist/zero-activity watchers apply per model.
+    from graph.middleware.prompt_cache import PromptCacheMiddleware
+    from graph.middleware.tool_call_repair import ToolResultOrderMiddleware
+
+    sub_middleware = [
+        TraceContextMiddleware(),
+        PromptCacheMiddleware(
+            enabled=getattr(config, "prompt_cache_enabled", True),
+            ttl=getattr(config, "prompt_cache_ttl", "5m"),
+            force=getattr(config, "prompt_cache_force", False),
+        ),
+        # A subagent can delegate_to as well — same view-only tool-result ordering.
+        ToolResultOrderMiddleware(),
+        AuditMiddleware(),
+        build_multimodal_middleware(config, vision=(sub_model is None and getattr(config, "model_vision", False))),
+    ]
+    # The delegating turn's tool fence (#1639/#2972): a fenced turn that may call
+    # `task` must not reach a wider toolset through the delegation. The subagent runs
+    # under (its allowlist ∩ the parent's fence) — deny-all when they don't overlap —
+    # read from the scope SubagentFenceMiddleware opens around the parent's `task` call
+    # (graph/fence_scope) and enforced by the same middleware on the sub-graph.
+    from graph.fence_scope import current_fence
+    from graph.middleware.subagent_fence import SubagentFenceMiddleware, intersect_fences
+
+    _parent_fence = current_fence()
+    sub_fence = intersect_fences(list(getattr(sub_config, "tools", None) or []), _parent_fence) if _parent_fence else []
+    if sub_fence:
+        sub_middleware.append(SubagentFenceMiddleware())
+    # In-history tool-result pruning (#3576) — the lead stack has had it since #2782; a
+    # delegation had NO relief valve, and a review finder whose whole job is reading files
+    # accumulated raw results until the provider refused the call (ContextWindowExceeded,
+    # 7 of 8 panels on one PR). Same knobs as the lead; the window is the SUBAGENT model's.
+    from graph.model_window import context_window_for_slot
+
+    try:
+        # The SUBAGENT model's window, on ITS route: `<provider>:<model>` names another
+        # gateway, and only that gateway reports the window (review on #3577).
+        sub_window: int | None = context_window_for_slot(config, sub_model)
+    except Exception:  # noqa: BLE001 — no window → the pruner's fixed fallback, no context note
+        sub_window = None
+    if getattr(config, "pruning_enabled", True):
+        from graph.middleware.tool_result_pruner import ToolResultPrunerMiddleware
+
+        sub_middleware.append(
+            ToolResultPrunerMiddleware(
+                max_input_tokens=sub_window,
+                at_fraction=getattr(config, "pruning_at_fraction", 0.6),
+                keep_messages=getattr(config, "pruning_keep_messages", 20),
+                min_chars=getattr(config, "pruning_min_chars", 4000),
+            )
+        )
+    if getattr(config, "prompt_capture_enabled", False):
+        # #2388 P3: subagent prompts were invisible (P1 was main-loop only).
+        # Registered after PromptCache (same ordering rule as the lead stack) so
+        # the capture sees the final assembled system message; the whole prompt
+        # still captures as the stable half with a single labeled section, and
+        # rows nest under the delegating tool-call id rather than the turn's task_id.
+        from graph.middleware.prompt_capture import PromptCaptureMiddleware
+
+        _sub_prompt = build_subagent_prompt(subagent_type)
+        sub_middleware.append(
+            PromptCaptureMiddleware(
+                retention_days=getattr(config, "prompt_capture_retention_days", 30),
+                max_calls=getattr(config, "prompt_capture_max_calls", 5000),
+                stable_sections=[{"label": f"{subagent_type} system prompt", "chars": len(_sub_prompt)}],
+                parent_task_id=parent_task_id or "",
+                subagent_type=subagent_type,
+            )
+        )
+    if getattr(config, "enforcement_enabled", False) and (
+        config.enforcement_disallowed_tools or config.enforcement_rate_limits
+    ):
+        from graph.middleware.enforcement import EnforcementMiddleware
+
+        sub_middleware.insert(
+            0,
+            EnforcementMiddleware(
+                disallowed_tools=config.enforcement_disallowed_tools,
+                rate_limits=config.enforcement_rate_limits,
+            ),
+        )
+    # Model routing / failover mirrors the lead chain (#2995). Without it a
+    # subagent's primary-model error fails the whole delegation, while the lead
+    # would have transparently retried on the configured fallbacks — the failover
+    # chain covered only `_build_middleware()`, never `task()`/`task_batch()`.
+    # Same observable wrapper, built from the same routing.fallback_models.
+    # Appended before the provider-shape dispatcher so a cross-provider
+    # fallback retry still runs through the native-OAuth wire shaping. No-op when
+    # routing.fallback_models is empty — the subagent stack is then unchanged.
+    if config.routing_fallback_models:
+        sub_fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
+        sub_middleware.append(ObservableModelFallbackMiddleware(*sub_fallbacks))
+    # Same history self-heal as the lead stack, in the same slot: a delegation
+    # replays the subagent's own thread, so a rejected reasoning blob bricks it the
+    # same way. See the lead chain for why this sits inside the failover wrapper.
+    from graph.middleware.codex_reasoning_replay import CodexReasoningReplayRecoveryMiddleware
+
+    sub_middleware.append(CodexReasoningReplayRecoveryMiddleware())
+    # A subagent that owes a recognisable deliverable is continued when a turn ends
+    # the loop without it, instead of being reported "completed" on a sentence of
+    # intent (#3552). Nothing declared, no middleware — the stack is then unchanged.
+    delivered = sub_config.delivered() if hasattr(sub_config, "delivered") else None
+    if delivered is not None:
+        from graph.middleware.completion_guard import CompletionGuardMiddleware, missing_markers
+
+        sub_middleware.append(
+            CompletionGuardMiddleware(
+                delivered=delivered,
+                contract=sub_config.nudge_contract(),
+                prompt_markers=getattr(sub_config, "completion_prompt_markers", ()) or (),
+                max_turns=sub_config.max_turns,
+                context_window=sub_window,
+            )
+        )
+    # Native-OAuth wire shape — LAST, so the transform sees the final system
+    # message (and sits inside PromptCapture above). Without these, a Claude/
+    # ChatGPT-subscription instance could chat but every delegation failed:
+    # anthropic-oauth refuses a prompt with no identity line, and the Codex
+    # backend rejects the system-role item this stack emits.
+    sub_middleware.extend(provider_shape_middleware(config))
+
+    subagent = create_agent(
+        model=sub_llm,
+        tools=sub_tools,
+        middleware=sub_middleware,
+        system_prompt=build_subagent_prompt(subagent_type),
+        state_schema=ProtoAgentState,
+    )
+
+    # Tag every event the subagent emits with the parent delegation's tool-call id.
+    # LangChain propagates config metadata to all child runs, so the subagent's own
+    # tool frames carry `parent_task_id` — letting the console nest them under the
+    # `task` card BY ID rather than by frame ordering (the delegation runs detached
+    # via ensure_future, so its on_tool_end races AHEAD of these child frames).
+    # `max_turns` counts TOOL ROUNDS; LangGraph's recursion_limit counts graph steps, and
+    # each round costs one step per node the compiled stack runs. Never pass it raw (#3510).
+    sub_run_config: dict[str, Any] = {
+        "recursion_limit": _subagent_recursion_limit(subagent, sub_config.max_turns),
+    }
+    if parent_task_id:
+        sub_run_config["metadata"] = {"parent_task_id": parent_task_id}
+
+    try:
+        # Stream values (not ainvoke) so the last state survives a recursion-limit
+        # stop: every subagent prompt promises "hard stop at max_turns: return what
+        # you have", but ainvoke() RAISES GraphRecursionError and loses the run —
+        # a finder that read one file too many failed its whole panel step (seen
+        # live: ADR 0078 shadow reviews on protoContent, GRAPH_RECURSION_LIMIT).
+        # max_turns is a budget, not a bomb: on the limit, salvage the transcript.
+        from langgraph.errors import GraphRecursionError
+
+        from graph.turn_liveness import note_progress
+        from observability import tracing
+
+        result: dict[str, Any] = {}
+        hard_stop = False
+        # Boundary span (fleet tracing): the subagent's tool/LLM observations
+        # nest under one `subagent:<type>` node in the current trace instead of
+        # scattering across the session span. No-op when tracing is disabled;
+        # exceptions (incl. GraphRecursionError salvage) pass through unchanged.
+        with tracing.trace_span(
+            f"subagent:{subagent_type}",
+            metadata={"description": description, "parent_task_id": parent_task_id or ""},
+            as_type="agent",
+        ):
+            try:
+                async for state in subagent.astream(
+                    {
+                        "messages": [{"role": "user", "content": prompt}],
+                        "session_id": session_id,
+                        **({"subagent_fence": sub_fence} if sub_fence else {}),
+                    },
+                    config=sub_run_config,
+                    stream_mode="values",
+                ):
+                    result = state
+                    # One completed super-step (a model call or a tool round) — the
+                    # liveness a `/<workflow>` step reports to the turn's stall guard
+                    # (#3940). Silent while wedged inside one call, by design.
+                    note_progress(subagent_type)
+            except GraphRecursionError:
+                hard_stop = True
+
+        messages = result.get("messages", [])
+
+        # Bill the delegation's model calls to the parent turn (#2872): the
+        # sub-graph is its own `create_agent`, so its usage never reliably reaches
+        # the parent executor's accumulator through the stream. Each AIMessage in
+        # the final state carries its call's `usage_metadata` — extract rows NOW,
+        # in place, so a GraphRecursionError salvage still bills and rows survive
+        # any failure below.
+        if usage_sink is not None:
+            usage_sink.extend(
+                _extract_subagent_usage(
+                    messages,
+                    subagent_type=subagent_type,
+                    fallback_model=sub_model or getattr(config, "model_name", ""),
+                )
+            )
+
+        # The delegation's answer is the subagent's last AIMessage with content —
+        # not "any message with content" (which could surface a raw tool dump) and
+        # not gated on a fragile startswith("Error") text sniff (which discarded a
+        # legitimate answer that opened with "Error"). Hard failures already raise
+        # SubagentError below, so they never reach here.
+        body = None
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and msg.content:
+                # `.text` flattens Responses-API content blocks (openai-codex, ADR 0097)
+                # to a string; a plain string passes through unchanged.
+                body = msg.content if isinstance(msg.content, str) else msg.text
+                break
+
+        if body is None:
+            if hard_stop:
+                return (
+                    f"[{subagent_type} hard-stopped at max_turns: {description}] -- no salvageable "
+                    "output; treat this lane as a Gap, not a verdict."
+                )
+            if delivered is not None:
+                # No output at all is the emptiest way to end without the deliverable.
+                return (
+                    f"[{subagent_type} ended without its deliverable: {description}] -- no output "
+                    "produced; treat this lane as a Gap, not a verdict."
+                )
+            return f"[{subagent_type} completed: {description}] -- no output produced."
+
+        # Judged on the whole answer: a fan-out's `truncate` may cut the deliverable off.
+        missing_deliverable = delivered is not None and (
+            not delivered(body)
+            or bool(missing_markers(getattr(sub_config, "completion_prompt_markers", ()), prompt, body))
+        )
+        if truncate is not None and len(body) > truncate:
+            body = body[:truncate] + f"\n\n…[truncated to {truncate} chars]"
+
+        if hard_stop:
+            return (
+                f"[{subagent_type} hard-stopped at max_turns: {description} — PARTIAL output; "
+                f"unverified remainder is a Gap]\n\n{body}"
+            )
+        if missing_deliverable:
+            # The guard's nudges did not rescue it. Say so: "completed" over a run
+            # that never produced its deliverable is how a dead lane passed for a
+            # clean one (#3552).
+            return (
+                f"[{subagent_type} ended without its deliverable: {description} — INCOMPLETE output; "
+                f"treat this lane as a Gap, not a verdict]\n\n{body}"
+            )
+        return f"[{subagent_type} completed: {description}]\n\n{body}"
+    except Exception as e:
+        # Surface a hard subagent failure as a tool ERROR (X) rather than a green
+        # "done" wrapping an "Error:" string. Callers (``task``/``task_batch``)
+        # turn this into a status="error" ToolMessage or an inline batch error line.
+        raise SubagentError(f"Subagent '{subagent_type}' failed: {e}") from e
+
+
+async def run_manual_subagent(
+    config: LangGraphConfig,
+    knowledge_store=None,
+    scheduler=None,
+    *,
+    description: str,
+    prompt: str,
+    subagent_type: str = "researcher",
+    truncate: int | None = None,
+    extra_tools=None,
+    reload_callback=None,
+    session_id: str = "",
+    turn_model: str = "",
+) -> str:
+    """Run a subagent outside the lead agent's ``task`` tool.
+
+    The React operator console uses this to let a human explicitly fan out
+    work. It intentionally uses the same private runner as ``task`` so audit,
+    prompt, max-turn, and one-level delegation behavior stay aligned.
+
+    ``extra_tools`` are tools beyond the core ``get_all_tools`` set — plugin and
+    MCP tools — that the lead graph exposes via ``extra_tools`` but which this
+    out-of-graph runner would otherwise miss. Without them a subagent whose
+    allowlist names a plugin tool (e.g. a finance ``backtest_strategy``) sees
+    "not a valid tool" and silently degrades. Mirrors the lead graph's tool set.
+
+    ``turn_model`` is the calling turn's model override (a ``/<subagent>`` slash run's
+    request ``metadata.model``); the subagent's own pinned model still wins (#3944).
+    """
+    # Mirror the lead graph's tool set so a subagent run OUTSIDE the lead's
+    # `task` tool (slash `/distill`, scheduled `/dream`, the console fan-out) sees
+    # the same tools — otherwise allowlisted names like `task_create` (distill's
+    # propose path) silently degrade. inbox/tasks come from STATE (not threaded
+    # through every caller); goal mode from config.
+    from runtime.state import STATE
+
+    self_improvement_run = subagent_type == "self-improve"
+    if self_improvement_run:
+        from graph.self_improvement import mode, skill_auto_allowed
+
+    all_tools = get_all_tools(
+        knowledge_store,
+        scheduler=scheduler,
+        inbox_store=STATE.inbox_store,
+        tasks_store=STATE.tasks_store,
+        goal_enabled=getattr(config, "goal_enabled", False),
+        watches_enabled=getattr(config, "watches_enabled", False),
+        graph_config=config,
+        soul_edit_enabled=(
+            self_improvement_run
+            and getattr(config, "self_improvement_enabled", False)
+            and mode(config, "distillation") == "auto"
+            and mode(config, "soul_md") == "auto"
+        ),
+        skill_edit_enabled=self_improvement_run and skill_auto_allowed(config),
+        self_improvement_provenance_required=self_improvement_run,
+        reload_callback=reload_callback if self_improvement_run else None,
+    )
+    if extra_tools:
+        all_tools = all_tools + list(extra_tools)
+    # Operator denylist over the extras (get_all_tools filtered the core set) — the
+    # out-of-graph runner must not see tools the lead graph dropped (parity, see
+    # create_agent_graph).
+    all_tools = drop_disabled_tools(all_tools)
+    tool_map = {t.name: t for t in all_tools}
+    tool_map = _policy_tool_map(config, subagent_type, tool_map)
+    available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
+
+    return await _run_subagent(
+        config=config,
+        tool_map=tool_map,
+        available_subagents=available_subagents,
+        description=description,
+        prompt=prompt,
+        subagent_type=subagent_type,
+        truncate=truncate,
+        session_id=session_id,
+        turn_model=turn_model,
+    )
+
+
+async def run_manual_subagent_batch(
+    config: LangGraphConfig,
+    knowledge_store=None,
+    scheduler=None,
+    *,
+    tasks: list[dict],
+    extra_tools=None,
+) -> str:
+    """Run independent manual subagent jobs concurrently.
+
+    Mirrors the lead-agent ``task_batch`` tool, including stable output order
+    and per-task failure isolation, but is callable from the operator API.
+    """
+    import asyncio
+
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError("tasks must be a non-empty list")
+
+    max_concurrency = max(1, config.subagent_max_concurrency)
+    truncate = config.subagent_output_truncate
+    sem = asyncio.Semaphore(max_concurrency)
+
+    async def _one(spec: dict) -> str:
+        if not isinstance(spec, dict):
+            return f"Error: each task must be an object, got {type(spec).__name__}."
+        desc = spec.get("description") or "(no description)"
+        prm = spec.get("prompt")
+        if not prm:
+            return f"Error: task '{desc}' is missing 'prompt'."
+        async with sem:
+            return await run_manual_subagent(
+                config,
+                knowledge_store=knowledge_store,
+                scheduler=scheduler,
+                description=desc,
+                prompt=prm,
+                subagent_type=spec.get("subagent_type") or spec.get("type", "researcher"),
+                truncate=truncate,
+                extra_tools=extra_tools,
+            )
+
+    results = await asyncio.gather(*(_one(s) for s in tasks), return_exceptions=True)
+
+    parts = []
+    for i, res in enumerate(results, start=1):
+        if isinstance(res, Exception):
+            res = f"Error: task #{i} raised {type(res).__name__}: {res}"
+        parts.append(f"=== Task {i}/{len(results)} ===\n{res}")
+    return "\n\n".join(parts)
+
+
+def split_subagent_only(tools: list, config, *, resolvable: frozenset[str] | None = None) -> tuple[list, list]:
+    """``(lead, held)`` — partition ``tools`` by config ``tools.subagent_only`` (ADR 0117).
+
+    Logs the configured names nothing can use: ones no registered subagent allowlists, and
+    (given ``resolvable``, the in-graph ``task`` snapshot) ones an in-graph subagent can't
+    resolve because they are assembled after that snapshot (filesystem and late tools) —
+    only a background subagent, which runs the lead graph under its fence, reaches those."""
+    import logging
+
+    names = {str(n) for n in (getattr(config, "tools_subagent_only", None) or [])}
+    if not names:
+        return list(tools), []
+    lead = [t for t in tools if getattr(t, "name", None) not in names]
+    held = [t for t in tools if getattr(t, "name", None) in names]
+    log = logging.getLogger(__name__)
+    allowlisted = {n for sub in SUBAGENT_REGISTRY.values() for n in (getattr(sub, "tools", None) or [])}
+    orphaned = sorted(t.name for t in held if t.name not in allowlisted)
+    if orphaned:
+        log.warning(
+            "[tools] subagent_only %s: no subagent allowlists them, so nothing can call them. "
+            "Add them to a subagent's tools, or take them out of tools.subagent_only.",
+            orphaned,
+        )
+    if resolvable is not None:
+        late = sorted(t.name for t in held if t.name not in resolvable and t.name not in orphaned)
+        if late:
+            log.warning(
+                "[tools] subagent_only %s are assembled after subagents resolve their tools "
+                "(filesystem/late tools): an in-graph `task` can't use them, only a background one.",
+                late,
+            )
+    return lead, held
+
+
+def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], background_mgr=None):
+    """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
+
+    Subagents share AuditMiddleware so their tool calls land alongside the
+    parent agent's. The session_id contextvar set by trace_session
+    propagates because subagents run in the same async context. Subagents are
+    given only their allowlisted tools (which never include ``task``/
+    ``task_batch``), so delegation depth is naturally bounded to one level.
+
+    ``background_mgr`` (ADR 0050) enables ``run_in_background`` on the ``task``
+    tool — a delegation the agent fires and keeps working past, surfaced back via
+    a completion notification on the spawning session's next turn. ``None``
+    disables it (the param falls back to synchronous execution).
+    """
+    import asyncio
+    from typing import Literal
+
+    from langchain_core.tools import InjectedToolCallId, tool
+
+    from graph.subagent_model import turn_model_from
+
+    tool_map = {t.name: t for t in all_tools}
+    subagent_names = list(SUBAGENT_REGISTRY.keys())
+    available_subagents = ", ".join(subagent_names) or "(none configured)"
+    max_concurrency = max(1, config.subagent_max_concurrency)
+    truncate = config.subagent_output_truncate
+
+    # Constrain subagent_type to the live registry (plugin-contributed subagents
+    # included — this runs after they're registered) so the model can't pass a name
+    # that doesn't exist. A dynamic Literal renders as a JSON-schema ``enum`` the model
+    # sees in the tool schema; evaluated at def time → captures the current roster,
+    # rebuilt on every graph reload. ``or [...]`` keeps it valid if the registry is bare.
+    _SubagentType = Literal[tuple(subagent_names or ["researcher"])]
+
+    @tool
+    async def task(
+        description: str,
+        prompt: str,
+        subagent_type: _SubagentType = "researcher",
+        run_in_background: bool = False,
+        state: Annotated[Any, InjectedState] = None,
+        tool_call_id: Annotated[str, InjectedToolCallId] = "",
+    ) -> str:
+        """Delegate a single task to a specialized subagent.
+
+        Use this for one focused delegation. To run several independent
+        delegations at once, use ``task_batch`` instead — it runs them
+        concurrently rather than one after another.
+
+        Args:
+            description: Short description of what this task will accomplish
+            prompt: Detailed instructions for the subagent
+            subagent_type: Which subagent to use — one of the registered roster
+                shown in the system prompt (e.g. researcher, strategist, …)
+            run_in_background: Set True for long-running, independent work (deep
+                research, multi-step gathering) you don't need to block on. The
+                task runs detached as its own turn and returns IMMEDIATELY with a
+                job id; you will be notified of the result automatically on a
+                later turn. When you set this, do NOT poll, re-check, or spawn a
+                duplicate — just continue with other work. Leave False (the
+                default) when you need the result to finish the current turn.
+        """
+
+        async def _spawn_bg() -> str:
+            # Resolve the originating session from injected graph state, not the
+            # tracing contextvar — the contextvar reads empty in a tool body, so
+            # the completion could never drain back to the spawning chat (ADR 0050).
+            # The state's incognito flag rides along (ADR 0070): a job spawned from
+            # an incognito thread must leave no memory trail at completion (no
+            # push-resume, no knowledge indexing) — the report still drains here.
+            job_id = await background_mgr.spawn(
+                origin_session=_session_id_from(state),
+                subagent_type=subagent_type,
+                description=description,
+                prompt=prompt,
+                origin_incognito=_incognito_from(state),
+                # Tag the job with the emitting turn's id (#1766) so a fan-out — several
+                # task(run_in_background=True) in one turn — coalesces into one push-resume.
+                # A lone task → batch_size 1 → the unchanged singleton path.
+                batch_id=_turn_id_from(state),
+                # The turn's model override (#3944): the manager resolves the job's
+                # model as the subagent's pin > this override and carries it in the fire.
+                turn_model=turn_model_from(state),
+            )
+            return job_id
+
+        if run_in_background and background_mgr is not None:
+            if subagent_type not in SUBAGENT_REGISTRY:
+                return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
+            job_id = await _spawn_bg()
+            return (
+                f"Background agent started: {job_id} ({subagent_type}: {description}). "
+                "It is running detached; you will be notified of the result automatically "
+                "on a later turn. Do NOT poll, re-check, or spawn a duplicate for this — "
+                "continue with other work in the meantime."
+            )
+
+        # Delegated model-call usage rows, billed to the parent turn's telemetry
+        # (#2872). `_run_subagent` extends the sink in place, so rows collected
+        # before a late failure still bill.
+        usage_rows: list[dict] = []
+
+        # Auto-background (ADR 0051): a foreground delegation that overruns the budget
+        # transparently detaches so it can't freeze the turn. Off unless BACKGROUND_AUTO_S>0.
+        auto_s = _auto_background_seconds()
+        if auto_s > 0 and background_mgr is not None and subagent_type in SUBAGENT_REGISTRY:
+            inline = asyncio.ensure_future(
+                _run_subagent(
+                    config=config,
+                    tool_map=tool_map,
+                    available_subagents=available_subagents,
+                    description=description,
+                    prompt=prompt,
+                    subagent_type=subagent_type,
+                    truncate=None,
+                    parent_task_id=tool_call_id,
+                    usage_sink=usage_rows,
+                    turn_model=turn_model_from(state),
+                )
+            )
+            done, _pending = await asyncio.wait({inline}, timeout=auto_s)
+            if inline in done:
+                await _emit_subagent_usage(usage_rows)
+                try:
+                    return inline.result()
+                except SubagentError as e:
+                    return ToolMessage(
+                        content=f"[{e}. Continue without its result.]",
+                        tool_call_id=tool_call_id,
+                        status="error",
+                    )
+            inline.cancel()
+            try:
+                await inline
+            except BaseException:  # noqa: BLE001 — discard the abandoned inline run
+                pass
+            job_id = await _spawn_bg()
+            return (
+                f"This '{subagent_type}' delegation ran past the {auto_s:.0f}s inline budget, "
+                f"so I moved it to the background as {job_id}. You'll be notified when it "
+                "finishes — continue with other work; do NOT re-spawn it."
+            )
+
+        # Foreground delegation: a blocking `await` that would freeze the turn until
+        # the subagent finishes. Wrap it in a cancellable task registered under THIS
+        # tool call's id (the one the console sees on the running `task` card) so the
+        # user can ABORT just this delegation (Tier 2). On a user cancel the lead
+        # CONTINUES with a "cancelled" result; a parent turn-level cancel (the Stop
+        # button → A2A CancelTask) still propagates and kills the whole turn.
+        from graph import delegations
+
+        session_id = _session_id_from(state)
+        deleg = asyncio.ensure_future(
+            _run_subagent(
+                config=config,
+                tool_map=tool_map,
+                available_subagents=available_subagents,
+                description=description,
+                prompt=prompt,
+                subagent_type=subagent_type,
+                truncate=None,
+                parent_task_id=tool_call_id,
+                usage_sink=usage_rows,
+                turn_model=turn_model_from(state),
+            )
+        )
+        delegations.register(session_id, tool_call_id, deleg, label=description)
+        try:
+            return await deleg
+        except asyncio.CancelledError:
+            # User-initiated delegation cancel → swallow and let the lead keep going;
+            # a turn-level cancel (flag unset) → re-raise so the whole turn unwinds.
+            if delegations.was_cancelled(session_id, tool_call_id):
+                return ToolMessage(
+                    content=(
+                        f"[delegation cancelled by the user before it finished: "
+                        f"{subagent_type} — {description}. Continue without its result.]"
+                    ),
+                    tool_call_id=tool_call_id,
+                    status="error",  # cancelled → the card closes as an X, not green "done"
+                )
+            raise
+        except SubagentError as e:
+            # Subagent crashed → close the delegation card as a failure (X) while still
+            # handing the lead a readable result so it can continue without it.
+            return ToolMessage(
+                content=f"[{e}. Continue without its result.]",
+                tool_call_id=tool_call_id,
+                status="error",
+            )
+        finally:
+            delegations.unregister(session_id, tool_call_id)
+            # Bill delegated model calls to the parent turn (#2872). No-op (no
+            # await) when the sink is empty — incl. the CancelledError re-raise
+            # path, where the cancelled sub-graph never reached extraction.
+            await _emit_subagent_usage(usage_rows)
+
+    @tool
+    async def task_batch(
+        tasks: list[dict],
+        run_in_background: bool = False,
+        state: Annotated[Any, InjectedState] = None,
+        tool_call_id: Annotated[str, InjectedToolCallId] = "",
+    ) -> str:
+        """Delegate several independent tasks to subagents concurrently.
+
+        Prefer this over multiple sequential ``task`` calls whenever the
+        delegations don't depend on each other (e.g. research three topics,
+        check several sources) — they run in parallel, bounded by the
+        configured concurrency cap, so total latency is roughly the slowest
+        task rather than the sum. Use plain ``task`` for a single delegation
+        or when one task's output feeds the next.
+
+        Args:
+            tasks: A list of task specs. Each item is an object with:
+                - ``description`` (str, required): short summary of the task
+                - ``prompt`` (str, required): detailed instructions
+                - ``subagent_type`` (str, optional): defaults to "researcher"
+            run_in_background: Set True to fan the whole batch out DETACHED — every
+                task spawns as its own background agent and this returns IMMEDIATELY
+                with their job ids, instead of blocking until they finish. Use it for a
+                wide fan-out of long / independent / quota-heavy work (research several
+                topics at once) you don't need to wait on; you'll be notified as each
+                finishes. When you set this, do NOT poll, re-check, or re-spawn — just
+                continue. Leave False (the default) when you need the results in this
+                turn. Concurrency is capped either way.
+
+        Returns the results concatenated in the same order as ``tasks``, each
+        prefixed with its 1-based index. Individual failures are reported
+        inline and do not abort the batch. With ``run_in_background`` the return is
+        instead the list of started job ids (results arrive later as notifications).
+        """
+        if not tasks:
+            return "Error: task_batch called with an empty task list."
+        if not isinstance(tasks, list):
+            return "Error: 'tasks' must be a list of task objects."
+
+        # Background fan-out (ADR 0050): spawn every spec detached and return immediately
+        # with the job ids — the multi-task analog of task(run_in_background=True), through
+        # the same BackgroundManager.spawn. Each completion drains back into this session
+        # independently (one task-notification per job); the manager's concurrency cap bounds
+        # how many run at once. Degrades to the foreground batch below when no manager exists.
+        if run_in_background and background_mgr is not None:
+            session_id = _session_id_from(state)
+            # All N specs are spawned by THIS one turn → they share the emitting turn's id
+            # as their batch key (#1766), so their completions coalesce into ONE push-resume
+            # instead of N drip-fed briefings; the real cross-report synthesis happens once.
+            batch_id = _turn_id_from(state)
+            incognito = _incognito_from(state)
+            lines: list[str] = []
+            started = 0
+            for i, spec in enumerate(tasks, start=1):
+                if not isinstance(spec, dict):
+                    lines.append(f"Task {i}: skipped — each task must be an object.")
+                    continue
+                desc = spec.get("description") or "(no description)"
+                prm = spec.get("prompt")
+                st = spec.get("subagent_type", "researcher")
+                if not prm:
+                    lines.append(f"Task {i} ({desc}): skipped — missing 'prompt'.")
+                    continue
+                if st not in SUBAGENT_REGISTRY:
+                    lines.append(f"Task {i} ({desc}): skipped — unknown subagent '{st}'.")
+                    continue
+                job_id = await background_mgr.spawn(
+                    origin_session=session_id,
+                    subagent_type=st,
+                    description=desc,
+                    prompt=prm,
+                    origin_incognito=incognito,
+                    batch_id=batch_id,
+                    turn_model=turn_model_from(state),
+                )
+                started += 1
+                lines.append(f"Task {i}: {job_id} ({st}: {desc})")
+            if not started:
+                return "No background tasks started:\n" + "\n".join(lines)
+            return (
+                f"Started {started} background agent(s), running detached. You will be "
+                "notified automatically as each finishes — do NOT poll, re-check, or "
+                "re-spawn; continue with other work.\n" + "\n".join(lines)
+            )
+
+        sem = asyncio.Semaphore(max_concurrency)
+        # One shared sink across the fan-out (#2872): appends from concurrent
+        # delegations are safe (single event loop), and a failed task's rows —
+        # extended in place before the failure — still bill.
+        usage_rows: list[dict] = []
+
+        async def _one(spec: dict) -> str:
+            if not isinstance(spec, dict):
+                return f"Error: each task must be an object, got {type(spec).__name__}."
+            desc = spec.get("description") or "(no description)"
+            prm = spec.get("prompt")
+            if not prm:
+                return f"Error: task '{desc}' is missing 'prompt'."
+            async with sem:
+                try:
+                    return await _run_subagent(
+                        config=config,
+                        tool_map=tool_map,
+                        available_subagents=available_subagents,
+                        description=desc,
+                        prompt=prm,
+                        subagent_type=spec.get("subagent_type", "researcher"),
+                        truncate=truncate,
+                        parent_task_id=tool_call_id,
+                        usage_sink=usage_rows,
+                        turn_model=turn_model_from(state),
+                    )
+                except SubagentError as e:
+                    # One failed delegation is reported inline; the batch goes on.
+                    return f"Error: {e}"
+
+        results = await asyncio.gather(*(_one(s) for s in tasks), return_exceptions=True)
+        await _emit_subagent_usage(usage_rows)
+
+        parts = []
+        for i, res in enumerate(results, start=1):
+            if isinstance(res, Exception):
+                res = f"Error: task #{i} raised {type(res).__name__}: {res}"
+            parts.append(f"=== Task {i}/{len(results)} ===\n{res}")
+        return "\n\n".join(parts)
+
+    # Background-job control tools (ADR 0051) — only when a background manager exists
+    # (so a no-background build doesn't advertise dead controls).
+    #
+    # There is deliberately NO pull/wait tool here (the former ``task_output`` was
+    # removed): its only real capability was blocking-to-wait, which is the exact
+    # anti-pattern to fire-and-forget delegation — agents polled it instead of ending
+    # their turn, producing duplicate, out-of-order delivery. Push (``drain_pending``)
+    # is the sole, exactly-once, in-order delivery path; only cancellation is a tool.
+    bg_tools: list[BaseTool] = []
+    if background_mgr is not None:
+
+        @tool
+        async def stop_task(job_id: str) -> str:
+            """Stop a running background job (the ``bg-…`` id from
+            ``task(run_in_background=True)``) — cancels its detached turn. Use this to
+            kill a job that's stuck, runaway, or no longer needed."""
+            res = await background_mgr.cancel(job_id)
+            return res.get("detail", "Done.")
+
+        bg_tools = [stop_task]
+
+    # Declarative multi-step workflows (ADR 0002) are now an opt-in plugin
+    # (plugins/workflows) — its run_workflow/save_workflow tools come in via the
+    # plugin tool path, not here. Core no longer ships the workflow engine.
+    tools = [task, task_batch, *bg_tools]
+    return tools
+
+
+def create_agent_graph(
+    config: LangGraphConfig,
+    knowledge_store=None,
+    scheduler=None,
+    skills_index=None,
+    extra_tools=None,
+    extra_middleware=None,
+    late_tool_factories=None,
+    include_subagents: bool = True,
+    checkpointer=None,
+    inbox_store=None,
+    tasks_store=None,
+    background_mgr=None,
+    reload_callback=None,
+):
+    """Create the protoAgent LangGraph agent.
+
+    ``extra_tools`` are additional LangChain tools to expose to the lead agent
+    (e.g. MCP-server tools discovered at startup). Appended before subagent /
+    middleware assembly so they're in the tool map and visible to the model.
+
+    ``reload_callback`` is the server-owned graph reload (``_reload_langgraph_agent``),
+    injected — not imported — so ``tools/`` stays clear of ``server/``. It's handed to the
+    guarded ``edit_soul`` tool (ADR 0079/0081) so a persona self-edit goes live on the
+    agent's next turn. ``None`` (subagent / eval / script builds) degrades gracefully: the
+    edit still saves and applies on the next natural reload.
+
+    ``checkpointer`` persists conversation state per ``thread_id``: pass one so
+    multi-turn chats keep their history (the agent sees prior turns instead of
+    starting fresh each message). Compaction middleware summarizes the old part
+    of that history near the context limit. A checkpointer set only in the
+    invoke ``config`` is ignored by LangGraph — it must be bound at compile time.
+
+    Returns a compiled graph that can be invoked with:
+        graph.ainvoke({"messages": [HumanMessage(content="...")]},
+                      config={"configurable": {"thread_id": "..."}})
+    """
+    llm = create_llm(config)
+
+    # Sync the operator denylist from THIS config — the server boot/reload path already
+    # set it, but out-of-server builders (eval sweeps, scripts) pass a config directly
+    # and would otherwise silently keep whatever the process global last held.
+    # Hidden tools (#2172) are a HARD superset: denied here like disabled ones (never
+    # bound), and additionally dropped from the console inventory (console_handlers), so
+    # a hidden tool can't be re-enabled from the UI. This is THE authoritative sync point,
+    # so the union lives here (agent_init's earlier call is for the pre-graph path).
+    from tools.lg_tools import set_disabled_tools
+
+    _denied = list(dict.fromkeys([*getattr(config, "tools_disabled", []), *getattr(config, "tools_hidden", [])]))
+    set_disabled_tools(_denied)
+
+    # Everything the denylist drops, across every assembly seam below. Stamped on the
+    # graph (like bound_tools) so the operator Tools tab can render disabled tools as
+    # toggled-off rows — without this a disabled tool vanishes from the catalog and
+    # can never be re-enabled from the console.
+    disabled_tools: list = []
+
+    all_tools = get_all_tools(
+        knowledge_store,
+        scheduler=scheduler,
+        inbox_store=inbox_store,
+        tasks_store=tasks_store,
+        # Thread the goal flag so the agent-facing set_goal tool (ADR 0028) is
+        # actually BOUND, not just advertised. Without this it defaults False and
+        # set_goal silently never reaches the model (it stayed in /api/tools,
+        # which passes goal_enabled explicitly — a registry-vs-binding split).
+        # Subagent builds deliberately omit it: subagents are bounded by
+        # max_turns and must not self-set goals.
+        goal_enabled=config.goal_enabled,
+        # Watch tools (ADR 0067), gated by `watches.enabled` (#2020) — same
+        # registry-vs-binding threading as goal_enabled, but an INDEPENDENT axis: a watch
+        # is verifier-only and moved by an external process, so goal mode has no say.
+        watches_enabled=config.watches_enabled,
+        # Lets knowledge_ingest build the gateway STT/vision fns for audio/video/image.
+        graph_config=config,
+        # Lets knowledge_ingest detach a slow URL/media ingest as a background job (ADR 0050).
+        background_mgr=background_mgr,
+        dropped=disabled_tools,
+        # Guarded self-authored persona (ADR 0079/0081). Lead-only: subagent builds omit
+        # both, so edit_soul never binds on a bounded subagent. reload_callback is the
+        # server-owned graph reload (injected, not imported) that makes an edit live next turn.
+        # The unified policy never widens an ordinary lead turn. Its privileged
+        # writers are bound only in run_manual_subagent's bounded self-improve path.
+        soul_edit_enabled=getattr(config, "soul_self_edit_enabled", False),
+        self_config_enabled=getattr(config, "tools_self_config_enabled", False),
+        reload_callback=reload_callback,
+    )
+
+    if extra_tools:
+        all_tools.extend(extra_tools)
+    # Operator denylist (config ``tools.disabled``) over the plugin/MCP extras too —
+    # get_all_tools already filtered the core set, but extra_tools bypassed it. Applied
+    # BEFORE the subagent tool_map snapshot below so a disabled tool can't ride into a
+    # subagent via an allowlist either.
+    all_tools = drop_disabled_tools(all_tools, disabled_tools)
+
+    # What an in-graph `task` subagent can resolve: the snapshot _build_task_tools takes.
+    task_resolvable = frozenset(t.name for t in all_tools)
+    if include_subagents:
+        all_tools.extend(
+            _build_task_tools(
+                config,
+                all_tools,
+                background_mgr=background_mgr,
+            )
+        )
+
+    # Fenced multi-project filesystem toolset (ADR 0007 — operator primitives).
+    # Opt-in; inert unless filesystem.enabled + a non-empty projects registry.
+    # Added before the late-tools seam / deferred so they're wrappable + discoverable.
+    if config.filesystem_enabled:
+        from tools.fs_tools import build_fs_tools
+
+        all_tools.extend(build_fs_tools(config))
+
+    # Operator denylist over the assembled set — covers the tools appended since the
+    # extra_tools filter above (task/task_batch, the filesystem tools incl.
+    # ``run_command``). Runs BEFORE the late-tools seam (ADR 0103 S4, #2807): a late
+    # factory that proxies other tools (execute_code's bridge) snapshots its tool_map
+    # from this list, so a denylisted name must already be gone — previously the
+    # factories saw the pre-sweep set and a tool could be unbound from the model yet
+    # still bridgeable from a script. This is also what makes ``tools.disabled:
+    # [run_command]`` actually work (#1527-era gap: the filter used to live only
+    # inside get_all_tools, which fs tools bypass).
+    all_tools = drop_disabled_tools(all_tools, disabled_tools)
+
+    # Subagent-only tools (config ``tools.subagent_only``, ADR 0117). ``_build_task_tools``
+    # above already snapshotted its tool map, so an in-graph subagent allowlisting one
+    # resolves it. They stay in ``all_tools`` (the ToolNode) because a background subagent
+    # runs THIS graph under its fence; the lead is kept off them by SubagentOnlyMiddleware.
+    # A proxying late tool (execute_code's bridge) only ever sees the lead's view, and
+    # search_tools lists a held tool only to a pass whose fence names it.
+    held_names = {str(n) for n in (getattr(config, "tools_subagent_only", None) or [])}
+
+    def lead_view(tools: list) -> list:
+        return [t for t in tools if getattr(t, "name", None) not in held_names]
+
+    # Plugin-contributed late tools (the late-tools seam) — factories that need the
+    # FULLY assembled (and now denylist-final) toolset: core + subagent + plugin +
+    # MCP tools. Built here, before the deferred meta-tool, so a late tool can wrap
+    # or proxy any other tool (but never itself) and is still surfaced by
+    # search_tools. factory(all_tools, config) -> tool | list[tool] | None; a
+    # raiser is skipped.
+    for _late_factory in late_tool_factories or ():
+        try:
+            _produced = _late_factory(lead_view(all_tools), config)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("[plugins] late tool factory failed — skipped")
+            continue
+        if _produced:
+            all_tools.extend(_produced if isinstance(_produced, list) else [_produced])
+
+    # Denylist over the late tools THEMSELVES — the factories ran after the sweep
+    # above (so their inputs were final), which means their outputs haven't met the
+    # filter yet: without this pass ``tools.disabled: [execute_code]`` would silently
+    # re-bind. Everything else is already filtered, so only late-seam names can drop.
+    all_tools = drop_disabled_tools(all_tools, disabled_tools)
+
+    # Deferred tools (ADR 0005 #3) — opt-in progressive disclosure. The
+    # search_tools meta-tool is built over the full set (so it can surface any
+    # of them) and ToolDeferralMiddleware trims the per-call schemas to base +
+    # loaded. Every tool stays callable; only the model's view is trimmed.
+    if config.tools_deferred_enabled:
+        from tools.lg_tools import build_search_tools_tool, resolve_deferred_keep
+
+        keep = resolve_deferred_keep(config.tools_deferred_keep)
+        all_tools.append(build_search_tools_tool(all_tools, keep, held_names=held_names))
+        # The meta-tool is denylistable like everything else — without this pass,
+        # ``tools.disabled: [search_tools]`` silently re-binds it (it's appended after
+        # the final filter above), which a Tools-tab row toggle would surface as a
+        # switch that snaps back on. Everything else was already filtered, so only
+        # search_tools can drop here.
+        all_tools = drop_disabled_tools(all_tools, disabled_tools)
+
+    # Record the FINAL bound toolset so a runtime change is observable to the agent and
+    # not only to the process (#2640). Here, after every filter and append, is the only
+    # place the set is what the model will actually see. No-op on the first build and
+    # whenever nothing changed; when it did change, the next turn gets a one-shot note
+    # (KnowledgeMiddleware). Without this an agent mid-session keeps refusing work it
+    # can now do — the ADR 0096 spine ends at *use*, and nothing told it.
+    from graph.tool_delta import record_toolset
+
+    # Split over the FINAL set, so a held late tool or search_tools is covered too.
+    lead_tools, subagent_only_tools = split_subagent_only(all_tools, config, resolvable=task_resolvable)
+    # A held tool is still the agent's capability, reached through `task`, so moving a tool
+    # into or out of tools.subagent_only is not a toolset change to announce. Announcing it
+    # as "No longer available" sent a live agent (Frank, 10-10) off answering the note
+    # instead of reporting the work it had just delegated.
+    record_toolset(t.name for t in all_tools)
+
+    # Composed as labeled parts (#2243 P2) so PromptCapture can persist the
+    # stable prefix's section boundaries with the blob it hashes — the prompt
+    # the model receives is exactly these texts joined (build_system_prompt is
+    # the same join, pinned by test).
+    from graph.prompts import build_system_prompt_parts
+
+    prompt_parts = build_system_prompt_parts(
+        include_subagents=include_subagents,
+        projects=(config.effective_filesystem_projects() if config.filesystem_enabled else None),
+        bound_tool_names=frozenset(t.name for t in lead_tools),
+    )
+    system_prompt = "\n\n".join(text for _label, text in prompt_parts)
+
+    middleware = _build_middleware(
+        config,
+        knowledge_store,
+        skills_index=skills_index,
+        extra_middleware=extra_middleware,
+        subagent_only=frozenset(t.name for t in subagent_only_tools),
+        stable_sections=[{"label": label, "chars": len(text)} for label, text in prompt_parts],
+        # Held tools aren't missing for a skill: the lead delegates them (ADR 0117 D6).
+        bound_tool_names=frozenset(t.name for t in all_tools),
+    )
+
+    agent = create_agent(
+        model=llm,
+        tools=all_tools,
+        middleware=middleware,
+        system_prompt=system_prompt,
+        checkpointer=checkpointer,
+        # Wire the declared state schema so session_id (stamped into every turn's
+        # graph input by the chat/A2A layer) is a real channel the tools can read
+        # via InjectedState. Without this, create_agent runs on the default
+        # messages-only state, session_id is silently dropped, and tool bodies
+        # can't recover it (the tracing contextvar is invisible in a tool body) —
+        # which broke wait's same-session resume (ADR 0053) and set_goal.
+        state_schema=ProtoAgentState,
+    )
+
+    # Single source of truth for "what tools the model has". Stamp the final
+    # assembled set on the compiled graph so the Tools tab (/api/tools) and any
+    # other consumer read exactly what's BOUND, instead of re-deriving the list
+    # and drifting from it (set_goal advertised-but-unbound bd-2aa; task /
+    # filesystem / execute_code under-reported bd-67j).
+    agent.bound_tools = list(lead_tools)
+    # The denylist's complement — what ``tools.disabled`` dropped, kept as tool objects
+    # so /api/tools can list them (name/description/category) as toggle-off rows.
+    agent.disabled_tools = list(disabled_tools)
+    # Live tools held for subagents only (ADR 0117) — /api/tools lists them, flagged, so a
+    # tool kept off the lead doesn't vanish from the console as if it were uninstalled.
+    agent.subagent_only_tools = list(subagent_only_tools)
+    # #2388 P3 (true next-call preview): the prompt-preview route needs (a) the exact
+    # labeled stable parts THIS graph was built with, and (b) the live KnowledgeMiddleware
+    # so it can run compose_context(record=False) speculatively. Stamped like bound_tools —
+    # consumers read what's BOUND rather than re-deriving and drifting.
+    agent.system_prompt_parts = list(prompt_parts)
+    agent.knowledge_middleware = next((m for m in middleware if m.__class__.__name__ == "KnowledgeMiddleware"), None)
+    return agent
+
+
+def create_simple_agent(config: LangGraphConfig, knowledge_store=None, scheduler=None):
+    """Create a simple agent without subagents (for debugging/testing)."""
+    from langgraph.prebuilt import create_react_agent
+
+    llm = create_llm(config)
+    all_tools = get_all_tools(knowledge_store, scheduler=scheduler, graph_config=config)
+
+    system_prompt = build_system_prompt(
+        include_subagents=False,
+        bound_tool_names=frozenset(t.name for t in all_tools),
+    )
+
+    return create_react_agent(
+        model=llm,
+        tools=all_tools,
+        prompt=system_prompt,
+    )

@@ -1,7 +1,7 @@
 // Live elapsed time for a RUNNING tool card.
 //
 // Why this exists: a running card showed a spinner and nothing else. `durationMs` is only
-// computed at the tool-END frame (ChatSurface.tsx), so while a call was in flight the DS
+// computed at the tool-END frame (ChatSessionSlot.tsx), so while a call was in flight the DS
 // ToolCard had no duration to render. A card three seconds in and one fifteen minutes in
 // looked exactly the same, and "how long has this been going?" is the question behind
 // "should I stop it?". Everything needed is already on the wire — `startedAt` is stamped

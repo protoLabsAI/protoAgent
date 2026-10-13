@@ -6,11 +6,14 @@ import asyncio
 import logging
 import os
 import shutil
+from pathlib import Path
 from dataclasses import dataclass, field
 
 import pytest
 
 from tools.fs_tools import Project, ProjectRegistry, build_fs_tools
+
+pytestmark = pytest.mark.platform_sensitive
 
 _LIST_COMMAND = "dir /b" if os.name == "nt" else "ls"
 
@@ -23,6 +26,7 @@ class _Cfg:
     filesystem_bypass_allowed: bool = True
     filesystem_projects: list = field(default_factory=list)
     tools_memoize_reads_enabled: bool = False
+    filesystem_run_command_env_passthrough: list = field(default_factory=list)
 
 
 @pytest.fixture
@@ -71,18 +75,29 @@ def _tools(cfg):
 
 def test_no_tools_without_valid_projects():
     assert build_fs_tools(_Cfg(filesystem_projects=[])) == []
-    # Nonexistent path → skipped → no tools.
-    assert build_fs_tools(_Cfg(filesystem_projects=[{"name": "x", "path": "/nope/zzz"}])) == []
+    # No entry with both a name and a path → nothing could ever resolve → no tools.
+    assert build_fs_tools(_Cfg(filesystem_projects=[{"name": "x"}])) == []
 
 
-def test_all_folders_unusable_warns_with_paths(caplog):
-    """Configured-but-all-unusable unbinds every fs tool. That's an operator
-    mistake, so it logs at WARNING and names the offending folder; the inert default
-    (nothing configured) stays quiet at INFO."""
+def test_all_folders_missing_warns_with_paths_but_stays_bound(caplog):
+    """Configured-but-all-missing used to unbind every fs tool for the session (#2251),
+    and nothing re-bound them when the folder came back (#3643). The tools now stay bound
+    (each call says the folder is missing); the operator mistake still logs at WARNING
+    and names the folder."""
     with caplog.at_level(logging.WARNING, logger="protoagent.fs"):
-        assert build_fs_tools(_Cfg(filesystem_projects=[{"name": "x", "path": "/nope/zzz"}])) == []
+        tools = build_fs_tools(_Cfg(filesystem_projects=[{"name": "x", "path": "/nope/zzz"}]))
+    assert "read_file" in {t.name for t in tools}
     msgs = [r.getMessage() for r in caplog.records]
-    assert any("NOT bound" in m and "/nope/zzz" in m for m in msgs), msgs
+    # The log names the RESOLVED path — `D:\\nope\\zzz` on Windows, `/nope/zzz` elsewhere.
+    shown = str(Path("/nope/zzz").resolve())
+    assert any("'x'" in m and shown in m for m in msgs), msgs
+
+
+def test_junk_only_config_warns_not_bound(caplog):
+    """An entry with no path can never come back — that one still unbinds, loudly."""
+    with caplog.at_level(logging.WARNING, logger="protoagent.fs"):
+        assert build_fs_tools(_Cfg(filesystem_projects=[{"name": "x"}])) == []
+    assert any("NOT bound" in r.getMessage() for r in caplog.records)
 
 
 def test_read_list_find_search(workspace):
@@ -361,7 +376,7 @@ def test_search_files_output_cap_engages_mid_range_not_just_between_matches(work
     assert out.count("\n") + 1 <= _MAX_SEARCH_OUTPUT_LINES + 2
 
 
-def test_search_files_regex_a_pathological_pattern_times_out_cleanly(workspace):
+def test_search_files_regex_a_pathological_pattern_times_out_cleanly(workspace, monkeypatch):
     # `query` is model-supplied; stdlib `re` has no match timeout, and capping the
     # matched slice's LENGTH does not help — verified separately that ~30-40
     # adversarial chars already take 70s+ against stdlib `re`, far below any sane
@@ -369,6 +384,10 @@ def test_search_files_regex_a_pathological_pattern_times_out_cleanly(workspace):
     # clean timeout error within a few seconds, not hang indefinitely.
     import time
 
+    import tools.fs_tools as fs_mod
+
+    # The production 2s bound is read per match; shrink it so the test doesn't wait it out.
+    monkeypatch.setattr(fs_mod, "_REGEX_MATCH_TIMEOUT_S", 0.1)
     _, a, _ = workspace
     # (a|a)+b: confirmed empirically to blow past a 2s regex timeout at ~40 chars
     # of non-matching input — a genuinely pathological case, not a fast/optimized one.
@@ -379,7 +398,7 @@ def test_search_files_regex_a_pathological_pattern_times_out_cleanly(workspace):
     out = t["search_files"].invoke({"project": "a", "query": r"(a|a)+b", "regex": True})
     elapsed = time.monotonic() - start
 
-    assert elapsed < 10.0  # bounded by the 2s per-match timeout, not left to run forever
+    assert elapsed < 10.0  # bounded by the per-match timeout, not left to run forever
     assert out.startswith("Error:") and "too long" in out
 
 
@@ -599,6 +618,85 @@ def test_run_command_runs_via_shell(workspace):
     # Exact lines (not substrings): the old argv path would print the literal "one && echo two",
     # so this assertion specifically fails unless the && actually chained two commands.
     assert [line.rstrip() for line in out.splitlines()] == ["one", "two"]
+
+
+_ENV_PROBE_NAMES = ("A2A_AUTH_TOKEN", "AGENT_NAME", "PROTOAGENT_HOME", "OPENAI_API_KEY", "GH_TOKEN", "KEEP_ME")
+
+
+def _probe(t, project_dir) -> dict:
+    """Print the probe vars from a script file (`"<python>" envprobe.py`)."""
+    import sys
+
+    (project_dir / "envprobe.py").write_text(
+        "import os\n" + "".join(f"print({n!r}, os.environ.get({n!r}, '<unset>'))\n" for n in _ENV_PROBE_NAMES)
+    )
+    out = asyncio.run(t["run_command"].ainvoke({"project": "a", "command": f'"{sys.executable}" envprobe.py'}))
+    seen = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
+    assert set(_ENV_PROBE_NAMES) <= set(seen), out  # the probe ran and printed every name
+    return seen
+
+
+def test_run_command_does_not_hand_project_code_the_agents_identity(workspace, monkeypatch):
+    """Friction 2026-09-28: pytest under run_command read the live agent's A2A_AUTH_TOKEN and
+    AGENT_NAME (2 tests failed) and PROTOAGENT_HOME pointed it at the live instance's data.
+    Project code gets neither the agent's identity/instance nor credential-shaped vars."""
+    _, a, _ = workspace
+    for n in _ENV_PROBE_NAMES:
+        monkeypatch.setenv(n, f"live-{n.lower()}")
+    t = _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a)}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=False,
+        )
+    )
+    seen = _probe(t, a)
+    for n in ("A2A_AUTH_TOKEN", "AGENT_NAME", "PROTOAGENT_HOME", "OPENAI_API_KEY", "GH_TOKEN"):
+        assert seen[n] == "<unset>", (n, seen)
+    assert seen["KEEP_ME"] == "live-keep_me"  # ordinary vars pass
+
+
+def test_run_command_env_passthrough_readmits_named_vars(workspace, monkeypatch):
+    _, a, _ = workspace
+    for n in _ENV_PROBE_NAMES:
+        monkeypatch.setenv(n, f"live-{n.lower()}")
+    t = _tools(
+        _Cfg(
+            filesystem_projects=[{"name": "a", "path": str(a)}],
+            filesystem_allow_run=True,
+            filesystem_run_requires_approval=False,
+            filesystem_run_command_env_passthrough=["GH_TOKEN"],
+        )
+    )
+    seen = _probe(t, a)
+    assert seen["GH_TOKEN"] == "live-gh_token" and seen["A2A_AUTH_TOKEN"] == "<unset>"
+
+
+def test_scrub_agent_env_rules():
+    from infra.proc import scrub_agent_env
+
+    env = {
+        "PATH": "/bin",
+        "HOME": "/h",
+        "LANG": "C",
+        "NODE_ENV": "test",
+        "A2A_AUTH_TOKEN": "t",
+        "AGENT_NAME": "n",
+        "PROTOAGENT_INSTANCE": "i",
+        "PROTOAGENT_BOX_ROOT": "b",
+        "OPENAI_API_KEY": "k",
+        "gateway_api_key": "k",
+        "LANGFUSE_SECRET_KEY": "s",
+        "LANGFUSE_PUBLIC_KEY": "p",
+        "NPM_TOKEN": "x",
+        "DB_PASSWORD": "x",
+        "GH_PAT": "x",
+        "API_KEY": "x",
+    }
+    out = scrub_agent_env(env)
+    assert out == {"PATH": "/bin", "HOME": "/h", "LANG": "C", "NODE_ENV": "test"}
+    assert scrub_agent_env(env, passthrough=["NPM_TOKEN", "PROTOAGENT_INSTANCE"])["NPM_TOKEN"] == "x"
+    assert "PROTOAGENT_INSTANCE" in scrub_agent_env(env, passthrough=["PROTOAGENT_INSTANCE"])
 
 
 def test_run_command_declined_returns_not_raises(workspace, monkeypatch):
@@ -861,9 +959,30 @@ def test_shell_argv_default_grammars():
     assert argv == ["/bin/sh", "-c", "echo hi"]
     assert runner == "/bin/sh -c"
     argv, runner = _platform_shell_argv("dir", windows=True)
-    assert argv[0].lower().endswith("cmd.exe")
-    assert argv[1:] == ["/d", "/s", "/c", "dir"]
-    assert "cmd.exe" in runner.lower()
+    # cmd.exe gets a finished command-line STRING, not a list (#3802).
+    assert isinstance(argv, str)
+    assert argv.lower().split(" /d ", 1)[0].strip('"').endswith("cmd.exe")
+    assert argv.endswith(' /d /s /c "dir"')
+    assert "cmd.exe" in runner.lower() and runner.endswith("/d /s /c")
+
+
+def test_cmd_command_line_hands_cmd_the_command_verbatim():
+    """#3802: a quoted path used to reach cmd as `\\"C:\\...\\"` (list2cmdline's MSVCRT
+    escaping). The built line wraps the command in ONE outer quote pair — which `/s` strips —
+    and leaves every quote inside it exactly as typed."""
+    from tools.shell import cmd_command_line
+
+    comspec = r"C:\Windows\system32\cmd.exe"
+    command = r'"C:\Program Files\Tool\tool.exe" --version & echo "a b"'
+    line = cmd_command_line(command, comspec)
+    assert line == comspec + ' /d /s /c "' + command + '"'
+    assert '\\"' not in line  # no backslash-escaped quotes anywhere
+    # What cmd /s /c runs: the text between the first and the last quote after /c.
+    after = line.split(" /c ", 1)[1]
+    assert after[0] == '"' and after[-1] == '"' and after[1:-1] == command
+    # A COMSPEC under a spaced path is itself quoted so CreateProcess finds it.
+    spaced = cmd_command_line("ver", r"C:\Program Files\cmd\cmd.exe")
+    assert spaced == r'"C:\Program Files\cmd\cmd.exe" /d /s /c "ver"'
 
 
 def test_shell_argv_powershell_is_encoded_and_unicode_safe():
@@ -1468,7 +1587,6 @@ def _same_snapshot_gate(monkeypatch, module, attr):
     monkeypatch.setattr(module, attr, gated)
 
 
-
 def test_parallel_edit_file_calls_both_land(workspace, monkeypatch):
     """Two edits to ONE file from different threads must both survive.
 
@@ -1527,3 +1645,123 @@ def test_edit_file_serialises_per_path_not_globally(workspace):
     two.write_text("x")
     assert _edit_lock(one) is not _edit_lock(two)
     assert _edit_lock(one) is _edit_lock(one)
+
+
+# ── atomic writes: a reader never sees a truncated file ──────────────────────────────
+def test_write_is_atomic_replace_and_keeps_existing_mode(tmp_path, monkeypatch):
+    """The target is swapped in with ``os.replace`` from a fully-written temp — never
+    truncated in place — and an existing file's permission bits survive the swap."""
+    from tools import fs_tools
+
+    p = tmp_path / "conf.json"
+    p.write_bytes(b'{"old": true}\n')  # bytes: write_text would emit CRLF on Windows
+    if os.name != "nt":
+        os.chmod(p, 0o640)
+
+    seen: list[bytes] = []
+    real_replace = os.replace
+
+    def spying_replace(src, dst):
+        # At the instant of the swap the target still holds the OLD, complete bytes and
+        # the temp holds the NEW, complete bytes — there is no empty window.
+        seen.append(Path(dst).read_bytes())
+        seen.append(Path(src).read_bytes())
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(fs_tools.os, "replace", spying_replace)
+    fs_tools._write_text_verbatim(p, '{"new": true}\n')
+
+    assert seen == [b'{"old": true}\n', b'{"new": true}\n']
+    assert p.read_bytes() == b'{"new": true}\n'
+    if os.name != "nt":
+        assert (p.stat().st_mode & 0o777) == 0o640
+    assert [x.name for x in tmp_path.iterdir()] == ["conf.json"]  # no temp left behind
+
+
+def test_new_file_gets_umask_mode_not_owner_only(tmp_path):
+    """A brand-new file gets what ``open("w")`` would give it (0o666 & ~umask), not the
+    0o600 a mkstemp-based temp would silently carry over."""
+    if os.name == "nt":
+        pytest.skip("POSIX permission bits")
+    from tools.fs_tools import _write_text_verbatim
+
+    ref = tmp_path / "ref.txt"
+    ref.write_text("x")
+    p = tmp_path / "new.txt"
+    _write_text_verbatim(p, "x")
+    assert (p.stat().st_mode & 0o777) == (ref.stat().st_mode & 0o777)
+
+
+def test_failed_write_leaves_original_intact_and_no_temp(tmp_path, monkeypatch):
+    from tools import fs_tools
+
+    p = tmp_path / "data.json"
+    p.write_text('{"keep": 1}\n')
+
+    def boom(fd):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(fs_tools.os, "fsync", boom)
+    with pytest.raises(OSError, match="disk full"):
+        fs_tools._write_text_verbatim(p, '{"lost": 2}\n')
+
+    assert p.read_text() == '{"keep": 1}\n'
+    assert [x.name for x in tmp_path.iterdir()] == ["data.json"]
+
+
+def test_atomic_write_keeps_verbatim_newlines(tmp_path):
+    from tools.fs_tools import _write_text_verbatim
+
+    p = tmp_path / "mixed.txt"
+    _write_text_verbatim(p, "a\nb\r\nc")
+    assert p.read_bytes() == b"a\nb\r\nc"
+
+
+def test_write_file_serialises_with_edit_file(workspace, monkeypatch):
+    """``write_file`` takes the same per-path lock as ``edit_file``. Unlocked, an edit that
+    read the file before a concurrent write and wrote after it silently reverted the write
+    while both calls reported success. The gate makes both callers read the same snapshot
+    when nothing serialises them."""
+    import threading
+
+    from tools import fs_tools
+
+    _, a, _ = workspace
+    (a / "notes.md").write_text("status: open\n")
+    t = _tools(_Cfg(filesystem_projects=[{"name": "a", "path": str(a), "write": True}]))
+
+    # edit_file reads, then parks until write_file has had its chance to run.
+    edit_has_read = threading.Event()
+    real_read = fs_tools._read_text_verbatim
+
+    def gated_read(*args, **kwargs):
+        out = real_read(*args, **kwargs)
+        edit_has_read.set()
+        threading.Event().wait(0.3)  # write_file, if unlocked, lands in this window
+        return out
+
+    monkeypatch.setattr(fs_tools, "_read_text_verbatim", gated_read)
+    results: dict[str, str] = {}
+
+    def do_edit():
+        results["edit"] = t["edit_file"].invoke(
+            {"project": "a", "path": "notes.md", "old": "status: open", "new": "status: done"}
+        )
+
+    def do_write():
+        edit_has_read.wait(timeout=5)
+        results["write"] = t["write_file"].invoke(
+            {"project": "a", "path": "notes.md", "content": "status: open\nowner: kj\n"}
+        )
+
+    threads = [threading.Thread(target=do_edit), threading.Thread(target=do_write)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=10)
+
+    assert "Edited" in results["edit"], results
+    assert "Overwrote" in results["write"], results
+    # Serialised: the edit finished first, then the whole-file write landed on top. Unlocked,
+    # the edit's stale snapshot would have been written last and dropped "owner: kj".
+    assert (a / "notes.md").read_text() == "status: open\nowner: kj\n"

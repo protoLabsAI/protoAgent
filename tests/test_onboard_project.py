@@ -34,6 +34,8 @@ from graph.config import LangGraphConfig
 from graph.plugins.host import HOST
 from tools import onboard_tools
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _symlink_or_skip(link: Path, to: Path) -> None:
     """Windows without developer mode can't create symlinks — skip, don't fail."""
@@ -341,6 +343,22 @@ async def test_already_registered_is_idempotent(tmp_path, mocks):
     assert mocks.clone_calls == []
     assert mocks.apply_calls == []  # nothing to write; already registered
     assert "already registered" in out
+
+
+async def test_registered_but_missing_checkout_is_recloned_and_says_so(tmp_path, mocks):
+    """#3643: the folder of a registered project was deleted. The tool clones it back —
+    and must not then report "Reused the existing checkout — nothing changed", which hid
+    that the checkout had been missing (the state that unbinds the filesystem tools)."""
+    target = tmp_path / "widget"  # registered, but NOT on disk
+    entry = {"name": "widget", "path": str(target), "write": False, "github": "acme/widget"}
+    tool = _tool(_cfg(tmp_path, projects=[entry]))
+    out = await tool.ainvoke({"github_repo": "acme/widget"})
+
+    assert len(mocks.clone_calls) == 1  # re-cloned
+    assert mocks.apply_calls == []  # registration already covered it
+    assert "Reused" not in out and "nothing changed" not in out
+    assert "checkout was missing" in out and "cloned" in out
+    assert "new chat" in out  # tells the agent how the fs tools come back
 
 
 async def test_already_registered_in_both_registry_and_override_is_idempotent(tmp_path, mocks):
@@ -921,3 +939,97 @@ async def test_local_disabled_means_absent(tmp_path):
     assert "register_local_project" not in {
         t.name for t in onboard_tools.build_onboard_tools(_cfg(tmp_path, onboarding_enabled=False))
     }
+
+
+# ── refresh=true on a reused checkout (#3733): fetch + fast-forward only ─────────
+
+
+def _origin_and_clone(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A bare origin, a clone in the onboarding root (``widget``), and a second clone
+    that pushes new commits to origin — all real git."""
+    origin = tmp_path / "src" / "widget.git"
+    origin.parent.mkdir()
+    _git("init", "-q", "--bare", "-b", "main", str(origin), cwd=tmp_path)
+    seed = tmp_path / "src" / "seed"
+    _git("clone", "-q", str(origin), str(seed), cwd=tmp_path)
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+        _git("config", k, v, cwd=seed)
+    (seed / "a.txt").write_text("one\n")
+    _git("add", "a.txt", cwd=seed)
+    _git("commit", "-q", "-m", "one", cwd=seed)
+    _git("push", "-q", "origin", "main", cwd=seed)
+    root = tmp_path / "root"
+    root.mkdir()
+    clone = root / "widget"
+    _git("clone", "-q", str(origin), str(clone), cwd=tmp_path)
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+        _git("config", k, v, cwd=clone)
+    return origin, seed, clone
+
+
+def _push_commits(seed: Path, n: int) -> None:
+    for i in range(n):
+        (seed / f"n{i}.txt").write_text(f"{i}\n")
+        _git("add", ".", cwd=seed)
+        _git("commit", "-q", "-m", f"n{i}", cwd=seed)
+    _git("push", "-q", "origin", "main", cwd=seed)
+
+
+def _head(repo: Path) -> str:
+    import subprocess
+
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
+
+
+async def test_refresh_fetches_and_fast_forwards_a_stale_clone(tmp_path, applied):
+    _origin, seed, clone = _origin_and_clone(tmp_path)
+    _push_commits(seed, 2)
+    stale = _head(clone)
+    out = await _tool(_cfg(tmp_path / "root")).ainvoke({"repo": "acme/widget", "refresh": True})
+    assert "Fetched and fast-forwarded 2 commits to origin/main" in out
+    assert _head(clone) == _head(seed) != stale
+
+
+async def test_refresh_refuses_uncommitted_tracked_changes_and_leaves_them(tmp_path, applied):
+    _origin, seed, clone = _origin_and_clone(tmp_path)
+    _push_commits(seed, 1)
+    (clone / "a.txt").write_text("local edit\n")
+    before = _head(clone)
+    out = await _tool(_cfg(tmp_path / "root")).ainvoke({"repo": "acme/widget", "refresh": True})
+    assert "Not refreshed — it has uncommitted changes" in out
+    assert (clone / "a.txt").read_text() == "local edit\n" and _head(clone) == before
+
+
+async def test_refresh_never_merges_over_local_commits(tmp_path, applied):
+    _origin, seed, clone = _origin_and_clone(tmp_path)
+    _push_commits(seed, 1)
+    (clone / "local.txt").write_text("mine\n")
+    _git("add", "local.txt", cwd=clone)
+    _git("commit", "-q", "-m", "local", cwd=clone)
+    before = _head(clone)
+    out = await _tool(_cfg(tmp_path / "root")).ainvoke({"repo": "acme/widget", "refresh": True})
+    assert "not fast-forwarded" in out and "1 local commit" in out and "1 behind" in out
+    assert _head(clone) == before
+
+
+async def test_refresh_up_to_date_after_fetch(tmp_path, applied):
+    _origin_and_clone(tmp_path)
+    out = await _tool(_cfg(tmp_path / "root")).ainvoke({"repo": "acme/widget", "refresh": True})
+    assert "Fetched — it is up to date with origin/main" in out
+
+
+async def test_default_reuse_stays_untouched_and_points_at_refresh(tmp_path, applied):
+    _origin, seed, clone = _origin_and_clone(tmp_path)
+    _push_commits(seed, 1)
+    before = _head(clone)
+    out = await _tool(_cfg(tmp_path / "root")).ainvoke({"repo": "acme/widget"})
+    assert "it was not fetched" in out and "Pass refresh=true" in out
+    assert _head(clone) == before  # the default path still never fetches or moves HEAD
+
+
+async def test_refresh_without_upstream_is_refused(tmp_path, applied):
+    root = tmp_path / "root"
+    root.mkdir()
+    _repo(root / "widget", branch="main")
+    out = await _tool(_cfg(root)).ainvoke({"repo": "acme/widget", "refresh": True})
+    assert "Not refreshed — the current branch has no upstream" in out

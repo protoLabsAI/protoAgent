@@ -16,6 +16,8 @@ import pytest
 
 from infra.proc import child_env
 
+pytestmark = pytest.mark.platform_sensitive
+
 MEI = os.path.join(os.sep, "var", "folders", "xx", "T", "_MEIabc123")
 
 

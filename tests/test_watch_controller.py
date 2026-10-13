@@ -8,6 +8,8 @@ from graph.watches.controller import WatchController
 from graph.watches.types import FLAP_WARN_CONSECUTIVE_FIRES as FLAP_WARN
 from graph.watches.store import WatchStore
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _ctrl(tmp_path, **overrides):
     cfg = LangGraphConfig(**overrides)

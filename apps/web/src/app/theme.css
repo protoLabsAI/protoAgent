@@ -52,91 +52,10 @@
   border-right: 0;
 }
 
-/* Topbar health light — one dot, detail on hover, click to refresh. */
-.status-dot {
-  width: 11px;
-  height: 11px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: var(--pl-color-fg-subtle, #555);
-  cursor: pointer;
-  flex: none;
-  transition: background 0.2s ease, box-shadow 0.2s ease;
-}
-
-.status-dot.tone-ok {
-  background: var(--pl-color-status-success, #3fb950);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-status-success, #3fb950) 22%, transparent);
-}
-
-.status-dot.tone-warning {
-  background: var(--pl-color-status-warning, #d29922);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-status-warning, #d29922) 22%, transparent);
-}
-
-.status-dot.tone-error {
-  background: var(--pl-color-status-error, #ff6b6b);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-status-error, #ff6b6b) 22%, transparent);
-}
-
-.status-dot:hover {
-  filter: brightness(1.15);
-}
-
-/* Bottom utility bar — panel collapse toggles, pinned to their sides. */
-.utility-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px 8px;
-  border-top: 1px solid var(--pl-color-border);
-  background: var(--pl-color-bg);
-  font-size: 11px;
-}
-
-.utility-bar .util-spacer {
-  flex: 1;
-}
-
-.util-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 20px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--pl-color-fg-muted);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.util-btn:not(:disabled):hover {
-  background: var(--pl-color-bg-raised, #1a1a1f);
-  color: var(--pl-color-fg);
-}
-
-/* Fully disabled toggle (#1234): the rail/dock it controls has no views, so the
-   button is greyed out and non-interactive (no hover feedback, no pointer). */
-.util-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.util-btn svg {
-  flex: none;
-}
-
-.util-btn.is-off {
-  color: var(--pl-color-accent, #7c8cff);
-}
-
 /* Undelivered priority-now page (#3351): tint the Feed pill's unread badge as an alert so a
    page whose automatic delivery failed reads as conspicuous before the operator opens the feed. */
 .activity-badge--alert {
-  color: var(--pl-color-status-error, #ff6b6b);
+  color: var(--pl-color-status-error);
   font-weight: 700;
 }
 
@@ -147,12 +66,12 @@
 .util-dialog-title {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .util-dialog-actions {
   display: inline-flex;
   align-items: center;
-  margin: -6px 0; /* keep the icon button from inflating the header row */
+  margin: calc(-1 * var(--pl-space-1_5)) 0; /* keep the icon button from inflating the header row */
 }
 .util-dialog-fill {
   border: 0;
@@ -169,18 +88,27 @@
 .bg-jobs-pill {
   position: relative;
 }
+/* Running: the spinner + count sit side by side — the spinner never shrinks out of round. */
+.bg-jobs-pill--running {
+  gap: var(--pl-space-1);
+}
+.bg-jobs-pill > svg,
+.bg-jobs-pill > [role="status"],
+.bg-jobs-pill > :first-child {
+  flex: none;
+}
 .bg-jobs-unread {
   position: absolute;
   top: 1px;
   right: 1px;
   width: 6px;
   height: 6px;
-  border-radius: 999px;
-  background: var(--pl-color-accent, #7c8cff);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-accent);
 }
 .bg-jobs-empty {
   color: var(--pl-color-fg-muted);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 .bg-jobs-list {
   list-style: none;
@@ -188,75 +116,15 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
   max-height: min(60vh, 520px);
   max-height: min(60dvh, 520px);
   overflow-y: auto;
 }
-.bg-jobs-row {
-  border: 1px solid var(--pl-color-border, #2a2a31);
-  border-radius: 8px;
-  background: var(--pl-color-bg-raised, #16161b);
-}
-.bg-jobs-rowhead {
-  display: flex;
-  align-items: stretch;
-}
-.bg-jobs-rowmain {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 9px 11px;
-  border: 0;
-  background: transparent;
-  color: var(--pl-color-fg);
-  text-align: left;
-  cursor: pointer;
-}
-.bg-jobs-rowmain:disabled {
-  cursor: default;
-}
-.bg-jobs-rowmain:not(:disabled):hover {
-  background: var(--pl-color-bg-hover);
-}
-.bg-jobs-stop {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  border: 0;
-  border-left: 1px solid var(--pl-color-border, #2a2a31);
-  background: transparent;
-  color: var(--pl-color-fg-muted);
-  cursor: pointer;
-}
-.bg-jobs-stop:hover {
-  color: var(--pl-color-status-error, #e5484d);
-  background: var(--pl-color-bg-hover);
-}
 .bg-jobs-toolbar {
   display: flex;
   justify-content: flex-end;
-  padding: 0 4px 8px;
-}
-.bg-jobs-clear {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  font-size: 12px;
-  border: 1px solid var(--pl-color-border, #2a2a31);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--pl-color-fg-muted);
-  cursor: pointer;
-}
-.bg-jobs-clear:hover {
-  color: var(--pl-color-status-error, #e5484d);
-  border-color: var(--pl-color-status-error, #e5484d);
+  padding: 0 var(--pl-space-1) var(--pl-space-2);
 }
 .bg-jobs-icon {
   flex: none;
@@ -265,40 +133,40 @@
 .bg-jobs-meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   min-width: 0;
 }
 .bg-jobs-title {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.35;
 }
 .bg-jobs-sub {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
   text-transform: capitalize;
 }
 .bg-jobs-tools {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 8px;
-  margin-top: 3px;
-  font-size: 10px;
+  gap: var(--pl-space-1) var(--pl-space-2);
+  margin-top: var(--pl-space-0_5);
+  font-size: var(--pl-font-size-3xs);
   font-family: var(--pl-font-mono);
 }
 .bg-jobs-tool.is-run {
-  color: var(--pl-color-accent, #7c8cff);
+  color: var(--pl-color-accent);
 }
 .bg-jobs-tool.is-done {
   color: var(--pl-color-fg-muted);
 }
 .bg-jobs-tool.is-err {
-  color: var(--pl-color-status-error, #e5484d);
+  color: var(--pl-color-status-error);
 }
 .bg-jobs-ok {
-  color: var(--pl-color-accent, #7c8cff);
+  color: var(--pl-color-accent);
 }
 .bg-jobs-fail {
-  color: var(--pl-color-status-error, #e5484d);
+  color: var(--pl-color-status-error);
 }
 /* Action row above a finished job's result — currently just Copy (#2352). Sits between
    the tool feed and the result so it can't scroll away inside .bg-jobs-result's own
@@ -306,12 +174,12 @@
 .bg-jobs-resulthead {
   display: flex;
   justify-content: flex-end;
-  padding: 6px 12px 0;
+  padding: var(--pl-space-1_5) var(--pl-space-3) 0;
 }
 .bg-jobs-result {
-  padding: 4px 12px 12px 33px;
-  font-size: 13px;
-  border-top: 1px solid var(--pl-color-border, #2a2a31);
+  padding: var(--pl-space-1) var(--pl-space-3) var(--pl-space-3) 33px;
+  font-size: var(--pl-font-size-sm);
+  border-top: 1px solid var(--pl-color-border);
   /* A long report (research agents emit thousands of words) scrolls within the row
      so the whole thing is readable without the dialog growing unbounded. */
   max-height: 50vh;
@@ -319,16 +187,8 @@
   overscroll-behavior: contain;
 }
 
-/* Expanded row body: a live tool-by-tool feed (DS ToolCard) and/or the result. The wrapper
-   owns the single top separator; the nested result drops its own to avoid a double rule. */
-.bg-jobs-detail {
-  border-top: 1px solid var(--pl-color-border, #2a2a31);
-}
-.bg-jobs-detail .bg-jobs-result {
-  border-top: none;
-}
 .bg-jobs-feed {
-  padding: 8px 12px 8px 33px;
+  padding: var(--pl-space-2) var(--pl-space-3) var(--pl-space-2) 33px;
   /* A chatty job (many tools) scrolls within the row rather than growing the dialog. */
   max-height: 40vh;
   overflow-y: auto;
@@ -336,22 +196,12 @@
 }
 /* Divider when a result is shown beneath the tool feed. */
 .bg-jobs-feed + .bg-jobs-resulthead {
-  border-top: 1px solid var(--pl-color-border, #2a2a31);
+  border-top: 1px solid var(--pl-color-border);
 }
 /* The action row sits directly above the result, so the result never draws its own rule
    when the row is present — that would double the separator. */
 .bg-jobs-resulthead + .bg-jobs-result {
   border-top: none;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--pl-color-border);
-  background: var(--pl-color-bg);
 }
 
 /* macOS desktop (invisible title bar): inset the brand so it clears the native
@@ -371,161 +221,13 @@
   animation-duration: 450ms;
 }
 
-.brand-lockup {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.brand-mark {
-  width: 24px;
-  height: 24px;
-  flex: 0 0 auto;
-}
-
-.brand-name {
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.brand-subline,
 .panel-kicker,
-.message-role,
 .metric span,
 .subagent-row span,
 .issue-row span {
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
-}
-
-.topbar-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.workspace {
-  min-height: 0;
-  display: grid;
-  /* The right column's width comes from --right-width (set inline in App.tsx
-     from the persisted/resized panel width; 0px when collapsed). Keeping the
-     template in CSS — not inline — lets the media query below collapse to two
-     columns instead of leaving a blank reserved column. */
-  /* ADR 0035 — symmetric dual rails: [left rail | left surface | right surface | right rail].
-     The right rail mirrors the left on the far edge; the right surface (content) track collapses
-     to 0 via --right-width while the right rail stays put. */
-  grid-template-columns: 72px minmax(0, 1fr) var(--right-width, 360px) 72px;
-}
-
-.rail {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 8px;
-  border-right: 1px solid var(--pl-color-border);
-}
-
-/* Right rail mirrors the left, bordered on its left edge (ADR 0035 D1). */
-.rail-right {
-  border-right: none;
-  border-left: 1px solid var(--pl-color-border);
-}
-
-.rail button {
-  min-height: 48px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  border: 1px solid transparent;
-  border-radius: var(--pl-radius);
-  background: transparent;
-  color: var(--pl-color-fg-subtle);
-  cursor: pointer;
-  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
-}
-
-.rail button span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: var(--pl-font-mono);
-  font-size: 10px;
-}
-
-.rail button:hover,
-.rail button.active {
-  border-color: var(--pl-color-border);
-  background: var(--pl-color-bg-hover);
-  color: var(--pl-color-fg);
-}
-
-.stage {
-  min-width: 0;
-  min-height: 0;
-  padding: 12px;
-  border-right: 1px solid var(--pl-color-border);
-}
-
-.right-panel {
-  position: relative; /* anchors the resize handle on its left edge */
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  padding: 12px;
-  /* Mirror .stage exactly (ADR 0035 D1 — symmetric rails): a plain cell whose single surface
-     child fills via its own height:100%. (The old inner grid auto/auto/1fr was for a multi-child
-     right panel; post-renderSurface it left the lone surface stuck in the content-sized first row.) */
-}
-
-/* Collapsed panels: the workspace grid sets their track to 0; zero the box so
-   no residual padding/border shows (the element stays a grid item — using
-   display:none would shift the other items into the wrong tracks). min-width:0
-   lets the tracks shrink to 0 / resize freely. */
-.rail {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.workspace.right-collapsed .right-panel {
-  padding: 0;
-  border: 0;
-}
-
-/* Drag handle on the boundary between the stage and the right panel. */
-/* A real grab target (ADR 0035 S3): a 14px hit area centered on the divider, with a
-   thin always-visible grip line that thickens on hover/focus/active. */
-.resize-handle {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 14px;
-  margin-left: -7px;
-  cursor: col-resize;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.resize-handle::before {
-  content: "";
-  width: 2px;
-  height: 100%;
-  background: var(--pl-color-border);
-  transition: background 120ms ease, width 120ms ease;
-}
-.resize-handle:hover::before,
-.resize-handle:focus-visible::before,
-.resize-handle:active::before {
-  width: 4px;
-  background: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 60%, transparent);
-}
-.resize-handle:focus-visible {
-  outline: none;
+  font-size: var(--pl-font-size-xs);
 }
 
 .panel {
@@ -542,34 +244,6 @@
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-}
-
-/* A tabbed surface renders the DS Tabs + the .panel card as siblings in the AppShell
-   column (or the bottom dock). Style the tab strip as the card's TOP edge and drop the
-   panel's top border/radius, so the two read as ONE full-height card — its top aligns
-   with the non-tabbed panels. (Responsive Tabs wrap the strip in .pl-tabs-wrap and
-   collapse to a dropdown on narrow containers — match both as the direct child.) The
-   bottom dock (`.pl-appshell__bottom`) is a different wrapper than the side columns, so
-   it must be matched explicitly or its tab strip falls through to the shell's dark
-   ground instead of the panel surface. */
-.pl-appshell__col > .pl-tabs,
-.pl-appshell__col > .pl-tabs-wrap,
-.pl-appshell__bottom > .pl-tabs,
-.pl-appshell__bottom > .pl-tabs-wrap {
-  flex: 0 0 auto;
-  padding: 8px 12px 0;
-  border: 1px solid var(--pl-color-border);
-  border-bottom: none;
-  border-radius: var(--pl-radius) var(--pl-radius) 0 0;
-  background: var(--pl-color-bg-raised);
-}
-.pl-appshell__col > .pl-tabs + .panel,
-.pl-appshell__col > .pl-tabs-wrap + .panel,
-.pl-appshell__bottom > .pl-tabs + .panel,
-.pl-appshell__bottom > .pl-tabs-wrap + .panel {
-  border-top: none;
-  border-top-left-radius: 0;
-  border-top-right-radius: 0;
 }
 
 /* Settings panel: header · category sub-nav · scrolling body (ADR 0020). The
@@ -589,32 +263,24 @@
   /* Horizontal inset matches the DS PanelHeader (--pl-space-4) so body content lines
      up with the header; a top gap clears the header divider; bottom gives breathing
      room above the utility bar. */
-  padding: var(--pl-space-3) var(--pl-space-4) 12px;
+  padding: var(--pl-space-3) var(--pl-space-4) var(--pl-space-3);
 }
 
 /* Section headings stacked inside a scrolling stage body (Runtime, Schedule,
    Subagents) — inset to align with the inset rows (.table-row padding) below
    them, with vertical separation from the preceding block. */
 .stage-body > .panel-kicker {
-  padding: 0 12px;
-  margin: 22px 0 8px;
+  padding: 0 var(--pl-space-3);
+  margin: 22px 0 var(--pl-space-2);
 }
 .stage-body > .panel-kicker:first-child {
-  margin-top: 12px;
+  margin-top: var(--pl-space-3);
 }
 
 .side-panel {
   height: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-}
-
-.notes-panel {
-  grid-template-rows: auto auto auto minmax(0, 1fr);
-}
-
-.beads-panel {
-  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 /* .panel-header / .panel-header.compact now live in @protolabsai/ui (.pl-panel-header).
@@ -635,7 +301,6 @@ select:disabled {
   opacity: 0.55;
 }
 
-.message-list,
 .issue-list,
 .subagent-list,
 .table-list {
@@ -650,13 +315,13 @@ select:disabled {
 .plugin-row-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .plugin-hint {
-  margin: 0 0 8px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  font-size: 13px;
+  margin: 0 0 var(--pl-space-2);
+  padding: var(--pl-space-2) var(--pl-space-2_5);
+  border-radius: var(--pl-radius-md);
+  font-size: var(--pl-font-size-sm);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
 }
@@ -665,16 +330,16 @@ select:disabled {
 .mcp-add-form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 10px;
-  padding: 10px;
-  border-radius: 8px;
+  gap: var(--pl-space-2);
+  margin-bottom: var(--pl-space-2_5);
+  padding: var(--pl-space-2_5);
+  border-radius: var(--pl-radius-lg);
   border: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg-raised);
 }
 .mcp-add-row {
   display: flex;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .mcp-add-row > * {
   flex: 1;
@@ -682,7 +347,7 @@ select:disabled {
 }
 .mcp-add-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .mcp-add-modes {
   align-self: flex-start;
@@ -690,18 +355,9 @@ select:disabled {
 .mcp-json {
   width: 100%;
   resize: vertical;
-  font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 12px;
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-font-size-xs);
   line-height: 1.5;
-}
-
-/* Roomier dialog body padding than the bare DS default (16px). Content dialogs —
-   forms, card pickers, the full-width search + multi-column grids — read as cramped
-   flush to the body edge, so the app-wide default is 24px. Dialogs that embed a full
-   surface override back to padding:0 at higher specificity (.settings-overlay /
-   .theme-quick-dialog). Loads after the DS overlays.css, so equal specificity wins. */
-.pl-dialog__body {
-  padding: var(--pl-space-6, 24px);
 }
 
 /* Auth gate scrim (#1921) — the AuthGate is a BLOCKING modal (no onClose; see
@@ -726,8 +382,8 @@ select:disabled {
    grid fill the space below the search/filter controls instead of capping the grid
    short and leaving dead space under it. The configure step keeps its content height. */
 .mcp-catalog-dialog--browse .pl-dialog {
-  height: min(82vh, calc(100vh - 2 * var(--pl-space-4, 16px)));
-  height: min(82dvh, calc(100dvh - 2 * var(--pl-space-4, 16px)));
+  height: min(82vh, calc(100vh - 2 * var(--pl-space-4)));
+  height: min(82dvh, calc(100dvh - 2 * var(--pl-space-4)));
 }
 .mcp-catalog-dialog--browse .pl-dialog__body {
   display: flex;
@@ -737,20 +393,20 @@ select:disabled {
 .mcp-browse-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 0 0 6px;
+  gap: var(--pl-space-2);
+  margin: 0 0 var(--pl-space-1_5);
 }
 .mcp-server-name {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .mcp-catalog-controls {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   flex-wrap: wrap;
-  margin: 2px 0 12px;
+  margin: var(--pl-space-0_5) 0 var(--pl-space-3);
 }
 /* The search box (DS Input + `icon`) and category filter (DS segmented Tabs)
    own their own styling now; the controls row just sizes the search to fill. */
@@ -761,7 +417,7 @@ select:disabled {
 .mcp-catalog-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   /* Fill the dialog body below the controls (flex parent); scroll internally. */
   flex: 1 1 auto;
   min-height: 0;
@@ -770,33 +426,33 @@ select:disabled {
 .mcp-catalog-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px;
+  gap: var(--pl-space-1_5);
+  padding: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
-  border-radius: 9px;
+  border-radius: var(--pl-radius-lg);
   background: var(--pl-color-bg-raised);
 }
 .mcp-catalog-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .mcp-catalog-card-head strong {
-  font-size: 14px;
+  font-size: var(--pl-font-size-base);
 }
 .mcp-catalog-chip {
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 1px 7px;
-  border-radius: 999px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius-pill);
   background: var(--pl-color-bg-hover);
   color: var(--pl-color-fg-subtle);
   white-space: nowrap;
 }
 .mcp-catalog-tagline {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   margin: 0;
   flex: 1;
@@ -805,46 +461,31 @@ select:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-top: 2px;
+  gap: var(--pl-space-2);
+  margin-top: var(--pl-space-0_5);
 }
 .mcp-catalog-docs {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
+  gap: var(--pl-space-1);
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
   text-decoration: none;
 }
 .mcp-catalog-docs:hover {
   color: var(--pl-color-fg-muted);
 }
-.mcp-catalog-back {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: none;
-  border: 0;
-  color: var(--pl-color-fg-muted);
-  cursor: pointer;
-  font-size: 12px;
-  padding: 0;
-  margin-bottom: 8px;
-}
-.mcp-catalog-back:hover {
-  color: var(--pl-color-fg);
-}
 .mcp-catalog-config-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .mcp-catalog-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin: 10px 0 0;
-  font-size: 12px;
+  gap: var(--pl-space-1);
+  margin: var(--pl-space-2_5) 0 0;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 
@@ -864,7 +505,7 @@ select:disabled {
 
 /* The chat thread now uses the DS Conversation/Message components (bd-1rn) —
    the old hand-rolled `.message*` bubble rules were removed. Generic list scroll
-   (`.message-list, .issue-list, …`) stays above for the other surfaces. */
+   (`.issue-list, .subagent-list, …`) stays above for the other surfaces. */
 
 /* Tool-call cards + per-tool renderers — moved to src/chat/tool-calls.css (#832). */
 
@@ -903,11 +544,11 @@ select:disabled {
 .pl-markdown [data-streamdown="table-wrapper"] .relative > div {
   min-width: 150px;
   white-space: nowrap;
-  padding: 4px;
+  padding: var(--pl-space-1);
   background: var(--pl-color-bg-raised);
   border: var(--pl-border-width) solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  box-shadow: 0 6px 20px rgb(0 0 0 / 28%);
+  box-shadow: var(--pl-shadow-popover);
   /* streamdown positions the menu with an inline left offset (its right-0/top-full Tailwind is
      inert), which shoved the 150px menu off the wrapper's right edge and out of view. Anchor it
      explicitly under the button, right-aligned, so it stays on-screen. !important beats the
@@ -919,7 +560,7 @@ select:disabled {
 .pl-markdown [data-streamdown="table-wrapper"] .relative > div button {
   display: block;
   width: 100%;
-  padding: 6px 10px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   text-align: left;
   white-space: nowrap;
   border-radius: var(--pl-radius);
@@ -938,35 +579,21 @@ select {
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   /* token-bridged so inputs flip in light mode (was a hardcoded #0c0c0f dark). */
-  background: var(--pl-color-bg-inset, #0c0c0f);
+  background: var(--pl-color-bg-inset);
   color: var(--pl-color-fg);
-  padding: 8px 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
 }
 
 textarea {
   resize: vertical;
 }
 
-.composer textarea,
-.notes-editor {
-  min-height: 0;
-  resize: none;
-}
-
-/* The chat input's compact fixed height (.composer textarea) — moved to
-   src/chat/chat.css (#832). .notes-editor keeps its own sizing above/below. */
-
 .field {
   display: grid;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
-}
-
-.field.grow {
-  min-height: 0;
-  padding: 0 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 /* New-task dialog form (TasksPanel) — a vertical stack of .field rows, with
@@ -974,69 +601,21 @@ textarea {
 .task-create-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 .task-create-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 
 /* Identity panel — the SOUL.md field — moved to src/agent/identity.css (#832). */
 
-.field-hint {
-  color: var(--pl-color-fg-subtle);
-  font-size: 11px;
-  opacity: 0.75;
-}
-
-.field-warn {
-  color: var(--pl-color-status-error, #d97706);
-  opacity: 1;
-}
-
 .subagent-grid {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 12px;
-}
-
-.subagent-mode {
-  margin: 12px 12px 0;
-}
-
-.batch-task-list {
-  min-height: 0;
-  display: grid;
-  gap: 10px;
-  overflow: auto;
-  padding: 0 12px;
-}
-
-.batch-task-row {
-  display: grid;
-  gap: 8px;
-  border: 1px solid var(--pl-color-border);
-  border-radius: var(--pl-radius);
-  padding: 10px;
-}
-
-.batch-task-header {
-  min-height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--pl-color-fg-subtle);
-  font-family: var(--pl-font-mono);
-  font-size: 12px;
-}
-
-.batch-task-fields {
-  display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
-  gap: 10px;
+  gap: var(--pl-space-2_5);
+  padding: var(--pl-space-3);
 }
 
 .checkbox-field {
@@ -1044,9 +623,9 @@ textarea {
   align-self: end;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   color: var(--pl-color-fg-subtle);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .checkbox-field input {
@@ -1058,47 +637,26 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .output-block {
   max-height: 260px;
   overflow: auto;
-  margin: 0 12px 12px;
+  margin: 0 var(--pl-space-3) var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
-  padding: 10px;
+  padding: var(--pl-space-2_5);
   color: var(--pl-color-fg-muted);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   white-space: pre-wrap;
 }
 
-/* Activity surface + rail dot (ADR 0003) ------------------------------------ */
-/* .rail-badge retired (#832) — dead class; the rail unread count is the DS
-   SurfaceRail .pl-count--rail (app-shell.tsx), fed by App.tsx's count. */
-
-/* Background chat-streaming indicator on the Chat rail button — a small pulsing
-   dot (no count), shown while a turn streams on another tab. */
-.rail-dot {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--pl-color-status-success);
-  animation: rail-dot-pulse 1.4s ease-in-out infinite;
-}
-@keyframes rail-dot-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.45; transform: scale(0.7); }
-}
-
-.rail button {
-  position: relative;
-}
+/* Activity surface (ADR 0003) ---------------------------------------------- */
+/* .rail-badge and the .rail-dot streaming indicator are retired (#832, #3863) — the rail
+   unread count is the DS SurfaceRail .pl-count--rail (app-shell.tsx), fed by App.tsx's count. */
 
 /* Activity surface + provenance feed (.activity-*) — moved to src/activity/activity.css (#832). */
 
@@ -1111,25 +669,25 @@ textarea {
    except .inbox-pri* below, which stay here since the completed-entry provenance badge
    renders them too (the unified feed's pending items reuse the same classes). */
 .inbox-pri {
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 8px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius-lg);
   color: var(--pl-color-fg-on-accent);
 }
 
 .inbox-pri-now {
-  background: var(--pl-color-status-error, #ff6b6b);
+  background: var(--pl-color-status-error);
 }
 
 .inbox-pri-next {
-  background: var(--pl-color-accent, #7c8cff);
+  background: var(--pl-color-accent);
 }
 
 .inbox-pri-later {
-  background: var(--pl-color-fg-subtle, #555);
+  background: var(--pl-color-fg-subtle);
 }
 
 /* Live event-stream indicator (ADR 0003) — retired with the standalone inbox surface (#3029). */
@@ -1137,9 +695,9 @@ textarea {
 /* Workflows surface — moved to src/workflows/workflows.css (#832), except
    .workflow-failed below which is shared (TasksPanel renders it too). */
 .workflow-failed {
-  margin: 0 12px;
-  color: var(--pl-color-status-error, #ff6b6b);
-  font-size: 13px;
+  margin: 0 var(--pl-space-3);
+  color: var(--pl-color-status-error);
+  font-size: var(--pl-font-size-sm);
 }
 
 .metric-grid {
@@ -1156,15 +714,15 @@ textarea {
   grid-template-columns: auto minmax(0, 1fr);
   grid-template-rows: auto auto;
   align-content: center;
-  column-gap: 8px;
+  column-gap: var(--pl-space-2);
   row-gap: 0;
   background: var(--pl-color-bg-raised);
-  padding: 6px 12px;
+  padding: var(--pl-space-1_5) var(--pl-space-3);
 }
 
 .metric svg {
   grid-row: span 2;
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 
 .metric strong {
@@ -1181,16 +739,16 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
   border-bottom: 1px solid var(--pl-color-border);
-  padding: 8px 12px;
+  padding: var(--pl-space-2) var(--pl-space-3);
 }
 
 .subagent-row > div,
 .issue-main {
   min-width: 0;
   display: grid;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 
 .subagent-row strong,
@@ -1199,7 +757,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 /* What the subagent DOES (#1660) — plain prose (not the mono tools line), clamped:
@@ -1207,77 +765,12 @@ textarea {
 .subagent-row span.subagent-desc {
   color: var(--pl-color-fg);
   font-family: var(--pl-font-sans);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
-
-.notes-editor {
-  height: 100%;
-  border: 0;
-  border-radius: 0 0 var(--pl-radius) var(--pl-radius);
-  background: transparent;
-  padding: 12px;
-}
-
-.notes-tabbar {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--pl-color-border);
-}
-
-.notes-tabbar button {
-  max-width: 140px;
-  height: 28px;
-  border: 1px solid transparent;
-  border-radius: var(--pl-radius);
-  background: transparent;
-  color: var(--pl-color-fg-subtle);
-  padding: 0 9px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.notes-tabbar button.active,
-.notes-tabbar button:hover {
-  border-color: var(--pl-color-border);
-  background: var(--pl-color-bg-hover);
-  color: var(--pl-color-fg);
-}
-
-.notes-meta {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 8px;
-  align-items: center;
-  padding: 10px;
-  border-bottom: 1px solid var(--pl-color-border);
-}
-
-.notes-meta input {
-  height: 32px;
-}
-
-.issue-create {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  padding: 10px;
-  border-bottom: 1px solid var(--pl-color-border);
-}
-
-.issue-create-meta {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: 104px 82px minmax(0, 1fr);
-  gap: 8px;
 }
 
 .issue-list {
@@ -1291,19 +784,19 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 28px 16px;
+  gap: var(--pl-space-2);
+  padding: 28px var(--pl-space-4);
   color: var(--pl-color-fg-subtle);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .panel-error {
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 8px 10px;
-  margin: 12px;
-  padding: 12px;
+  gap: var(--pl-space-2) var(--pl-space-2_5);
+  margin: var(--pl-space-3);
+  padding: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: color-mix(in srgb, var(--pl-color-status-error) 6%, transparent);
@@ -1315,17 +808,17 @@ textarea {
 
 .panel-error > div {
   display: grid;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   min-width: 0;
 }
 
 .panel-error strong {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .panel-error span {
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   word-break: break-word;
 }
 
@@ -1355,13 +848,13 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
   border-bottom: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg-inset);
-  padding: 6px 10px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .issue-group-toggle {
@@ -1369,7 +862,7 @@ textarea {
   min-height: 24px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   border: 0;
   background: transparent;
   color: inherit;
@@ -1396,9 +889,9 @@ textarea {
 .issue-row {
   min-height: 36px;
   display: grid;
-  gap: 8px;
+  gap: var(--pl-space-2);
   border-bottom: 1px solid var(--pl-color-border);
-  padding: 10px;
+  padding: var(--pl-space-2_5);
 }
 
 .issue-titleline {
@@ -1420,14 +913,14 @@ textarea {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .issue-badges {
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 
 .issue-badges > span:not(.status-pill) {
@@ -1436,7 +929,7 @@ textarea {
   align-items: center;
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 1px 6px;
+  padding: 1px var(--pl-space-1_5);
 }
 
 .issue-badges .issue-time {
@@ -1447,7 +940,7 @@ textarea {
   min-width: 0;
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .issue-description-block summary {
@@ -1462,10 +955,10 @@ textarea {
 }
 
 .issue-description {
-  margin-top: 6px;
+  margin-top: var(--pl-space-1_5);
   color: var(--pl-color-fg-muted);
   font-family: var(--pl-font-sans);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -1474,7 +967,7 @@ textarea {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 
 /* .empty-state / .empty-state.stacked retired (#832) — TasksPanel + ChatSurface
@@ -1488,7 +981,7 @@ textarea {
   place-items: center;
   overflow: auto;
   background: color-mix(in srgb, var(--pl-color-bg) 98%, transparent);
-  padding: 24px;
+  padding: var(--pl-space-6);
 }
 
 /* New-schedule modal (friendly builder, .schedule-*) — moved to src/schedule/schedule.css (#832). */
@@ -1500,20 +993,20 @@ textarea {
 .setup-progress {
   display: flex;
   justify-content: center;
-  gap: 8px;
-  margin-bottom: 20px;
+  gap: var(--pl-space-2);
+  margin-bottom: var(--pl-space-5);
 }
 
 .setup-progress span {
   width: 28px;
   height: 4px;
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   background: var(--pl-color-border-strong);
 }
 
 .setup-progress span.done,
 .setup-progress span.active {
-  background: var(--brand-violet);
+  background: var(--pl-color-accent);
 }
 
 .setup-progress span.active {
@@ -1528,20 +1021,20 @@ textarea {
 
 .setup-step {
   display: grid;
-  gap: 16px;
+  gap: var(--pl-space-4);
   padding: 18px;
 }
 
 .setup-heading {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 
 .setup-heading p {
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .setup-icon {
@@ -1549,28 +1042,26 @@ textarea {
   height: 34px;
   display: grid;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--brand-violet) 36%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pl-color-accent) 36%, transparent);
   border-radius: var(--pl-radius);
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 
 .setup-summary,
-.finish-list,
-.toggle-grid {
+.finish-list {
   display: grid;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
-.status-line,
-.toggle-row {
+.status-line {
   min-height: 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 8px 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
 }
 
 .status-line {
@@ -1579,10 +1070,9 @@ textarea {
 }
 
 .status-line svg {
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 
-.toggle-row span,
 .status-line span {
   min-width: 0;
   overflow: hidden;
@@ -1595,30 +1085,21 @@ textarea {
 .setup-intro {
   margin: 0;
   color: var(--pl-color-fg-muted);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.55;
 }
 .setup-intro-foot {
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
-}
-
-.toggle-row input {
-  width: 18px;
-  height: 18px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .setup-grid {
   display: grid;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 
 .setup-grid.two {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.setup-grid.three {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .setup-grid.model-row {
@@ -1626,115 +1107,76 @@ textarea {
   align-items: end;
 }
 
-.setup-checkbox {
-  justify-self: start;
-}
-
-.setup-error,
-.setup-message {
-  margin: 0 18px;
-  border-radius: var(--pl-radius);
-  padding: 9px 10px;
-}
-
-.setup-error {
-  border: 1px solid color-mix(in srgb, var(--pl-color-status-error) 30%, transparent);
-  background: color-mix(in srgb, var(--pl-color-status-error) 14%, transparent);
-  color: var(--pl-color-status-error);
-}
-
-.setup-message {
-  border: 1px solid color-mix(in srgb, var(--pl-color-status-success) 28%, transparent);
-  background: color-mix(in srgb, var(--pl-color-status-success) 16%, transparent);
-  color: var(--pl-color-status-success);
-}
-
 /* "Test connection" result line in the model step. */
 /* Short explanatory line under a field/step (replaces ad-hoc inline `opacity` smalls). */
 .setup-hint {
-  margin: 8px 0 0;
+  margin: var(--pl-space-2) 0 0;
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.4;
-}
-
-/* Archetype "what's included" preview (setup wizard + fleet new-agent panel) */
-.archetype-preview-link {
-  margin-top: 8px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--pl-color-fg-muted);
-  font-size: 12px;
-  cursor: pointer;
-  text-align: left;
-}
-.archetype-preview-link:hover {
-  color: var(--pl-color-fg);
-  text-decoration: underline;
 }
 
 /* Choose-time runtime requirement (#2186 follow-on): the picked archetype needs the
    managed Python runtime and this host hasn't provisioned it. */
 .archetype-runtime-notice {
-  margin: 8px 0 0;
-  font-size: 12px;
+  margin: var(--pl-space-2) 0 0;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-warning);
 }
 .archetype-preview {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--pl-space-3);
   max-height: min(70vh, 640px);
   overflow-y: auto;
 }
 .archetype-preview-members {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .archetype-preview-member {
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 10px 12px;
+  padding: var(--pl-space-2_5) var(--pl-space-3);
 }
 .archetype-preview-member-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .archetype-preview-desc {
-  margin: 4px 0 0;
+  margin: var(--pl-space-1) 0 0;
   color: var(--pl-color-fg-muted);
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.45;
 }
 .archetype-preview-muted {
-  margin: 4px 0 0;
+  margin: var(--pl-space-1) 0 0;
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 .archetype-preview-skills {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
+  gap: var(--pl-space-1_5);
+  margin-top: var(--pl-space-2);
 }
 .archetype-preview-chip {
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
-  padding: 1px 8px;
+  border-radius: var(--pl-radius-pill);
+  padding: 1px var(--pl-space-2);
   font-family: var(--pl-font-mono);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
 }
 .archetype-preview-soul {
-  margin: 6px 0 0;
-  padding: 10px 12px;
+  margin: var(--pl-space-1_5) 0 0;
+  padding: var(--pl-space-2_5) var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-inset);
-  font-size: 11.5px;
+  font-size: var(--pl-font-size-2xs);
   line-height: 1.5;
   white-space: pre-wrap;
   max-height: 260px;
@@ -1747,7 +1189,7 @@ textarea {
 .setup-actions {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
   padding: 18px;
   border-top: 1px solid var(--pl-color-border);
 }
@@ -1794,7 +1236,6 @@ textarea {
   /* Dense content grids collapse to a single column on phones. */
   .subagent-grid,
   .setup-grid.two,
-  .setup-grid.three,
   .setup-grid.model-row {
     grid-template-columns: 1fr;
   }
@@ -1804,7 +1245,7 @@ textarea {
   }
 
   .setup-overlay {
-    padding: 12px;
+    padding: var(--pl-space-3);
     place-items: start center;
   }
 
@@ -1838,25 +1279,22 @@ textarea {
 /* ── Settings surface ─────────────────────────────────────────────────────── */
 /* The settings-form chrome (.settings-banner / .settings-group / .setting-..., ADR 0047
    .setting-inheritance) moved to src/settings/settings.css (#832). Left here, shared:
-   .settings-status (SchedulePanel renders it too) + the .settings-help-link / .setup-link
-   rule (it pairs the setup wizard's link styling). */
+   .settings-status (SchedulePanel renders it too) + the .settings-help-link rule. */
 .settings-status {
-  margin: 0 0 10px;
-  font-size: 0.8rem;
+  margin: 0 0 var(--pl-space-2_5);
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
 }
-.settings-help-link,
-.setup-link {
+.settings-help-link {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 0.8rem;
-  color: var(--brand-indigo-bright);
+  gap: var(--pl-space-1);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-accent-fg);
   text-decoration: none;
 }
-.settings-help-link:hover,
-.setup-link:hover {
+.settings-help-link:hover {
   text-decoration: underline;
 }
 
@@ -1867,115 +1305,115 @@ textarea {
 /* Playbooks surface (ADR 0009) */
 .playbook-search {
   width: 100%;
-  padding: 8px 12px;
-  margin-bottom: 14px;
+  padding: var(--pl-space-2) var(--pl-space-3);
+  margin-bottom: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
   color: var(--pl-color-fg);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 .playbook-search:focus { outline: none; border-color: var(--pl-color-border-strong); }
-.playbook-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.playbook-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--pl-space-2); }
 .playbook-card {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
-  padding: 12px 14px;
+  gap: var(--pl-space-4);
+  padding: var(--pl-space-3) var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
 }
 .playbook-card:hover { border-color: var(--pl-color-border-strong); }
 .playbook-main { min-width: 0; }
-.playbook-title { display: flex; align-items: center; gap: 8px; }
-.playbook-title strong { font-size: 13.5px; }
+.playbook-title { display: flex; align-items: center; gap: var(--pl-space-2); }
+.playbook-title strong { font-size: var(--pl-font-size-base); }
 /* .playbook-badge / .pinned / .learned retired (#832) — pinned/learned/domain/
    finding-type tags are now DS <Badge> (info / success / neutral). */
-.playbook-desc { margin: 6px 0 0; font-size: 12.5px; color: var(--pl-color-fg-muted); }
-.playbook-tools { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
-.playbook-tools code { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); }
+.playbook-desc { margin: var(--pl-space-1_5) 0 0; font-size: var(--pl-font-size-sm); color: var(--pl-color-fg-muted); }
+.playbook-tools { margin-top: var(--pl-space-1_5); display: flex; flex-wrap: wrap; gap: var(--pl-space-1); }
+.playbook-tools code { font-size: var(--pl-font-size-2xs); padding: 1px var(--pl-space-1_5); border-radius: var(--pl-radius); background: var(--pl-color-bg-hover); color: var(--pl-color-fg-subtle); }
 .playbook-meta {
-  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
-  font-size: 11.5px; color: var(--pl-color-fg-subtle); white-space: nowrap;
+  display: flex; flex-direction: column; align-items: flex-end; gap: var(--pl-space-1);
+  font-size: var(--pl-font-size-2xs); color: var(--pl-color-fg-subtle); white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
 /* Knowledge store curation (add / edit / delete a chunk from the console). */
-.knowledge-chunk-form { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; margin: 8px 0; }
-.knowledge-chunk-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.knowledge-chunk-form { display: flex; flex-direction: column; gap: var(--pl-space-2); flex: 1; min-width: 0; margin: var(--pl-space-2) 0; }
+.knowledge-chunk-form-row { display: flex; gap: var(--pl-space-2); align-items: center; flex-wrap: wrap; }
 .knowledge-chunk-form-row > :first-child { flex: 1; min-width: 180px; }
-.knowledge-chunk-actions { display: flex; gap: 2px; }
+.knowledge-chunk-actions { display: flex; gap: var(--pl-space-0_5); }
 /* Shift held → the delete button arms red (chat-tab quick-delete parity, #1582). */
 .knowledge-del-armed, .knowledge-del-armed svg { color: var(--pl-color-status-error); }
 
 /* Collapsible source groups in the Knowledge Base (#1575). A group is a plain
    list item holding a full-width header button + (when open) a nested card list. */
-.kb-group { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.kb-group { list-style: none; display: flex; flex-direction: column; gap: var(--pl-space-2); }
 /* Toggle + a bulk delete-by-source button sit side by side (#1770); the toggle
    flexes to fill, the trash button is a fixed sibling at the end. */
-.kb-group-header-row { display: flex; align-items: center; gap: 4px; }
+.kb-group-header-row { display: flex; align-items: center; gap: var(--pl-space-1); }
 .kb-group-header {
   flex: 1; min-width: 0;
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 8px 12px; border: 1px solid var(--pl-color-border); border-radius: var(--pl-radius);
+  display: flex; align-items: center; gap: var(--pl-space-2); width: 100%;
+  padding: var(--pl-space-2) var(--pl-space-3); border: 1px solid var(--pl-color-border); border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised); color: var(--pl-color-fg); cursor: pointer; text-align: left;
 }
 .kb-group-header:hover { border-color: var(--pl-color-border-strong); }
 .kb-group-delete { flex: none; }
 .kb-group-caret { flex: none; color: var(--pl-color-fg-subtle); transition: transform 0.12s ease; }
 .kb-group-title {
-  flex: 1; min-width: 0; font-size: 13px; font-weight: 600;
+  flex: 1; min-width: 0; font-size: var(--pl-font-size-sm); font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.kb-group-body { margin-left: 14px; }
+.kb-group-body { margin-left: var(--pl-space-3); }
 
 /* New/Edit skill dialog (PlaybooksSurface) — a little more space between fields than
-   the knowledge inline form it grew out of. (Body padding is the app-wide
-   .pl-dialog__body default now.) */
-.skill-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+   the knowledge inline form it grew out of. (The dialog passes padding="roomy", so the
+   body already has the 24px inset.) */
+.skill-form { display: flex; flex-direction: column; gap: var(--pl-space-3); min-width: 0; }
 /* The trailing action row gets a little separation from the fields above it. */
-.skill-form > .knowledge-chunk-form-row:last-child { margin-top: 4px; }
+.skill-form > .knowledge-chunk-form-row:last-child { margin-top: var(--pl-space-1); }
 
 /* Document ingestion drop-zone (ADR 0021) — file/URL "Add source". */
 .knowledge-ingest-drop {
-  display: flex; align-items: center; gap: 8px;
-  padding: 14px 12px;
+  display: flex; align-items: center; gap: var(--pl-space-2);
+  padding: var(--pl-space-3) var(--pl-space-3);
   border: 1px dashed var(--pl-color-border);
-  border-radius: 8px;
+  border-radius: var(--pl-radius-lg);
   background: var(--pl-color-bg-inset);
   color: var(--pl-color-fg-subtle);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 .knowledge-ingest-drop.is-drag {
-  border-color: var(--pl-color-accent, #7c8cff);
+  border-color: var(--pl-color-accent);
   border-style: solid;
   background: var(--pl-color-bg-raised);
 }
 .knowledge-ingest-drop.is-busy { opacity: 0.6; pointer-events: none; }
 .knowledge-ingest-pick {
-  color: var(--pl-color-accent, #7c8cff);
+  color: var(--pl-color-accent);
   cursor: pointer;
   text-decoration: underline;
   font-weight: 500;
 }
-.knowledge-ingest-note { color: var(--pl-color-fg-subtle); font-size: 12px; align-self: center; }
+.knowledge-ingest-note { color: var(--pl-color-fg-subtle); font-size: var(--pl-font-size-xs); align-self: center; }
 
 /* Ingest preview (dry-run gate, #1801) — shown in place of the drop-zone once a
    source is picked; Confirm ingests, Cancel returns to selection. */
-.knowledge-ingest-preview { display: flex; flex-direction: column; gap: 10px; }
-.knowledge-ingest-preview-meta { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.knowledge-ingest-preview { display: flex; flex-direction: column; gap: var(--pl-space-2_5); }
+.knowledge-ingest-preview-meta { display: flex; gap: var(--pl-space-1_5); flex-wrap: wrap; align-items: center; }
 .knowledge-ingest-preview-source {
-  font-size: 12px; color: var(--pl-color-fg-subtle);
+  font-size: var(--pl-font-size-xs); color: var(--pl-color-fg-subtle);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
 }
 .knowledge-ingest-preview-snippet {
-  margin: 0; padding: 10px 12px;
+  margin: 0; padding: var(--pl-space-2_5) var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
-  border-radius: 8px;
+  border-radius: var(--pl-radius-lg);
   background: var(--pl-color-bg-inset);
-  font-size: 12px; line-height: 1.5;
+  font-size: var(--pl-font-size-xs); line-height: 1.5;
   white-space: pre-wrap; word-break: break-word;
   max-height: 220px; overflow-y: auto;
 }
@@ -1986,7 +1424,7 @@ textarea {
 .plugin-view { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 .plugin-view-body { position: relative; flex: 1; min-height: 0; }
 .plugin-view-frame { width: 100%; height: 100%; border: 0; background: var(--pl-color-bg); display: block; }
-.plugin-view-state { display: flex; align-items: center; gap: 8px; padding: 24px; color: var(--pl-color-fg-subtle); font-size: 13px; }
+.plugin-view-state { display: flex; align-items: center; gap: var(--pl-space-2); padding: var(--pl-space-6); color: var(--pl-color-fg-subtle); font-size: var(--pl-font-size-sm); }
 /* A plugin view hosted in a utility-widget DIALOG (vs the stage): give it a fixed height
    so the iframe has room to fill (the stage normally supplies that via its flex column). */
 .plugin-widget-dialog { display: flex; flex-direction: column; height: 70vh; height: 70dvh; min-height: 0; }
@@ -1995,36 +1433,13 @@ textarea {
 /* Plugins panel (ADR 0027, .plugin-install-* / .plugin-list / .plugin-row-main / -title /
    .plugin-ver/.plugin-state/.plugin-desc/.plugin-meta/.plugin-review/.plugin-enable-hint
    + .btn-icon.danger:hover) — moved to src/settings/plugins.css (#832). The bare
-   .plugin-row stays here: it's shared with the MCP panel + the Plugins surface. */
-.plugin-row { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: var(--pl-color-bg-raised); border: 1px solid var(--pl-color-border); border-radius: 9px; }
-
-/* Federated plugin view (ADR 0034) — loading + bounded error card (D6). */
-.federated-loading,
-.federated-error {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 14px;
-  font-size: 0.85rem;
-  color: var(--pl-color-fg-subtle);
-}
-.federated-loading { align-items: center; }
-.federated-error { color: var(--pl-color-status-warning); }
-.federated-error strong { color: var(--pl-color-fg); }
-.federated-error-detail {
-  margin: 4px 0 8px;
-  font-family: var(--pl-font-mono);
-  font-size: 0.78rem;
-  color: var(--pl-color-fg-subtle);
-  word-break: break-word;
-}
+   .plugin-row and the federated-view .federated-* cards were dead and retired (#3863). */
 
 /* Fleet manager (Settings → Agents, ADR 0042) — the .fleet-list / .fleet-row* /
    .fleet-rename-input / .fleet-meta / .fleet-error / .fleet-purge / .fleet-discover
    rules moved to src/fleet/fleet.css (#832). The .fleet-active-tag / .fleet-delegate-tag /
    .fleet-host-tag text tags are now DS <Badge> (#832).
-   Left here (shared / other surfaces): the .archetype-* picker (NewAgentPanel), .field-hint
-   (NewAgentPanel + SetupWizard), the topbar .fleet-switcher* (FleetSwitcher), plus the global
+   Left here (shared / other surfaces): the .archetype-* picker (NewAgentPanel), the topbar .fleet-switcher* (FleetSwitcher), plus the global
    ::view-transition root crossfade. The status dots (FleetSwitcher + FleetManager) are the DS
    <StatusDot> now, so the hand-rolled .fleet-dot* is retired. */
 
@@ -2033,12 +1448,12 @@ textarea {
 .archetype-configure-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   padding: 0;
   border: none;
   background: none;
   color: var(--pl-color-fg);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   font-weight: 600;
   cursor: pointer;
   text-align: left;
@@ -2050,24 +1465,23 @@ textarea {
 .archetype-picker {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .archetype-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
   min-width: 0;
 }
 .archetype-card > .pl-radiocard {
   flex: 1;
 }
-.archetype-card > .archetype-preview-link {
-  margin-top: 0;
-  padding: 2px 4px;
+/* Layout-only: keep the DS "What's included" Button start-aligned in the card column. */
+.archetype-card > .pl-btn {
   align-self: flex-start;
 }
 .archetype-step-actions {
-  margin-top: 12px;
+  margin-top: var(--pl-space-3);
 }
 
 /* Step 2 (ArchetypeSetupForm) — the name, the bundle's questions, Advanced. Shared by
@@ -2077,7 +1491,7 @@ textarea {
 .archetype-setup {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--pl-space-4);
   min-width: 0;
   color: var(--pl-color-fg);
   font-family: var(--pl-font-sans);
@@ -2085,11 +1499,11 @@ textarea {
 .archetype-setup-group {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--pl-space-3);
 }
 .archetype-setup-help {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.45;
   color: var(--pl-color-fg-muted);
 }
@@ -2100,17 +1514,17 @@ textarea {
   color: var(--pl-color-status-error);
 }
 .archetype-setup-switch .pl-field__hint {
-  margin-top: 4px;
-  padding-left: 2px;
+  margin-top: var(--pl-space-1);
+  padding-left: var(--pl-space-0_5);
 }
 .archetype-setup-soul {
   min-height: 160px;
   resize: vertical;
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 .archetype-setup-advanced .pl-accordion__panel {
-  padding-top: 4px;
+  padding-top: var(--pl-space-1);
 }
 /* The set-up dialog: a long bundle scrolls inside the body, the Back/Create foot stays. */
 .archetype-setup-dialog .pl-dialog__body {
@@ -2124,12 +1538,21 @@ textarea {
 .archetype-advanced {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 4px;
+  gap: var(--pl-space-2_5);
+  margin-top: var(--pl-space-1);
 }
-.field-hint {
-  font-size: 11px;
-  color: var(--pl-color-fg-subtle);
+/* The opt-in "Show preview archetypes" switch at the top of the expanded Advanced section,
+   with its one-line caveat below; held cards then carry a DS "Preview" Badge in the title. */
+.archetype-preview-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+}
+.archetype-card-title {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pl-space-1_5);
 }
 
 /* Topbar fleet switcher (ADR 0042) — the agent name as a DS Menu trigger (#1078).
@@ -2139,11 +1562,11 @@ textarea {
 .fleet-switcher-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--pl-space-1);
   background: none;
   border: none;
-  padding: 2px 4px;
-  margin: -2px -4px;
+  padding: var(--pl-space-0_5) var(--pl-space-1);
+  margin: calc(-1 * var(--pl-space-0_5)) calc(-1 * var(--pl-space-1));
   border-radius: var(--pl-radius);
   color: inherit;
   font: inherit;
@@ -2157,7 +1580,7 @@ textarea {
 .fleet-switcher-name {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   min-width: 0;
 }
 .fleet-switcher-check {
@@ -2174,31 +1597,13 @@ textarea {
   display: block;
 }
 
-/* Every DS Menu is capped to the space Radix measured for it, and scrolls past that.
-   The DS caps its own DropSelect (`.pl-menu.pl-dropselect__menu`) this way but never
-   the base `.pl-menu`, so a plain Menu with more rows than fit simply ran off the
-   viewport with no way to reach the rest — the composer's model picker, once a second
-   provider's models joined the list, was the surface that made it obvious. The Radix
-   var is the collision-aware available height; the vh fallback covers a Content that
-   somehow renders without it. (DS gap: this belongs on base `.pl-menu` in
-   @protolabsai/ui — contribute back and drop this, along with the section-label and
-   disabled-item-with-tooltip gaps above.) */
-.pl-menu {
-  max-height: var(--radix-dropdown-menu-content-available-height, 60vh);
-  overflow-y: auto;
-  /* A menu that has hit its cap must not hand its leftover scroll to the page
-     underneath — on touch especially, that reads as the chat jumping while you're
-     choosing a model. */
-  overscroll-behavior: contain;
-}
-
-/* On a phone the same menu becomes a full-screen sheet: 180px of dropdown floating over
-   a keyboard-shrunk viewport is unusable for a list you're meant to read. Scoped to the
-   composer's model picker via its marker child — `Menu` takes no className (the popover
-   is always `.pl-menu`), so the marker is the only per-instance hook, and a context menu
-   or an overflow menu must NOT become a sheet. */
+/* On a phone the composer's model menu becomes a full-screen sheet: 180px of dropdown
+   floating over a keyboard-shrunk viewport is unusable for a list you're meant to read.
+   Scoped to the composer's model picker via the class it carries through `Menu className`
+   (which DS lands on the Radix Content next to `pl-menu` as of @protolabsai/ui 0.63) — a
+   context menu or an overflow menu must NOT become a sheet. */
 @media (max-width: 767px) {
-  .pl-menu:has(> .composer-model-menu) {
+  .pl-menu.composer-model-menu {
     position: fixed;
     inset: 0;
     max-height: 100dvh;
@@ -2206,13 +1611,13 @@ textarea {
     max-width: 100vw;
     border: 0;
     border-radius: 0;
-    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+    padding: var(--pl-space-2) var(--pl-space-2) calc(8px + env(safe-area-inset-bottom));
     /* Radix positions the portal wrapper with a transform; inset:0 only wins once the
        element is taken out of that flow. */
     transform: none !important;
   }
   /* The transformed popper wrapper would otherwise clip/offset the fixed sheet. */
-  [data-radix-popper-content-wrapper]:has(> .pl-menu > .composer-model-menu) {
+  [data-radix-popper-content-wrapper]:has(> .pl-menu.composer-model-menu) {
     position: fixed !important;
     inset: 0 !important;
     transform: none !important;
@@ -2243,13 +1648,13 @@ textarea {
   z-index: 40;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: 999px;
+  gap: var(--pl-space-1_5);
+  padding: var(--pl-space-1) var(--pl-space-3);
+  border-radius: var(--pl-radius-pill);
   border: 1px solid var(--pl-color-border);
   background: var(--pl-color-bg-raised);
   color: inherit;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   cursor: pointer;
   box-shadow: var(--pl-shadow-popover);
 }
@@ -2259,19 +1664,19 @@ textarea {
 .update-notice-dot {
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   background: currentColor;
   opacity: 0.7;
 }
 /* The update notice now renders in the DS Dialog (full modal) — the version in the
    title, and the release changelog as scrollable markdown in the body. */
 .update-notice-ver {
-  font-family: ui-monospace, monospace;
-  font-size: 0.85em;
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-font-size-sm);
   opacity: 0.85;
 }
 .update-notice-cur {
-  font-size: 0.8em;
+  font-size: var(--pl-font-size-xs);
   opacity: 0.6;
 }
 .update-notice-notes {
@@ -2280,38 +1685,38 @@ textarea {
   overscroll-behavior: contain;
 }
 .update-notice-empty {
-  margin-top: 8px;
-  font-size: 12px;
+  margin-top: var(--pl-space-2);
+  font-size: var(--pl-font-size-xs);
   opacity: 0.7;
 }
 .update-notice-progress {
-  margin-top: 12px;
+  margin-top: var(--pl-space-3);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .update-notice-bar {
   height: 4px;
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   background: var(--pl-color-bg-inset);
   overflow: hidden;
 }
 .update-notice-fill {
   height: 100%;
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   background: currentColor;
   opacity: 0.8;
   transition: width 0.2s ease;
 }
 .update-notice-pct {
   text-align: center;
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   opacity: 0.7;
   font-variant-numeric: tabular-nums;
 }
 .update-notice-err {
-  margin-top: 8px;
-  font-size: 12px;
+  margin-top: var(--pl-space-2);
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-error);
 }
 
@@ -2319,30 +1724,30 @@ textarea {
 .setup-postinstall {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .setup-postinstall-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
-  padding: 10px 12px;
+  padding: var(--pl-space-2_5) var(--pl-space-3);
 }
 .setup-postinstall-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
 }
 .setup-postinstall-info > span {
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-family: var(--pl-font-mono);
 }
 .setup-postinstall-error {
   color: var(--pl-color-status-error);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 /* Category filter overflow (#2319) — same DS segmented-Tabs gap as the plugin Discover

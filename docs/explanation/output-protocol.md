@@ -51,4 +51,4 @@ the console renders the model's real thinking above the answer with zero parsing
 ## Related
 
 - [Architecture](/explanation/architecture) — where in the runtime this lives
-- [`graph/output_format.py`](https://github.com/protoLabsAI/protoAgent/blob/main/graph/output_format.py) — the implementation (now ~65 lines)
+- [`graph/output_format.py`](https://github.com/protoLabsAI/protoAgent/blob/main/src/graph/output_format.py) — the implementation (now ~65 lines)

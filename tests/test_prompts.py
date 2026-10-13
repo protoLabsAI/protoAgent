@@ -189,7 +189,7 @@ def test_template_soul_names_no_capability_tools():
 
     from tests.test_prompt_budgets import FIXTURE_SOUL
 
-    repo_soul = (Path(build_system_prompt.__code__.co_filename).parent.parent / "config" / "SOUL.md").read_text(
+    repo_soul = (Path(__file__).resolve().parents[1] / "config" / "SOUL.md").read_text(
         encoding="utf-8"
     )
     names = _GOAL_TOOLS | _SCHEDULE_TOOLS | _TASK_TOOLS | _WATCH_TOOLS | _WAIT_TOOLS

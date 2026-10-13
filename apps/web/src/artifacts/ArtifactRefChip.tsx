@@ -1,18 +1,46 @@
+import { InlineFrameCard, type InlineFrameCardState } from "@protolabsai/ui/ai";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Sparkles } from "lucide-react";
-import { useEffect } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type SyntheticEvent,
+} from "react";
 
-import { api } from "../lib/api";
+import { postInit, scheduleInitReposts, usePluginFrameThemeSync } from "../app/pluginFrameHandshake";
+import { api, apiUrl } from "../lib/api";
 import { onTopic } from "../lib/events";
 import {
+  ARTIFACT_REF_COMPONENT,
   artifactRefFromProps,
   openArtifactRef,
   refName,
   refState,
   useArtifactViewAvailable,
   versionLabel,
+  type ArtifactRef,
   type RefState,
 } from "./artifactRef";
+import { createFrameBridge, type FrameBridge } from "./frameBridge";
+import { useFrameFocusGuard } from "./frameFocusGuard";
+import { FrameActivationShield, FrameQuarantineNotice } from "./FrameGuardViews";
+import { BridgeNoticeView, useFrameProposalGate } from "./FrameProposalChip";
+import {
+  clampHeight,
+  createFrameRegistry,
+  createLatestVersionRegistry,
+  createLiveRefRegistry,
+  MAX_LIVE_FRAMES,
+  MIN_FRAME_HEIGHT,
+  useLazyMount,
+} from "./inlineFrames";
 
 // The `artifact-ref` chat component (#3617): what the artifact plugin's create/revise tools
 // leave in the transcript — `✨ <title> · v<n>` + the kind, click → the Artifact panel on
@@ -24,8 +52,30 @@ import {
 // It asks the plugin's /refs route what exists NOW, so an older version reads "v2 of 5" and
 // a deleted/evicted artifact renders inert instead of opening a panel that can't show it.
 // Every string here renders as React text (title included — it's model-authored), never HTML.
+//
+// An INLINE ref (ADR 0118 D2 / S7) hosts the artifact's OWN frame right here in the transcript
+// instead of the chip — see InlineArtifactHost below. A ref without `inline` is unchanged.
 
 const REF_STALE_MS = 15_000;
+
+// The artifact plugin's view page, served from its public namespace (ADR 0026); its chrome-less
+// embed mode (S5) renders ONE version through the same frame builder as the panel.
+const ARTIFACT_EMBED_PATH = "/plugins/artifact/view";
+function embedSrc(ref: Pick<ArtifactRef, "id" | "version">): string {
+  return `${ARTIFACT_EMBED_PATH}?embed=${encodeURIComponent(ref.id)}&v=${ref.version}`;
+}
+
+// The live-frame registry key for an inline ref: the artifact id AND its version, never the id
+// alone. The backend re-emits an inline ref on every edit — update_artifact/rewrite_artifact keep
+// the inline placement (plugins/artifact/_tools.py `ref_tail(art, inline=_store._is_inline(art))`)
+// — so several version frames of one artifact coexist in the transcript. Keying by id alone would
+// collapse them into one slot: the 6-frame cap wouldn't hold, and evicting or releasing one
+// version would flip every sibling version with it. Version first (a digit-only run), then a
+// space, then the id: the first space is always the separator, so distinct (id, version) pairs
+// never alias even when the id itself contains spaces.
+function frameKey(ref: Pick<ArtifactRef, "id" | "version">): string {
+  return `v${ref.version} ${ref.id}`;
+}
 
 function useRefMeta(id: string, enabled: boolean) {
   const qc = useQueryClient();
@@ -47,6 +97,139 @@ function useRefMeta(id: string, enabled: boolean) {
   });
 }
 
+// ── inline frame host (ADR 0118 D2 / S7b) ──────────────────────────────────────────────────
+
+/** A per-chat-view host governing the live inline frames: a {@link createFrameRegistry} (the
+ *  pure S7a cap/height bookkeeping) made observable so an eviction re-renders the evicted
+ *  frame's host into its "Click to resume" card. One host is shared by every inline chip in
+ *  the view (via context), so the 6-frame cap bounds them together. */
+export type InlineFrameHost = {
+  /** Register `id` as live now; evicts the least-recently-visible frame past the cap, then
+   *  notifies subscribers so the evicted host can swap to a resume card. */
+  register(id: string): void;
+  /** Mark `id` visible now (scrolled into view) so it isn't the next evicted. */
+  touch(id: string): void;
+  /** Record `id`'s reported content height; returns the clamped value. */
+  measure(id: string, height: number): number;
+  /** Drop `id` from the live set (its host unmounted); notifies if it had been live. */
+  release(id: string): void;
+  /** The last height remembered for `id` (the registry keeps it past eviction/release, so a
+   *  remounted frame can restore its size before it remeasures); the floor if never measured. */
+  heightOf(id: string): number;
+  /** Is `id` a live frame right now? */
+  isLive(id: string): boolean;
+  /** How many frames are live right now. */
+  liveCount(): number;
+  /** Announce that an inline ref for (`scope` chat, artifact `id`, `version`) is rendered;
+   *  returns its withdraw. The newest announced version per (scope, id) is the only one that
+   *  hosts a live frame — earlier ones render superseded and claim no slot (S18d, #4124). */
+  announceVersion(scope: string, id: string, version: number): () => void;
+  /** The newest version announced for (scope, id), or 0. */
+  latestVersion(scope: string, id: string): number;
+  /** Mark (`scope` chat, artifact `id`, `version`) as the inline ref the LIVE turn just produced
+   *  there (S22, #4147): its host mounts the frame at once — on screen or not — so it loads and
+   *  reports a render verdict during the turn. One mark per chat; a newer one replaces it. */
+  markLiveRef(scope: string, id: string, version: number): void;
+  /** Is (scope, id, version) the live turn's pending eager frame? */
+  isLiveRef(scope: string, id: string, version: number): boolean;
+  /** Clear that mark once its frame mounted, so a later remount lazy-mounts like history. */
+  consumeLiveRef(scope: string, id: string, version: number): void;
+  /** Subscribe to live-set, newest-version AND live-ref changes; returns an unsubscribe. */
+  subscribe(listener: () => void): () => void;
+};
+
+export function createInlineFrameHost(cap: number = MAX_LIVE_FRAMES): InlineFrameHost {
+  const reg = createFrameRegistry(cap);
+  const versions = createLatestVersionRegistry();
+  const liveRefs = createLiveRefRegistry();
+  const listeners = new Set<() => void>();
+  const emit = () => {
+    for (const fn of listeners) fn();
+  };
+  versions.subscribe(emit);
+  liveRefs.subscribe(emit);
+  return {
+    register(id) {
+      reg.register(id);
+      emit(); // a register may evict another frame → let it re-render into a resume card
+    },
+    touch(id) {
+      reg.touch(id);
+    },
+    measure(id, height) {
+      return reg.measure(id, height);
+    },
+    release(id) {
+      const was = reg.isLive(id);
+      reg.release(id);
+      if (was) emit();
+    },
+    heightOf: (id) => reg.heightOf(id),
+    isLive: (id) => reg.isLive(id),
+    liveCount: () => reg.size(),
+    announceVersion: (scope, id, version) => versions.announce(scope, id, version),
+    latestVersion: (scope, id) => versions.latest(scope, id),
+    markLiveRef: (scope, id, version) => liveRefs.mark(scope, frameKey({ id, version })),
+    isLiveRef: (scope, id, version) => liveRefs.isMarked(scope, frameKey({ id, version })),
+    consumeLiveRef: (scope, id, version) => liveRefs.consume(scope, frameKey({ id, version })),
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
+// The shared host for the console's inline frames. A single module default keeps the live-frame
+// budget bounded across the transcript; a test (or a future per-chat-view wiring) can scope its
+// own via the context Provider.
+const sharedInlineFrameHost = createInlineFrameHost();
+export const InlineFrameHostContext = createContext<InlineFrameHost>(sharedInlineFrameHost);
+
+/** The live-stream hook for INLINE artifact refs (ADR 0118 / S22, #4147), registered beside
+ *  onLiveArtifactRef through the component registry's `onLive` — which fires only for a
+ *  component arriving on the LIVE turn stream, never for history hydration, reattach or replay.
+ *  It marks the ref on the host so its frame mounts eagerly even when the chat isn't on screen
+ *  (background window, hidden chat tab, scrolled away): the frame loads, reports its render
+ *  verdict, and the agent's check_artifact can confirm the artifact works within the turn.
+ *  `sessionId` is the chat the turn belongs to — the same id the transcript's
+ *  ArtifactChatSendContext scopes its inline refs by. Takes the host so tests can scope one. */
+export function onLiveInlineArtifactRef(
+  spec: { component: string; props: Record<string, unknown> },
+  ctx: { sessionId?: string },
+  host: InlineFrameHost = sharedInlineFrameHost,
+): void {
+  if (spec.component !== ARTIFACT_REF_COMPONENT) return;
+  const ref = artifactRefFromProps(spec.props);
+  if (!ref || !ref.inline) return;
+  host.markLiveRef(ctx.sessionId ?? "", ref.id, ref.version);
+}
+
+// ── send-to-chat / openLink host bridge (ADR 0118 D4 / S10b) ────────────────────────────────
+
+/** How an inline artifact frame reaches the chat it is rendered in. The hosting ChatSessionSlot
+ *  provides it (ArtifactChatSendContext.Provider); `send` runs the frame's text through the
+ *  NORMAL send path as a visible, origin-tagged user turn (ChatMessage.sentVia), and `isBusy`
+ *  answers the gate's busy check for THIS session. Absent (no provider — a test, or a standalone
+ *  panel) ⇒ the host refuses the send, so the frame's Promise rejects instead of hanging. The
+ *  panel can supply the same shape to reach the active chat tab. */
+export type ArtifactChatSend = {
+  sessionId: string;
+  /** True when THIS session already has a turn running / parked — the D4 "the agent is busy" gate. */
+  isBusy: () => boolean;
+  /** Post `text` as a visible user turn tagged with where it came from. */
+  send: (text: string, origin: { artifact_id: string; version: number; title?: string }) => void;
+};
+export const ArtifactChatSendContext = createContext<ArtifactChatSend | null>(null);
+
+// One host-side bridge for the console's inline frames: it holds the per-frame send rate windows
+// (frameBridge.ts). A single module default keeps the 1-per-2s gate consistent across the whole
+// transcript; the gate DECISIONS live in frameBridge (D4), never in the model-authored frame. A
+// test (or a future per-view wiring) can scope its own via the context Provider.
+const sharedInlineFrameBridge = createFrameBridge();
+export const InlineFrameBridgeContext = createContext<FrameBridge>(sharedInlineFrameBridge);
+
 function Inert({ name, version, reason, testId }: { name: string; version: string; reason: string; testId: string }) {
   return (
     <div className="code-ref-inert artifact-ref-inert" data-testid={testId}>
@@ -57,6 +240,374 @@ function Inert({ name, version, reason, testId }: { name: string; version: strin
       </span>
     </div>
   );
+}
+
+// An inline ref: the chip's head (title · version · Open in panel) over the artifact's own embed
+// frame (S5's /plugins/artifact/view?embed=<id>&v=<n>), hosted with the SAME bearer/theme
+// handshake PluginView uses (S6) so there is no second frame builder or security model. The
+// frame mounts lazily near the viewport (S7a), reports its content height (host-clamped to
+// [80,1200] — taller content scrolls inside), and obeys the 6-frame cap: a frame evicted to make
+// room becomes a static "Click to resume" card keeping its last height.
+function InlineArtifactHost({
+  artifact,
+  name,
+  label,
+  older,
+}: {
+  artifact: ArtifactRef;
+  name: string;
+  label: string;
+  older: boolean;
+}) {
+  const host = useContext(InlineFrameHostContext);
+  // How THIS inline frame reaches its chat (D4 / S10b) — null when no provider wraps the
+  // transcript (a test, or a standalone render), in which case a send is refused.
+  const chat = useContext(ArtifactChatSendContext);
+  // The host-side gate bridge (per-frame rate windows); the shared module default unless a
+  // Provider scopes one (tests do, for isolation).
+  const bridge = useContext(InlineFrameBridgeContext);
+  // Each (artifact, version) gets its OWN live slot — see frameKey: an inline artifact re-emits a
+  // fresh ref per version, and keying by id alone would collapse the versions into one.
+  const key = frameKey(artifact);
+  const src = useMemo(() => embedSrc(artifact), [artifact.id, artifact.version]);
+  // The LIVE turn's newest inline ref mounts its frame at once, wherever it is (S22, #4147): a
+  // lazy frame off screen never loads, so no render verdict would reach check_artifact during
+  // the turn. Only the live-stream hook marks a ref, so history replay stays lazy. The eager
+  // frame registers like any other — it counts toward the cap and evicts least-recently-seen.
+  const scope = chat?.sessionId ?? "";
+  const eager = useSyncExternalStore(host.subscribe, () => host.isLiveRef(scope, artifact.id, artifact.version));
+  const { ref: slotRef, mounted } = useLazyMount<HTMLDivElement>(undefined, eager);
+  // Mounted → the mark has done its job; clear it so a later remount lazy-mounts like history.
+  useEffect(() => {
+    if (mounted && eager) host.consumeLiveRef(scope, artifact.id, artifact.version);
+  }, [mounted, eager, host, scope, artifact.id, artifact.version]);
+  // Whether THIS host currently holds its one live-slot claim on the registry (taken on mount,
+  // dropped on unmount). An eviction drops our live slot but NOT this claim — inlineFrames
+  // reference-counts holders — so this ref lets `resume` re-register without taking a second
+  // claim (#4111), and lets the first render below treat the pre-register window as live.
+  const claimedRef = useRef(false);
+  const liveInStore = useSyncExternalStore(host.subscribe, () => host.isLive(key));
+  // A just-mounted frame hasn't run its register effect yet, so the store still reads "not live"
+  // for that first render and the resume card would flash before `live` settled true (#4111).
+  // Treat the mounted-but-not-yet-claimed window as live; once claimed the store is authoritative
+  // (claimedRef stays true across an eviction, so an evicted frame still falls to the resume card).
+  const live = liveInStore || (mounted && !claimedRef.current);
+  // Seeded from the registry's remembered height for this (id, version) so a remount restores the
+  // frame's last size instead of snapping back to the hint or the floor (#4111); then driven by
+  // the frame's reported height. heightOf returns the floor when nothing was ever measured, so a
+  // first mount falls back to the optional `height` prop hint (0 = none). Kept across a
+  // live→resume flip (the host component stays mounted) so the card doesn't jump.
+  const [measured, setMeasured] = useState<number | null>(() => {
+    const remembered = host.heightOf(key);
+    return remembered > MIN_FRAME_HEIGHT ? remembered : artifact.height || null;
+  });
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const navigatedRef = useRef(false);
+  // Has the embed frame loaded (its load event, the kit's ready ping, or its first height report —
+  // whichever comes first)? Until then the card shows its loading skeleton over the (already
+  // mounted) frame. Reset whenever the frame goes away (evicted / unmounted), since a
+  // resumed frame is a fresh iframe that has to load again.
+  const [loaded, setLoaded] = useState(false);
+  const initTimers = useRef<number[]>([]);
+
+  // Bring this frame (back) live holding EXACTLY one claim. The eviction that drops our live slot
+  // leaves our claim intact (inlineFrames reference-counts holders, and we are still mounted), so
+  // registering outright would add a SECOND claim — then unmount's release() would see one claim
+  // remaining and keep the key live with no frame, leaking the slot forever (#4111). Drop our
+  // surviving claim first, then re-take exactly one. Used by the resume card's click AND by the
+  // visibility observer below when an evicted frame scrolls back into view (#4123).
+  const resume = useCallback(() => {
+    if (claimedRef.current) host.release(key);
+    host.register(key);
+    claimedRef.current = true;
+  }, [host, key]);
+
+  // Claim a live slot once the frame mounts (lazily); free it on unmount. Registering past the
+  // cap evicts the least-recently-visible frame — its host re-reads `isLive` and renders the
+  // resume card. A visibility observer keeps `touch` current so a frame scrolled away long ago
+  // is the one that goes (not whichever mounted first). And when an ALREADY-evicted frame scrolls
+  // back into view — its slot taken by a frame in another chat tab that is now hidden but still
+  // mounted (hidden tabs don't unmount, so they hold their slots) — it re-registers so
+  // least-recently-seen eviction reclaims the slot from those hidden frames instead of leaving a
+  // dead resume card (#4123). The re-register runs through `resume`, so it never double-claims —
+  // the single-claim invariant (#4111) still holds.
+  useEffect(() => {
+    if (!mounted) return;
+    host.register(key);
+    claimedRef.current = true;
+    const el = slotRef.current;
+    let io: IntersectionObserver | undefined;
+    if (el && typeof IntersectionObserver !== "undefined") {
+      io = new IntersectionObserver(
+        (entries) => {
+          if (!entries.some((e) => e.isIntersecting)) return;
+          if (host.isLive(key)) host.touch(key);
+          else resume();
+        },
+        { rootMargin: "0px" },
+      );
+      io.observe(el);
+    }
+    return () => {
+      io?.disconnect();
+      host.release(key);
+      claimedRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- slotRef is a stable ref; resume is stable per (host, key)
+  }, [mounted, host, key, resume]);
+
+  // Size the frame from the height it reports (protoArtifact:height — S5). Gated on e.source
+  // being THIS frame's own window, the strong guarantee; the payload is a single int the shell
+  // already clamped, so that source check is the whole gate (the shell itself notes a height is
+  // low-stakes). Re-clamp host-side to [80,1200] — the host owns the contract — so taller
+  // content scrolls inside the frame rather than growing the transcript. Also re-posts the
+  // bearer/theme when the kit pings ready, exactly as PluginView does.
+  useEffect(() => {
+    if (!live) return;
+    const onMessage = (e: MessageEvent) => {
+      const win = frameRef.current?.contentWindow;
+      if (!win || e.source !== win) return;
+      const m = (e.data || {}) as { type?: unknown; height?: unknown };
+      if (m.type === "protoagent:ready") {
+        setLoaded(true); // the kit is up — no need to wait for every subresource's load
+        postInit(win, src);
+        return;
+      }
+      if (m.type !== "protoArtifact:height") return;
+      setLoaded(true); // a measured render is a loaded frame, even if a subresource still hangs
+      const h = typeof m.height === "number" ? m.height : NaN;
+      setMeasured(host.measure(key, h));
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [live, host, key, src]);
+
+  // Post the host's verdict back down to THIS embed frame (shell.js correlates it by `cid` and
+  // relays it to the model frame's send()/openLink() Promise). Always to our own frame's window.
+  const replyToFrame = useCallback((cid: number, result: { ok: boolean; text?: string; error?: string }) => {
+    const win = frameRef.current?.contentWindow;
+    if (!win) return;
+    win.postMessage({ type: "protoArtifact:bridgeResult", cid, ...result }, "*");
+  }, []);
+
+  // The send gate + confirm chip state (ADR 0118 D4 / S19, #4137): the frame proposes, the
+  // operator decides. Trust ("Always allow from this artifact") is keyed by the artifact id from
+  // the HOST's own ref — every version of it, never an id the frame claims — so a trusted
+  // artifact's later versions skip the chip but still pass the busy/length/rate gates.
+  const gate = useFrameProposalGate({ bridge, frameId: key, trustKey: `artifact:${artifact.id}`, reply: replyToFrame });
+
+  // The send/openLink bridge (ADR 0118 D4 / S10b). The shell relays an in-frame
+  // protoArtifact.send()/openLink() UP to this host as `protoArtifact:send|openLink` carrying a
+  // correlation id (`cid`) and the D4 origin metadata (`via/artifact_id/version`). The host owns
+  // the TRUST decision — never the model-authored frame — so every request runs through the
+  // frameBridge gates here, and the verdict goes back down via replyToFrame. Gated on e.source
+  // being THIS frame's own window (a sibling or the nested frame can't drive another chip's chat),
+  // which is the strong guarantee; only mounted/live frames carry a window to match.
+  useEffect(() => {
+    if (!live) return;
+    const onBridge = (e: MessageEvent) => {
+      const win = frameRef.current?.contentWindow;
+      if (!win || e.source !== win) return; // only our own embed frame
+      const m = (e.data || {}) as {
+        type?: unknown;
+        cid?: unknown;
+        text?: unknown;
+        url?: unknown;
+        artifact_id?: unknown;
+        version?: unknown;
+      };
+      if (m.type !== "protoArtifact:send" && m.type !== "protoArtifact:openLink") return;
+      const cid = typeof m.cid === "number" ? m.cid : NaN;
+      if (Number.isNaN(cid)) return;
+
+      if (m.type === "protoArtifact:openLink") {
+        // A PROPOSAL like send (#4076 F1): https only, narrowed by the operator's
+        // `artifact.open_link_origins`, rate-gated, then the "Open ‹host› in a new tab?" chip
+        // unless this source's LINKS are trusted. The tab opens from the chip's click with
+        // noopener/noreferrer, and the frame hears success only if it really opened.
+        void gate.proposeOpen(cid, String(m.url ?? ""));
+        return;
+      }
+
+      // send: a visible user turn into THIS chat. Refuse up front when no chat is wired.
+      if (!chat) {
+        const message = "This answer can't send to chat here.";
+        gate.showRejection(message);
+        replyToFrame(cid, { ok: false, error: message });
+        return;
+      }
+      // A PROPOSAL, never a post: the shared gate either shows the confirm chip (untrusted) or
+      // — for an "Always allow" artifact — posts through the normal origin-tagged send path,
+      // after the content/busy/rate gates either way.
+      // The origin tag is the HOST's own ref, never what the frame claims: a trusted artifact
+      // must not be able to label its turn as coming from another artifact or version.
+      const origin = { artifact_id: artifact.id, version: artifact.version, title: name };
+      gate.propose(cid, String(m.text ?? ""), { isBusy: chat.isBusy, post: (text) => chat.send(text, origin) });
+    };
+    window.addEventListener("message", onBridge);
+    return () => window.removeEventListener("message", onBridge);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- frameRef/replyToFrame are stable; re-bind on live/key/chat
+  }, [live, key, chat, artifact.id, artifact.version, name, replyToFrame, gate.propose, gate.proposeOpen, gate.showRejection]);
+
+  // The live re-theme PluginView performs (ADR 0026 / S6), reused verbatim so the embed repaints
+  // on a console theme switch without a reload.
+  usePluginFrameThemeSync(frameRef, src, navigatedRef);
+
+  // A self-focusing artifact must not pull the composer's focus into its frame (#4076): the frame
+  // is click-to-activate (or Tab into it), and one that takes focus on its own is quarantined —
+  // see frameFocusGuard.ts. Keyed like the live slot, so the quarantine survives a re-render.
+  const guard = useFrameFocusGuard(frameRef, `artifact:${key}`, mounted && live);
+
+  // Hand the embed the bearer + theme after it navigates (never a token in the URL). The DS
+  // plugin-kit registers its listener asynchronously, so re-post on a short schedule; the
+  // ready-ping path above makes it exact when the kit announces itself.
+  function handleLoad(e: SyntheticEvent<HTMLIFrameElement>) {
+    navigatedRef.current = true;
+    setLoaded(true);
+    const win = e.currentTarget.contentWindow;
+    if (!win) return;
+    initTimers.current.forEach(clearTimeout);
+    initTimers.current = scheduleInitReposts(win, src);
+  }
+  useEffect(
+    () => () => {
+      initTimers.current.forEach(clearTimeout);
+      initTimers.current = [];
+    },
+    [],
+  );
+
+  // A frame that goes away (evicted to a resume card, or not yet mounted) must load again.
+  const frameUp = mounted && live;
+  useEffect(() => {
+    if (!frameUp) setLoaded(false);
+  }, [frameUp]);
+
+  const shownHeight = measured ?? MIN_FRAME_HEIGHT;
+
+  // The card chrome is the DS InlineFrameCard (@protolabsai/ui/ai): one root + one body box held at
+  // `shownHeight` across every state, so mount → load → evict → resume never jumps the transcript.
+  //   • not yet mounted (lazy, off screen) → `live` with an empty body at the remembered height;
+  //   • mounted, frame not yet loaded      → `loading` (a skeleton over the still-mounted frame);
+  //   • live                               → the frame (or the quarantine notice, #4076);
+  //   • evicted past the 6-frame cap       → `resume`: the whole body is the "Click to resume" button.
+  // The older-version state keeps its "v2 of 5" label in the title, since the DS version badge is a
+  // bare `v{n}`. The outer div stays OURS: it carries the lazy-mount/visibility observer ref, which a
+  // DS component can't take.
+  const cardState: InlineFrameCardState = !mounted
+    ? "live"
+    : !live
+      ? "resume"
+      : !loaded && !guard.quarantined
+        ? "loading"
+        : "live";
+  return (
+    <div
+      ref={slotRef}
+      className="artifact-ref-inline"
+      data-testid="artifact-ref-inline"
+      data-version={artifact.version}
+      data-older={older ? "true" : undefined}
+    >
+      <InlineFrameCard
+        title={older ? `${name} · ${label}` : name}
+        version={older ? undefined : artifact.version}
+        icon={<Sparkles size={14} />}
+        state={cardState}
+        height={shownHeight}
+        onOpen={() => openArtifactRef(artifact)}
+        onResume={resume}
+      >
+        {!mounted ? null : guard.quarantined ? (
+          <FrameQuarantineNotice what="artifact" height={shownHeight} onRun={guard.run} />
+        ) : (
+          // sandbox/allow mirror PluginView's plugin frame: same-origin so the DS kit + the gated
+          // history poll work, allow-pointer-lock (a sandbox token, not a permissions-policy feature)
+          // so a nested canvas/3D answer can capture the mouse. The NESTED artifact frame the shell
+          // builds keeps its own stricter sandbox.
+          <div className="frame-guard" data-active={guard.active ? "true" : undefined}>
+            <iframe
+              ref={frameRef}
+              data-testid="artifact-inline-frame"
+              src={apiUrl(src)}
+              title={name}
+              sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
+              allow="clipboard-read; clipboard-write"
+              style={{ height: shownHeight }}
+              onLoad={handleLoad}
+            />
+            <FrameActivationShield guard={guard} />
+          </div>
+        )}
+      </InlineFrameCard>
+      {/* The host's send/openLink verdict (ADR 0118 D4): the needs-confirm prompt, or a
+          rejection shown in place. The frame also gets the verdict on its send()/openLink()
+          Promise; this makes the decision visible to the operator, where their click landed. */}
+      <BridgeNoticeView
+        notice={gate.notice}
+        testIdPrefix="artifact"
+        source="artifact"
+        onAccept={(alwaysAllow) =>
+          gate.resolve(true, alwaysAllow, chat && {
+            isBusy: chat.isBusy,
+            post: (text) => chat.send(text, { artifact_id: artifact.id, version: artifact.version, title: name }),
+          })
+        }
+        onDismiss={() => gate.resolve(false, false, null)}
+        onClearRejection={gate.clear}
+      />
+    </div>
+  );
+}
+
+// One live card per artifact (ADR 0118 / S18d, #4124). The backend re-emits an inline ref on
+// every edit, so parallel update_artifact calls in one turn leave v2..v6 in the transcript — five
+// live frames for one answer, eating the 6-frame cap. Each inline ref announces its version to
+// the host's per-chat newest-version registry; only the newest version in THIS chat hosts the
+// live frame. An earlier one renders a compact "superseded by vN" chip (still opening its own
+// version in the panel) and mounts no InlineArtifactHost, so it claims no slot — and a ref that
+// becomes superseded mid-stream unmounts its host, whose cleanup releases the slot. Derived from
+// what is rendered, so history replay reaches the same state; scoped by chat session, so the same
+// artifact in another (possibly hidden) chat tab never collapses this one.
+function InlineArtifactRef({
+  artifact,
+  name,
+  label,
+  older,
+}: {
+  artifact: ArtifactRef;
+  name: string;
+  label: string;
+  older: boolean;
+}) {
+  const host = useContext(InlineFrameHostContext);
+  const scope = useContext(ArtifactChatSendContext)?.sessionId ?? "";
+  // Layout effect: announce before paint, so a replayed transcript never flashes earlier versions
+  // as live frames before they collapse.
+  useLayoutEffect(() => host.announceVersion(scope, artifact.id, artifact.version), [host, scope, artifact.id, artifact.version]);
+  const newest = useSyncExternalStore(host.subscribe, () => host.latestVersion(scope, artifact.id));
+  if (newest > artifact.version) {
+    return (
+      <button
+        type="button"
+        className="code-ref-chip artifact-ref-chip artifact-ref-chip--superseded"
+        data-testid="artifact-ref-superseded"
+        data-version={artifact.version}
+        title={`Open ${name} v${artifact.version} in the Artifact panel — superseded by v${newest}`}
+        onClick={() => openArtifactRef(artifact)}
+      >
+        <Sparkles size={14} aria-hidden className="code-ref-chip__icon" />
+        <span className="code-ref-chip__body">
+          <span className="artifact-ref-chip__head">
+            <span className="artifact-ref-chip__title">{name}</span>
+            <span className="code-ref-chip__sep"> · </span>
+            <span className="artifact-ref-chip__version">{`v${artifact.version} → superseded by v${newest}`}</span>
+          </span>
+        </span>
+      </button>
+    );
+  }
+  return <InlineArtifactHost artifact={artifact} name={name} label={label} older={older} />;
 }
 
 export function ArtifactRefChip({ props }: { props: Record<string, unknown> }) {
@@ -79,6 +630,12 @@ export function ArtifactRefChip({ props }: { props: Record<string, unknown> }) {
     return <Inert name={name} version={label} reason="this version is no longer kept" testId="artifact-ref-trimmed" />;
   }
   const older = state.kind === "older";
+  // Inline placement (ADR 0118 D2): host the artifact's own embed frame here. History replay and
+  // reattach reach this exact path, so an inline answer renders identically after a reload; a
+  // ref WITHOUT `inline` falls through to the unchanged chip below.
+  if (ref.inline) {
+    return <InlineArtifactRef artifact={ref} name={name} label={label} older={older} />;
+  }
   return (
     <button
       type="button"

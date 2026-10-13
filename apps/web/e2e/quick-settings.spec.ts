@@ -61,7 +61,11 @@ test("the chat composer model picker overrides the model per-tab (no global save
 
   // Trigger should now show the selected model name.
   await expect(trigger).toContainText("protolabs/fast");
-  await page.waitForTimeout(300);
+  // The override lands on the chat session (persisted by a trailing timer) — once it is in
+  // the store, any settings write the pick made has gone out too.
+  await expect
+    .poll(() => page.evaluate(() => window.localStorage.getItem("protoagent.chat.sessions") ?? ""))
+    .toContain("protolabs/fast");
   expect(settingsWrite).toBe(false);
 });
 

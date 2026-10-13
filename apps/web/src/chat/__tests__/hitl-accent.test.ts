@@ -7,14 +7,14 @@ import { describe, expect, it } from "vitest";
 import chatCss from "../chat.css?raw";
 
 // Success-toned system notes (noteToThread `noteTone:"success"`) are "the agent did the
-// thing" confirmations, so their left accent follows the workspace accent — the exact
-// `var(--pl-color-accent, var(--brand-indigo, #6366f1))` chain #2157 established for the
-// HITL card — instead of pinning to literal success green. The other tones stay semantic
-// on purpose: the #2197 export-blocked note relies on danger reading red, not accent.
+// thing" confirmations, so their left accent follows the workspace accent — the semantic
+// `var(--pl-color-accent)` the HITL card adopted (#2157, see ../hitl-accent.test.ts) —
+// instead of pinning to literal success green. The other tones stay semantic on purpose:
+// the #2197 export-blocked note relies on danger reading red, not accent.
 
-// The exact chain every accent site must use (same regex as ../hitl-accent.test.ts). A lazy
-// re-pin to `--pl-color-success` or bare `--brand-indigo` fails the success-rule assertion.
-const ACCENT = /var\(--pl-color-accent,\s*var\(--brand-indigo,\s*#6366f1\)\)/;
+// The exact form every accent site must use (same regex as ../hitl-accent.test.ts). A lazy
+// re-pin to `--pl-color-success` fails the success-rule assertion below.
+const ACCENT = /var\(--pl-color-accent\)/;
 
 // Pull a single top-level rule's body by its exact line-start selector, so each assertion
 // is scoped to its own tone rule.
@@ -44,11 +44,5 @@ describe("success-toned system notes follow the workspace accent, other tones st
 
   it("danger note keeps its semantic colour (the #2197 distinction is load-bearing)", () => {
     expect(note("danger")).toMatch(/border-left-color:\s*var\(--pl-color-status-error\)/);
-  });
-
-  it("keeps every chat.css comment free of the glued `*` `/` minifier trap", () => {
-    // Mirror scripts/check-css-comments.mjs: a `*/` glued to identifier chars closes a
-    // comment early and silently drops downstream rules from the minified bundle.
-    expect(chatCss).not.toMatch(/[A-Za-z0-9_.-]\*\/[A-Za-z0-9_.-]/);
   });
 });

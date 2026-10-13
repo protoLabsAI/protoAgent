@@ -6,17 +6,15 @@ import { ARCHETYPES } from "./fixtures.mjs";
 import { routeSnapshot } from "./routeSnapshot";
 
 // Fleet manager + archetype picker (Settings → Agents, ADR 0042). Drives the live
-// control-plane endpoints (mocked): list, create from an archetype, stop. The mock
-// FLEET is shared module state, so run serially + assert by presence (not exact counts).
-
-test.describe.configure({ mode: "serial" });
+// control-plane endpoints (mocked): list, create from an archetype, stop. Assert by
+// presence (not exact counts).
 
 // This spec MUTATES the mock fleet (create / stop / rename / add-remote). Claim a
 // private fleet scope (the mock keys state on x-e2e-fleet) and reset it to baseline
-// before every test — including serial-group retries — so a write can never leak
-// into the next test, a retry, or another spec. The scope is keyed on the parallel
-// worker so even concurrent runners (repeat-each, if mode:serial is ever lifted)
-// stay isolated from each other.
+// before every test — including retries — so a write can never leak into the next
+// test, a retry, or another spec. The scope is keyed on the parallel worker (unique
+// among the workers running at once, and a worker runs one test at a time), which is
+// what lets these tests run fully parallel instead of as one serial group.
 const fleetScope = (testInfo) => `fleet-spec-${testInfo.parallelIndex}`;
 
 test.beforeEach(async ({ page }, testInfo) => {
@@ -204,6 +202,93 @@ test("New agent: every card has its own 'What's included' preview (#2041)", asyn
   const dialog = page.locator(".pl-dialog", { hasText: "What's included" });
   await expect(dialog.getByText("MCP servers: GitHub (needs token)")).toBeVisible();
   await expect(dialog.getByText("Secrets: Brave API key")).toBeVisible();
+});
+
+// ── New agent: "From a bundle URL" + opt-in preview archetypes ───────────────────────
+// The third source: paste a bundle's git URL (+ ref) → the read-only peek shows what it
+// installs and asks for an explicit trust ack on a non-official source → the SAME set-up
+// dialog → Create posts `bundle` + `ref`. Held catalog archetypes appear only behind
+// Advanced ▸ "Show preview archetypes", badged "Preview", and the choice sticks per console.
+
+test("New agent → From a bundle URL → preview + trust → set up → create posts bundle + ref", async ({ page }) => {
+  await openAgents(page);
+  let posted = null;
+  await page.route("**/api/fleet", async (route) => {
+    if (route.request().method() === "POST") posted = route.request().postDataJSON();
+    return route.continue();
+  });
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByRole("tab", { name: "From a bundle URL" }).click();
+
+  // A non-git URL is refused before anything is fetched.
+  const urlField = page.getByLabel("Repository URL");
+  await urlField.fill("not a repo");
+  await page.getByRole("button", { name: "Look up" }).click();
+  await expect(page.getByRole("alert")).toContainText("isn't a git repository URL");
+
+  // A GitHub /tree/<ref> page URL folds to repo + ref.
+  await urlField.fill("https://github.com/acme/analyst-archetype/tree/v0.1.0");
+  await page.getByRole("button", { name: "Look up" }).click();
+  const preview = page.locator(".bundle-url-preview");
+  await expect(preview).toContainText("github.com/acme/analyst-archetype@v0.1.0");
+  await expect(page.getByLabel("Ref (optional)")).toHaveValue("v0.1.0");
+  await expect(preview).toContainText("What it installs");
+  await expect(preview.locator(".archetype-preview-member")).toHaveCount(3);
+  await expect(preview).toContainText("built-in");
+  await expect(preview).toContainText("It will ask for: Data folders");
+  await expect(preview).toContainText("isn't an official source");
+
+  // Next waits for the trust ack.
+  const next = page.getByRole("button", { name: /^Next/ });
+  await expect(next).toBeDisabled();
+  await preview.getByText("I trust this repository").click();
+  await expect(next).toBeEnabled();
+  await next.click();
+
+  const dialog = setupDialog(page);
+  await expect(dialog).toContainText("Set up Analyst");
+  await expect(dialog).toContainText("installs 3 plugins");
+  await expect(dialog.getByLabel("Agent name")).toHaveValue("analyst");
+  await dialog.getByLabel("Agent name").fill("databot");
+  // The bundle's required config_inputs answer hard-gates Create, exactly like a catalog card.
+  await expect(createButton(page)).toBeDisabled();
+  await dialog.getByLabel("Data folders").fill("/Users/me/data");
+  await createButton(page).click();
+  await expect(page).toHaveURL(/\/app\/agent\/databot-ab12\//);
+  expect(posted?.bundle).toBe("https://github.com/acme/analyst-archetype");
+  expect(posted?.ref).toBe("v0.1.0");
+  expect(posted?.requires_tools).toEqual(["data_query", "data_chart"]);
+  expect(posted?.config_inputs).toEqual({ "data.data_dirs": "/Users/me/data" });
+});
+
+test("New agent → From a bundle URL: an unreadable repo shows the server's reason", async ({ page }) => {
+  await openAgents(page);
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByRole("tab", { name: "From a bundle URL" }).click();
+  await page.getByLabel("Repository URL").fill("https://github.com/acme/missing-archetype");
+  await page.getByRole("button", { name: "Look up" }).click();
+  await expect(page.getByRole("alert")).toContainText("repository not found");
+  await expect(page.getByRole("button", { name: /^Next/ })).toBeDisabled();
+});
+
+test("New agent: held archetypes stay hidden until 'Show preview archetypes', then carry a Preview badge", async ({ page }) => {
+  await openAgents(page);
+  await page.getByRole("button", { name: "New agent" }).click();
+  await expect(page.locator(".pl-radiocard", { hasText: "Analyst" })).toHaveCount(0);
+  await page.getByRole("button", { name: /^Advanced \(1\)/ }).click();
+  await expect(page.locator(".pl-radiocard", { hasText: "Analyst" })).toHaveCount(0);
+
+  await page.getByText("Show preview archetypes").click();
+  const held = page.locator(".pl-radiocard", { hasText: "Analyst" });
+  await expect(held).toBeVisible();
+  await expect(held.locator(".pl-badge")).toHaveText("Preview");
+
+  // Persisted per console: a reload keeps the opt-in.
+  await page.reload({ waitUntil: "load" });
+  await openFleet(page);
+  await page.getByRole("button", { name: "New agent" }).click();
+  await page.getByRole("button", { name: /^Advanced \(2\)/ }).click();
+  await expect(page.locator(".pl-radiocard", { hasText: "Analyst" })).toBeVisible();
 });
 
 // ── The set-up step's hard gate (#2977/#2979/#2984) ────────────────────────────────
@@ -756,8 +841,9 @@ test("⌘K → Fleet Room: presence, DM a member (the wired chat), broadcast", a
   await expect(room.locator(".flr__composer")).toBeVisible();
 
   // The bottom bar broadcasts to everyone online → a success toast.
-  await room.locator(".flr__input").fill("standup in 5");
-  await room.locator(".flr__send").click();
+  const composer = room.locator(".flr__composer");
+  await composer.getByRole("textbox").fill("standup in 5");
+  await composer.getByRole("button", { name: "Send" }).click();
   await expect(page.locator(".pl-toast", { hasText: /Broadcast to \d+ member/ })).toBeVisible();
 });
 
@@ -778,24 +864,41 @@ test("⌘K → Fleet Room: @-address a member in the composer, then send opens i
   await page.goto("/app/", { waitUntil: "load" });
   await openFleetRoom(page);
   const room = page.locator(".flr");
-  // Typing "@" opens a member picker; picking sets the address chip.
-  await room.locator(".flr__input").fill("@ava");
+  const composer = room.locator(".flr__composer");
+  // Typing "@" opens a member picker; picking sets the address chip (a PromptInput attachment).
+  await composer.getByRole("textbox").fill("@ava");
   await room.locator(".flr__mention", { hasText: "ava" }).click();
-  await expect(room.locator(".flr__target")).toContainText("@ava");
+  await expect(composer.locator(".pl-prompt__chip")).toContainText("@ava");
   // Type a message and send → morphs into ava's DM (the wired chat), message pre-sent.
-  await room.locator(".flr__input").fill("ship it");
-  await room.locator(".flr__send").click();
+  await composer.getByRole("textbox").fill("ship it");
+  await composer.getByRole("button", { name: "Send" }).click();
   await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
+});
+
+test("⌘K → Fleet Room: removing the @-address chip clears the target back to broadcast", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+  const composer = room.locator(".flr__composer");
+  // Address ava → a removable attachment chip.
+  await composer.getByRole("textbox").fill("@ava");
+  await room.locator(".flr__mention", { hasText: "ava" }).click();
+  await expect(composer.locator(".pl-prompt__chip")).toContainText("@ava");
+  // Removing the chip drops the target back to the read-only broadcast chip.
+  await composer.getByRole("button", { name: "Remove @ava" }).click();
+  await expect(composer.locator(".pl-prompt__chip")).toContainText("Everyone else");
+  await expect(composer.locator(".pl-prompt__chip")).not.toContainText("@ava");
 });
 
 test("⌘K → Fleet Room: a TYPED @name addresses that member without using the picker", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await openFleetRoom(page);
   const room = page.locator(".flr");
+  const composer = room.locator(".flr__composer");
   // Never touch the picker — just type "@ava <message>" and send, the way people actually
   // type. It must address ava (open its DM), NOT broadcast the literal text.
-  await room.locator(".flr__input").fill("@ava ship it");
-  await room.locator(".flr__send").click();
+  await composer.getByRole("textbox").fill("@ava ship it");
+  await composer.getByRole("button", { name: "Send" }).click();
   await expect(page.getByPlaceholder(/Message ava/i)).toBeVisible();
   await expect(page.locator(".pl-toast", { hasText: /Broadcast to/ })).toHaveCount(0);
 });
@@ -960,9 +1063,9 @@ test("Fleet Room diagnostics: switching members retargets the drawer; a fleet-se
 
   // Change the ACTIVE FLEET SELECTION (the composer address) to a different member — the drawer
   // is drawer-local and authoritative (ADR 0042), so it must NOT retarget to follow it.
-  await room.locator(".flr__input").fill("@ro");
+  await room.locator(".flr__composer").getByRole("textbox").fill("@ro");
   await room.locator(".flr__mention", { hasText: "roxy" }).click();
-  await expect(room.locator(".flr__target")).toContainText("@roxy");
+  await expect(room.locator(".flr__composer").locator(".pl-prompt__chip")).toContainText("@roxy");
   await expect(page.getByTestId("diag-member")).toHaveText("ava");
   await expect(page.getByTestId("diag-logs")).toContainText("[ava]");
 

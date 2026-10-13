@@ -8,23 +8,32 @@ ROOT anchors there off the repo root rather than the test's parent dir."""
 from __future__ import annotations
 
 import importlib.util
+import json
+import re
 import sys
 from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.platform_sensitive
+
 ROOT = Path(__file__).resolve().parent.parent / "plugins" / "artifact"
 
 
-def _load(monkeypatch, tmp_path):
-    """Fresh package bound to a temp ARTIFACT_DIR so history is isolated per test.
+def _load(monkeypatch, tmp_path=None):
+    """Fresh package. With ``tmp_path`` given, bind ARTIFACT_DIR to it so history is isolated
+    per test (the common case). With ``tmp_path`` omitted — the instance-store tests, which
+    call ``_pin_roots`` first — leave ARTIFACT_DIR unset and PROTOAGENT_INSTANCE as the caller
+    set it, so the store resolves through the instance plugin store (graph.sdk.plugin_store)
+    rather than the env override.
 
     Loaded as a PACKAGE (submodule_search_locations, the way the host loader does)
     so the plugin's relative imports resolve. Prior runs' submodules are evicted
     from sys.modules first — a cached ``artifact_under_test._tools`` would carry
     mutable module state (nudge counters, poll stamps) across tests."""
-    monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path))
-    monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    if tmp_path is not None:
+        monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path))
+        monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
     for k in [k for k in sys.modules if k.startswith("artifact_under_test")]:
         del sys.modules[k]
     spec = importlib.util.spec_from_file_location(
@@ -218,7 +227,7 @@ def test_legacy_flat_history_migrates_to_versioned(monkeypatch, tmp_path):
 def test_bad_history_env_falls_back_to_default(monkeypatch, tmp_path):
     monkeypatch.setenv("ARTIFACT_HISTORY", "not-a-number")
     art = _load(monkeypatch, tmp_path)  # must not raise at import
-    assert art._max_history() == 20  # bad value → default, never crashes
+    assert art._max_history() == 200  # bad value → default, never crashes (200 since #4138)
 
 
 def test_config_layer_precedence_env_then_ui_then_default(monkeypatch, tmp_path):
@@ -228,7 +237,7 @@ def test_config_layer_precedence_env_then_ui_then_default(monkeypatch, tmp_path)
 
     # default (no env, no host config — _plugin_cfg() returns {} without a host).
     assert art._ask_enabled() is False
-    assert art._max_history() == 20
+    assert art._max_history() == 200  # was 20 before #4138 raised it for inline answers
 
     # host/UI config drives it (simulate Settings ▸ Plugins → artifact.ask_enabled).
     monkeypatch.setattr(art._config, "_plugin_cfg", lambda: {"ask_enabled": True, "history": 7})
@@ -433,7 +442,7 @@ def test_shell_surfaces_persistent_poll_failures(monkeypatch, tmp_path):
     # empty-state lie — the exact bug this guards against.
     assert "if (!r.ok) { pollFailed(" in js
     # both success shapes reset the streak and remove the strip; 304 short-circuits first.
-    assert "if (r.status === 304) { pollOk(); applyPendingSel(true); return; }" in js
+    assert "if (r.status === 304) { pollOk(); applyPendingSel(my); return; }" in js
     assert "pollFails=0" in js
     # network-level errors (fetch threw — no response) count too; the bare swallow is gone.
     assert 'pollFailed("")' in js
@@ -669,15 +678,25 @@ def test_libs_are_vendored_same_origin_not_cdn(monkeypatch, tmp_path):
     html = art._SHELL_HTML + art._SHELL_JS
     assert "cdnjs.cloudflare.com" not in html  # no external CDN dependency
     assert "/plugins/artifact/vendor/" in html  # served same-origin
-    # all four libs present, each with an integrity hash.
+    # all thirteen libs present, each with an integrity hash.
     for lib in (
         "mermaid.min.js",
         "react.production.min.js",
         "react-dom.production.min.js",
         "babel.min.js",
+        "pptx-renderer.min.js",
+        "vega.min.js",
+        "vega-lite.min.js",
+        "vega-embed.min.js",
+        "jszip.min.js",
+        "docx-preview.min.js",
+        "pdfjs.min.mjs",
+        "pdfjs-worker.min.mjs",
+        "three.module.min.js",  # r170 self-contained ESM, import-map resolved (ADR 0118 D6)
+        "anime.esm.min.js",  # anime.js 4.5.0 self-contained ESM, import-map resolved (ADR 0118 D6)
     ):
         assert lib in html
-    assert html.count("sha512-") == 4 and 'integrity="' in html
+    assert html.count("sha512-") == 14 and 'integrity="' in html
     # crossorigin is REQUIRED even same-origin: the sandbox is an opaque origin, so
     # the lib load is cross-origin and SRI needs the CORS fetch to validate.
     assert 'crossorigin="anonymous"' in html
@@ -688,8 +707,9 @@ def test_vendored_files_exist_and_match_the_allowlist(monkeypatch, tmp_path):
     vendor = ROOT / "vendor"
     for name in art._VENDOR_FILES:
         assert (vendor / name).exists(), f"vendor/{name} missing"
-    # no stray files served that aren't on disk, no disk files unlisted (UMD .js + ESM .mjs).
-    on_disk = {p.name for p in vendor.iterdir() if p.suffix in (".js", ".mjs")}
+    # no stray files served that aren't on disk, no disk files unlisted (UMD/ESM .js/.mjs +
+    # the DS element-default .css sheet; .LICENSES.txt sidecars are not served, so not counted).
+    on_disk = {p.name for p in vendor.iterdir() if p.suffix in (".js", ".mjs", ".css")}
     assert on_disk == art._VENDOR_FILES
 
 
@@ -711,6 +731,251 @@ def test_vendor_route_serves_js_and_blocks_traversal(monkeypatch, tmp_path):
     assert c.get("/plugins/artifact/vendor/..%2f__init__.py").status_code == 404
 
 
+def test_three_js_is_vendored_sri_pinned_and_served(monkeypatch, tmp_path):
+    """three.js (ADR 0118 D6, operator decision 2026-10-10): the r170 self-contained
+    minified ESM build is vendored same-origin, importable via the bare `three`
+    specifier the same way as d3, and SRI-pinned — the shell's integrity hash is the
+    sha512 of the EXACT bytes the vendor route serves, never a CDN."""
+    import base64
+    import hashlib
+
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    c = TestClient(_app(art))
+
+    # the vendor route serves the file: same-origin, CORS, immutable, as JavaScript.
+    r = c.get("/plugins/artifact/vendor/three.module.min.js")
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]
+    assert "immutable" in r.headers.get("cache-control", "")
+    assert r.headers.get("access-control-allow-origin") == "*"  # opaque-sandbox cross-origin fetch
+    served = r.content
+
+    # the shell's "three" SRI == sha512 of those served bytes (the ADR 0118 D6 vendoring fence).
+    js = art._SHELL_JS
+    want = "sha512-" + base64.b64encode(hashlib.sha512(served).digest()).decode()
+    assert want in js, "shell three SRI does not match sha512 of the served vendored bytes"
+
+    # resolvable from the no-same-origin sandbox the way d3 is: bare `three` → the same-origin
+    # vendored module in the import map, and the module is SELF-CONTAINED — no further
+    # `import … from "./three.core.min.js"` subresource that the nonce CSP / allowlist would
+    # block (r171+ split that out; r170 is the last single-file release). So an html/react
+    # artifact importing "three" loads with no CSP or SRI error.
+    html = art._SHELL_HTML + js
+    # `"three": V + "three.module.min.js"` — the vendor prefix lives in V, so assert the
+    # specifier, the same-origin prefix and the filename separately (as the sibling tests do).
+    assert '"three":' in html and "/plugins/artifact/vendor/" in html and "three.module.min.js" in html
+    assert "cdnjs.cloudflare.com" not in html and "unpkg.com" not in html
+    assert b"three.core" not in served  # single-file build — nothing else to fetch
+    assert b"export{" in served  # it is an ES module, importable as-is
+
+
+def test_animejs_is_vendored_sri_pinned_and_served(monkeypatch, tmp_path):
+    """anime.js (ADR 0118 D6, operator decision 2026-10-10: the MIT animation library in place of
+    GSAP, whose license prohibits no-code animation tools): the 4.5.0 self-contained minified ESM
+    bundle is vendored same-origin, importable via the bare `animejs` specifier, and SRI-pinned to
+    the exact bytes the vendor route serves."""
+    import base64
+    import hashlib
+
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    c = TestClient(_app(art))
+
+    r = c.get("/plugins/artifact/vendor/anime.esm.min.js")
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]
+    assert "immutable" in r.headers.get("cache-control", "")
+    assert r.headers.get("access-control-allow-origin") == "*"
+    served = r.content
+
+    js = art._SHELL_JS
+    want = "sha512-" + base64.b64encode(hashlib.sha512(served).digest()).decode()
+    assert want in js, "shell anime SRI does not match sha512 of the served vendored bytes"
+
+    html = art._SHELL_HTML + js
+    assert '"animejs":' in html and "anime.esm.min.js" in html
+    assert "cdnjs.cloudflare.com" not in html and "unpkg.com" not in html
+    assert b'from"' not in served and b"from \"" not in served  # self-contained: nothing else to fetch
+    assert b"export{" in served and b" as animate" in served  # an ES module exporting animate()
+
+
+# ── the DS embed module pair (embed.js + its ./tokens.js relative dep) ───────────
+
+_VENDOR = ROOT / "vendor"
+# @protolabsai/design is installed under the console workspace (apps/web). ROOT is
+# <repo>/plugins/artifact, so ROOT.parent.parent is the repo root; DS resolution walks up
+# from apps/web/src, so the pinned 0.12.0 copy lives here (mirrors test_artifact_vega.py).
+_DESIGN_PKG = ROOT.parent.parent / "apps" / "web" / "node_modules" / "@protolabsai" / "design"
+
+
+def _strip_vendor_header(text: str) -> str:
+    """The vendored copy is a leading `/** … */` header comment + the verbatim package source.
+    The header is the file's FIRST block comment, so everything after its first `*/` (newlines
+    trimmed) is the source byte-for-byte — what the drift test compares to the installed package."""
+    return text.split("*/", 1)[1].lstrip("\n")
+
+
+def test_the_embed_module_relative_imports_are_all_vendored_and_allowlisted(monkeypatch, tmp_path):
+    """The gotcha guard (no node_modules needed): embed.js is NOT self-contained — it imports
+    `./tokens.js`. Every relative import specifier in the vendored module must name a FLAT sibling
+    that is vendored on disk AND in _VENDOR_FILES, or the sandbox 404s that subresource at load
+    time (the flat /vendor/{name} route can't serve a nested path)."""
+    art = _load(monkeypatch, tmp_path)
+    mod = (_VENDOR / "pl-design-embed.mjs").read_text(encoding="utf-8")
+    # static `… from "./x"` and dynamic `import("./x")` specifiers that are relative (start with `.`)
+    specs = re.findall(r"""(?:from|import)\s*\(?\s*["'](\.[^"']+)["']""", mod)
+    assert "./tokens.js" in specs  # the known dependency is actually present (guard isn't vacuous)
+    for spec in specs:
+        assert spec.startswith("./") and "/" not in spec[2:], f"{spec} is not a flat sibling"
+        name = spec[2:]
+        assert (_VENDOR / name).exists(), f"{spec} not vendored in plugins/artifact/vendor/"
+        assert name in art._VENDOR_FILES, f"{spec} not in _VENDOR_FILES"
+
+
+def test_the_embed_module_pair_is_vendored_and_served_same_origin(monkeypatch, tmp_path):
+    """Both the embed module and its ./tokens.js dep are allowlisted and served 200 as JavaScript
+    with the vendor route's CORS header (the shell loads them same-origin, like pl-design-vega.mjs).
+    Not SRI-pinned in the LIB map — a same-origin load, not an opaque-sandbox subresource."""
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    c = TestClient(_app(art))
+    for name in ("pl-design-embed.mjs", "tokens.js"):
+        assert name in art._VENDOR_FILES
+        r = c.get(f"/plugins/artifact/vendor/{name}")
+        assert r.status_code == 200, name
+        assert "javascript" in r.headers["content-type"], name
+        assert r.headers.get("access-control-allow-origin") == "*", name
+        assert "@protolabsai/design@" in r.text, name  # the header names the package + version
+    # neither is SRI-pinned in the shell's LIB map (same-origin shell load, not a frame subresource)
+    lib_map = art._SHELL_JS.split("var LIB")[1].split("}", 1)[0]
+    assert "pl-design-embed.mjs" not in lib_map and "tokens.js" not in lib_map
+
+
+def test_the_vendored_embed_pair_matches_the_installed_package():
+    """Drift guard: pl-design-embed.mjs / tokens.js are a VERBATIM copy of @protolabsai/design's
+    src/embed.js / src/tokens.js. Where the package is installed (apps/web/node_modules), each
+    vendored file must be byte-identical to the package source once the vendored header is stripped,
+    and the headers must name the installed version — a DS bump that touches embed/tokens has to be
+    re-vendored here. Skips cleanly on the web-less lanes that don't install the console deps."""
+    if not (_DESIGN_PKG / "src" / "embed.js").exists():
+        pytest.skip("@protolabsai/design not installed (apps/web/node_modules)")
+    version = json.loads((_DESIGN_PKG / "package.json").read_text(encoding="utf-8"))["version"]
+    for vend_name, src_name in (("pl-design-embed.mjs", "embed.js"), ("tokens.js", "tokens.js")):
+        vend = (_VENDOR / vend_name).read_text(encoding="utf-8")
+        src = (_DESIGN_PKG / "src" / src_name).read_text(encoding="utf-8")
+        assert _strip_vendor_header(vend) == src, f"{vend_name} drifted from @protolabsai/design"
+        assert f"@protolabsai/design@{version}" in vend, f"{vend_name} header must name design@{version}"
+
+
+# ── the DS element-default stylesheet (@protolabsai/ui-css styles/embed.css) ─────
+
+# apps/web depends on @protolabsai/ui-css (^0.67.0), which ships styles/embed.css. node resolves it
+# by walking up from apps/web/src; UNLIKE design (pinned to a conflicting version, kept nested in
+# apps/web/node_modules), ui-css hoists to the repo-root node_modules here. Check the nested copy
+# first, then the hoisted repo-root copy — either is "the installed package" the drift guard matches.
+_UI_CSS_CANDIDATES = (
+    ROOT.parent.parent / "apps" / "web" / "node_modules" / "@protolabsai" / "ui-css",
+    ROOT.parent.parent / "node_modules" / "@protolabsai" / "ui-css",
+)
+
+
+def _installed_ui_css():
+    for pkg in _UI_CSS_CANDIDATES:
+        if (pkg / "styles" / "embed.css").exists():
+            return pkg
+    return None
+
+
+def test_the_embed_css_sheet_is_served_as_css_not_javascript(monkeypatch, tmp_path):
+    """pl-embed.css is allowlisted and served 200 as text/css (NEVER application/javascript) with
+    the vendor route's CORS + immutable headers — the sandboxed frame applies it as a stylesheet.
+    The route picks the media type by extension, so the .js/.mjs libs beside it stay JavaScript."""
+    from fastapi.testclient import TestClient
+
+    art = _load(monkeypatch, tmp_path)
+    c = TestClient(_app(art))
+
+    assert "pl-embed.css" in art._VENDOR_FILES
+    r = c.get("/plugins/artifact/vendor/pl-embed.css")
+    assert r.status_code == 200
+    ctype = r.headers["content-type"]
+    assert "text/css" in ctype and "javascript" not in ctype
+    assert "immutable" in r.headers.get("cache-control", "")
+    assert r.headers.get("access-control-allow-origin") == "*"  # opaque-sandbox cross-origin fetch
+    assert "@protolabsai/ui-css@" in r.text  # the header names the package + version
+
+    # the extension switch must not regress the JS/ESM libs beside it — still served as JavaScript.
+    for name in ("react.production.min.js", "d3.mjs", "pl-design-embed.mjs"):
+        jr = c.get(f"/plugins/artifact/vendor/{name}")
+        assert jr.status_code == 200, name
+        assert "javascript" in jr.headers["content-type"], name
+        assert "text/css" not in jr.headers["content-type"], name
+
+
+def test_the_vendored_embed_css_matches_the_installed_package():
+    """Drift guard: pl-embed.css is a VERBATIM copy of @protolabsai/ui-css's styles/embed.css.
+    Where the package is installed (apps/web/node_modules, or the hoisted repo-root node_modules it
+    resolves to from apps/web), the vendored file must be byte-identical once the vendored header is
+    stripped, and the header must name the installed version — a ui-css bump that touches embed.css
+    has to be re-vendored here. Skips cleanly on the web-less lanes that don't install console deps."""
+    pkg = _installed_ui_css()
+    if pkg is None:
+        pytest.skip("@protolabsai/ui-css not installed (apps/web or repo-root node_modules)")
+    version = json.loads((pkg / "package.json").read_text(encoding="utf-8"))["version"]
+    vend = (_VENDOR / "pl-embed.css").read_text(encoding="utf-8")
+    src = (pkg / "styles" / "embed.css").read_text(encoding="utf-8")
+    assert _strip_vendor_header(vend) == src, "pl-embed.css drifted from @protolabsai/ui-css styles/embed.css"
+    assert f"@protolabsai/ui-css@{version}" in vend, f"pl-embed.css header must name ui-css@{version}"
+
+
+# ── shell.js uses the DS embed layer for frame token injection (ADR 0118) ────────
+
+
+def test_shell_uses_embed_module_for_token_injection(monkeypatch, tmp_path):
+    """shell.js must have NO hand-written THEME_TOKENS list (deleted in favour of the DS embed
+    layer) and must reference the two DS embed functions it delegates to.  The embed module
+    itself is separately guarded by the drift + serve tests above; this test just confirms the
+    wiring in shell.js is present."""
+    art = _load(monkeypatch, tmp_path)
+    js = art._SHELL_JS
+    # The hand-written list is gone — a literal "THEME_TOKENS" in shell.js is a regression.
+    assert "THEME_TOKENS" not in js
+    # The DS embed functions must be referenced (called in themeTokens / base).
+    assert "snapshotToCss" in js
+    assert "themeTokenSnapshot" in js
+    # The module is loaded from the vendor path — same-origin like pl-design-vega.mjs.
+    assert "/plugins/artifact/vendor/pl-design-embed.mjs" in js
+
+
+def test_shell_base_token_css_uses_snapshotToCss(monkeypatch, tmp_path):
+    """base() must build the frame's :root CSS via snapshotToCss, not by manually
+    concatenating individual token declarations.  Guards ADR 0118: every token value
+    crossing into a frame passes through snapshotToCss's < { } ; guard."""
+    art = _load(monkeypatch, tmp_path)
+    js = art._SHELL_JS
+    # snapshotToCss called with the ":root" selector inside base().
+    assert 'snapshotToCss(snap,":root")' in js
+    # The old manual concatenation pattern must not be present.
+    assert "decl+=" not in js and "Object.keys(all).forEach" not in js
+
+
+def test_shell_base_uses_pl_embed_css_not_defaults_string(monkeypatch, tmp_path):
+    """shell.js must have NO hand-written DEFAULTS element-CSS string and must reference
+    /plugins/artifact/vendor/pl-embed.css so the DS embed defaults reach the frame as a
+    same-origin <link> (bd-8cfo slice 4/4, ADR 0118). The DEFAULTS var was a hand-written
+    :where() CSS block; the vendored pl-embed.css replaces it."""
+    art = _load(monkeypatch, tmp_path)
+    js = art._SHELL_JS
+    # The hand-written DEFAULTS var is gone — a literal "DEFAULTS" in shell.js is a regression.
+    assert "DEFAULTS" not in js
+    # base() must reference the vendored embed stylesheet.
+    assert "/plugins/artifact/vendor/pl-embed.css" in js
+
+
 # ── the new kinds: markdown + the react import map + the DS surface ──────────────
 
 
@@ -729,6 +994,7 @@ def test_react_kind_uses_import_map_and_module_babel(monkeypatch, tmp_path):
         ('"d3":', "d3.mjs"),
         ('"chart.js":', "chartjs.mjs"),
         ('"lucide":', "lucide.mjs"),
+        ('"three":', "three.module.min.js"),
     ):
         assert spec in html and file in html, spec
 
@@ -942,7 +1208,7 @@ def test_live_theme_repush_is_wired(monkeypatch, tmp_path):
     assert "st.setProperty(k,String(m.tokens[k]))" in html
     # shell side: observe the kit re-theme + re-push after a fresh srcdoc load.
     assert "new MutationObserver(pushTheme).observe(document.documentElement" in html
-    assert '$frame.addEventListener("load", pushTheme)' in html
+    assert 'frameNav.onLoad(pushTheme)' in html  # follows a replaced frame element (#4076)
 
 
 # ── file artifacts (ADR 0092 D2): save_file_artifact + sidecar blobs + blob route ─
@@ -1084,7 +1350,7 @@ def test_save_file_artifact_registered_and_shell_has_filecard(monkeypatch, tmp_p
     assert "save_file_artifact" in names
     # the shell renders file kinds as a download card, hides Edit, and downloads via the blob route
     html = art._SHELL_HTML + art._SHELL_JS
-    assert "function fileCard(v)" in html
+    assert "function fileCard(v, note)" in html
     assert 'a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks)' in html
     assert "/blob?version=" in html
 
@@ -1115,7 +1381,7 @@ def test_xlsx_extraction_reads_sheet_cells(monkeypatch, tmp_path):
     wb.save(str(p))
     art.save_file_artifact.invoke({"path": str(p)})
     code = _arts(art)[0]["versions"][0]["code"]
-    assert "# Sales" in code and "Region" in code and "1200" in code
+    assert "### sheet: Sales" in code and "Region,Total" in code and "West,1200" in code
 
 
 def test_unparseable_office_file_degrades_not_crashes(monkeypatch, tmp_path):
@@ -1448,7 +1714,7 @@ def test_parallel_update_artifact_calls_both_land(monkeypatch, tmp_path):
     # (The artifact-ref chip tail after the text is stripped, as the server does — #3617.)
     from graph.components import strip_component
 
-    assert sorted(strip_component(r).split("version ")[1].rstrip(".") for r in results) == ["2", "3"]
+    assert sorted(strip_component(r).split("version ")[1].split(".")[0] for r in results) == ["2", "3"]
 
 
 # ── html artifacts keep their document prologue first ────────────────────────────────
@@ -1476,9 +1742,32 @@ def _html_doc(art):
     return build
 
 
+def _import_map_script(js):
+    """Rebuild the ESM import-map ``<script>`` the shell concatenates for html/react artifacts,
+    from the REAL ``IMPORTMAP`` specifier list in shell.js — so dropping the ``three`` entry (or
+    the html branch no longer injecting the map) fails these assertions rather than passing on a
+    source string that happens to appear in the react branch."""
+    import json
+    import re
+
+    m = re.search(r"var IMPORTMAP = JSON\.stringify\(\{ imports: \{(.+?)\}\s*\}\);", js, re.S)
+    assert m, "IMPORTMAP moved or changed shape — keep this extraction in sync"
+    pairs = re.findall(r'"([^"]+)":\s*V\s*\+\s*"([^"]+)"', m.group(1))
+    assert pairs, "no `spec: V + file` entries found in IMPORTMAP"
+    imports = {spec: "/plugins/artifact/vendor/" + file for spec, file in pairs}
+    return '<script type="importmap">' + json.dumps({"imports": imports}) + "</script>"
+
+
 def test_html_kind_injects_through_the_prologue_aware_builder(monkeypatch, tmp_path):
     js = _load(monkeypatch, tmp_path)._SHELL_JS
-    assert 'if (kind === "html") return htmlDoc(code, dsLink() + base(kind));' in js
+    # html still routes through the prologue-aware builder (injection inside <head>) AND now
+    # carries the curated ESM import map, like react (regression: it used to inject only
+    # dsLink()+base(), so a bare `import … from "three"` had no map and failed — ADR 0118 D6).
+    assert "var im = htmlImportMap(code);" in js
+    assert (
+        "return htmlDoc(im.code, dsLink() + base(kind) + (im.map ? "
+        "'<script type=\"importmap\">' + im.map + '<\\/script>' : ''));"
+    ) in js
     assert "dsLink() + base(kind) + code" not in js  # the prepend that displaced the doctype
 
 
@@ -1517,6 +1806,30 @@ def test_html_injection_keeps_the_document_prologue_first(monkeypatch, tmp_path,
     assert _html_doc(_load(monkeypatch, tmp_path))(code) == expected
 
 
+def test_html_artifact_srcdoc_carries_the_three_import_map(monkeypatch, tmp_path):
+    """Regression (review of #4118): an html artifact importing three must resolve the bare
+    ``three`` specifier. The html kind used to inject only ``dsLink()+base()`` — no import map —
+    so ``import * as THREE from "three"`` failed in EVERY html artifact (only react got the map),
+    making the three.js support promised in the changelog/LICENSES a no-op. Build the html srcdoc
+    through the real prologue-aware builder and assert the curated map lands inside ``<head>``,
+    ahead of the author's module, with ``three`` → the same-origin vendored file."""
+    art = _load(monkeypatch, tmp_path)
+    importmap = _import_map_script(art._SHELL_JS)
+    assert '"three":' in importmap and "three.module.min.js" in importmap  # the specifier resolves
+
+    code = (
+        "<!doctype html><html><head></head><body>"
+        '<script type="module">import * as THREE from "three";new THREE.Scene();</script>'
+        "</body></html>"
+    )
+    doc = _html_doc(art)(code, inject=importmap)
+    # the import map is present and sits inside the head, BEFORE the author module that uses it —
+    # an import map after a module load would be ignored, so ordering is what makes `three` resolve.
+    assert importmap in doc
+    assert doc.index("<head>") < doc.index(importmap) < doc.index("<body>")
+    assert doc.index(importmap) < doc.index('import * as THREE from "three"')
+
+
 # ── pinning: exempt a long-lived artifact from history eviction ─────────────────────
 # Field case (careercoach resume skill): a master resume kept as an HTML artifact, its id
 # recorded elsewhere, was silently evicted after ~20 unrelated artifacts — history counts
@@ -1533,7 +1846,8 @@ def _ids(art):
 
 
 def test_pinned_artifact_survives_30_unrelated_artifacts(monkeypatch, tmp_path):
-    art = _load(monkeypatch, tmp_path)  # default history = 20
+    monkeypatch.setenv("ARTIFACT_HISTORY", "20")  # the pre-#4138 default these cases were written at
+    art = _load(monkeypatch, tmp_path)
     resume = _show(art, "<h1>Resume</h1>", "Master resume")
     assert "Pinned artifact" in art.pin_artifact.invoke({"artifact_id": resume})
     unrelated = [_show(art, f"<p>{i}</p>") for i in range(30)]
@@ -1613,7 +1927,8 @@ def test_pinned_artifacts_are_stored_first_so_a_downgrade_keeps_them(monkeypatch
     ``artifacts[:history]``. A long-lived pinned artifact is usually the OLDEST touched, so in
     recency order that first old write would evict it (and GC a file artifact's blobs). Stored
     pins-first, the old slice keeps them until `history` newer artifacts push them out."""
-    art = _load(monkeypatch, tmp_path)  # default history = 20
+    monkeypatch.setenv("ARTIFACT_HISTORY", "20")  # the pre-#4138 default these cases were written at
+    art = _load(monkeypatch, tmp_path)
     pins = [_show(art, f"<p>pin {i}</p>", f"P{i}") for i in range(3)]
     for p in pins:
         art.pin_artifact.invoke({"artifact_id": p})
@@ -1702,7 +2017,8 @@ def test_list_get_and_history_report_pinned_state(monkeypatch, tmp_path):
     listing = art.list_artifacts.invoke({})
     rows = {ln.split()[0]: ln for ln in listing.splitlines() if ln.startswith("a-")}
     assert "· pinned" in rows[resume] and "· pinned" not in rows[plain]
-    assert "1/10 pins used" in listing and "20 most recently touched unpinned" in listing
+    assert "1/10 pins used" in listing and "up to 200 unpinned artifacts are kept" in listing
+    assert "over that cap" not in listing
     assert "· pinned" in art.get_artifact.invoke({"artifact_id": resume}).splitlines()[0]
     assert "pinned" not in art.get_artifact.invoke({"artifact_id": plain}).splitlines()[0]
     # The panel's /history payload (the raw store) carries it as well.
@@ -1845,3 +2161,563 @@ def test_parallel_pins_cannot_overshoot_the_cap(monkeypatch, tmp_path):
         th.join(timeout=10)
     assert sorted("Pinned artifact" in r for r in results) == [False, True], results
     assert len(art._store._pinned(art._read_store())) == 1
+
+
+# ── ADR 0004 / 0065: the default store lives in the instance plugin store ────────
+# With ARTIFACT_DIR unset the store used to be derived straight from ~ (ignoring
+# PROTOAGENT_BOX_ROOT / PROTOAGENT_HOME): a box-scoped server wrote to the real home,
+# and a default install landed one level ABOVE the instance root. It now resolves via
+# graph.sdk.plugin_store (box-root aware) and migrates legacy ~/.protoagent/artifact data.
+
+
+def _pin_roots(monkeypatch, tmp_path, instance=None):
+    """Point the box root and HOME at SEPARATE dirs under tmp and re-resolve instance paths,
+    so the store stays inside tmp and the migration can NEVER touch the developer's real
+    ~/.protoagent/artifact (the conftest does not pin HOME).
+
+    The box root (``<tmp>/box``) is deliberately separate from HOME — the general shape, and
+    the one the desktop and containers use (``PROTOAGENT_BOX_ROOT`` / ``PROTOAGENT_HOME`` point
+    at the Tauri config dir or ``/sandbox``, NOT ``~``). The legacy store the migration reads
+    is HOME-relative (``<HOME>/.protoagent/artifact[/<inst>]``), exactly where the pre-scoping
+    code wrote it, independent of the box root — so these tests create it under HOME and watch
+    it get adopted into the box-rooted instance store even though the two roots differ."""
+    from infra.paths import reset_instance_paths
+
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    box = tmp_path / "box"
+    monkeypatch.delenv("ARTIFACT_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows
+    monkeypatch.setenv("PROTOAGENT_BOX_ROOT", str(box))
+    if instance is None:
+        monkeypatch.delenv("PROTOAGENT_INSTANCE", raising=False)
+    else:
+        monkeypatch.setenv("PROTOAGENT_INSTANCE", instance)
+    reset_instance_paths()
+    return home, box
+
+
+def _legacy_dir(home, instance=None):
+    """The pre-scoping store's OLD location — ``<HOME>/.protoagent/artifact[/<inst>]`` — the
+    HOME-relative path the migration reads, whatever the box root is."""
+    base = home / ".protoagent" / "artifact"
+    return base / instance if instance else base
+
+
+def _legacy_store(art_id):
+    return {
+        "artifacts": [
+            {
+                "id": art_id,
+                "kind": "html",
+                "title": art_id,
+                "versions": [{"code": f"<p>{art_id}</p>", "ts": 1, "by": "agent"}],
+                "version_count": 1,
+                "created": 1,
+                "updated": 1,
+            }
+        ],
+        "current": art_id,
+    }
+
+
+def test_default_store_writes_to_the_instance_plugin_store_not_home(monkeypatch, tmp_path):
+    """r1: box-scoped + instanced, ARTIFACT_DIR unset — history.json and blobs land under
+    <box>/<inst>/artifact, and nothing is created under the real-home ~/.protoagent."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    art = _load(monkeypatch)
+
+    art.show_artifact.invoke({"kind": "html", "code": "<p>hi</p>"})
+    src = tmp_path / "src.txt"
+    src.write_bytes(b"blobby")
+    out = art.save_file_artifact.invoke({"path": str(src)})
+    assert "Saved file artifact" in out
+
+    store_dir = box / "onb" / "artifact"
+    assert (store_dir / "history.json").is_file()
+    blobs = list((store_dir / "blobs").rglob("*.txt"))
+    assert blobs and blobs[0].read_bytes() == b"blobby"
+    assert json.loads((store_dir / "history.json").read_text())["artifacts"]  # real store, not empty
+    assert not (home / ".protoagent").exists()  # nothing leaked to the real-home shape
+
+
+def test_legacy_instance_store_is_migrated_history_and_blobs(monkeypatch, tmp_path):
+    """r2: a pre-instance-scoping <HOME>/.protoagent/artifact/onb store (history + a blob) is
+    moved wholesale into the instance plugin store on first access; the artifact lists and its
+    blob resolves from the new location, and the legacy files are gone. The legacy source is
+    HOME-relative, so it is found even here where the box root points elsewhere."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = _legacy_dir(home, "onb")
+    (legacy / "blobs" / "a-1").mkdir(parents=True)
+    blob_name = "deadbeef01.txt"
+    (legacy / "blobs" / "a-1" / blob_name).write_bytes(b"legacy-bytes")
+    store = {
+        "artifacts": [
+            {
+                "id": "a-1",
+                "kind": "file",
+                "title": "Doc",
+                "versions": [
+                    {
+                        "code": "preview",
+                        "ts": 1,
+                        "by": "agent",
+                        "file": {"mime": "text/plain", "filename": "d.txt", "size": 12, "thumb": ""},
+                        "blob": blob_name,
+                    }
+                ],
+                "version_count": 1,
+                "created": 1,
+                "updated": 1,
+            }
+        ],
+        "current": "a-1",
+    }
+    (legacy / "history.json").write_text(json.dumps(store), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["a-1"]
+
+    new_dir = box / "onb" / "artifact"
+    assert (new_dir / "history.json").is_file()
+    assert (new_dir / "blobs" / "a-1" / blob_name).read_bytes() == b"legacy-bytes"
+    # the blob resolves from the new location (the path the download route opens, _routes:56)
+    assert art._store._blob_path("a-1", blob_name).read_bytes() == b"legacy-bytes"
+    # legacy files are gone
+    assert not (legacy / "history.json").exists()
+    assert not (legacy / "blobs").exists()
+
+
+def test_bare_legacy_store_migrates_and_leaves_sibling_instances(monkeypatch, tmp_path):
+    """r3: with PROTOAGENT_INSTANCE unset the bare <HOME>/.protoagent/artifact store
+    migrates, but sibling instance subdirectories under it are left untouched."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance=None)
+    art_root = _legacy_dir(home)
+    art_root.mkdir(parents=True)
+    (art_root / "history.json").write_text(json.dumps(_legacy_store("bare")), encoding="utf-8")
+    sibling = art_root / "roxy"  # a co-located instance's store — NOT ours to move
+    sibling.mkdir()
+    (sibling / "history.json").write_text(json.dumps(_legacy_store("roxy-art")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["bare"]
+
+    new_dir = box / "default" / "artifact"  # no instance → "default"
+    assert (new_dir / "history.json").is_file()
+    assert not (art_root / "history.json").exists()  # the bare store moved
+    assert (sibling / "history.json").is_file()  # the sibling instance is left alone
+
+
+def test_no_migration_when_the_new_store_already_exists(monkeypatch, tmp_path):
+    """r4: if the instance store already has history.json it wins outright — no migration,
+    and legacy data stays where it is."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    new_dir = box / "onb" / "artifact"
+    new_dir.mkdir(parents=True)
+    (new_dir / "history.json").write_text(json.dumps(_legacy_store("new")), encoding="utf-8")
+    legacy = _legacy_dir(home, "onb")
+    legacy.mkdir(parents=True)
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("legacy")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["new"]  # the new store wins
+    assert (legacy / "history.json").is_file()  # legacy untouched
+
+
+def test_path_resolution_failure_falls_back_to_the_legacy_path(monkeypatch, tmp_path):
+    """r6: a resolver that raises must not fail the tool call — the store falls back to the
+    legacy directory and keeps working."""
+    import graph.sdk
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+
+    def _boom(*a, **k):
+        raise RuntimeError("instance paths unavailable")
+
+    monkeypatch.setattr(graph.sdk, "plugin_store", _boom)
+
+    art = _load(monkeypatch)
+    out = art.show_artifact.invoke({"kind": "html", "code": "<p>fallback</p>"})
+    assert "Created" in out  # the tool call succeeded despite the failing resolver
+
+    legacy = _legacy_dir(home, "onb")  # the OLD HOME-relative location — where the fallback lands
+    assert (legacy / "history.json").is_file()
+    assert str(art._store._store_path()).startswith(str(legacy))
+    assert not (box / "onb" / "artifact" / "history.json").exists()  # never the plugin-store shape
+
+
+def test_box_root_elsewhere_still_migrates_the_home_store(monkeypatch, tmp_path):
+    """The blocking fix: on the desktop and in containers the box root points at its OWN dir
+    (Tauri's config dir; /sandbox), NOT ~/.protoagent — yet the old code still wrote the store
+    under Path.home()/.protoagent/artifact. So the legacy source is HOME-relative: a box root
+    that differs from HOME must still find and adopt that store, or artifact history and pins
+    silently vanish from the panel on upgrade. The earlier attempt keyed the legacy path off
+    box_root(), which missed the real store on exactly these installs."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")  # box = <tmp>/box, NOT under home
+    legacy = _legacy_dir(home, "onb")  # where the old sidecar actually wrote — under HOME
+    (legacy / "blobs" / "a-live").mkdir(parents=True)
+    (legacy / "blobs" / "a-live" / "keep.txt").write_bytes(b"home-bytes")
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("home-live")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    # the home store is adopted into the box store — history is preserved, not lost
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["home-live"]
+    new_dir = box / "onb" / "artifact"
+    assert (new_dir / "history.json").is_file()
+    assert (new_dir / "blobs" / "a-live" / "keep.txt").read_bytes() == b"home-bytes"
+    # the blob resolves from the new location (the path the download route opens)
+    assert art._store._blob_path("a-live", "keep.txt").read_bytes() == b"home-bytes"
+    # the store resolves inside the box, and the legacy home store is emptied (moved, not copied)
+    assert str(art._store._store_dir()).startswith(str(new_dir))
+    assert not (legacy / "history.json").exists()
+    assert not (legacy / "blobs").exists()
+
+
+def test_history_move_failure_rolls_blobs_back_to_the_legacy_dir(monkeypatch, tmp_path):
+    """The blocking data-integrity finding: if ``blobs/`` moves but the ``history.json`` move
+    then raises, the blobs must be rolled BACK into the legacy dir before the fallback — so the
+    legacy store the resolver keeps using is left WHOLE. Otherwise the store serves history.json
+    from legacy while the blobs have already left it, and every file-artifact download 404s."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = _legacy_dir(home, "onb")
+    (legacy / "blobs" / "a-1").mkdir(parents=True)
+    (legacy / "blobs" / "a-1" / "b.txt").write_bytes(b"legacy-bytes")
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("a-1")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    new_dir = box / "onb" / "artifact"
+
+    # Fail ONLY the second move — the history.json one (its source basename is "history.json").
+    # The blobs move and the roll-back move both go through the real replace.
+    real_replace = Path.replace
+
+    def replace(self, target):
+        if self.name == "history.json":
+            raise OSError("history.json is not moveable")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", replace)
+
+    resolved = art._store._store_dir()
+
+    # the resolver fell back to the legacy dir…
+    assert resolved.resolve() == legacy.resolve()
+    # …left whole: BOTH its history.json and its blobs/<id>/<file> are still there
+    assert (legacy / "history.json").is_file()
+    assert (legacy / "blobs" / "a-1" / "b.txt").read_bytes() == b"legacy-bytes"
+    # and nothing was stranded in the new dir
+    assert not (new_dir / "history.json").exists()
+    assert not (new_dir / "blobs").exists()
+    # the store resolves to legacy and the blob is still resolvable from there
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["a-1"]
+    assert art._store._blob_path("a-1", "b.txt").read_bytes() == b"legacy-bytes"
+
+
+class _NoLock:
+    """A no-op stand-in for ``_MUTATION_LOCK`` so two threads in ONE process are serialised
+    only by the cross-process OS file lock — the ACP condition, where the tool process and the
+    main process each have their own thread lock and only the file lock spans them."""
+
+    def acquire(self, timeout=-1):  # noqa: ARG002 — the RLock signature _migration_lock calls
+        return True
+
+    def release(self):
+        pass
+
+
+def test_migration_loser_adopts_the_new_dir_not_the_emptied_legacy(monkeypatch, tmp_path):
+    """The blocking review finding, at the unit level: when two callers race the one-time
+    adoption, the loser's ``replace`` raises ``FileNotFoundError`` because the winner already
+    moved history.json. That must NOT be read as a failed migration that sends the loser back to
+    the now-emptied legacy dir (a different lock file, an orphaned write) — the loser re-checks
+    and adopts new_dir."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = _legacy_dir(home, "onb")
+    legacy.mkdir(parents=True)
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("legacy")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    new_dir = box / "onb" / "artifact"
+    new_dir.mkdir(parents=True, exist_ok=True)  # plugin_store creates it
+
+    def racing_move(src, dst):
+        # The winner's move already landed history.json in new_dir before ours ran...
+        dst.mkdir(parents=True, exist_ok=True)
+        (dst / "history.json").write_text(json.dumps(_legacy_store("winner")), encoding="utf-8")
+        # ...so our own replace of the now-gone legacy history.json raises, as the race does.
+        raise FileNotFoundError(str(src / "history.json"))
+
+    monkeypatch.setattr(art._store, "_migrate_legacy_store", racing_move)
+    resolved = art._store._adopt_legacy_store(new_dir)
+    assert resolved == new_dir  # NOT the emptied legacy dir
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["winner"]  # the winner's store
+    assert legacy.resolve() not in {p.resolve() for p in [art._store._store_dir()]}
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="msvcrt byte-range locks don't contend within one process; the cross-process suite covers Windows",
+)
+def test_concurrent_first_access_migration_never_diverges_to_legacy(monkeypatch, tmp_path):
+    """Two callers racing the one-time adoption both land on new_dir, with the legacy store moved
+    intact and nothing stranded. The in-process thread lock is neutralised so the cross-process
+    OS file lock is the SOLE serialiser — the ACP shape (operator-MCP vs. main, separate thread
+    locks). Without a lock the loser fell back to the emptied legacy dir and wrote an orphaned
+    history.json; here the loser waits on the file lock and adopts new_dir."""
+    import json
+    import threading
+    import time
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = _legacy_dir(home, "onb")
+    (legacy / "blobs" / "a-1").mkdir(parents=True)
+    (legacy / "blobs" / "a-1" / "b.txt").write_bytes(b"blob-bytes")
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("a-1")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+    new_dir = box / "onb" / "artifact"
+    new_dir.mkdir(parents=True, exist_ok=True)  # plugin_store creates it
+
+    monkeypatch.setattr(art._store, "_MUTATION_LOCK", _NoLock())
+    started, proceed = threading.Event(), threading.Event()
+    real_move = art._store._migrate_legacy_store
+
+    def gated_move(src, dst):
+        # The winner pauses mid-migration holding the OS lock, so the loser must wait on it.
+        started.set()
+        proceed.wait(5)
+        return real_move(src, dst)
+
+    monkeypatch.setattr(art._store, "_migrate_legacy_store", gated_move)
+
+    results: dict[str, Path] = {}
+
+    def call(name):
+        results[name] = art._store._store_dir()
+
+    a = threading.Thread(target=call, args=("a",))
+    a.start()
+    assert started.wait(5)  # the winner is inside the migration, holding the OS lock
+    b = threading.Thread(target=call, args=("b",))
+    b.start()
+    time.sleep(0.1)  # let the loser reach and block on the OS lock
+    proceed.set()
+    a.join(10)
+    b.join(10)
+
+    assert results["a"] == new_dir and results["b"] == new_dir  # neither diverged to legacy
+    assert (new_dir / "history.json").is_file()
+    assert (new_dir / "blobs" / "a-1" / "b.txt").read_bytes() == b"blob-bytes"  # blobs travelled too
+    assert not (legacy / "history.json").exists()  # the winner's move landed, once
+    assert [x["id"] for x in art._read_store()["artifacts"]] == ["a-1"]  # a single intact store
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="msvcrt byte-range locks don't contend within one process; the reentrancy is POSIX-flock-specific",
+)
+def test_migration_lock_is_reentrant_with_the_store_write_lock(monkeypatch, tmp_path):
+    """The blocking finding: an adoption triggered from INSIDE a serialized write must NOT
+    re-open the store's own flock. On POSIX flock is per-open-file-description, so a second
+    LOCK_EX on the same file from this same process conflicts with the one the write already
+    holds — without the _FILE_LOCK_DEPTH reentrancy guard the nested acquire polls to the
+    _LOCK_TIMEOUT_S deadline (60s in prod) and then runs unlocked. We drop the timeout so a
+    regression FAILS FAST here instead of merely running ~60s slower."""
+    import time
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    art = _load(monkeypatch)
+    monkeypatch.setattr(art._store, "_LOCK_TIMEOUT_S", 2.0)
+
+    art._store._store_dir()  # resolve + cache the dir so _lock_path() is stable
+    lock_file = art._store._lock_path()
+
+    start = time.monotonic()
+    with art._store._store_lock():  # takes the real flock; _FILE_LOCK_DEPTH -> 1
+        with art._store._migration_lock(lock_file):  # same file — must skip, not re-flock
+            pass
+    # << _LOCK_TIMEOUT_S (2.0s): the guard returns at once. Without it the inner acquire would
+    # self-conflict and poll to the 2.0s deadline.
+    assert time.monotonic() - start < 1.0
+
+
+def _record_os_lock(monkeypatch, art):
+    """Record every _os_lock call so a test can assert a code path took no store OS lock."""
+    calls: list[int] = []
+    real = art._store._os_lock
+
+    def rec(fd, deadline):
+        calls.append(1)
+        return real(fd, deadline)
+
+    monkeypatch.setattr(art._store, "_os_lock", rec)
+    return calls
+
+
+def test_reads_on_a_fresh_store_take_no_store_lock(monkeypatch, tmp_path):
+    """The major finding, case (a): on a fresh/empty store (nothing to adopt) resolving the
+    store dir takes NO lock — so the lock-free read path (the async /history and /current
+    polls) never waits behind a writer while resolving the path."""
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    art = _load(monkeypatch)
+    calls = _record_os_lock(monkeypatch, art)
+
+    assert art._read_store()["artifacts"] == []  # a pure read, exactly what /history does
+    assert calls == []  # the read path took no store OS lock at all
+
+
+def test_reads_after_a_failed_migration_take_no_store_lock(monkeypatch, tmp_path):
+    """The major finding, case (b): once an adoption that can't move falls back to legacy, the
+    resolution is CACHED — later reads don't re-attempt the migration under the lock on every
+    poll. Without the cache each /history / /current poll would take _MUTATION_LOCK and poll the
+    flock on the event-loop thread for as long as a writer held it."""
+    import json
+
+    home, box = _pin_roots(monkeypatch, tmp_path, instance="onb")
+    legacy = _legacy_dir(home, "onb")
+    legacy.mkdir(parents=True)
+    (legacy / "history.json").write_text(json.dumps(_legacy_store("a-1")), encoding="utf-8")
+
+    art = _load(monkeypatch)
+
+    # First access: the one-time adoption. Make the history.json move fail so it falls back to
+    # legacy and caches it (blobs absent here, so no roll-back is involved).
+    real_replace = Path.replace
+
+    def failing_replace(self, target):
+        if self.name == "history.json":
+            raise OSError("history.json is not moveable")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    assert art._store._store_dir().resolve() == legacy.resolve()  # fell back and cached legacy
+    monkeypatch.setattr(Path, "replace", real_replace)
+
+    calls = _record_os_lock(monkeypatch, art)
+    assert [a["id"] for a in art._read_store()["artifacts"]] == ["a-1"]  # still served, from legacy
+    assert calls == []  # the cached fallback means a later read never re-takes the store lock
+
+
+# ── save_file_artifact: project-relative paths (the fs tools' path language) ─────────────
+# An agent finds a file with find_files/read_file as `project` + a relative path; passing
+# that same relative path here used to resolve against the server's cwd and fail.
+
+
+def _fence(monkeypatch, art, **roots):
+    from tools.fs_tools import Project, ProjectRegistry
+
+    reg = ProjectRegistry([Project(name=n, root=r.resolve()) for n, r in roots.items()])
+    monkeypatch.setattr(art._links, "_registry", lambda: reg)
+
+
+def test_save_file_artifact_resolves_a_relative_path_inside_a_project(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    (ws / "sheets").mkdir(parents=True)
+    (ws / "sheets" / "sheet.txt").write_text("body", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=ws)
+    out = art.save_file_artifact.invoke({"path": "sheets/sheet.txt"})
+    assert "Saved file artifact" in out
+    assert _arts(art)[0]["versions"][0]["file"]["filename"] == "sheet.txt"
+
+
+def test_save_file_artifact_explicit_project(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (b / "x.txt").write_text("in b", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=a, other=b)
+    out = art.save_file_artifact.invoke({"path": "x.txt", "project": "other"})
+    assert "Saved file artifact" in out and "in b" in _arts(art)[0]["versions"][0]["code"]
+
+
+def test_save_file_artifact_relative_path_in_two_projects_is_ambiguous(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    a, b = tmp_path / "a", tmp_path / "b"
+    for d in (a, b):
+        d.mkdir()
+        (d / "same.txt").write_text(d.name, encoding="utf-8")
+    _fence(monkeypatch, art, workspace=a, other=b)
+    out = art.save_file_artifact.invoke({"path": "same.txt"})
+    assert "more than one project" in out and "workspace" in out and "other" in out
+    assert _arts(art) == []
+
+
+def test_save_file_artifact_project_path_cannot_escape_the_fence(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (tmp_path / "secret.txt").write_text("nope", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=ws)
+    out = art.save_file_artifact.invoke({"path": "../secret.txt", "project": "workspace"})
+    assert "escapes" in out and _arts(art) == []
+
+
+def test_save_file_artifact_not_found_names_where_it_looked(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _fence(monkeypatch, art, workspace=ws)
+    out = art.save_file_artifact.invoke({"path": "sheets/missing.pdf"})
+    assert "No file at" in out and "workspace" in out
+
+
+# ── html import map: merged with an author's own map, never stacked ahead of it ─────────────
+
+
+def _run_html_import_map(code: str) -> dict:
+    from tests.test_artifact_slides import _js_function, _node
+
+    js = (Path(__file__).resolve().parents[1] / "plugins" / "artifact" / "shell.js").read_text(encoding="utf-8")
+    regex_line = next(line for line in js.splitlines() if "var AUTHOR_IMPORTMAP = " in line)
+    harness = "\n".join(
+        [
+            'var IMPORTMAP = JSON.stringify({imports: {three: "/v/three.module.min.js", d3: "/v/d3.mjs"}});',
+            regex_line,
+            _js_function(js, "htmlImportMap"),
+            f"console.log(JSON.stringify(htmlImportMap({json.dumps(code)})));",
+        ]
+    )
+    return _node(harness)
+
+
+def test_html_without_its_own_import_map_gets_the_shell_map():
+    out = _run_html_import_map("<p>hi</p><script type=module>import * as T from 'three'</script>")
+    assert json.loads(out["map"])["imports"]["three"] == "/v/three.module.min.js"
+    assert out["code"].startswith("<p>hi</p>")
+
+
+def test_an_author_import_map_is_merged_with_author_entries_winning_and_lifted_out():
+    code = (
+        '<head><script type="importmap">{"imports": {"three": "./my-three.js", "lodash": "./lodash.js"}, '
+        '"scopes": {"/x/": {"a": "./a.js"}}}</script></head><body>x</body>'
+    )
+    out = _run_html_import_map(code)
+    merged = json.loads(out["map"])
+    assert merged["imports"] == {"three": "./my-three.js", "d3": "/v/d3.mjs", "lodash": "./lodash.js"}
+    assert merged["scopes"] == {"/x/": {"a": "./a.js"}}
+    assert "importmap" not in out["code"]  # exactly one map remains: the merged one
+    assert out["code"] == "<head></head><body>x</body>"
+
+
+def test_an_unparseable_author_import_map_is_left_alone_and_no_shell_map_is_added():
+    code = '<script type="importmap">{not json</script><p>x</p>'
+    out = _run_html_import_map(code)
+    assert out["map"] is None
+    assert out["code"] == code

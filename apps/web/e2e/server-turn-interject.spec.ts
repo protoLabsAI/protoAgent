@@ -26,6 +26,13 @@ import { expect, test, type Page, type Request, type Route } from "@playwright/t
 // so nothing depends on machine speed. The interject/steer routes are answered here too,
 // which keeps every piece of per-test state inside this page — the shared mock server is
 // never asked to remember anything.
+//
+// Scope: this file keeps the WIRE-level paths — what only a real console against the real
+// routes can show (marker placement, ✕/Stop/↑ dequeues, reload + reattach races, the re-check
+// ladder's timing and grace). The pure keep/settle/resend/retarget/reclaim DECISIONS
+// (in-flight, HITL hold, a second live turn, the durable marker, the drain log, the
+// unresolved grace) are pinned in src/chat/serverInterjections.test.ts and
+// src/chat/useSteerQueue.test.tsx; don't re-add an e2e per branch here.
 
 const TASK = "task-interject-e2e";
 const TASK2 = "task-interject-e2e-2";
@@ -448,7 +455,8 @@ test("the server's consumed marker settles a queued interjection at the boundary
   // pending — ↑, Escape — would be acting on one the agent has already read. (The recalled
   // TEXT can't tell them apart: the input-history ring holds it either way.)
   await page.locator(`${SLOT} .pl-prompt__field`).press("ArrowUp");
-  await page.waitForTimeout(300);
+  // Either path puts the words in the composer, and a dequeue (if any) goes out before they do.
+  await expect(page.locator(`${SLOT} .pl-prompt__field`)).toHaveValue(new RegExp(INTERJECTION));
   expect(h.deletes, "↑ must not try to dequeue a message that already landed").toEqual([]);
   await page.locator(`${SLOT} .pl-prompt__field`).fill("");
 
@@ -516,9 +524,8 @@ test("✕ on a pending interjection takes it back out of the server queue", asyn
   h.release(terminalFrames(session));
   await expect(page.locator(SLOT).getByText(POST)).toBeVisible();
   await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(0);
-  await page.waitForTimeout(500);
-  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
   await expect.poll(() => persistedInterjections(page, session)).toBe(0);
+  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
 });
 
 test("an interjection the server turn never reached is sent as a normal message when it ends", async ({ page }) => {
@@ -544,61 +551,6 @@ test("an interjection the server turn never reached is sent as a normal message 
   const reply = indexOf(settled, POST);
   expect(reply).toBeGreaterThan(-1);
   expect(indexOf(settled, INTERJECTION)).toBeGreaterThan(reply);
-});
-
-test("an interjection still in flight when the turn ends is left alone until the server answers", async ({ page }) => {
-  const session = "chat-interject-inflight";
-  const h = await openAttendedServerTurn(page, session);
-  // The POST is slow (a remote member, a loaded box). The turn ends underneath it.
-  h.holdInterject(true);
-  const field = page.locator(`${SLOT} .pl-prompt__field`);
-  await field.fill(INTERJECTION);
-  await field.press("Enter");
-  await expect.poll(() => h.heldInterjects()).toBe(1);
-  h.release(terminalFrames(session));
-  await expect(page.getByText(/responding to background reports/i)).toHaveCount(0);
-
-  // The server has not said whether it queued it, so its absence from the queue means
-  // NOTHING yet: settling it would claim the agent read it, re-sending could double it,
-  // and handing the words back would deny a message the agent is about to read. Waited out
-  // past the reconcile's own re-check ladder — an in-flight submission is not "unresolved",
-  // it is unanswered, and the two must not be confused however long it takes.
-  await page.waitForTimeout(6_000);
-  expect(h.deletes, "nothing may be dequeued while the submission is unanswered").toEqual([]);
-  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(1);
-  expect(await page.locator(`${SLOT} .pl-prompt__field`).inputValue()).toBe("");
-
-  // Answered at last, and accepted: now it can be resolved — the turn is over and nothing
-  // else will drain it, so it goes as the operator's next message.
-  await h.releaseInterjects((body) => ({ ok: true, id: body.id, pending: 1 }));
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
-  await expect.poll(() => h.deletes.length).toBe(1);
-  await expect.poll(() => h.a2aSends.filter((body) => body.includes(INTERJECTION)).length).toBe(1);
-});
-
-test("a refused interjection is never lost: its words come back, and nothing is delivered", async ({ page }) => {
-  const session = "chat-interject-refused";
-  const h = await openAttendedServerTurn(page, session);
-  h.holdInterject(true);
-  const field = page.locator(`${SLOT} .pl-prompt__field`);
-  await field.fill(INTERJECTION);
-  await field.press("Enter");
-  await expect.poll(() => h.heldInterjects()).toBe(1);
-  // The operator keeps typing while it is in flight — their in-hand draft must survive too.
-  await field.fill("and fix the résumé date as well");
-  // The turn ended between its last control frame and this POST, so the server refuses it:
-  // nothing was queued, and nothing will ever settle this bubble.
-  await h.releaseInterjects(() => ({ ok: false, reason: "not_live", pending: 0 }));
-
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
-  await expect(page.locator(".pl-toast--error")).toContainText(/wasn't sent/i);
-  const draft = await field.inputValue();
-  expect(draft).toContain(INTERJECTION); // the refused words
-  expect(draft).toContain("and fix the résumé date as well"); // and the in-hand ones
-  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
-  // The composer is back to ordinary sending: the server said that task is gone.
-  await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();
 });
 
 test("Stop settles what the agent had already read and hands back what it hadn't", async ({ page }) => {
@@ -638,8 +590,10 @@ test("✕ after the turn ended settles an interjection the agent had already rea
   // forever, and dropping it would deny a message that shaped the reply.
   await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
   await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
+  // Let the held reconcile read through, and wait for it to land before checking nothing was sent.
+  const readsBefore = h.steerReads();
   h.holdSteerReads(false);
-  await page.waitForTimeout(500);
+  await expect.poll(() => h.steerReads()).toBeGreaterThan(readsBefore);
   expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
 });
 
@@ -657,7 +611,8 @@ test("a re-send whose dequeue lost the race settles instead of sending a duplica
   await expect.poll(() => h.deletes.length).toBe(1);
   await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
   await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
-  await page.waitForTimeout(1_000);
+  // The settle above is resendInterjections' `consumed` branch — the send list it returns
+  // with is already decided, so no duplicate can follow it.
   expect(h.a2aSends.filter((body) => body.includes(INTERJECTION)), "no duplicate send").toEqual([]);
 });
 
@@ -680,103 +635,6 @@ test("a transient queue-read failure at turn end is retried, not taken as an ans
   // Resolved the honest way: the turn never reached it, so it was dequeued and re-sent.
   await expect.poll(() => h.deletes.length).toBe(1);
   await expect.poll(() => h.a2aSends.filter((body) => body.includes(INTERJECTION)).length).toBe(1);
-});
-
-test("a turn whose task hasn't settled yet is re-checked until it has", async ({ page }) => {
-  const session = "chat-interject-late-terminal";
-  const h = await openAttendedServerTurn(page, session);
-  await interject(page, h);
-
-  // `turn.finished` can land while the durable task still reads WORKING (the self-POST
-  // timed out, or the store commit lags). "Can't tell yet" must not settle or re-send —
-  // and must not be the last word either.
-  h.taskState.set(TASK, "TASK_STATE_WORKING");
-  h.release(terminalFrames(session));
-  await page.waitForTimeout(1_000);
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(1);
-  expect(h.deletes).toEqual([]);
-
-  h.taskState.set(TASK, "TASK_STATE_COMPLETED"); // it settles a moment later
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
-  await expect.poll(() => h.a2aSends.filter((body) => body.includes(INTERJECTION)).length).toBe(1);
-});
-
-test("with a second server turn live, a leftover is handed to it instead of pulled out", async ({ page }) => {
-  const session = "chat-interject-two-turns";
-  const h = await openAttendedServerTurn(page, session);
-  await interject(page, h);
-
-  // A second nudge comes up while the first still runs (the A2A server serializes the
-  // turns, but the second's control frame arrives first).
-  h.taskState.set(TASK, "TASK_STATE_WORKING");
-  h.taskState.set(TASK2, "TASK_STATE_WORKING");
-  h.release([
-    { topic: "turn.started", data: { session_id: session, origin: ORIGIN, trigger: "bg-2" } },
-    progress(session, { phase: "turn_started" }, TASK2),
-  ]);
-  await expect.poll(() => h.steerReads()).toBeGreaterThanOrEqual(1);
-
-  // Turn 1 ends — un-addressed, as an older server reports it.
-  h.taskState.set(TASK, "TASK_STATE_COMPLETED");
-  h.release(terminalFrames(session, TASK));
-  await page.waitForTimeout(2_500);
-
-  // Turn 2 drains the same queue, so the message stays queued FOR IT: pulling it out to
-  // re-send would race the live turn and could deliver it twice.
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(1);
-  expect(h.deletes, "must not pull the message out from under the live second turn").toEqual([]);
-  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
-
-  // When turn 2 reads it, its marker settles the bubble — same as any other turn.
-  const sent = h.interjected()!;
-  h.setPending([]);
-  h.release([progress(session, { phase: "steer_consumed", items: [{ id: sent.id, text: sent.text }] }, TASK2)]);
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
-  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
-});
-
-test("an interjection parked behind an approval settles when another device answers it", async ({ page }) => {
-  const session = "chat-interject-hitl-elsewhere";
-  const h = await openAttendedServerTurn(page, session);
-  await interject(page, h);
-
-  // The turn parks on an approval before reaching the message. The server holds the queue
-  // and folds it in right after the form is answered (#1560), so it must stay queued.
-  h.taskState.set(TASK, "TASK_STATE_INPUT_REQUIRED");
-  h.release([{ topic: "turn.finished", data: { session_id: session, origin: ORIGIN, trigger: "bg-1" } }]);
-  await page.waitForTimeout(1_500);
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(1);
-  expect(h.deletes).toEqual([]);
-
-  // The approval is answered on ANOTHER device: that turn resumes there and drains the
-  // queue, and its marker never reaches this console (an operator turn is not republished).
-  // The durable history is what still tells us — and a re-check is what asks.
-  h.setPending([]);
-  h.taskConsumed.set(TASK, [h.interjected()!.id]);
-  h.taskState.set(TASK, "TASK_STATE_COMPLETED");
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
-  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
-  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
-});
-
-test("the durable marker settles a message the in-memory queue can no longer vouch for", async ({ page }) => {
-  const session = "chat-interject-durable-marker";
-  const h = await openAttendedServerTurn(page, session);
-  await interject(page, h);
-
-  // The steering queue lives in memory, so "gone from the queue" alone cannot tell a
-  // message the agent READ from one a restart dropped. The task history can: the executor
-  // writes a steer-consumed marker into it, which is why this settles while the task is
-  // still running and no bus frame ever arrived.
-  h.setPending([]);
-  h.taskConsumed.set(TASK, [h.interjected()!.id]);
-  h.taskState.set(TASK, "TASK_STATE_WORKING");
-  h.release([{ topic: "turn.finished", data: { session_id: session, origin: ORIGIN, trigger: "bg-1" } }]);
-
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
-  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
-  expect(h.deletes).toEqual([]);
-  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
 });
 
 test("a reload mid-submission never leaves the server holding a message nobody tracks", async ({ page }) => {
@@ -900,70 +758,48 @@ test("a failing dequeue on the re-send path keeps the ladder alive", async ({ pa
   await expect.poll(() => h.a2aSends.filter((body) => body.includes(INTERJECTION)).length).toBe(1);
 });
 
-test("the server's drain log settles a read message with no marker of any kind", async ({ page }) => {
-  const session = "chat-interject-drain-log";
-  const h = await openAttendedServerTurn(page, session);
-  const sent = await interject(page, h);
-
-  // The agent read it, but nothing announced the boundary: the sync middleware path emits
-  // no marker, and a failed dispatch emits none either. Absence from the queue alone must
-  // not become "never arrived" — the server's drain log is what answers it.
-  h.setPending([]);
-  h.setDrained([sent.id]);
-  h.taskState.set(TASK, "TASK_STATE_WORKING");
-  h.release([{ topic: "turn.finished", data: { session_id: session, origin: ORIGIN, trigger: "bg-1", task_id: TASK } }]);
-
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0);
-  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
-  // Never re-offered and never re-sent: the agent already has it.
-  expect(await page.locator(`${SLOT} .pl-prompt__field`).inputValue()).toBe("");
-  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
-});
-
-test("a message the agent read is never handed back, even with nothing to prove it", async ({ page }) => {
-  const session = "chat-interject-unlocated";
-  const h = await openAttendedServerTurn(page, session);
-  await interject(page, h);
-
-  // The worst case: the queue drained it, no marker frame, no drain log (an older server,
-  // or one that restarted), and the task never reaches a terminal state. The console cannot
-  // tell "read" from "lost" — so it settles the bubble as sent and never re-offers the
-  // words. An operator re-sending a message the agent already used is the worse outcome.
-  h.setPending([]);
-  h.setDrained([]);
-  h.taskState.set(TASK, "TASK_STATE_WORKING");
-  h.release([{ topic: "turn.finished", data: { session_id: session, origin: ORIGIN, trigger: "bg-1", task_id: TASK } }]);
-
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0, { timeout: 25_000 });
-  await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
-  expect(await page.locator(`${SLOT} .pl-prompt__field`).inputValue()).toBe("");
-  expect(h.a2aSends.filter((body) => body.includes(INTERJECTION))).toEqual([]);
-  expect(h.deletes).toEqual([]);
-});
-
 test("switching windows doesn't refund the grace, and a blip doesn't spend it", async ({ page }) => {
   const session = "chat-interject-grace";
   const h = await openAttendedServerTurn(page, session);
   await interject(page, h);
 
   // Four reads never reach the server (a link blip across the turn's end). They must not
-  // spend the grace that exists to survive them: after the FIRST successful read the
+  // spend the grace that exists to survive them: after the first successful reads the
   // message is still queued, not resolved on one answer.
+  //
+  // The re-checks are driven by coming back to the tab (a `focus` re-checks NOW) rather than
+  // by waiting out the 1-2-4-8s ladder: the ladder surviving a failed read is its own spec
+  // above, and this one is about what each read SPENDS. Each step waits for the read it
+  // caused, so nothing here depends on machine speed.
+  const recheck = async () => {
+    const before = h.steerReads();
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect.poll(() => h.steerReads()).toBeGreaterThan(before);
+  };
   h.failSteerReads(4);
   h.setPending([]);
   h.setDrained([]);
   h.taskState.set(TASK, "TASK_STATE_WORKING");
   h.release([{ topic: "turn.finished", data: { session_id: session, origin: ORIGIN, trigger: "bg-1", task_id: TASK } }]);
-  await expect.poll(() => h.steerReads(), { timeout: 25_000 }).toBeGreaterThanOrEqual(5);
+  await expect.poll(() => h.steerReads()).toBeGreaterThanOrEqual(1);
+  // Four failures, then TWO successful reads: had the blips been counted, the grace
+  // (UNRESOLVED_ASKS) was spent at the first success and the bubble is settled by the second.
+  while (h.steerReads() < 6) await recheck();
   await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(1);
 
   // And coming back to the tab re-checks NOW without refunding the grace — otherwise
   // alt-tabbing every couple of seconds keeps an unresolvable message unresolved forever.
-  for (let i = 0; i < 6; i++) {
+  const queued = page.locator(`${SLOT} .pl-message--queued`);
+  for (let i = 0; i < 6 && (await queued.count()) > 0; i++) {
+    const before = h.steerReads();
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-    await page.waitForTimeout(400);
+    // A settled bubble ends the episode, so the read it would have caused never comes.
+    await expect.poll(async () => h.steerReads() > before || (await queued.count()) === 0).toBe(true);
   }
-  await expect(page.locator(`${SLOT} .pl-message--queued`)).toHaveCount(0, { timeout: 15_000 });
+  // Settled BY the re-checks, not by the ladder afterwards: a focus that refunded the grace
+  // leaves it queued here, and the ladder's next step is a second away. (The old 15s wait
+  // let that ladder finish the job and passed with the refund bug in.)
+  await expect(queued).toHaveCount(0, { timeout: 500 });
   await expect(page.locator(`${SLOT} .pl-message--user`).filter({ hasText: INTERJECTION })).toHaveCount(1);
 });
 

@@ -1,0 +1,960 @@
+"""Operator API for git-installed plugins (ADR 0027, PR2).
+
+Backs the console Plugins panel: list installed plugins (with their manifest +
+declared capabilities for review), install from a git URL, uninstall, and
+enable/disable. **Installing AUTO-ENABLES + runs the plugin** (trust-by-default,
+ADR 0071 D3): a source that is neither official nor previously acked answers
+``needs_ack`` and the console asks with the one-time "this runs code" confirm;
+``POST /api/plugins/ack`` persists the answer. Opt out with
+``PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1`` for strict install ≠ enable (fetch-only —
+no code runs, so the gate is skipped).
+Enable/disable edits ``plugins.enabled`` and hot-reloads.
+
+ENABLE is fully live: tools/middleware/MCP rebuild with the graph, and a plugin's
+router — which is what serves a console view (the view iframe just points at a
+router route) — is hot-mounted on the same reload (``_mount_plugin_routers`` in
+``server.plugin_wiring``, #822). So enabling a view-contributing plugin needs no
+restart; ``restart_recommended`` stays False for enable.
+
+DISABLE and UNINSTALL are live too: the reload reconcile stops surfaces (ADR 0018) and
+``_mount_plugin_routers`` UNMOUNTS a roster-absent plugin's routes (ADR 0096 live QA).
+UPDATE / FORCE RE-INSTALL / bundle update are live: modules are purged, the reload
+re-mounts the router with the new code (retiring #942's "the first mount wins") and the
+reconcile restarts or reloads the surfaces.
+
+So ``restart_recommended`` is set by one thing: a background surface the reload could
+not replace or end (``_restart_needed``) — a stop that didn't finish in the grace period,
+or a surface left on its ``reload(cfg)`` hook across a code change. Uninstalling a plugin
+that is live without being in ``plugins.enabled`` (no reload runs) is flagged too.
+tests/test_plugin_lifecycle_real_process.py proves the live half against a real server.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import concurrent.futures
+import logging
+import re
+from collections.abc import Iterable
+
+from fastapi import HTTPException
+
+from graph.plugins import installer
+from graph.plugins.manifest import load_manifest
+from runtime.state import STATE
+
+log = logging.getLogger(__name__)
+
+# Serializes the ack route's read-modify-write of plugins.sources.acked (ADR 0071
+# D3): _CONFIG_WRITE_LOCK guards only the inside of _apply_settings_changes, so two
+# concurrent acks reading the same list would drop one entry without this.
+_ACK_RMW_LOCK = asyncio.Lock()
+
+
+def _current_plugin_lists(current) -> dict:
+    """The live `plugins.enabled`/`disabled`, UNCHANGED — the write the sync and update
+    routes use purely as the reload trigger. Passed to the applier as a callable so it
+    reads `current` inside the config write lock (#2743): a copy read before the lock
+    wrote whatever landed in between back out. Order is kept as the operator wrote it
+    (the loader treats the list as a set, so there's nothing to gain by reshuffling)."""
+    return {
+        "plugins": {
+            "enabled": list(getattr(current, "plugins_enabled", []) or []),
+            "disabled": list(getattr(current, "plugins_disabled", []) or []),
+        }
+    }
+
+
+def _sources_allowlist() -> list[str] | None:
+    """`plugins.sources.allow` from config, if a fork locked installs down (PR3
+    wires the config field; None = open)."""
+    cfg = STATE.graph_config
+    allow = getattr(cfg, "plugins_sources_allow", None) if cfg else None
+    return list(allow) if allow else None
+
+
+def _consent_needs_ack(url: str) -> dict | None:
+    """The ADR 0071 D3 consent gate, shared by install and install-deps (#2743):
+    the ``{"needs_ack": True, "source": …}`` response when ``url`` needs the
+    one-time "this runs code" ack, else None (trusted — proceed). One home so the
+    two gates can't drift (the 2771 QA panel's DRY finding)."""
+    from graph.plugins.trust import normalize_source, source_trusted
+
+    cfg = STATE.graph_config
+    if source_trusted(
+        url,
+        official=getattr(cfg, "plugins_sources_official", None) if cfg else None,
+        acked=getattr(cfg, "plugins_sources_acked", None) if cfg else None,
+        # Literal-True only: from_dict already parses string forms via _falsey
+        # (#2739), so the attribute is a real bool — but this flag WIDENS trust,
+        # so the gate is belt-and-braces fail-closed against any exotic value.
+        trust_unverified=(getattr(cfg, "plugins_trust_unverified", False) is True) if cfg else False,
+    ):
+        return None
+    return {"needs_ack": True, "source": normalize_source(url)}
+
+
+def _config_inputs_from(body: dict) -> dict | None:
+    """Operator answers to a bundle's declared ``config_inputs:`` prompts (#2934) from
+    the install body — ``{dotted_key: value}``. Keys are str-coerced; values pass
+    through untouched (a boolean toggle must arrive as a bool — the seed helper
+    coerces per declared type). JSON nulls drop, so "not answered" falls through to
+    the declared default. Malformed → None (nothing to write), never a 500."""
+    raw = body.get("config_inputs")
+    if not isinstance(raw, dict):
+        return None
+    return {str(k): v for k, v in raw.items() if v is not None} or None
+
+
+def _install_no_enable() -> bool:
+    """Opt out of auto-enable-on-install — back to ADR 0027's strict install ≠ enable.
+    Default off: installing a plugin enables + runs it (trust-by-default, behind the
+    ADR 0071 D3 consent gate — untrusted sources get the one-time "runs code" ack
+    first). Fetch-only mode also skips that gate: no code runs at install."""
+    import os
+
+    return os.environ.get("PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE", "").strip().lower() in ("1", "true", "yes")
+
+
+# The install summary → enabled/installed-id parsing moved into ``ops.plugins`` (ADR 0075
+# D2) with the install_and_activate op. What stays here reads the LIVE app state after a
+# reload — a REST-surface concern every lifecycle route shares.
+
+# How long a route waits for the surface reconcile its reload scheduled. A surface that
+# won't stop costs the reconcile its restart grace + cancel grace (10 s + 2 s in
+# server.plugin_wiring); this leaves room for a couple of them plus the starts.
+_RECONCILE_WAIT_S = 30.0
+
+
+async def _restart_needed(plugin_ids: Iterable[str]) -> bool:
+    """Whether the reload just applied left any of ``plugin_ids`` needing a process restart.
+
+    Routers never do: ``_mount_plugin_routers`` re-mounts a re-registered router with the
+    current code and removes a dropped plugin's routes (ADR 0096). Surfaces are the one
+    contribution that can outlive a reload, so this waits for the surface reconcile and
+    then checks, per plugin:
+
+    - a surface the reconcile could not end (``STATE.plugin_surfaces_stuck``): its task is
+      still running, and a re-registration of it was not started;
+    - a wanted surface whose running instance is not the current registration — kept
+      after a failed stop, restored after a failed start, left on its ``reload(cfg)`` hook
+      across a code change, or not running at all.
+
+    Call it only after a reload that re-ran the plugins' ``register()`` (install, update,
+    toggle, uninstall). A reconcile still running after ``_RECONCILE_WAIT_S`` answers True
+    for a plugin with surfaces, since nothing proves they came over."""
+    ids = {p for p in plugin_ids if p}
+    if not ids:
+        return False
+    pending = getattr(STATE, "plugin_surface_reconcile", None)
+    if pending is not None:
+        try:
+            waitable = asyncio.wrap_future(pending) if isinstance(pending, concurrent.futures.Future) else pending
+            await asyncio.wait_for(asyncio.shield(waitable), timeout=_RECONCILE_WAIT_S)
+        except asyncio.TimeoutError:
+            log.warning("[plugins] surface reconcile still running after %.0fs", _RECONCILE_WAIT_S)
+            return any(s.get("plugin_id") in ids for s in (STATE.plugin_surfaces or []))
+        except Exception:  # noqa: BLE001 — the reconcile logs its own failures
+            pass
+    stuck = getattr(STATE, "plugin_surfaces_stuck", None) or {}
+    if any(pid in ids for (pid, _name) in stuck):
+        return True
+    if not getattr(STATE, "plugin_surfaces_started", False):
+        return False  # boot's startup hook starts the current registrations itself
+    running = {(h.get("plugin_id"), h.get("name")): h for h in (STATE.plugin_surface_handles or [])}
+    for spec in STATE.plugin_surfaces or []:
+        if spec.get("plugin_id") not in ids:
+            continue
+        handle = running.get((spec.get("plugin_id"), spec.get("name")))
+        if handle is None or handle.get("start") != spec.get("start"):
+            return True
+    return False
+
+
+def _is_live(plugin_id: str) -> bool:
+    """The plugin is running in this process: LOADED (a ``plugin_meta`` entry with
+    ``loaded`` — the list also carries every discovered-but-disabled plugin, which isn't
+    running), with a router on the live app (``_mount_plugin_routers``'s registry), or with
+    a surface task an earlier reconcile couldn't end (``STATE.plugin_surfaces_stuck``) — a
+    disabled plugin whose surface never stopped is still running code, and no reload will
+    end it."""
+    if any(p.get("id") == plugin_id and p.get("loaded") for p in (STATE.plugin_meta or [])):
+        return True
+    stuck = getattr(STATE, "plugin_surfaces_stuck", None) or {}
+    if any(pid == plugin_id for (pid, _name) in stuck):
+        return True
+    keys = getattr(STATE, "plugin_router_keys", None) or set()
+    return any(pid == plugin_id for (pid, _prefix) in keys)
+
+
+def _purge_plugin_modules(plugin_id: str) -> None:
+    """Drop a plugin's module subtree from ``sys.modules`` (see
+    ``loader.purge_plugin_modules``) so the next reload re-execs every file from
+    disk. Thin alias kept for the route's existing call sites."""
+    from graph.plugins.loader import purge_plugin_modules
+
+    purge_plugin_modules(plugin_id)
+
+
+# What to refresh after install-deps lands something (#3450):
+#   the plugin failed to load BECAUSE its deps weren't installed
+#       → FULL reload: its code can't import until the dep exists, and only a load can
+#         bring it up;
+#   it is loaded
+#       → recompute just its deps state (`refresh_plugin_deps`). A full reload would
+#         close every MCP client and fire every running surface's reload (Discord /
+#         Telegram reconnect) to flip one list;
+#   it is off, or failed for another reason
+#       → nothing: an enable computes it fresh, and a deps refresh can't fix the rest.
+# Matched against the loader's ModuleNotFoundError message ("declared deps not installed
+# (…) — run: … install-deps <id>"); a test pins the two together.
+_DEPS_BLOCKED_LOAD = "declared deps not installed"
+
+
+def _refresh_after_deps(plugin_id: str) -> str:
+    """Apply the rule above; returns ``"full"``, ``"plugin"`` or ``"none"``."""
+    meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
+    if meta is None or not meta.get("enabled"):
+        return "none"
+    if not meta.get("loaded"):
+        if _DEPS_BLOCKED_LOAD not in str(meta.get("error") or ""):
+            return "none"
+        from server.agent_init import _reload_langgraph_agent
+
+        ok, _ = _reload_langgraph_agent()
+        return "full" if ok else "none"
+    from graph.plugins.loader import refresh_plugin_deps
+
+    missing = refresh_plugin_deps(plugin_id)
+    if missing is None:
+        return "none"
+    meta["deps_missing"] = missing  # /api/runtime/status reads STATE.plugin_meta live
+    return "plugin"
+
+
+def _install_deps_and_refresh(plugin_id: str) -> tuple[list[str], list[str], list[str], str]:
+    """One install-deps run: ``(satisfied, failed, newly installed, refresh)``.
+
+    The target environment is held for ALL of it: the pip run AND the refresh that
+    re-imports what pip wrote. Two installs at once could corrupt the environment. One
+    install racing another's refresh could have the reload import a half-written package.
+    So a second request that arrives during either part gets ``DepsInstallBusy`` (409),
+    not a second pip. The hold is reentrant, so ``install_deps`` taking it again inside is
+    a no-op."""
+    failed: list[str] = []
+    newly: list[str] = []
+    with installer.deps_install_lock(plugin_id):
+        satisfied = installer.install_deps(plugin_id, failed=failed, newly_installed=newly)
+        # The deps banner and the row's `deps_missing` are computed at load, so something
+        # has to recompute them once packages land (#3450) — see `_refresh_after_deps` for
+        # which something. Nothing newly landed → nothing changed → nothing to do.
+        refresh = _refresh_after_deps(plugin_id) if newly else "none"
+    return satisfied, failed, newly, refresh
+
+
+def _deps_needed(plugin_ids: list[str]) -> list[dict]:
+    """For each just-installed plugin with packages still missing HERE: ``{"id", "name",
+    "source", "target", "deps": [{"name", "spec", "optional"}]}`` (see
+    ``installer.missing_deps_detail``). ``source`` is where the code came from (the lock's
+    recorded origin, else the manifest's repository) and ``target`` names the environment
+    ``install_deps`` would write into — both are part of what the operator consents to.
+    Best-effort: a plugin that can't be resolved is simply left out."""
+    if not plugin_ids:
+        return []
+    running = installer.effective_copies()
+    _, target = installer.deps_install_target()
+    out: list[dict] = []
+    for pid in plugin_ids:
+        m = running.get(pid)
+        if m is None:
+            continue
+        try:
+            deps = installer.missing_deps_detail(m)
+        except Exception:  # noqa: BLE001 — a dep probe must never fail an install that landed
+            log.debug("[plugins] %s: deps probe failed after install (ignored)", pid, exc_info=True)
+            continue
+        if deps:
+            source = installer.effective_source_url(pid) or str(m.repository or "")
+            out.append({"id": pid, "name": m.name or pid, "source": source, "target": target, "deps": deps})
+    return out
+
+
+def register_plugin_routes(app) -> None:
+    """Register `/api/plugins/installed`, `/install`, `/updates`, `/{id}/enabled`,
+    `/{id}/update`, and DELETE `/{id}`."""
+
+    @app.get("/api/plugins/installed")
+    async def _installed():
+        # enabled + incomplete state come from the loader's per-plugin meta (#1719)
+        meta_by_id = {p["id"]: p for p in (STATE.plugin_meta or [])}
+        root = installer.live_plugins_dir()
+        # Bundle provenance (ADR 0040): the lock already links members to their bundle
+        # (`by: "bundle:<id>"` + the top-level bundles[] registry) — join it here so the
+        # Installed table can label bundle-installed rows instead of showing them as
+        # anonymous individual plugins. `name` is absent on locks written before it was
+        # persisted; consumers fall back to the id.
+        bundle_by_member: dict[str, dict] = {}
+        # The lock's bundles[] registry, verbatim — the AUTHORITATIVE installed-bundle
+        # list. Deriving it client-side from member provenance drifts: a bundle whose
+        # members were all removed individually still has a row (and is still
+        # uninstallable), but no member row would carry its chip.
+        bundle_rows: list[dict] = []
+        for b in installer._read_lock().get("bundles") or []:
+            bundle_rows.append({"id": b.get("id") or "", "name": b.get("name") or ""})
+            for member_id in b.get("plugins") or []:
+                bundle_by_member[member_id] = {
+                    "id": b.get("id") or "",
+                    "name": b.get("name") or "",
+                    "url": b.get("source_url") or "",
+                }
+        out = []
+        # The copy that RUNS per id (the loader's rule: supersedes, tracked overrides,
+        # #1574). The console joins these rows onto the running plugin — description,
+        # deps_missing and the "Install deps" action — so they must describe that copy,
+        # not whichever folder happens to sit in the live dir (for a superseded install
+        # that is the ignored old copy). Off the loop: it reads every manifest.
+        running = await asyncio.to_thread(installer.effective_copies)
+        for e in installer.list_installed():
+            mt = meta_by_id.get(e["id"], {})
+            item = {
+                **e,
+                "enabled": bool(mt.get("enabled")),
+                "incomplete": bool(mt.get("incomplete")),
+                "needs_config": list(mt.get("needs_config") or []),
+                # Load failure from the last reload (#2716) — previously only the
+                # console/runtime-status payload carried it, so API consumers of this
+                # inventory saw an enabled-but-dead plugin as healthy.
+                "error": str(mt.get("error")) if mt.get("error") else None,
+            }
+            if e["id"] in bundle_by_member:
+                item["bundle"] = bundle_by_member[e["id"]]
+            try:
+                m = (running.get(e["id"]) or load_manifest(root / e["id"])) if e.get("present") else None
+            except Exception:  # noqa: BLE001 — one row's manifest must never 500 the listing
+                # A concurrent uninstall can pull the folder between list_installed() and
+                # this read; load_manifest doesn't raise for a missing file, but a half-
+                # removed tree can fail anywhere under it. The row stays, manifest-less.
+                log.warning("[plugins] %s: manifest unreadable while listing", e["id"], exc_info=True)
+                m = None
+            if m is not None:
+                item["manifest"] = {
+                    "name": m.name,
+                    "version": m.version,
+                    "description": m.description,
+                    "repository": m.repository,
+                    "homepage": m.homepage,
+                    "capabilities": m.capabilities,
+                    "requires_env": m.requires_env,
+                    "requires_pip": m.requires_pip,
+                    "optional_pip": m.optional_pip,
+                    "views": [v.get("label") for v in m.views],
+                    # Full ordered Configure-tab descriptors (#3179/#3180), not
+                    # labels only: inventory clients need to distinguish generic
+                    # schema tabs from path-backed sandbox pages.
+                    "settings_tabs": list(m.settings_tabs),
+                    "secrets": m.secrets,
+                }
+                # Actionable install state (#2013 adjacent): which declared pip deps
+                # are missing from the runtime — drives the console's "Install deps"
+                # action instead of the old install-manually advisory text.
+                # Scope-aware (#2246): a `scope: host` dep isn't satisfied by the managed
+                # runtime, so the console must keep showing it as missing rather than
+                # reporting a plugin ready that will ModuleNotFoundError at tool time.
+                item["deps_missing"] = installer.missing_deps(list(m.requires_pip or []), getattr(m, "pip_scopes", {}))
+            out.append(item)
+        # The dependency install this server is running, if any: `{id, target, since}` or
+        # null. The console shows that row as installing and every other Install deps
+        # button as waiting, including for an install started in another tab.
+        return {"plugins": out, "bundles": bundle_rows, "deps_installing": installer.deps_install_running()}
+
+    @app.post("/api/plugins/install-deps")
+    async def _install_deps(body: dict | None = None):
+        """Pip-install a plugin's declared ``requires_pip`` — the explicit code-exec
+        step `install` deliberately skips (ADR 0027 D4), previously CLI-only. The
+        wizard's post-install report and the Plugins panel call this."""
+        plugin_id = str((body or {}).get("id", "")).strip()
+        if not plugin_id:
+            raise HTTPException(status_code=400, detail="id is required")
+        # Consent re-check at deps time (#2743): a plugin installed before a trust
+        # tightening (or under trust_unverified since switched off) must not run pip
+        # without the same one-time "this runs code" ack install itself requires.
+        # Same 200-with-needs_ack contract as the install endpoint — the client
+        # renders the confirm dialog and retries after POST /api/plugins/ack; a 4xx
+        # here would dead-end as an error toast. Skipped when the copy that RUNS has
+        # no recorded origin (bundled — including one superseding an old git install —
+        # or a hand-copied working tree: nothing was fetched for it).
+        source_url = await asyncio.to_thread(installer.effective_source_url, plugin_id)
+        if source_url:
+            needs_ack = _consent_needs_ack(source_url)
+            if needs_ack is not None:
+                return needs_ack
+        try:
+            satisfied, failed, newly, refresh = await asyncio.to_thread(_install_deps_and_refresh, plugin_id)
+        except installer.DepsInstallBusy as exc:
+            # One install per environment at a time. The second request is refused at once
+            # rather than queued behind a pip run that can take minutes (and might be for
+            # another plugin); the console shows the running one as busy and polls.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except installer.InstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # `installed` is what NEWLY landed — a package that was already there isn't one.
+        # All-optional deps fail soft, so an empty install can mean "nothing to do" or
+        # "everything failed": `failed` tells them apart, and `ok` is false when nothing
+        # is satisfied at all, so a client never reports that as a success.
+        out: dict = {"ok": bool(satisfied) or not failed, "installed": newly, "refresh": refresh}
+        if failed:
+            out["failed"] = failed
+        return out
+
+    # NOT under /api/plugins/<id>/: that subtree is one a plugin may exempt from the auth gate
+    # (manifest `public_paths`) or open to fleet peers (`federation_paths`), and a core route
+    # there inherits the exemption. Running a step (a download, an install) must ALWAYS take the
+    # operator credential, so it lives in a namespace no manifest can claim.
+    @app.post("/api/plugin-setup/{plugin_id}/{step}")
+    async def _run_setup_step(plugin_id: str, step: str):
+        """Run one SETUP STEP a plugin registered (``registry.register_setup_step``) — what a
+        setup-gap banner's ``plugin_setup`` button calls ("Download the CLI", "Install
+        Chrome"). The host runs only the callable it holds for exactly this (plugin, step)
+        pair: nothing from the request is executed, and a step is reachable only while its
+        plugin is loaded (a disable, an uninstall or a failed reload drops it). 404 otherwise.
+        Operator-only: the path is outside every plugin-exemptable prefix. Off the event loop —
+        a step may spawn a process or touch the network before it hands long work to a
+        thread. Returns ``{"ok", "message", "pending"}``; a step that raised is ``ok: false``
+        with its message, never a 500."""
+        from graph.plugins import setup_gaps
+
+        if not setup_gaps.has_step(plugin_id, step):
+            raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} has no setup step {step!r} (is it enabled?)")
+        log.info("[plugins] running setup step %s/%s", plugin_id, step)
+        result = await asyncio.to_thread(setup_gaps.run_step, plugin_id, step)
+        if result is None:  # dropped between the check and the run (a reload / disable)
+            raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} has no setup step {step!r} (is it enabled?)")
+        # Audit-logged like install-deps (ADR 0027 D5): a step may fetch or install software.
+        installer._audit("setup_step", {"id": plugin_id, "step": step}, result.get("message") or "", success=result["ok"])
+        return result
+
+    @app.get("/api/plugins/catalog")
+    async def _catalog():
+        """The curated official-plugin directory (ADR 0059) — `config/plugin-catalog.json`
+        (live dir overrides the bundle), merged with install state so the Discover UI can
+        show **Available / Installed / Bundled**. State is matched by `repo` URL (robust)
+        or id; one-click install runs `plugin install <repo>` (ADR 0058)."""
+        import json
+
+        from infra.paths import instance_paths
+
+        ip = instance_paths()
+        entries: list[dict] = []
+        for base in (ip.config_dir, ip.bundle_dir):
+            f = base / "plugin-catalog.json"
+            if f.exists():
+                try:
+                    entries = (json.loads(f.read_text(encoding="utf-8")) or {}).get("plugins") or []
+                except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+                    log.warning("[plugins] plugin-catalog.json unreadable at %s", f)
+                break
+
+        def _norm(u: str | None) -> str:
+            return re.sub(r"\.git$", "", (u or "").strip().rstrip("/")).lower()
+
+        installed = installer.list_installed()
+        by_url = {_norm(e.get("source_url")): e["id"] for e in installed if e.get("source_url")}
+        by_id = {e["id"] for e in installed}
+        meta_by_id = {p["id"]: p for p in (STATE.plugin_meta or []) if p.get("id")}
+
+        out = []
+        for entry in entries:
+            eid = entry.get("id") or ""
+            repo = entry.get("repo") or entry.get("install_url") or ""
+            # Bundled built-in: it ships in core, so it can't be git-installed over. The
+            # installer's own built-in rule decides, so Discover and the installer agree:
+            # the id has a manifest in the bundled tree. A bare dir left over from a
+            # core→standalone extraction (#1731) isn't bundled, and a bundled manifest id is
+            # found whatever its folder is called. The card shows "bundled" and never Install.
+            bundled = bool(eid) and installer._is_builtin(eid)
+            inst_id = by_url.get(_norm(repo)) or (eid if eid in by_id else None)
+            # On/off is the loader's answer for the copy that runs, bundled or installed.
+            # A bundled plugin is never "installed", but it IS on or off, and it may be on
+            # only because another bundled plugin's `enables:` turned it on (#3450:
+            # execute_code, by cowork). `enabled_by` says so.
+            mt = meta_by_id.get(eid if bundled else inst_id or "") or {}
+            on = bool(mt.get("enabled"))
+            out.append(
+                {
+                    **entry,
+                    "bundled": bundled,
+                    "installed": inst_id is not None,
+                    "enabled": on,
+                    "enabled_by": list(mt.get("enabled_by") or []) if on else [],
+                }
+            )
+        return {"plugins": out}
+
+    @app.post("/api/plugins/install")
+    async def _install(body: dict | None = None):
+        body = body or {}
+        url = str(body.get("url", "")).strip()
+        if not url:
+            raise HTTPException(status_code=400, detail="url is required")
+        ref = str(body.get("ref", "")).strip() or None
+        force = bool(body.get("force"))
+
+        # Consent gate (ADR 0071 D3 S4, #2721): an untrusted source needs the one-time
+        # "this runs code" ack BEFORE anything is fetched. 200-with-needs_ack, not a
+        # 4xx — the client turns it into the confirm dialog and retries after
+        # POST /api/plugins/ack; an error status would render as a failure toast.
+        # Fetch-only installs (PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1) skip the gate:
+        # no code runs, so there is nothing to consent to yet — the ENABLE that
+        # follows is the operator's explicit act.
+        if not _install_no_enable():
+            needs_ack = _consent_needs_ack(url)
+            if needs_ack is not None:
+                return needs_ack
+
+        from ops import OpContext
+        from ops.plugins import install_and_activate
+
+        # Install AUTO-ENABLES + runs the code (ADR 0027, trust-by-default) — for a
+        # trusted source; an untrusted one was already turned back with needs_ack
+        # above (ADR 0071 D3, both the dialog and the Discover one-click ask). The
+        # op adds it to plugins.enabled + hot-reloads via _apply_settings_changes —
+        # the live-agent rebuild this REST adapter injects. Opt out with
+        # PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE=1 (strict install ≠ enable).
+        from server.agent_init import _apply_settings_changes
+
+        try:
+            result = await install_and_activate(
+                url,
+                ref,
+                force=force,
+                by="console",
+                allow=_sources_allowlist(),
+                activate=not _install_no_enable(),
+                ctx=OpContext.from_state(),
+                apply_settings=lambda updates: _apply_settings_changes(config=updates),
+                # Bundle services (#2118): optional create-time values for a bundle's
+                # declared mcp `${input}`s / `secrets:` — same body shapes as POST
+                # /api/fleet ({key: value} / [{key, value}]). Absent = env-only seeding.
+                mcp_inputs=body.get("inputs") or None,
+                bundle_secrets=body.get("secrets") or None,
+                # Operator answers to the bundle's declared config_inputs prompts
+                # (#2934) — {dotted_key: value}, written to the host config at the
+                # declared keys. Values stay untouched here (a boolean toggle must
+                # arrive as a bool); the seed helper coerces per declared type.
+                config_inputs=_config_inputs_from(body),
+            )
+        except installer.InstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Routers re-mount with the fresh code (ADR 0096), so a fresh install and a force
+        # re-install over a live plugin are both live; only a surface the reload couldn't
+        # replace asks for a restart. With NO reload (the post-install reload failed, or
+        # PROTOAGENT_PLUGIN_INSTALL_NO_ENABLE) the new files are on disk while a plugin that
+        # was already live keeps running its old router / tools / surfaces → restart.
+        if result.reloaded:
+            restart = await _restart_needed(result.installed_ids)
+        else:
+            restart = any(_is_live(pid) for pid in result.installed_ids)
+        deps_needed = await asyncio.to_thread(_deps_needed, result.installed_ids)
+        if result.enable_error:
+            log.warning("[plugins] installed but auto-enable reload failed: %s", result.enable_error)
+        for pid, err in result.load_errors.items():
+            log.warning("[plugins] %s installed + enabled but FAILED to load: %s", pid, err)
+        return {
+            "installed": result.summary,
+            "enabled": result.enabled,  # the ids now live
+            "reloaded": result.reloaded,
+            "restart_recommended": restart,
+            "enable_error": result.enable_error,
+            # Per-plugin import failures from the post-enable reload (#2716) — an id in
+            # `enabled` whose entry is here is in plugins.enabled but NOT running.
+            "load_errors": result.load_errors,
+            # Bundle mcp: servers seeded into the host config this install (#2118).
+            "mcp_seeded": result.mcp_seeded,
+            # Dotted config keys the bundle's declared config_inputs wrote (#2934).
+            "config_written": result.config_written,
+            # The just-installed plugins' Python packages that still need installing ON THIS
+            # MACHINE (marker-excluded ones never appear), with the exact specs + source — the
+            # console asks once ("<Plugin> needs these packages… install them now?") and on
+            # confirm calls POST /api/plugins/install-deps. Install itself never pips (ADR 0027
+            # D4); only that explicit click does. Empty when nothing is missing.
+            "deps_needed": deps_needed,
+        }
+
+    @app.post("/api/plugins/{plugin_id}/enabled")
+    async def _set_enabled(plugin_id: str, body: dict | None = None):
+        """Enable/disable a plugin by editing `plugins.enabled`/`disabled` + hot-reloading.
+
+        ENABLE is fully live: tools / subagents / middleware / MCP rebuild with the graph,
+        and the plugin's router (which serves any **console view** — the view iframe just
+        points at a router route) is hot-mounted on the same reload (#822). So a freshly
+        enabled view-contributing plugin works immediately; ``restart_recommended`` is False.
+
+        DISABLE is live too: the reload unmounts the plugin's router (``_mount_plugin_routers``
+        removes a roster-absent plugin's routes, ADR 0096) and stops its surfaces (ADR 0018),
+        so ``restart_recommended`` is False here as well — unless a surface would not stop
+        (``_restart_needed``).
+        """
+        want = bool((body or {}).get("enabled"))
+        prev_meta = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
+        # A builtin (core runtime infrastructure, e.g. the delegate registry) always
+        # loads regardless of plugins.disabled — refuse to disable it rather than write a
+        # config entry the loader silently ignores.
+        if not want and prev_meta and prev_meta.get("builtin"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{plugin_id!r} is a built-in plugin and can't be disabled",
+            )
+
+        def _toggle(current) -> dict:
+            # Merged inside the config write lock (#2743) — read here, before it, the
+            # list could be missing whatever another toggle or install just wrote.
+            enabled = [p for p in (getattr(current, "plugins_enabled", []) or []) if p != plugin_id]
+            disabled = [p for p in (getattr(current, "plugins_disabled", []) or []) if p != plugin_id]
+            (enabled if want else disabled).append(plugin_id)
+            return {"plugins": {"enabled": enabled, "disabled": disabled}}
+
+        from server.agent_init import _apply_settings_changes
+
+        # Offload off the event loop (#2210 class) — the reload's graph recompile is
+        # heavy and this handler is async; a direct call would freeze the server.
+        ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_toggle)
+        if not ok:
+            raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+
+        # Enabling hot-mounts the router that serves the view (#822); disabling unmounts it
+        # (ADR 0096) and the reconcile stops its surfaces (ADR 0018) — live both ways. A
+        # surface that won't stop is the one thing that outlives the reload.
+        restart = await _restart_needed([plugin_id])
+        out: dict = {"ok": True, "enabled": want, "reloaded": True, "restart_recommended": restart}
+        if want:
+            # The one UI moment to mention missing packages (#3450): the operator just
+            # turned it on. The reload above computed them (a disabled plugin's are []).
+            now = next((p for p in (STATE.plugin_meta or []) if p.get("id") == plugin_id), None)
+            if now and now.get("deps_missing"):
+                out["deps_missing"] = list(now["deps_missing"])
+        return out
+
+    @app.post("/api/plugins/ack")
+    async def _ack(body: dict | None = None):
+        """Persist a one-time source ack (ADR 0071 D3 S4, #2721). A bare Confirm
+        writes the EXACT normalized source into ``plugins.sources.acked`` (narrowest
+        grant — acking one repo trusts that repo, not its org; org-wide trust is
+        ``sources.official``, fork-overridable). ``trust_all: true`` (the dialog's
+        "don't ask again") flips ``plugins.trust_unverified`` too. Persists through
+        the same write path settings use — an ack that doesn't survive a restart
+        re-asks forever."""
+        body = body or {}
+        url = str(body.get("url", "") or body.get("source", "")).strip()
+        # Never bool(): a string "false" is truthy, and this flag WIDENS trust — the
+        # exact fail-open shape the 2733 review caught on trust_unverified itself.
+        raw_trust = body.get("trust_all")
+        trust_all = raw_trust is True or str(raw_trust or "").strip().lower() in ("1", "true", "yes", "on")
+        # A url is REQUIRED: an ack is consent for a NAMED source the dialog just
+        # showed. A bare {"trust_all": true} would pre-approve every future source
+        # with nothing on screen naming that stake (2734 review) — the global switch
+        # only rides alongside a concrete ack, exactly like the dialog's checkbox.
+        if not url:
+            raise HTTPException(status_code=400, detail="url is required")
+        from graph.plugins.trust import ack_pattern
+
+        from server.agent_init import _apply_settings_changes
+
+        # Serialize the read-modify-write: two concurrent acks both reading the same
+        # acked list would drop one entry (_CONFIG_WRITE_LOCK guards only the inside
+        # of the apply, not this route-level RMW — 2734 review). One process-wide
+        # async lock held across read → merge → apply.
+        async with _ACK_RMW_LOCK:
+            cfg = STATE.graph_config
+            acked = list(getattr(cfg, "plugins_sources_acked", []) or []) if cfg else []
+            pattern = ack_pattern(url)
+            if pattern and pattern not in acked:
+                acked.append(pattern)
+            updates: dict = {"plugins": {"sources": {"acked": acked}}}
+            if trust_all:
+                updates["plugins"]["trust_unverified"] = True
+            # Off the event loop — config write + full graph rebuild (D9 rule).
+            ok, messages = await asyncio.to_thread(_apply_settings_changes, config=updates)
+        if not ok:
+            raise HTTPException(status_code=500, detail="; ".join(messages) or "persisting the ack failed")
+        return {"ok": True, "acked": pattern or None, "trust_all": trust_all}
+
+    @app.get("/api/plugins/updates")
+    async def _updates():
+        """Per-plugin update status (behind / up-to-date / pinned / error).
+
+        Pinned-to-SHA plugins skip the network; the rest ls-remote their ref
+        (TTL-cached + timeout-bounded so the poll can't hang). Errors are
+        non-fatal per entry — surfaced in each row's ``error``.
+
+        ``bundles`` (#2718, ADR 0049 D4): the same status per installed BUNDLE —
+        ``behind`` there means the bundle repo's manifest moved (member pins may
+        move with it; ``POST /api/plugins/bundles/{id}/update`` re-resolves)."""
+        return {
+            "plugins": await asyncio.to_thread(installer.check_updates),
+            "bundles": await asyncio.to_thread(installer.check_bundle_updates),
+        }
+
+    @app.post("/api/plugins/bundles/{bundle_id}/update")
+    async def _update_bundle(bundle_id: str):
+        """Bundle-level update (#2718): force re-install the bundle repo at its
+        recorded ref (release-tag pins move to the newest semver tag), re-pin every
+        member, re-apply the declared enable set (WITHOUT undoing an operator's
+        explicit disable) + config/mcp defaults, retire members the new manifest
+        dropped, hot-reload. The lock's ``bundles`` row is rewritten — this is the
+        re-pin surface ADR 0049 D4 deferred."""
+        from ops import OpContext
+        from ops.plugins import update_bundle
+
+        from server.agent_init import _apply_settings_changes
+
+        try:
+            res = await update_bundle(
+                bundle_id,
+                by="console",
+                allow=_sources_allowlist(),
+                ctx=OpContext.from_state(),
+                apply_settings=lambda updates: _apply_settings_changes(config=updates),
+            )
+        # TYPED not-installed → 404 (matching DELETE + the single-plugin route) —
+        # raised by the op itself, so a bundle removed by a concurrent DELETE maps
+        # correctly too (the 2740 review's TOCTOU on the old pre-check + generic
+        # except). 400 stays for genuine install failures.
+        except installer.BundleNotInstalledError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except installer.InstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        inst = res.install
+        # Same truth as the single-plugin update: routers re-mount live; only a member's
+        # surface the reload couldn't replace asks for a restart — and with no reload, any
+        # member that was already live keeps running its old code.
+        if inst.reloaded:
+            restart = await _restart_needed(inst.installed_ids)
+        else:
+            restart = any(_is_live(pid) for pid in inst.installed_ids)
+        for pid, err in inst.load_errors.items():
+            log.warning("[plugins] bundle %s member %s updated but FAILED to load: %s", bundle_id, pid, err)
+        return {
+            "installed": inst.summary,
+            "enabled": inst.enabled,
+            "reloaded": inst.reloaded,
+            "restart_recommended": restart,
+            "enable_error": inst.enable_error,
+            "load_errors": inst.load_errors,
+            "mcp_seeded": inst.mcp_seeded,
+            "removed_members": res.removed_members,
+            "retire_error": res.retire_error,
+        }
+
+    @app.delete("/api/plugins/bundles/{bundle_id}")
+    async def _uninstall_bundle(bundle_id: str, purge: bool = False):
+        """One-action bundle removal (#2718): uninstall the bundle's exclusively-owned
+        members (shared / re-owned ones stay), drop the lock row, purge modules,
+        hot-reload so their tools/routes leave the live agent. ``?purge=true``
+        forwards to each member uninstall (config + secrets removal)."""
+        from ops import OpContext
+        from ops.plugins import uninstall_bundle
+
+        from server.agent_init import _apply_settings_changes
+
+        try:
+            report = await uninstall_bundle(
+                bundle_id,
+                purge=purge,
+                ctx=OpContext.from_state(),
+                apply_settings=lambda updates: _apply_settings_changes(config=updates),
+            )
+        # Typed not-installed → 404; any other uninstall failure is a 400, not a
+        # phantom "doesn't exist" (the old blanket-404 hid real errors).
+        except installer.BundleNotInstalledError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except installer.InstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, **report}
+
+    @app.post("/api/plugins/sync")
+    async def _sync():
+        """Re-clone every locked plugin that's missing on disk (the console's
+        "missing" state; previously CLI-only as `python -m server plugin sync`).
+
+        The lock is the source of truth: each missing plugin re-installs at its
+        recorded ``resolved_sha`` — fetch, not update, and fetch ≠ enable (ADR
+        0027). If anything was fetched and is already in ``plugins.enabled``
+        (e.g. a restored data dir whose config still enables it), hot-reload so
+        it comes up live — a previously-missing plugin has no mounted router, so
+        the hot-mount path applies and no restart is needed."""
+        results = await asyncio.to_thread(installer.sync, allow=_sources_allowlist())
+        fetched = {r["id"] for r in results if r.get("status") == "installed"}
+
+        reloaded = False
+        if fetched & set(getattr(STATE.graph_config, "plugins_enabled", []) or []):
+            from server.agent_init import _apply_settings_changes
+
+            # Off the event loop — config write + full graph rebuild (2734 review;
+            # the D9 rule every reload call site follows).
+            ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_current_plugin_lists)
+            if not ok:
+                # The fetch itself succeeded — surface the reload failure per row
+                # semantics rather than 500ing (mirrors the install route).
+                return {"plugins": results, "reloaded": False, "reload_error": "; ".join(messages) or "reload failed"}
+            reloaded = True
+        return {"plugins": results, "reloaded": reloaded, "reload_error": None}
+
+    @app.post("/api/plugins/{plugin_id}/update")
+    async def _update(plugin_id: str):
+        """Pull the latest code for an installed plugin, then hot-reload via the
+        SAME path the enable toggle uses so the new code mounts.
+
+        The target ref is the update check's ``latest_ref`` when one exists (a
+        release-tag pin moves tag → newer tag; re-installing the RECORDED tag would
+        be a no-op forever — tags are immutable), else the recorded ``requested_ref``
+        (a branch pulls its newest commit). Rewrites the lock with the new ref +
+        ``resolved_sha``. If the plugin is currently ENABLED we reload (so tools/
+        middleware/MCP rebuild and the router re-mounts, #822); if it's
+        installed-but-disabled we just re-install (nothing to reload yet).
+        """
+        entry = next((e for e in installer.list_installed() if e.get("id") == plugin_id), None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} is not installed")
+        source_url = entry.get("source_url", "")
+        if not source_url:
+            raise HTTPException(
+                status_code=400,
+                detail=f"plugin {plugin_id!r} has no source_url — cannot update",
+            )
+        # The plugin moved into core (a bundled copy supersedes this source): the
+        # installed copy is ignored, so there is nothing to pull. 409 with the reason and
+        # the fix — before, this reached the installer's built-in guard and 400'd with
+        # "cannot install over it", which read as a broken update.
+        bundled = installer.bundled_superseding(plugin_id, source_url)
+        if bundled is not None:
+            raise HTTPException(
+                status_code=409, detail=installer.superseded_reason(plugin_id, source_url, bundled)
+            )
+        ref = entry.get("requested_ref", "") or None
+        if ref and installer.is_release_tag(ref):
+            # A release-tag pin is immutable — the update target is the newest
+            # semver tag (the check's latest_ref), not the recorded one. Branch
+            # refs skip this: re-installing the branch already pulls its head.
+            try:
+                status = await asyncio.to_thread(installer.check_plugin_update, entry)
+                ref = status.get("latest_ref") or ref
+            except Exception:  # noqa: BLE001 — best-effort; fall back to the recorded ref
+                pass
+        try:
+            summary = await asyncio.to_thread(
+                installer.install, source_url, ref, force=True, by="console", allow=_sources_allowlist()
+            )
+        except installer.InstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        cfg = STATE.graph_config
+        is_enabled = plugin_id in (getattr(cfg, "plugins_enabled", []) or [])
+
+        reloaded = False
+        if is_enabled:
+            # Force a genuinely fresh import of the just-pulled code before the
+            # reload — what makes UPDATE deliver fresh code for a multi-file plugin
+            # where the enable path's hot-mount alone wouldn't.
+            _purge_plugin_modules(plugin_id)
+
+            # Reload through the enable route's path so the freshly pulled code
+            # hot-mounts (router re-mount, tools/middleware/MCP rebuild — #822).
+            from server.agent_init import _apply_settings_changes
+
+            # Off the event loop — full graph rebuild (2734 review, D9 rule).
+            ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_current_plugin_lists)
+            if not ok:
+                raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+            reloaded = True
+
+        # The reload re-mounted the router with the new code (ADR 0096) and reconciled the
+        # surfaces; only one it couldn't replace asks for a restart. With no reload (not in
+        # plugins.enabled), a plugin that is nonetheless live keeps running the old code.
+        return {
+            "ok": True,
+            "id": plugin_id,
+            "version": summary.get("version"),
+            "resolved_sha": summary.get("resolved_sha"),
+            "reloaded": reloaded,
+            "restart_recommended": await _restart_needed([plugin_id]) if reloaded else _is_live(plugin_id),
+        }
+
+    @app.delete("/api/plugins/{plugin_id}")
+    async def _uninstall(plugin_id: str, purge: bool = False):
+        # purge=true also removes the plugin's config section + secrets (ADR 0027).
+        cfg = STATE.graph_config
+        was_enabled = plugin_id in (getattr(cfg, "plugins_enabled", []) or [])
+        # Loaded or mounted right now — e.g. enabled by its own manifest rather than
+        # plugins.enabled, which no reload below would take down.
+        was_live = _is_live(plugin_id)
+        try:
+            # Off the event loop: it removes the checkout and scrubs the YAML under the
+            # config write lock (#2743), which a concurrent reload can hold for seconds.
+            report = await asyncio.to_thread(installer.uninstall, plugin_id, purge=purge)
+        except installer.InstallError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if report.get("superseded_by_bundled"):
+            # Only the IGNORED copy of a plugin that now ships with protoAgent went, and the
+            # enable entry stays — dropping it here would switch the bundled plugin off.
+            if not report.get("was_loaded"):
+                # The running code is the bundled copy: nothing to purge, scrub or reload.
+                return {"ok": True, **report, "reloaded": False, "restart_recommended": False}
+            # …unless this process was STILL running the removed copy (protoAgent was
+            # upgraded under it without a restart): its files just went, so unload it like
+            # any removal — purge + reload brings the bundled copy up in its place, its
+            # router re-mounted (ADR 0096). Without a reload the removed copy keeps running.
+            _purge_plugin_modules(plugin_id)
+            reloaded = False
+            if was_enabled:
+                from server.agent_init import _apply_settings_changes
+
+                ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_current_plugin_lists)
+                if not ok:
+                    raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+                reloaded = True
+            return {
+                "ok": True,
+                **report,
+                "reloaded": reloaded,
+                "restart_recommended": await _restart_needed([plugin_id]) if reloaded else was_live,
+            }
+
+        # Teardown, mirroring _update (#1955): the files are gone, so stale module
+        # objects must not survive to the next import, and an ENABLED plugin must
+        # leave plugins_enabled + hot-reload out of the live graph — otherwise the
+        # next reload or request into its surface crashes on imports of deleted
+        # files. Purge is unconditional: a previously-enabled-then-disabled
+        # plugin's modules can linger too, and purging an absent subtree is a no-op.
+        _purge_plugin_modules(plugin_id)
+        reloaded = False
+        if was_enabled:
+            from server.agent_init import _apply_settings_changes
+
+            def _drop(current) -> dict:
+                # Inside the config write lock (#2743): filtered from a copy read before
+                # it, this wrote out any enable that landed in between.
+                return {
+                    "plugins": {
+                        "enabled": [p for p in (getattr(current, "plugins_enabled", []) or []) if p != plugin_id],
+                        "disabled": [p for p in (getattr(current, "plugins_disabled", []) or []) if p != plugin_id],
+                    }
+                }
+
+            # Off the event loop — full graph rebuild (2734 review, D9 rule).
+            ok, messages = await asyncio.to_thread(_apply_settings_changes, config=_drop)
+            if not ok:
+                raise HTTPException(status_code=500, detail="; ".join(messages) or "reload failed")
+            reloaded = True
+
+        # The reload unmounted its routes (ADR 0096) and stopped its surfaces; only one
+        # that wouldn't stop asks for a restart. With no reload (it wasn't in
+        # plugins.enabled), whatever was live keeps running until one.
+        return {
+            "ok": True,
+            **report,
+            "reloaded": reloaded,
+            "restart_recommended": await _restart_needed([plugin_id]) if reloaded else was_live,
+        }

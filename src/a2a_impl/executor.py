@@ -1,0 +1,1571 @@
+"""protoAgent's A2A 1.0 AgentExecutor — drives LangGraph through ``a2a-sdk``.
+
+Replaces the hand-rolled ``a2a_handler.py``. ``a2a-sdk`` owns every piece of
+protocol mechanics (JSON-RPC dispatch, SSE streaming, the task lifecycle, push
+delivery, the in-memory task store). This module is the bridge: it adapts
+protoAgent's existing ``_chat_langgraph_stream`` event generator
+(``(event_type, payload)`` tuples) onto the SDK's ``EventQueue`` via
+``TaskUpdater``, and emits the four protoLabs extensions through
+``protolabs_a2a``.
+
+The producer-event contract (unchanged from the hand-rolled handler) is::
+
+    text            answer text, streamed + accumulated verbatim (a producer puts
+                    any paragraph break between model calls INSIDE the delta)
+    tool_start      a tool began      (dict {id,name,input} | str)
+    tool_end        a tool finished   (dict {id,name,output} | str)
+    delta           a worldstate-delta {domain,path,op,value}
+    usage           per-LLM-call token usage {input_tokens,output_tokens,...};
+                    a `subagent_type` tag marks a delegated call (#2872) and a
+                    `peer` tag an A2A peer's own reported spend (#3016) — both
+                    summed into the turn's spend but excluded from context-fill
+                    tracking
+    input_required  HITL pause {question}
+    steer_consumed  queued operator input folded before the next model call
+    delegate_progress  a running coding-agent delegation's live snapshot {id,target,…}
+    tool_args       streamed preview of a tool's declared string arg (ADR 0118 D3),
+                    {id,arg,offset,chunk,done}; relayed as a LIVE-ONLY tool-args-v1
+                    DataPart on WORKING frames — never persisted, never replayed
+    done            terminal; payload is the final text
+    error           terminal; payload is the error string
+
+On terminal completion the accumulated text + the cost / worldstate-delta /
+context extension DataParts are published as a single artifact. Tool events are
+surfaced as tool-call-v1 DataParts on the working status frames.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextvars
+import logging
+import time
+import uuid
+from collections.abc import AsyncGenerator, Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+from a2a.server.agent_execution import AgentExecutor, RequestContext
+from a2a.server.events import EventQueue
+from a2a.server.tasks import TaskUpdater
+from a2a.types import Message, Part, Task, TaskState, TaskStatus
+from a2a.utils.errors import InvalidParamsError, UnsupportedOperationError
+from google.protobuf import json_format, struct_pb2
+
+import protolabs_a2a as pa
+
+from a2a_impl import hitl_routing
+from graph.turn_liveness import TurnStop, bind_turn_stop
+from runtime.session_ids import session_id_problem
+
+logger = logging.getLogger(__name__)
+
+# protoAgent-LOCAL extension (not one of the four fleet extensions in
+# ``protolabs_a2a``): the HITL form/approval payload surfaced on an
+# ``input-required`` frame so the operator console can render a JSON-schema form
+# or an Approve/Deny card (the agent's ``request_user_input`` / ``run_command``
+# approval). The console matches on this MIME; the hub doesn't need it. Built
+# with the same ``data_part`` wire primitive as the fleet extensions, so it
+# rides the 1.0 envelope identically — it's just not on the shared card.
+HITL_MIME = "application/vnd.protolabs.hitl-v1+json"
+# Bounds on the rendered form prompt (#3414). A pause must never turn into a wall of
+# schema, and the delegate caller truncates what it forwards anyway.
+_HITL_MAX_FORM_STEPS = 5
+_HITL_MAX_FORM_FIELDS = 12
+_HITL_MAX_FORM_CHOICES = 8
+# Streamed scratch_pad reasoning ("thinking") — carried on WORKING status frames as
+# a DataPart, distinct from the answer artifact, so the console can show a
+# collapsible reasoning view. Plain consumers ignore it.
+REASONING_MIME = "application/vnd.protolabs.reasoning-v1+json"
+# Authorship for an `@<name>`-addressed turn (#3042) — who the answer on the terminal
+# frame is FROM, so the console renders it as that participant's message instead of the
+# lead agent's. A local extension like the two above: the answer itself still rides the
+# ordinary artifact, so a consumer that ignores this DataPart shows the same text, just
+# unattributed.
+ROOM_MIME = "application/vnd.protolabs.room-v1+json"
+# Mid-turn operator input consumed at a model-call boundary (#2959). The payload is
+# {items:[{id,text}]}; its position among working frames is the chronology contract.
+STEER_CONSUMED_MIME = "application/vnd.protolabs.steer-consumed-v1+json"
+# A running coding-agent delegation's live state (#3979) — a bounded WHOLE snapshot
+# ({id, target, plan, current_tool, recent_tools, tool_count, text, done, ok}; see
+# graph/delegate_progress.py), keyed by the card it belongs to: the `@` mention card's
+# tool-call id, or a `delegate_to` ask's id. Latest wins, so a consumer that ignores or
+# misses one loses nothing but latency.
+DELEGATE_PROGRESS_MIME = "application/vnd.protolabs.delegate-progress-v1+json"
+# A goal drive's status line (#4012) — "🎯 checking the goal…", "🎯 goal not met (1/8) …".
+# A typed DataPart, NOT a plain-string tool_start: that became WORKING text a delegator's
+# card committed as content, and counted as a tool call.
+GOAL_STATUS_MIME = "application/vnd.protolabs.goal-status-v1+json"
+# Streamed tool arguments (ADR 0118 D3) — a tool's declared string arg, extracted
+# incrementally server-side and relayed on WORKING frames so the console can preview an
+# artifact as the model writes it. LIVE-ONLY: never persisted to task history and never
+# replayed on resubscribe/hydration (``a2a_impl.stores.drop_tool_args_history`` drops it on
+# save); once the tool runs, the finished artifact replaces the preview. Plain consumers
+# ignore it. Template-local, so it is NOT declared on the agent card.
+TOOL_ARGS_MIME = "application/vnd.protolabs.tool-args-v1+json"
+
+# A renderable UI component (ADR 0051 Slice 2) — a typed, data-only widget the console
+# renders inline ({component, props}). Same DataPart contract as the HITL/tool-call parts.
+from graph.components import COMPONENT_MIME  # noqa: E402
+
+# Where a work frame (tool call, reasoning run, component) fell in the turn's answer text,
+# stamped on its status MESSAGE metadata: the length of the text streamed before it. The
+# durable task keeps answer text as ONE flattened artifact and the work frames in
+# `history`, so without this a reattach / reload can't tell which text preceded which tool
+# and replays every frame first, the text after — folding a pre-tool sentence the live view
+# showed above the tool into the "Working…" block. Counted in UTF-16 code units, the
+# console's string indexing, so an emoji before a tool doesn't shift the split.
+TEXT_OFFSET_META = "protoagent/textOffset"
+
+
+def _text_offset_meta(accumulated: str) -> dict[str, int]:
+    return {TEXT_OFFSET_META: len(accumulated.encode("utf-16-le")) // 2}
+
+
+# What the offsets were measured AGAINST, stamped on the terminal answer artifact: the
+# streamed text's UTF-16 length + an FNV-1a hash of its UTF-16 code units. The stored
+# answer is not always that text — a goal drive's `done` carries only the last pass plus
+# the goal note, and output extraction strips — so an offset from an earlier pass can
+# land mid-word in it. The console interleaves only when the stored answer STARTS WITH
+# exactly the measured text (same length prefix, same hash); otherwise it falls back to
+# the old order (frames, then text).
+TEXT_FINGERPRINT_META = "protoagent/textFingerprint"
+
+
+def _utf16_fnv1a(text: str) -> int:
+    data = text.encode("utf-16-le")
+    h = 0x811C9DC5
+    for i in range(0, len(data), 2):
+        h ^= data[i] | (data[i + 1] << 8)
+        h = (h * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def _text_fingerprint_meta(measured: str) -> dict[str, dict[str, int]]:
+    return {TEXT_FINGERPRINT_META: {"length": len(measured.encode("utf-16-le")) // 2, "fnv1a": _utf16_fnv1a(measured)}}
+
+
+class TurnStalled(RuntimeError):
+    """The agent stream produced no event for the whole stall window.
+
+    Not "the turn is long" — "the turn stopped saying anything". See
+    ``_stall_guarded``.
+    """
+
+
+async def _frame_within(step: asyncio.Task, seconds: float) -> bool:
+    """Wait up to ``seconds`` for ``step`` (the stream's next frame); True if it arrived.
+
+    The stall guard's only clock, as a module-level seam: a test that must tell "keeps
+    working" from "stalled" swaps in a virtual clock (``tests/_virtual_clock.py``) instead
+    of racing a sub-second wall-clock window against a loaded CI box. Only the wait
+    itself — every decision about what a timeout means stays in ``_stall_guarded``."""
+    finished, _ = await asyncio.wait({step}, timeout=seconds)
+    return bool(finished)
+
+
+async def _stall_guarded(stream, seconds: float, last_activity: list[str]):
+    """Yield from ``stream``, raising :class:`TurnStalled` if no event arrives
+    for ``seconds``.
+
+    Measures the GAP BETWEEN events, never the total turn length. That
+    distinction is the whole design: a research turn making forty tool calls over
+    twenty minutes is healthy and must never be cut off, while a turn wedged
+    inside ONE tool call emits nothing at all — and only the second is a hang.
+    A wall-clock cap cannot tell them apart; silence can.
+
+    Without this a wedged turn sat in ``TASK_STATE_WORKING`` forever: nothing
+    server-side ever ended it, and the console's own watchdog deliberately keeps
+    waiting while the durable task still says WORKING (correctly — it can't
+    distinguish slow from stuck either), so the spinner ran until reload (#2344).
+
+    Cancelling the pending step is what actually frees the wedged work: the
+    ``wait_for`` cancel propagates into the tool call itself.
+
+    ``seconds <= 0`` disables the guard and passes the stream straight through.
+
+    Closing THIS generator closes ``stream`` too (#3876): a bare ``async for`` does not
+    close the generator it iterates when the iterating generator is itself closed, so the
+    stream's ``finally`` (thread-lock release, trace flush) would otherwise wait for the
+    event loop's async-generator finalizer. The stall path closes ``stream`` itself, so the
+    ``finally`` skips it there — ``stream`` is closed exactly once either way.
+    """
+    closed = False
+    try:
+        if seconds <= 0:
+            async for item in stream:
+                yield item
+            return
+
+        iterator = stream.__aiter__()
+        # Why the turn was stopped, shared with everything the stream spawns (#3940): a
+        # `/<workflow>` runner reads it on its cancel to record a stall as FAILED rather
+        # than as an operator's cancel. Set BEFORE the cancel below, which is why this is
+        # an explicit wait + cancel rather than `asyncio.wait_for` (that cancels first).
+        stop = TurnStop()
+        while True:
+            # Each step runs as its own task in a fresh copy of this context, exactly as
+            # `wait_for` ran it, plus the shared `stop`.
+            step_ctx = contextvars.copy_context()
+            bind_turn_stop(step_ctx, stop)
+            step = asyncio.get_running_loop().create_task(iterator.__anext__(), context=step_ctx)
+            try:
+                finished = await _frame_within(step, seconds)
+            except asyncio.CancelledError:
+                # Cancelled from above (an A2A CancelTask): cancel the step and let it
+                # unwind, as `wait_for` did.
+                step.cancel()
+                await asyncio.wait({step})
+                raise
+            if finished:
+                try:
+                    item = step.result()
+                except StopAsyncIteration:
+                    return
+            else:
+                stalled = (
+                    f"The turn stalled: no progress for {seconds:g}s while {last_activity[0]}. "
+                    "It was stopped rather than left running invisibly — the last step never "
+                    "returned. Retry, or narrow whatever that step was doing."
+                )
+                stop.reason = stalled
+                step.cancel()
+                # On a wedged ACP runtime, this can take up to _ACP_CANCEL_SETTLE_S.
+                await asyncio.wait({step})
+                if not step.cancelled():
+                    step.exception()  # retrieved: the turn is failing with TurnStalled
+                # aclose() finalizes the generator so its `finally` blocks run. Bounded
+                # and best-effort — a cleanup that hangs must not replace one hang with
+                # another.
+                closed = True
+                try:
+                    await asyncio.wait_for(stream.aclose(), 5.0)
+                except (Exception, asyncio.CancelledError):  # noqa: BLE001
+                    logger.debug("[a2a] stalled stream did not close cleanly", exc_info=True)
+                raise TurnStalled(stalled) from None
+            yield item
+    finally:
+        if not closed:
+            # A no-op when ``stream`` already finished (exhausted or raised); otherwise
+            # this is the guard being closed/cancelled at a ``yield`` — close ``stream``
+            # now rather than leave its cleanup to GC.
+            await stream.aclose()
+
+
+@dataclass
+class TurnOutcome:
+    """Everything a host needs at the end of an A2A turn (ADR 0003 / 0006).
+
+    Passed to the registered terminal hook so the host can (a) surface the
+    visible answer on the Activity thread and (b) record a per-turn telemetry
+    row — without the executor itself depending on either subsystem.
+    """
+
+    task_id: str
+    context_id: str
+    state: str  # "completed" | "failed"
+    text: str
+    usage: dict = field(default_factory=dict)
+    cost_usd: float = 0.0
+    duration_ms: int = 0
+    llm_calls: int = 0
+    tool_calls: int = 0
+    models: list[str] = field(default_factory=list)
+    # Per-tool execution durations, tool name → list of durations in ms across this
+    # turn's calls (#2697) — one turn can call the same tool more than once, and
+    # distinct tools too. Empty when the stream's tool_end frames carried no
+    # duration_ms (an older/alternate producer, e.g. a workflow yield) — those calls
+    # still count toward `tool_calls` above, just not toward this durable breakdown.
+    tool_durations: dict[str, list[int]] = field(default_factory=dict)
+    # Peak single-call prompt size this turn — the context-window FILL the thread
+    # reached, distinct from the summed spend in `usage` (#1372, persisted per
+    # ADR 0101 D6 so context growth is a series, not a one-turn readout).
+    context_tokens: int = 0
+    # Provenance (ADR 0022) — what triggered this turn, from the inbound A2A
+    # message metadata. ``origin`` ∈ scheduler|inbox|webhook|a2a|"" (empty = a
+    # live/operator turn); ``trigger`` is a human label (job id / inbox source);
+    # ``priority`` is the inbox tier when applicable.
+    origin: str = ""
+    trigger: str = ""
+    priority: str = ""
+    # The triggering input text (the scheduled prompt / inbound message / webhook body),
+    # truncated — so the Activity feed can show the response as an explicit reply to it (#1375).
+    stimulus: str = ""
+    # The Langfuse trace this turn ran under, so a telemetry row can deep-link to
+    # the trace tree. Captured DURING the stream, not after — see ``execute``.
+    trace_id: str = ""
+    # Why a non-``completed`` turn ended — the same text the task's terminal
+    # ``status.message`` carries. Kept on the outcome because a host surfacing a
+    # failed turn to an operator otherwise has only ``text`` (the partial answer,
+    # which reads as a completed one that trails off) and would have to re-fetch
+    # the task to say what went wrong. Empty for a completed turn.
+    error: str = ""
+    # The model the turn's caller asked for (``metadata.model`` — a console tab's pick, an
+    # A2A peer's per-request override). Empty when none was requested. Telemetry names it
+    # when no model call reported usage — a turn that failed on its first call, a
+    # short-circuit reply — instead of the configured default it never ran on (#3957).
+    requested_model: str = ""
+
+
+# A terminal hook the host can register (ADR 0003 / 0006): invoked with a
+# ``TurnOutcome`` when a turn reaches a terminal state, so the host can surface
+# the answer on the Activity thread and record telemetry. No-op when unset.
+_ON_TERMINAL: list[Callable[[TurnOutcome], None] | None] = [None]
+
+
+def set_terminal_hook(hook: Callable[[TurnOutcome], None] | None) -> None:
+    """Register (or clear) the terminal hook fired on task completion."""
+    _ON_TERMINAL[0] = hook
+
+
+def _notify_terminal(outcome: TurnOutcome) -> None:
+    cb = _ON_TERMINAL[0]
+    if cb is None:
+        return
+    try:
+        cb(outcome)
+    except Exception:  # noqa: BLE001 — best-effort, never breaks the turn
+        logger.exception("[a2a] terminal hook failed for context %s", outcome.context_id)
+
+
+# A progress hook (ADR 0051) the host can register to observe a turn's realtime
+# frames — fired at turn start (``turn_started``, which carries the task_id + a
+# ``resumed`` flag for HITL continuations), on each tool start/end, on a HITL
+# pause (``input_required``, with the human-readable prompt), and once more as the
+# producer exits however it exits (``turn_ended`` — #3933) with
+# ``(context_id, task_id, frame)``. No-op when unset, so live turns (which already
+# stream over their own SSE) pay nothing; the host publisher uses it to surface
+# detached-turn progress and HITL pauses on the event bus.
+_ON_PROGRESS: list[Callable[[str, str, dict], None] | None] = [None]
+
+
+def set_progress_hook(hook: Callable[[str, str, dict], None] | None) -> None:
+    """Register (or clear) the per-frame progress hook (ADR 0051)."""
+    _ON_PROGRESS[0] = hook
+
+
+def _notify_progress(context_id: str, task_id: str, frame: dict) -> None:
+    cb = _ON_PROGRESS[0]
+    if cb is None:
+        return
+    try:
+        cb(context_id or "", task_id or "", frame)
+    except Exception:  # noqa: BLE001 — best-effort, never breaks the turn
+        logger.exception("[a2a] progress hook failed for context %s", context_id)
+
+
+def _begin_knowledge_ops():
+    """Arm per-turn knowledge-op accumulation (#2676): hybrid-store query /
+    ingest / embed timings recorded anywhere inside this turn's async context
+    fold into the turn. Returns the disarm token (None if metrics is broken)."""
+    try:
+        from observability import metrics
+
+        return metrics.begin_knowledge_turn()
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        return None
+
+
+def _current_knowledge_ops() -> dict:
+    """The armed turn's knowledge-op durations (op → [ms, ...]), or {}."""
+    try:
+        from observability import metrics
+
+        return metrics.current_knowledge_ops() or {}
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        return {}
+
+
+def _end_knowledge_ops(token) -> None:
+    if token is None:
+        return
+    try:
+        from observability import metrics
+
+        metrics.end_knowledge_turn(token)
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        pass
+
+
+def _text_part(text: str) -> Part:
+    return Part(text=text)
+
+
+def _data_part_proto(payload: Any, mime_type: str) -> Part:
+    """A proto ``Part`` carrying ``payload`` under ``mime_type``.
+
+    ``a2a-sdk`` serializes this to the A2A 1.0 wire shape
+    ``{"data": …, "metadata": {"mimeType": …}, "mediaType": "application/json"}``.
+    The payload values, MIME, and extension URI match the protoLabs contract
+    that ``protolabs_a2a`` documents.
+    """
+    part = Part()
+    value = struct_pb2.Value()
+    json_format.ParseDict(payload, value.struct_value)
+    part.data.CopyFrom(value)
+    part.metadata.update({pa.MIME_KEY: mime_type})
+    part.media_type = pa.DATA_MEDIA_TYPE
+    return part
+
+
+def _ext_data_part(emit_dict: dict[str, Any]) -> Part:
+    """Convert a ``protolabs_a2a.emit_*`` contract dict into a proto ``Part``."""
+    mime = emit_dict["metadata"][pa.MIME_KEY]
+    payload = emit_dict["content"]["value"]
+    return _data_part_proto(payload, mime)
+
+
+def _hitl_prompt(payload: Any) -> str:
+    """A human-readable prompt for an ``input-required`` pause, for consumers
+    that don't parse the hitl-v1 DataPart.
+
+    That set includes every DELEGATE CALLER: a peer that parks bubbles the pause back
+    to whoever called it (``plugins/delegates/a2a.py``), and the caller reads the
+    TEXT part — it has no hitl-v1 parser. So this string is the whole question as far
+    as an agent chain is concerned, and it has to be answerable on its own.
+
+    It used to be ``question or title``, which meant a form or approval — neither of
+    which carries ``question`` — reached the caller as a bare TITLE with the substance
+    left behind in the DataPart (#3414). Observed live: a delegate parked on a form and
+    its caller received only "protoContent readiness gate", with no fields, no options
+    and nothing to answer. A plain ``ask_human`` has ``question``, so it worked, which
+    is why the gap read as intermittent.
+
+    Now every kind renders what a human (or a calling agent) needs to reply: the ask's
+    question, an approval's action, a form's fields with their choices and which are
+    required."""
+    if not isinstance(payload, dict):
+        return str(payload) if payload is not None else "Input required."
+    question = str(payload.get("question") or "").strip()
+    detail = str(payload.get("detail") or "").strip()
+    if question:
+        # A plain ask (and an approval that also phrased one) — the detail is the
+        # command or action being approved, which the answer turns on.
+        return f"{question}\n\n{detail}" if detail else question
+    lines: list[str] = []
+    title = str(payload.get("title") or "").strip()
+    description = str(payload.get("description") or "").strip()
+    if title:
+        lines.append(title)
+    if description:
+        lines.append(description)
+    if detail:
+        lines.append(detail)
+    lines.extend(_hitl_field_lines(payload.get("steps")))
+    return "\n\n".join(lines) if lines else "Input required."
+
+
+def _hitl_field_lines(steps: Any) -> list[str]:
+    """One readable line per form field: name, label, whether it is required, and the
+    allowed values when the schema constrains them.
+
+    Rendered from the JSON Schema the form is built from, so a caller answering a
+    delegate's form knows what to send back without a schema parser of its own. Bounded
+    and defensive — a malformed step is skipped rather than raising into a pause."""
+    out: list[str] = []
+    if not isinstance(steps, list):
+        return out
+    for step in steps[:_HITL_MAX_FORM_STEPS]:
+        if not isinstance(step, dict):
+            continue
+        schema = step.get("schema")
+        if not isinstance(schema, dict):
+            continue
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        required = schema.get("required")
+        required_names = set(required) if isinstance(required, list) else set()
+        step_title = str(step.get("title") or "").strip()
+        if step_title:
+            out.append(step_title)
+        for name, spec in list(properties.items())[:_HITL_MAX_FORM_FIELDS]:
+            if not isinstance(spec, dict):
+                continue
+            label = str(spec.get("title") or name).strip()
+            bits = [f"- {name}: {label}" if label != name else f"- {name}"]
+            choices = spec.get("enum")
+            if isinstance(choices, list) and choices:
+                bits.append("one of " + ", ".join(str(c) for c in choices[:_HITL_MAX_FORM_CHOICES]))
+            if name in required_names:
+                bits.append("required")
+            out.append(" — ".join(bits))
+    return out
+
+
+class ProtoAgentExecutor(AgentExecutor):
+    """Bridges protoAgent's LangGraph stream onto the A2A event queue.
+
+    A single ``execute`` call runs one turn end-to-end (or to a HITL pause).
+    ``cancel`` genuinely stops the turn: the a2a-sdk cancels the producer task,
+    injecting ``CancelledError`` into this coroutine — which the execute loop catches
+    to record a ``canceled`` outcome before re-raising, and the LangGraph stream
+    unwinds. (A live ``SubscribeToTask`` re-attach also exists in this SDK; polling
+    ``GetTask`` is only the *cross-restart* ceiling.)
+    """
+
+    def __init__(
+        self,
+        stream_fn_factory: Callable[..., AsyncGenerator[tuple[str, Any], None]],
+        structured_finalizer: Callable[[str, str], Any] | None = None,
+        context_meta_provider: Callable[[], dict[str, Any]] | None = None,
+        stall_timeout_provider: Callable[[], float] | None = None,
+        server_fired_origin: Callable[[str], bool] | None = None,
+    ) -> None:
+        # ``stream_fn_factory(text, context_id, *, resume, caller_trace,
+        # request_metadata)`` → async generator of (event_type, payload). This is
+        # protoAgent's ``_chat_langgraph_stream``; ``request_metadata`` is the
+        # merged A2A request metadata, passed through so the backend's thread_id
+        # resolver (#571) can scope memory off it.
+        self._stream_factory = stream_fn_factory
+        # ``structured_finalizer(skill_id, final_text)`` → an emit DataPart dict
+        # or None (#476). Injected by server.py so the executor stays decoupled
+        # from the skill registry (no circular import).
+        self._structured_finalizer = structured_finalizer
+        # ``context_meta_provider()`` → the static compaction context for the context-v1
+        # DataPart (#1372): {enabled, trigger, compactionAtTokens?}. Injected by server.py
+        # (it reads STATE.graph_config) so the executor needn't import the config (layering).
+        self._context_meta_provider = context_meta_provider
+        # ``stall_timeout_provider()`` → seconds of SILENCE after which a turn is
+        # declared wedged and failed (0 disables). Injected like the two above so the
+        # executor stays free of a config import, and read per turn so an operator's
+        # change takes effect on the next turn rather than needing a restart.
+        self._stall_timeout_provider = stall_timeout_provider
+        # ``server_fired_origin(origin)`` → whether a request's ``origin`` names a turn the
+        # SERVER fired (scheduler, watch, background-resume…) rather than one an operator
+        # sent: its prompt is machine text that was never a chat bubble, so the durable
+        # transcript keeps none (``_transcript_opening``). Injected by server.py
+        # (``server.turn_control.is_autonomous_origin``) — the executor cannot import server.
+        self._server_fired_origin = server_fired_origin
+
+    def _server_fired(self, origin: str) -> bool:
+        """Whether ``origin`` names a server-fired turn; False when unknown or on error —
+        at worst the transcript keeps a machine prompt, never breaks the turn."""
+        if not origin or self._server_fired_origin is None:
+            return False
+        try:
+            return bool(self._server_fired_origin(origin))
+        except Exception:  # noqa: BLE001 — the transcript must never break a turn
+            logger.debug("[a2a] server-fired-origin predicate failed", exc_info=True)
+            return False
+
+    def _stall_timeout_seconds(self) -> float:
+        """The configured stall window, or 0 (guard off) if unavailable.
+
+        Never raises: a watchdog that can break a turn by misreading config would
+        be worse than the hang it exists to catch.
+        """
+        if self._stall_timeout_provider is None:
+            return 0.0
+        try:
+            return float(self._stall_timeout_provider() or 0.0)
+        except Exception:  # noqa: BLE001 — degrade to "no guard", never break the turn
+            logger.debug("[a2a] stall-timeout provider failed; guard disabled", exc_info=True)
+            return 0.0
+
+    async def _append_structured(self, parts: list[Part], context: RequestContext, final_text: str) -> list[Part]:
+        """If the turn targets a structured skill (``skillHint`` + a declared
+        schema), append the schema-enforced result as a DataPart (#476). No-op
+        otherwise; a finalizer error degrades to the text-only parts."""
+        if self._structured_finalizer is None or not final_text:
+            return parts
+        skill = _extract_skill_hint(context)
+        if not skill:
+            return parts
+        try:
+            emit = await self._structured_finalizer(skill, final_text)
+        except Exception:  # noqa: BLE001
+            logger.exception("[structured] finalizer raised for skill %s", skill)
+            return parts
+        return [*parts, _ext_data_part(emit)] if emit else parts
+
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        updater = TaskUpdater(event_queue, context.task_id, context.context_id)
+
+        # A resumed task (HITL) already exists in input-required; a fresh task
+        # must be enqueued as a Task object first (the framework requires the
+        # initial Task before any TaskStatusUpdateEvent), then transitioned to
+        # working.
+        resume = bool(context.current_task and _is_input_required(context.current_task))
+        # A parked task another task superseded (#3930): its pause was answered, or re-parked,
+        # on that other task, so this one is over. A settle message NEVER reaches the graph:
+        # it completes the task (with a pointer) only while the task is still paused on the
+        # pause it was scheduled against, and is a no-op otherwise (stale or forged).
+        is_settle, superseded_by = hitl_routing.settle_decision(context.message, context.current_task)
+        if is_settle:
+            if superseded_by is not None:
+                await updater.complete(
+                    message=updater.new_agent_message(
+                        [_text_part(f"Continued in task {superseded_by}.")],
+                        metadata={hitl_routing.SUPERSEDED_BY: superseded_by},
+                    )
+                )
+            else:
+                logger.info("[a2a] stale settle for task %s ignored", context.task_id)
+            return
+        # A message reaching a task that has already ENDED (a double-submitted answer that
+        # queued behind the one that completed it) must not reopen it as a fresh turn — and
+        # must not vanish behind a 200 either: refuse it, like the SDK refuses a message
+        # naming a task that had ended before it arrived — with the same error it uses
+        # (UnsupportedOperationError, a2a-sdk >= 1.2 / the A2A spec's terminal-task error).
+        # (The routing wrapper re-routes a refused HITL answer to the context's current pause.)
+        if context.current_task is not None and _is_terminal(context.current_task):
+            raise UnsupportedOperationError(message=f"Task {context.task_id} has already ended")
+        # Backstop only: the entry-point check (hitl_routing.check_context_id, installed on
+        # the handler's send methods) refuses an unusable contextId before the SDK creates a
+        # task. Reaching here means a handler without that wrapper — the turn is still
+        # refused, but the SDK records the raise as a FAILED task under this context.
+        _ctx = str(context.context_id or "")
+        _ctx_problem = session_id_problem(_ctx) if _ctx else None
+        if _ctx_problem is not None:
+            raise InvalidParamsError(message=f"Invalid contextId: {_ctx_problem}")
+        # Provenance for the Activity feed (ADR 0022): what triggered this turn.
+        _md = _request_metadata(context)
+        # One parked task per context (#3930). A turn that ANSWERED the pause (a resume, or
+        # a hitl_resume) or that PARKED (a held message re-parks on the pending interrupt)
+        # makes every other task parked in the context BEFORE it ended stale — their pause
+        # was consumed or taken over. So they are settled when this turn ENDS (the finally
+        # below), never at its start: turns on a thread are serialized, and a task parking
+        # while this one waited for the thread lock is only known stale once it is done.
+        touches_pause = bool(resume or _md.get("hitl_resume"))
+        _origin = str(_md.get("origin", "") or "")
+        if not resume:
+            await event_queue.enqueue_event(
+                Task(
+                    id=context.task_id,
+                    context_id=context.context_id,
+                    status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+                    # The operator's message OPENS the task's durable history. The SDK
+                    # records the request message itself only when an agent's first
+                    # event is a status/artifact update; when the agent enqueues its own
+                    # Task, as this one must, the SDK saves that Task verbatim and drops
+                    # the message — assuming the Task already carries it, the way a2a's
+                    # `new_task(message)` helper builds one. A bare Task therefore stored
+                    # every turn without its prompt, and the session-turns reader (ADR
+                    # 0104) rebuilt chats as answers with no questions. (A HITL resume
+                    # skips this branch; the SDK appends that message on its own.)
+                    history=_transcript_opening(context.message, server_fired=self._server_fired(_origin)),
+                )
+            )
+        text = context.get_user_input()
+        images = _extract_image_parts(context)
+        caller_trace = _extract_caller_trace(context)
+
+        # Thread the task id to in-graph middleware via the request-context
+        # contextvar (ADR 0032) — PromptCapture keys snapshots by it (#2243);
+        # it is request-scoped, not agent state, so metadata is the lane.
+        if context.task_id:
+            _md["a2a.task_id"] = context.task_id
+        _priority = str(_md.get("priority", "") or "")
+        _trigger = str(_md.get("trigger") or _md.get("scheduler_job_id") or _md.get("inbox_source") or "")
+        # The stimulus = this turn's input text, kept as a truncated preview so the Activity
+        # feed can show the response as an explicit reply to what triggered it (#1375).
+        _stimulus = (text or "").strip()
+        if len(_stimulus) > 600:
+            _stimulus = _stimulus[:600] + "…"
+
+        await updater.start_work()
+        # Realtime: announce the turn (carries the task_id — the handle a host needs to
+        # control or re-attach to this turn) before any work runs (ADR 0051). `resumed`
+        # marks a HITL continuation (the parked task got its answer), so a host can flip
+        # a "needs approval" surface back to "running" (#2132). The provenance fields ride
+        # this first frame too (#3092) so a server host can publish an addressable,
+        # session-scoped control capability without inferring task identity later from
+        # display frames.
+        _notify_progress(
+            context.context_id,
+            context.task_id,
+            {
+                "phase": "turn_started",
+                "resumed": resume,
+                "origin": _origin,
+                "trigger": _trigger,
+                "attended": _md.get("attended"),
+            },
+        )
+
+        started = time.monotonic()
+        accumulated = ""
+        deltas: list[dict] = []
+        usage = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
+        cost_usd = 0.0
+        had_usage = False
+        # Peak prompt size this turn = the largest single model call's input_tokens (the
+        # model's own count of all prompt tokens, incl. cache reads). Unlike the summed
+        # usage above, this is the live context-window FILL, not per-turn spend (#1372).
+        context_tokens = 0
+        # The FINAL model call's input/output, kept separately from the peak above: the
+        # next request on this thread starts from last prompt + last completion, which
+        # makes them the honest basis for the projectedTokens estimate (#2773). The next
+        # turn's user message and envelope aren't knowable here, so the projection is a
+        # floor, not a promise — ADR 0101 D6 keeps precision at the adapter layer.
+        last_call_input = 0
+        last_call_output = 0
+        llm_calls = 0
+        tool_calls = 0
+        _counted_tool_call_ids: set[str] = set()  # dedupe key for tool_calls below
+        models: list[str] = []
+        tool_durations: dict[str, list[int]] = {}  # tool name → durations this turn, ms (#2697)
+        # Knowledge-op accumulation (#2676): the stream (and the graph inside it)
+        # runs in THIS call's async context, so hybrid-store query/ingest/embed
+        # timings recorded mid-turn land in the armed contextvar and merge into
+        # `_outcome` below. Disarmed in the `finally` — after every outcome read.
+        knowledge_token = _begin_knowledge_ops()
+
+        # Live answer streaming: forward each text delta as an incremental
+        # artifact-update (append) frame so the console fills the bubble as the
+        # model writes, instead of the whole answer landing at turn end. Batched
+        # by a small char threshold to avoid a frame per token. The terminal
+        # emission then REPLACES this artifact (append=False) with the canonical
+        # final text + the cost/context DataParts — so the durable task and any
+        # re-fetch carry the answer exactly once (and a goal retry that changed the
+        # text still finalizes correctly).
+        # A resumed leg (a HITL answer continuing its parked task, #3930) streams into an
+        # artifact of its own: reusing the first leg's id would REPLACE the answer text the
+        # task streamed before it paused, and the durable task would lose it.
+        answer_aid = f"{context.task_id or 'turn'}-answer"
+        if resume:
+            answer_aid = f"{answer_aid}-resumed-{uuid.uuid4().hex[:8]}"
+        _text_buf = ""
+        _answer_started = False  # first chunk creates the artifact (append=False); rest append
+        # Batched by a char threshold OR an elapsed-time floor, whichever trips
+        # first — size alone made the stream chunky twice over (#2766): the frame
+        # only fires when the buffer crosses the threshold, so the console fills
+        # in ~10-word blocks, and a slow producer leaves the tail parked in the
+        # buffer indefinitely (there is no timer; nothing flushes until the NEXT
+        # delta tips the size check). History of the size knob: 240 (an 11KB
+        # answer ≈ 48 frames — "reads as chunky, visible ~40-word blocks"), then
+        # 60, originally 24. The teardown-race concern that motivated raising it
+        # (registry FLUSH_GRACE_S, #1713) was re-tested and disproven at 24 —
+        # 30x through the real SendStreamingMessage SSE body, zero grace-window
+        # warnings, zero truncation (tests/test_a2a_flush_granularity.py):
+        # FLUSH_GRACE_S fires on a genuinely hung producer, not frame count.
+        # (Still not re-tested: real TCP backpressure / a slow browser consumer —
+        # if a future report ties chunkiness back to teardown under load, look
+        # there first.) Governs the answer text and reasoning batching (#1710).
+        _FLUSH_CHARS = 24
+        # The time floor: a buffer older than this flushes on the next delta even
+        # below the size threshold, so a slowly-generating model still trickles
+        # word by word instead of parking a 23-char tail. Event-driven (checked
+        # per delta, no background timer) — a buffer can still sit through a
+        # genuine mid-answer SILENCE, but the existing flush-before-tool/end
+        # paths already cover every event boundary where that matters.
+        _FLUSH_INTERVAL_S = 0.1
+        # Reasoning ("thinking") deltas arrive one token at a time. Batch them
+        # like the answer text so the live thinking bubble still fills word by
+        # word without a WORKING status frame per token — unbatched, one turn
+        # produced ~700 single-word frames, and each one becomes a durable
+        # history Message row downstream (#1710; the durable store additionally
+        # coalesces whole contiguous reasoning runs — a2a_impl.stores).
+        _reasoning_buf = ""
+        # Monotonic stamp of each buffer's last flush, for the time floor. Starts
+        # "long ago" so the very first delta of a turn flushes immediately — the
+        # first visible words should never wait out a full size threshold.
+        _text_flushed_at = 0.0
+        _reasoning_flushed_at = 0.0
+
+        def _should_flush(buf: str, flushed_at: float) -> bool:
+            return len(buf) >= _FLUSH_CHARS or (bool(buf) and time.monotonic() - flushed_at >= _FLUSH_INTERVAL_S)
+
+        async def _flush_reasoning() -> None:
+            nonlocal _reasoning_buf, _reasoning_flushed_at
+            if not _reasoning_buf:
+                return
+            payload_text, _reasoning_buf = _reasoning_buf, ""
+            _reasoning_flushed_at = time.monotonic()
+            await updater.update_status(
+                TaskState.TASK_STATE_WORKING,
+                message=updater.new_agent_message(
+                    [_data_part_proto({"text": payload_text}, REASONING_MIME)],
+                    metadata=_text_offset_meta(accumulated),
+                ),
+            )
+
+        async def _flush_text() -> None:
+            nonlocal _text_buf, _answer_started, _text_flushed_at
+            if not _text_buf:
+                return
+            _text_flushed_at = time.monotonic()
+            chunk = _text_buf
+            await updater.add_artifact(
+                [_text_part(chunk)],
+                artifact_id=answer_aid,
+                append=_answer_started,
+                last_chunk=False,
+            )
+            _answer_started = True
+            _text_buf = ""
+            # Realtime tap (#2361). The artifact frames above go to whoever holds THIS
+            # turn's A2A stream — for a server-fired turn that is the server itself, so
+            # an open console sees nothing for the whole turn. Mirror each flushed chunk
+            # onto the progress hook so a host can republish it. Already batched to
+            # _FLUSH_CHARS, so this is ~one frame per paragraph, not per token.
+            _notify_progress(
+                context.context_id,
+                context.task_id,
+                {"phase": "text", "text": chunk, "origin": _origin},
+            )
+
+        async def _finalize(final_text: str) -> None:
+            """Close the answer artifact + emit the cost/context DataParts.
+
+            AUTHORITATIVE (#1709): the terminal frame always carries the full
+            canonical ``final_text`` with ``append=False`` — a REPLACE — so the
+            durable task (and any tasks/get re-fetch) holds the answer exactly
+            once even when mid-stream append frames were lost downstream of this
+            process. The old heuristic (append meta-only when the streamed text
+            matched ``final_text``) compared against the IN-PROCESS accumulation,
+            so a downstream loss looked like "nothing diverged" and permanently
+            sealed a truncated artifact into the store. Frame consumers must
+            honor the A2A ``append`` flag — and beware its WIRE SHAPE: proto3
+            gives ``append`` no presence, so ``append=False`` serializes as an
+            ABSENT key. Absent/false ⇒ replace; only an explicit ``true`` is an
+            append (the SDK task store, evals/client.py and the console's
+            ``artifactAppends`` all read it that way — the console's previous
+            ``append !== false`` mapping would have doubled every streamed
+            answer). Naive concat consumers would otherwise see the answer
+            twice."""
+            body = final_text
+            # Compaction context (#1372): the live prompt size + the configured trigger /
+            # token threshold, merged into one context-v1 DataPart. Provider failures
+            # degrade to "size only" — never break the turn's finalization.
+            context_meta: dict[str, Any] | None = None
+            if context_tokens > 0:
+                meta: dict[str, Any] = {}
+                if self._context_meta_provider is not None:
+                    try:
+                        meta = self._context_meta_provider() or {}
+                    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+                        meta = {}
+                context_meta = {"contextTokens": context_tokens, **meta}
+                if last_call_input > 0:
+                    # What the NEXT request on this thread will roughly cost before
+                    # anything new is added: last prompt + last completion (#2773).
+                    context_meta["projectedTokens"] = last_call_input + last_call_output
+            parts, ext_meta = _terminal_parts(
+                body,
+                deltas,
+                usage if had_usage else None,
+                cost_usd,
+                context_meta,
+                success=True,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
+            parts = await self._append_structured(parts, context, final_text)
+            # Guard on EITHER: cost/worldstate now ride metadata, so a turn with telemetry
+            # but no text/context part must still emit the artifact (it would previously
+            # have had a cost DataPart keeping `parts` non-empty).
+            if parts or ext_meta:
+                # rstrip: the stored answer is `extract_output(...).strip()`, so a streamed
+                # trailing newline must not make a normal turn's fingerprint miss.
+                if accumulated.rstrip():
+                    ext_meta = {**(ext_meta or {}), **_text_fingerprint_meta(accumulated.rstrip())}
+                await updater.add_artifact(
+                    parts,
+                    artifact_id=answer_aid,
+                    metadata=ext_meta or None,
+                    append=False,
+                    last_chunk=True,
+                )
+
+        # The Langfuse trace id for this turn, captured on the first streamed event.
+        #
+        # WHY IT MUST BE READ INSIDE THE LOOP: ``trace_session`` sets a contextvar in
+        # the stream generator's body. Async generators share the caller's Context
+        # (unlike Tasks), so the value IS visible here while the generator is
+        # suspended mid-iteration — but the generator's ``finally`` resets it as soon
+        # as the loop ends. Reading it from the terminal hook, or from the post-loop
+        # ``_outcome`` calls, reliably yields "". A one-slot list so the closure in
+        # ``_outcome`` sees the captured value without a ``nonlocal``.
+        trace_id: list[str] = [""]
+
+        def _capture_trace_id() -> None:
+            if trace_id[0]:
+                return
+            try:
+                from observability import tracing
+
+                trace_id[0] = tracing.current_trace_id() or ""
+            except Exception:  # noqa: BLE001 — telemetry must never break a turn
+                pass
+
+        def _outcome(state: str, final_text: str, error: str = "") -> TurnOutcome:
+            durations = {k: list(v) for k, v in tool_durations.items()}
+            # Knowledge ops attribute to the SAME per-turn durations blob as tool
+            # calls (#2676), under `knowledge:{op}` pseudo-tool keys — so the
+            # telemetry row (and its by-tool percentiles) needs no new column.
+            for op, samples in _current_knowledge_ops().items():
+                durations.setdefault(f"knowledge:{op}", []).extend(samples)
+            return TurnOutcome(
+                task_id=context.task_id,
+                context_id=context.context_id,
+                state=state,
+                text=final_text,
+                usage=dict(usage),
+                cost_usd=round(cost_usd, 6),
+                duration_ms=int((time.monotonic() - started) * 1000),
+                llm_calls=llm_calls,
+                tool_calls=tool_calls,
+                models=list(models),
+                tool_durations=durations,
+                context_tokens=context_tokens,
+                origin=_origin,
+                trigger=_trigger,
+                priority=_priority,
+                stimulus=_stimulus,
+                trace_id=trace_id[0],
+                error=error,
+                requested_model=str(_md.get("model") or "").strip(),
+            )
+
+        # What the turn was last seen doing — read only when the stall guard trips,
+        # so the failure names the step that never returned instead of just "stalled".
+        last_activity = ["starting up"]
+
+        # The guarded stream, held so the `finally` can close it (#3876). Every terminal
+        # branch below RETURNS from inside the loop with the stream suspended at the
+        # terminal frame's `yield`; a bare `async for` leaves it there, so its `finally`
+        # — the chat driver's per-thread lock release, trace flush, turn bookkeeping —
+        # waited for the event loop's async-generator finalizer (GC).
+        guarded: AsyncGenerator[tuple[str, Any], None] | None = None
+        try:
+            guarded = _stall_guarded(
+                self._stream_factory(
+                    text,
+                    context.context_id,
+                    resume=resume,
+                    caller_trace=caller_trace,
+                    request_metadata=_md,
+                    images=images,
+                ),
+                self._stall_timeout_seconds(),
+                last_activity,
+            )
+            async for event_type, payload in guarded:
+                _capture_trace_id()
+                # A contiguous reasoning run ends at the first non-reasoning event:
+                # flush the buffered tail first so frames reach the consumer in
+                # stream order (thinking before the text/tool frame it preceded).
+                if event_type != "reasoning":
+                    await _flush_reasoning()
+
+                if event_type == "text":
+                    # Verbatim, never re-punctuated here: `accumulated` must stay the
+                    # exact string the stream carried. The console keeps a turn's
+                    # text-to-tool interleaving only while its own accumulation of these
+                    # frames matches the terminal text, so the executor adding a break
+                    # the stream never had would collapse it. Paragraph breaks between
+                    # model calls are the producer's to make, inside the delta itself
+                    # (server.turn_stream._run_turn_stream).
+                    accumulated += payload
+                    _text_buf += payload
+                    if _should_flush(_text_buf, _text_flushed_at):
+                        await _flush_text()
+
+                elif event_type in ("tool_start", "tool_end"):
+                    # Flush any buffered preamble text BEFORE the tool frame so the
+                    # console renders pre-tool text above the tool card (ordering fix)
+                    # rather than after it — the client builds its ordered render blocks
+                    # in frame-arrival order, so text must reach it before the tool.
+                    await _flush_text()
+                    if event_type == "tool_start":
+                        # server/chat.py announces a tool_start TWICE per real call — once
+                        # early (streamed tool-call name, empty args, so the card shows
+                        # "running" immediately) and once more at on_chat_model_end (same
+                        # id, full args, to fill the card in) — both intentional, by design.
+                        # A naive increment here double-counted every call; dedupe by the
+                        # tool_call id so a call with no id (a legacy plain-string producer)
+                        # still counts once, and a call announced twice counts once too.
+                        tc_id = payload.get("id") if isinstance(payload, dict) else None
+                        if tc_id is None or tc_id not in _counted_tool_call_ids:
+                            tool_calls += 1
+                            if tc_id is not None:
+                                _counted_tool_call_ids.add(tc_id)
+                        # The overwhelmingly likely thing to wedge a turn is a tool
+                        # that never returns, so name it for the stall message.
+                        name = payload.get("name") if isinstance(payload, dict) else None
+                        last_activity[0] = f"running the `{name}` tool" if name else "running a tool"
+                    else:
+                        last_activity[0] = "waiting for the model"
+                        # #2697: only tool_end carries a finished duration, and only from
+                        # the main turn-loop's on_tool_start/on_tool_end pair — other
+                        # tool_end producers (a workflow-step yield, a subagent-result
+                        # summary) don't stamp one. Those calls still counted above, they
+                        # just contribute no durable duration sample. `duration_ms == 0`
+                        # is the on_tool_start-had-no-run_id fallback, not a real
+                        # sub-millisecond call (there's always at least async/model-loop
+                        # overhead) — treated the same as "unmeasured", not "instant".
+                        if isinstance(payload, dict):
+                            end_name = payload.get("name")
+                            duration_ms = payload.get("duration_ms")
+                            if end_name and isinstance(duration_ms, int) and duration_ms > 0:
+                                tool_durations.setdefault(end_name, []).append(duration_ms)
+                    part, tc_meta = _tool_call_frame(event_type, payload)
+                    if tc_meta is not None:
+                        tc_meta = {**tc_meta, **_text_offset_meta(accumulated)}
+                    if part is not None or tc_meta is not None:
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([part] if part is not None else [], metadata=tc_meta),
+                        )
+                    # Realtime tap (ADR 0051) — surface the tool frame to any host hook.
+                    if isinstance(payload, dict):
+                        _notify_progress(
+                            context.context_id,
+                            context.task_id,
+                            # origin AFTER the payload spread: it is the frame's own
+                            # provenance and a tool result carrying an "origin" key of its
+                            # own must not be able to masquerade as one.
+                            {"phase": event_type, **payload, "origin": _origin},
+                        )
+
+                elif event_type == "room_reply":
+                    # An `@<name>` address answered (#3042). Emitted BEFORE the terminal
+                    # frame carrying the answer text, so the console has the author in
+                    # hand when the answer lands and can attribute it in one render
+                    # rather than re-labelling a message it already drew as the lead's.
+                    if isinstance(payload, dict):
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([_data_part_proto(payload, ROOM_MIME)]),
+                        )
+                        # A server-fired background-resume turn is consumed by the
+                        # server itself, not the browser. Mirror authored replies onto
+                        # the progress hook so the open room sees each participant
+                        # before the lead's eventual synthesis (#3051).
+                        _notify_progress(
+                            context.context_id,
+                            context.task_id,
+                            {"phase": "room_reply", **payload, "origin": _origin},
+                        )
+
+                elif event_type == "delegate_progress":
+                    # A coding-agent delegation's live state (#3979): its plan, current
+                    # tool, recent tools. One bounded, throttled snapshot per frame — the
+                    # producer (graph/delegate_progress.py) caps both size and rate.
+                    if isinstance(payload, dict) and payload.get("id"):
+                        current = payload.get("current_tool") or {}
+                        if isinstance(current, dict) and current.get("status") == "running":
+                            last_activity[0] = f"waiting on @{payload.get('target') or 'a delegate'} ({current.get('name') or 'a tool'})"
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([_data_part_proto(payload, DELEGATE_PROGRESS_MIME)]),
+                        )
+
+                elif event_type == "goal_status":
+                    # A transient goal status line (#4012): its own typed frame — not tool
+                    # telemetry (never counted as a tool call) and not text a consumer
+                    # would commit as content. Text before it lands above it.
+                    text = str(payload.get("text") or "") if isinstance(payload, dict) else str(payload or "")
+                    if text:
+                        await _flush_text()
+                        last_activity[0] = text.lstrip("🎯 ").strip() or last_activity[0]
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([_data_part_proto({"text": text}, GOAL_STATUS_MIME)]),
+                        )
+
+                elif event_type == "steer_consumed":
+                    # Commit any answer text emitted before the model-call boundary,
+                    # then publish the marker. The client splits its live assistant
+                    # placeholder here and continued frames land below the user bubble.
+                    await _flush_text()
+                    await _flush_reasoning()
+                    if isinstance(payload, dict):
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([_data_part_proto(payload, STEER_CONSUMED_MIME)]),
+                        )
+                        # A server-fired turn's stream is held by the server, so the
+                        # console that interjected into it never sees the frame above.
+                        # Mirror the boundary onto the progress hook — AFTER _flush_text
+                        # mirrored the text that preceded it — so the host can hand the
+                        # console the same acknowledgement a browser-owned stream carries
+                        # inline. Without it the operator's message sat "queued" under an
+                        # answer that had already used it.
+                        _notify_progress(
+                            context.context_id,
+                            context.task_id,
+                            {"phase": "steer_consumed", "items": payload.get("items") or [], "origin": _origin},
+                        )
+
+                elif event_type == "component":
+                    # A renderable UI component (ADR 0051 Slice 2) — emit it as a
+                    # component-v1 DataPart on a working frame so the console renders it
+                    # inline immediately.
+                    if isinstance(payload, dict):
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message(
+                                [_data_part_proto(payload, COMPONENT_MIME)], metadata=_text_offset_meta(accumulated)
+                            ),
+                        )
+
+                elif event_type == "tool_args":
+                    # Streamed preview of a tool's declared string arg (ADR 0118 D3): a
+                    # tool-args-v1 DataPart on a WORKING frame so the console can render an
+                    # artifact as the model writes it. LIVE-ONLY — the durable store drops
+                    # these from history (a2a_impl/stores.py), so a reattach or reload never
+                    # replays a stale partial; the finished artifact replaces the preview.
+                    if isinstance(payload, dict) and payload.get("id"):
+                        await updater.update_status(
+                            TaskState.TASK_STATE_WORKING,
+                            message=updater.new_agent_message([_data_part_proto(payload, TOOL_ARGS_MIME)]),
+                        )
+
+                elif event_type == "reasoning":
+                    # Live "thinking" — a reasoning DataPart on a WORKING frame,
+                    # separate from the answer artifact (plain consumers ignore it).
+                    # Batched to the same size-or-time thresholds as the answer text
+                    # so a token-per-event reasoning stream doesn't become a frame
+                    # per word (#1710) but still trickles under a slow producer.
+                    if payload:
+                        _reasoning_buf += str(payload)
+                        if _should_flush(_reasoning_buf, _reasoning_flushed_at):
+                            await _flush_reasoning()
+
+                elif event_type == "delta":
+                    if isinstance(payload, dict):
+                        deltas.append(payload)
+
+                elif event_type == "usage":
+                    if isinstance(payload, dict):
+                        had_usage = True
+                        llm_calls += 1
+                        # A delegated call — a subagent's, tagged by the `task` tool
+                        # (#2872), or an A2A peer's own reported spend, tagged by the
+                        # delegates adapter (#3016) — bills to the turn's token/cost
+                        # sums and models below, but not to the thread's
+                        # context-window fill or the next-turn projection: those
+                        # describe the LEAD thread, and a delegation's prompt size
+                        # says nothing about either. A peer's least of all: its
+                        # context window is a different agent's entirely.
+                        if not (payload.get("subagent_type") or payload.get("peer")):
+                            context_tokens = max(context_tokens, int(payload.get("input_tokens", 0) or 0))
+                            last_call_input = int(payload.get("input_tokens", 0) or 0)
+                            last_call_output = int(payload.get("output_tokens", 0) or 0)
+                        usage["input_tokens"] += int(payload.get("input_tokens", 0) or 0)
+                        usage["output_tokens"] += int(payload.get("output_tokens", 0) or 0)
+                        usage["cache_read_input_tokens"] += int(payload.get("cache_read_input_tokens", 0) or 0)
+                        usage["cache_creation_input_tokens"] += int(payload.get("cache_creation_input_tokens", 0) or 0)
+                        cost_usd += float(payload.get("cost_usd", 0.0) or 0.0)
+                        model = payload.get("model", "")
+                        if model and model not in models:
+                            models.append(model)
+
+                elif event_type == "input_required":
+                    await _flush_text()  # persist any answer text streamed before the pause
+                    # Surface the pause to the host hook (ADR 0051) so it can publish a
+                    # "needs approval" bus event — a fleet console can then show a pending
+                    # HITL without polling. Best-effort by contract (_notify_progress
+                    # swallows everything), so it can never break the pause itself.
+                    _notify_progress(
+                        context.context_id,
+                        context.task_id,
+                        {"phase": "input_required", "prompt": _hitl_prompt(payload)},
+                    )
+                    # Human-readable prompt for plain consumers; the full
+                    # form/approval payload rides a protoAgent-local hitl-v1
+                    # DataPart so the console renders the form / approval card.
+                    parts = [_text_part(_hitl_prompt(payload))]
+                    if isinstance(payload, dict):
+                        parts.append(_data_part_proto(payload, HITL_MIME))
+                    await updater.requires_input(message=updater.new_agent_message(parts))
+                    touches_pause = True  # settled against in the finally (#3930)
+                    # The park leg is a real turn with real spend (#2943): every model
+                    # call made before the pause belongs to a row of its own, or HITL
+                    # flows — the expensive turn class — vanish from telemetry. The
+                    # resumed execute() records its own outcome separately.
+                    _notify_terminal(_outcome("input_required", accumulated))
+                    return  # parked — the caller resumes via message/send on this task
+
+                elif event_type == "done":
+                    await _flush_text()
+                    final_text = payload or accumulated
+                    await _finalize(final_text)
+                    await updater.complete()
+                    _notify_terminal(_outcome("completed", final_text))
+                    return
+
+                elif event_type == "error":
+                    # Keep whatever the turn said before it failed (#3940) — a `/<workflow>`
+                    # streams its whole output as text, then a short `error`.
+                    await _flush_reasoning()
+                    await _flush_text()
+                    await updater.failed(message=updater.new_agent_message([_text_part(str(payload))]))
+                    _notify_terminal(_outcome("failed", accumulated, error=str(payload)))
+                    return
+
+            # Stream ended without an explicit terminal event — treat the
+            # accumulated text as the answer.
+            await _flush_reasoning()
+            await _flush_text()
+            await _finalize(accumulated)
+            await updater.complete()
+            _notify_terminal(_outcome("completed", accumulated))
+
+        except asyncio.CancelledError:
+            # A real CancelTask (ADR 0051): the SDK cancels the producer task, injecting
+            # CancelledError here. Record a terminal outcome so the turn isn't an
+            # observability hole and a canceled background job settles — then re-raise so
+            # the SDK's cancel flow (the `canceled` frame) completes normally.
+            _notify_terminal(_outcome("canceled", accumulated))
+            raise
+
+        except TurnStalled as exc:
+            # A wedged turn, ended deliberately. Loud but not a crash — there is no
+            # traceback worth printing, the message IS the diagnosis. Terminating it
+            # is the point: the task leaves TASK_STATE_WORKING, the console stops
+            # spinning, and telemetry finally gets a turn row for the hang (#2344),
+            # which is what made this class of failure invisible.
+            logger.warning("[a2a] task %s stalled — failing it: %s", context.task_id, exc)
+            await _flush_reasoning()
+            await _flush_text()  # keep whatever the turn did manage to say
+            await updater.failed(message=updater.new_agent_message([_text_part(str(exc))]))
+            _notify_terminal(_outcome("failed", accumulated, error=str(exc)))
+
+        except Exception as exc:  # noqa: BLE001 — surface to the task, fail loud
+            logger.exception("[a2a] execute crashed for task %s", context.task_id)
+            await updater.failed(message=updater.new_agent_message([_text_part(str(exc))]))
+            _notify_terminal(_outcome("failed", accumulated, error=str(exc)))
+
+        finally:
+            # Close the stream BEFORE returning (#3876). Ordering, deliberately:
+            #   1. the terminal frame (completed / input-required / failed) is already
+            #      enqueued above, so a slow cleanup never delays it reaching the client;
+            #   2. `_notify_terminal` already ran, while the stream was still suspended
+            #      inside its trace scope (the trace id was captured in the loop anyway);
+            #   3. the stream's cleanup then runs HERE, in this task and context, before
+            #      execute() returns — so a blocking message/send (whose response waits
+            #      for this producer to finish) never answers while the thread lock is
+            #      still held, and a streaming client's next message queues on the lock
+            #      for at most this cleanup, never for GC.
+            # A no-op when the stream already finished (exhausted, raised, or stalled —
+            # the stall guard closes its own stream).
+            try:
+                if guarded is not None:
+                    try:
+                        await guarded.aclose()
+                    except Exception:  # noqa: BLE001 — the turn's outcome is already recorded
+                        logger.exception("[a2a] stream cleanup raised for task %s", context.task_id)
+            finally:
+                # The pair of `turn_started` (#3933): fired on EVERY exit, including the
+                # crash paths where a terminal update itself raised before the terminal
+                # hook ran, so a host that registered this turn on `turn_started` always
+                # gets to forget it. Idempotent for the host by contract.
+                _notify_progress(context.context_id, context.task_id, {"phase": "turn_ended", "origin": _origin})
+            # Every `_outcome` read happens in the except/return paths above, so
+            # disarming here can never lose a turn's samples. Also covers the
+            # input_required park — the resumed execute() re-arms fresh.
+            _end_knowledge_ops(knowledge_token)
+            if touches_pause:
+                hitl_routing.schedule_settle_siblings(
+                    context.context_id, context.task_id, getattr(context, "call_context", None)
+                )
+
+    async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
+        updater = TaskUpdater(event_queue, context.task_id, context.context_id)
+        await updater.cancel()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+_TERMINAL_STATES = (
+    TaskState.TASK_STATE_COMPLETED,
+    TaskState.TASK_STATE_FAILED,
+    TaskState.TASK_STATE_CANCELED,
+    TaskState.TASK_STATE_REJECTED,
+)
+
+
+def _is_terminal(task: Any) -> bool:
+    try:
+        return task.status.state in _TERMINAL_STATES
+    except AttributeError:
+        return False
+
+
+def _is_input_required(task: Any) -> bool:
+    try:
+        return task.status.state == TaskState.TASK_STATE_INPUT_REQUIRED
+    except AttributeError:
+        return False
+
+
+def _request_metadata(context: RequestContext) -> dict:
+    """Merged A2A request metadata: message-level (fallback) overlaid by
+    request-level (preferred). The a2a-sdk surfaces ``SendMessageRequest``-level
+    metadata on ``context.metadata`` (a dict) — that's where clients (e.g. the
+    hub) put routing keys like ``skillHint`` + ``a2a.trace``, so request-level
+    must win. Reading only ``context.message.metadata`` silently misses all of
+    it (the latent bug found via jon's reference)."""
+    merged: dict = {}
+    msg = getattr(context, "message", None)
+    if msg is not None and getattr(msg, "metadata", None):
+        try:
+            merged.update(json_format.MessageToDict(msg.metadata))
+        except Exception:  # noqa: BLE001
+            pass
+    req = getattr(context, "metadata", None)
+    if isinstance(req, dict):
+        merged.update(req)
+    elif req is not None:
+        try:
+            merged.update(json_format.MessageToDict(req))
+        except Exception:  # noqa: BLE001
+            pass
+    return merged
+
+
+def _extract_caller_trace(context: RequestContext) -> dict:
+    """The ``a2a.trace`` metadata (Langfuse cross-trace propagation), or {}."""
+    trace = _request_metadata(context).get("a2a.trace")
+    return trace if isinstance(trace, dict) else {}
+
+
+def _extract_image_parts(context: RequestContext) -> list[tuple[str, str]]:
+    """Vision image parts off the inbound message → ``[(media_type, data_uri)]``.
+
+    A part with an ``image/*`` media_type carries either inline bytes (proto
+    ``raw``, base64-encoded into a ``data:`` URI) or a ``url`` (already a
+    ``data:``/``http`` URL). Empty when there are none — so non-vision turns and
+    text-only consumers pay nothing. The turn handler only forwards these to the
+    model when the active model is vision-capable."""
+    import base64
+
+    out: list[tuple[str, str]] = []
+    msg = getattr(context, "message", None)
+    for p in getattr(msg, "parts", None) or []:
+        mt = (getattr(p, "media_type", "") or "").lower()
+        if not mt.startswith("image/"):
+            continue
+        raw = getattr(p, "raw", b"") or b""
+        if raw:
+            out.append((mt, f"data:{mt};base64,{base64.b64encode(bytes(raw)).decode()}"))
+        elif getattr(p, "url", ""):
+            out.append((mt, p.url))
+    return out
+
+
+# The most prompt text the durable transcript keeps. The SDK re-serializes the WHOLE task
+# on every save (each status frame and streamed answer chunk — hundreds a turn), so an
+# unbounded paste would be rewritten that many times; past this the rebuilt bubble ends
+# with a note. Far above anything typed — what it bounds is the pasted log.
+_TRANSCRIPT_PROMPT_MAX_CHARS = 16_000
+# The metadata the transcript reads back — a rebuilt tab's incognito, the no-bubble mark,
+# a form answer, where the message came from — and nothing else of the request's. Kept as
+# short bools/strings only, so a client's bulky (or non-finite: Python's json writes
+# Infinity) metadata can neither bloat every save nor fail it.
+_TRANSCRIPT_METADATA_KEYS = ("incognito", "hidden", "hitl_resume", "origin")
+_TRANSCRIPT_SHORT_MAX_CHARS = 256  # a kept metadata string, a filename, a media type
+_TRANSCRIPT_URL_MAX_CHARS = 2048  # a plain link is kept; anything longer is a payload
+
+
+def _transcript_opening(message: Message | None, *, server_fired: bool) -> list[Message]:
+    """What a task's durable history opens with: the operator's message AS THEY SAW IT —
+    the record a chat rebuilt from durable turns draws its user bubble from (ADR 0104) —
+    not the model-facing text the turn ran on (that is the live request, and the
+    checkpoint).
+
+    - Nothing for a server-fired turn: its prompt is machine text that was never a bubble.
+    - A text-less copy for a send the console marked ``hidden`` (an approval or dismissal
+      resume, a regenerate, a goal kickoff): no bubble to rebuild, but its metadata still
+      carries the per-message incognito stamp a rebuilt tab recovers.
+    - The bubble text for a send marked with ``display`` — the console prepended
+      attachment context for the model; the bubble showed the typed text + a 📎 list.
+    - Otherwise the message's text as sent.
+
+    Never raises: a message it cannot shape is simply not stored — the transcript must
+    never break a turn."""
+    if message is None or server_fired:
+        return []
+    try:
+        return [_transcript_copy(message)]
+    except Exception:  # noqa: BLE001 — the transcript must never break a turn
+        logger.warning("[a2a] could not shape the turn's durable prompt; storing none", exc_info=True)
+        return []
+
+
+def _hint(message: Message, key: str) -> bool | str | None:
+    """A bool or string from ``message``'s metadata, read without serializing it — one
+    non-finite number anywhere in the Struct makes ``MessageToDict`` raise."""
+    value = message.metadata.fields.get(key) if message.HasField("metadata") else None
+    if value is None:
+        return None
+    kind = value.WhichOneof("kind")
+    if kind == "bool_value":
+        return value.bool_value
+    if kind == "string_value":
+        return value.string_value
+    return None
+
+
+def _transcript_copy(message: Message) -> Message:
+    """The transcript's copy of ``message``, built field by field rather than copied, so
+    it is bounded and serializable whatever the client sent: ids and role, the metadata
+    keys the transcript reads, the (capped) text the operator saw, and a shell for each
+    attachment."""
+    kept = Message(
+        message_id=message.message_id,
+        context_id=message.context_id,
+        task_id=message.task_id,
+        role=message.role,
+    )
+    hints: dict[str, bool | str] = {}
+    for key in _TRANSCRIPT_METADATA_KEYS:
+        value = _hint(message, key)
+        if isinstance(value, bool):
+            hints[key] = value
+        elif isinstance(value, str) and value:
+            hints[key] = value[:_TRANSCRIPT_SHORT_MAX_CHARS]
+    if hints:
+        kept.metadata.update(hints)
+    if hints.get("hidden") is True:
+        return kept
+    display = _hint(message, "display")
+    texts = [display] if isinstance(display, str) else []
+    budget = _TRANSCRIPT_PROMPT_MAX_CHARS
+    for part in message.parts:
+        if part.WhichOneof("content") == "text":
+            if isinstance(display, str):
+                continue  # the bubble text stands in for every text the model was sent
+            texts.append(part.text)
+    for text in texts:
+        if len(text) > budget:
+            text = f"{text[:budget]}\n\n… [{len(text) - budget:,} more characters not kept]"
+            budget = 0
+        else:
+            budget -= len(text)
+        kept.parts.append(Part(text=text))
+    kept.parts.extend(_attachment_shell(p) for p in message.parts if p.WhichOneof("content") != "text")
+    return kept
+
+
+def _attachment_shell(part: Part) -> Part:
+    """An attachment as the transcript keeps it: its name, its type and a plain link —
+    never an inline payload (``raw`` bytes, a ``data:`` URL, a data blob). The SDK would
+    rewrite that on every save and nothing reads it back: the turn takes attachments off
+    the live request (``_extract_image_parts``), never off the stored copy. An elided
+    payload is recorded as ``omittedBytes``, so the history still says what was sent."""
+    shell = Part(
+        filename=part.filename[:_TRANSCRIPT_SHORT_MAX_CHARS],
+        media_type=part.media_type[:_TRANSCRIPT_SHORT_MAX_CHARS],
+    )
+    kind = part.WhichOneof("content")
+    if kind == "url" and not part.url.startswith("data:") and len(part.url) <= _TRANSCRIPT_URL_MAX_CHARS:
+        shell.url = part.url
+    elif kind == "raw":
+        shell.metadata.update({"omittedBytes": len(part.raw)})
+    elif kind == "url":
+        shell.metadata.update({"omittedBytes": len(part.url)})
+    elif kind == "data":
+        shell.metadata.update({"omittedBytes": part.data.ByteSize()})
+    return shell
+
+
+def _extract_skill_hint(context: RequestContext) -> str:
+    """The ``skillHint`` the caller set to invoke a specific skill — the
+    structured-finalizer dispatch (A2A has no skill field on the message).
+    '' when absent."""
+    hint = _request_metadata(context).get("skillHint")
+    return hint if isinstance(hint, str) else ""
+
+
+def _tool_call_frame(event_type: str, payload: Any) -> tuple[Part | None, dict[str, Any] | None]:
+    """Build the tool-call-v1 frame for a tool_start/tool_end event.
+
+    Returns ``(part, metadata)``. Structured dict payloads ({id,name,input|output})
+    become URI-keyed **metadata** on the status message (protolabs-a2a 0.3.0 — the
+    extension rides `metadata[TOOL_CALL_EXT_URI]`, not a DataPart in `parts[]`, so a
+    generic A2A client no longer renders telemetry as content). A plain-string payload
+    (legacy producers) still becomes a plain text status **part** so text-only consumers
+    see progress. Exactly one of the two is non-None.
+    """
+    if isinstance(payload, dict):
+        errored = event_type == "tool_end" and bool(payload.get("error"))
+        # A failed tool end carries phase="failed" (+ the error text) so the card
+        # renders the X glyph instead of the green "done".
+        phase = "started" if event_type == "tool_start" else ("failed" if errored else "completed")
+        kwargs: dict[str, Any] = {}
+        if event_type == "tool_start" and payload.get("input") is not None:
+            kwargs["args"] = payload.get("input")
+        if event_type == "tool_end" and payload.get("output") is not None:
+            kwargs["result"] = payload.get("output")
+        if errored:
+            kwargs["error"] = str(payload.get("output") or "tool failed")
+        meta = pa.tool_call_metadata(
+            str(payload.get("id", "")),
+            str(payload.get("name", "")),
+            phase,
+            **kwargs,
+        )
+        # A subagent's tool frame carries its parent delegation's tool-call id so the
+        # console nests it under the `task` card by id (the payload has no field for it,
+        # so ride it as an extra key the console reads) — now set on the URI-keyed
+        # fragment rather than the old DataPart's content.value.
+        if payload.get("parentId"):
+            meta[pa.TOOL_CALL_EXT_URI]["parentToolCallId"] = str(payload["parentId"])
+        # True pre-truncation result size (#2775) — `result` above is the capped
+        # card preview; the console's context-cost chip needs the real size. Same
+        # extra-key lane as parentToolCallId.
+        if event_type == "tool_end" and isinstance(payload.get("output_chars"), int):
+            meta[pa.TOOL_CALL_EXT_URI]["outputChars"] = payload["output_chars"]
+        # The call's measured execution time (on_tool_start→on_tool_end, #2697). Riding the
+        # end frame — which the durable store keeps — lets a reload or reattach show the REAL
+        # duration instead of the ~0ms between two replayed frames (#4076).
+        duration_ms = payload.get("duration_ms")
+        if event_type == "tool_end" and isinstance(duration_ms, int) and not isinstance(duration_ms, bool) and duration_ms > 0:
+            meta[pa.TOOL_CALL_EXT_URI]["durationMs"] = duration_ms
+        return None, meta
+    if payload:
+        return _text_part(str(payload)), None
+    return None, None
+
+
+_CONTEXT_MIME = "application/vnd.protolabs.context-v1+json"
+
+
+def _terminal_parts(
+    text: str,
+    deltas: list[dict],
+    usage: dict | None,
+    cost_usd: float,
+    context: dict | None = None,
+    *,
+    success: bool,
+    duration_ms: int | None = None,
+) -> tuple[list[Part], dict[str, Any]]:
+    """Assemble the terminal artifact's ``(parts, extension_metadata)``.
+
+    protolabs-a2a 0.3.0 moved the four telemetry extensions off DataParts: the
+    worldstate-delta and cost payloads now ride the artifact's **metadata map keyed by
+    extension URI**, so a generic A2A client no longer renders them as content. Parts
+    therefore carry only real content — the answer text, plus the context-v1 readout,
+    which is a template-local extension (no SDK helper) and stays a DataPart.
+    """
+    parts: list[Part] = []
+    fragments: list[dict[str, Any]] = []
+    if text:
+        parts.append(_text_part(text))
+    if deltas:
+        fragments.append(pa.worldstate_delta_metadata(deltas))
+    if usage and (usage.get("input_tokens", 0) or usage.get("output_tokens", 0)):
+        fragments.append(
+            pa.cost_metadata(
+                usage,
+                duration_ms=duration_ms,
+                cost_usd=round(cost_usd, 6) if cost_usd > 0 else None,
+                success=success,
+            )
+        )
+    # Compaction context-window readout (#1372) — a template extension (no SDK helper),
+    # built with the generic DataPart packer. Only when we actually measured a prompt.
+    if context and context.get("contextTokens"):
+        parts.append(_ext_data_part(pa.data_part(context, _CONTEXT_MIME)))
+    return parts, pa.merge_extension_metadata(*fragments) if fragments else {}

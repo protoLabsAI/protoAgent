@@ -10,6 +10,8 @@ import yaml
 from graph.workspaces import manager
 from tests.privacy_asserts import assert_owner_only
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def root(tmp_path, monkeypatch):
@@ -951,6 +953,17 @@ class TestRemoveKeepsDataUnlessPurged:
 # ── #2583: a locked workspace is a retryable partial, not a 500 ───────────────
 
 
+def _record_backoff(monkeypatch) -> list[float]:
+    """Swap the real retry backoff (``_rmtree_resilient`` sleeps ~2s across its
+    attempts) for a recorder, so the tests pin the schedule without waiting it out.
+    The helper imports ``time`` locally, so the module attribute is the seam."""
+    import time
+
+    slept: list[float] = []
+    monkeypatch.setattr(time, "sleep", slept.append)
+    return slept
+
+
 def test_purge_retries_a_transiently_locked_workspace(root, monkeypatch):
     """The Windows race: a member's handles can outlive its process by a moment, so the
     delete right after the stop loses. It must retry rather than fail the whole purge."""
@@ -966,11 +979,13 @@ def test_purge_retries_a_transiently_locked_workspace(root, monkeypatch):
         return real_rmtree(path, **kw)
 
     monkeypatch.setattr(manager.shutil, "rmtree", flaky)
+    slept = _record_backoff(monkeypatch)
 
     out = manager.remove("alpha", purge=True)
 
     assert out["removed"] == ["workspace"] and not ws.exists()
     assert calls["n"] == 2  # first attempt lost the race, second won
+    assert slept == [0.2]  # it backed off once before the retry
 
 
 def test_purge_reports_a_permanently_locked_workspace_as_busy(root, monkeypatch):
@@ -978,14 +993,20 @@ def test_purge_reports_a_permanently_locked_workspace_as_busy(root, monkeypatch)
     the OSError escape and the endpoint answered a generic 500 after already stopping the
     member and clearing its record."""
     manager.create("alpha")
+    calls = {"n": 0}
 
     def always_locked(path, **kw):
+        calls["n"] += 1
         raise OSError(32, "The process cannot access the file because it is being used")
 
     monkeypatch.setattr(manager.shutil, "rmtree", always_locked)
+    slept = _record_backoff(monkeypatch)
 
     with pytest.raises(manager.WorkspaceBusy) as excinfo:
         manager.remove("alpha", purge=True)
+
+    assert calls["n"] == 5  # every attempt was made before giving up
+    assert slept == pytest.approx([0.2, 0.4, 0.6, 0.8])  # with a growing backoff between them
 
     msg = str(excinfo.value)
     assert "IS stopped" in msg and "retry" in msg.lower()  # names the state + the way out
@@ -1427,7 +1448,7 @@ def test_bundle_failure_does_not_transfer_oauth_ownership(root, tmp_path, monkey
     (host / "langgraph-config.yaml").write_text("model:\n  name: chatgpt:gpt-5-codex\n")
     local_store = host / "codex-oauth.json"
     local_store.write_text('{"tokens":{"refresh_token":"instance"}}')
-    monkeypatch.setattr(manager, "_install_bundle_into", lambda ws, bundle: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(manager, "_install_bundle_into", lambda ws, bundle, ref=None: (_ for _ in ()).throw(RuntimeError("boom")))
 
     with pytest.raises(RuntimeError, match="boom"):
         manager.create("sister", inherit_model=str(host), bundle="https://example.invalid/bundle")
@@ -1446,7 +1467,7 @@ def test_create_from_bundle_refuses_missing_required_input_and_cleans_up(root, t
     repo.mkdir(parents=True)
     monkeypatch.setattr(manager, "github_slug_for_checkout", lambda p: "acme/proj")
 
-    def fake_install(ws, bundle):
+    def fake_install(ws, bundle, ref=None):
         _pm_lock(ws)
         return ["board"]
 
@@ -1570,7 +1591,7 @@ def test_cli_new_answers_config_inputs_and_copies_the_delegate(root, tmp_path, m
     monkeypatch.setattr(config_io, "config_yaml_path", lambda: host / "langgraph-config.yaml")
     monkeypatch.setattr(manager, "github_slug_for_checkout", lambda p: "")
 
-    def fake_install(ws, bundle):
+    def fake_install(ws, bundle, ref=None):
         _pm_lock(ws)
         return ["board"]
 
@@ -1703,8 +1724,12 @@ def _tracing_host(tmp_path, *, enabled: bool, inline_keys: bool = False):
     return host
 
 
-def test_a_new_agent_inherits_the_hosts_tracing(root, tmp_path):
+def test_a_new_agent_inherits_the_hosts_tracing(root, tmp_path, monkeypatch):
     """Before this, every new or rebuilt agent booted 'Langfuse not configured'."""
+    # resolve_credentials prefers LANGFUSE_* from the environment by design; a developer
+    # shell or CI runner exporting them would otherwise decide this test's answer.
+    for var in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST", "LANGFUSE_URL"):
+        monkeypatch.delenv(var, raising=False)
     from graph.config import LangGraphConfig
     from observability.tracing import resolve_credentials
 
@@ -1750,3 +1775,129 @@ def test_a_whitespace_only_secret_never_overrides_a_real_inline_tracing_key(root
     secrets = yaml.safe_load((root / rec["id"] / "config" / "secrets.yaml").read_text())
 
     assert secrets["tracing"] == {"public_key": "pk-lf-inline", "secret_key": "sk-lf-inline"}
+
+
+# ── bundle install failures say WHY (the analyst-archetype 400, 2026-10-03) ───────────────────
+
+# What the frozen desktop's `plugin install` child actually wrote: httpx narration first, the
+# CLI's `✗ <reason>` last. The old `stderr[:400]` kept the narration and cut off the reason.
+_ANALYST_STDERR = (
+    '2026-10-03 17:26:43,676 INFO httpx HTTP Request: GET https://api.github.com/repos/protoLabsAI/analyst-archetype/commits/HEAD "HTTP/1.1 200 OK"\n'
+    '2026-10-03 17:26:43,852 INFO httpx HTTP Request: GET https://codeload.github.com/protoLabsAI/analyst-archetype/tar.gz/c5ea817536d5bfaa71d7d295a9e3aebe11202a68 "HTTP/1.1 200 OK"\n'
+    '2026-10-03 17:26:44,424 INFO httpx HTTP Request: GET https://api.github.com/repos/protoLabsAI/data-plugin/commits/v0.1.0 "HTTP/1.1 200 OK"\n'
+    '2026-10-03 17:26:44,613 INFO httpx HTTP Request: GET https://codeload.github.com/protoLabsAI/data-plugin/tar.gz/f56c068ec19760f4eac36e1ab94026b55c8323b2 "HTTP/1.1 200 OK"\n'
+    "✗ 'data' needs duckdb as a HOST-scoped dep, which a frozen app cannot satisfy: the plugin imports it in "
+    "this process, and the managed Python runtime (which is where deps get installed) only serves execute_code "
+    "children — separate site-packages. Vendor the code, drop the dependency, or ship it in the app bundle. "
+    "(Declare scope: runtime if it is only imported by execute_code.)\n"
+)
+
+
+def test_bundle_install_failure_surfaces_the_cli_reason_not_httpx_noise(monkeypatch, tmp_path, caplog):
+    import logging
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, stdout="", stderr=_ANALYST_STDERR)
+    )
+    with caplog.at_level(logging.WARNING, logger="protoagent.workspaces"):
+        with pytest.raises(manager.WorkspaceError) as exc:
+            manager._install_bundle_into(tmp_path, "https://github.com/protoLabsAI/analyst-archetype")
+    msg = str(exc.value)
+    assert msg.startswith("bundle install failed: 'data' needs duckdb as a HOST-scoped dep")
+    assert msg.endswith("(Declare scope: runtime if it is only imported by execute_code.)")  # not truncated
+    assert "httpx" not in msg and "HTTP Request" not in msg
+    # The hub log gets the reason AND the full child output.
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "needs duckdb as a HOST-scoped dep" in logged and "codeload.github.com" in logged
+
+
+@pytest.mark.parametrize(
+    "stdout, stderr, want",
+    [
+        ("", _ANALYST_STDERR, "'data' needs duckdb"),
+        # A crash: no ✗ line — the traceback's last line, never an INFO line after it.
+        ("", "2026-10-03 1:2:3,4 INFO httpx GET x\nTraceback (most recent call last):\n  File \"x\"\nValueError: bad manifest\n", "ValueError: bad manifest"),
+        # Only narration + an ERROR log line → the ERROR line.
+        ("", "2026-10-03 17:00:00,000 INFO httpx GET a\n2026-10-03 17:00:00,001 ERROR protoagent boom happened\n", "ERROR protoagent boom happened"),
+        # The ✗ line on stdout (some CLI paths print there) still wins over stderr noise.
+        ("✗ plugin 'x' already installed — from 'y'; use --force to replace.\n", "2026-10-03 17:00:00,000 INFO httpx GET a\n", "plugin 'x' already installed"),
+        # A multi-line ✗ (git's own error follows on the next lines) keeps its continuation.
+        ("", "2026-10-03 17:00:00,000 INFO httpx GET a\n✗ git clone https://github.com/o/nope failed: Cloning into '/tmp/r'...\nremote: Repository not found.\nfatal: repository 'https://github.com/o/nope/' not found\n", "Cloning into '/tmp/r'... remote: Repository not found. fatal: repository"),
+        # A crash with boot banners on stdout: stderr's last line, not the banner.
+        ("[metrics] Prometheus metrics initialized\n[trace_export] fleet trace export disabled.\n", "Traceback (most recent call last):\nOSError: disk full\n", "OSError: disk full"),
+        # Nothing at all → the exit code, never an empty detail.
+        ("", "", "exited 2"),
+    ],
+)
+def test_install_failure_reason(stdout, stderr, want):
+    got = manager.install_failure_reason(stdout, stderr, 2)
+    assert want in got
+    assert "INFO httpx" not in got
+
+
+def test_install_failure_reason_caps_a_runaway_line():
+    got = manager.install_failure_reason("", "✗ " + "x" * 5000, 1)
+    assert len(got) <= 1500 and got.endswith("…")
+
+
+def test_bundle_install_timeout_is_a_workspace_error(monkeypatch, tmp_path):
+    import subprocess
+
+    def _run(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout"), stderr="2026-10-03 17:00:00,000 INFO httpx GET a\n")
+
+    monkeypatch.setattr(subprocess, "run", _run)
+    with pytest.raises(manager.WorkspaceError, match="timed out after 300s"):
+        manager._install_bundle_into(tmp_path, "https://github.com/acme/stack")
+
+
+def test_plugin_cli_keeps_httpx_quiet(monkeypatch):
+    """The child `plugin install` must not narrate HTTP requests onto the stderr its caller parses."""
+    import logging
+
+    from graph.plugins import cli
+
+    for name in ("httpx", "httpcore"):
+        monkeypatch.setattr(logging.getLogger(name), "level", logging.INFO)
+
+    def _stop():
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cli, "_build_parser", _stop)
+    with pytest.raises(SystemExit):
+        cli.run_plugin_cli(["list"])
+    assert logging.getLogger("httpx").level == logging.WARNING
+    assert logging.getLogger("httpcore").level == logging.WARNING
+
+
+def test_create_pins_bundle_ref_into_install_and_record(root, tmp_path, monkeypatch):
+    """A bundle created at a ref ("From a bundle URL") installs AT that ref and records it."""
+    host = _host_dir(tmp_path)
+    seen: dict = {}
+
+    def fake_install(ws, bundle, ref=None):
+        seen.update(bundle=bundle, ref=ref)
+        return []
+
+    monkeypatch.setattr(manager, "_install_bundle_into", fake_install)
+    rec = manager.create("pinned", bundle="https://example/b", bundle_ref="v0.1.0", inherit_model=str(host))
+    assert seen == {"bundle": "https://example/b", "ref": "v0.1.0"}
+    ws_doc = yaml.safe_load((root / rec["id"] / "workspace.yaml").read_text())
+    assert ws_doc["bundle_ref"] == "v0.1.0"
+
+
+def test_install_bundle_into_passes_ref_to_the_cli(monkeypatch, tmp_path):
+    import subprocess
+
+    seen: list[list[str]] = []
+
+    def _run(argv, **kw):
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(manager.subprocess, "run", _run)
+    manager._install_bundle_into(tmp_path, "https://github.com/acme/stack", ref="v2")
+    manager._install_bundle_into(tmp_path, "https://github.com/acme/stack")
+    assert seen[0][seen[0].index("--ref") + 1] == "v2"
+    assert "--ref" not in seen[1]

@@ -17,7 +17,7 @@
   width: 7px;
   height: 7px;
   flex: 0 0 auto;
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   background: var(--pl-color-fg-subtle);
 }
 
@@ -57,9 +57,9 @@
 /* ── Assistant markdown code blocks ─────────────────────────────────────────────
    Polish for the DS streamdown code block inside chat:
    0. Whitespace (the load-bearing one) — streamdown puts `white-space: pre` + `overflow-x:
-      auto` on the code well via Tailwind utilities that are INERT in this build (preflight is
-      off and the streamdown dist scan is gone — see tailwind.config.cjs), and with preflight
-      off there's no `pre { white-space: pre }` reset to catch it either. The DS's
+      auto` on the code well via Tailwind utilities that are INERT in this build (Tailwind is no
+      longer part of the build, so streamdown's utility classes are never generated), and with
+      preflight off there's no `pre { white-space: pre }` reset to catch it either. The DS's
       [data-streamdown] schema also drifted: the code well is now `code-block-body` (the `<pre>`
       lives there), not the `code-block`/`code-block-header` our old polish targeted — so nothing
       re-asserted whitespace and multi-line fences collapsed onto one forever-scrolling line
@@ -127,8 +127,8 @@
 .chat-session-slot .pl-markdown [data-streamdown="code-block"] > div:has([data-streamdown="code-block-copy-button"]) {
   margin-top: 0;
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: var(--pl-space-1_5);
+  right: var(--pl-space-1_5);
   z-index: 1;
 }
 
@@ -160,7 +160,7 @@
   border-radius: 0;
   padding: 0;
   text-align: left;
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
   color: var(--pl-color-fg);
 }
 /* One line, chip-sized (~40px tall): inline-flex hugs the content instead of stretching
@@ -169,12 +169,12 @@
 .chat-report-chip {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   max-width: 100%;
-  padding: 5px 6px 5px 12px;
+  padding: var(--pl-space-1) var(--pl-space-1_5) var(--pl-space-1) var(--pl-space-3);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   box-shadow: var(--pl-shadow-card);
 }
 .chat-report-chip > svg {
@@ -186,32 +186,11 @@
 .chat-report-title {
   min-width: 0;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Dismiss ✕ — removes the chip from THIS transcript only (jobId persisted in
-   localStorage); the report stays retrievable in the Background agents panel. */
-.chat-report-dismiss {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: 999px;
-  background: none;
-  color: var(--pl-color-fg-muted);
-  cursor: pointer;
-}
-.chat-report-dismiss:hover {
-  color: var(--pl-color-fg);
-  background: var(--pl-color-bg-hover);
-}
-
 /* Scheduled-task RESULT card (#2990) — the first fire of a schedule, delivered back to the
    chat that created it. A full card (not the one-line report chip): calendar/clock head,
    summary body, and a "View full result" action. Recurring re-fires use .chat-report-chip
@@ -219,21 +198,21 @@
 .chat-scheduled-card {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
   max-width: 100%;
-  padding: 10px 12px;
+  padding: var(--pl-space-2_5) var(--pl-space-3);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
-  border-radius: 12px;
+  border-radius: var(--pl-radius-lg);
   box-shadow: var(--pl-shadow-card);
 }
 .chat-scheduled-card--failed {
-  border-color: var(--pl-color-border-danger, var(--pl-color-border));
+  border-color: var(--pl-color-status-error, var(--pl-color-border));
 }
 .chat-scheduled-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .chat-scheduled-head > svg {
   flex: 0 0 auto;
@@ -243,18 +222,18 @@
   min-width: 0;
   flex: 1 1 auto;
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .chat-scheduled-time {
   flex: 0 0 auto;
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 .chat-scheduled-summary {
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
   color: var(--pl-color-fg);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -285,20 +264,20 @@
    by-product, not a first-class reply. */
 .chat-server-result-card {
   border: 1px solid var(--pl-color-border);
-  border-radius: 10px;
+  border-radius: var(--pl-radius-lg);
   background: var(--pl-color-bg-inset, var(--pl-color-bg-raised));
   overflow: hidden;
 }
 .chat-server-result-card--failed {
-  border-color: var(--pl-color-border-danger, var(--pl-color-status-error));
+  border-color: var(--pl-color-status-error);
 }
 /* Collapsed summary — one clickable line. The whole row is the disclosure toggle. */
 .chat-server-result-summary {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   width: 100%;
-  padding: 7px 10px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5);
   border: none;
   background: none;
   color: var(--pl-color-fg-muted);
@@ -316,21 +295,21 @@
 .chat-server-result-label {
   flex: 0 0 auto;
   font-weight: 600;
-  font-size: 0.82rem;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg);
 }
 /* The preview takes the slack and ellipsizes on one line; the full text is in the body below. */
 .chat-server-result-preview {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 0.82rem;
+  font-size: var(--pl-font-size-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .chat-server-result-time {
   flex: 0 0 auto;
-  font-size: 0.76rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 .chat-server-result-chevron {
@@ -344,10 +323,10 @@
 /* Expanded body — the FULL markdown answer + tool cards, no truncation. A hairline separates
    it from the summary; the CONTENT reads at full foreground strength (only the chrome is muted). */
 .chat-server-result-body {
-  padding: 10px 12px 12px;
+  padding: var(--pl-space-2_5) var(--pl-space-3) var(--pl-space-3);
   border-top: 1px solid var(--pl-color-border);
   color: var(--pl-color-fg);
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
 }
 .chat-server-result-body .markdown > :first-child { margin-top: 0; }
 .chat-server-result-body .markdown > :last-child { margin-bottom: 0; }
@@ -358,10 +337,10 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: var(--pl-space-3);
   color: var(--pl-color-fg-muted, var(--pl-color-fg-subtle));
   font-family: var(--pl-font-mono);
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   cursor: default;
@@ -369,7 +348,7 @@
 .chat-usage-item {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .chat-usage-item svg {
   opacity: 0.85;
@@ -379,8 +358,8 @@
   display: inline-block;
   width: 42px;
   height: 4px;
-  margin-left: 2px;
-  border-radius: 2px;
+  margin-left: var(--pl-space-0_5);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-border);
   overflow: hidden;
   vertical-align: middle;
@@ -388,18 +367,18 @@
 .chat-usage-bar-fill {
   display: block;
   height: 100%;
-  border-radius: 2px;
+  border-radius: var(--pl-radius);
   background: var(--pl-color-fg-subtle);
 }
 .chat-usage-bar-fill[data-warn="true"] {
-  background: var(--pl-color-status-warning, #d98324);
+  background: var(--pl-color-status-warning);
 }
 
 /* Hover card (DS Tooltip content): a compact label/value breakdown of the turn. */
 .chat-usage-tip {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--pl-space-1);
   min-width: 190px;
   font-family: var(--pl-font-mono);
   font-variant-numeric: tabular-nums;
@@ -409,16 +388,16 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--pl-space-4);
 }
 .chat-usage-tip-label {
   color: var(--pl-color-fg-subtle);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .chat-usage-tip-value {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-weight: 500;
   text-align: right;
 }
@@ -426,15 +405,15 @@
   display: block;
   color: var(--pl-color-fg-subtle);
   font-weight: 400;
-  font-size: 10.5px;
+  font-size: var(--pl-font-size-2xs);
 }
 .chat-usage-tip-note {
-  margin: 3px 0 0;
-  padding-top: 6px;
+  margin: var(--pl-space-0_5) 0 0;
+  padding-top: var(--pl-space-1_5);
   border-top: 1px solid color-mix(in srgb, currentColor 18%, transparent);
   color: var(--pl-color-fg-subtle);
-  font-family: var(--pl-font-sans, inherit);
-  font-size: 11px;
+  font-family: var(--pl-font-sans);
+  font-size: var(--pl-font-size-2xs);
   line-height: 1.4;
   white-space: normal;
   max-width: 230px;
@@ -447,25 +426,28 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin-top: 7px;
+  gap: var(--pl-space-3);
+  margin-top: var(--pl-space-1_5);
 }
 /* Sent-time chip (#3458): the full local sent date-and-time lives in the DS Tooltip on hover or
    focus. Same muted monospace tone and size as the usage stats so the row reads as one strip of
    metadata; the chip stays tight around icon and time so the hover target is not the whole row. */
-.chat-sent-time {
+/* The "Stopped" marker on a turn the operator stopped (#4076) shares the chip's quiet look. */
+.chat-sent-time,
+.chat-stopped-mark {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
   color: var(--pl-color-fg-muted, var(--pl-color-fg-subtle));
   font-family: var(--pl-font-mono);
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  border-radius: 4px;
+  border-radius: var(--pl-radius);
   cursor: default;
 }
-.chat-sent-time svg {
+.chat-sent-time svg,
+.chat-stopped-mark svg {
   opacity: 0.8;
 }
 .chat-sent-time:focus-visible {
@@ -549,26 +531,6 @@
   display: none;
 }
 
-/* ADR 0114 D2 load barrier. A transcript still being read shows a light placeholder in
-   the messages row; one whose read failed keeps its row but stacks a notice above it. */
-.chat-transcript-loading {
-  min-height: 0;
-  display: grid;
-  align-content: start;
-}
-.chat-load-failed-wrap {
-  min-height: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-}
-.chat-load-failed {
-  margin: 8px 12px 0;
-  padding: 8px 12px;
-  border-left: 3px solid var(--pl-color-status-warning);
-  color: var(--pl-color-fg-muted);
-  font-size: 13px;
-}
-
 /* Literal user input inside the DS Message bubble — preserve newlines/wrapping
    (assistant markdown reflows on its own). */
 .chat-user-text {
@@ -582,7 +544,7 @@
 .chat-server-turn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   color: var(--pl-color-fg-subtle);
   font-style: italic;
 }
@@ -593,13 +555,13 @@
    .pl-message--user (anchored under .chat-session-slot), so it outranks the DS base
    user-bubble rule regardless of import order. */
 .chat-session-slot .pl-message--user.chat-slash-msg .pl-message__content {
-  background: color-mix(in srgb, var(--brand-violet) 12%, var(--pl-color-bg-raised));
-  border-color: color-mix(in srgb, var(--brand-violet) 40%, var(--pl-color-border-strong));
+  background: color-mix(in srgb, var(--pl-color-accent) 12%, var(--pl-color-bg-raised));
+  border-color: color-mix(in srgb, var(--pl-color-accent) 40%, var(--pl-color-border-strong));
 }
 .chat-user-text.chat-slash-cmd {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   font-family: var(--pl-font-mono);
   font-size: 0.9em;
 }
@@ -611,8 +573,8 @@
   justify-content: center;
   width: 1.2em;
   height: 1.2em;
-  border-radius: 4px;
-  background: var(--brand-violet);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-accent);
   color: var(--pl-color-fg-on-accent);
   font-weight: 600;
   line-height: 1;
@@ -633,13 +595,13 @@
 .chat-session-slot .pl-message--system .pl-message__content {
   display: block;
   text-align: left;
-  font-size: 0.9rem;
+  font-size: var(--pl-font-size-base);
   color: var(--pl-color-fg);
   background: var(--pl-color-bg-inset);
   border: var(--pl-border-width) solid var(--pl-color-border);
   border-left: 3px solid var(--pl-color-border-strong);
   border-radius: var(--pl-radius);
-  padding: 12px 16px;
+  padding: var(--pl-space-3) var(--pl-space-4);
 }
 /* The lede ("✅ Background agent finished — …") is the first markdown line; keep
    the report's own margins tidy inside the card. */
@@ -655,17 +617,17 @@
    union in lib/types.ts. The `.chat-note--*` class sits ON `.pl-message--system`, so these
    (4 classes) outrank the base system rule above (3 classes). */
 .chat-session-slot .pl-message--system.chat-note .pl-message__content {
-  font-size: 0.85rem;
-  padding: 8px 12px;
+  font-size: var(--pl-font-size-sm);
+  padding: var(--pl-space-2) var(--pl-space-3);
   background: var(--pl-color-bg-raised);
   box-shadow: var(--pl-shadow-card);
 }
 .chat-session-slot .pl-message--system.chat-note--info .pl-message__content { border-left-color: var(--pl-color-status-info); }
-/* Success = "the agent did the thing", so it follows the workspace accent — the exact chain
-   the HITL card adopted in #2157 (see hitl.css / hitl-accent.test.ts) — not traffic-light
-   green. Warning/danger/info stay semantic: the #2197 export-blocked note relies on danger
-   reading red, not accent. Guarded by __tests__/hitl-accent.test.ts. */
-.chat-session-slot .pl-message--system.chat-note--success .pl-message__content { border-left-color: var(--pl-color-accent, var(--brand-indigo, #6366f1)); }
+/* Success = "the agent did the thing", so it follows the workspace accent — the semantic
+   --pl-color-accent the HITL card adopted (see hitl.css / hitl-accent.test.ts) — not
+   traffic-light green. Warning/danger/info stay semantic: the #2197 export-blocked note
+   relies on danger reading red, not accent. Guarded by __tests__/hitl-accent.test.ts. */
+.chat-session-slot .pl-message--system.chat-note--success .pl-message__content { border-left-color: var(--pl-color-accent); }
 .chat-session-slot .pl-message--system.chat-note--warning .pl-message__content { border-left-color: var(--pl-color-status-warning); }
 .chat-session-slot .pl-message--system.chat-note--danger .pl-message__content { border-left-color: var(--pl-color-status-error); }
 
@@ -686,9 +648,19 @@
    adds no phantom text row — it signals "still generating" through the gaps (between tool
    calls, long tool runs, large tool-call args) without competing with the content above. */
 .chat-streaming-indicator {
-  margin-top: 6px;
+  margin-top: var(--pl-space-1_5);
   line-height: 0;
   opacity: 0.45;
+}
+
+/* A turn PAUSED on the operator (#3946): a quiet, static cue where the streaming spinner
+   would be. The turn is waiting on the HITL form, not working. */
+.chat-paused-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1_5);
+  margin-top: var(--pl-space-1_5);
+  color: var(--pl-color-fg-subtle);
 }
 
 /* Stop (while streaming) and the queued-steer bubble are now the DS busy mode +
@@ -700,14 +672,14 @@
 .composer-model-select {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   background: none;
   border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 2px 6px;
+  border-radius: var(--pl-radius-md);
+  padding: var(--pl-space-0_5) var(--pl-space-1_5);
   cursor: pointer;
   max-width: 180px;
 }
@@ -715,7 +687,7 @@
 .composer-model-select:focus-visible {
   color: var(--pl-color-fg);
   border-color: var(--pl-color-border);
-  background: var(--pl-color-bg-raised, rgba(255, 255, 255, 0.03));
+  background: var(--pl-color-bg-raised);
 }
 .composer-model-select:disabled {
   opacity: 0.6;
@@ -725,6 +697,10 @@
 /* Slash-command autocomplete (floats above the composer). */
 .composer-wrap {
   position: relative;
+  /* A grid item of .chat-session-slot: without min-width:0 its min-content (the one-line
+     background-work / goal strips above the prompt) pins the whole chat column wider than the
+     panel, the same leak .pl-convo-wrap guards against above. The strips ellipsize instead. */
+  min-width: 0;
 }
 
 /* The DS PromptInput shows focus on the CONTAINER (.pl-prompt:focus-within). Our
@@ -737,9 +713,9 @@
 }
 .slash-menu {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: calc(100% + 6px);
+  left: var(--pl-space-3);
+  right: var(--pl-space-3);
+  bottom: calc(100% + var(--pl-space-1_5));
   z-index: 20;
   max-height: 240px;
   overflow-y: auto;
@@ -751,10 +727,10 @@
 .slash-item {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   width: 100%;
   text-align: left;
-  padding: 8px 12px;
+  padding: var(--pl-space-2) var(--pl-space-3);
   background: none;
   border: 0;
   border-bottom: 1px solid var(--pl-color-border);
@@ -768,27 +744,27 @@
 }
 .slash-name {
   font-family: var(--pl-font-mono);
-  font-size: 13px;
-  color: var(--brand-violet-light);
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-accent-fg);
 }
 .slash-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   min-width: 0;
 }
 .slash-kind {
   flex: 0 0 auto;
-  font-size: 9px;
+  font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 1px 6px;
-  border-radius: 999px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius-pill);
   border: 1px solid var(--pl-color-border);
   color: var(--pl-color-fg-subtle);
 }
 .slash-desc {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -797,19 +773,20 @@
 
 /* Delete/clear dialog: the note that compaction may already have archived parts of the chat. */
 .chat-memory-note {
-  margin: 12px 0 0;
-  font-size: 12.5px;
+  margin: var(--pl-space-3) 0 0;
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
 }
-/* The dialog's opt-in switches: harvest a summary first, or forget what the chat already
-   saved. Neither happens automatically. */
+/* The dialog's memory switches: harvest a summary first (on by default for an ordinary chat
+   since #4053; absent for incognito), or forget what the chat already saved. They're mutually
+   exclusive — ticking one unticks the other. */
 .chat-delete-harvest,
 .chat-delete-forget {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-  font-size: 12.5px;
+  gap: var(--pl-space-2);
+  margin-top: var(--pl-space-3);
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
@@ -830,13 +807,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
+  gap: var(--pl-space-3);
+  padding: var(--pl-space-2_5) var(--pl-space-3);
   border: 1px dashed var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
   color: var(--pl-color-fg-muted);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 /* Known-duplicate warning strip (#3413): a persistent inline notice above the composer when a
@@ -848,14 +825,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-  padding: 8px 12px;
+  gap: var(--pl-space-3);
+  margin-bottom: var(--pl-space-2);
+  padding: var(--pl-space-2) var(--pl-space-3);
   border: 1px solid var(--pl-color-status-warning);
   border-radius: var(--pl-radius);
   background: color-mix(in srgb, var(--pl-color-status-warning) 12%, var(--pl-color-bg-raised));
   color: var(--pl-color-fg-muted);
-  font-size: 12.5px;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.4;
 }
 .composer-dup-risk-copy {
@@ -868,7 +845,7 @@
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 
 /* Provider heading inside the composer's model menu. Rows under it are bare model
@@ -877,12 +854,12 @@
    DS gap: @protolabsai/ui/menu exports MenuItem + MenuSeparator but no section label.
    Worth contributing back rather than each surface re-styling this (house rule). */
 .composer-model-lane {
-  padding: 6px 10px 2px;
-  font-size: 11px;
+  padding: var(--pl-space-1_5) var(--pl-space-2_5) var(--pl-space-0_5);
+  font-size: var(--pl-font-size-2xs);
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
-  color: var(--pl-color-text-muted, #8b8b93);
+  color: var(--pl-color-fg-muted);
   pointer-events: none;
 }
 
@@ -893,8 +870,8 @@
 .chat-author {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: var(--pl-space-1_5);
+  margin-bottom: var(--pl-space-1_5);
   color: var(--pl-color-fg-muted);
 }
 .chat-author > svg {
@@ -902,7 +879,7 @@
 }
 .chat-author-name {
   font-weight: 600;
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   letter-spacing: 0.01em;
 }
 
@@ -914,26 +891,26 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 0 2px 6px;
+  gap: var(--pl-space-1_5);
+  padding: 0 var(--pl-space-0_5) var(--pl-space-1_5);
   color: var(--pl-color-fg-muted);
 }
 .chat-roster > svg {
   flex: 0 0 auto;
-  margin-right: 2px;
+  margin-right: var(--pl-space-0_5);
 }
 .chat-roster-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 6px 2px 8px;
+  gap: var(--pl-space-1);
+  padding: var(--pl-space-0_5) var(--pl-space-1_5) var(--pl-space-0_5) var(--pl-space-2);
   font: inherit;
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   font-weight: 600;
   color: var(--pl-color-fg-muted);
   background: var(--pl-color-bg-raised);
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   cursor: pointer;
 }
 .chat-roster-chip:hover,
@@ -954,7 +931,7 @@
 .chat-roster-chip--active {
   color: var(--pl-color-fg);
   border-color: var(--pl-color-fg-subtle);
-  background: var(--pl-color-bg-sunken, var(--pl-color-bg));
+  background: var(--pl-color-bg-inset, var(--pl-color-bg));
 }
 
 /* A delegation (the lead's outgoing ask, #3042): ONE quiet row, not a bubble. Same ground
@@ -964,13 +941,13 @@
 .chat-delegation-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
-  padding: 5px 10px;
-  font-size: 0.82rem;
+  padding: var(--pl-space-1) var(--pl-space-2_5);
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
   border: 1px solid var(--pl-color-border);
-  border-radius: 8px;
+  border-radius: var(--pl-radius-lg);
 }
 .chat-delegation-icon {
   flex: 0 0 auto;
@@ -983,10 +960,10 @@
 }
 .chat-delegation-kind {
   flex: 0 0 auto;
-  padding: 0 6px;
-  font-size: 0.72rem;
+  padding: 0 var(--pl-space-1_5);
+  font-size: var(--pl-font-size-xs);
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
 }
 .chat-delegation-summary {
   flex: 1 1 auto;
@@ -1007,29 +984,14 @@
 .chat-delegation-error {
   color: var(--pl-color-status-error);
 }
-.chat-delegation-toggle {
-  flex: 0 0 auto;
-  padding: 0;
-  font: inherit;
-  font-size: 0.76rem;
-  color: var(--pl-color-fg-subtle);
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-.chat-delegation-toggle:hover,
-.chat-delegation-toggle:focus-visible {
-  color: var(--pl-color-fg);
-  text-decoration: underline;
-}
 .chat-delegation-error {
-  margin: 4px 0 0 2px;
-  font-size: 0.78rem;
+  margin: var(--pl-space-1) 0 0 var(--pl-space-0_5);
+  font-size: var(--pl-font-size-xs);
 }
 .chat-delegation-brief {
-  margin: 6px 0 0 12px;
-  padding-left: 10px;
-  font-size: 0.86rem;
+  margin: var(--pl-space-1_5) 0 0 var(--pl-space-3);
+  padding-left: var(--pl-space-2_5);
+  font-size: var(--pl-font-size-sm);
   border-left: 2px solid var(--pl-color-border);
 }
 
@@ -1038,37 +1000,27 @@
 .chat-bgwork {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   min-width: 0;
-  padding: 0 2px 6px;
-  font-size: 0.78rem;
+  padding: 0 var(--pl-space-0_5) var(--pl-space-1_5);
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
+.chat-bgwork > :not(.chat-bgwork-list) {
+  flex: none; /* the spinner and View keep their size; only the label list shrinks */
+}
 .chat-bgwork-list {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chat-bgwork-open {
-  flex: 0 0 auto;
-  padding: 0;
-  font: inherit;
-  color: var(--pl-color-fg-subtle);
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-.chat-bgwork-open:hover,
-.chat-bgwork-open:focus-visible {
-  color: var(--pl-color-fg);
-  text-decoration: underline;
-}
 
 /* One activity cue per server-fired turn: its label rides the message's own spinner. */
 .chat-streaming-label {
-  margin-left: 6px;
-  font-size: 0.82rem;
+  margin-left: var(--pl-space-1_5);
+  font-size: var(--pl-font-size-sm);
   font-style: italic;
   color: var(--pl-color-fg-muted);
 }

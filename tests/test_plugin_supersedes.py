@@ -615,6 +615,7 @@ async def test_autoupdate_sweep_skips_a_superseded_plugin_without_error_spam(hos
     assert "ships with protoAgent now" in caplog.text
 
 
+@pytest.mark.platform_sensitive
 def test_sync_does_not_refetch_a_superseded_copy(host):
     _remote(host, "protoLabsAI", "cowork-plugin", "cowork", "0.3.1", tags=["v0.3.1"])
     _old_host_install(host)
@@ -826,6 +827,7 @@ def test_duplicate_lock_rows_never_delete_a_running_fork_as_superseded(host):
 # ── a superseded row is never "missing on disk" ─────────────────────────────────────
 
 
+@pytest.mark.platform_sensitive
 def test_superseded_lock_row_without_files_reads_present_not_missing(host, monkeypatch, capsys):
     from graph.plugins import cli
 
@@ -908,6 +910,7 @@ def test_uninstall_route_unloads_a_removed_copy_this_process_was_still_running(h
 # ── removal never leaves a copy that can load ────────────────────────────────────────
 
 
+@pytest.mark.platform_sensitive
 def test_symlinked_superseded_copy_is_unlinked_not_left_as_a_loading_bak(host, tmp_path):
     checkout = _write_plugin(tmp_path / "dev" / "cowork-plugin", "cowork", "0.5.0")
     host.live.mkdir(parents=True, exist_ok=True)
@@ -1053,6 +1056,7 @@ def test_workspace_created_from_a_superseded_plugin_url_boots_with_it_enabled(ho
     assert "cowork" in cfg["plugins"]["enabled"]
 
 
+@pytest.mark.platform_sensitive
 def test_archetype_preview_describes_the_bundled_copy_without_fetching(host):
     from ops import plugins as ops_plugins
 
@@ -1098,6 +1102,7 @@ async def test_devkit_uninstall_tool_leaves_the_running_bundled_copy_alone(host,
     assert not (host.live / "cowork").exists()
 
 
+@pytest.mark.platform_sensitive
 def test_cli_reports_every_superseded_outcome(host, monkeypatch, capsys):
     from graph.plugins import cli
 
@@ -1146,6 +1151,7 @@ def test_waiver_is_refused_for_a_fork_override(host):
         installer.install_deps("cowork")
 
 
+@pytest.mark.platform_sensitive
 def test_waiver_is_refused_for_a_live_copy_symlinked_into_the_bundled_tree(host):
     """A live-dir entry POINTING at a bundled folder is still an installed copy."""
     _ship_bundled(host, version="0.4.0")
@@ -1330,6 +1336,7 @@ def test_lifecycle_operations_follow_the_configured_plugins_dir(host):
     assert installer.list_installed() == []
 
 
+@pytest.mark.platform_sensitive
 def test_a_removal_that_cannot_rename_raises_install_error(host):
     """A failed removal must reach callers as InstallError (they all handle it) — a bare
     OSError is a 500 with a traceback instead of "couldn't remove it"."""
@@ -1487,6 +1494,7 @@ def test_an_untracked_copy_of_a_bundled_id_can_be_uninstalled(host):
     assert _read_config(host)["plugins"]["enabled"] == ["web_probe"]  # the bundled copy keeps running
 
 
+@pytest.mark.platform_sensitive
 def test_josh_shape_configured_dir_symlinked_checkout_no_lock_row(host):
     """The live setup this protects: `plugins.dir` pointing at a repo's config dir, the
     plugin a SYMLINK to a dev checkout, no lock row, enabled. The checkout must survive
@@ -1526,6 +1534,7 @@ def test_a_fork_override_of_a_bundled_id_is_still_refused(host):
     assert (host.live / "cowork").exists()
 
 
+@pytest.mark.platform_sensitive
 def test_a_dangling_link_at_the_ids_path_is_unlinked_and_reported(host):
     """The dev moved or deleted the checkout the link pointed at. The link has no target,
     so unlinking it can't harm anything: uninstall removes it (sparing the operator an
@@ -1595,6 +1604,7 @@ def test_uninstall_never_deletes_the_bundled_tree(host):
     assert (host.bundled / "cowork" / "protoagent.plugin.yaml").exists()
 
 
+@pytest.mark.platform_sensitive
 def test_banner_advice_works_when_the_folder_name_differs_from_the_id(host, tmp_path):
     """A checkout symlinked under its REPO name (`cowork-plugin`) holding id `cowork`: the
     banner says `plugin uninstall cowork`, so that has to work — on the path it named."""
@@ -1612,6 +1622,7 @@ def test_banner_advice_works_when_the_folder_name_differs_from_the_id(host, tmp_
     assert not (host.live / "cowork-plugin").is_symlink() and checkout.exists()
 
 
+@pytest.mark.platform_sensitive
 def test_a_symlink_to_a_symlink_is_unlinked_never_followed(host, tmp_path):
     checkout = _write_plugin(tmp_path / "dev" / "cowork", "cowork", "0.3.0")
     hop = tmp_path / "hop"
@@ -1700,6 +1711,7 @@ def test_bundled_index_sees_a_manifest_rewrite_that_leaves_every_stat_field_unch
     assert installer._bundled_manifest("cowork").version == "0.5.0"
 
 
+@pytest.mark.platform_sensitive
 def test_cache_sees_an_atomic_rename_save(host):
     """An `atomic_write`-style save: a new inode renamed over the config, same size and mtime."""
     a, b = _two_same_length_dirs(host)
@@ -1790,6 +1802,7 @@ def test_the_delete_guard_refuses_a_path_outside_the_live_root(host, monkeypatch
     assert (outside / "protoagent.plugin.yaml").exists()
 
 
+@pytest.mark.platform_sensitive
 def test_a_tracked_superseded_row_whose_files_are_gone_clears_only_the_lock(host):
     """The operator deleted the folder by hand; the recorded row still reads SUPERSEDED.
     Uninstall clears the row — there are no files to verify, so none are touched."""
@@ -1855,6 +1868,7 @@ def test_plain_uninstall_still_removes_a_broken_install_with_a_lock_row(host):
     assert not (host.live / "notes").exists()
 
 
+@pytest.mark.platform_sensitive
 def test_plain_uninstall_unlinks_a_dangling_link_and_says_so(host):
     host.live.mkdir(parents=True, exist_ok=True)
     link = host.live / "notes"
@@ -1863,6 +1877,7 @@ def test_plain_uninstall_unlinks_a_dangling_link_and_says_so(host):
     assert report["dangling_link"] == str(link) and not link.is_symlink()
 
 
+@pytest.mark.platform_sensitive
 def test_the_running_copy_branch_never_deletes_through_a_link_into_the_bundled_tree(host):
     """An untracked live entry that is a SYMLINK into the bundled tree, same version as the
     bundled copy (so #1574 lets it win): the running-copy branch picks the link. It must
@@ -1877,6 +1892,7 @@ def test_the_running_copy_branch_never_deletes_through_a_link_into_the_bundled_t
     assert (host.bundled / "cowork" / "protoagent.plugin.yaml").exists()
 
 
+@pytest.mark.platform_sensitive
 def test_a_dir_swapped_for_a_symlink_after_the_guards_is_never_followed(host, tmp_path, monkeypatch):
     """TOCTOU: the guards vet a real folder, then (before the delete) it becomes a symlink
     to a checkout. The delete re-checks at delete time, so only the link goes."""
@@ -1898,6 +1914,7 @@ def test_a_dir_swapped_for_a_symlink_after_the_guards_is_never_followed(host, tm
     assert (checkout / "precious.txt").exists() and not (host.live / "cowork").is_symlink()
 
 
+@pytest.mark.platform_sensitive
 def test_a_tracked_rows_dangling_link_is_not_left_behind_silently(host):
     """A TRACKED superseded row whose copy is a dangling symlink: the lock entry was
     cleared and "success" reported while the link stayed and its hint was dropped. Now the

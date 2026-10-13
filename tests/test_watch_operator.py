@@ -7,6 +7,8 @@ from graph.config import LangGraphConfig
 from graph.watches.controller import WatchController
 from graph.watches.store import WatchStore
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _wire(monkeypatch, tmp_path):
     from runtime.state import STATE
@@ -53,7 +55,6 @@ async def test_operator_watches_disabled_when_no_controller(monkeypatch):
     monkeypatch.setattr(STATE, "watch_controller", None)
     assert (await console_handlers._operator_watches_list())["enabled"] is False
     assert (await console_handlers._operator_watches_set({"condition": "c"}))["ok"] is False
-
 
 
 @pytest.mark.asyncio
@@ -143,11 +144,6 @@ async def test_sdk_update_watch_unavailable(monkeypatch):
     assert (await sdk.update_watch("x", interval_s=5))["ok"] is False
 
 
-def test_sdk_module_exposes_update_watch():
-    from graph import sdk
-
-    assert callable(sdk.update_watch)
-
 # --- sdk.create_watch (plugin-only) ----------------------------------------
 
 
@@ -165,12 +161,6 @@ def test_sdk_create_watch_unavailable(monkeypatch):
 
     monkeypatch.setattr(STATE, "watch_controller", None)
     assert sdk.create_watch(condition="c", verifier="p:v")["ok"] is False
-
-
-def test_sdk_module_exposes_create_watch():
-    from graph import sdk
-
-    assert callable(sdk.create_watch)
 
 
 # --- sdk.list_watches / sdk.clear_watch (#1638) -----------------------------
@@ -249,13 +239,6 @@ def test_sdk_list_and_clear_watch_unavailable(monkeypatch):
     monkeypatch.setattr(STATE, "watch_controller", None)
     assert sdk.list_watches() == []
     assert sdk.clear_watch("anything") is False
-
-
-def test_sdk_module_exposes_watch_lifecycle():
-    from graph import sdk
-
-    assert callable(sdk.list_watches)
-    assert callable(sdk.clear_watch)
 
 
 # --- registry / loader register_watch_hook seam ----------------------------

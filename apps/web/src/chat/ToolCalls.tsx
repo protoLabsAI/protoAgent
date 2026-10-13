@@ -6,7 +6,9 @@ import {
   Globe,
   Hourglass,
   Network,
+  PauseCircle,
   Search,
+  CircleSlash,
   SlidersHorizontal,
   Square,
   Wrench,
@@ -20,6 +22,7 @@ import { ToolCard, ToolCardList, ToolCardSummary, ToolSection } from "@protolabs
 
 import { tokens } from "../lib/format";
 import type { ToolCall } from "../lib/types";
+import { DelegateProgressList } from "./DelegateProgressView";
 import { isCancelledDelegation } from "./dismissedToolCalls";
 import { useUI } from "../state/uiStore";
 import { SHOW_ELAPSED_AFTER_MS, formatElapsed, useElapsed } from "./elapsed";
@@ -157,6 +160,8 @@ export function ToolCalls({
 
   const settled = fg.filter((c) => c.status !== "running");
   const failedCount = fg.filter((c) => c.status === "error").length;
+  // A stopped call (#4076) never returned: the fold's ✓ would claim the block succeeded.
+  const anyStopped = fg.some((c) => c.stopped);
 
   // Only TOP-LEVEL `task` groups get the cancel callback (the Stop affordance only shows
   // for a running task); nested children and settled cards never need it. The dismiss
@@ -186,6 +191,7 @@ export function ToolCalls({
       label={count === 1 ? "tool" : "tools"}
       status={failedCount > 0 ? "error" : "done"}
       failedCount={failedCount || undefined}
+      className={failedCount === 0 && anyStopped ? "tool-stopped" : undefined}
     >
       {folded.map(group)}
     </ToolCardSummary>
@@ -333,8 +339,16 @@ function ToolGroup({
   // tools (the `.pl-toolcard__children` indented rail, but here gated by the card's open
   // state instead of always-on — so the header row stays a stable height as kids stream in).
   const Icon = iconFor(call.name);
+  // A coding delegate's live view (#3979) — on an `@` mention card. While the card runs it
+  // renders OUTSIDE the collapsed body, under the header, so the plan and current tool are
+  // visible without expanding (the whole point: the card used to be a bare spinner); once
+  // the card settles it moves INTO the body, the run's final state one click away.
+  const hasProgress = Boolean(call.delegateProgress && Object.keys(call.delegateProgress).length);
+  const liveProgress = hasProgress && call.status === "running";
+  const settledProgress =
+    hasProgress && !liveProgress ? <DelegateProgressList progress={call.delegateProgress} live={false} /> : null;
   const body =
-    call.input || call.output || nestedCards ? (
+    call.input || call.output || nestedCards || settledProgress ? (
       <>
         {call.input ? (
           <ToolSection label="input" copyText={call.input}>
@@ -349,6 +363,7 @@ function ToolGroup({
           </ToolSection>
         ) : null}
         {nestedCards ? <div className="pl-toolcard__children">{nestedCards}</div> : null}
+        {settledProgress}
       </>
     ) : undefined;
 
@@ -434,7 +449,10 @@ function ToolGroup({
   // It reports AGE, not liveness: the value is `now - startedAt`, so it climbs the same
   // whether the call is working or wedged. Nothing client-side can tell those apart —
   // that is the server's job (a wedged turn is failed by the stall watchdog, #2349).
-  const elapsedMs = useElapsed(call.status === "running" ? call.startedAt : undefined);
+  // A call whose turn PARKED on the operator (#3946 — an `ask_human` waiting on its form)
+  // isn't working: no spinner, no climbing timer, just "waiting for you".
+  const waiting = call.status === "running" && call.paused === true;
+  const elapsedMs = useElapsed(call.status === "running" && !waiting ? call.startedAt : undefined);
   const showElapsed = elapsedMs !== undefined && elapsedMs >= SHOW_ELAPSED_AFTER_MS;
 
   // Context cost of the result, estimated from its size (#2282). Only on settled calls
@@ -457,6 +475,18 @@ function ToolGroup({
           {formatElapsed(elapsedMs)}
         </span>
       ) : null}
+      {waiting ? (
+        <span className="tool-waiting" title="The turn is paused until you answer">
+          {" · "}
+          <PauseCircle size={11} aria-hidden /> waiting for you
+        </span>
+      ) : null}
+      {call.stopped ? (
+        <span className="tool-stopped-label" title="The turn was stopped before this call finished">
+          {" · "}
+          <CircleSlash size={11} aria-hidden /> stopped
+        </span>
+      ) : null}
       {costTokens !== null ? (
         <span
           className="tool-ctx-cost"
@@ -475,15 +505,27 @@ function ToolGroup({
     </>
   );
 
-  return (
+  const card = (
     <ToolCard
       name={name}
-      status={call.status}
+      // The DS has no paused glyph: a waiting card drops the spinner (done frame, glyph
+      // hidden by .tool-paused) and says "waiting for you" in its header instead.
+      // A STOPPED call (#4076) is the same shape: settled (no spinner) but it never returned,
+      // so no ✓ either — .tool-stopped hides the glyph and the header says "stopped".
+      status={waiting || call.stopped ? "done" : call.status}
+      className={waiting ? "tool-paused" : call.stopped ? "tool-stopped" : undefined}
       icon={<Icon size={13} />}
       duration={call.durationMs}
       actions={actions}
     >
       {body}
     </ToolCard>
+  );
+  if (!liveProgress) return card;
+  return (
+    <>
+      {card}
+      <DelegateProgressList progress={call.delegateProgress} live={!waiting} />
+    </>
   );
 }

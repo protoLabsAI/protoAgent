@@ -1,0 +1,29 @@
+Idiomorph 0.7.3 (https://github.com/bigskysoftware/idiomorph), 0BSD.
+
+Vendored byte-for-byte from npm:
+  idiomorph@0.7.3  dist/idiomorph.min.js -> idiomorph.min.js
+
+  source:  https://unpkg.com/idiomorph@0.7.3/dist/idiomorph.min.js
+  sha256:  8a7733fadfa0d3dae533fd80483c640885221c93458c1711c940797508f46662
+  bytes:   9346
+
+Used by the console's streamed artifact preview (ADR 0118 D3, S8): the host inlines this
+file as the single nonce'd script in the preview frame's srcdoc, where a tiny receiver applies
+Idiomorph.morph() to the processed partial markup posted on each update, so the preview updates
+in place instead of being rebuilt. The file is unmodified; before inlining, the host escapes any
+`</script` sequence (there are none at this version) so it cannot close its host <script> early.
+
+--- idiomorph: LICENSE (0BSD) ---
+
+Copyright (c) 2022 Big Sky Software
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.

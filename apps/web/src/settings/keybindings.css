@@ -6,14 +6,14 @@
 }
 .kb-panel__hint {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   max-width: 60ch;
 }
 .kb-panel__hint kbd {
-  font-size: 11px;
-  padding: 0 4px;
+  font-size: var(--pl-font-size-2xs);
+  padding: 0 var(--pl-space-1);
   border: var(--pl-border-width) solid var(--pl-color-border);
-  border-radius: 4px;
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg-subtle);
 }
 
@@ -22,48 +22,48 @@
   flex-direction: column;
 }
 .kb-group__label {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--pl-color-fg-subtle);
-  padding: 4px 0;
+  padding: var(--pl-space-1) 0;
 }
 
 .kb-row {
   display: grid;
   grid-template-columns: 1fr auto;
   align-items: center;
-  gap: 12px;
-  padding: 7px 0;
-  border-bottom: var(--pl-border-width) solid var(--pl-color-border-subtle, var(--pl-color-border));
+  gap: var(--pl-space-3);
+  padding: var(--pl-space-2) 0;
+  border-bottom: var(--pl-border-width) solid var(--pl-color-border);
 }
 .kb-row__label {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: var(--pl-space-2);
+  font-size: var(--pl-font-size-sm);
 }
 .kb-row__scope {
-  font-size: 10px;
+  font-size: var(--pl-font-size-3xs);
   text-transform: uppercase;
   letter-spacing: 0.03em;
   color: var(--pl-color-fg-subtle);
   border: var(--pl-border-width) solid var(--pl-color-border);
-  border-radius: 100px;
-  padding: 0 6px;
+  border-radius: var(--pl-radius-pill);
+  padding: 0 var(--pl-space-1_5);
 }
 .kb-row__keys {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .kb-key {
   min-width: 84px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   text-align: center;
-  padding: 4px 10px;
+  padding: var(--pl-space-1) var(--pl-space-2_5);
   border: var(--pl-border-width) solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-subtle);
@@ -77,22 +77,9 @@
   border-color: var(--pl-color-accent);
   color: var(--pl-color-accent);
 }
-.kb-reset {
-  font: inherit;
-  border: none;
-  background: transparent;
-  color: var(--pl-color-fg-subtle);
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: var(--pl-radius);
-}
-.kb-reset:hover {
-  color: var(--pl-color-fg);
-  background: var(--pl-color-bg-hover);
-}
 .kb-row__conflict {
   grid-column: 1 / -1;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-status-error);
-  padding-top: 4px;
+  padding-top: var(--pl-space-1);
 }

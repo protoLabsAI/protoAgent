@@ -1,0 +1,485 @@
+// The throttle/flush cadence (1 update/s with an immediate flush on milestones) and the
+// reported-height clamp below are ported from OpenIntelligentUI (OIU), MIT-licensed.
+//   repo:   https://github.com/CopilotKit/OpenIntelligentUI
+//   path:   apps/app/src/components/generative-ui/open-generative-ui/renderer.tsx
+//   commit: f6e4388
+//
+// The MIT License — Copyright (c) Atai Barkai
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this
+// software and associated documentation files (the "Software"), to deal in the Software
+// without restriction, including without limitation the rights to use, copy, modify, merge,
+// publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons
+// to whom the Software is furnished to do so, subject to the following conditions: the above
+// copyright notice and this permission notice shall be included in all copies or substantial
+// portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+// See the OIU LICENSE for the full text.
+
+import { InlineFrameCard } from "@protolabsai/ui/ai";
+import { Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+
+import type { ToolArgsBuffer } from "../chat/toolArgsBuffer";
+import { refName } from "./artifactRef";
+import { clampHeight, MIN_FRAME_HEIGHT } from "./inlineFrames";
+import {
+  cachedControlDefaults,
+  cachedPluginKitCss,
+  consoleScheme,
+  loadControlDefaults,
+  loadPluginKitCss,
+  previewThemeCss,
+} from "./previewTheme";
+import {
+  bodyBytesWithoutStyle,
+  firstStyleClosed,
+  PREVIEW_BODY_BYTE_THRESHOLD,
+  processPartialHtml,
+} from "./processPartialHtml";
+// Byte-for-byte vendored Idiomorph (0BSD) — see vendor/idiomorph.LICENSE.txt for version + sha256.
+// Imported as raw text so it can be inlined as the frame's one nonce'd script.
+import idiomorphMin from "./vendor/idiomorph.min.js?raw";
+
+// Streamed artifact preview (ADR 0118 D3 console, S8b). While a `show_artifact` tool call with
+// inline placement is still streaming, the server decodes its declared `code` argument into a
+// live per-tool-call buffer (S3, chat/toolArgsBuffer.ts); this component renders the inline card
+// AT ONCE from that buffer, rather than leaving the operator on a spinner until the tool ends.
+//
+//   • The card header (title + kind-aware status line) shows immediately. The title appears as
+//     soon as the caller knows it; before then a kind-derived name stands in.
+//   • For `html`/`svg` ONLY, once the gate opens the card hosts a PREVIEW FRAME. Every other kind
+//     (`react`, `mermaid`, `vega-lite`, …) shows the placeholder only — a partial program or spec
+//     has nothing safe to preview.
+//
+// Trust model — the preview frame is a tighter fence than the inline artifact host (S7b), because
+// it renders half-streamed, model-written markup:
+//   • `sandbox="allow-scripts"` with NO `allow-same-origin`, so the frame runs on a unique opaque
+//     origin with no access to the console's cookies/localStorage (where the operator bearer lives)
+//     and no first-party API reach. No bearer is ever posted to it.
+//   • Its CSP meta is `default-src 'none'; script-src 'nonce-<n>'; style-src 'unsafe-inline';
+//     img-src data: blob:`, with a FRESH random nonce per frame. The only script carrying the nonce
+//     is the host's own morph script (vendored Idiomorph + a tiny postMessage receiver); any script
+//     that rides in on the streamed markup has no nonce and so cannot execute, and inline `on*=`
+//     handlers are inert because there is no `'unsafe-inline'` for scripts.
+//   • All markup is run through S8a's `processPartialHtml` BEFORE it is posted: the incomplete
+//     trailing tag is dropped, `<script>`/`<head>`/incomplete `<style>` blocks are stripped,
+//     complete `<style>` blocks are hoisted, and inline handlers are removed. So model code never
+//     reaches the frame in the first place — the CSP is the second, independent fence.
+//   • The frame is opaque-origin, so a host→frame post cannot name a concrete target origin; we
+//     post with `"*"`, which is safe precisely because the payload is non-secret model markup.
+//
+// Gating (OIU's "never unstyled" rule): the frame stays hidden until the first `<style>` block
+// closes, or until 1.5 KB of body markup has streamed with no style in sight — so the preview does
+// not flash unstyled, nor stall forever on a style-less document.
+//
+// Cadence (S8c, OIU renderer.tsx): markup is posted at most ONCE A SECOND so a fast stream does
+// not thrash the frame, with an IMMEDIATE flush on the milestones where a stale frame reads worst —
+// the first `<style>` closing (the first styled paint), the first body markup appearing, and the
+// stream's `done`. The frame reports its content height back (`proto-preview:height`); we clamp it
+// to the inline-frame bounds and size the preview from it.
+//
+// Handover (S8c): when the stream is `done` and the caller has the real artifact-ref in hand, it
+// passes `renderFinal`; this component then renders that final inline frame (S7b) IN PLACE of the
+// preview, seeded with the last measured height so the transcript layout does not jump as the
+// sandboxed preview gives way to the artifact's own embed.
+
+/** The kinds that get a live preview frame; every other kind shows the placeholder only. */
+const PREVIEW_KINDS = new Set(["html", "svg"]);
+
+/** The preview frame's root node — the morph receiver targets it; the host builds it empty. */
+const PREVIEW_ROOT_ID = "proto-preview-root";
+
+/** The postMessage type the host sends and the in-frame receiver listens for. */
+const PREVIEW_MORPH_TYPE = "proto-preview:morph";
+
+/** The postMessage type the host sends to (re)fill one of the frame's two host stylesheets — the
+ *  DS kit once its CSS has loaded, or the console theme after a live re-theme. */
+const PREVIEW_STYLE_TYPE = "proto-preview:style";
+
+/** The ids of the frame's host-owned `<style>` elements — the only ones a style post may fill. */
+const PREVIEW_KIT_STYLE_ID = "proto-preview-kit";
+const PREVIEW_THEME_STYLE_ID = "proto-preview-theme";
+
+/** The postMessage type the FRAME sends back after each morph, carrying its content height. */
+const PREVIEW_HEIGHT_TYPE = "proto-preview:height";
+
+/** The preview frame's starting height, used until the frame reports its own content height
+ *  (then clamped to the inline-frame bounds). Also the height handed to the final inline frame if
+ *  the preview never measured — so the handover never collapses the slot to nothing. */
+const PREVIEW_FRAME_HEIGHT = 240;
+
+/** At most one markup post per second (OIU renderer.tsx), save for the milestone flushes below. */
+const PREVIEW_THROTTLE_MS = 1000;
+
+const STATUS_BY_KIND: Record<string, string> = {
+  html: "Preparing preview…",
+  svg: "Preparing preview…",
+  react: "Writing React component…",
+  mermaid: "Rendering diagram…",
+  "vega-lite": "Rendering chart…",
+  markdown: "Writing document…",
+  file: "Preparing file…",
+};
+
+/** The card's status line: kind-aware while streaming, and a short "finishing" note once the final
+ *  frame for the arg has arrived (the real inline frame takes over in S8c). */
+function statusLine(kind: string, done: boolean): string {
+  if (done) return "Finishing…";
+  return STATUS_BY_KIND[kind] ?? "Writing artifact…";
+}
+
+/** The exact CSP the preview frame carries. Single source of truth so the srcdoc and any guard
+ *  read the same string. */
+export function previewCsp(nonce: string): string {
+  return `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src data: blob:`;
+}
+
+/** OIU's gate: show the preview once the first `<style>` has closed (so it is never unstyled), or
+ *  once {@link PREVIEW_BODY_BYTE_THRESHOLD} bytes of body markup have arrived with no style at all.
+ *
+ *  This is a POINT-IN-TIME predicate on the current buffer, NOT monotonic on its own: once the byte
+ *  branch has opened the gate, a later still-opening `<style>` makes `bodyBytesWithoutStyle` read 0
+ *  again while `firstStyleClosed` is still false, so this flips back to false mid-stream. The
+ *  component is what makes "shown" monotonic — {@link StreamingPreview} latches this open so the
+ *  frame never unmounts and remounts underneath an in-flight post. */
+export function previewGateOpen(html: string): boolean {
+  return firstStyleClosed(html) || bodyBytesWithoutStyle(html) >= PREVIEW_BODY_BYTE_THRESHOLD;
+}
+
+/** A fresh random nonce per frame — hex of 16 cryptographically random bytes. The nonce is a
+ *  CSP gate (only the host's morph script may run in the preview), so there is NO weak fallback:
+ *  Web Crypto is present in every supported browser and in jsdom, and without it we refuse to
+ *  build a preview rather than mint a predictable nonce. */
+function randomNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  let out = "";
+  for (const b of bytes) out += b.toString(16).padStart(2, "0");
+  return out;
+}
+
+/** The in-frame receiver: on each `proto-preview:morph` post, morph the root's children to match
+ *  the processed markup so the preview updates in place instead of being rebuilt, then post the
+ *  document's content height back so the host can size the frame (and hand that height to the
+ *  final inline frame on swap). Built from the module constants so the host and the frame agree on
+ *  the message types and the root id. */
+const MORPH_RECEIVER = [
+  "(function(){",
+  "function report(){",
+  "try{",
+  "var h=Math.ceil(document.documentElement.scrollHeight||document.body.scrollHeight||0);",
+  `parent.postMessage({type:${JSON.stringify(PREVIEW_HEIGHT_TYPE)},height:h},"*");`,
+  "}catch(_){}",
+  "}",
+  "function render(html){",
+  `var root=document.getElementById(${JSON.stringify(PREVIEW_ROOT_ID)});`,
+  "if(!root)return;",
+  'try{Idiomorph.morph(root,html,{morphStyle:"innerHTML"});}catch(_){root.innerHTML="";}',
+  "report();",
+  "}",
+  // A host style post: fill one of the two HOST-owned style elements (kit / theme) by id — never
+  // any other node — and re-stamp the scheme on <html>, which the theme rules key off.
+  "function restyle(d){",
+  `if(d.id!==${JSON.stringify(PREVIEW_KIT_STYLE_ID)}&&d.id!==${JSON.stringify(PREVIEW_THEME_STYLE_ID)})return;`,
+  "var el=document.getElementById(d.id);",
+  "if(el)el.textContent=d.css;",
+  'if(d.scheme==="light"||d.scheme==="dark")document.documentElement.setAttribute("data-theme",d.scheme);',
+  "report();",
+  "}",
+  'window.addEventListener("message",function(ev){',
+  "if(ev.source!==parent)return;",
+  "var d=ev.data;",
+  `if(d&&d.type===${JSON.stringify(PREVIEW_STYLE_TYPE)}&&typeof d.css==="string"){restyle(d);return;}`,
+  `if(!d||d.type!==${JSON.stringify(PREVIEW_MORPH_TYPE)}||typeof d.html!=="string")return;`,
+  "render(d.html);",
+  "});",
+  "})();",
+].join("");
+
+/** Build the preview frame's srcdoc: the exact CSP meta; the console's theme, inlined (allowed by
+ *  `style-src 'unsafe-inline'`) exactly as the live artifact frame gets it — the DS kit's CSS text
+ *  (if it has loaded yet; else it is posted in once it has), then the `--pl-*` palette + a
+ *  console-matched `color-scheme` + html/body colours + the `:where()` control defaults, keyed on
+ *  the `data-theme` stamped on `<html>` (#4076); the empty morph root; and ONE nonce'd script
+ *  carrying the vendored Idiomorph plus the receiver. Any `</script` in the vendored lib is defused
+ *  so it cannot close its host `<script>` early (there are none at the pinned version —
+ *  belt-and-braces). */
+export function buildPreviewSrcdoc(
+  nonce: string,
+  theme: { scheme: "light" | "dark"; css: string; kitCss: string } = {
+    scheme: consoleScheme(),
+    css: previewThemeCss(),
+    kitCss: cachedPluginKitCss(),
+  },
+): string {
+  const idiomorph = idiomorphMin.replace(/<\/(script)/gi, "<\\/$1");
+  return [
+    "<!doctype html>",
+    `<html lang="en" data-theme="${theme.scheme}">`,
+    "<head>",
+    '<meta charset="utf-8">',
+    `<meta http-equiv="Content-Security-Policy" content="${previewCsp(nonce)}">`,
+    `<style id="${PREVIEW_KIT_STYLE_ID}">${theme.kitCss}</style>`,
+    `<style id="${PREVIEW_THEME_STYLE_ID}">${theme.css}</style>`,
+    "</head>",
+    "<body>",
+    `<div id="${PREVIEW_ROOT_ID}"></div>`,
+    `<script nonce="${nonce}">${idiomorph}\n${MORPH_RECEIVER}</script>`,
+    "</body>",
+    "</html>",
+  ].join("\n");
+}
+
+/** Post the processed markup to the (opaque-origin) preview frame. Target `"*"` is required — an
+ *  opaque origin never matches a concrete one — and safe because the payload is non-secret model
+ *  markup already stripped of scripts/handlers. Swallows the detached/cross-origin throw. */
+function postMarkup(win: Window | null | undefined, html: string): void {
+  if (!win) return;
+  try {
+    win.postMessage({ type: PREVIEW_MORPH_TYPE, html }, "*");
+  } catch {
+    /* detached / cross-origin — best effort */
+  }
+}
+
+export type StreamingPreviewProps = {
+  /** The streamed `code` argument so far, plus whether its final frame has arrived (S3). Only
+   *  `text`/`done` are read; `pending` bookkeeping stays internal to the buffer. */
+  buffer: Pick<ToolArgsBuffer, "text" | "done">;
+  /** The artifact kind once known ("" until the args name it). `html`/`svg` get the live preview
+   *  frame; everything else shows the placeholder only. */
+  kind?: string;
+  /** The artifact title once known; a kind-derived name stands in until then. */
+  title?: string;
+  /** The handover (S8c): supplied by the caller ONCE it holds the real artifact-ref — so it is
+   *  absent until the artifact has been created. When present AND the stream is `done`, this
+   *  component renders `renderFinal(height)` — the real inline frame (S7b) — IN PLACE of the
+   *  preview, passing the last measured preview height so the slot keeps its size across the swap. */
+  renderFinal?: (height: number) => ReactNode;
+};
+
+export function StreamingPreview({ buffer, kind = "", title = "", renderFinal }: StreamingPreviewProps) {
+  const name = refName({ title, kind });
+  const processed = useMemo(() => processPartialHtml(buffer.text), [buffer.text]);
+
+  // `previewGateOpen` is a point-in-time predicate and can flip back to false mid-stream (a later
+  // still-opening `<style>` zeroes the byte count before it closes). LATCH it here: once the preview
+  // has opened for this stream it stays open for the life of this card. Without the latch the frame
+  // would unmount on the retract and remount when the gate re-opened, and the markup posted to the
+  // remounted-but-not-yet-loaded frame would be lost — blanking the preview if that was the final
+  // chunk. Setting state during render (guarded, so it runs at most once) is React's sanctioned way
+  // to derive state from props across renders; it re-renders before commit, so there is no flash.
+  const gateOpenNow = useMemo(() => previewGateOpen(buffer.text), [buffer.text]);
+  const [gateLatched, setGateLatched] = useState(false);
+  if (gateOpenNow && !gateLatched) setGateLatched(true);
+  const showPreview = PREVIEW_KINDS.has(kind) && (gateLatched || gateOpenNow);
+
+  // One random nonce per mounted frame; the srcdoc (and thus the CSP) are built once from it —
+  // carrying the console theme and, when already cached, the DS kit CSS plus the DS element-default
+  // control sheet (#4076). Start BOTH one-time fetches now (at MOUNT), so each has usually landed by
+  // the time the gate opens and is inlined into the srcdoc. The control defaults were a build-time
+  // import before protoContent#577; fetching them only after the frame loaded would leave the FIRST
+  // preview on a page with bare browser controls until the post arrived — so they get the same
+  // head-start as the kit here, and the srcdoc built at gate-open includes them when they've landed.
+  // Built when the frame first SHOWS (not at card mount) so it picks up either sheet if it landed
+  // in between; `showPreview` is latched for a live stream, so this builds once.
+  const [nonce] = useState(randomNonce);
+  const built = useMemo(
+    () =>
+      showPreview
+        ? {
+            srcdoc: buildPreviewSrcdoc(nonce),
+            hadKit: cachedPluginKitCss() !== "",
+            hadControlDefaults: cachedControlDefaults() !== "",
+          }
+        : null,
+    [nonce, showPreview],
+  );
+  const srcdoc = built?.srcdoc ?? "";
+  const srcdocHadKit = built?.hadKit ?? false;
+  const srcdocHadControlDefaults = built?.hadControlDefaults ?? false;
+  useEffect(() => {
+    void loadPluginKitCss();
+    void loadControlDefaults();
+  }, []);
+
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const [frameLoaded, setFrameLoaded] = useState(false);
+
+  // The frame's last reported content height, clamped to the inline-frame bounds — null until it
+  // first measures. Sizes the preview frame and seeds the handover so the final inline frame
+  // starts at the same height (no layout jump).
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
+
+  // If the preview is ever torn down (e.g. the kind changes away from html/svg), drop the loaded
+  // flag so any future frame must fire its own load before we post — markup can never land on a
+  // remounted-but-unwired frame. The latch above means this does not fire during a live stream.
+  useEffect(() => {
+    if (!showPreview) setFrameLoaded(false);
+  }, [showPreview]);
+
+  // Size the preview from the height the frame reports after each morph (proto-preview:height),
+  // gated on `e.source` being THIS frame's own opaque-origin window — the whole gate, as the
+  // payload is one int we re-clamp host-side to [80,1200] anyway.
+  useEffect(() => {
+    if (!showPreview) return;
+    const onMessage = (e: MessageEvent) => {
+      const win = frameRef.current?.contentWindow;
+      if (!win || e.source !== win) return;
+      const d = (e.data || {}) as { type?: unknown; height?: unknown };
+      if (d.type !== PREVIEW_HEIGHT_TYPE) return;
+      const h = typeof d.height === "number" ? d.height : NaN;
+      setMeasuredHeight(clampHeight(h));
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [showPreview]);
+
+  // Post the processed markup, THROTTLED to one post per second (OIU renderer.tsx) with an
+  // IMMEDIATE flush on the milestones where a stale frame reads worst: the first `<style>` closing,
+  // the first body markup appearing, and the stream's `done`. The load flag gates the first post so
+  // it never lands before the frame's receiver is wired. A trailing post is scheduled once per
+  // window and NOT rescheduled by later chunks (throttle, not debounce), so a chatty stream still
+  // advances every second rather than stalling until it pauses.
+  const lastPostAtRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingHtmlRef = useRef<string | null>(null);
+  const milestoneRef = useRef({ styleClosed: false, body: false });
+  useEffect(() => {
+    if (!showPreview || !frameLoaded) return;
+    pendingHtmlRef.current = processed;
+    const flush = () => {
+      timerRef.current = null;
+      lastPostAtRef.current = Date.now();
+      const html = pendingHtmlRef.current;
+      pendingHtmlRef.current = null;
+      if (html !== null) postMarkup(frameRef.current?.contentWindow, html);
+    };
+    // Milestones — each fires at most once per stream, save `done` which always flushes.
+    const styleClosedNow = firstStyleClosed(buffer.text);
+    const bodyNow = processed.length > 0;
+    const milestone =
+      buffer.done ||
+      (styleClosedNow && !milestoneRef.current.styleClosed) ||
+      (bodyNow && !milestoneRef.current.body);
+    if (styleClosedNow) milestoneRef.current.styleClosed = true;
+    if (bodyNow) milestoneRef.current.body = true;
+
+    const sinceLast = Date.now() - lastPostAtRef.current;
+    if (milestone || sinceLast >= PREVIEW_THROTTLE_MS) {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      flush();
+      return;
+    }
+    // Within the throttle window: schedule ONE trailing post for the window's end; later chunks
+    // only refresh `pendingHtmlRef` (above) so the trailing post carries the newest markup.
+    if (timerRef.current === null) {
+      timerRef.current = setTimeout(flush, PREVIEW_THROTTLE_MS - sinceLast);
+    }
+  }, [showPreview, frameLoaded, processed, buffer.text, buffer.done]);
+
+  // Theme (#4076): the srcdoc inlines the console theme as it is when the frame first SHOWS, plus
+  // the DS kit CSS if it is cached. Once the frame is loaded, post the kit in when its one-time
+  // fetch settles (a first preview on the page mounts before it has), and re-post the theme on a
+  // live console re-theme (`protoagent:theme`, agentTheme.ts) so the preview never drifts from the
+  // console. The re-theme listener is attached from MOUNT: a re-theme between the srcdoc build and
+  // the frame's load can't be posted yet (the receiver isn't wired), so it is queued and the
+  // LATEST theme is posted on load — never lost (#4154).
+  const postStyle = (id: string, css: string) => {
+    const win = frameRef.current?.contentWindow;
+    if (!win) return;
+    try {
+      win.postMessage({ type: PREVIEW_STYLE_TYPE, id, css, scheme: consoleScheme() }, "*");
+    } catch {
+      /* detached — best effort */
+    }
+  };
+  const frameLiveRef = useRef(false);
+  const themeQueuedRef = useRef(false);
+  useEffect(() => {
+    const onTheme = () => {
+      if (frameLiveRef.current) postStyle(PREVIEW_THEME_STYLE_ID, previewThemeCss());
+      else themeQueuedRef.current = true;
+    };
+    window.addEventListener("protoagent:theme", onTheme);
+    return () => window.removeEventListener("protoagent:theme", onTheme);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- postStyle reads only refs
+  }, []);
+  useEffect(() => {
+    frameLiveRef.current = showPreview && frameLoaded;
+    if (!showPreview || !frameLoaded) return;
+    let cancelled = false;
+    if (themeQueuedRef.current) {
+      themeQueuedRef.current = false;
+      postStyle(PREVIEW_THEME_STYLE_ID, previewThemeCss()); // the latest theme, read now
+    }
+    if (!srcdocHadKit) {
+      void loadPluginKitCss().then((css) => {
+        if (!cancelled && css) postStyle(PREVIEW_KIT_STYLE_ID, css);
+      });
+    }
+    // The DS element defaults (served by the artifact plugin's vendor route, not bundled) load like
+    // the kit: inlined into the srcdoc when the mount-time fetch had already landed, else posted in
+    // once it settles by re-posting the theme style, which now inlines them (cachedControlDefaults).
+    if (!srcdocHadControlDefaults) {
+      void loadControlDefaults().then((css) => {
+        if (!cancelled && css) postStyle(PREVIEW_THEME_STYLE_ID, previewThemeCss());
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- postStyle reads only refs
+  }, [showPreview, frameLoaded, srcdocHadKit, srcdocHadControlDefaults]);
+
+  // Never leave a trailing post timer behind on unmount.
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
+
+  // Handover (S8c): once the stream is `done` and the caller has handed us the real artifact-ref
+  // (`renderFinal`), swap the sandboxed preview for the artifact's own inline frame (S7b), seeded
+  // with the last measured height so the slot keeps its size. Placed after every hook so the hook
+  // order is stable across the swap.
+  const lastHeight = measuredHeight ?? PREVIEW_FRAME_HEIGHT;
+  if (buffer.done && renderFinal) {
+    return <>{renderFinal(lastHeight)}</>;
+  }
+
+  // The card chrome is the DS InlineFrameCard (@protolabsai/ui/ai) — the SAME surface the final
+  // inline frame (ArtifactRefChip) renders in, so the handover swaps like for like. Before the gate
+  // opens (and for every non-previewable kind) it is the `building` state: a skeleton plus the
+  // kind-aware status line in an aria-live region. Once the preview frame shows it is `live`, hosting
+  // the sandboxed preview; the frame itself is then the progress, so the status line steps aside.
+  const status = statusLine(kind, buffer.done);
+  return (
+    <div
+      className="artifact-ref-inline artifact-ref-inline--streaming"
+      data-testid="streaming-preview"
+      data-kind={kind || undefined}
+      data-preview={showPreview ? "true" : undefined}
+    >
+      <InlineFrameCard
+        title={name}
+        icon={<Sparkles size={14} />}
+        state={showPreview ? "live" : "building"}
+        height={showPreview ? lastHeight : MIN_FRAME_HEIGHT}
+        status={<span data-testid="streaming-preview-status">{status}</span>}
+      >
+        {showPreview ? (
+          <iframe
+            ref={frameRef}
+            data-testid="streaming-preview-frame"
+            title={name}
+            // allow-scripts ONLY — never allow-same-origin, so the frame is opaque-origin and cannot
+            // read the console's credentials. The markup is injected via postMessage, never the URL.
+            sandbox="allow-scripts"
+            srcDoc={srcdoc}
+            style={{ height: lastHeight }}
+            onLoad={() => setFrameLoaded(true)}
+          />
+        ) : null}
+      </InlineFrameCard>
+    </div>
+  );
+}

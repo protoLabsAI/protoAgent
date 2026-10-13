@@ -1,4 +1,4 @@
-// Waiting-state info for the `wait` tool's card (#1914). `wait` (tools/lg_tools.py) ends
+// Waiting-state info for the `wait` tool's card (#1914). `wait` (tools/scheduler_tools.py) ends
 // the agent's turn on purpose and schedules a one-shot resume — but its card rendered as a
 // generic success, so the user couldn't tell the agent yielded intentionally, for how long,
 // or that the chat stays usable meanwhile. Everything the UI needs is already in the tool's

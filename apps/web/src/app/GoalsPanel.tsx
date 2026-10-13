@@ -16,7 +16,7 @@ import { api } from "../lib/api";
 import { GoalDetailDrawer } from "./GoalDetailDrawer";
 import { newGoalTab } from "./goalTab";
 import { HitlForm } from "../chat/HitlForm";
-import { buildGoalSetBody, goalFormPayload, type GoalSetBody } from "../chat/goalForm";
+import { buildGoalSetBody, goalFormPayload, goalSetDetail, type GoalSetBody } from "../chat/goalForm";
 import { errMsg } from "../lib/format";
 import { onServerEvent } from "../lib/events";
 import { PanelHeader } from "@protolabsai/ui/navigation";
@@ -148,7 +148,7 @@ export function GoalCreateDialog({
   // failed fetch) falls through to goalFormPayload's core-type default.
   const { data: catalog } = useQuery({ ...verifiersQuery(), enabled: open });
   return (
-    <Dialog open={open} onClose={onClose} width="min(560px, 94vw)" className="goal-create-modal">
+    <Dialog open={open} onClose={onClose} width="min(560px, 94vw)" padding="none" className="goal-create-modal">
       <div data-testid="goal-create-dialog">
         <HitlForm
           payload={goalFormPayload(catalog)}
@@ -176,7 +176,7 @@ export function GoalsPanel() {
     mutationFn: (body: GoalSetBody) => api.setGoal(body),
     onSuccess: (res) => {
       setCreating(false);
-      toast({ tone: "success", title: "Goal set", message: res.message || "The agent has a new goal." });
+      toast({ tone: "success", title: "Goal set", message: goalSetDetail(res.message) || "The agent has a new goal." });
     },
     // A rejected verifier / disabled goal mode comes back as HTTP 400 → request() throws here.
     onError: (e) => toast({ tone: "error", title: "Couldn't set goal", message: errMsg(e) }),

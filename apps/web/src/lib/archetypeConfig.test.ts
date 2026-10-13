@@ -284,6 +284,20 @@ describe("config_inputs fields (#2934) — declared plugin config prompts", () =
     ).toBe(false);
   });
 
+  it("`multiple: true` on a path input marks the field a folder list; its answer is one \\n-joined string", () => {
+    const preview = configInputsPreview();
+    preview.bundle!.config_inputs = [
+      { key: "data.data_dirs", label: "Data folders", type: "path", multiple: true },
+      { key: "data.name", label: "Name", type: "string", multiple: true },
+    ];
+    const fs = archetypeConfigFields(preview);
+    expect(fs[0].multiple).toBe(true);
+    expect(fs[1].multiple).toBeUndefined(); // path-only
+    expect(fields.find((f) => f.key === "board.workroot")?.multiple).toBeUndefined();
+    const values = { [fieldId({ origin: "config", key: "data.data_dirs" })]: "/a\n/b" };
+    expect(splitConfigValues(fs, values).config).toEqual({ "data.data_dirs": "/a\n/b" });
+  });
+
   it("a bundle without config_inputs yields no config fields (backward compat)", () => {
     expect(archetypeConfigFields(githubPreview()).some((f) => f.origin === "config")).toBe(false);
   });

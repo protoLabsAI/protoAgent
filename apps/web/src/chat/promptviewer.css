@@ -4,23 +4,23 @@
 .prompt-viewer {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   height: 100%;
   min-height: 0;
 }
 
 .prompt-viewer__diff {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
-  padding: 2px 0 0;
+  padding: var(--pl-space-0_5) 0 0;
 }
 
 .prompt-viewer__meta {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--pl-space-3);
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 
@@ -33,12 +33,12 @@
   min-height: 0;
   overflow: auto;
   margin: 0;
-  padding: 12px;
+  padding: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
-  border-radius: 8px;
+  border-radius: var(--pl-radius-lg);
   background: var(--pl-color-bg-raised);
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-font-size-xs);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
@@ -47,9 +47,9 @@
 .prompt-viewer__status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
   color: var(--pl-color-fg-subtle);
-  padding: 8px 0;
+  padding: var(--pl-space-2) 0;
 }
 
 /* Context-budget breakdown (#2243 P2): one row per composer-labeled section —
@@ -58,14 +58,14 @@
 .prompt-viewer__budget {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
+  gap: var(--pl-space-1);
+  font-size: var(--pl-font-size-xs);
 }
 
 .prompt-viewer__budget-row {
   display: grid;
   grid-template-columns: minmax(120px, 240px) 1fr 64px;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   align-items: center;
 }
 
@@ -77,7 +77,7 @@
 
 .prompt-viewer__budget-bar {
   height: 6px;
-  border-radius: 3px;
+  border-radius: var(--pl-radius);
   background: var(--pl-color-border);
   overflow: hidden;
 }
@@ -85,19 +85,19 @@
 .prompt-viewer__budget-fill {
   display: block;
   height: 100%;
-  border-radius: 3px;
+  border-radius: var(--pl-radius);
   background: var(--pl-color-fg-subtle);
 }
 
 .prompt-viewer__budget-fill--context {
-  background: var(--brand-violet);
+  background: var(--pl-color-accent);
 }
 
 /* The per-turn projection (ADR 0108 D2) is neither the cacheable prefix nor the
    legacy tail — its own tint, or the breakdown can't show the one split it exists
    to show. */
 .prompt-viewer__budget-fill--projected {
-  background: var(--pl-color-accent, var(--brand-violet));
+  background: var(--pl-color-accent);
   opacity: 0.75;
 }
 
@@ -122,28 +122,28 @@
 .prompt-viewer__delivery-budget {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  padding: 8px 0;
+  gap: var(--pl-space-1);
+  font-size: var(--pl-font-size-xs);
+  padding: var(--pl-space-2) 0;
 }
 
 .prompt-viewer__budget-fill--delivery {
-  background: var(--brand-violet);
+  background: var(--pl-color-accent);
 }
 
 .prompt-viewer__overflow {
   color: var(--pl-color-fg-subtle);
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
 }
 
 /* The speculative next-call preview is a projection, not a record — say so
    before any of its numbers are read. */
 .prompt-viewer__speculative {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
-  border-left: 2px solid var(--brand-violet);
-  padding: 4px 0 4px 8px;
-  margin: 4px 0;
+  border-left: 2px solid var(--pl-color-accent);
+  padding: var(--pl-space-1) 0 var(--pl-space-1) var(--pl-space-2);
+  margin: var(--pl-space-1) 0;
 }
 
 .prompt-viewer__budget-tokens {
@@ -158,8 +158,8 @@
 .prompt-viewer__wire {
   border: 1px solid var(--pl-color-status-warning);
   border-radius: var(--pl-radius);
-  padding: 8px 10px;
-  font-size: 12.5px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
+  font-size: var(--pl-font-size-sm);
 }
 .prompt-viewer__wire-head--alarm {
   color: var(--pl-color-status-error);
@@ -167,19 +167,19 @@
 }
 .prompt-viewer__wire-details summary {
   cursor: pointer;
-  margin-top: 6px;
+  margin-top: var(--pl-space-1_5);
   color: var(--pl-color-fg-muted);
 }
 .prompt-viewer__delivery {
   color: var(--pl-color-fg-muted);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-style: italic;
 }
 
 /* Rendered (markdown) prompt view — same pipeline as chat messages; the raw
    monospace dump stays behind the Raw toggle for byte-exact reading. */
 .prompt-viewer__md {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   overflow-y: auto;
   min-height: 0;
 }
@@ -190,12 +190,12 @@
 /* #2843: the conversation-history block reuses the budget-row grammar; these two
    carry its header and the muted footnotes (top tools, the as-of-now caveat). */
 .prompt-viewer__history-head {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-weight: 600;
-  margin-top: 4px;
+  margin-top: var(--pl-space-1);
 }
 .prompt-viewer__history-note {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-muted);
   font-weight: 400;
 }

@@ -1,12 +1,16 @@
 id: workflows
 name: Workflows
-version: 0.3.1
+version: 0.3.2
 description: >-
   Declarative, multi-step subagent workflows (ADR 0002) — chain subagent steps
   (some in parallel) into repeatable recipes, with the Studio console surface for
   authoring and live-watching runs. Lives as a plugin (lean core); the engine taps
   core via the plugin SDK (graph.sdk.run_subagent), never core internals.
 enabled: false            # opt in via plugins.enabled: [workflows] (operator's call — not on by default)
+# Its own section (#3946): `workflows:` is core's built-in section (`workflows.dir`, the
+# writable recipe root, read by graph/config.py), so claiming it collided — the plugin's
+# `max_runs` never bound and every config load logged the collision.
+config_section: workflow_runs
 config:
   # Terminal-run retention: `.runs/` keeps this many done/failed records (paused and
   # running runs are never pruned — they're resumable state, not history).

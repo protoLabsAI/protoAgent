@@ -22,6 +22,8 @@ import pytest
 from infra import media
 from tests.privacy_asserts import assert_owner_only
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture(autouse=True)
 def _isolated_instance(tmp_path, monkeypatch):

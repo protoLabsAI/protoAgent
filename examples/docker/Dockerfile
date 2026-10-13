@@ -2,13 +2,9 @@
 # Full walkthrough: docs/guides/deploy-docker.md
 FROM ghcr.io/protolabsai/protoagent:latest
 
-# Bake your agent's config as a SEED — NOT as the live /opt/protoagent/config/
-# langgraph-config.yaml. That path is a VOLUME; baking the live file there means a
-# config volume freezes your first-boot config and silently shadows every later
-# image update. Instead point PROTOAGENT_SEED_CONFIG at a plain (non-volume) path:
-# protoAgent's first-boot seeder copies it to the live config once, then leaves it
-# alone, so console edits persist on the volume and image rebuilds still re-seed a
-# FRESH instance.
+# Bake a read-only seed outside /sandbox, the persistent instance root.
+# First boot copies it to /sandbox/config/langgraph-config.yaml. Later boots
+# retain operator edits unless PROTOAGENT_SEED_MERGE opts into per-key merging.
 COPY langgraph-config.seed.yaml /opt/agent/seed/langgraph-config.yaml
 ENV PROTOAGENT_SEED_CONFIG=/opt/agent/seed/langgraph-config.yaml
 

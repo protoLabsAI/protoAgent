@@ -8,7 +8,8 @@ artifact is a VERSION CHAIN you can step back through, not a flood of near-dupli
 didn't author) / ``pin_artifact`` (exempt a long-lived one from history eviction) /
 ``delete_artifact`` manage them. ``save_file_artifact`` (ADR 0092) versions a
 generated FILE (docx/xlsx/pptx/pdf/image) as a download artifact — bytes in a sidecar blob, a
-diffable text preview in ``code``, an image thumbnail — rendered as a download card, not iframed.
+diffable text projection in ``code``, an image thumbnail — previewed by type: .docx/.pdf as real
+pages, .pptx as real slides (each behind a save-time preflight), .csv/.tsv/.xlsx as tables.
 The panel is a plugin-served shell page
 (iframed by the console, ADR 0026) that renders the generated code in a **nested sandboxed
 iframe** (``sandbox="allow-scripts"``, no same-origin) — the Claude Artifacts / Open WebUI
@@ -27,6 +28,9 @@ import logging
 #   _config         config/env knob resolution (ENV > Settings UI > default)
 #   _store          file-backed version chains + sidecar blobs + event emit
 #   _preview        file previews: mime/clip/extractors/thumbnails
+#   _slides         .pptx slide-preview safety preflight (caps the in-panel renderer)
+#   _pdfview        .pdf page-preview safety preflight (caps the in-panel pdf.js)
+#   _docx           .docx page-preview safety preflight (caps the in-panel docx-preview)
 #   _render_status  browser render feedback (#1458)
 #   _bundle         chat-bundle consumption seam (#2681)
 #   _tools          the nine agent-facing tools + the full-body-write nudge
@@ -62,6 +66,7 @@ from ._tools import (
     rewrite_artifact,
     save_file_artifact,
     show_artifact,
+    show_service,
     update_artifact,
 )
 from . import _ref as _ref_mod
@@ -73,6 +78,7 @@ __all__ = [
     "register",
     "resolve_for_bundle",
     "show_artifact",
+    "show_service",
     "save_file_artifact",
     "update_artifact",
     "rewrite_artifact",
@@ -107,6 +113,19 @@ def register(registry) -> None:
     _ref_mod.EMIT = register_component is not None
     if register_component is not None:
         register_component(ARTIFACT_REF, validate_artifact_ref)
+    # The `artifact.show` service (ADR 0116): how ANOTHER plugin creates an artifact — e.g. the
+    # data plugin's charts — through `graph.sdk.service`, without importing this package.
+    register_service = getattr(registry, "register_service", None)
+    if register_service is not None:
+        register_service(
+            "show",
+            show_service,
+            description=(
+                "Create an artifact (any kind, e.g. a vega-lite chart). placement defaults to "
+                "'inline': html/svg/mermaid/react/vega-lite render in the conversation, other kinds "
+                "in the Artifact panel; pass placement='panel' for the panel (ADR 0118)."
+            ),
+        )
     registry.register_skill_dir(
         "skills"
     )  # teaches: render with show_artifact, edit with update/rewrite, don't write files

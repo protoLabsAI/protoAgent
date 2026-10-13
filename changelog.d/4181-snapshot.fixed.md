@@ -1,0 +1,1 @@
+- **Snapshot import bounds its upload read (#4181).** The import handler reads at most the archive limit plus one byte before rejecting an oversized snapshot, avoiding an unbounded in-memory copy. Archives exactly at the limit remain accepted.

@@ -36,12 +36,82 @@ describe("cold-start detection (ApiError / isColdStart)", () => {
     expect(isColdStart(new ApiError(500, "boom"))).toBe(false);
   });
 
+  it("does NOT retry an agent's own upstream-failure 502 as a cold start (#3973)", () => {
+    // `/api/chat` answers a failed model hop with a 502 whose detail carries a `code`;
+    // the hub proxy's "agent is not reachable" 502 has a plain-string detail.
+    expect(isColdStart(new ApiError(502, "The model provider closed the stream", "server_error"))).toBe(false);
+    expect(isColdStart(new ApiError(502, "agent is not reachable"))).toBe(true);
+  });
+
   it("treats a fetch with no HTTP response as cold-start (desktop sidecar booting)", () => {
     // WKWebView throws `TypeError: Load failed` (Chrome: "Failed to fetch") when the
     // local sidecar isn't bound to its port yet on first launch — ride it out rather
     // than flashing "Load failed" in the tasks/notes panels.
     expect(isColdStart(new TypeError("Load failed"))).toBe(true);
     expect(isColdStart(new Error("Failed to fetch"))).toBe(true);
+  });
+});
+
+describe("a subagent route's model failure is not a cold start (#3991)", () => {
+  // `/api/subagents/run|batch` answer a failed model hop with `/api/chat`'s OBJECT detail
+  // `{code, message, upstream_status, session_id, error_id}`. With the old plain-string
+  // detail the 502 read as the hub proxy's "agent not up yet" and the QueryClient retried
+  // it as a cold start, up to 25 times.
+  const respond = (status: number, detail: unknown) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status,
+        statusText: "x",
+        text: async () => JSON.stringify({ detail }),
+      })),
+    );
+  const failure = async (call: () => Promise<unknown>) => {
+    try {
+      await call();
+    } catch (e) {
+      return e;
+    }
+    throw new Error("expected the call to reject");
+  };
+  const detail = (status: number, code: string) => ({
+    code,
+    message: `The model provider rejected this subagent run (upstream HTTP ${status}).`,
+    upstream_status: status,
+    session_id: "manual-subagent",
+    error_id: "1a2b3c4d",
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  for (const [name, call] of [
+    ["runSubagent", () => api.runSubagent({ session_id: "s", type: "researcher", description: "d", prompt: "p" })],
+    ["runSubagentBatch", () => api.runSubagentBatch({ session_id: "s", tasks: [{ description: "d", prompt: "p" }] })],
+  ] as const) {
+    it(`${name}: an upstream 502 is neither a cold start nor an unreachable agent`, async () => {
+      respond(502, detail(503, "server_error"));
+      const err = await failure(call);
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).status).toBe(502);
+      expect((err as ApiError).code).toBe("server_error");
+      expect((err as ApiError).message).toContain("upstream HTTP 503");
+      expect(isColdStart(err)).toBe(false);
+      expect(isAgentUnreachable(err)).toBe(false);
+    });
+
+    it(`${name}: an upstream 429 is not a cold start`, async () => {
+      respond(429, detail(429, "rate_limit_error"));
+      const err = await failure(call);
+      expect((err as ApiError).status).toBe(429);
+      expect(isColdStart(err)).toBe(false);
+    });
+  }
+
+  it("the hub proxy's plain-string 502 still retries as a cold start", async () => {
+    respond(502, "agent 'ava' is not reachable");
+    const err = await failure(() => api.runSubagent({ session_id: "s", type: "t", description: "d", prompt: "p" }));
+    expect(isColdStart(err)).toBe(true);
+    expect(isAgentUnreachable(err)).toBe(true);
   });
 });
 
@@ -63,6 +133,8 @@ describe("unreachable-remote detection (isAgentUnreachable)", () => {
     expect(isAgentUnreachable(new ApiError(401, "unauthorized"))).toBe(false); // that's a bad token
     expect(isAgentUnreachable(new TypeError("Load failed"))).toBe(false);
     expect(isAgentUnreachable(undefined)).toBe(false);
+    // The agent's own upstream-failure 502 (coded detail, #3973) means it IS reachable.
+    expect(isAgentUnreachable(new ApiError(502, "provider closed the stream", "server_error"))).toBe(false);
   });
 });
 
@@ -280,6 +352,23 @@ describe("drainSseBuffer", () => {
   it("parses a frame on a CR boundary", () => {
     const { frames } = drain(`data: {"v":3}\r\r`);
     expect(frames).toEqual([{ v: 3 }]);
+  });
+
+  it("skips a malformed frame and keeps draining the rest of the buffer", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { frames, rest } = drain(`data: {"a":1}\n\ndata: {not json\n\ndata: {"b":2}\n\n`);
+    expect(frames).toEqual([{ a: 1 }, { b: 2 }]);
+    expect(rest).toBe("");
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it("still propagates an error thrown by the frame handler", () => {
+    expect(() =>
+      drainSseBuffer(`data: {"a":1}\n\n`, () => {
+        throw new Error("handler boom");
+      }),
+    ).toThrow("handler boom");
   });
 
   it("parses multiple frames from one buffer", () => {

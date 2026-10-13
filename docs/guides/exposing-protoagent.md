@@ -1,13 +1,9 @@
 # Exposing a protoAgent to the world
 
-Most protoAgents run private — on a LAN or a tailnet, reachable only by the operator
-and the rest of the fleet. Sometimes you want one reachable from the public internet:
-an agent other people (or other orgs' agents) can call over [A2A](/guides/delegates),
-a card discoverable at a stable URL. This guide is how to do that **without handing the
-internet a code-execution box**.
-
-The one-sentence version: **expose only the A2A surface, gate it with a bearer token,
-and 404 everything else.** The rest is detail.
+Make an agent reachable by external A2A callers through a stable public URL.
+Expose the A2A routes you need, require a bearer token, and block the operator API
+at the reverse proxy. Keep the console private. For private remote access, use
+[phone access over Tailscale](/guides/phone-access) instead.
 
 ## The shape of the job
 
@@ -67,7 +63,7 @@ off the public net while letting `/a2a` through.**
 That's defense in three layers: the proxy only routes the safe paths, the 404 catch-all
 hides the rest, and the bearer token gates the actions on the paths that *are* routed.
 
-## Worked example — Cloudflare Tunnel
+## Worked example — Cloudflare Tunnel {#worked-example-cloudflare-tunnel}
 
 This is the real setup for `ava.proto-labs.ai` (the fleet's orchestrator). A `cloudflared`
 tunnel fronts the agent; the agent's container is only reachable inside the Docker network

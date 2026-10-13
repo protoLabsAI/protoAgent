@@ -1,0 +1,2334 @@
+"""LangGraph configuration loader for protoAgent.
+
+Loads from ``config/langgraph-config.yaml`` when present, falls back
+to hardcoded defaults otherwise. Fork this file to add agent-specific
+config surface (extra subagents, domain flags, custom knowledge
+store paths, etc.).
+
+The defaults here point at the protoLabs LiteLLM gateway via the
+``protolabs/<agent>`` alias pattern — retarget ``model.name`` in the
+YAML (or swap the gateway alias) per agent without code changes.
+"""
+
+import copy
+import logging
+import os
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+log = logging.getLogger("protoagent.config")
+
+# The built-in researcher's runtime defaults are the single source of truth; the
+# config-side SubagentDef mirrors them so the YAML override layer can't drift
+# (graph/subagents/config has no graph.config dep — no import cycle).
+from graph.subagents.config import RESEARCHER_CONFIG
+from graph.watches.types import DEFAULT_KEEP_TERMINAL_H, DEFAULT_WATCH_INTERVAL_S
+
+# Loader helpers live in graph/config_load.py (#3840) and are re-exported here: callers
+# import them from graph.config, and tests patch them HERE (``graph.config._load_host_layer``,
+# ``graph.config._resolve_plugin_config``) — from_yaml/from_dict below call them by bare name,
+# which resolves this module's global, i.e. the patched binding.
+from graph.config_load import (  # noqa: F401 — re-exports
+    _coerce_budget_pct,
+    _coerce_digest_cap,
+    _coerce_prior_sessions,
+    _deep_merge_dicts,
+    _default_filesystem_allow_run,
+    _default_prompt_cache_ttl,
+    _drop_host_model_identity,
+    _env_default,
+    _FALSE_STRINGS,
+    _falsey,
+    _filter_to_host_keys,
+    _get_dotted,
+    _host_scoped_fields,
+    _hydrate_external_secrets,
+    _load_host_layer,
+    _load_secrets_doc,
+    _merge_provider_lists,
+    _MODEL_IDENTITY_KEYS,
+    _OFFICIAL_SOURCES_DEFAULT,
+    _parse_sources_allow,
+    _read_config_docs,
+    _resolve_plugin_config,
+    _set_dotted,
+    _valid_a2a_skills,
+    _warn_shadowed_host_keys,
+    load_config_docs,
+    SECRETS_FILENAME,
+    yaml_word_for_bool,
+)
+
+
+# ── Provider/model coherence across ALL slots (bd-66cw) ───────────────────────
+#
+# `model.provider` + `model.name` are one decision (see `_MODEL_IDENTITY_KEYS`), but the
+# aux / subagent / fallback slots each carry their OWN model override that inherits
+# `model.provider`. A native-OAuth provider (ADR 0097) needs a real Claude id in every
+# slot it builds — ``graph.providers.anthropic_oauth`` REJECTS a '/'-bearing gateway
+# alias (`protolabs/reasoning`). Before this, a stale alias in a NON-lead slot (aux, a
+# subagent tier, a fallback) built fine at boot and only raised at the FIRST subagent
+# dispatch — silently disabling all task/task_batch/workflow/board-dispatch work while
+# the lead agent kept running. We surface it at config load and reconcile the fixable
+# slots so they inherit the coherent lead pair instead.
+#
+# Gateway-aware, not a blanket ban on '/': when a gateway key IS configured a '/'-alias
+# slot legitimately routes THROUGH the gateway (the mixed native-main / gateway-aux path,
+# #2550 / graph.llm), so it is coherent. The genuine incoherence — the shape that raises
+# at dispatch — is a native provider + an alias slot + NO gateway key to route it.
+
+# Slot-name prefixes that name their OWN routing target (graph.llm.split_slot_target and
+# the `acp:` convention). The bare id after them is out of scope for the lead-provider
+# coherence check — the slot already said where it goes.
+_SLOT_ROUTE_PREFIXES = ("gateway:", "anthropic-oauth:", "openai-codex:", "acp:")
+
+# The non-lead SCALAR model slots that resolve through ``create_llm(config,
+# model_name=<slot>)`` and thus hit the native builder. (human label, config attribute.)
+_SCALAR_MODEL_SLOTS = (
+    ("routing.aux_model", "aux_model"),
+    ("compaction.model", "compaction_model"),
+    ("goal.eval_model", "goal_eval_model"),
+    ("soul.drift.judge.model", "soul_drift_judge_model"),
+)
+# Config-exposed subagent tiers (subagents.<name>.model). Only `researcher` is a typed
+# field today; extend alongside the dataclass fields as more subagents are promoted.
+_SUBAGENT_MODEL_SLOTS = ("researcher",)
+
+
+def _is_gateway_alias(model_value, config=None) -> bool:
+    """Is ``model_value`` a bare gateway alias — a '/'-namespaced id (`protolabs/reasoning`)
+    with no explicit slot-provider prefix? A native id (`claude-opus-4-6`) or an
+    explicitly-routed slot (`gateway:…`, `acp:…`) is NOT one.
+
+    A value naming a REGISTERED connection (ADR 0106) is never one either, however many
+    slashes follow: `prod-gateway:protolabs/reasoning` says where it runs, so it cannot
+    be incoherent with a lead provider — that is the whole point of qualifying it. The
+    hardcoded prefix tuple only knows the three legacy lanes, so without the registry
+    check a custom connection id read as a bare alias and the coherence warning fired on
+    a perfectly routable value."""
+    v = str(model_value or "").strip()
+    if not v or "/" not in v:
+        return False
+    if v.lower().startswith(_SLOT_ROUTE_PREFIXES):
+        return False
+    if config is not None:
+        prefix = v.partition(":")[0].strip().lower()
+        if prefix and prefix in {p.id for p in getattr(config, "providers", []) or []}:
+            return False
+    return True
+
+
+def _native_provider_without_gateway(config) -> bool:
+    """A native-OAuth provider (ADR 0097) with NO gateway key to fall back on — the only
+    shape in which a '/'-alias slot is genuinely incoherent (it raises at first dispatch
+    rather than routing through the gateway). The same default-route key
+    ``graph.llm._gateway_configured`` checks (``resolve_model_route``)."""
+    from graph.providers import is_native_oauth_provider  # lazy — avoid an import cycle
+
+    if not is_native_oauth_provider(getattr(config, "model_provider", "")):
+        return False
+    return not resolve_model_route(config).api_key
+
+
+def _detect_incoherent_slots(config) -> list[str]:
+    """Every model slot whose value is incoherent with the current provider (read-only).
+
+    Empty when coherent. Today's case: a native-OAuth provider with a bare gateway alias
+    in a slot and no gateway key to route it. Covers the LEAD pair plus aux, the subagent
+    tiers, and each ``routing.fallback_models`` entry — the full set ``graph.llm`` builds.
+    """
+    if not _native_provider_without_gateway(config):
+        return []
+    flagged: list[str] = []
+    if _is_gateway_alias(getattr(config, "model_name", ""), config):
+        flagged.append(f"model.name={config.model_name!r} (lead)")
+    for label, attr in _SCALAR_MODEL_SLOTS:
+        if _is_gateway_alias(getattr(config, attr, ""), config):
+            flagged.append(f"{label}={getattr(config, attr)!r}")
+    for name in _SUBAGENT_MODEL_SLOTS:
+        sub = getattr(config, name, None)
+        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model, config):
+            flagged.append(f"subagents.{name}.model={sub.model!r}")
+    for m in getattr(config, "routing_fallback_models", None) or []:
+        if _is_gateway_alias(m, config):
+            flagged.append(f"routing.fallback_models[{m!r}]")
+    return flagged
+
+
+def _reconcile_slot_providers(config) -> list[str]:
+    """Reconcile NON-lead slots incoherent with a native-OAuth provider so they inherit
+    the coherent lead pair instead of raising at first dispatch — and WARN, naming each
+    offending slot, so the incoherence is visible at config load/reload rather than only
+    at the first `task`/subagent dispatch. Called from :meth:`from_dict`, so a provider
+    SWITCH (a reload with a new `model.provider`) reconciles exactly as a fresh load does.
+
+    A scalar aux/tier slot is CLEARED (→ it inherits `model.name`); an incoherent fallback
+    is DROPPED (each fallback is built eagerly at graph build, so a '/'-alias one would
+    crash the whole build there, not just at dispatch). The LEAD pair cannot be reconciled
+    — it has nothing to inherit — so it is only surfaced; the operator fixes
+    `model.name`/`model.provider` together (they are one decision, ADR 0097). Returns the
+    flagged slot descriptions."""
+    flagged = _detect_incoherent_slots(config)
+    if not flagged:
+        return []
+    for _label, attr in _SCALAR_MODEL_SLOTS:
+        if _is_gateway_alias(getattr(config, attr, ""), config):
+            setattr(config, attr, "")
+    for name in _SUBAGENT_MODEL_SLOTS:
+        sub = getattr(config, name, None)
+        if isinstance(sub, SubagentDef) and _is_gateway_alias(sub.model, config):
+            sub.model = ""
+    kept = [m for m in (config.routing_fallback_models or []) if not _is_gateway_alias(m, config)]
+    if len(kept) != len(config.routing_fallback_models or []):
+        config.routing_fallback_models = kept
+    log.warning(
+        "[config] model.provider=%r is a native OAuth provider (ADR 0097) and needs a real "
+        "Claude model id, but these slots hold a gateway alias with no gateway key to route "
+        "them: %s. Non-lead slots were reconciled to inherit the coherent lead "
+        "model.name=%r (any such fallback dropped); a lead-slot alias must be fixed in "
+        "config. Left unreconciled, this only surfaced at the FIRST subagent dispatch as "
+        "'is not a Claude model id', silently disabling all task/task_batch/workflow "
+        "delegation.",
+        getattr(config, "model_provider", ""),
+        ", ".join(flagged),
+        getattr(config, "model_name", ""),
+    )
+    return flagged
+
+
+@dataclass
+class SubagentDef:
+    enabled: bool = True
+    tools: list[str] = field(default_factory=list)
+    max_turns: int = 30
+    # Per-subagent model override (ADR 0001) — blank = routing.aux_model → main model.
+    # Applied onto the registry's SubagentConfig at build (see _apply_config_subagents).
+    model: str = ""
+
+
+# ── Provider registry (ADR 0106) ──────────────────────────────────────────────
+#
+# A provider is a CONNECTION, not a mode. `type` is the kind of connection
+# (`openai-compat`, `anthropic-oauth`, `openai-codex`); `id` is which one. Several
+# entries may share a type — that is the point, and what makes two gateways possible.
+#
+# Ids appear inside stored model values (`prod-gateway:protolabs/reasoning`), and via
+# the fleet host layer those values can live in ANOTHER instance's config, which a
+# rename cannot reach. So an id is chosen once and frozen; `label` carries the
+# ergonomics and is freely editable.
+
+PROVIDER_TYPE_OPENAI_COMPAT = "openai-compat"
+PROVIDER_TYPES = (PROVIDER_TYPE_OPENAI_COMPAT, "anthropic-oauth", "openai-codex")
+
+# No colon (it separates id from model in the slot grammar) and no slash (gateway
+# aliases contain them), so `split_slot_target` stays unambiguous by construction.
+_PROVIDER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def valid_provider_id(pid: str) -> bool:
+    return bool(_PROVIDER_ID_RE.match((pid or "").strip()))
+
+
+@dataclass
+class Provider:
+    """One configured connection to a model source."""
+
+    id: str
+    type: str = PROVIDER_TYPE_OPENAI_COMPAT
+    label: str = ""
+    base_url: str = ""
+    api_key: str = ""  # overlaid from secrets.yaml, like model.api_key was
+
+    def display(self) -> str:
+        return self.label.strip() or self.id
+
+    def as_dict(self, *, redact: bool = True) -> dict:
+        out = {"id": self.id, "type": self.type}
+        if self.label:
+            out["label"] = self.label
+        if self.base_url:
+            out["base_url"] = self.base_url
+        if self.api_key and not redact:
+            out["api_key"] = self.api_key
+        return out
+
+
+def _parse_providers(entries, secrets: dict) -> list[Provider]:
+    """YAML `providers:` → validated entries. Malformed ones are dropped WITH an
+    attributed warning rather than raising: a typo in one connection must not take the
+    agent down, and a silent drop would strand every slot that names it."""
+    out: list[Provider] = []
+    seen: set[str] = set()
+    secret_keys = secrets.get("providers") if isinstance(secrets.get("providers"), dict) else {}
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            log.warning("providers: skipping a non-mapping entry: %r", entry)
+            continue
+        pid = str(entry.get("id", "") or "").strip().lower()
+        if not valid_provider_id(pid):
+            log.warning("providers: skipping entry with invalid id %r (need [a-z0-9][a-z0-9_-]*)", entry.get("id"))
+            continue
+        if pid in seen:
+            log.warning("providers: duplicate id %r — keeping the first", pid)
+            continue
+        ptype = str(entry.get("type", "") or PROVIDER_TYPE_OPENAI_COMPAT).strip().lower()
+        if ptype not in PROVIDER_TYPES:
+            log.warning("providers: %r has unknown type %r — skipping", pid, ptype)
+            continue
+        seen.add(pid)
+        out.append(
+            Provider(
+                id=pid,
+                type=ptype,
+                label=str(entry.get("label", "") or ""),
+                base_url=str(entry.get("base_url", "") or "").strip(),
+                # Secret overlay mirrors model.api_key: secrets.yaml wins over inline.
+                api_key=str((secret_keys or {}).get(pid) or entry.get("api_key", "") or ""),
+            )
+        )
+    return out
+
+
+# ── the default route's endpoint and key: ONE resolver (#3128) ──────────────────────────
+#
+# Every reader asking "which endpoint, which key" — the runtime client, embeddings, the
+# gateway HTTP client, the context-window probe, egress auto-allow, headless validation, the
+# model-listing and test-connection fallbacks — answers through here, so they cannot drift
+# apart again (#3525: the window probe skipped the env key the client itself used).
+#
+# The precedence is the one the runtime client already had:
+#   1. a REGISTERED connection, when the value being routed names one — strictly from its
+#      own fields, never borrowing the legacy pair or the env key (the cross-credential
+#      guard: that is how one connection's credential reaches another's endpoint);
+#   2. otherwise the unqualified default route: the retired `model.api_base` /
+#      `model.api_key`, with `""` and whitespace counting as unset;
+#   3. then OPENAI_API_KEY for the key.
+# The unqualified route does not consult the registry. Moving it onto one is the removal
+# slice's decision, and it lands here.
+
+
+@dataclass(frozen=True)
+class ModelRoute:
+    """Where an OpenAI-compatible call goes and what it authenticates with."""
+
+    #: ``None`` only on the default route when ``model.api_base`` is null (a bare
+    #: ``api_base:``): the client then gets ``base_url=None`` and the OpenAI SDK applies its
+    #: own default, exactly as before this resolver existed.
+    base_url: str | None
+    #: Never in the repr — a route is exactly the kind of object that ends up in a log line.
+    api_key: str = field(repr=False)
+    #: The registered connection this came from; ``""`` for the unqualified default route.
+    connection: str = ""
+
+
+def resolve_model_route(config, connection: Provider | None = None) -> ModelRoute:
+    """The endpoint and key for ``connection``, or for the default route when None.
+
+    ``api_key`` is ``""`` when nothing resolves; what goes on the wire then is the caller's
+    call (a registered connection sends a placeholder, the default route sends the empty
+    key, a probe omits the header). Reads with ``getattr`` so any config-shaped object
+    works, and never reads request context.
+    """
+    if connection is not None:
+        return ModelRoute(
+            base_url=str(connection.base_url or "").strip(),
+            api_key=str(connection.api_key or "").strip(),
+            connection=connection.id,
+        )
+    base = getattr(config, "api_base", "")
+    return ModelRoute(
+        # A null endpoint stays None rather than becoming "": the runtime client and
+        # embeddings have always passed it through, letting the OpenAI SDK default apply
+        # (`https://api.openai.com/v1`, or OPENAI_BASE_URL), where "" fails every call.
+        base_url=None if base is None else str(base or "").strip(),
+        api_key=str(getattr(config, "api_key", "") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip(),
+    )
+
+
+def _migrated_providers(config) -> list[Provider]:
+    """The registry a pre-ADR-0106 config implies.
+
+    Deliberately reuses the three lane names the qualified slot grammar already used
+    (#2574) as the ids — `gateway`, `anthropic-oauth`, `openai-codex` — so EVERY slot
+    value already stored keeps resolving to the same place and no fleet member's config
+    needs rewriting. The migration is as close to an identity function as it can be.
+    """
+    out: list[Provider] = []
+    # Exactly the default route, env key included: the migrated entry has to carry
+    # everything the legacy gateway ran on, because a REGISTERED connection is resolved
+    # strictly from its own fields — nothing downstream may borrow a global key on its
+    # behalf (that is how one connection's credential reaches another's endpoint).
+    route = resolve_model_route(config)
+    base, key = route.base_url or "", route.api_key
+    if base or key:
+        out.append(Provider(id="gateway", type=PROVIDER_TYPE_OPENAI_COMPAT, label="Gateway", base_url=base, api_key=key))
+    lead = (getattr(config, "model_provider", "") or "").strip().lower()
+    if lead in ("anthropic-oauth", "openai-codex"):
+        out.append(Provider(id=lead, type=lead, label=_LEGACY_PROVIDER_LABELS[lead]))
+    return out
+
+
+# ── the registry shape of ONE config layer (#3128) ─────────────────────────────────
+#
+# `_migrated_providers` above rebuilds a registry IN MEMORY at load, against the fully
+# merged (host ⊕ agent) doc. A snapshot needs the same answer as a DOCUMENT, for one layer
+# that travels to another box — and until #3128 removes them, the three retired fields
+# still carry runtime meaning of their own, separate from the registry:
+#
+# * `model.provider` routes every BARE model value — the lead and each aux / compaction /
+#   goal / drift-judge / subagent / fallback / favorite slot: a slash-less id goes to that
+#   subscription, anything else to the default gateway route. `--setup` validation and
+#   load-time slot reconciliation read it too.
+# * `model.api_base` / `model.api_key` are the endpoint and key of that default route and of
+#   every gateway-only reader (embeddings, transcription, the plugin gateway client, the
+#   context-window probe, egress auto-allow), all resolved by `resolve_model_route`. In a
+#   config WITH a registry they are no
+#   connection's endpoint or key; only in a config the loader migrates do they become the
+#   `gateway` connection.
+#
+# So a retired value leaves the document only where the registry can say the same thing,
+# and `aliases` records how — as references into the registry — for an importer that has to
+# restate it to a runtime that still reads the field. A value the registry cannot express
+# stays exactly where it was. And nothing is emitted blank: `_merge_provider_lists` overlays
+# field by field, so `base_url: ""` REPLACES a box endpoint rather than inheriting it (#3425).
+
+_NATIVE_PROVIDER_TYPES = ("anthropic-oauth", "openai-codex")
+# Prefixes a model value may already carry that say where it routes: the three legacy lane
+# ids (claimed by `split_slot_target`'s floor), and `acp:` (handled upstream of it).
+_KNOWN_ROUTE_PREFIXES = ("gateway", "anthropic-oauth", "openai-codex", "acp")
+#: YAML paths of every model value `create_llm` resolves, so every value a bare
+#: `model.provider` routes: the lead, the `_SCALAR_MODEL_SLOTS`, and the list slots.
+#: `subagents.<name>.model` is walked separately.
+_ROUTED_SCALAR_SLOTS = (
+    ("model", "name"),
+    ("routing", "aux_model"),
+    ("compaction", "model"),
+    ("goal", "eval_model"),
+    ("soul", "drift", "judge", "model"),
+)
+_ROUTED_LIST_SLOTS = (("routing", "fallback_models"), ("model", "favorites"))
+
+
+def _layer_connection_types(doc: dict) -> dict[str, str]:
+    """``{id: type}`` for the mapping entries of a layer's ``providers:`` list."""
+    entries = doc.get("providers") if isinstance(doc, dict) else None
+    out: dict[str, str] = {}
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict):
+            pid = str(entry.get("id", "") or "").strip().lower()
+            if pid and pid not in out:
+                out[pid] = str(entry.get("type", "") or PROVIDER_TYPE_OPENAI_COMPAT).strip().lower()
+    return out
+
+
+def _route_prefix(value: object) -> str:
+    """The ``<id>`` of a ``<id>:<model>`` value, lowercased; "" for a bare value."""
+    text = str(value or "").strip()
+    prefix, sep, _ = text.partition(":")
+    return prefix.strip().lower() if sep else ""
+
+
+def _node(doc: dict, path: tuple[str, ...]):
+    for part in path:
+        doc = doc.get(part) if isinstance(doc, dict) else None
+    return doc
+
+
+def _routed_model_refs(doc: dict) -> list[tuple[object, object]]:
+    """``(container, key)`` for every model value in a layer that `create_llm` resolves."""
+    refs: list[tuple[object, object]] = []
+    for path in _ROUTED_SCALAR_SLOTS:
+        parent = _node(doc, path[:-1])
+        if isinstance(parent, dict) and path[-1] in parent:
+            refs.append((parent, path[-1]))
+    for path in _ROUTED_LIST_SLOTS:
+        values = _node(doc, path)
+        if isinstance(values, list):
+            refs.extend((values, i) for i in range(len(values)))
+    subagents = doc.get("subagents")
+    for sub in subagents.values() if isinstance(subagents, dict) else []:
+        if isinstance(sub, dict) and "model" in sub:
+            refs.append((sub, "model"))
+    return refs
+
+
+def _claimed_by_a_native_lead(value: object, registered: dict[str, str]) -> bool:
+    """Would a subscription `model.provider` route this bare value to itself? A slash-less
+    id with no route prefix of its own does; a `/`-namespaced gateway alias routes through
+    the gateway instead (#2550), and a qualified value already says where it goes."""
+    if not isinstance(value, str) or not value.strip() or "/" in value:
+        return False
+    prefix = _route_prefix(value)
+    return not (prefix in registered or prefix in _KNOWN_ROUTE_PREFIXES)
+
+
+def to_registry_shape(layer: dict | None, *, host: dict | None = None) -> tuple[dict, dict[str, str], dict[str, str]]:
+    """One config layer with every retired model value the registry can express moved into it.
+
+    Returns ``(doc, credentials, aliases)``:
+
+    * ``doc`` — the layer. ``model.api_key`` and each connection's ``api_key`` are lifted
+      out; everything else in a connection entry passes through as the layer had it (a
+      caller that must ship nothing secret still strips and sweeps the rest). No provider
+      field is emitted blank.
+    * ``credentials`` — each non-blank key lifted, by the name a snapshot asks for it under:
+      ``providers.<id>`` for a connection's key; for the retired ``model.api_key``,
+      ``providers.gateway`` exactly when it IS that connection's key (below), else
+      ``model.api_key``.
+    * ``aliases`` — for each retired field that left ``doc``, the connection it pointed at:
+      ``provider`` (the lane its bare values now name), ``api_base`` (the connection whose
+      endpoint it is), ``api_key`` (the connection whose key it is).
+
+    ``host`` is the Host layer this layer is read against — the SOURCE box for an export.
+    A layer the loader migrates (no ``providers:`` list here or on the Host) gets the
+    registry the loader builds from it, because there its endpoint and key ARE the
+    ``gateway`` connection. Anywhere else they are not, and nothing is built.
+
+    * ``model.provider`` naming a subscription: every bare value it routes (the lead and
+      each routed slot) is qualified with that connection, and ``aliases["provider"]``
+      names it. The default (``openai``) is dropped — bare values mean the gateway without
+      it — unless the layer sets no ``model.name``, where it also decides whether the Host's
+      model is inherited; then it stays.
+    * ``model.api_base``: dropped when the ``gateway`` entry here has exactly that endpoint
+      (a migrating layer gets one built from it); dropped when blank. Otherwise it stays —
+      the endpoint of the default route and the gateway-only readers, which no connection
+      in the registry is.
+    * ``model.api_key``: never in ``doc``.
+
+    Idempotent for the same ``host``. PURE — never mutates ``layer``.
+    """
+    doc = copy.deepcopy(layer) if isinstance(layer, dict) else {}
+    credentials: dict[str, str] = {}
+    aliases: dict[str, str] = {}
+    model = doc.get("model") if isinstance(doc.get("model"), dict) else None
+    lead = str((model or {}).get("provider") or "").strip().lower()
+    base = str((model or {}).get("api_base") or "").strip()
+    legacy_key = str((model or {}).get("api_key") or "").strip()
+    has_name = bool(str((model or {}).get("name") or "").strip())
+
+    declared = doc.get("providers")
+    migrates = not isinstance(declared, list) and not isinstance((host or {}).get("providers"), list)
+    if isinstance(declared, list):
+        cleaned: list = []
+        for entry in declared:
+            if not isinstance(entry, dict):
+                cleaned.append(entry)  # malformed — the loader drops it with a warning
+                continue
+            pid = str(entry.get("id", "") or "").strip().lower()
+            key = entry.get("api_key")
+            if pid and isinstance(key, str) and key.strip():
+                credentials.setdefault(f"providers.{pid}", key.strip())  # first duplicate wins, as at load
+            cleaned.append({k: v for k, v in entry.items() if k != "api_key" and v not in ("", None)})
+        doc["providers"] = cleaned
+    elif migrates and base:
+        # Exactly what `_migrated_providers` builds from this layer at load: the endpoint
+        # and key ARE the `gateway` connection, plus the subscription lead's own entry
+        # (a declared list switches that load-time step off, so it has to be here).
+        built = [{"id": "gateway", "type": PROVIDER_TYPE_OPENAI_COMPAT, "base_url": base}]
+        if lead in _NATIVE_PROVIDER_TYPES:
+            built.append({"id": lead, "type": lead})
+        doc["providers"] = built
+        aliases["api_key"] = "gateway"
+    else:
+        doc.pop("providers", None)  # absent/null/malformed all migrate at load — say nothing
+
+    if model is not None:
+        registered = _layer_connection_types(doc)
+        if "api_key" in model:
+            model.pop("api_key")
+            if legacy_key:
+                credentials[f"providers.{aliases['api_key']}" if "api_key" in aliases else "model.api_key"] = legacy_key
+        if "api_base" in model:
+            gateway = next(
+                (
+                    e
+                    for e in (doc.get("providers") if isinstance(doc.get("providers"), list) else [])
+                    if isinstance(e, dict) and str(e.get("id", "") or "").strip().lower() == "gateway"
+                ),
+                None,
+            )
+            if not base:
+                model.pop("api_base")  # a blank REPLACES the box endpoint; absent inherits it
+            elif gateway is not None and str(gateway.get("base_url") or "").strip() == base:
+                model.pop("api_base")
+                aliases["api_base"] = "gateway"
+            # else: no connection has this endpoint — it stays, exactly as the layer had it
+        if "provider" in model:
+            if lead in _NATIVE_PROVIDER_TYPES:
+                lane = next((pid for pid, t in registered.items() if t == lead), lead)
+                for container, key in _routed_model_refs(doc):
+                    value = container[key]  # type: ignore[index]
+                    if _claimed_by_a_native_lead(value, registered):
+                        container[key] = f"{lane}:{value.strip()}"  # type: ignore[index]
+                model.pop("provider")
+                aliases["provider"] = lane
+            elif has_name and lead in ("", "openai"):
+                model.pop("provider")
+            # else: it also picks whether the Host's model is inherited (no name here) — keep
+        if not model:
+            doc.pop("model", None)
+    return doc, credentials, aliases
+
+
+_LEGACY_PROVIDER_LABELS = {
+    "anthropic-oauth": "Claude subscription",
+    "openai-codex": "ChatGPT subscription",
+}
+
+
+_LEGACY_FLOOR_SEEN: set[str] = set()
+
+
+def note_legacy_registry_floor(where: str) -> None:
+    """Record that a config with NO provider registry reached ``where`` (#3128).
+
+    `split_slot_target` and `available_model_lanes` fall back to the three legacy lanes
+    for an empty registry — the compatibility floor ADR 0106 scheduled for removal. Every
+    shipped config source now carries a registry (`from_dict` migrates one in, and
+    `LangGraphConfig.app_defaults()` is the unloaded equivalent), so reaching this means a
+    caller built a bare `LangGraphConfig()` — or the operator removed every connection
+    (`providers: []`), the one shape still read through the floor until the removal PR
+    decides what an empty registry means.
+
+    A seam rather than inline logging so the guard test can turn it into a hard failure
+    and prove no shipped flow depends on the floor. Logged at DEBUG, once per call site:
+    a fork or plugin tripping it should be findable, not noisy.
+    """
+    if where in _LEGACY_FLOOR_SEEN:
+        return
+    _LEGACY_FLOOR_SEEN.add(where)
+    log.debug(
+        "[config] %s received a config with no provider registry and fell back to the legacy "
+        "lanes (ADR 0106 floor, retiring with #3128) — build configs through from_yaml / "
+        "from_dict / LangGraphConfig.app_defaults(), not a bare LangGraphConfig()",
+        where,
+    )
+
+
+@dataclass
+class LangGraphConfig:
+    # Model settings — route through the LiteLLM gateway by default
+    model_provider: str = "openai"
+    model_name: str = "protolabs/reasoning"  # override in YAML per agent
+    api_base: str = "http://gateway:4000/v1"
+    api_key: str = ""  # set via OPENAI_API_KEY env (gateway master key)
+    temperature: float = 0.2
+    max_tokens: int = 32768  # 32k — required headroom for the Qwen models we run
+    # LangGraph `recursion_limit` for the main tool loop (server/chat.py). Counts graph
+    # steps through the middleware chain, not tool calls 1:1 — roughly 8 steps per tool
+    # call, so 2000 ≈ 250 tool calls/turn. Was a dead field until this was wired up (it
+    # only fed a display value); the hardcoded `recursion_limit: 200` it replaces was
+    # ≈25 tool calls/turn, so 2000 is deliberately generous headroom, not a copy of the
+    # old number. The real backstop for a runaway turn is `turn_stall_timeout_seconds`.
+    max_iterations: int = 2000
+    # Seconds of stream SILENCE after which a turn is declared wedged and failed
+    # (#2344). Deliberately a stall window, not a wall-clock cap: a long turn that
+    # keeps emitting frames is healthy and must never be cut off, while a turn stuck
+    # inside one tool call emits nothing at all. 900s clears the slowest legitimate
+    # single step by a wide margin (an MCP call is separately bounded at 300s by
+    # ``mcp.call_timeout_seconds``). ``0`` disables the guard.
+    turn_stall_timeout_seconds: float = 900.0
+    # Round governance (#2710, ADR 0101 D8). ``round_nudge_after``: model rounds
+    # into a turn before ONE re-grounding note is injected (long runs decay
+    # instruction adherence — the duplicate-card incident was 21 rounds in);
+    # 0 disables. ``round_hard_cap``: end the turn with an honest hand-back at
+    # this many rounds; 0 (default) = off — max_iterations remains the backstop.
+    round_nudge_after: int = 25
+    round_hard_cap: int = 0
+    # Native vision (ADR 0021): set true when `model_name` is image-capable (e.g.
+    # protolabs/fast, protolabs/smart). The chat composer then sends attached
+    # images as native multimodal parts straight to the model instead of routing
+    # them through the extraction pipeline. Off → images go through the pipeline.
+    model_vision: bool = False
+    # Image limits (graph/image_limits.py). ``image_max_side`` — the long side, in px,
+    # an image a tool returns or a user attaches is downscaled to before it enters the
+    # history (1568 = Anthropic's recommended size; clamped to ≤ 2000 at use so no
+    # setting can store an image that breaks a many-image request).
+    # ``max_images_per_request`` — only the newest N inline images ride a model request;
+    # older ones become an ``[image omitted: …]`` note (0 = no count cap; the per-image
+    # provider limits still apply).
+    image_max_side: int = 1568
+    max_images_per_request: int = 20
+    # Pinned go-to models (#1957) — the chat `/model` quick-switch shows these (in
+    # order) instead of the gateway's full list. Console-consumed via the settings
+    # schema; empty = no favorites, /model falls back to the full model list.
+    model_favorites: list[str] = field(default_factory=list)
+    # The provider registry (ADR 0106). Empty in a pre-0106 config until `from_dict`
+    # migrates one in from the legacy `model.provider`/`api_base`/`api_key` fields, so
+    # code may assume it is populated after a load.
+    providers: list["Provider"] = field(default_factory=list)
+    #: True when the config DECLARED `providers:` as a list — including the empty list.
+    #: `from_dict` already distinguishes absent/null (migrate) from an explicit list (do
+    #: not), because `providers: []` is what removing the last connection writes. The
+    #: floors in `split_slot_target` / `available_model_lanes` see only an empty list and
+    #: cannot tell "the operator emptied it" from "a bare object that never loaded", so
+    #: this carries that distinction to them: declared-empty resolves NOTHING, a bare
+    #: config still gets the legacy floor. Not a config key — never written or read back.
+    providers_declared: bool = False
+
+    # Per-call timeout (seconds) on the model client + transient-retry cap. Bounds
+    # a hung/slow gateway so a turn surfaces a clean error instead of blocking the
+    # A2A task / SSE stream indefinitely (prod-readiness). 0/None ⇒ SDK default.
+    request_timeout: float = 120.0
+    llm_max_retries: int = 2
+
+    # In-flight limiter (ADR 0115). PER-PROCESS caps on concurrent model calls per
+    # lane (resolved endpoint + model) — off by default. Nothing reads these yet; card
+    # C4 wires them into graph/llm_limiter.py. The budgets are per-process by design
+    # (scope="agent", not host): a box-wide default would silently give each instance N
+    # slots, so the operator sizes them across instances to sum within the gateway's
+    # parallel capacity (ADR 0115 D2, Options d).
+    #   ``llm_max_inflight`` — max concurrent model calls per lane in THIS process.
+    #     0 disables the limiter entirely (today's behaviour, one branch of overhead).
+    #   ``llm_inflight_queue_timeout`` — seconds one acquisition may wait for a slot.
+    #     Separate from ``request_timeout`` (which times the HTTP call once a slot is
+    #     held); kept below ``turn_stall_timeout_seconds`` (900) so a queued turn fails
+    #     with a queue error, not a stall.
+    #   ``llm_inflight_interactive_reserve`` — slots only interactive callers may take;
+    #     clamped to ``max_inflight − 1`` at use, so other work always keeps one slot.
+    llm_max_inflight: int = 0
+    llm_inflight_queue_timeout: float = 300.0
+    llm_inflight_interactive_reserve: int = 1
+
+    # Advanced sampling — all opt-in. ``None`` (or a negative top_k) means
+    # "let the gateway / model card decide". top_p and presence_penalty are
+    # standard OpenAI params; top_k and repetition_penalty aren't, so they
+    # ride ``extra_body`` for vLLM-compatible gateways. ``chat_template_kwargs``
+    # also rides extra_body — e.g. vLLM's ``preserve_thinking=True`` to keep
+    # historical <think>/<scratch_pad> blocks across turns.
+    top_p: float | None = None
+    top_k: int = -1
+    presence_penalty: float | None = None
+    repetition_penalty: float | None = None
+    chat_template_kwargs: dict | None = None
+
+    # Reasoning controls for OpenAI-compatible reasoning models (DeepSeek, the
+    # OpenAI o-series, etc. behind the gateway). Both opt-in — unset means "let the
+    # provider/model card decide", so an un-tuned config is a true no-op (#1113).
+    #   ``thinking`` — "" (inherit) | "enabled" | "disabled". When set, rides
+    #     ``extra_body`` as ``{"thinking": {"type": ...}}`` (DeepSeek's spelling).
+    #   ``reasoning_effort`` — None (inherit) | "low" | "medium" | "high" | "max".
+    #     A native ChatOpenAI param, sent top-level. DeepSeek maps low/medium→high
+    #     and xhigh→max server-side; we just pass the string through.
+    thinking: str = ""
+    reasoning_effort: str | None = None
+
+    # Subagents — template ships one example, `researcher` (see
+    # graph/subagents/config.py). Add fields here as you add entries to
+    # SUBAGENT_REGISTRY. Tool/max_turns here mirror the registry default and
+    # are the YAML-overridable layer.
+    # Defaults derived from the registry entry (SSOT) so the YAML-overridable layer
+    # always matches the runtime default — an un-overridden config is a true no-op.
+    researcher: SubagentDef = field(
+        default_factory=lambda: SubagentDef(
+            tools=list(RESEARCHER_CONFIG.tools),
+            max_turns=RESEARCHER_CONFIG.max_turns,
+            model=RESEARCHER_CONFIG.model,
+        )
+    )
+
+    # Sub-agent fan-out — the `task_batch` tool runs delegations concurrently.
+    # ``subagent_max_concurrency`` caps in-flight subagents (protects the
+    # gateway / context budget); ``subagent_output_truncate`` bounds each
+    # subagent's returned text (chars) so a fan-out can't blow the parent
+    # context. Both apply to `task_batch`; single `task` is unbounded.
+    subagent_max_concurrency: int = 4
+    subagent_output_truncate: int = 6000
+
+    # Middleware / subsystem toggles. All default-on so a fresh fork has
+    # a working memory loop + scheduler on day one. Forks that want a
+    # purely stateless agent (no KB, no scheduled tasks) can flip these
+    # via the drawer or by editing the YAML directly.
+    knowledge_middleware: bool = True
+    audit_middleware: bool = True
+    memory_middleware: bool = True
+    scheduler_enabled: bool = True
+
+    # The Discord (ADR 0015/0016) and Google (ADR 0017) surfaces moved out of core
+    # to external plugins (ADR 0058/0059) — installed at runtime, their config lives
+    # in plugin_config[<section>], never a typed field here.
+
+    # Enforcement gate — opt-in safety middleware that blocks tool calls
+    # before they execute (deny list + per-tool rate limits). Off by default;
+    # forks enable it and supply a deny list / rate limits (and can attach a
+    # custom predicate in code). See graph/middleware/enforcement.py.
+    enforcement_enabled: bool = False
+    enforcement_disallowed_tools: list[str] = field(default_factory=list)
+    enforcement_rate_limits: dict = field(default_factory=dict)
+
+    # Prompt caching — Anthropic prefix caching on the stable system prompt.
+    # Safe no-op on non-Anthropic models (gated on model name unless forced).
+    # NOTE: this middleware also DELIVERS KnowledgeMiddleware's context to the
+    # model (create_agent doesn't read the `context` state key), so it's wired
+    # unconditionally; the flags below only control the caching half.
+    # Attempt-by-default (#2255): blocks are attached for EVERY model (aliases
+    # included); a provider that rejects them auto-falls back per session, one
+    # that silently ignores them draws a zero-hit warning.
+    prompt_cache_enabled: bool = True
+    prompt_cache_ttl: str = "5m"  # "5m" (ephemeral) or "1h" (persistent)
+    prompt_cache_force: bool = False  # never auto-fall back — a rejection propagates
+
+    # Cache-warming heartbeat — optional background ping that reproduces the
+    # agent's cached system+tools prefix on an interval so the FIRST real
+    # request after an idle gap hits a warm cache instead of a full miss.
+    # OFF by default; only worth enabling for sporadic-but-latency-sensitive
+    # workloads on the "1h" persistent tier (interval just under the TTL).
+    # For steady traffic the cache stays warm on its own and this is pure cost.
+    cache_warming_enabled: bool = False
+    cache_warming_interval_seconds: int = 3300  # 55m — just under the 1h tier
+
+    # Context compaction — wires langchain's SummarizationMiddleware to
+    # summarize old history near the context limit. ON by default (a long
+    # session would otherwise overflow the window). trigger is
+    # "fraction:0.8" | "tokens:120000" | "messages:80"; keep = last N messages.
+    # NOTE: "fraction:"/"tokens:" triggers need the model's context-window
+    # profile; for a custom gateway alias that lacks one, the wiring falls back
+    # to a message-count trigger (see graph/agent.py) instead of crashing.
+    compaction_enabled: bool = True
+    compaction_trigger: str = "fraction:0.8"
+    compaction_keep_messages: int = 20
+    # In-history tool-result pruning (#2782, ADR 0101 D3) — the near-lossless
+    # step BEFORE compaction's lossy summarize: at ``at_fraction`` of the model's
+    # context window, tool results older than the newest ``keep_messages`` are
+    # rewritten to head+tail stubs in one batched pass. See
+    # graph/middleware/tool_result_pruner.py for the full mechanics.
+    pruning_enabled: bool = True
+    pruning_at_fraction: float = 0.6
+    pruning_keep_messages: int = 20
+    pruning_min_chars: int = 4000
+    compaction_model: str = ""  # blank = summarize with the main model
+
+    # Deferred tools (ADR 0005 #3) — progressive tool disclosure for high tool
+    # counts. When enabled, only a small base set + a ``search_tools`` meta-tool
+    # are exposed to the model each turn; the rest are bound (callable) but their
+    # schemas are withheld until the agent searches for and "loads" them. Cuts
+    # the per-turn tool-schema footprint and improves selection accuracy past
+    # ~15 tools. OFF by default — the full tool set is exposed (unchanged).
+    # ``tools_deferred_keep`` overrides the always-on base (empty → built-in
+    # base: keyless core + delegation/workflow tools + search_tools).
+    tools_deferred_enabled: bool = False
+    tools_deferred_keep: list[str] = field(default_factory=list)
+
+    # Skip re-executing an allowlisted read call when this turn's history already
+    # has an up-to-date result for the identical (tool, project, path). Found via a
+    # live-session audit: `read_file` on the same file, called twice non-
+    # consecutively (so stall_guard's stuck-loop detector never saw it), returning
+    # byte-identical truncated content both times. Scoped to explicitly idempotent
+    # read tools only (never state-reading tools like a board/issue listing, which
+    # can legitimately change within a turn as the agent's own actions alter it),
+    # and invalidated the moment a write tool touches the same (project, path) this
+    # turn. OFF by default — new, unproven in production.
+    tools_memoize_reads_enabled: bool = False
+
+    # Fleet diagnostics model exposure (ADR 0071 / #3170). This gates whether a
+    # future fleet-diagnostics tool is exposed to the model. Slice 1 only lands
+    # the config switch; no tool is written or bound here. Default OFF so
+    # ordinary agents do not gain a new diagnostics surface until an operator
+    # opts in.
+    tools_fleet_diagnostics_enabled: bool = False
+
+    # Tool denylist — drop named core tools from the agent without editing
+    # ``tools/lg_tools.py::get_all_tools``. A fork keeps what it wants by listing
+    # the rest here (config ``tools.disabled``); plugins still ADD tools. So
+    # "keep what you want, drop the rest, add your own" is fully config + plugin
+    # driven — no core edit that conflicts on upstream re-sync.
+    tools_disabled: list[str] = field(default_factory=list)
+
+    # Guarded agent-owned config writes (config ``tools.self_config_enabled``, default off).
+    # When on, the LEAD agent gets a ``set_config`` tool over the same ops-layer write path
+    # the CLI and the console REST route use (ADR 0075 D2 — one op, thin adapters). Off by
+    # default and fenced to OPERATIONAL keys: the tool refuses the trust surface outright
+    # (``filesystem.allow_run``, ``operator.allowed_dirs``, egress, ``plugins.enabled``,
+    # auth) and every secret-typed key, so an agent can retune itself without being able to
+    # widen what it is allowed to do. Same disposition as ``soul.self_edit_enabled``
+    # (ADR 0081): crossing into self-modification is the operator's explicit choice.
+    tools_self_config_enabled: bool = False
+
+    # Tool HIDE list (config ``tools.hidden``, #2172) — a HARD superset of ``disabled``:
+    # a hidden tool is denied like a disabled one (never bound to the graph), AND it is
+    # dropped from the console's tool inventory entirely, so it never renders as a
+    # toggle and can't be re-enabled from the UI. This is a trust/setup-time control
+    # (ADR 0071) — an archetype or a restricted console pins the set in config; the UI
+    # is presentation, not the boundary. Disabled = "off but toggleable"; hidden =
+    # "not available, and not offered".
+    tools_hidden: list[str] = field(default_factory=list)
+
+    # Subagent-only tools (config ``tools.subagent_only``, ADR 0117). Named tools are never
+    # bound to the LEAD agent (nor exposed over the operator MCP, nor reachable through a
+    # late tool such as execute_code's bridge), but stay resolvable by any subagent whose
+    # allowlist names them. Contains a domain's tools and their schemas inside the subagent
+    # that owns it, so the lead routes there via ``task`` instead of carrying them every turn.
+    # Not a deny: ``tools.disabled`` still removes a tool from subagents too.
+    tools_subagent_only: list[str] = field(default_factory=list)
+
+    # Settings HIDE list (config ``settings.hidden``, #2172) — the settings half of
+    # ``tools.hidden``. Entries are dotted field keys ("goal.max_iterations") or whole
+    # group prefixes ("goal", including plugin groups like "careercoach"). A hidden
+    # setting is dropped from the schema the console renders AND refused by the settings
+    # write/reset APIs, so it can't be seen or changed from the UI; its VALUE stays live
+    # in config (hiding ≠ disabling). Setup-time trust control (ADR 0071): the config
+    # file is the boundary, the UI is presentation. Contrast a field's static
+    # ``ui_hidden`` (dev-declared, #1076), which only moves rendering to a dedicated
+    # panel and locks nothing.
+    settings_hidden: list[str] = field(default_factory=list)
+
+    # Model routing / failover — wires langchain's ModelFallbackMiddleware.
+    # On primary error, retry on each fallback model (same gateway) in order.
+    routing_fallback_models: list[str] = field(default_factory=list)
+
+    # Auxiliary model — a single cheap/fast alias for the non-reasoning calls
+    # (context summarization, goal verification, subagent delegation). Each of
+    # those paths uses its own specific override if set, else falls back to
+    # this, else the main model. Blank = everything on the main model.
+    aux_model: str = ""
+
+    # Goal mode — testable-outcome goals the agent self-drives toward. The
+    # machinery is available when enabled, but no goal is active until one is
+    # set via `/goal` (a control message) or the /goal HTTP endpoints. After
+    # each terminal turn the goal's verifier (command/test/ci/data/llm) decides
+    # completion; on "not met" the agent is re-invoked with a continuation
+    # prompt until met, the iteration budget runs out (exhausted), or it's
+    # flagged unachievable (no-progress streak, or the model gives up). See
+    # graph/goals/ and docs/guides/goal-mode.
+    goal_enabled: bool = True
+    goal_max_iterations: int = 8  # continuation budget per goal
+    goal_no_progress_limit: int = 3  # identical verifier evidence N times -> unachievable
+    goal_eval_model: str = ""  # blank = main model (llm verifier / fuzzy goals)
+    goal_verify_timeout: float = 120.0  # seconds for command/test/ci verifiers
+    # Per-TURN model-round cap for goal-driven turns (#3957) — ``max_iterations`` bounds the
+    # continuations, this bounds each one. A goal turn runs unsupervised, and an
+    # unsatisfiable goal once spun a single turn for 130+ model calls because
+    # ``model.round_hard_cap`` is off by default. At the cap the round governor ends the
+    # turn with a hand-back and the goal drive PAUSES (goal stays active) instead of
+    # re-driving. 0 = unlimited (no goal-specific cap; ``model.round_hard_cap`` still
+    # applies if set). Effective cap on a goal turn = min of the non-zero two. 50 = twice
+    # the re-grounding nudge (``round_nudge_after``), well above legitimate goal turns.
+    goal_max_rounds_per_turn: int = 50
+
+    # Watches (ADR 0067) — agent-held supervised conditions (a deploy, CI, a metric),
+    # polled out-of-band; when one trips the agent is resumed to react. `enabled` gates
+    # ONLY whether the agent-facing watch tools (create_watch / list_watches /
+    # clear_watch) are BOUND — independent of goal mode, and NOT a kill switch: toggling
+    # it off never deletes or mutates stored watch state, and the background poller runs
+    # regardless (an operator/plugin watch keeps polling on an instance where the agent
+    # has no watch tools). Default ON since the feature settled; it was OFF while it
+    # cooked (#2020).
+    watches_enabled: bool = True
+    # Global poll cadence for the out-of-band watch tick, in seconds. A watch's own
+    # `interval_s` overrides it as a FLOOR (#1753). The server clamps to >=5s. This was
+    # referenced as `watch_interval` in three places for two releases WITHOUT ever being
+    # a field, so every read silently took the getattr default and the cadence could not
+    # be configured at all.
+    watch_interval: float = DEFAULT_WATCH_INTERVAL_S
+    # How long a met/expired watch is kept before the tick deletes it, in hours. Without
+    # this a terminal watch lived on disk forever and every list surface (the agent's
+    # list_watches, sdk.list_watches, GET /api/watches, the console panel) returned it
+    # forever. 0 = keep forever, the repo's convention for a retention knob.
+    watch_keep_terminal_h: float = DEFAULT_KEEP_TERMINAL_H
+
+    # The room (#3042) — `@name` addressing turns a chat thread into a group chat, and
+    # these are its bounds. All three were module constants or an implicit `1` until they
+    # were lifted here: a hardcoded cap silently drops the tail of a busy round, and the
+    # only workaround is re-mentioning, which fragments the conversation.
+    #   ``room_catchup_max_messages`` / ``room_catchup_max_chars`` — the catch-up window
+    #     an addressed delegate receives ("the room since you last spoke"). Whichever
+    #     bound trips first wins, and the window is taken from the END. Raising them buys
+    #     continuity at the cost of every addressed dispatch's prompt.
+    #   ``room_max_rounds`` — how many serial round-robin rounds one addressed run may
+    #     take. ``3`` (the default) lets an addressed cast actually answer each other;
+    #     ``1`` restores the original one-pass behavior, where each addressee answers
+    #     once and the exchange ends. Above 1 the addressed set re-runs, in the same
+    #     order, so each participant sees what the others just said; a round in which
+    #     nobody spoke (empty, or a `pass` token) settles the room early, and the cap is
+    #     the backstop. Deliberately a ROUND cap, not a wall-clock one — a wall-clock turn
+    #     cap declares work dead while a participant is still doing it. It is a CEILING,
+    #     not a count: a cast that cannot hold a conversation (one addressee, or one
+    #     survivor left after failures) runs a single round however high this is set,
+    #     because rounds 2..N would re-send the operator's words to the same delegate
+    #     with an empty catch-up. See ``graph/room_rounds.plan_round``.
+    room_catchup_max_messages: int = 40
+    room_catchup_max_chars: int = 8000
+    # Default 3, not 1. A single pass makes every participant answer the OPERATOR and
+    # never each other, which is the thing a room is for. The cost is real and paid on
+    # every multi-addressee address: early settle is discovered by RUNNING a round in
+    # which everyone passes, so a cast with nothing more to say costs two rounds of
+    # dispatches rather than one. A single addressee is capped at one round regardless,
+    # so a plain `@name` is unaffected.
+    room_max_rounds: int = 3
+
+    # Self-authored persona (guarded, default OFF). When on, the lead agent gets the
+    # ``edit_soul`` tool — it can rewrite SECTIONS of its own ``SOUL.md`` (persona /
+    # identity ONLY, never operating doctrine — ADR 0079). Every edit is snapshotted to
+    # soul-history (#1691) and reversible, and takes effect on the NEXT turn (a graph
+    # reload). This crosses the operator-trust boundary that keeps "SOUL rewrite" an
+    # ``/api`` operator capability (ADR 0066/0081), so it stays off unless an operator
+    # opts in via ``soul.self_edit_enabled: true``.
+    soul_self_edit_enabled: bool = False
+
+    # Unified, opt-in self-improvement policy (#3069). The master switch gates the
+    # opportunistic post-goal/task review loop; each facet then chooses whether the review
+    # is disabled, files an operator task, or writes directly. Manual /distill and the
+    # legacy soul.self_edit_enabled tool remain independent for backward compatibility.
+    self_improvement_enabled: bool = False
+    self_improvement_soul_md: str = "auto"  # off | propose | auto
+    self_improvement_skills: str = "propose"  # off | propose | auto
+    self_improvement_distillation: str = "propose"  # off | propose | auto
+
+    # Deterministic persona drift detection (#1986). A read-only curation pass
+    # (lineage of the dream/distill maintenance passes) periodically diffs the live
+    # ``SOUL.md`` against its EARLIEST recorded soul-history snapshot — net size
+    # delta, section churn (added/dropped markdown headings), and a ``difflib``
+    # retention ratio — and publishes a ``persona.drift_detected`` event on the bus
+    # when the drift score (``1 - retention``, 0..1) crosses ``threshold``. It never
+    # rewrites the persona: recovery already exists via the restore endpoint (ADR
+    # 0081), so this only SURFACES the signal. ``interval_hours`` sets the cadence
+    # (0 disables the pass); the pass is hosted by the checkpoint-prune maintenance
+    # loop, so it runs at most once per interval. Cheap (a diff of two small text
+    # files) and a true no-op until there's history to compare against, so it's on
+    # by default like the other curation passes.
+    soul_drift_enabled: bool = True
+    soul_drift_interval_hours: int = 24
+    soul_drift_threshold: float = 0.25
+    # Semantic tier (#2272) — an opt-in LLM judge that answers what the retention ratio
+    # structurally can't: was the persona REWRITTEN (identity lost) or did operating
+    # procedure ACCRETE into it (``doctrine_leak`` — the CLAUDE.md/AGENTS.md bloat
+    # failure)? Both read as low retention, so only a semantic judgement separates them.
+    # Off by default: non-deterministic and it costs tokens. It runs only when the
+    # deterministic tier already crossed its threshold — the cheap signal decides whether
+    # to look, the judge decides what kind of drift it is. Blank model ⇒ the agent's own.
+    soul_drift_judge_enabled: bool = False
+    soul_drift_judge_model: str = ""
+
+    # Knowledge store — sqlite + FTS5, see ``knowledge/store.py``.
+    # The default path lives under ``/sandbox/`` to play well with the
+    # bundled Docker volume; the store falls back to
+    # ``~/.protoagent/knowledge/agent.db`` automatically when /sandbox
+    # is read-only or absent (e.g. local ``python -m server``).
+    knowledge_db_path: str = "/sandbox/knowledge/agent.db"
+    # Tier (ADR 0041 / bd-2wu): scoped (private, default) | shared (the whole store is
+    # the host-level commons) | layered (read commons ∪ private, write private, operator
+    # `knowledge promote`). Blank → scoped. The commons lives at `commons.path`/knowledge.db
+    # and a shared/layered fleet must share one `embed_model` (stamped + enforced).
+    knowledge_scope: str = ""
+    # Knowledge backend selector (ADR 0031) — "" = the built-in SQLite/FTS5 store;
+    # otherwise the name of a plugin-registered backend (register_knowledge_store).
+    # An unregistered name / a factory error degrades to the built-in store.
+    knowledge_backend: str = ""
+    # In-process embedder selector (ADR 0031 follow-up) — "" = the gateway embedder
+    # (create_embed_fn); otherwise a plugin-registered embedder (register_embedder),
+    # used by the built-in hybrid store. Unregistered/error → gateway embedder.
+    knowledge_embedder: str = ""
+    # The gateway's embedding model (NOT the chat model). Default is what the
+    # protoLabs gateway serves; forks on a different gateway set this to a model
+    # their gateway has (check GET /v1/models). A wrong/absent model degrades to
+    # keyword search via the store's circuit breaker — never KB-less.
+    embed_model: str = "qwen3-embedding"
+    # Speech-to-text model for audio/video ingestion (ADR 0021) — the gateway's
+    # OpenAI-compatible /audio/transcriptions alias (e.g. whisper-1). Audio is sent
+    # as-is; video has its audio track pulled by ffmpeg first. Blank disables
+    # audio/video ingestion (they error with a clear message).
+    transcribe_model: str = "whisper-1"
+    # Vision model used to DESCRIBE attached images for a text-only chat model (#1381) —
+    # the screenshot is sent to this vision-capable gateway model, its description + any
+    # transcribed text is inlined as context the chat model can read. Blank disables image
+    # attachments on non-vision models (they error with a clear "switch models" message).
+    image_describe_model: str = ""
+    # Semantic recall (ADR 0021): when True, the knowledge store is the
+    # HybridKnowledgeStore (FTS5 + vector embeddings via `embed_model`, fused
+    # with RRF). OFF by default (#1681): out of the box the app must not depend
+    # on an optional gateway route — a gateway without a working embedding model
+    # turned recall (which runs pre-model on every turn) into a per-turn stall.
+    # Opt in when your gateway serves `embed_model`; keyword recall works
+    # everywhere, and the circuit breaker still guards runtime outages when on.
+    knowledge_embeddings: bool = False
+    # How many recalled chunks are injected per turn. 5, matching the documented
+    # example YAML, `ProjectionOptions.top_k` and `KnowledgeMiddleware`'s ctor —
+    # this field was the lone outlier at 10, so a config that OMITTED the key
+    # injected twice what every other statement of the default promised (#3259).
+    # The RAG bake-off that argued for 10 is not lost: set `knowledge.top_k: 10`.
+    knowledge_top_k: int = 5
+    # Namespace scope for the AUTO-INJECT RAG search (ADR 0069 D3a). Empty (the
+    # default) = unfiltered — today's behavior, so box-commons sharing keeps
+    # working. When set, only chunks whose `namespace` matches a listed value
+    # are auto-injected; include "" to also match un-namespaced chunks. Gates
+    # only what enters the prompt unasked — memory_recall stays unscoped.
+    knowledge_inject_namespaces: list[str] = field(default_factory=list)
+    # Trust floor for the AUTO-INJECT RAG hits (ADR 0069 D8). Rows rank into
+    # deterministic trust tiers by source_type (knowledge/trust.py): 3 =
+    # operator-authored, 2 = agent-derived (extracted facts, harvest,
+    # memory_ingest), 1 = ingested/external (web, YouTube, PDF, media) and
+    # unknown. 1 (default) excludes nothing — low tiers are only down-weighted
+    # (ranked below higher tiers); 2 drops external/ingested content from
+    # auto-injection; 3 auto-injects operator-authored rows only. memory_recall
+    # is never gated — excluded content stays reachable on demand.
+    knowledge_inject_min_trust: int = 1
+    # Projected-context budget (ADR 0108 D6): the per-turn injected context —
+    # working state, always-on memory, the skill index, the prior-session digest,
+    # RAG hits — may use at most this percentage of the model's context window
+    # (chars//4 token heuristic). When it overflows, the lowest-priority sections
+    # shed first (RAG hits, then the digest, then skill descriptions); working
+    # state and always-on memory are never shed. Floored at 16k chars (≈ the
+    # always-on cap + the digest cap) so a small-window model keeps its standing
+    # context whole — on a ≤32k window the floor applies and only RAG hits /
+    # skill descriptions beyond it shed. 8% of a 128k window is ~10k tokens —
+    # more than a typical turn injects, so the default sheds nothing there;
+    # lower it to make the budget bite. 0 = unbounded. Unbounded too when the
+    # gateway reports no window for the model. YAML: `context.budget_pct`.
+    context_budget_pct: float = 8.0
+    # Prior-session digest policy (ADR 0108 D9). "newest" (default) injects the
+    # newest-N session digest exactly as before; "relevant" gates the digest on
+    # the turn's query via the session-search FTS index (#3073) — only sessions
+    # matching what was asked, bm25-then-newest, falling back to "newest" on an
+    # empty query, a missing FTS5 build, or zero matches; "off" injects no
+    # automatic digest at all (session_search / recall_session stay the
+    # on-demand path). Whatever the policy, the ACTIVE session's own summary is
+    # never injected as a "prior" session. Default stays "newest" pending the
+    # #3186 eval. YAML: `context.prior_sessions`.
+    context_prior_sessions: str = "newest"
+    # Prior-session digest ceilings (ADR 0021; wired to YAML in #3308 — they were
+    # documented in the example config but read by nothing for their whole life,
+    # so an operator shrinking the digest got a silent no-op). max_sessions is how
+    # many summaries the digest may LIST (the loader keeps one spare in its pool so
+    # excluding the active session can't shorten the block); max_tokens is the
+    # char/4 ceiling for the rendered block, past which entries shed from the end
+    # (oldest under `newest`, lowest-rank under `relevant`). Both are ceilings, not
+    # switches — to remove the digest use `context.prior_sessions: off`.
+    # YAML: `memory.max_sessions` / `memory.max_tokens`.
+    memory_max_sessions: int = 10
+    memory_max_tokens: int = 2000
+    # Always-on write confirm gate (ADR 0069 D8, widened by ADR 0108 D4). When
+    # True, the agent's own write paths (memory_ingest and knowledge_ingest)
+    # refuse always-on writes — domain="hot" or delivery_policy="always" — with
+    # an error telling the model to ask the operator; only operator surfaces
+    # (console knowledge/memory routes) put facts in front of the model every turn.
+    # Default False: single-operator boxes keep the frictionless flow; every
+    # hot write emits a `memory.hot_written` bus event either way.
+    knowledge_hot_write_confirm: bool = False
+    # Hybrid-retrieval tuning (HybridKnowledgeStore knobs, ADR 0021) — surfaced so
+    # they're tunable without editing the store / via the retrieval eval:
+    #   vector_k  — FTS5 + vector candidates fused per query (the RRF pool).
+    #   rrf_k     — Reciprocal-Rank-Fusion constant (higher = flatter weighting).
+    #   min_score — drop fused hits below this score; 0 = keep all (a relevance
+    #               floor for off-topic turns; RRF scores aren't normalized, so
+    #               tune empirically).
+    #   recall_preview_chars — how much of each hit the model sees (was 240).
+    #   embed_breaker_* — the embed circuit breaker (consecutive failures to open
+    #               it; seconds it stays open before retrying the gateway).
+    knowledge_vector_k: int = 20
+    knowledge_rrf_k: int = 60
+    knowledge_min_score: float = 0.0
+    knowledge_recall_preview_chars: int = 1000
+    knowledge_embed_breaker_threshold: int = 2
+    knowledge_embed_breaker_cooldown_s: float = 300.0
+    # Document chunking on ingest (ADR 0021) — large bodies (conversation
+    # summaries, pasted docs) are split before embedding so each passage gets
+    # its own vector instead of one diluted whole-doc embedding. Applied by
+    # add_document (harvest + operator paste); facts/notes stay atomic.
+    #   chunk_max_chars     — target ceiling per chunk (content ≤ this isn't split).
+    #   chunk_overlap_chars — shared tail between adjacent chunks (boundary safety).
+    #   chunk_min_chars     — a trailing fragment below this folds into the prior chunk.
+    knowledge_chunk_max_chars: int = 1200
+    knowledge_chunk_overlap_chars: int = 150
+    knowledge_chunk_min_chars: int = 200
+    # Contextual Retrieval (ADR 0021, Anthropic) — when a doc splits, prepend a
+    # one-line aux-LLM context situating each chunk in the whole document before
+    # embedding/indexing, so the chunk carries doc-level context (lifts both
+    # semantic + keyword recall). Costs one aux call per chunk at INGEST (not on
+    # the query path), so OFF by default. context_max_doc_chars caps the document
+    # text sent in the context prompt.
+    knowledge_contextual_enrichment: bool = False
+    knowledge_context_max_doc_chars: int = 12000
+    # Chat attachments (ADR 0021) — a file dropped in chat is extracted, then TIERED
+    # so a big doc never gets dumped into the turn: text at or under this many chars
+    # is inlined whole; a larger doc is ingested (chunked/embedded, session-scoped)
+    # for retrieval and only a lede of this many chars is inlined as an anchor.
+    knowledge_attach_inline_budget: int = 8000
+
+    # Conversation checkpointer — persists each chat session's history per
+    # thread_id so multi-turn chats survive a server restart. A path → durable
+    # SQLite (same /sandbox→~/.protoagent writable fallback as the stores);
+    # blank → in-memory (history cleared on restart). Bound at graph-compile
+    # time (see graph/checkpointer.py); changing the path needs a restart.
+    checkpoint_db_path: str = "/sandbox/checkpoints.db"
+    # Local telemetry store (ADR 0006 Slice 2) — one per-turn cost/latency row
+    # per terminal A2A turn, queryable via /api/telemetry/*. ON by default
+    # (cheap, one write per turn); path follows /sandbox→~/.protoagent fallback
+    # and is instance-scoped (ADR 0004).
+    telemetry_enabled: bool = True
+    telemetry_db_path: str = "/sandbox/telemetry.db"
+    # Retention guardrail (ADR 0006) — turns older than this are pruned by the
+    # periodic maintenance loop so the store can't grow unbounded. 0 = keep forever.
+    telemetry_retention_days: int = 90
+    # Langfuse deep tracing (ADR 0006's OTHER half, #3017) — the per-turn trace tree
+    # the ``trace_id`` column, ``a2a.trace`` caller propagation and ``trace_session``
+    # all exist to feed. Until #3017 the credentials were env-only, which made tracing
+    # unreachable on the shape the fleet actually deploys (a desktop-app member spawned
+    # with no LANGFUSE_* in its environment). The environment still WINS — a container
+    # deploy that exports LANGFUSE_{PUBLIC,SECRET}_KEY keeps tracing with no config at
+    # all — and these fields are the fallback beneath it. The two keys are credentials:
+    # they are declared in ``config_io.SECRET_PATHS`` so they live in the untracked
+    # ``secrets.yaml``, never in the tracked YAML. Blank ``tracing_host`` resolves to
+    # the module's default (see ``observability.tracing.resolve_credentials``).
+    tracing_enabled: bool = False
+    tracing_host: str = ""
+    tracing_public_key: str = ""
+    tracing_secret_key: str = ""
+    # Prompt snapshot capture (#2243) — record the EXACT system prompt each model
+    # call received (stable prefix hash-deduped, volatile tail per call), viewable
+    # per turn in the console ("View prompt" / /prompt). ON by default — the
+    # operator owns the prompt; cost is one hashed blob + a small tail per call.
+    # Retention is trimmed in-write (no maintenance loop); 0 = keep forever.
+    prompt_capture_enabled: bool = True
+    prompt_capture_retention_days: int = 30
+    # The row cap that trims in the same write (#3019). It is NOT independent of
+    # retention_days — both apply per write, so on a busy agent this one evicts
+    # long before the age cap and raising retention_days alone changes nothing.
+    # 0 = unlimited rows (age cap only).
+    prompt_capture_max_calls: int = 5000
+    # Fleet trace export (ADR 0006 / #1897) — write one per-turn trajectory JSONL
+    # row (OpenAI chat format) to ``<instance>/fleet-traces/`` for the agent-fleet
+    # flywheel. OFF by default; ``PROTOAGENT_FLEET_TRACE_EXPORT`` env overrides in
+    # both directions (and can point at an explicit path). Dumps stay on the
+    # machine until shipped (scripts/setup_fleet_tracing.sh).
+    fleet_trace_export_enabled: bool = False
+    # Inbox/Activity retention — delivered inbox items and activity log entries
+    # are pruned by the same maintenance loop. 0 = keep forever.
+    inbox_retention_days: int = 90
+    activity_retention_days: int = 90
+    # Checkpoint pruning — keeps the SQLite DB from growing unbounded. Keep the
+    # latest N checkpoints per session, and TTL whole sessions idle past
+    # max_age_days. Runs every prune_interval_hours (0 disables the sweep).
+    checkpoint_keep_per_thread: int = 2
+    # Background subagent threads (a2a:background:*) get a tighter cap — we only
+    # resume-from-latest, never time-travel, so retaining more than 1 is waste.
+    checkpoint_background_keep: int = 1
+    # Push-resume (ADR 0070 D1): when a background job finishes, self-submit a nudge
+    # turn into the session that spawned it, so its <task-notification> drains
+    # immediately and the agent briefs the operator — instead of the report waiting
+    # for that session's next manual turn. False restores pull-only delivery.
+    background_auto_resume: bool = True
+    checkpoint_max_age_days: int = 30
+    checkpoint_prune_interval_hours: int = 6
+    # When a session is retired (aged out or deleted), summarize it into the
+    # knowledge base before dropping the raw checkpoints — so past conversations
+    # stay searchable via memory_recall. Needs the knowledge store enabled.
+    checkpoint_harvest_enabled: bool = True
+    # Vacuum reclaim — after the prune sweep deletes rows, compact the DB file
+    # (truncate WAL + free unused pages back to the OS). Best-effort; never
+    # blocks pruning on error. True by default so the DB shrinks after deletes.
+    checkpoint_vacuum: bool = True
+    # One-time migration at boot of a legacy checkpoint DB (auto_vacuum=NONE, created
+    # before the checkpointer set INCREMENTAL): ``PRAGMA auto_vacuum=INCREMENTAL; VACUUM;``
+    # before anything opens it, when the freelist is large enough to matter and the disk
+    # has room (graph/checkpoint_migrate.py). Without it such a DB never shrinks.
+    checkpoint_vacuum_legacy_on_start: bool = True
+    # Semantic facts (ADR 0021): on retirement, also extract durable facts from
+    # the conversation (aux model) and consolidate them into the store as
+    # finding_type="fact". Rides the harvest pass; needs harvest enabled.
+    knowledge_facts: bool = True
+
+    # Skills — human-authored ``SKILL.md`` folders (AgentSkills open standard)
+    # loaded from disk into the FTS5 skill index and retrieved at inference by
+    # KnowledgeMiddleware. ``db_path`` follows the same /sandbox→~/.protoagent
+    # writable fallback as the knowledge store (resolved in server.py).
+    # ``dir`` optionally overrides the writable skills root (default:
+    # ``<config_dir>/skills``); shipped example skills live in ``config/skills``.
+    skills_enabled: bool = True
+    skills_db_path: str = "/sandbox/skills.db"
+    # Max skills carrying their FULL description in the always-on
+    # <available_skills> index (ADR 0060, re-shaped by #2867): every discoverable
+    # skill is always LISTED (overflow rows keep name+slash — identities never
+    # drop, so load_skill always has a visible target); this caps descriptions,
+    # alongside a ~2%-of-window char ceiling computed at graph build.
+    skills_top_k: int = 24
+    skills_dir: str = ""
+    # Tiered stores (ADR 0041) — `shared` lifts a store out of per-instance scoping
+    # into the COMMONS (read by every agent on the host); `scoped` keeps it private.
+    # Slice 1: skills can be shared (a fleet's compounding skill library). Default
+    # False = legacy per-instance behavior (no surprise migration).
+    skills_shared: bool = False
+    # Tier (ADR 0041 slice 3): "scoped" (private), "shared" (one commons for all), or
+    # "layered" (read commons ∪ private, write private, promote to commons). Blank →
+    # derived from skills_shared (back-compat): shared→"shared", else "scoped".
+    skills_scope: str = ""
+    commons_path: str = ""  # commons base dir; blank → ~/.protoagent/commons
+
+    # Workflows — declarative multi-step subagent recipes (see ADR 0002),
+    # exposed via the run_workflow tool. Bundled examples ship in the repo
+    # ``dir`` is the writable root for user/agent-emitted recipes (same
+    # /sandbox→~/.protoagent fallback, resolved in server.py). Read by the
+    # workflows plugin (lean core — the engine/tools live there now).
+    workflow_dir: str = "/sandbox/workflows"
+
+    # MCP — Model Context Protocol client. Connect to external MCP servers
+    # (stdio or streamable-HTTP); their tools become agent tools, namespaced
+    # ``<server>__<tool>`` so they can't shadow core tools. OFF by default —
+    # configuring a server is the opt-in. ``servers`` entries are
+    # ``{name, transport, command/args/env | url/headers}`` plus two optional
+    # context-control keys: ``enabled: false`` skips connecting that server
+    # entirely (lazy), and ``tools: {include: [...], exclude: [...]}`` filters
+    # which of its tools are bound — ``include`` is an allowlist (only those
+    # survive), the surgical defense against a large catalog flooding context.
+    # ``denylist`` is a cross-server hard block. See tools/mcp_tools.py.
+    mcp_enabled: bool = False
+    mcp_servers: list[dict] = field(default_factory=list)
+    mcp_timeout_seconds: float = 20.0
+    # Bounds a single tool INVOCATION (``timeout_seconds`` above bounds only
+    # discovery/connect). Generous by design: legitimate calls really can run for
+    # minutes — a filesystem search over a large tree measured ~4 min — so this
+    # is a backstop against a call that will NEVER return, not a latency budget.
+    # A timeout degrades to a recoverable tool error the model can retry with
+    # narrower arguments, never a failed turn. ``0`` disables it; a single server
+    # entry can override with ``call_timeout``.
+    mcp_call_timeout_seconds: float = 300.0
+    # Bounds a single MCP tool RESULT (``mcp.max_result_chars``) — the one lane
+    # that had no size cap at all (#2781, ADR 0101 D3): every built-in tool
+    # truncates at call time, but an MCP server returning 500KB put 500KB into
+    # history, re-sent verbatim on every later model call for the thread's life.
+    # Over the cap, the result is rewritten to bounded head + omission marker +
+    # bounded tail so both ends survive. Matches read_file's ``_MAX_READ_CHARS``.
+    # ``0`` disables it; a single server entry can override with ``max_result_chars``.
+    mcp_max_result_chars: int = 50_000
+    mcp_denylist: list[str] = field(default_factory=list)
+    # Persistent sessions (default ON): each server keeps ONE long-lived MCP
+    # session reused across tool calls, auto-reconnected once when it dies.
+    # OFF restores stateless per-call sessions — for stdio servers that means a
+    # fresh subprocess (~1s of spawn overhead) per invocation. A single server
+    # can opt out alone with ``persistent: false`` on its ``servers`` entry.
+    mcp_persistent_sessions: bool = True
+    # Tier (ADR 0041) — does this agent run the box-shared MCP commons? "scoped"
+    # (default/blank) = only this agent's ``mcp.servers``; "layered" = also run the
+    # box commons (``~/.protoagent/commons/mcp-servers.json``), ∪ private (private
+    # wins by name). Share/unshare moves an entry between this agent's config and the
+    # commons (operator_api/mcp_routes). A shared server runs as a subprocess with its
+    # configured secrets on every agent on the box.
+    mcp_scope: str = ""
+
+    # Operator MCP server (ADR 0033 slice 1) — expose THIS agent's tools as an MCP
+    # server so any MCP client (Claude Desktop, Cursor) or an ACP coding-agent runtime
+    # can operate the instance. Opt-in + allowlist-gated: only the named tools are
+    # exposed (empty = none). Served standalone via ``python -m server.operator_mcp``.
+    operator_mcp_enabled: bool = False
+    operator_mcp_tools: list[str] = field(default_factory=list)
+    # Curated profile preset over the allowlist (ADR 0075 D3): "" (default) = use
+    # ``operator_mcp_tools`` verbatim (deny-by-default); "read-only" = reads/queries
+    # only; "full" = everything (≡ "*"). A profile UNIONs with any explicit names.
+    # env PROTOAGENT_MCP_TRUST=full forces "full" (vouch for the client). The safe
+    # middle tier "safe-operator" arrives with the ops layer (ADR 0075 D2).
+    operator_mcp_profile: str = ""
+
+    # Agent runtime (ADR 0033) — which brain executes a turn. "native" = the built-in
+    # LangGraph loop (default). "acp:<agent>" (e.g. "acp:codex", "acp:claude") = an
+    # external coding agent drives the turn over ACP, mounting the operator MCP bus.
+    agent_runtime: str = "native"
+    # Developer channel (ADR 0068) — which pre-release feature tier this instance exposes:
+    # "prod" (released only) | "beta" (opt-in previews) | "dev" (everything, incl. in-progress).
+    # The dev sandbox instance defaults to "dev"; env fallback PROTOAGENT_CHANNEL. Read by
+    # ``runtime.flags`` to resolve developer flags.
+    developer_channel: str = "prod"
+    # ACP launch overrides (ADR 0033) — per-agent ``{command, args}`` from the YAML
+    # ``acp.agents`` block, e.g. ``acp: {agents: {claude: {command: claude-agent-acp}}}``.
+    # ``runtime.acp_runtime.adapter_for`` reads this to override the built-in default
+    # adapter (an ``npx -y …`` fetch) with a locally-installed binary. Empty = use the
+    # defaults. Not a settings-UI field — an advanced, machine-local launch knob.
+    acp_agents: dict = field(default_factory=dict)
+
+    # Plugins — drop-in packages (manifest + register()) that contribute tools
+    # and bundled skills. Run IN-PROCESS with the agent's privileges, so a
+    # plugin loads only when enabled: listed here, or ``enabled: true`` in its
+    # own manifest. ``dir`` overrides the live plugins root (default
+    # ``<config_dir>/plugins``); shipped examples live in ``plugins/``.
+    # See graph/plugins/ and docs/guides/plugins.md.
+    plugins_enabled: list[str] = field(default_factory=list)
+    # Denylist — turn OFF a plugin even if its manifest says ``enabled: true``.
+    # Lets a fork disable a bundled first-party plugin (e.g. github, telegram)
+    # without deleting its directory or editing core.
+    plugins_disabled: list[str] = field(default_factory=list)
+    plugins_dir: str = ""
+    # Opt-in (ADR 0093): let the frozen desktop app install a plugin's UNBUNDLED
+    # requires_pip as pure-Python wheels into a writable per-instance deps dir on
+    # sys.path, instead of ADR 0058 D2's refusal. Off by default — installing packages
+    # runs code on import, so it stays consent-gated (ADR 0071). No effect off-frozen
+    # (a source/server run pip-installs into its own venv as before).
+    plugins_allow_unbundled_deps: bool = False
+    # Optional source allowlist for git-URL installs (ADR 0027 D3) — host/org
+    # globs (e.g. ``github.com/protoLabsAI/*``). Absent-vs-explicit-empty is
+    # load-bearing since #2743 (the #2691 lesson, same pattern as ``official``
+    # below): ``None`` (key absent) = any URL allowed; an explicit empty list =
+    # DENY-ALL (a hardening stance, what a defense-minded admin writing ``[]``
+    # means); non-empty = the allowlist. Previously ``[]`` silently meant open.
+    plugins_sources_allow: list[str] | None = None
+    # Trust & consent (ADR 0071 D3, #2721) — decides only whether the console asks
+    # for a one-time "this runs code" confirm before an install; install ≠ enable ≠
+    # trust semantics are untouched. ``official``: auto-trusted source globs —
+    # default the protoLabsAI org, FORK-OVERRIDABLE (an explicit empty list means
+    # "no official sources", distinct from the key being absent). ``acked``:
+    # sources the operator confirmed once (the ack API appends here).
+    plugins_sources_official: list[str] = field(default_factory=lambda: list(_OFFICIAL_SOURCES_DEFAULT))
+    plugins_sources_acked: list[str] = field(default_factory=list)
+    # The consent dialog's "don't show again" — every source treated as acked.
+    plugins_trust_unverified: bool = False
+    # Opt-in auto-update policy (#1720), keyed by plugin id. Each value is a policy
+    # dict ``{"track": "main", "when": "idle"}`` — ``track`` opts the plugin in (a
+    # non-empty value; the actual ref comes from the lock), ``when`` gates the
+    # safe-moment (``idle`` = defer while a chat turn is/was just in flight;
+    # ``always`` = update on the next sweep regardless). Empty = manual-only
+    # updates (the default). A pinned-to-SHA plugin is never auto-updated.
+    plugins_update_policy: dict = field(default_factory=dict)
+    # Auto-update sweep cadence in hours (mirrors ``checkpoint_prune_interval_hours``);
+    # ``0`` disables the loop entirely. Only plugins listed in ``update_policy`` are
+    # ever touched, so this is a safe non-zero default.
+    plugins_autoupdate_interval_hours: int = 6
+    # Plugin-declared config sections (ADR 0019), keyed by the claimed top-level
+    # section. Each value is the section's resolved config (manifest defaults ⊕
+    # YAML ⊕ secrets overlay). A plugin reads its own via plugin_config["<section>"].
+    plugin_config: dict = field(default_factory=dict)
+
+    # Identity — captured by the setup wizard, editable via the drawer.
+    # ``identity_name`` falls back to the AGENT_NAME env var at runtime;
+    # the YAML value wins when both are set so per-fork customization
+    # survives image rebuilds. ``operator`` is the human the agent thinks
+    # it's talking to — injected into the system prompt when non-empty.
+    identity_name: str = "protoagent"
+    identity_operator: str = ""
+    identity_org: str = ""  # white-label org label (settings_schema FIELDS + runtime status + Header)
+
+    # A2A card identity (#570). Forks declare their advertised skills + card
+    # description here (or a plugin contributes skills via register_a2a_skill)
+    # instead of editing server/a2a.py. ``a2a_skills`` is a list of skill specs
+    # (id/name/description/tags/examples, + optional output_schema/result_mime);
+    # empty falls back to the template placeholder so a fresh clone stays
+    # callable. ``a2a_description`` overrides the card description; blank uses the
+    # template default. The card ``name`` already resolves from identity (see
+    # agent_name()).
+    a2a_skills: list[dict] = field(default_factory=list)
+    a2a_description: str = ""
+    # When true, refuse to start if the card would advertise a loopback URL
+    # (e.g. A2A_PUBLIC_URL unset on a deployed agent → http://127.0.0.1:.../a2a,
+    # silently unreachable to remote consumers). Off by default — local/desktop
+    # runs SHOULD advertise loopback (the client is same-host). Enforced by
+    # server/a2a.py::assert_routable_card_url() at startup.
+    a2a_require_routable_url: bool = False
+
+    # Instance id for multi-instance data scoping (ADR 0004). When set, every
+    # store nests under <base>/<id>/ so several instances can share one
+    # filesystem without clobbering each other. Empty = single-instance (legacy)
+    # paths, unchanged. Seeded into the PROTOAGENT_INSTANCE env at startup so the
+    # env-reading stores (knowledge/scheduler/memory) honor it too.
+    instance_id: str = ""
+
+    # A2A bearer token — None = unset (falls back to A2A_AUTH_TOKEN env),
+    # "" = explicitly off (no env fallback, even if A2A_AUTH_TOKEN is set),
+    # non-empty string = use this token. Kept in YAML / secrets.yaml so the
+    # drawer can manage it; configure() in a2a_impl/auth.py owns the contract.
+    auth_token: str | None = None
+
+    # Optional federation token (ADR 0066) — a SECOND credential handed to
+    # semi-trusted A2A peers. It reaches only the /a2a + /v1 consumer surfaces;
+    # the /api operator surface (plugin install, config rewrite, subagent runs,
+    # the operator goal set-path) is denied it. None = unset (env fallback);
+    # "" = explicitly off. Env fallback: A2A_FEDERATION_TOKEN.
+    federation_token: str | None = None
+
+    # OS-level autostart — ``True`` means the server launches on user
+    # login (macOS LaunchAgent today; Linux/Windows TBD). Managed by
+    # ``autostart.py``; the field here is the source of truth for
+    # whether the plist should exist.
+    autostart_on_boot: bool = False
+
+    # Process memory ceiling (#3365). No OS-level RSS ceiling exists to lean on —
+    # Darwin refuses setrlimit(RLIMIT_RSS) outright (so launchd's resource-limit
+    # keys can't express one) and Linux ignores it — so a leak has no backstop
+    # below the host running out of memory. 0 = off, the repo's convention for a
+    # threshold knob. Exiting on breach is a SECOND, explicit opt-in: a server
+    # that kills itself mid-turn drops that turn, which is the operator's call.
+    memory_ceiling_mb: int = 0
+    memory_ceiling_exit: bool = False
+
+    # Box runtime (Host layer, ADR 0047 D8) — box-wide knobs promoted out of
+    # scattered env/CLI reads into the Host cascade layer (scope="host" in FIELDS).
+    # Each pairs with an env-var fallback in ``from_dict`` (file > env > default), so
+    # existing PROTOAGENT_* boxes keep working with zero migration. Consumed by the
+    # host process (uvicorn bind / workspace port picker / fleet discovery + warm
+    # supervisor) — a workspace leaf override is a silent no-op (the host process
+    # reads its own config), see ADR §5.
+    bind_host: str = "127.0.0.1"  # uvicorn bind interface; env: PROTOAGENT_HOST
+    fleet_port_base: int = 7870  # workspace agents get port_base+1, +2, …
+    discovery_port_min: int = 7860  # fleet discovery scan window (inclusive)
+    discovery_port_max: int = 7910
+    # Off by default (#1802) — an agent should not announce itself on the LAN unless
+    # the operator opts in. mDNS advertises this agent (and browses siblings) on the
+    # _protoagent._tcp channel; default-off keeps a fleet quiet on the network
+    # (privacy/security). Local-fleet enumeration is disk-based, so the console is
+    # unaffected; set fleet.discovery.mdns: true to restore LAN auto-discovery.
+    discovery_mdns: bool = False  # advertise + browse the _protoagent._tcp mDNS channel
+    fleet_max_warm: int = 0  # warm-agent cap (0 = unlimited); env: PROTOAGENT_FLEET_MAX_WARM
+    fleet_warm_grace_seconds: int = (
+        # Spare agents touched within N s from LRU eviction; env: PROTOAGENT_FLEET_WARM_GRACE.
+        # Default 300 (Swap & Resume S4): rapid A->B->A switching used to be able to evict A
+        # MID-TURN (pure LRU, grace 0) — five minutes of recency protection covers the common
+        # switch-and-return without unbounding the warm set. 0 restores pure LRU.
+        300
+    )
+    # Member ids/names (re)started at hub boot (ADR 0072 autostart slice) — a container
+    # recreate/host restart kills the detached member processes, and without this the
+    # declared crew stays down until re-activated by hand. env: PROTOAGENT_FLEET_AUTOSTART
+    # (comma-separated). See graph/fleet/supervisor.start_autostart_members.
+    fleet_autostart: list[str] = field(default_factory=list)
+
+    # System lifecycle reactions (ADR 0074) — a top-level ``lifecycle_hooks:`` YAML list
+    # of ``{event, prompt?, webhook?, session?}`` entries the runtime runs when a system
+    # lifecycle event fires. ``event`` is one of ``app_loaded`` / ``agent_active`` /
+    # ``system_wake``; ``prompt`` enqueues a follow-up turn (in ``session``, or the event's
+    # own session for agent_active); ``webhook`` POSTs the event. **Opt-in**: empty ⇒ NOTHING
+    # fires beyond the ADR 0039 bus broadcast (plugins can still react via the bus / a
+    # ``register_lifecycle_hook`` hook). List of dicts, so it round-trips via config_io.py §B
+    # (like ``filesystem_projects`` / ``mcp_servers``), not the string_list-typed FIELDS.
+    lifecycle_hooks: list[dict] = field(default_factory=list)
+
+    # DEPRECATED / INERT — was the operator-console path sandbox for the tasks/notes
+    # APIs, enforced by ``operator_api.paths.resolve_project_path``. Nothing calls that
+    # helper anymore: tasks became a single instance-scoped store (the routes accept
+    # ``project_path`` and ignore it) and notes moved to a plugin with its own store, so
+    # this list gates nothing. The agent's filesystem fence is ``filesystem_projects``
+    # (ADR 0007). Kept in FIELDS + ui_hidden so existing YAML round-trips unchanged;
+    # don't wire new behavior to it.
+    operator_allowed_dirs: list[str] = field(default_factory=list)
+
+    # Which directory the console calls "this project". Set in the setup wizard /
+    # Settings; blank = the resolver's default (PROTOAGENT_PROJECT_DIR env, else the
+    # protoAgent dir). Read by ``server._resolve_operator_project_root`` and surfaced as
+    # ``project.path`` in runtime status, which the console uses to prefill the wizard.
+    # NOT an access grant — it gives the agent no reach into that directory; only
+    # ``filesystem_projects`` (ADR 0007) does that.
+    operator_project_dir: str = ""
+
+    # Fenced filesystem toolset (ADR 0007 — operator primitives). ON by default,
+    # fenced to a default **workspace** dir (paths.workspace_dir) when no explicit
+    # ``projects`` are configured — read/write/list/search, every path contained
+    # under the workspace root (``..``/symlink escapes refused). A capable, safe
+    # first run: the agent can actually work with files, but only inside the fence.
+    # ``projects`` entries: ``{name, path, write: true|false}`` register extra dirs.
+    # ``allow_run`` adds the dual-use ``run_command`` power tool. Gated: run_command
+    # (like execute_code) is fenced cwd but arbitrary argv (not a real sandbox), so
+    # each call pauses for HITL approval (``run_requires_approval``) — the operator
+    # sees the command + approves. This dataclass default (True) is what a directly
+    # constructed config gets; ``from_dict``/``from_yaml`` resolve an UNSET value
+    # through ``_default_filesystem_allow_run()`` instead, which flips to False on a
+    # headless instance — no operator means a pending approval wedges the turn
+    # forever (#1849). Explicit config always wins either way. A fork can also drop
+    # the approval gate itself inside a hardened container / trusted autonomous run.
+    filesystem_enabled: bool = True
+    filesystem_allow_run: bool = True
+    filesystem_run_requires_approval: bool = True
+    # Escape hatch (off by default per-turn): when True (default), an operator may toggle
+    # bypass-permissions mode per-turn via A2A ``message.metadata.bypass_permissions`` to
+    # auto-approve ``run_command`` — for trusted-autonomous / container runs. Set False to
+    # FORBID bypass entirely regardless of caller metadata (locked-down hosts); the approval
+    # gate is then always enforced.
+    filesystem_bypass_allowed: bool = True
+    # Safe-command allowlist for ``run_command``: argv-PREFIX entries (``git diff``,
+    # ``npx vitest run``) whose matching commands skip the approval prompt. Token-wise
+    # match, no shell metacharacters, exec'd without a shell; unusable/too-broad entries
+    # are dropped with a warning when the tools build (tools/run_auto_approve.py).
+    # Empty (default) = every command asks, exactly as before.
+    filesystem_run_auto_approve: list[str] = field(default_factory=list)
+    # ``run_command`` runs project code with a SCRUBBED env: no A2A_AUTH_TOKEN / AGENT_NAME /
+    # PROTOAGENT_* and no credential-shaped vars (infra.proc.scrub_agent_env). Env var names
+    # listed here are passed through anyway (e.g. GH_TOKEN for a `gh` the project calls).
+    filesystem_run_command_env_passthrough: list[str] = field(default_factory=list)
+    # Operator's desktop editor for the ``open_in_editor`` tool — a command line
+    # (``zed``, ``code -g``, ``cursor -g``) split with shlex; the fenced target is
+    # appended as ONE argv element ``<abs_path>[:<line>]``. Empty (default) = the tool
+    # is not bound. Only meaningful for an agent on the operator's own machine.
+    filesystem_editor_command: str = ""
+    # The console code pane (ADR 0112) as an opt-in toolset — OFF by default. On: the
+    # ``show_code`` fs tool is bound (it emits the ``code-ref`` chip) and the console's
+    # read-only ``/api/fs/file`` + ``/api/fs/diff`` routes answer; the console shows the
+    # Code surface. Off: none of that exists — no tool, the routes answer 404
+    # ``{code: "disabled"}``, and file links go to the external editor. Needs
+    # ``filesystem.enabled`` (it reads through the same fence). Hot-reloadable.
+    filesystem_code_pane: bool = False
+    # When ``open_in_editor`` opens a file, also OFFER the calling chat to the editor: a
+    # new agent thread started in Zed (via the protoagent-acp shim) under that project
+    # within 2 minutes continues this chat instead of starting fresh
+    # (runtime/editor_handoff.py). False = the tool only opens the file.
+    filesystem_editor_handoff: bool = True
+    filesystem_projects: list[dict] = field(default_factory=list)
+
+    # Managed projects registry (ADR 0095) — the ONE place a project is declared. A
+    # top-level ``projects:`` list of ``{name, path, github?, default_branch?, write?,
+    # no_delete?, fs?}`` dicts, keyed on ``name`` (the identifier the fs tools already
+    # address projects by — deliberately no separate slug). It describes a project's
+    # binding on THIS host: where it lives, what it is on GitHub, what the agent may do
+    # to it. Deliberately holds no planning state (goals/milestones/issues) — that lives
+    # in whatever board owns the work.
+    #
+    # Consumers project from it rather than re-declaring: the fs fence via
+    # ``effective_filesystem_projects`` below, the github plugin's repo picker via
+    # ``github``, the board's repo/base branch via ``name``. An EXPLICIT
+    # ``filesystem.projects`` (or ``github.repos``, or ``project_board.repo``) still
+    # wins, so every existing config and fork loads unchanged.
+    #
+    # ADR 0095 D3: a registered project is fenced READ-WRITE by default. That's the
+    # reverse of the cautious default, and deliberate — the case for "membership grants
+    # nothing until separately opted in" needs entries to arrive from somewhere other
+    # than the operator (a sync feed / org registry / onboarding webhook), and no such
+    # source exists. Opt out per entry: ``write: false`` (read-only), ``no_delete: true``
+    # (create/edit, never delete), ``fs: false`` (registered, but NOT in the fence at
+    # all — for a project tracked only for github/board purposes).
+    #
+    # A list of dicts, so it round-trips via config_io.py §B (like ``lifecycle_hooks`` /
+    # ``filesystem_projects``), not the string_list-typed FIELDS.
+    projects: list[dict] = field(default_factory=list)
+
+    # Project onboarding — bounded clone + register within operator-consented space (#2555).
+    #
+    # ``enabled`` is ON by default (#3396) and is a DISCOVERABILITY switch, not the consent:
+    # the bounds below carry that, and both are empty by default, so a stock install can
+    # onboard exactly nothing. ``allow: []`` matches no source, so every clone is refused;
+    # ``root: ""`` is no consented space, so a registration only happens on the operator's
+    # approval card (``approve_outside_root``; off → refused). Turning this off
+    # additionally removes ``onboard_project`` from the toolset — which is why it defaulted
+    # off and why that was wrong: an absent tool and a hidden settings section left the
+    # operator with a dead "Add project" button and nothing naming what to configure.
+    onboarding_enabled: bool = True
+    onboarding_root: str = ""            # e.g. ~/dev — clones land here; registrations must resolve UNDER it
+    onboarding_allow: list[str] = field(default_factory=list)  # e.g. [github.com/protoLabsAI/*]
+    onboarding_write_default: bool = False  # registered read-only unless overridden per-call
+    # A local folder OUTSIDE ``root`` (or any, with no root) → an in-chat approval card for that one folder
+    # (Allow read-only / read-write / Deny) instead of a flat refusal. Never auto-approved
+    # by /bypass or "allow for session" — it moves the fence. False = the old refusal.
+    onboarding_approve_outside_root: bool = True
+
+    # Core media output store (#1929) — tool-generated binary artifacts
+    # (images/audio/video) persisted via ``registry.save_media()`` and served on
+    # ``/media/<file>``. Gated by default: each saved URL carries a per-file HMAC
+    # signature (an inline ``<img>`` can't send a bearer header), so unsigned
+    # requests still hit the default-deny gate. ``public`` opts the whole store
+    # out of the auth gate (explicit exposure); ``retention_days`` prunes files
+    # older than N days on each save (0 = keep forever). See infra/media.py.
+    media_public: bool = False
+    media_retention_days: int = 0
+
+    # Egress allowlist (ADR 0008) — deny-by-default outbound-host allowlist
+    # enforced in ``fetch_url`` (the model-chosen-host exfil/SSRF vector). Empty
+    # = permissive (off). ``*.host`` matches subdomains. Single source of truth
+    # for the generated OpenShell network policy (scripts/gen_openshell_policy).
+    egress_allowed_hosts: list[str] = field(default_factory=list)
+
+    # Opt-in CIDR allowlist for outbound A2A destinations — push callbacks +
+    # delegate_to a2a delegates (#572). Empty/unset = today's behavior (callbacks keep their
+    # default private-IP denylist; delegate_to unrestricted). When set, an
+    # outbound destination is allowed iff every resolved IP is inside a listed
+    # CIDR. Enforced via ``policy.set_callback_allowlist``.
+    security_callback_allowlist: list[str] = field(default_factory=list)
+
+    # Redact credentials from tool output before it enters the transcript (#3070).
+    # When True (default), AuditMiddleware applies the redaction.py patterns to
+    # ToolMessage.content before returning the result to the graph — scrubbing
+    # OpenAI keys, GitHub tokens, Bearer tokens, env-var assignments, and any
+    # value the external secrets manager knows about. Audit redaction is always
+    # on regardless of this flag; this controls only the transcript/checkpoint path.
+    # Set False to disable (e.g. debug a credential issue where you need raw output).
+    security_redact_tool_output: bool = True
+
+    # External secrets manager (ADR 0080) — pull env vars from Infisical (etc.) at
+    # config load, on hot-reload, and on a refresh interval. client_id/client_secret
+    # are the bootstrap machine identity: SECRET_PATHS entries, overlaid from
+    # secrets.yaml exactly like model.api_key, with INFISICAL_CLIENT_ID /
+    # INFISICAL_CLIENT_SECRET as the env fallback.
+    secrets_manager_enabled: bool = False
+    secrets_manager_provider: str = "infisical"
+    secrets_manager_host: str = "https://us.infisical.com"
+    secrets_manager_project_id: str = ""
+    secrets_manager_environment: str = "prod"
+    secrets_manager_path: str = "/"
+    secrets_manager_recursive: bool = True
+    secrets_manager_client_id: str = ""
+    secrets_manager_client_secret: str = ""
+    secrets_manager_refresh_seconds: int = 300
+    secrets_manager_required: bool = False
+    secrets_manager_override_env: bool = False
+    secrets_manager_timeout_seconds: float = 10.0
+
+    # Hosted chat-thread publishing (#2179 P2, #2683) — POST a redacted bundle
+    # (graph.chat_bundle) to a hosted viewer service and get back a public link. Empty
+    # host is the expected default until the hosted service (#2685, a separate,
+    # not-yet-started repo) exists: publish then reports "not configured" rather than
+    # erroring or silently no-opping. Behind the chat.publish developer flag (ADR 0068).
+    publish_endpoint_url: str = ""
+    publish_timeout_seconds: float = 15.0
+    # Revocation (#2684) — a SEPARATE configured endpoint, not a path convention off
+    # endpoint_url: presuming a URL shape on a service that doesn't exist yet would be a
+    # guess dressed up as a contract. See infra/publish/client.py's revoke_bundle.
+    publish_revoke_endpoint_url: str = ""
+
+    def __post_init__(self):
+        # PROTOAGENT_MODEL wins over the YAML/default model so an eval sweep can
+        # boot the same agent against different models without editing config
+        # (evals/sweep.py). Applied here so it holds on *every* construction
+        # path — including the defaults fallback when no YAML is present (CI,
+        # fresh forks), not just the from_yaml parse branch.
+        env_model = os.environ.get("PROTOAGENT_MODEL")
+        if env_model:
+            self.model_name = env_model
+
+    def coherence_warnings(self) -> list[str]:
+        """Provider/model coherence problems across EVERY model slot (read-only).
+
+        Non-empty when a slot is incoherent with `model.provider` — today's case is a
+        native-OAuth provider (ADR 0097) with a bare gateway alias slot (aux / subagent
+        tier / a fallback) that would raise at the first `task`/subagent dispatch.
+        :meth:`from_dict` already reconciles the fixable NON-lead slots on load, so on a
+        freshly-parsed config this returns only what could not be auto-fixed (an
+        incoherent LEAD pair). A caller that builds a config directly can validate with
+        it before graph build."""
+        return _detect_incoherent_slots(self)
+
+    def fenced_projects(self, *, quiet: bool = False) -> list[dict]:
+        """The ADR 0095 ``projects:`` registry projected onto the fs-fence shape.
+
+        Entries opt out with ``fs: false``; everything else is fenced read-write
+        by default (D3). Only the fence keys are emitted — ``github`` /
+        ``default_branch`` are identity for other consumers and have no business
+        in the fence's vocabulary.
+
+        This grants filesystem access, so every rejection is **loud** and every
+        ambiguity resolves toward *less* access:
+
+        - a malformed entry (no name, no path, duplicate name, non-absolute path)
+          is dropped with a WARNING naming it. ADR 0095's own constraint is that a
+          wrong entry must be visible; these are dropped here, so nothing
+          downstream can report them and this is the only place that can.
+        - ``fs`` / ``write`` are read with :func:`_falsey`, so a string
+          ``"false"`` from JSON or a hand-edit opts out instead of silently
+          granting read-write on a truthy non-empty string.
+        - ``~`` is expanded here so every consumer (the fence, and the ADR 0008
+          OpenShell policy) sees the same path. A RELATIVE path is refused
+          outright for the reason the work-folders POST route already refuses it:
+          it resolves against the server's CWD (``/`` under the desktop sidecar),
+          never the operator's.
+
+        ``quiet=True`` drops those warnings to DEBUG for POLLED callers (the
+        runtime-status banner, #3643) — the build/boot path reports them; a poll
+        repeating them every few seconds would bury them.
+        """
+        warn = log.debug if quiet else log.warning
+        fenced: list[dict] = []
+        seen: set[str] = set()
+        for entry in self.projects or []:
+            if not isinstance(entry, dict):
+                warn("[projects] skipping non-object entry: %r", entry)
+                continue
+            name = str(entry.get("name") or "").strip()
+            path = str(entry.get("path") or "").strip()
+            # Malformed is reported BEFORE the opt-out is honoured: `{fs: false}` with no
+            # name or path is junk config, and staying quiet about it because it happens
+            # to be opted out is the same invisibility the warnings exist to end. A
+            # WELL-FORMED opt-out below stays silent — that one is deliberate, not a typo.
+            if not name or not path:
+                warn("[projects] skipping entry missing name/path: %r", entry)
+                continue
+            if _falsey(entry.get("fs"), default=False):
+                continue  # registered for other consumers; no filesystem reach
+            if name in seen:
+                warn(
+                    "[projects] duplicate project name %r — keeping the first, dropping this one. "
+                    "Names are the fence's identifier; two entries can't share one.",
+                    name,
+                )
+                continue
+            # Absoluteness is checked on the EXPANDED-but-unresolved path, because
+            # `.resolve()` makes every path absolute (it resolves a relative one against
+            # the process CWD) — resolving first would silently swallow the very input
+            # this rejects.
+            expanded = Path(path).expanduser()
+            if not expanded.is_absolute():
+                warn(
+                    "[projects] project %r path is not absolute: %s — skipped. A relative path "
+                    "resolves against the SERVER's working directory, never yours.",
+                    name,
+                    path,
+                )
+                continue
+            seen.add(name)
+            projected = {
+                "name": name,
+                # Emitted RESOLVED, matching tools/fs_tools.py and gen_openshell_policy.py.
+                # Without this a symlinked project is projected as the link while the
+                # enforced fence and the Landlock policy follow it to the target — the
+                # declared-vs-enforced divergence this registry exists to prevent, in the
+                # one function whose docstring promises every consumer sees the same path.
+                "path": str(expanded.resolve()),
+                "write": not _falsey(entry.get("write"), default=False),
+            }
+            if not _falsey(entry.get("no_delete"), default=True):
+                projected["no_delete"] = True
+            fenced.append(projected)
+        return fenced
+
+    def effective_filesystem_projects(self, *, create: bool = False, quiet: bool = False) -> list[dict]:
+        """The fs project registry the agent actually gets. Explicit
+        ``filesystem_projects`` win; then the ADR 0095 ``projects:`` registry
+        projected onto the fence; otherwise (when filesystem is enabled) a
+        single default ``workspace`` project so the on-by-default fs toolset has a
+        fenced place to work. ``create=True`` mkdirs the workspace dir;
+        ``quiet`` is passed to :meth:`fenced_projects` (polled callers)."""
+        if self.filesystem_projects:
+            return self.filesystem_projects
+        if not self.filesystem_enabled:
+            return []
+        # A CONFIGURED registry is the answer, even when it projects to nothing.
+        # ``fs: false`` on every entry means "registered, but NOT in the fence at all"
+        # (D3) and is honoured literally — substituting the workspace default would
+        # grant read-write on a directory the operator just said they didn't want.
+        #
+        # This used to fall through to that default, on the grounds that an empty fence
+        # unbinds the whole toolset with no visible cause (#2251). That reason is gone:
+        # every dropped entry now WARNs by name, and ``/api/projects`` reports
+        # ``fence_source: "unbound"`` with a console banner. The failure is loud, so it
+        # no longer has to be papered over with access nobody asked for.
+        #
+        # An ABSENT registry still gets the workspace default below — that's the
+        # default-install path and it is deliberately unchanged.
+        if self.projects:
+            return self.fenced_projects(quiet=quiet)
+        from infra.paths import workspace_dir
+
+        return [{"name": "workspace", "path": str(workspace_dir(create=create)), "write": True}]
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "LangGraphConfig":
+        """Load config via the App→Host→Agent cascade (ADR 0047).
+
+        Reads the **agent** (leaf) YAML at ``path`` and overlays it on the box-shared
+        **Host** layer (``host-config.yaml``, filtered to host-scoped FIELDS keys).
+        Agent values win (git-style per-field override); the **App** layer is the
+        dataclass defaults filled in by :meth:`from_dict`. With NO host file the merge
+        collapses to the agent doc alone — byte-identical to the pre-cascade parse
+        (zero-migration). Secrets stay leaf-only (sibling ``secrets.yaml``).
+        """
+        p = Path(path)
+        merged, secrets, present = _read_config_docs(p)
+        if not present:
+            # Not a bare `cls()`: that has an EMPTY registry, which every model-routing
+            # reader then answers from the legacy floor (#3128). No file and no host
+            # layer still means "App defaults", and App defaults imply a registry.
+            return cls.app_defaults()
+
+        # External secrets-manager hydration (ADR 0080) — before the parse, so the
+        # env fallbacks consulted below (and later, lazily, by create_llm / plugin
+        # requires_env gates) already see manager-sourced values.
+        _hydrate_external_secrets(merged, secrets)
+        return cls.from_dict(merged, secrets=secrets, config_dir=p.parent)
+
+    @classmethod
+    def app_defaults(cls) -> "LangGraphConfig":
+        """The App layer alone: dataclass defaults WITH the provider registry they imply.
+
+        Use this, never a bare ``LangGraphConfig()``, wherever the result can reach model
+        routing. A bare construction skips the ADR 0106 migration `from_dict` performs, so
+        its registry is empty and `split_slot_target` / `available_model_lanes` can only
+        answer it from their legacy floor — the dependency #3128 has to remove before that
+        floor can go. Every field except ``providers`` is identical to ``cls()``.
+        """
+        config = cls()
+        config.providers = _migrated_providers(config)
+        return config
+
+    def provider_by_id(self, pid: str) -> "Provider | None":
+        """The registered connection named `pid`, or None. Case-insensitive."""
+        want = (pid or "").strip().lower()
+        return next((p for p in self.providers if p.id == want), None)
+
+    def provider_ids(self) -> list[str]:
+        """Registered ids, in config order — the whitelist the slot grammar parses against."""
+        return [p.id for p in self.providers]
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict | None,
+        *,
+        secrets: dict | None = None,
+        config_dir: Path | str | None = None,
+    ) -> "LangGraphConfig":
+        """Build a config from an already-loaded YAML dict — the parse seam.
+
+        ``secrets`` overlays secret keys (model api_key, auth token); ``config_dir``
+        locates plugin config (ADR 0019). Both optional so callers/tests can parse a
+        bare dict. Behavior is identical to the old inline ``from_yaml`` parse.
+        """
+        data = data or {}
+        # A top-level section present but empty/commented-out in YAML parses to
+        # None (e.g. a bare `routing:` with every key commented). The many
+        # `data.get("x", {}).get(...)` reads below would then return None and
+        # crash on `.get`. Normalize null sections to {} so editing the example —
+        # commenting a whole block out — can't break the loader. (Subsumes the
+        # per-section `or {}` guards; top-level config keys are all mappings.)
+        data = {k: ({} if v is None else v) for k, v in data.items()}
+        secrets = secrets or {}
+        config_dir = Path(config_dir) if config_dir is not None else Path(".")
+
+        model = data.get("model", {})
+        subagents = data.get("subagents", {})
+        middleware = data.get("middleware", {})
+        knowledge = data.get("knowledge", {})
+        context = data.get("context") or {}  # ADR 0108 D6 — `or {}`: an all-commented block parses to None
+        memory = data.get("memory") or {}  # same `or {}` reason as context
+        skills = data.get("skills", {})
+        mcp = data.get("mcp", {})
+        operator_mcp = data.get("operator_mcp", {})
+        acp = data.get("acp", {}) or {}
+        plugins = data.get("plugins", {})
+        identity = data.get("identity", {})
+        # `or {}` (not a default arg): a section present but empty/commented in
+        # YAML parses to None, and `.get(...)` on the default arg wouldn't catch
+        # that — the example ships an all-commented `a2a:` block.
+        a2a = data.get("a2a") or {}
+        auth = data.get("auth", {})
+        runtime = data.get("runtime", {})
+        operator = data.get("operator", {})
+        # `or {}` at each level: a present-but-empty `soul:` or `soul.drift:` block
+        # parses to None (top-level null is normalized above, a nested null is not).
+        soul = data.get("soul", {}) or {}
+        soul_drift = soul.get("drift", {}) or {}
+        self_improvement = data.get("self_improvement", {}) or {}
+        # Box runtime (Host layer, ADR 0047 D8) — `or {}` because a present-but-empty
+        # section parses to None.
+        network = data.get("network", {}) or {}
+        fleet = data.get("fleet", {}) or {}
+        discovery = fleet.get("discovery", {}) or {}
+        warm = fleet.get("warm", {}) or {}
+
+        # Secret overlay wins when present; otherwise the (now secret-free)
+        # main YAML value, otherwise the dataclass default — and a blank
+        # value still lets create_llm / set_a2a_token fall back to env.
+        secret_api_key = secrets.get("model", {}).get("api_key")
+        secret_auth_token = secrets.get("auth", {}).get("token")
+        secret_federation_token = secrets.get("auth", {}).get("federation_token")
+        secrets_manager = data.get("secrets_manager", {})
+        secret_sm_client_id = secrets.get("secrets_manager", {}).get("client_id")
+        secret_sm_client_secret = secrets.get("secrets_manager", {}).get("client_secret")
+        # Langfuse credentials (#3017) — same overlay shape as model.api_key: the
+        # secrets.yaml value wins, the (now secret-free) main YAML is the fallback,
+        # and a blank leaves ``tracing.init`` on its LANGFUSE_* environment path.
+        tracing = data.get("tracing", {})
+        secret_tracing_public_key = secrets.get("tracing", {}).get("public_key")
+        secret_tracing_secret_key = secrets.get("tracing", {}).get("secret_key")
+        publish = data.get("publish", {}) or {}
+        # `or {}`: an operator who comments out every knob under `room:` leaves the key
+        # parsed as None, and the reads below would raise on it (same reason as `soul` /
+        # `fleet` above). The docs page hands people a `room:` block to edit, so this is
+        # a likely edit, not a theoretical one.
+        room = data.get("room", {}) or {}
+
+        config = cls(
+            model_provider=model.get("provider", cls.model_provider),
+            model_name=model.get("name", cls.model_name),
+            api_base=model.get("api_base", cls.api_base),
+            api_key=secret_api_key or model.get("api_key", cls.api_key),
+            temperature=model.get("temperature", cls.temperature),
+            max_tokens=model.get("max_tokens", cls.max_tokens),
+            model_vision=model.get("vision", cls.model_vision),
+            image_max_side=model.get("image_max_side", cls.image_max_side),
+            max_images_per_request=model.get("max_images_per_request", cls.max_images_per_request),
+            model_favorites=list(model.get("favorites", []) or []),
+            providers=_parse_providers(data.get("providers"), secrets),
+            max_iterations=model.get("max_iterations", cls.max_iterations),
+            turn_stall_timeout_seconds=model.get(
+                "turn_stall_timeout_seconds", cls.turn_stall_timeout_seconds
+            ),
+            round_nudge_after=model.get("round_nudge_after", cls.round_nudge_after),
+            round_hard_cap=model.get("round_hard_cap", cls.round_hard_cap),
+            request_timeout=model.get("request_timeout", cls.request_timeout),
+            llm_max_retries=model.get("max_retries", cls.llm_max_retries),
+            llm_max_inflight=model.get("max_inflight", cls.llm_max_inflight),
+            llm_inflight_queue_timeout=model.get(
+                "inflight_queue_timeout", cls.llm_inflight_queue_timeout
+            ),
+            llm_inflight_interactive_reserve=model.get(
+                "inflight_interactive_reserve", cls.llm_inflight_interactive_reserve
+            ),
+            top_p=model.get("top_p", cls.top_p),
+            top_k=model.get("top_k", cls.top_k),
+            presence_penalty=model.get("presence_penalty", cls.presence_penalty),
+            repetition_penalty=model.get("repetition_penalty", cls.repetition_penalty),
+            chat_template_kwargs=model.get("chat_template_kwargs", cls.chat_template_kwargs),
+            thinking=model.get("thinking", cls.thinking),
+            reasoning_effort=model.get("reasoning_effort", cls.reasoning_effort),
+            knowledge_middleware=middleware.get("knowledge", cls.knowledge_middleware),
+            audit_middleware=middleware.get("audit", cls.audit_middleware),
+            memory_middleware=middleware.get("memory", cls.memory_middleware),
+            scheduler_enabled=middleware.get("scheduler", cls.scheduler_enabled),
+            enforcement_enabled=middleware.get("enforcement", cls.enforcement_enabled),
+            enforcement_disallowed_tools=(data.get("enforcement", {}).get("disallowed_tools", [])),
+            enforcement_rate_limits=(data.get("enforcement", {}).get("rate_limits", {})),
+            prompt_cache_enabled=data.get("prompt_cache", {}).get("enabled", cls.prompt_cache_enabled),
+            # Absent (or blank) resolves through the profile-aware default —
+            # 1h for fleet/desktop, 5m interactive (#2780). Explicit always wins.
+            prompt_cache_ttl=(data.get("prompt_cache", {}).get("ttl") or _default_prompt_cache_ttl()),
+            prompt_cache_force=data.get("prompt_cache", {}).get("force", cls.prompt_cache_force),
+            cache_warming_enabled=data.get("prompt_cache", {})
+            .get("warm", {})
+            .get("enabled", cls.cache_warming_enabled),
+            cache_warming_interval_seconds=data.get("prompt_cache", {})
+            .get("warm", {})
+            .get("interval_seconds", cls.cache_warming_interval_seconds),
+            compaction_enabled=data.get("compaction", {}).get("enabled", cls.compaction_enabled),
+            compaction_trigger=data.get("compaction", {}).get("trigger", cls.compaction_trigger),
+            compaction_keep_messages=data.get("compaction", {}).get("keep_messages", cls.compaction_keep_messages),
+            pruning_enabled=data.get("pruning", {}).get("enabled", cls.pruning_enabled),
+            pruning_at_fraction=data.get("pruning", {}).get("at_fraction", cls.pruning_at_fraction),
+            pruning_keep_messages=data.get("pruning", {}).get("keep_messages", cls.pruning_keep_messages),
+            pruning_min_chars=data.get("pruning", {}).get("min_chars", cls.pruning_min_chars),
+            compaction_model=data.get("compaction", {}).get("model", cls.compaction_model),
+            tools_deferred_enabled=data.get("tools", {}).get("deferred", {}).get("enabled", cls.tools_deferred_enabled),
+            tools_deferred_keep=list(data.get("tools", {}).get("deferred", {}).get("keep", []) or []),
+            tools_memoize_reads_enabled=data.get("tools", {})
+            .get("memoize_reads", {})
+            .get("enabled", cls.tools_memoize_reads_enabled),
+            tools_fleet_diagnostics_enabled=data.get("tools", {})
+            .get("fleet_diagnostics", {})
+            .get("enabled", cls.tools_fleet_diagnostics_enabled),
+            tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
+            tools_self_config_enabled=bool(data.get("tools", {}).get("self_config_enabled", False)),
+            tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),
+            tools_subagent_only=list(data.get("tools", {}).get("subagent_only", []) or []),
+            settings_hidden=list(data.get("settings", {}).get("hidden", []) or []),
+            routing_fallback_models=data.get("routing", {}).get("fallback_models", []),
+            aux_model=data.get("routing", {}).get("aux_model", cls.aux_model),
+            goal_enabled=data.get("goal", {}).get("enabled", cls.goal_enabled),
+            goal_max_iterations=data.get("goal", {}).get("max_iterations", cls.goal_max_iterations),
+            goal_no_progress_limit=data.get("goal", {}).get("no_progress_limit", cls.goal_no_progress_limit),
+            goal_eval_model=data.get("goal", {}).get("eval_model", cls.goal_eval_model),
+            goal_verify_timeout=data.get("goal", {}).get("verify_timeout", cls.goal_verify_timeout),
+            goal_max_rounds_per_turn=data.get("goal", {}).get("max_rounds_per_turn", cls.goal_max_rounds_per_turn),
+            watches_enabled=data.get("watches", {}).get("enabled", cls.watches_enabled),
+            watch_interval=float(data.get("watches", {}).get("interval", cls.watch_interval) or cls.watch_interval),
+            watch_keep_terminal_h=float(
+                data.get("watches", {}).get("keep_terminal_h", cls.watch_keep_terminal_h) or 0
+            ),
+            room_catchup_max_messages=room.get("catchup_max_messages", cls.room_catchup_max_messages),
+            room_catchup_max_chars=room.get("catchup_max_chars", cls.room_catchup_max_chars),
+            room_max_rounds=room.get("max_rounds", cls.room_max_rounds),
+            soul_self_edit_enabled=soul.get("self_edit_enabled", cls.soul_self_edit_enabled),
+            self_improvement_enabled=bool(
+                self_improvement.get("enabled", cls.self_improvement_enabled)
+            ),
+            # `off | propose | auto`, so YAML hands a bare `off` here as False (#3253).
+            # The `or "off"` literal below lands that right by coincidence, not the
+            # field defaults (auto/propose/propose); yaml_word_for_bool makes it right
+            # on purpose, and keeps a bare `on` from becoming the string "True".
+            self_improvement_soul_md=str(
+                yaml_word_for_bool(self_improvement.get("soul_md", cls.self_improvement_soul_md)) or "off"
+            ),
+            self_improvement_skills=str(
+                yaml_word_for_bool(self_improvement.get("skills", cls.self_improvement_skills)) or "off"
+            ),
+            self_improvement_distillation=str(
+                yaml_word_for_bool(self_improvement.get("distillation", cls.self_improvement_distillation))
+                or "off"
+            ),
+            soul_drift_enabled=bool(soul_drift.get("enabled", cls.soul_drift_enabled)),
+            soul_drift_interval_hours=int(
+                soul_drift.get("interval_hours", cls.soul_drift_interval_hours) or 0
+            ),
+            soul_drift_threshold=float(
+                soul_drift.get("threshold", cls.soul_drift_threshold) or 0.0
+            ),
+            soul_drift_judge_enabled=bool(
+                (soul_drift.get("judge", {}) or {}).get("enabled", cls.soul_drift_judge_enabled)
+            ),
+            soul_drift_judge_model=str(
+                (soul_drift.get("judge", {}) or {}).get("model", cls.soul_drift_judge_model) or ""
+            ),
+            subagent_max_concurrency=subagents.get("max_concurrency", cls.subagent_max_concurrency),
+            subagent_output_truncate=subagents.get("output_truncate", cls.subagent_output_truncate),
+            knowledge_db_path=knowledge.get("db_path", cls.knowledge_db_path),
+            knowledge_scope=knowledge.get("scope", cls.knowledge_scope),
+            knowledge_backend=knowledge.get("backend", cls.knowledge_backend),
+            knowledge_embedder=knowledge.get("embedder", cls.knowledge_embedder),
+            checkpoint_db_path=data.get("checkpoint", {}).get("db_path", cls.checkpoint_db_path),
+            telemetry_enabled=data.get("telemetry", {}).get("enabled", cls.telemetry_enabled),
+            telemetry_db_path=data.get("telemetry", {}).get("db_path", cls.telemetry_db_path),
+            telemetry_retention_days=data.get("telemetry", {}).get("retention_days", cls.telemetry_retention_days),
+            tracing_enabled=tracing.get("enabled", cls.tracing_enabled),
+            tracing_host=tracing.get("host", cls.tracing_host),
+            tracing_public_key=secret_tracing_public_key or tracing.get("public_key", cls.tracing_public_key),
+            tracing_secret_key=secret_tracing_secret_key or tracing.get("secret_key", cls.tracing_secret_key),
+            prompt_capture_enabled=data.get("prompts", {}).get("capture", cls.prompt_capture_enabled),
+            prompt_capture_retention_days=data.get("prompts", {}).get(
+                "retention_days", cls.prompt_capture_retention_days
+            ),
+            prompt_capture_max_calls=data.get("prompts", {}).get("max_calls", cls.prompt_capture_max_calls),
+            fleet_trace_export_enabled=data.get("telemetry", {}).get("fleet_trace_export", cls.fleet_trace_export_enabled),
+            inbox_retention_days=data.get("inbox", {}).get("retention_days", cls.inbox_retention_days),
+            activity_retention_days=data.get("activity", {}).get("retention_days", cls.activity_retention_days),
+            checkpoint_keep_per_thread=data.get("checkpoint", {}).get(
+                "keep_per_thread", cls.checkpoint_keep_per_thread
+            ),
+            checkpoint_background_keep=data.get("checkpoint", {}).get(
+                "background_keep", cls.checkpoint_background_keep
+            ),
+            background_auto_resume=data.get("background", {}).get("auto_resume", cls.background_auto_resume),
+            checkpoint_max_age_days=data.get("checkpoint", {}).get("max_age_days", cls.checkpoint_max_age_days),
+            checkpoint_prune_interval_hours=data.get("checkpoint", {}).get(
+                "prune_interval_hours", cls.checkpoint_prune_interval_hours
+            ),
+            checkpoint_harvest_enabled=data.get("checkpoint", {}).get(
+                "harvest_enabled", cls.checkpoint_harvest_enabled
+            ),
+            checkpoint_vacuum=data.get("checkpoint", {}).get("vacuum", cls.checkpoint_vacuum),
+            checkpoint_vacuum_legacy_on_start=data.get("checkpoint", {}).get(
+                "vacuum_legacy_on_start", cls.checkpoint_vacuum_legacy_on_start
+            ),
+            knowledge_facts=data.get("knowledge", {}).get("facts", cls.knowledge_facts),
+            workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),
+            embed_model=knowledge.get("embed_model", cls.embed_model),
+            transcribe_model=knowledge.get("transcribe_model", cls.transcribe_model),
+            image_describe_model=knowledge.get("image_describe_model", cls.image_describe_model),
+            knowledge_embeddings=knowledge.get("embeddings", cls.knowledge_embeddings),
+            knowledge_top_k=knowledge.get("top_k", cls.knowledge_top_k),
+            knowledge_inject_namespaces=list(knowledge.get("inject_namespaces", []) or []),
+            knowledge_inject_min_trust=knowledge.get("inject_min_trust", cls.knowledge_inject_min_trust),
+            knowledge_hot_write_confirm=knowledge.get("hot_write_confirm", cls.knowledge_hot_write_confirm),
+            context_budget_pct=_coerce_budget_pct(context.get("budget_pct", cls.context_budget_pct), cls.context_budget_pct),
+            context_prior_sessions=_coerce_prior_sessions(
+                context.get("prior_sessions", cls.context_prior_sessions), cls.context_prior_sessions
+            ),
+            memory_max_sessions=_coerce_digest_cap(
+                memory.get("max_sessions", cls.memory_max_sessions), cls.memory_max_sessions, "memory.max_sessions"
+            ),
+            memory_max_tokens=_coerce_digest_cap(
+                memory.get("max_tokens", cls.memory_max_tokens), cls.memory_max_tokens, "memory.max_tokens"
+            ),
+            knowledge_vector_k=knowledge.get("vector_k", cls.knowledge_vector_k),
+            knowledge_rrf_k=knowledge.get("rrf_k", cls.knowledge_rrf_k),
+            knowledge_min_score=knowledge.get("min_score", cls.knowledge_min_score),
+            knowledge_recall_preview_chars=knowledge.get("recall_preview_chars", cls.knowledge_recall_preview_chars),
+            knowledge_embed_breaker_threshold=knowledge.get(
+                "embed_breaker_threshold", cls.knowledge_embed_breaker_threshold
+            ),
+            knowledge_embed_breaker_cooldown_s=knowledge.get(
+                "embed_breaker_cooldown_s", cls.knowledge_embed_breaker_cooldown_s
+            ),
+            knowledge_chunk_max_chars=knowledge.get("chunk_max_chars", cls.knowledge_chunk_max_chars),
+            knowledge_chunk_overlap_chars=knowledge.get("chunk_overlap_chars", cls.knowledge_chunk_overlap_chars),
+            knowledge_chunk_min_chars=knowledge.get("chunk_min_chars", cls.knowledge_chunk_min_chars),
+            knowledge_contextual_enrichment=knowledge.get("contextual_enrichment", cls.knowledge_contextual_enrichment),
+            knowledge_context_max_doc_chars=knowledge.get("context_max_doc_chars", cls.knowledge_context_max_doc_chars),
+            knowledge_attach_inline_budget=knowledge.get("attach_inline_budget", cls.knowledge_attach_inline_budget),
+            skills_enabled=skills.get("enabled", cls.skills_enabled),
+            skills_db_path=skills.get("db_path", cls.skills_db_path),
+            skills_top_k=skills.get("top_k", cls.skills_top_k),
+            skills_dir=skills.get("dir", cls.skills_dir),
+            skills_shared=skills.get("shared", cls.skills_shared),
+            skills_scope=skills.get("scope", cls.skills_scope),
+            commons_path=(data.get("commons", {}) or {}).get("path", cls.commons_path),
+            mcp_enabled=mcp.get("enabled", cls.mcp_enabled),
+            mcp_servers=list(mcp.get("servers", []) or []),
+            mcp_timeout_seconds=mcp.get("timeout_seconds", cls.mcp_timeout_seconds),
+            mcp_call_timeout_seconds=mcp.get(
+                "call_timeout_seconds", cls.mcp_call_timeout_seconds
+            ),
+            mcp_max_result_chars=mcp.get("max_result_chars", cls.mcp_max_result_chars),
+            mcp_denylist=list(mcp.get("denylist", []) or []),
+            mcp_persistent_sessions=bool(
+                mcp.get("persistent_sessions", cls.mcp_persistent_sessions)
+            ),
+            mcp_scope=mcp.get("scope", cls.mcp_scope),
+            operator_mcp_enabled=operator_mcp.get("enabled", cls.operator_mcp_enabled),
+            operator_mcp_tools=list(operator_mcp.get("tools", []) or []),
+            operator_mcp_profile=str(operator_mcp.get("profile", "") or "").strip(),
+            agent_runtime=str(data.get("agent_runtime", cls.agent_runtime) or "native"),
+            developer_channel=str((data.get("developer", {}) or {}).get("channel", cls.developer_channel) or "prod"),
+            acp_agents=dict(acp.get("agents", {}) or {}),
+            plugins_enabled=list(plugins.get("enabled", []) or []),
+            plugins_disabled=list(plugins.get("disabled", []) or []),
+            plugins_dir=plugins.get("dir", cls.plugins_dir),
+            plugins_allow_unbundled_deps=bool(plugins.get("allow_unbundled_deps", cls.plugins_allow_unbundled_deps)),
+            plugins_sources_allow=_parse_sources_allow(plugins.get("sources", {}) or {}),
+            # ``official``'s absent-vs-explicit-empty distinction is load-bearing
+            # (#2691's lesson): absent → the protoLabsAI default; an explicit empty
+            # list → "no official sources" (a fork's hardening choice).
+            plugins_sources_official=(
+                list((plugins.get("sources", {}) or {})["official"] or [])
+                if "official" in (plugins.get("sources", {}) or {})
+                else list(_OFFICIAL_SOURCES_DEFAULT)
+            ),
+            plugins_sources_acked=list((plugins.get("sources", {}) or {}).get("acked", []) or []),
+            # `not _falsey(...)`, never bool(): a string "false" (JSON overlay, env,
+            # hand-edit) is truthy, and bool() would silently DISABLE the consent
+            # gate — the 2733 review's fail-open finding. Ambiguity resolves toward
+            # asking, matching _falsey's less-access design. The absent-key default
+            # DERIVES from the field (a fork changing the class default stays
+            # coherent): _falsey answers "is this a NO?", so absent must read as
+            # the negation of the field's default.
+            plugins_trust_unverified=not _falsey(
+                plugins.get("trust_unverified"), default=not cls.plugins_trust_unverified
+            ),
+            plugins_update_policy=dict(plugins.get("update_policy", {}) or {}),
+            plugins_autoupdate_interval_hours=int(
+                plugins.get("autoupdate_interval_hours", cls.plugins_autoupdate_interval_hours) or 0
+            ),
+            identity_name=identity.get("name", cls.identity_name),
+            identity_operator=identity.get("operator", cls.identity_operator),
+            identity_org=identity.get("org", cls.identity_org),
+            a2a_skills=_valid_a2a_skills(a2a.get("skills", []) or []),
+            a2a_description=a2a.get("description", "") or "",
+            a2a_require_routable_url=bool(a2a.get("require_routable_url", False)),
+            instance_id=data.get("instance", {}).get("id", "") or data.get("instance_id", cls.instance_id),
+            auth_token=secret_auth_token or auth.get("token", cls.auth_token),
+            federation_token=secret_federation_token or auth.get("federation_token", cls.federation_token),
+            secrets_manager_enabled=bool(secrets_manager.get("enabled", cls.secrets_manager_enabled)),
+            secrets_manager_provider=str(
+                secrets_manager.get("provider", cls.secrets_manager_provider) or "infisical"
+            ),
+            secrets_manager_host=str(secrets_manager.get("host", cls.secrets_manager_host) or ""),
+            secrets_manager_project_id=str(secrets_manager.get("project_id", cls.secrets_manager_project_id) or ""),
+            secrets_manager_environment=str(
+                secrets_manager.get("environment", cls.secrets_manager_environment) or "prod"
+            ),
+            secrets_manager_path=str(secrets_manager.get("path", cls.secrets_manager_path) or "/"),
+            secrets_manager_recursive=bool(secrets_manager.get("recursive", cls.secrets_manager_recursive)),
+            secrets_manager_client_id=secret_sm_client_id
+            or secrets_manager.get("client_id", cls.secrets_manager_client_id),
+            secrets_manager_client_secret=secret_sm_client_secret
+            or secrets_manager.get("client_secret", cls.secrets_manager_client_secret),
+            secrets_manager_refresh_seconds=int(
+                secrets_manager.get("refresh_seconds", cls.secrets_manager_refresh_seconds) or 0
+            ),
+            secrets_manager_required=bool(secrets_manager.get("required", cls.secrets_manager_required)),
+            secrets_manager_override_env=bool(
+                secrets_manager.get("override_env", cls.secrets_manager_override_env)
+            ),
+            secrets_manager_timeout_seconds=float(
+                secrets_manager.get("timeout_seconds", cls.secrets_manager_timeout_seconds) or 10.0
+            ),
+            publish_endpoint_url=str(publish.get("endpoint_url", cls.publish_endpoint_url) or ""),
+            publish_timeout_seconds=float(publish.get("timeout_seconds", cls.publish_timeout_seconds) or 15.0),
+            publish_revoke_endpoint_url=str(
+                publish.get("revoke_endpoint_url", cls.publish_revoke_endpoint_url) or ""
+            ),
+            autostart_on_boot=runtime.get("autostart_on_boot", cls.autostart_on_boot),
+            memory_ceiling_mb=runtime.get("memory_ceiling_mb", cls.memory_ceiling_mb),
+            memory_ceiling_exit=runtime.get("memory_ceiling_exit", cls.memory_ceiling_exit),
+            # Box runtime (Host layer, ADR 0047 D8) — file > env > default. The env
+            # fallback only fires when the merged dict omits the key (zero-migration).
+            bind_host=network.get("bind", _env_default("PROTOAGENT_HOST", cls.bind_host)),
+            fleet_port_base=fleet.get("port_base", cls.fleet_port_base),
+            discovery_port_min=discovery.get("port_min", cls.discovery_port_min),
+            discovery_port_max=discovery.get("port_max", cls.discovery_port_max),
+            discovery_mdns=discovery.get("mdns", cls.discovery_mdns),
+            fleet_max_warm=warm.get("max", _env_default("PROTOAGENT_FLEET_MAX_WARM", cls.fleet_max_warm, int)),
+            fleet_warm_grace_seconds=warm.get(
+                "grace_seconds", _env_default("PROTOAGENT_FLEET_WARM_GRACE", cls.fleet_warm_grace_seconds, int)
+            ),
+            fleet_autostart=list(
+                fleet.get(
+                    "autostart",
+                    [s.strip() for s in os.environ.get("PROTOAGENT_FLEET_AUTOSTART", "").split(",") if s.strip()],
+                )
+                or []
+            ),
+            # System lifecycle reactions (ADR 0074) — top-level ``lifecycle_hooks:`` list.
+            # Opt-in: absent/empty ⇒ [] ⇒ nothing fires beyond the bus broadcast.
+            lifecycle_hooks=list(data.get("lifecycle_hooks", []) or []),
+            # Managed projects registry (ADR 0095) — top-level ``projects:`` list.
+            projects=list(data.get("projects", []) or []),
+            onboarding_enabled=bool((data.get("onboarding") or {}).get("enabled", True)),
+            onboarding_root=str((data.get("onboarding") or {}).get("root", "") or ""),
+            onboarding_allow=list((data.get("onboarding") or {}).get("allow") or []),
+            onboarding_write_default=bool((data.get("onboarding") or {}).get("write_default", False)),
+            onboarding_approve_outside_root=bool((data.get("onboarding") or {}).get("approve_outside_root", True)),
+            operator_allowed_dirs=list(operator.get("allowed_dirs", []) or []),
+            operator_project_dir=str(operator.get("project_dir", "") or ""),
+            filesystem_enabled=data.get("filesystem", {}).get("enabled", cls.filesystem_enabled),
+            filesystem_allow_run=data.get("filesystem", {}).get("allow_run", _default_filesystem_allow_run()),
+            filesystem_run_requires_approval=data.get("filesystem", {}).get(
+                "run_requires_approval", cls.filesystem_run_requires_approval
+            ),
+            filesystem_bypass_allowed=data.get("filesystem", {}).get(
+                "bypass_allowed", cls.filesystem_bypass_allowed
+            ),
+            filesystem_run_auto_approve=[
+                str(x) for x in ((data.get("filesystem", {}) or {}).get("run_auto_approve") or []) if x is not None
+            ],
+            filesystem_run_command_env_passthrough=[
+                str(x).strip()
+                for x in ((data.get("filesystem", {}) or {}).get("run_command_env_passthrough") or [])
+                if x is not None and str(x).strip()
+            ],
+            filesystem_editor_command=str(
+                (data.get("filesystem", {}) or {}).get("editor_command", cls.filesystem_editor_command) or ""
+            ).strip(),
+            filesystem_code_pane=not _falsey(
+                (data.get("filesystem", {}) or {}).get("code_pane"), default=not cls.filesystem_code_pane
+            ),
+            # not _falsey(), never bool(): a string "false" (JSON overlay, env, hand-edit)
+            # must switch the hand-off OFF.
+            filesystem_editor_handoff=not _falsey(
+                (data.get("filesystem", {}) or {}).get("editor_handoff"),
+                default=not cls.filesystem_editor_handoff,
+            ),
+            filesystem_projects=list(data.get("filesystem", {}).get("projects", []) or []),
+            media_public=bool((data.get("media", {}) or {}).get("public", cls.media_public)),
+            media_retention_days=int(
+                (data.get("media", {}) or {}).get("retention_days", cls.media_retention_days) or 0
+            ),
+            egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
+            security_callback_allowlist=list((data.get("security") or {}).get("callback_allowlist", []) or []),
+            security_redact_tool_output=bool(
+                (data.get("security") or {}).get("redact_tool_output", cls.security_redact_tool_output)
+            ),
+            plugin_config=_resolve_plugin_config(data, secrets, config_dir),
+        )
+
+        for name in ("researcher",):
+            if name in subagents:
+                sub = subagents[name]
+                setattr(
+                    config,
+                    name,
+                    SubagentDef(
+                        enabled=sub.get("enabled", True),
+                        tools=sub.get("tools", getattr(config, name).tools),
+                        max_turns=sub.get("max_turns", getattr(config, name).max_turns),
+                        model=sub.get("model", getattr(config, name).model),
+                    ),
+                )
+
+        # Provider/model coherence across ALL slots (bd-66cw): a native-OAuth provider
+        # with a stale gateway alias in a non-lead slot used to build fine and raise only
+        # at the first subagent dispatch. Surface it now and reconcile the fixable slots so
+        # they inherit the coherent lead pair. Runs on every load path, so a provider
+        # SWITCH (a reload with a new model.provider) reconciles the same way a load does.
+        # ADR 0106: a config with no `providers:` KEY gets the registry its legacy fields
+        # imply, using the same three ids the slot grammar already used — so every
+        # stored `gateway:`/`anthropic-oauth:`/`openai-codex:` value keeps working and
+        # nothing downstream has to special-case "pre-registry config".
+        #
+        # Keyed on the value being ABSENT-OR-NULL, not on the list being empty.
+        # `providers: []` is a deliberate statement — it is what removing the last
+        # connection writes — and treating it as "not migrated yet" re-created the entry
+        # the operator had just deleted, on the very next load. The console reported
+        # success and the connection was back after a refresh, because both sides were
+        # telling the truth about different moments.
+        #
+        # A registry is a LIST, so "not a list" is the test rather than `is None`: a bare
+        # `providers:` parses as null and `from_dict` normalizes every null value to `{}`
+        # above, so an identity check against None could never see it. Absent, null and
+        # malformed all migrate — reading an ambiguous line as "this agent has no model
+        # source" is the more expensive wrong answer of the two.
+        if not isinstance(data.get("providers"), list):
+            config.providers = _migrated_providers(config)
+        else:
+            # An explicit list — `[]` included — is the operator's answer, so the floors
+            # must not speak for it (#3128).
+            config.providers_declared = True
+        _reconcile_slot_providers(config)
+
+        return config

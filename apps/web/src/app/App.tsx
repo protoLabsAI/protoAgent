@@ -17,6 +17,7 @@ import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { FleetTurnWatch } from "./FleetTurnWatch";
 import { UpdateNotice } from "./UpdateNotice";
 import { BackgroundWatch } from "./BackgroundWatch";
+import { DownloadWatch } from "./DownloadWatch";
 import { ScheduledWatch } from "./ScheduledWatch";
 import { ChatResumeWatch } from "./ChatResumeWatch";
 import { ChatAttendance } from "./ChatAttendance";
@@ -37,6 +38,7 @@ import { Button } from "@protolabsai/ui/primitives";
 
 import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
+import { StorageWarning } from "./StorageWarning";
 import { AgentDownBanner } from "./AgentDownBanner";
 import { SignedOutBanner } from "./SignedOutBanner";
 import {
@@ -51,6 +53,7 @@ import { ChatSlot, chatSlotProvider } from "./ChatSlot";
 import { chatStore, useAnyChatStreaming } from "../chat/chat-store";
 import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { MemorySurface } from "../memory/MemorySurface";
+import { CodeChangeWatch } from "../codeviewer/CodeChangeWatch";
 import { CodeSurface } from "../codeviewer/CodeSurface";
 import { codePaneEnabledFrom, setCodePaneEnabled } from "../codeviewer/enabled";
 import { CODE_SURFACE_ID } from "../codeviewer/open";
@@ -99,7 +102,7 @@ import { StatusPill } from "./StatusPill";
 import { WorkPanel } from "./WorkPanel";
 import { invalidateAllAfterSetup } from "../setup/finish";
 import { SetupWizard } from "../setup/SetupWizard";
-import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, runtimeStatusQuery } from "../lib/queries";
+import { hostRuntimeStatusQuery, installedPluginsQuery, pluginUpdatesQuery, refreshGoalsOnEvent, runtimeStatusQuery } from "../lib/queries";
 import { buildViews } from "../lib/viewRegistry";
 import { applyNavIntent, openView, useForwardedPaletteNotices, usePaletteRegistry } from "./usePaletteRegistry";
 import type { NavIntent } from "./usePaletteRegistry";
@@ -546,6 +549,20 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
     return () => { offDone(); offFail(); offMet(); offExpired(); };
   }, [toast]);
 
+  // Keep the goals cache LIVE app-wide, not just while a goal surface is mounted. The Work
+  // card and the Goals panel subscribe only while open, so a goal set (from `/goal new` in
+  // chat, say) while they were closed left a stale cache: opening Work then painted
+  // "No active goals" over a goal that was driving, until the refetch landed.
+  // `refreshGoalsOnEvent` refetches the LIST even with no observer mounted (detail drawers
+  // only while open).
+  useEffect(() => {
+    const refresh = () => refreshGoalsOnEvent(queryClient);
+    const offs = ["goal.changed", "goal.iteration", "goal.achieved", "goal.failed"].map((t) =>
+      onServerEvent(t, refresh),
+    );
+    return () => offs.forEach((off) => off());
+  }, [queryClient]);
+
   // Resize + collapse are now the DS AppShell's (controlled via rightWidth/onRightWidthChange +
   // rightCollapsed/onCollapse) — the hand-rolled mouse/keyboard handlers are gone.
 
@@ -914,6 +931,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           live into the spawning chat (a system message + toast) if it's still open —
           instead of waiting for the next message to surface it. */}
       <BackgroundWatch />
+      <DownloadWatch />
       {/* Scheduled tasks (#2990): when a fire completes, deliver its result back to the
           chat that created the schedule as a ScheduledReportCard (or a compact chip on
           recurring re-fires) if that chat is open — instead of it hiding in Activity. */}
@@ -934,6 +952,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           autoupdate sweep publish plugin.changed/plugin.updated — refetch the plugin
           queries so a rail view the agent just enabled appears without a manual refresh. */}
       <PluginChangeWatch />
+      {/* Code pane live updates (ADR 0112): `fs.changed` — a coding delegate's or the agent's
+          own edit inside a registered project — re-fetches the pane's diff + open file, and
+          moves a following pane to a delegate's edit. No Refresh click needed. */}
+      <CodeChangeWatch />
       {/* Tenant guard: if a DIFFERENT backend now owns this origin (the HUB re-keyed —
           a fork booted on the old port), drop the previous tenant's persisted chat view.
           Keyed on the HUB's uid, NOT the focused agent's — switching fleet agents keeps
@@ -976,6 +998,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
               {visibleSetupGaps.map((gap) => (
                 <SetupGapBanner key={gapIdentity(gap)} gap={gap} onDismiss={() => dismissSetupGap(gap)} />
               ))}
+              <StorageWarning />
               <AgentDownBanner />
               <SignedOutBanner runtime={runtime} />
             </>
@@ -1027,6 +1050,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       {/* Focused fleet member stopped mid-session (the boot gate only catches boot-time
           down; a runtime stop otherwise surfaces only as plugin views 409-ing). Slim
           strip with a hub-routed Start; renders nothing on the host or a running agent. */}
+      <StorageWarning />
       <AgentDownBanner />
 
       {/* Deliberate OAuth signed-out state (#2513) — visible status + the reconnect
@@ -1181,15 +1205,17 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                     (SettingsOverlay). A plain pill, not a UtilityWidget, so the drawer +
                     palette deep-links can open it too via the store flag (openGlobalSettings). */}
                 <Tooltip label="Settings — model, plugins, knowledge & more">
-                  <button
+                  <Button
+                    icon
+                    size="xs"
+                    variant="ghost"
                     type="button"
-                    className="util-btn"
                     aria-label="Settings"
                     data-testid="settings-widget"
                     onClick={() => openGlobalSettings()}
                   >
                     <Settings2 size={14} />
-                  </button>
+                  </Button>
                 </Tooltip>
                 {/* The palette's only visible way in (ADR 0057) — an icon pill, AFTER Settings:
                     that one keeps the far-left slot operators already reach for by position. */}
@@ -1234,16 +1260,19 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                       : "No bottom panel — move a surface to the bottom dock"
                   }
                 >
-                  <button
+                  <Button
+                    icon
+                    size="xs"
+                    variant="ghost"
                     type="button"
-                    className={`util-btn ${bottomCollapsed ? "is-off" : ""}`}
                     onClick={() => setBottomCollapsed(!bottomCollapsed)}
                     disabled={!bottomActive}
+                    aria-pressed={!bottomCollapsed}
                     aria-label="Toggle bottom panel"
                     data-testid="toggle-bottom"
                   >
                     <PanelBottom size={14} />
-                  </button>
+                  </Button>
                 </Tooltip>
                 <Tooltip
                   label={
@@ -1254,16 +1283,19 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                         : "Hide left panel"
                   }
                 >
-                  <button
+                  <Button
+                    icon
+                    size="xs"
+                    variant="ghost"
                     type="button"
-                    className={`util-btn ${leftCollapsed ? "is-off" : ""}`}
                     onClick={() => setLeftCollapsed(!leftCollapsed)}
                     disabled={leftMembers.length === 0}
+                    aria-pressed={!leftCollapsed}
                     aria-label="Toggle left panel"
                     data-testid="toggle-left"
                   >
                     <PanelLeft size={14} />
-                  </button>
+                  </Button>
                 </Tooltip>
                 <Tooltip
                   label={
@@ -1274,16 +1306,19 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                         : "Hide side panel"
                   }
                 >
-                  <button
+                  <Button
+                    icon
+                    size="xs"
+                    variant="ghost"
                     type="button"
-                    className={`util-btn ${rightCollapsed ? "is-off" : ""}`}
                     onClick={() => setRightCollapsed(!rightCollapsed)}
                     disabled={rightMembers.length === 0}
+                    aria-pressed={!rightCollapsed}
                     aria-label="Toggle side panel"
                     data-testid="toggle-right"
                   >
                     <PanelRight size={14} />
-                  </button>
+                  </Button>
                 </Tooltip>
               </>
             }

@@ -210,6 +210,9 @@ class DelegateRegistry:
                 status.record_failure(d.name, str(exc) or type(exc).__name__)
                 raise
             status.record_success(d.name)
+            from .health import record_dispatch_success
+
+            record_dispatch_success(d.name)
             return reply
 
     def recording_session(self, session_id: str):

@@ -41,6 +41,7 @@ from urllib.parse import urlparse
 
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
+sys.path.insert(0, str(_REPO / "src"))
 
 from graph.config import LangGraphConfig, resolve_model_route  # noqa: E402
 

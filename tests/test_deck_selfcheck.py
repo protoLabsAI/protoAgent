@@ -83,17 +83,19 @@ print("rc", cli.run_fleet_cli(["--self-check"]))
 """
 
 
+@pytest.mark.platform_sensitive
 def test_a_module_loaded_only_at_render_time_fails_the_self_check(tmp_path):
     """Why the self-check renders instead of importing: Rich resolves its unicode cell table
     with `import_module` on the first wide/non-ASCII cell — a PyInstaller scan cannot see it,
     and `import deck.app` never touches it. Blocked, the import still succeeds and the
     self-check must fail."""
-    env = dict(os.environ, PYTHONPATH=str(REPO), PROTOAGENT_HOME=str(tmp_path / "inst"), PROTOAGENT_BOX_ROOT=str(tmp_path / "box"))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(REPO / "src"), str(REPO))), PROTOAGENT_HOME=str(tmp_path / "inst"), PROTOAGENT_BOX_ROOT=str(tmp_path / "box"))
     out = subprocess.run([sys.executable, "-c", _BLOCK_RICH_TABLES], env=env, capture_output=True, text=True, cwd=str(REPO), timeout=120)
     assert out.stdout.strip().splitlines()[-1:] == ["rc 1"], (out.stdout[-500:], out.stderr[-1500:])
     assert "rich._unicode_data.unicode" in out.stderr
 
 
+@pytest.mark.platform_sensitive
 def test_the_desktop_smoke_passes_against_the_dev_server():
     """`scripts/fleet_deck_smoke.py` without `--bin` runs `python -m server` — the same
     checks the desktop build runs against the frozen binary, so a check that could never

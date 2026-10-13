@@ -383,6 +383,15 @@ def test_start_boot_sweep_without_env_var_still_probes_normally(monkeypatch):
     normal (non-smoke) discovery behavior is unchanged."""
     monkeypatch.delenv("PROTOAGENT_DISCOVERY_DISABLE", raising=False)
 
+    # Only the co-located (local) channel is under test: keep _scan_local real, but
+    # stub the live zeroconf browse + tailnet scan (a real multi-second network wait
+    # that proves nothing here).
+    async def no_tailnet(port_range, known):
+        return []
+
+    monkeypatch.setattr(discovery, "_scan_tailnet", no_tailnet)
+    monkeypatch.setattr(discovery, "_browse_mdns", lambda timeout: [])
+
     async def _drive():
         server, port, hit = await _bind_probe_target()
         try:

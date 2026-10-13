@@ -2,7 +2,7 @@
 //
 // A fork (or a core module) drops a `src/ext/<name>.tsx` — or any module imported at
 // startup — that calls `registerSlashCommand()` to own a `/<name>` chat command that runs
-// IN THE BROWSER, WITHOUT editing `ChatSurface.tsx`. So a `git pull upstream` stays
+// IN THE BROWSER, WITHOUT editing `ChatSessionSlot.tsx`. So a `git pull upstream` stays
 // conflict-free. This is the frontend twin of the backend's `register_chat_command`
 // (graph/plugins/registry.py): registering a token CLAIMS it — typing or picking `/<name>`
 // invokes the handler and short-circuits the send (the chat input never goes to the agent).
@@ -24,7 +24,7 @@ export type ComposerFormSpec = {
   onCancel?: () => void;
 };
 
-/** What a client slash command's handler receives. The host (ChatSurface) builds this
+/** What a client slash command's handler receives. The host (ChatSessionSlot) builds this
  *  from its local state + the chat store when the command fires. */
 export type SlashContext = {
   /** Everything after the token, trimmed (e.g. `/effort high` → `"high"`). */

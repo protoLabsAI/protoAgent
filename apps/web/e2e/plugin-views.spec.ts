@@ -74,7 +74,12 @@ test("subscribe with `since` replays missed bus events on reopen — no poll nee
   // Hide the view (unmounted — the pre-#1640 default) while the bus keeps emitting.
   await rail.getByRole("button", { name: "Chat", exact: true }).click();
   await expect(page.locator(".plugin-view-frame")).toHaveCount(0);
-  await page.waitForTimeout(1200); // ≥2 mock ticks arrive while hidden
+  // ≥2 mock ticks arrive while hidden. The Feed pill counts every bus frame it sees while
+  // closed (3 per tick) in its aria-label, uncapped — so wait for it to move by two ticks.
+  const feed = page.getByTestId("activity-widget");
+  const feedCount = async () => Number(/(\d+) new/.exec((await feed.getAttribute("aria-label")) ?? "")?.[1] ?? 0);
+  const hiddenAt = await feedCount();
+  await expect.poll(feedCount).toBeGreaterThanOrEqual(hiddenAt + 6);
 
   // Reopen: a FRESH page subscribes with since:0 → the host immediately replays what the
   // console retains, including everything from before + during the hidden window.

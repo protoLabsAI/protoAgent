@@ -21,23 +21,45 @@
 //      (or holding the session "streaming" while the poller spins) would leave
 //      the form's buttons dead (#3082).
 //
+//      The server does NOT close `SubscribeToTask` for a paused task, and must not:
+//      input-required is an INTERRUPTED state, not a terminal one, and the stream
+//      ends only at a terminal state (A2A §3.1.6) — the same task continues when
+//      the operator answers (§3.4.3). So "stream closed" can never be how a
+//      reattach learns a turn is paused. The moment the stream reports a paused
+//      state — the opening snapshot, or a live status update when the turn parks
+//      while we're attached — the reattach settles as paused and lets go of the
+//      stream. Waiting for the close held the session "streaming" (Stop up, the
+//      form's Send/Dismiss disabled) for as long as the operator didn't answer
+//      the form they couldn't answer (#3930).
+//
 // Kept store-only (no component state) so any surface can mount it; HITL and
 // transient-status hooks are injected by the caller.
 
-import { api, type TurnStreamHandlers } from "../lib/api";
+import { api, supersededByFromStatus, type DurableChatTurn, type TurnStreamHandlers } from "../lib/api";
 import type { ChatMessage, HitlPayload } from "../lib/types";
-import { chatStore, mapMessageById } from "./chat-store";
+import { chatStore } from "./chat-store";
+import { applyDelegateProgress } from "./delegateProgress";
 import { isLiveServerTurn, serverTurnLabel } from "./server-turn-store";
+import { messagesFromDurableTurns } from "./sessionHydration";
 import { beginReattach, reconcileSessionStatus } from "./sessionLiveness";
-import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage } from "./turnReducers";
+import {
+  applyComponent,
+  applyReasoning,
+  applyText,
+  applyToolEvent,
+  applyUsage,
+  pauseBubble,
+  stopBubble,
+} from "./turnReducers";
+import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskStateUnknown, isTaskTerminal } from "./taskState";
 import { applyCanonicalTurnText, resetTurnForSnapshot, settleTurnBubbles } from "./turnText";
 
-// Kept in sync with streamWatchdog.ts TERMINAL_RE.
-const TERMINAL = /completed|failed|canceled|cancelled|rejected/i;
-// PAUSED, not over: the server parked the turn waiting on the operator (a HITL
-// form/approval, or an auth grant). The task resumes with the operator's answer,
-// so the message keeps its status — only the session un-busies.
-const PAUSED = /input.required|auth.required/i;
+export { pauseBubble, unpauseBubble } from "./turnReducers";
+
+// Task states come from taskState.ts, shared with every surface that settles a turn. A
+// PAUSED task is not over: the server parked the turn waiting on the operator (a HITL
+// form/approval, or an auth grant). The task resumes with the operator's answer, so the
+// message keeps its status — only the session un-busies.
 // Cold-agent / transient-transport signatures worth retrying (mirrors the
 // query client's retry policy for member boots).
 const COLD = /\b(409|502|503|504)\b|Failed to fetch|NetworkError|Load failed|network/i;
@@ -111,6 +133,43 @@ export function leadAssistantMessage(messages: ChatMessage[] | undefined): ChatM
     );
 }
 
+/** Mark `messageId` PAUSED on the operator (#3946): the turn parked (input-required) and
+ *  nothing is producing into the bubble until the operator answers. Its status stays
+ *  `streaming` — the turn is not over and the answer continues it — but the bubble and its
+ *  in-flight cards render as waiting: before this a fresh browser's reattach left the
+ *  `ask_human` card spinning with a climbing timer, and an empty bubble showed the
+ *  streaming placeholder, for as long as the form went unanswered. Only a streaming bubble
+ *  is touched. */
+export function markTurnPaused(messages: ChatMessage[], messageId: string): ChatMessage[] {
+  return messages.map((m) =>
+    m.id === messageId && m.status === "streaming" ? pauseBubble(m) : m,
+  );
+}
+
+/** The paused bubble a HITL answer just answered, settled. A reattach that found its turn
+ *  PAUSED leaves the bubble `streaming` on purpose — the turn was not over — and the answer
+ *  then continues the task in a NEW bubble (a form/question answer), so nothing else would
+ *  ever settle the old one: it spun its `ask_human` card and its spinner for good (#3930).
+ *  Marks `messageId` done, with any still-running tool card done too (the answer's own
+ *  stream closes that card in the new bubble). A bubble that is not streaming is left
+ *  alone. */
+export function settleAnsweredPause(messages: ChatMessage[], messageId: string | undefined): ChatMessage[] {
+  if (!messageId) return messages;
+  return messages.map((m) =>
+    m.id === messageId && m.status === "streaming"
+      ? {
+          ...m,
+          status: "done",
+          paused: undefined,
+          durableSnapshotFallback: undefined,
+          toolCalls: m.toolCalls?.map((c) =>
+            c.status === "running" ? { ...c, status: "done" as const, paused: undefined } : c,
+          ),
+        }
+      : m,
+  );
+}
+
 /** Stable dependency key for the session slot's reattach effect. Hydration can
  * fill an already-mounted empty fixed-id tab, so sessionId alone is not enough
  * to trigger the effect when its durable streaming assistant appears later. */
@@ -122,36 +181,104 @@ export function reattachKeyForMessages(messages: ChatMessage[] | undefined): str
 }
 
 function updateMessage(sessionId: string, assistantId: string, fn: (m: any) => any) {
-  // A missing bubble is a no-op: the updater hands back its input untouched.
-  chatStore.updateMessages(sessionId, (messages) => mapMessageById(messages, assistantId, fn));
+  const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  if (!cur) return;
+  chatStore.updateMessages(
+    sessionId,
+    cur.messages.map((m) => (m.id === assistantId ? fn(m) : m)),
+  );
 }
 
-function finalize(sessionId: string, assistantId: string, state: string, text: string) {
-  const failed = /fail|cancel/i.test(state);
-  // Reconcile the ORDERED parts against the authoritative full-turn text, not
-  // just the flat `content`. ChatMessageView renders a parts-bearing bubble FROM
-  // its parts (foldPlan) and only falls back to `content` when there are none —
-  // so a completed MULTI-PART turn whose trailing prose frame was stranded on the
-  // wire (the resubscribe stream closed after the tool cards but before the answer
-  // artifact-update) would otherwise render only the last tool card: the GetTask
-  // text landed in `content`, which a parts-bearing message never shows (#3082
-  // sibling). That text is the whole TURN's answer and the turn may span several
-  // bubbles (a consumed steer / delegation split it), so it is distributed across
-  // them — landing all of it on the live bubble would draw the earlier bubble's
-  // prose a second time. Mirrors the live path's finalizeFromTask.
-  chatStore.updateMessages(sessionId, (messages) => {
-    if (!messages.some((m) => m.id === assistantId)) return messages; // bubble gone: no-op
-    const reconciled = text ? applyCanonicalTurnText(messages, assistantId, text) : messages;
-    return settleTurnBubbles(
-      reconciled.map((m) => {
-        if (m.id !== assistantId) return m;
-        const toolCalls = m.toolCalls?.map((c) => (c.status === "running" ? { ...c, status: "done" as const } : c));
-        return { ...m, status: failed ? "error" : "done", toolCalls, durableSnapshotFallback: undefined };
-      }),
-      assistantId,
+/** `settledAt`: the task's own settle instant (GetTask's status timestamp — the `last_updated` a
+ *  reload shows as the footer time), else the moment this reattach saw it end. The bubble's
+ *  hydration-time `createdAt` (when the turn was still WORKING) is never kept: live and reload
+ *  must show the same time (#4154). */
+function finalize(sessionId: string, assistantId: string, state: string, text: string, settledAt?: number) {
+  const at = settledAt ?? Date.now();
+  // failed / canceled / rejected — the one failure set every settling surface shares
+  // (#3957: this read `/fail|cancel/`, so a REJECTED turn settled as done).
+  const failed = isTaskFailed(state);
+  const canceled = isTaskCanceled(state);
+  const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  if (cur) {
+    // Reconcile the ORDERED parts against the authoritative full-turn text, not
+    // just the flat `content`. ChatMessageView renders a parts-bearing bubble FROM
+    // its parts (foldPlan) and only falls back to `content` when there are none —
+    // so a completed MULTI-PART turn whose trailing prose frame was stranded on the
+    // wire (the resubscribe stream closed after the tool cards but before the answer
+    // artifact-update) would otherwise render only the last tool card: the GetTask
+    // text landed in `content`, which a parts-bearing message never shows (#3082
+    // sibling). That text is the whole TURN's answer and the turn may span several
+    // bubbles (a consumed steer / delegation split it), so it is distributed across
+    // them — landing all of it on the live bubble would draw the earlier bubble's
+    // prose a second time. Mirrors the live path's finalizeFromTask.
+    const reconciled = text ? applyCanonicalTurnText(cur.messages, assistantId, text) : cur.messages;
+    chatStore.updateMessages(
+      sessionId,
+      settleTurnBubbles(
+        reconciled.map((m) => {
+          if (m.id !== assistantId) return m;
+          // A stopped turn settles neutral, its unfinished cards STOPPED (#4076).
+          if (canceled) return { ...stopBubble(m, { at }), durableSnapshotFallback: undefined };
+          const toolCalls = m.toolCalls?.map((c) =>
+            c.status === "running" ? { ...c, status: "done" as const, paused: undefined } : c,
+          );
+          return {
+            ...m,
+            status: failed ? "error" : "done",
+            paused: undefined,
+            toolCalls,
+            createdAt: at,
+            durableSnapshotFallback: undefined,
+          };
+        }),
+        assistantId,
+      ),
     );
-  });
-  chatStore.setSessionStatus(sessionId, failed ? "error" : "idle");
+  }
+  chatStore.setSessionStatus(sessionId, failed && !canceled ? "error" : "idle");
+}
+
+// ── a pause another task took over (#3963) ─────────────────────────────────────────────
+//
+// A plain message sent while a turn waits on the operator — from another surface, or from a
+// console that had lost the form — is held and RE-PARKS the pause on a new task; the old task
+// is completed with a pointer to it. A console reattaching to the old task (a warm tab that
+// last saw it parked) found a finished turn and settled it: the form never came back, the
+// next composer reply was held and re-asked on yet another task, and so on. The reattach now
+// follows the pointer: the old bubble settles, and the task(s) that took the pause over are
+// drawn after it the way hydration draws them — the live one last, so the slot's reattach
+// resubscribes to IT and the form comes back.
+
+/** Hops followed at most: each is one GetTask, and a chain longer than this is not one a
+ *  person made by hand. */
+const MAX_SUCCESSORS = 5;
+
+/** The tasks that took `firstId`'s pause over, oldest first, following each one's own
+ *  pointer. Best-effort: a hop that fails ends the chain there. */
+async function successorTurns(firstId: string, cancelled: () => boolean): Promise<DurableChatTurn[]> {
+  const turns: DurableChatTurn[] = [];
+  const seen = new Set<string>();
+  let next: string | undefined = firstId;
+  while (next && !seen.has(next) && turns.length < MAX_SUCCESSORS && !cancelled()) {
+    seen.add(next);
+    const turn: DurableChatTurn | null = await api.getTaskTurn(next).catch(() => null);
+    if (!turn) break;
+    turns.push(turn);
+    next = supersededByFromStatus(turn.status);
+  }
+  return turns;
+}
+
+/** Draw the turns that took a settled pause over after the session's transcript — skipping
+ *  any this console already shows (it sent that message itself) — with the live one last. */
+export function appendSuccessorTurns(sessionId: string, turns: DurableChatTurn[]) {
+  const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+  if (!cur || !turns.length) return;
+  const shown = new Set(cur.messages.map((m) => m.taskId).filter(Boolean));
+  const fresh = turns.filter((turn) => !shown.has(turn.task_id));
+  if (!fresh.length) return;
+  chatStore.updateMessages(sessionId, [...cur.messages, ...messagesFromDurableTurns(fresh)]);
 }
 
 /** Reattach the stuck assistant message to its server-owned task. Returns a
@@ -184,6 +311,17 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     reconcileSessionStatus(sessionId);
   }
 
+  // Set once the subscription reports the task PAUSED on the operator (step 4 above).
+  // `detached` then mutes whatever the dropped stream still delivers: the desktop relay
+  // cannot be aborted, and an answer continuing this task must not be written into the
+  // bubble by a producer that already let go of it.
+  let paused = false;
+  let detached = false;
+  let onPaused: () => void = () => {};
+  const pausedSignal = new Promise<"paused">((resolve) => {
+    onPaused = () => resolve("paused");
+  });
+
   const handlers: TurnStreamHandlers = {
     signal: controller.signal,
     // Every Task frame is a full authoritative snapshot, not a delta. Reset
@@ -196,7 +334,8 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       // split to place a consumed steer / delegation folds back to one bubble first
       // (resetTurnForSnapshot) — the snapshot flattens every text frame into one
       // accumulation and cannot honestly re-derive where the split belonged.
-      chatStore.updateMessages(sessionId, (messages) => resetTurnForSnapshot(messages, assistantId));
+      const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+      if (cur) chatStore.updateMessages(sessionId, resetTurnForSnapshot(cur.messages, assistantId));
       updateMessage(sessionId, assistantId, (m) => ({
         ...m,
         content: "",
@@ -207,6 +346,8 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         usage: undefined,
         contextWindow: undefined,
         durableSnapshotFallback: undefined,
+        // The snapshot says what state the turn is in now; a pause is re-marked below.
+        paused: undefined,
       }));
     },
     onStatus: (status) => hooks.onStatus?.(status),
@@ -216,7 +357,8 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         return;
       }
       // A replace carries the whole turn — distribute it (turnText.ts).
-      chatStore.updateMessages(sessionId, (messages) => applyCanonicalTurnText(messages, assistantId, text));
+      const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+      if (cur) chatStore.updateMessages(sessionId, applyCanonicalTurnText(cur.messages, assistantId, text));
     },
     onReasoning: (delta) => updateMessage(sessionId, assistantId, (m) => applyReasoning(m, delta)),
     onToolCall: (evt) => {
@@ -224,6 +366,13 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
       updateMessage(sessionId, assistantId, (m) => applyToolEvent(m, evt));
     },
     onComponent: (spec) => updateMessage(sessionId, assistantId, (m) => applyComponent(m, spec)),
+    // A coding delegate's live state (#3979) — on its mention card or ask row, wherever it is.
+    onDelegateProgress: (evt) => {
+      const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+      if (!cur) return;
+      const next = applyDelegateProgress(cur.messages, evt);
+      if (next !== cur.messages) chatStore.updateMessages(sessionId, next);
+    },
     onCost: (usage) => updateMessage(sessionId, assistantId, (m) => applyUsage(m, usage)),
     onContext: (contextWindow) => updateMessage(sessionId, assistantId, (m) => ({ ...m, contextWindow })),
     onInputRequired: (payload) => hooks.onHitl?.(payload),
@@ -244,50 +393,110 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
         if (!COLD.test(String(err))) sawTask = false; // gone/rejected — un-stick below
       }
       if (cancelled) return;
-      if (PAUSED.test(state)) {
+      if (isTaskPaused(state)) {
         // Paused on operator input — stop polling NOW (this used to spin the
         // full MAX_POLLS budget holding the session "streaming", which kept the
         // re-rendered HITL form's buttons disabled) and free the composer. No
         // finalize: the turn isn't over, the replay above re-rendered the form.
+        const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+        if (cur) chatStore.updateMessages(sessionId, markTurnPaused(cur.messages, assistantId));
         chatStore.setSessionStatus(sessionId, "idle");
         return;
       }
-      if (!sawTask || !state || TERMINAL.test(state)) {
-        const { state: s2, text } = await api.getTask(taskId).catch(() => ({ state: "", text: "" }));
+      // Over, gone, or a state the server cannot name (`unknown` / UNSPECIFIED): nothing
+      // will ever move it on, so settle now rather than holding the session "streaming"
+      // for the whole MAX_POLLS budget (#3957).
+      if (!sawTask || !state || isTaskTerminal(state) || isTaskStateUnknown(state)) {
+        const { state: s2, text, supersededBy, settledAt } = await api
+          .getTask(taskId)
+          .catch(() => ({ state: "", text: "", supersededBy: undefined, settledAt: undefined }));
         if (cancelled) return; // a late answer must not settle over a turn started since the cancel
-        finalize(sessionId, assistantId, s2 || state, text);
+        await settle(s2 || state, text, supersededBy, settledAt);
         return;
       }
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
   }
 
+  // The subscription's handlers: the shared ones, muted once the stream is let go, plus the
+  // paused-state watch.
+  const streamHandlers: TurnStreamHandlers = {
+    ...(Object.fromEntries(
+      Object.entries(handlers).map(([key, value]) => [
+        key,
+        typeof value === "function"
+          ? (...args: unknown[]) => {
+              if (!detached) (value as (...a: unknown[]) => void)(...args);
+            }
+          : value,
+      ]),
+    ) as TurnStreamHandlers),
+    onTaskState: (state) => {
+      if (detached || !isTaskPaused(state)) return;
+      paused = true;
+      detached = true;
+      onPaused();
+      controller.abort(); // release the socket the server keeps open for the answer
+    },
+  };
+
+  /** The turn is over: finalize it — and when its pause was taken over by another task,
+   *  draw that task after it (fetched FIRST: once the bubble settles the slot cancels this
+   *  reattach, so both land in one synchronous step). */
+  async function settle(state: string, text: string, supersededBy: string | undefined, settledAt?: number) {
+    const successors = supersededBy ? await successorTurns(supersededBy, () => cancelled) : [];
+    if (cancelled) return;
+    finalize(sessionId, assistantId, state, text, settledAt);
+    appendSuccessorTurns(sessionId, successors);
+  }
+
+  /** Paused on the operator: un-busy the session so the re-rendered form's buttons work,
+   *  but DON'T finalize — stamping the message "done" would misrepresent a turn the
+   *  server still owns. The bubble is marked paused instead, so it and its in-flight
+   *  `ask_human` card render as waiting rather than spinning (#3946). */
+  function settlePaused() {
+    const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+    if (cur) chatStore.updateMessages(sessionId, markTurnPaused(cur.messages, assistantId));
+    chatStore.setSessionStatus(sessionId, "idle");
+  }
+
   async function run() {
     chatStore.setSessionStatus(sessionId, "streaming");
     for (let attempt = 0; attempt < MAX_ATTEMPTS && !cancelled; attempt++) {
       try {
-        await api.resumeTask(taskId, sessionId, handlers);
+        const subscription = Promise.resolve(api.resumeTask(taskId, sessionId, streamHandlers));
+        // Once paused, the subscription's own end (an abort error, or never on desktop)
+        // is no longer anyone's business.
+        subscription.catch(() => {});
+        const outcome = await Promise.race([subscription.then(() => "closed" as const), pausedSignal]);
+        if (cancelled) return;
+        if (outcome === "paused") {
+          settlePaused();
+          return;
+        }
         // Stream closed = the turn is over (terminal-by-state, A2A 1.0). Confirm
         // and finalize off the durable task.
-        if (cancelled) return;
-        const { state, text } = await api.getTask(taskId).catch(() => ({ state: "completed", text: "" }));
+        const { state, text, supersededBy, settledAt } = await api
+          .getTask(taskId)
+          .catch(() => ({ state: "completed", text: "", supersededBy: undefined, settledAt: undefined }));
         // Cancelled while GetTask was out: the cancel already handed the session back, and a
         // turn started since owns it now — finalize would set it idle mid-turn (Stop gone,
         // Send live), inviting a second concurrent turn into this slot.
         if (cancelled) return;
-        if (PAUSED.test(state)) {
-          // Waiting on the operator (HITL / auth): un-busy the session so the
-          // re-rendered form's buttons work, but DON'T finalize — stamping the
-          // message "done" would misrepresent a turn the server still owns.
-          // Mirrors the live path, where the stream closing on input-required
-          // lands on idle without touching the message.
-          chatStore.setSessionStatus(sessionId, "idle");
+        if (isTaskPaused(state)) {
+          // Paused with no paused frame on the stream (an older server, or a stream that
+          // closed as the task parked): same settle.
+          settlePaused();
           return;
         }
-        finalize(sessionId, assistantId, state || "completed", text);
+        await settle(state || "completed", text, supersededBy, settledAt);
         return;
       } catch (err) {
         if (cancelled) return;
+        if (paused) {
+          settlePaused();
+          return;
+        }
         if (COLD.test(String(err))) {
           await new Promise((r) => setTimeout(r, BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)]));
           continue;
@@ -325,16 +534,6 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
  *  finds no streaming bubble and nothing to reattach. Before, it sat "streaming" for good;
  *  now the reconciler reads that nothing is live and returns it to idle. */
 export function reattachOrReconcile(sessionId: string, hooks: ReattachHooks = {}): (() => void) | undefined {
-  // ADR 0114 D2: nothing reattaches (or reads "no live turn") off a transcript that
-  // hasn't been read. A `pending` session waits — the slot re-runs this once it loads.
-  // A `failed` one gets the status-only reconcile (it writes no messages), so its
-  // composer can't stay locked forever.
-  const loadState = chatStore.loadState(sessionId);
-  if (loadState === "pending") return undefined;
-  if (loadState === "failed") {
-    reconcileSessionStatus(sessionId);
-    return undefined;
-  }
   const snap = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   // The same bubble `reattachKey` names: a participant's row after the preview is not it.
   const last = leadAssistantMessage(snap?.messages);

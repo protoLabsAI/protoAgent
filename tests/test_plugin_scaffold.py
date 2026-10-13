@@ -98,6 +98,7 @@ def test_scaffold_with_tests_is_shippable(tmp_path):
     assert "test" in ci["jobs"]
 
 
+@pytest.mark.platform_sensitive
 def test_scaffolded_suite_passes_end_to_end(tmp_path):
     """The generated suite is GREEN out of the box — run pytest on the scaffolded plugin in
     a subprocess (cwd = the plugin, where ``graph`` is absent, so the vendored testkit's

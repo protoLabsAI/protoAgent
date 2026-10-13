@@ -31,6 +31,8 @@ from graph.providers.oauth import (
     resolve_codex_oauth,
 )
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 _REAL_KEYCHAIN_READ = oauth_mod._read_claude_keychain
 

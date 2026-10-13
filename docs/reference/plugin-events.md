@@ -35,36 +35,37 @@ of what the emitting call sites pass; a key may be absent on a given event.
 
 | Topic | Payload keys | Emitted from |
 |---|---|---|
-| `activity.message` | `context_id`, `error`, `origin`, `priority`, `role`, `state`, `stimulus`, `task_id`, `text`, `trigger` | `server/a2a.py` |
-| `background.completed` | `description`, `job_id`, `origin_session`, `result`, `status`, `subagent_type` | `background/manager.py`, `server/a2a.py` |
-| `background.progress` | `error`, `job_id`, `output`, `phase`, `task_id`, `tool`, `tool_call_id` | `server/a2a.py` |
-| `background.started` | `description`, `job_id`, `origin_session`, `status`, `subagent_type` | `background/manager.py` |
-| `chat.progress` | `session_id`, `task_id` | `server/a2a.py` |
-| `chat.resumed` | `error`, `origin`, `session_id`, `state`, `task_id`, `text`, `trigger` | `server/a2a.py` |
-| `goal.achieved / goal.failed` | `condition`, `evidence`, `reason`, `session_id`, `status` | `graph/goals/controller.py` |
-| `goal.changed` | `session_id` | `graph/goals/store.py` |
-| `goal.iteration` | `condition`, `iteration`, `max_iterations`, `reason`, `session_id` | `graph/goals/controller.py` |
-| `inbox.item` | `id`, `priority`, `source`, `text` | `operator_api/console_handlers.py` |
-| `media.saved` | `id`, `mime`, `plugin`, `url` | `graph/plugins/registry.py` |
-| `memory.hot_written` | `chunk_id`, `preview`, `source`, `source_type` | `knowledge/store.py` |
-| `model.fallback` | `fallback_index`, `fallback_model`, `primary_error` | `graph/agent.py` |
-| `persona.drift_detected` | `baseline_id`, `baseline_saved_at`, `rationale`, `score`, `signals`, `threshold` | `server/agent_init.py` |
-| `persona.untooled_action_detected` | `count`, `findings`, `soul_revision`, `trigger` | `server/agent_init.py` |
-| `plugin.changed` | `scope` | `server/agent_init.py` |
-| `plugin.updated` | `by`, `id`, `reloaded`, `resolved_sha`, `version` | `server/agent_init.py` |
-| `scheduler.completed` | _(varies)_ | `server/a2a.py` |
-| `scheduler.fired` | `job_id`, `prompt`, `schedule` | `scheduler/local.py` |
-| `turn.finished` | `ok`, `origin`, `session_id`, `task_id`, `trigger` | `background/manager.py`, `scheduler/local.py` |
-| `turn.input_required` | `context_id`, `prompt`, `task_id` | `server/a2a.py` |
-| `turn.resumed` | `context_id`, `task_id` | `server/a2a.py` |
-| `turn.started` | `origin`, `session_id`, `trigger` | `background/manager.py`, `scheduler/local.py` |
-| `turn.usage` | `context_id`, `cost_usd`, `duration_ms`, `input_tokens`, `model`, `output_tokens`, `soul_rev`, `state`, `task_id` | `server/turn_telemetry.py` |
-| `ui.navigate` | `plugin`, `view` | `graph/plugins/registry.py` |
-| `watch.changed` | `id` | `graph/watches/store.py` |
-| `watch.expired` | _(varies)_ | `graph/watches/controller.py` |
-| `watch.met` | _(varies)_ | `graph/watches/controller.py` |
-| `watch.stalled` | _(varies)_ | `graph/watches/controller.py` |
-| `watch.value_changed` | _(varies)_ | `graph/watches/controller.py` |
+| `activity.message` | `context_id`, `error`, `origin`, `priority`, `role`, `state`, `stimulus`, `task_id`, `text`, `trigger` | `src/server/a2a.py` |
+| `background.completed` | `description`, `error`, `job_id`, `origin_session`, `result`, `status`, `subagent_type` | `src/background/manager.py`, `src/server/a2a.py` |
+| `background.progress` | `error`, `job_id`, `output`, `phase`, `task_id`, `tool`, `tool_call_id` | `src/background/manager.py`, `src/server/a2a.py` |
+| `background.started` | `description`, `job_id`, `origin_session`, `status`, `subagent_type` | `src/background/manager.py` |
+| `chat.progress` | `session_id`, `task_id` | `src/server/a2a.py` |
+| `chat.resumed` | `error`, `origin`, `session_id`, `state`, `task_id`, `text`, `trigger` | `src/server/a2a.py` |
+| `fs.changed` | `paths`, `project`, `source` | `src/graph/fs_changes.py` |
+| `goal.achieved / goal.failed` | `condition`, `evidence`, `reason`, `session_id`, `status` | `src/graph/goals/controller.py` |
+| `goal.changed` | `session_id` | `src/graph/goals/store.py` |
+| `goal.iteration` | `condition`, `iteration`, `max_iterations`, `reason`, `session_id` | `src/graph/goals/controller.py` |
+| `inbox.item` | `id`, `priority`, `source`, `text` | `src/operator_api/console_handlers.py` |
+| `media.saved` | `id`, `mime`, `plugin`, `url` | `src/graph/plugins/registry.py` |
+| `memory.hot_written` | `chunk_id`, `preview`, `source`, `source_type` | `src/knowledge/store.py` |
+| `model.fallback` | `fallback_index`, `fallback_model`, `primary_error` | `src/graph/agent.py` |
+| `persona.drift_detected` | `baseline_id`, `baseline_saved_at`, `rationale`, `score`, `signals`, `threshold` | `src/server/maintenance_loops.py` |
+| `persona.untooled_action_detected` | `count`, `findings`, `soul_revision`, `trigger` | `src/server/maintenance_loops.py` |
+| `plugin.changed` | `scope` | `src/server/settings_apply.py` |
+| `plugin.updated` | `by`, `id`, `reloaded`, `resolved_sha`, `version` | `src/server/maintenance_loops.py` |
+| `scheduler.completed` | _(varies)_ | `src/server/a2a.py` |
+| `scheduler.fired` | `job_id`, `prompt`, `schedule` | `src/scheduler/local.py` |
+| `turn.finished` | `ok`, `origin`, `session_id`, `task_id`, `trigger` | `src/background/manager.py`, `src/scheduler/local.py` |
+| `turn.input_required` | `context_id`, `prompt`, `task_id` | `src/server/a2a.py` |
+| `turn.resumed` | `context_id`, `task_id` | `src/server/a2a.py` |
+| `turn.started` | `origin`, `session_id`, `trigger` | `src/background/manager.py`, `src/scheduler/local.py` |
+| `turn.usage` | `context_id`, `cost_usd`, `duration_ms`, `input_tokens`, `model`, `output_tokens`, `soul_rev`, `state`, `task_id` | `src/server/turn_telemetry.py` |
+| `ui.navigate` | `plugin`, `view` | `src/graph/plugins/registry.py` |
+| `watch.changed` | `id` | `src/graph/watches/store.py` |
+| `watch.expired` | _(varies)_ | `src/graph/watches/controller.py` |
+| `watch.met` | _(varies)_ | `src/graph/watches/controller.py` |
+| `watch.stalled` | _(varies)_ | `src/graph/watches/controller.py` |
+| `watch.value_changed` | _(varies)_ | `src/graph/watches/controller.py` |
 
 ## Publishing your own
 

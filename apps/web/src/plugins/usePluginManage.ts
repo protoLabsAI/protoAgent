@@ -3,7 +3,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
-import { uninstallToast } from "./installed";
+import { SURFACE_SWAP_RESTART, uninstallToast } from "./installed";
 import { invalidateChatCommands, queryKeys, runtimeStatusQuery } from "../lib/queries";
 
 // A plugin the actions target — just its id (for the API) + name (for the toast).
@@ -44,7 +44,7 @@ export function usePluginManage() {
       refreshAll();
       toast(
         res.restart_recommended
-          ? { tone: "info", title: "Plugin updated", message: `${p.name}${res.version ? ` to v${res.version}` : ""} — restart to fully load its console view or background surface.` }
+          ? { tone: "info", title: "Plugin updated", message: `${p.name}${res.version ? ` to v${res.version}` : ""}. ${SURFACE_SWAP_RESTART}` }
           : { tone: "success", title: "Plugin updated", message: `${p.name}${res.version ? ` to v${res.version}` : ""}${res.reloaded ? " (hot-reloaded)" : ""}.` },
       );
     },
@@ -60,7 +60,7 @@ export function usePluginManage() {
       // A plugin that now ships with protoAgent: only its ignored old copy went and the
       // built-in keeps running — say that, not "removed".
       const { title, message } = uninstallToast(p.name, res);
-      toast({ tone: res?.superseded_by_bundled ? "info" : "success", title, message });
+      toast({ tone: res?.superseded_by_bundled || res?.restart_recommended ? "info" : "success", title, message });
     },
     onError: (err: unknown, p) => toast({ tone: "error", title: "Couldn't uninstall plugin", message: `${p.name}: ${errMsg(err)}` }),
   });

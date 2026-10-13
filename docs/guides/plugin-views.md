@@ -5,7 +5,7 @@
 > `slot: "chat"` panel, the init/theme handshake, the event-bus bridge, the sandbox split, and the
 > DS kit helpers — is now **[Building a plugin view](/guides/building-react-plugin-views)**.
 >
-> For the short copy-me quickstart, see **[Build a plugin view](/how-to/build-a-plugin-view)**.
+> For the short copy-me quickstart, see **[Build a plugin view](/guides/build-a-plugin-view)**.
 
 A plugin can add its own **left-rail icon and view** to the operator console — a dashboard, board,
 chart, editor, or a panel that *replaces* the built-in chat (`slot: "chat"`) — by declaring it in the

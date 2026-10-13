@@ -4,14 +4,14 @@ import type { SystemNoteTone } from "../lib/types";
 
 // Build-time fork seam for COMPOSER ACTIONS (ADR 0061, extends ADR 0038 D3). A fork drops
 // a `src/ext/<name>.tsx` that calls `registerComposerAction()` to add a control to the chat
-// composer's actions slot (beside the model picker) — WITHOUT editing `ChatSurface.tsx`, so
+// composer's actions slot (beside the model picker) — WITHOUT editing `ChatSessionSlot.tsx`, so
 // `git pull upstream` stays conflict-free. Sibling of `registerSlashCommand` /
 // `registerSurface`: static registration at module load, first-wins (HMR-safe).
 //
 // This is an ADDITIVE seam — core's composer controls (attach, model select, send) are DS
 // PromptInput built-ins, not migrated; the registry is purely for fork-added actions.
 
-/** What a composer action's handler receives — the host (ChatSurface) builds it. */
+/** What a composer action's handler receives — the host (ChatSessionSlot) builds it. */
 export type ComposerActionContext = {
   /** The active chat session id, or null. */
   sessionId: string | null;

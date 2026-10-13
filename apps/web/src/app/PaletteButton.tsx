@@ -36,6 +36,7 @@ import { Search } from "lucide-react";
 import "./palette.css";
 
 import { Tooltip } from "@protolabsai/ui/overlays";
+import { Button } from "@protolabsai/ui/primitives";
 
 import { registeredKeybindings } from "../ext/keybindingRegistry";
 import { useKbIntents } from "../keybindings/intents";
@@ -75,16 +76,19 @@ export function PaletteButton() {
           : "Search commands, surfaces and agents"
       }
     >
-      <button
+      <Button
+        icon
+        size="xs"
+        variant="ghost"
         type="button"
-        className="util-btn palette-btn"
+        className="palette-btn"
         aria-label="Search commands"
         aria-keyshortcuts={aria || undefined}
         data-testid="palette-widget"
         onClick={toggle}
       >
         <Search size={14} />
-      </button>
+      </Button>
     </Tooltip>
   );
 }

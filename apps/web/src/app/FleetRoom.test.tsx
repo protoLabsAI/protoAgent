@@ -294,4 +294,38 @@ describe("MemberDiagnostics — exact task inspection", () => {
     expect(testid("diag-error-missing")).not.toBeNull();
     expect(text()).toContain("No such task");
   });
+
+  it("drives the DS Button loading state on Inspect while the task fetch is in flight (#3683)", async () => {
+    vi.spyOn(api, "memberDiagnosticsLogs").mockResolvedValue(LOGS_OK);
+    // A deferred fetch so the in-flight window is observable: the Inspect button binds Button's
+    // `loading` to the task query's isFetching, so it must go busy+disabled until this resolves.
+    let resolveTask: (t: DiagnosticsTask) => void = () => {};
+    vi.spyOn(api, "memberDiagnosticsTask").mockImplementation(
+      () => new Promise<DiagnosticsTask>((resolve) => (resolveTask = resolve)),
+    );
+    mount({ slug: "ava", name: "ava", agent: AVA, onClose: () => {} });
+    await flush();
+
+    const input = container.querySelector<HTMLInputElement>(".flr__diag-taskinput")!;
+    const inspectBtn = () => container.querySelector<HTMLButtonElement>(".flr__diag-inspect")!;
+    setValue(input, "t-1");
+    await flush();
+    act(() => inspectBtn().click());
+    await flush();
+
+    // In flight: Button's `loading` prop disables it and marks it aria-busy.
+    expect(inspectBtn().getAttribute("aria-busy")).toBe("true");
+    expect(inspectBtn().disabled).toBe(true);
+
+    // Resolving clears the loading state and the summary renders.
+    await act(async () => {
+      resolveTask(taskFixture());
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(inspectBtn().getAttribute("aria-busy")).toBeNull();
+    expect(inspectBtn().disabled).toBe(false);
+    expect(testid("diag-task")).not.toBeNull();
+  });
 });

@@ -172,7 +172,7 @@ async def test_goal_drive_pauses_on_handoff_instead_of_exhausting(monkeypatch):
     kinds = [k for k, _ in frames]
 
     assert "done" in kinds
-    assert any(k == "tool_start" and "paused" in str(p).lower() for k, p in frames)
+    assert any(k == "goal_status" and "paused" in str(p).lower() for k, p in frames)
     # The goal is PAUSED (still active), not exhausted — it will resume when the trigger fires.
     goal = ctrl.active_goal("h1")
     assert goal is not None and goal.status == "active"

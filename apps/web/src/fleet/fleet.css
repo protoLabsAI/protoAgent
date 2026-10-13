@@ -7,8 +7,8 @@
 .fleet-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 4px;
+  gap: var(--pl-space-2_5);
+  padding: var(--pl-space-2_5) var(--pl-space-1);
   border-bottom: 1px solid var(--pl-color-border);
 }
 .fleet-row.active {
@@ -42,8 +42,8 @@
   /* It is a <button> now (focusable — the keyboard reorder path), so strip the UA chrome. The
      padding/negative-margin pair grows the HIT box around a 14px glyph without widening the
      cell: it is the row's smallest control and the only one you have to grab. */
-  padding: 6px 2px;
-  margin: -6px -2px;
+  padding: var(--pl-space-1_5) var(--pl-space-0_5);
+  margin: calc(-1 * var(--pl-space-1_5)) calc(-1 * var(--pl-space-0_5));
   border: 0;
   background: none;
   color: var(--pl-color-fg-subtle);
@@ -60,7 +60,7 @@
 .fleet-drag-handle:focus-visible {
   outline: 2px solid var(--pl-color-focus);
   outline-offset: 2px;
-  border-radius: 3px;
+  border-radius: var(--pl-radius);
   color: var(--pl-color-fg);
 }
 /* A reorder save in flight blocks the drag + key paths — dim it and drop the grab cursor so it
@@ -90,13 +90,13 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
 }
 .fleet-name {
   font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 /* #2240 — the row name links to that agent's window. Styled as the row text rather than as
    a blue link: the list should still read as a list, so the affordance is the pointer + hover
@@ -109,7 +109,7 @@
   text-decoration: underline;
 }
 .fleet-name-link:focus-visible {
-  outline: 1px solid var(--pl-color-fg);
+  outline: 2px solid var(--pl-color-focus);
   outline-offset: 2px;
 }
 /* Inline display-rename sizing — the chrome is the DS EditableText (.pl-editable__input);
@@ -120,7 +120,7 @@
 }
 /* .fleet-active-tag retired (#832) — now DS <Badge status="info">. */
 .fleet-meta {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   font-family: var(--pl-font-mono);
 }
@@ -128,11 +128,11 @@
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .fleet-autostart-toggle {
-  margin-right: 6px;
-  font-size: 12px;
+  margin-right: var(--pl-space-1_5);
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 /* .fleet-empty retired (#832) — the manager + discover empty states now render
@@ -141,18 +141,18 @@
   color: var(--pl-color-fg-subtle);
 }
 .fleet-section-label {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin: 4px 0 8px;
+  margin: var(--pl-space-1) 0 var(--pl-space-2);
 }
 /* .fleet-error retired — the fleet manager + new-agent errors are DS <Alert status="error"> now. */
 .fleet-purge {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  font-size: 13px;
+  gap: var(--pl-space-2);
+  margin-top: var(--pl-space-2_5);
+  font-size: var(--pl-font-size-sm);
 }
 .fleet-purge input {
   width: auto;
@@ -163,48 +163,48 @@
 
 /* Network-discovery sub-section in the fleet manager (ADR 0042 §I). */
 .fleet-discover {
-  margin-top: 14px;
-  padding-top: 12px;
+  margin-top: var(--pl-space-3);
+  padding-top: var(--pl-space-3);
   border-top: 1px solid var(--pl-color-border);
 }
 
 .fleet-discover-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .fleet-add-remote {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 10px 0 4px;
-  padding: 12px;
+  gap: var(--pl-space-2_5);
+  margin: var(--pl-space-2_5) 0 var(--pl-space-1);
+  padding: var(--pl-space-3);
   border: 1px solid var(--pl-color-border);
-  border-radius: var(--pl-radius, 8px);
-  background: var(--pl-color-bg-raised, transparent);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-raised);
 }
 
 .fleet-add-remote-title {
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   font-weight: 600;
 }
 
 .fleet-add-remote .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 
 .fleet-add-remote .field > span {
-  font-size: 12px;
-  color: var(--pl-color-fg-muted, inherit);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
 }
 
 .fleet-add-remote-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 /* Pair… / Re-pair dialog (ADR 0113). Same field rhythm as the add-by-URL form; the code
@@ -212,7 +212,7 @@
 .fleet-pair-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 .fleet-pair-form .setting-desc {
   margin: 0;
@@ -220,15 +220,15 @@
 .fleet-pair-form .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .fleet-pair-form .field > span {
-  font-size: 12px;
-  color: var(--pl-color-fg-muted, inherit);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
 }
 .fleet-pair-form .fleet-pair-code {
-  font-family: var(--pl-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 18px;
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-font-size-xl);
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -238,5 +238,5 @@
 
 /* D10 plaintext opt-in: the warning sentence, then its required checkbox. */
 .fleet-insecure p {
-  margin: 0 0 8px;
+  margin: 0 0 var(--pl-space-2);
 }

@@ -1,0 +1,74 @@
+// Local-only dismissal of FINISHED goals from the live surfaces — the Work overview card's
+// "Recent" list and a chat tab's goal strip. A finished goal stays visible there for
+// RECENT_GOAL_WINDOW_S so the operator sees it land; dismissing hides it sooner. The Goals
+// panel (the full list) is unaffected, and nothing on the server changes.
+//
+// Keyed by `goalDismissKey` (session + finish time), so a goal that is restarted and finishes
+// again reappears. One shared store, so dismissing on the card also hides the chat strip.
+// localStorage is a per-viewer convenience here: every read/write is guarded, and a blocked
+// store just means dismissals last until reload.
+
+import { useSyncExternalStore } from "react";
+import { readKey, writeKey, removeKey } from "../lib/storage";
+
+const KEY = "protoagent.goals.dismissed";
+const CAP = 100;
+const listeners = new Set<() => void>();
+
+function load(): Set<string> {
+  try {
+    return new Set(JSON.parse(readKey("local", KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+let snapshot: Set<string> = load();
+
+// Another browser tab dismissed (or reset) a goal: the `storage` event fires in every OTHER
+// tab of this origin, so re-read and notify — a dismissal in one tab hides it in all of them.
+try {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== KEY && e.key !== null) return; // null = storage.clear()
+    snapshot = load();
+    listeners.forEach((l) => l());
+  });
+} catch {
+  // non-browser context — nothing to sync
+}
+
+/** Hide a finished goal (by its `goalDismissKey`) from the card + chat strip. */
+export function dismissGoal(key: string) {
+  const next = new Set(snapshot);
+  next.add(key);
+  snapshot = next;
+  try {
+    writeKey("local", KEY, JSON.stringify([...next].slice(-CAP)));
+  } catch {
+    // Storage blocked (private window / preview) — the dismissal holds until reload.
+  }
+  listeners.forEach((l) => l());
+}
+
+/** Test hook — forget every dismissal. */
+export function resetDismissedGoals() {
+  snapshot = new Set();
+  try {
+    removeKey("local", KEY);
+  } catch {
+    // ignore
+  }
+  listeners.forEach((l) => l());
+}
+
+function subscribe(fn: () => void) {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
+}
+
+/** The current dismissed set (a stable object until the next dismissal). */
+export function useDismissedGoals(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
+}

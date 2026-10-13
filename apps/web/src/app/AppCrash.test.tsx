@@ -95,6 +95,7 @@ describe("resetChatData (the existing reset, kept)", () => {
   it("still clears every protoagent.chat.sessions* key and stops the flush", () => {
     seed(10);
     resetChatData();
+    expect(posted).toEqual([{ name: "protoagent.storage", m: { type: "storage-reset" } }]);
     expect(window.localStorage.getItem("protoagent.chat.sessions")).toBeNull();
     expect(window.localStorage.getItem("protoagent.chat.sessions:gymBro")).toBeNull();
     expect(window.localStorage.getItem("protoagent.authToken")).toBe("tok");

@@ -19,6 +19,8 @@ from runtime.state import STATE
 from tools import fs_view
 from tools.fs_view import LINE_CUT_MARKER, MAX_LINE_CHARS, guess_language, read_window
 
+pytestmark = pytest.mark.platform_sensitive
+
 _needs_symlinks = pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
 
 

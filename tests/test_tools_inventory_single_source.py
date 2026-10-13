@@ -242,3 +242,29 @@ def test_pre_setup_fallback_without_a_graph(monkeypatch):
 
     names = {t["name"] for t in ch._operator_tools_list()["tools"]}
     assert "current_time" in names  # the keyless base is always present
+
+
+def test_subagent_only_tools_are_listed_flagged_and_uncounted(monkeypatch):
+    """A tools.subagent_only tool (ADR 0117) is live but not the lead's: the inventory lists
+    it flagged, so it doesn't vanish as if uninstalled, and ``count`` stays the lead's."""
+    from langchain_core.tools import tool
+
+    import operator_api.console_handlers as ch
+    import runtime.state as rs
+
+    @tool
+    def held_tool() -> str:
+        """Owned by a subagent."""
+        return ""
+
+    g, cfg = _graph(extra_tools=[held_tool], tools_subagent_only=["held_tool"])
+    monkeypatch.setattr(rs.STATE, "graph", g, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_tools", [held_tool], raising=False)
+    monkeypatch.setattr(rs.STATE, "mcp_tools", [], raising=False)
+
+    res = ch._operator_tools_list()
+    row = next(t for t in res["tools"] if t["name"] == "held_tool")
+    assert row["subagent_only"] is True and row["enabled"] is True
+    assert res["count"] == len(g.bound_tools)
+    assert not any(t.get("subagent_only") for t in res["tools"] if t["name"] != "held_tool")

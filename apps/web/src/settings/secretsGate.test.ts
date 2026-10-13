@@ -5,7 +5,7 @@ import { settingsSections } from "./sections";
 // The section table lives in ./sections (a leaf); SettingsSurface.tsx now holds only renderers.
 import src from "./sections.ts?raw";
 import surfaceSrc from "./SettingsSurface.tsx?raw";
-import flags from "../../../../runtime/flags.py?raw";
+import flags from "../../../../src/runtime/flags.py?raw";
 
 // Settings ▸ Secrets is gated to the dev channel (ADR 0068). The external secrets manager's
 // connect/test/sync flow stays behind `secrets-panel` until it's exercised end to end, so it

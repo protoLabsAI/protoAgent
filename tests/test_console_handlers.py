@@ -118,6 +118,27 @@ async def test_goals_set_kicks_an_initial_drive_turn(monkeypatch, tmp_path):
     assert kicks and kicks[0][0] == "s9"
 
 
+async def test_goal_kicks_carry_the_goal_run_job_id(monkeypatch, tmp_path):
+    # Every headless goal drive (set, resume, rearm) enqueues under `goal-run:<session>`, so
+    # the console streams it as a goal run instead of a collapsed "Scheduled task" card, and
+    # a second kick replaces the pending one rather than queueing a duplicate turn.
+    ctrl = _wire_goal_controller(monkeypatch, tmp_path)
+    import graph.sdk as sdk
+
+    job_ids: list = []
+    monkeypatch.setattr(
+        sdk, "run_in_session", lambda sid, prompt, **k: (job_ids.append(k.get("job_id")), {"ok": True})[1]
+    )
+    await ch._operator_goals_set({"session_id": "s9", "condition": "go", "verifier": {"type": "llm"}})
+    await ch._operator_goals_resume("s9")
+    finished = ctrl.store.get("s9")
+    finished.status, finished.finished_at = "achieved", 1.0
+    ctrl.store.set(finished)
+    res = await ch._operator_goals_rearm("s9", {})
+    assert res["resumed"] is True and res["kicked"] is True
+    assert job_ids == ["goal-run:s9", "goal-run:s9", "goal-run:s9"]
+
+
 async def test_goals_set_failure_does_not_kick(monkeypatch, tmp_path):
     # A rejected set (no condition) returns an error and never enqueues a turn.
     _wire_goal_controller(monkeypatch, tmp_path)

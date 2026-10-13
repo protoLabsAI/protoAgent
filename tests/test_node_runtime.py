@@ -15,6 +15,8 @@ from infra import node_runtime as nr
 from infra.paths import reset_instance_paths
 from runtime import node_install as ni
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def box(tmp_path, monkeypatch):

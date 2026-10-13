@@ -21,9 +21,9 @@
 
 .hitl-float .hitl-card {
   pointer-events: auto;
-  /* Elevated off the chat — the DS popover shadow, same literal fallback as
-     .slash-menu / .chat-report-card for themes without the token. */
-  box-shadow: var(--pl-shadow-popover, 0 2px 8px rgba(0, 0, 0, 0.22));
+  /* Elevated off the chat — the DS popover shadow, as on
+     .slash-menu / .chat-report-card. */
+  box-shadow: var(--pl-shadow-popover);
   /* A long wizard scrolls INSIDE the card (dvh per the mobile overlay convention)
      instead of growing to cover the conversation. */
   max-height: min(60dvh, 520px);
@@ -49,18 +49,17 @@
    the composer when a turn pauses as input-required.
    Accent sites (#2153) read --pl-color-accent — the semantic accent the
    ThemePanel workspace override writes on <html> (the same token the
-   composer's focus border follows via the theme-base.css bridge) — with the
-   literal --brand-indigo chain as fallback, so unthemed installs render
-   exactly as before. Guarded by hitl-accent.test.ts. */
+   composer's focus border follows via the theme-base.css bridge) — so the
+   card tracks the workspace accent. Guarded by hitl-accent.test.ts. */
 .hitl-card {
-  margin: 0 12px 8px;
-  padding: 12px 14px;
-  border: 1px solid var(--pl-color-accent, var(--brand-indigo, #6366f1));
+  margin: 0 var(--pl-space-3) var(--pl-space-2);
+  padding: var(--pl-space-3) var(--pl-space-3);
+  border: 1px solid var(--pl-color-accent);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 
 .hitl-title {
@@ -69,7 +68,7 @@
 
 .hitl-prompt {
   color: var(--pl-color-fg-muted);
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   /* A model-authored question can run long — scroll it inside the card instead of
      growing the card unbounded (the float variant additionally caps the whole card). */
   max-height: min(40dvh, 420px);
@@ -91,20 +90,20 @@
 .hitl-step {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .hitl-step-title {
   font-weight: 600;
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 
 .hitl-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
+  gap: var(--pl-space-1);
+  font-size: var(--pl-font-size-xs);
 }
 
 .hitl-field > span {
@@ -114,7 +113,7 @@
 .hitl-field-bool {
   flex-direction: row;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .hitl-field input,
@@ -124,8 +123,8 @@
   background: var(--pl-color-bg);
   color: var(--pl-color-fg);
   border: 1px solid var(--pl-color-border);
-  border-radius: 5px;
-  padding: 6px 8px;
+  border-radius: var(--pl-radius);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   font: inherit;
 }
 
@@ -140,12 +139,12 @@
 
 .hitl-detail {
   margin: 0;
-  padding: 8px 10px;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
-  border-radius: 5px;
+  border-radius: var(--pl-radius);
   font-family: var(--pl-font-mono);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   white-space: pre-wrap;
   word-break: break-all;
   color: var(--pl-color-fg);
@@ -158,7 +157,7 @@
 .hitl-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 /* Wizard header + step indicator (multi-step request_user_input). */
@@ -166,24 +165,24 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--pl-space-3);
 }
 
 .hitl-stepper {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .hitl-step-count {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   color: var(--pl-color-fg-subtle);
   white-space: nowrap;
 }
 
 .hitl-dots {
   display: inline-flex;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 
 .hitl-dot {
@@ -194,7 +193,7 @@
 }
 
 .hitl-dot[data-state="active"] {
-  background: var(--pl-color-accent, var(--brand-indigo, #6366f1));
+  background: var(--pl-color-accent);
 }
 
 .hitl-dot[data-state="done"] {
@@ -209,57 +208,57 @@
 .hitl-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 
 .hitl-card-option {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--pl-space-2);
   text-align: left;
-  padding: 10px;
+  padding: var(--pl-space-2_5);
   background: var(--pl-color-bg);
   color: var(--pl-color-fg);
   border: 1px solid var(--pl-color-border);
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   cursor: pointer;
   font: inherit;
   transition: border-color 0.1s ease, background 0.1s ease;
 }
 
 .hitl-card-option:hover {
-  border-color: var(--pl-color-accent, var(--brand-indigo, #6366f1));
+  border-color: var(--pl-color-accent);
 }
 
 /* Keyboard navigation (#1978): the roving focus must be visible even on the
-   already-selected card, where the brand border alone wouldn't distinguish it. */
+   already-selected card, where the accent border alone wouldn't distinguish it. */
 .hitl-card-option:focus-visible {
-  outline: 2px solid var(--pl-color-accent, var(--brand-indigo, #6366f1));
+  outline: 2px solid var(--pl-color-accent);
   outline-offset: 2px;
 }
 
 .hitl-card-option[data-selected] {
-  border-color: var(--pl-color-accent, var(--brand-indigo, #6366f1));
-  background: color-mix(in srgb, var(--pl-color-accent, var(--brand-indigo, #6366f1)) 12%, var(--pl-color-bg));
+  border-color: var(--pl-color-accent);
+  background: color-mix(in srgb, var(--pl-color-accent) 12%, var(--pl-color-bg));
 }
 
 .hitl-card-mark {
   line-height: 1.2;
-  color: var(--pl-color-accent, var(--brand-indigo, #6366f1));
+  color: var(--pl-color-accent);
 }
 
 .hitl-card-body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
 }
 
 .hitl-card-label {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
 }
 
 .hitl-card-desc {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }

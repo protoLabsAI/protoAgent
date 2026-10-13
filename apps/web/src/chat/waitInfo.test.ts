@@ -32,7 +32,7 @@ describe("parseWaitInput (#1914)", () => {
   });
 });
 
-describe("humanizeSeconds — loose mirror of tools/lg_tools.py::_humanize_duration", () => {
+describe("humanizeSeconds — loose mirror of tools/scheduler_tools.py::_humanize_duration", () => {
   it("phrases seconds / minutes / hours like the tool's own confirmation", () => {
     expect(humanizeSeconds(1)).toBe("1 second");
     expect(humanizeSeconds(40)).toBe("40 seconds");

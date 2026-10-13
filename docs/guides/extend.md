@@ -1,16 +1,18 @@
 # Extend protoAgent
 
-protoAgent is a template repo, so the honest answer to "how do I change it" depends on *what* you're
-changing:
+Choose how to customize your agent:
 
-- **Your agent's persona, prompts, and domain logic** → fork it. That's what a fork is for
-  ([Fork the template](/guides/fork-the-template)).
-- **A capability** — a tool, an integration, a console surface, a background worker → **write a
-  plugin.** No fork, nothing to keep merging, and it installs from a git URL.
-- **An untrusted third-party tool** → [connect an MCP server](/guides/mcp). Out-of-process, so it
-  doesn't run with the agent's privileges.
+| Change | How |
+| --- | --- |
+| Name, persona, or model | Use [Settings](/guides/react-tauri-ui#agent-settings-telemetry) |
+| A reusable procedure | Write a [skill](/guides/skills) |
+| Existing tools or integrations | [Install a plugin](/guides/plugin-registry) or [connect MCP](/guides/mcp) |
+| New tools, routes, background work, or console views | Build a plugin using the links below |
+| Core behavior or your own product | [Fork the template](/guides/fork-the-template) |
 
-This page is the map for the middle one.
+Plugins run in the server process with its privileges. MCP servers run separately,
+but still need appropriate filesystem and network limits; a separate process alone
+is not a sandbox. See [Plugin architecture](/explanation/plugin-architecture).
 
 ## Start here
 
@@ -19,12 +21,12 @@ This page is the map for the middle one.
 | **Never written one** | [Build your first plugin](/tutorials/first-plugin) — twenty minutes to a tool and a console view on a running agent |
 | **Want the model first** | [Plugin architecture](/explanation/plugin-architecture) — what's trusted, what's sandboxed, when your code runs |
 | **Building something specific** | [Plugins guide](/guides/plugins) — the contract, seam by seam |
-| **Need a signature** | [Reference](#reference) — generated from the code, so it's current |
+| **Need a signature** | [Reference](#reference) — source-generated signatures and fields |
 
 ## What a plugin can contribute
 
-Every one of these is a `register_*` call in your plugin's `register(registry)`
-([full list](/reference/plugin-registry-api)):
+Contribute through `register(registry)` and the plugin manifest
+([registry reference](/reference/plugin-registry-api)):
 
 | | |
 |---|---|
@@ -48,7 +50,7 @@ and **events** other plugins can subscribe to without importing it
 
 ## Reference
 
-Generated from the source on every build, and CI-gated — a new seam can't ship undocumented.
+The reference is generated from source signatures and docstrings. CI checks for drift.
 
 | Page | Contents |
 |---|---|
@@ -65,6 +67,6 @@ Generated from the source on every build, and CI-gated — a new seam can't ship
 | | |
 |---|---|
 | **Test it** | The [testkit](/reference/plugin-testkit) runs your real modules with no protoAgent installed — `plugin new --tests` scaffolds the suite and a CI workflow |
-| **Publish it** | [Install & publish plugins](/guides/plugin-registry) — git URLs, pinning, `plugins.lock` |
+| **Publish it** | [Install and manage plugins](/guides/plugin-registry) — git URLs, pinning, `plugins.lock` |
 | **Group several** | [Bundles](/guides/bundles) — one install for a whole capability stack |
 | **Extend the console itself** | [Frontend extension registries](/adr/0061-frontend-extension-registries) for fork-level UI work |

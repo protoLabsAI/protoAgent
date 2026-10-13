@@ -129,10 +129,31 @@ def test_a_failed_turn_is_recorded_as_failed(wired):
     assert row["state"] == "failed" and row["success"] == 0
 
 
+def test_a_failed_turn_with_no_usage_is_still_recorded(wired):
+    # #3929: a provider 400/429 on the FIRST call leaves the usage callback empty.
+    # The turn still failed — it must show up in /api/telemetry/recent as `failed`,
+    # exactly like a failed A2A turn, not vanish from the success rate.
+    _record({"usage_cb": _FakeUsageCallback({})}, state="failed", origin="v1")
+    rows = wired.recent()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["state"] == "failed" and row["success"] == 0
+    assert row["task_id"].startswith("v1:")
+    assert (row["input_tokens"], row["output_tokens"], row["total_tokens"], row["cost_usd"]) == (0, 0, 0, 0.0)
+
+
+def test_a_failed_turn_that_died_before_the_graph_is_recorded(wired):
+    # The impl raised before handing over a usage callback (empty sink). Still a
+    # failed turn the caller saw — recorded with zero usage.
+    _record({}, state="failed", origin="api-chat")
+    rows = wired.recent()
+    assert len(rows) == 1 and rows[0]["state"] == "failed" and rows[0]["total_tokens"] == 0
+
+
 def test_a_control_plane_reply_gets_no_row(wired):
-    # A turn that short-circuited before the graph — an unknown slash command,
-    # "setup not complete", a HITL hold — never populates the sink. It spent
-    # nothing, and counting it as a turn would corrupt every rate the store reports.
+    # A turn whose sink stayed empty ("setup not complete" never reaches the impl)
+    # spent nothing and ran no turn. Slash-command short-circuits and HITL parks/holds
+    # DO get a row now, matching A2A (#3945) — they mark the sink; this one did not.
     _record({})
     assert wired.recent() == []
 
@@ -161,6 +182,7 @@ async def test_the_wrapper_bills_a_turn_that_raised(wired, monkeypatch):
     bills what it spent before it died — the expensive failures are exactly the
     ones worth seeing."""
     chat_mod = _chat_module()
+    import server.turn_sync as turn_sync  # the impl's owner (#3917)
 
     cb = _FakeUsageCallback({"m": {"input_tokens": 500, "output_tokens": 20}}, llm_calls=1)
 
@@ -168,7 +190,7 @@ async def test_the_wrapper_bills_a_turn_that_raised(wired, monkeypatch):
         kw["_telemetry_sink"]["usage_cb"] = cb
         raise RuntimeError("provider exploded")
 
-    monkeypatch.setattr(chat_mod, "_chat_langgraph_impl", _boom)
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", _boom)
     with pytest.raises(RuntimeError):
         await chat_mod._chat_langgraph("hi", "sess-boom", origin="v1")
 
@@ -182,6 +204,7 @@ async def test_the_wrapper_reads_the_error_key_not_an_exception(wired, monkeypat
     carrying a structured `error`, so that key — not a raise — is what marks a
     turn failed."""
     chat_mod = _chat_module()
+    import server.turn_sync as turn_sync  # the impl's owner (#3917)
 
     cb = _FakeUsageCallback({"m": {"input_tokens": 7, "output_tokens": 2}})
 
@@ -189,7 +212,7 @@ async def test_the_wrapper_reads_the_error_key_not_an_exception(wired, monkeypat
         kw["_telemetry_sink"]["usage_cb"] = cb
         return [{"role": "assistant", "content": "**Error:** nope", "error": {"type": "server_error"}}]
 
-    monkeypatch.setattr(chat_mod, "_chat_langgraph_impl", _soft_fail)
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", _soft_fail)
     await chat_mod._chat_langgraph("hi", "sess-soft", origin="api-chat")
 
     assert wired.recent()[0]["state"] == "failed"

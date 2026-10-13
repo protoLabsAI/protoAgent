@@ -219,3 +219,49 @@ def resolve_capture_path(path: str | None, *, default_name: str) -> Path:
         )
     target.parent.mkdir(parents=True, exist_ok=True)
     return target
+
+
+def resolve_upload_path(path: str | None) -> Path:
+    """An upload SOURCE path fenced to :func:`capture_root`, or ``ValueError`` if it escapes.
+
+    Uploading reads a LOCAL file and hands its bytes to a third-party page, so the #3451
+    capture fence applies in **reverse**: a file may be uploaded only if it already lives
+    inside this plugin's own capture directory, so a prompt-injected page ("upload
+    ``~/.ssh/id_rsa``") cannot make the agent exfiltrate an arbitrary local file. The résumé
+    flow is therefore ``browser_pdf`` → ``browser_upload``: ``browser_pdf`` writes into this
+    same root (:func:`resolve_capture_path`) and returns the path to pass straight here. (A
+    wider, operator-configured upload root is a deliberate follow-up, not this fence.)
+
+    * a bare filename or a relative path (``resume.pdf``, ``out/cv.pdf``) → under the root;
+    * an absolute path → accepted ONLY if, after ``Path.resolve()`` (which normalises ``..``
+      and follows symlinks), it still lies inside the root — so ``..`` traversal, an absolute
+      path elsewhere, and a symlink inside the root that points out are all caught by one
+      check, exactly as for a capture;
+    * the file must EXIST and be NON-EMPTY (a zero-byte résumé is never worth uploading).
+    """
+    root = capture_root().resolve()
+    raw = str(path or "").strip()
+    if not raw:
+        raise ValueError(
+            "no file to upload: pass the path browser_pdf returned, or a filename / relative "
+            f"path inside the capture directory ({root})"
+        )
+    candidate = Path(raw).expanduser()
+    source = (candidate if candidate.is_absolute() else root / candidate).resolve()
+    # Containment FIRST, before any stat: a symlink inside the root that points out resolves
+    # to a real file elsewhere, and reading its size would mean touching it.
+    if not source.is_relative_to(root) or source == root:
+        raise ValueError(
+            "refusing to upload a file from outside the plugin's capture directory: a page "
+            "cannot pick an arbitrary local file. Produce the file with browser_pdf (which "
+            f"writes into {root}) and upload the path it returns."
+        )
+    if not source.is_file():
+        raise ValueError(f"no file to upload at {source} — produce it with browser_pdf first")
+    try:
+        empty = source.stat().st_size <= 0
+    except OSError as e:  # unreadable — treat as nothing to upload
+        raise ValueError(f"cannot read the file to upload at {source}: {e}") from e
+    if empty:
+        raise ValueError(f"the file to upload is empty ({source}), so there is nothing to attach")
+    return source

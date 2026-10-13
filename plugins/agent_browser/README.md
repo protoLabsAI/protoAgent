@@ -67,10 +67,42 @@ Homebrew, Cargo), or a path pinned in the `binary` setting, always wins over the
 | `workflows/` | declarative browser recipes (browse-and-extract, fill-form) |
 | `__init__.py` | `register()` — preflight, tools, the interactive panel; skills/workflows auto-discovered |
 
-Tests live with the host, in [`tests/test_agent_browser_plugin.py`](../../tests/test_agent_browser_plugin.py).
-The operator knobs (headed, allowed domains, profile, device, stealth, …) are editable in
-**Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:` in
-`langgraph-config.yaml`.
+Tests live with the host, in [`tests/test_agent_browser_plugin.py`](../../tests/test_agent_browser_plugin.py)
+(host-free: the CLI is mocked) and [`tests/test_agent_browser_forms_live.py`](../../tests/test_agent_browser_forms_live.py)
+(real browser — see below). The operator knobs (headed, allowed domains, profile, device,
+stealth, …) are editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:`
+in `langgraph-config.yaml`.
+
+## Live form tests (real browser)
+
+The form tools (`browser_select`, `browser_upload`, `browser_form_read`, `browser_click`'s
+JS fallback) run their logic as **in-page JavaScript** (`forms.py`). The mocked unit tests
+never execute that JS, so a vendor markup change — or a regression in the in-page code —
+would ship green. [`tests/test_agent_browser_forms_live.py`](../../tests/test_agent_browser_forms_live.py)
+closes that gap: it drives the **real** tools from `get_browser_tools` against saved,
+fully self-contained application-form fixtures in
+[`tests/fixtures/ats/`](../../tests/fixtures/ats/), opened over `file://` with **no
+network**, and asserts the widgets behave (the visa combobox commits "Yes", not the
+highlighted "Yes, Ireland…"; a phone country then number both read back; an upload reads its
+filename back; a wrong option is a hard `Error:`; a label still resolves after a reload).
+
+```bash
+pytest tests/test_agent_browser_forms_live.py
+```
+
+The whole module **skips** unless the `agent-browser` CLI resolves AND Chrome is available
+(the plugin's own `preflight` probe decides), so the default gate stays host-free and green.
+To run them you need the CLI (`npm i -g agent-browser`, or let the plugin auto-fetch it) and
+Chrome (`agent-browser install`).
+
+**Refreshing a fixture when a vendor changes markup.** Each file under `tests/fixtures/ats/`
+opens with an HTML comment recording the live form it models and the date it was captured.
+When the Greenhouse or Ashby form drifts, open the live form, read the relevant widget's DOM
+in devtools, and update the matching block in the fixture — keep the class names `forms.py`
+keys on (`select__control`, `select__single-value`, `select__menu`, `iti__selected-flag`,
+`iti__country`, `iti__country-name`), and keep the `<label for>` associations and the
+`<fieldset>`/`<legend>` around radio groups — then bump the "last modeled" date and re-run
+the live tests.
 
 ## The Browser panel
 

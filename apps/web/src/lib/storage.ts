@@ -61,6 +61,8 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   { id: "authToken", area: "local", pattern: /^protoagent\.authToken$/, category: "auth", slug: noSlug, evictable: false },
   { id: "deviceId", area: "local", pattern: /^protoagent\.deviceId$/, category: "auth", slug: noSlug, evictable: false },
   { id: "apiBase", area: "local", pattern: /^protoagent\.apiBase$/, category: "auth", slug: noSlug, evictable: false },
+  { id: "frame.sendTrust", area: "local", pattern: /^protoagent:frame-send-trust:v1$/, category: "auth", slug: noSlug, evictable: false },
+  { id: "frame.openLinkTrust", area: "local", pattern: /^protoagent:frame-openlink-trust:v1$/, category: "auth", slug: noSlug, evictable: false },
   // ── tenant ──
   { id: "tenant.uid", area: "local", pattern: /^protoagent\.tenant\.uid$/, category: "tenant", slug: noSlug, evictable: false },
   { id: "tenant.switched", area: "session", pattern: /^protoagent\.tenant\.switched$/, category: "ephemeral", slug: noSlug, evictable: false },
@@ -88,7 +90,9 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   { id: "chat.dismissedScheduled", area: "local", pattern: /^protoagent\.chat\.dismissedScheduled$/, category: "dismissals", slug: noSlug, evictable: false },
   { id: "chat.dismissedToolCalls", area: "local", pattern: /^protoagent\.chat\.dismissedToolCalls$/, category: "dismissals", slug: noSlug, evictable: false },
   { id: "bgjobs.seen", area: "local", pattern: /^protoagent\.bgjobs\.seen$/, category: "dismissals", slug: noSlug, evictable: false },
+  { id: "goals.dismissed", area: "local", pattern: /^protoagent\.goals\.dismissed$/, category: "dismissals", slug: noSlug, evictable: false },
   // ── prefs ──
+  { id: "newAgent.showPreviewArchetypes", area: "local", pattern: /^protoagent\.newAgent\.showPreviewArchetypes$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "keybindings", area: "local", pattern: /^protoagent\.keybindings$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "chat.inputHistory", area: "local", pattern: /^protoagent\.chat\.inputHistory$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "fleet.recent", area: "local", pattern: /^protoagent\.fleet\.recent$/, category: "prefs", slug: noSlug, evictable: false },
@@ -209,8 +213,7 @@ const _querySimBytes: number | null = (() => {
   }
 })();
 
-// Gated like the Developer panel (ADR 0068): a dev build, or a runtime channel that isn't
-// prod (flags/flags.ts reports it once /api/flags answers). A production console ignores the
+// QA hooks are available only in dev builds or the dev runtime channel. A production console ignores the
 // knob and the crash hook, so a crafted link can't switch a real operator's saving off.
 let _devHooks: boolean = (() => {
   try {
@@ -319,8 +322,12 @@ function runEviction(key: string, bytes: number): number {
 }
 
 try {
-  // Another tab removed or rewrote something — space may have come back.
-  globalThis.addEventListener?.("storage", () => releaseLatch());
+  // A sibling tab must actually free space before clearing the warning.
+  globalThis.addEventListener?.("storage", (event: StorageEvent) => {
+    if (event.storageArea && event.storageArea !== store("local")) return;
+    if (event.key === null || (event.oldValue !== null &&
+        (event.newValue === null || event.newValue.length < event.oldValue.length))) releaseLatch();
+  });
 } catch {
   /* non-browser context */
 }
@@ -339,16 +346,6 @@ export function readKey(area: StorageArea, key: string): string | null {
   }
 }
 
-/** Read a key, distinguishing "absent" from "unreadable": `null` when the key is missing,
- *  but THROWS when storage is unavailable or the read itself fails. For callers (the
- *  ADR 0114 load barrier) that must never treat a failed read as an empty one. */
-export function readKeyOrThrow(area: StorageArea, key: string): string | null {
-  const s = store(area);
-  if (!s) throw new Error(`${area}Storage is unavailable`);
-  const v = s.getItem(key);
-  return typeof v === "string" ? v : null;
-}
-
 /** Write a key. Never throws. On a localStorage quota error: evict once, retry once, then
  *  latch `failing`. While latched, evictable keys fail fast without touching storage. */
 export function writeKey(area: StorageArea, key: string, value: string): WriteResult {
@@ -363,14 +360,15 @@ export function writeKey(area: StorageArea, key: string, value: string): WriteRe
     /* unreadable — treat as new */
   }
   // A write that doesn't grow usage (a chat deleted, a layout reset) can always go through —
-  // it frees space rather than taking it, so the latch must never block it.
-  const shrinking = prevBytes !== null && bytes <= prevBytes;
+  // it does not need extra space, so the latch must never block it.
+  const nonGrowing = prevBytes !== null && bytes <= prevBytes;
+  const shrinking = prevBytes !== null && bytes < prevBytes;
   const latched = area === "local" && _pressure.state === "failing";
   const evictable = matchKey(area, key)?.spec.evictable ?? false;
-  if (latched && evictable && !shrinking) return { ok: false, reason: "quota" };
+  if (latched && evictable && !nonGrowing) return { ok: false, reason: "quota" };
   try {
     rawSet(area, s, key, value);
-    if (area === "local" && shrinking) releaseLatch(); // usage didn't grow — space came back
+    if (area === "local" && shrinking) releaseLatch(); // only a strictly smaller write proves space came back
     return { ok: true };
   } catch (err) {
     if (!isQuotaError(err)) return { ok: false, reason: "unavailable" };
@@ -420,11 +418,12 @@ export function removeKey(area: StorageArea, key: string): void {
   const s = store(area);
   if (!s) return;
   try {
+    const existed = s.getItem(key) !== null;
     s.removeItem(key);
+    if (area === "local" && existed) releaseLatch();
   } catch {
     return;
   }
-  if (area === "local") releaseLatch();
 }
 
 /** The zustand `StateStorage` adapter (for `createJSONStorage(() => persistStorage(area))`).

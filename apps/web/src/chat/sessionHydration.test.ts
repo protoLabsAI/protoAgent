@@ -11,12 +11,24 @@ import {
 import type { ChatMessage } from "../lib/types";
 import {
   HYDRATION_CONCURRENCY,
+  SESSION_INDEX_LIMIT,
+  SESSION_PARKED_LIMIT,
+  SESSION_TURN_LIMIT,
   hydrateDurableChatSessions,
+  isBehindServer,
+  localTurnIds,
   messagesFromDurableTurn,
+  parseServerInstant,
+  pinParkedSessions,
+  reconcileServerTurns,
   sessionFromDurableTurns,
 } from "./sessionHydration";
+import { MAX_SESSIONS } from "./chat-store";
 import { applyText, applyToolEvent } from "./turnReducers";
+import { foldPlan, textRuns } from "./parts";
+import { utf16Fnv1a } from "../lib/api/a2aStream";
 import { applyCanonicalTurnText } from "./turnText";
+import { sentTimestamp } from "./ChatMessageView";
 
 const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
 const COST = "https://proto-labs.ai/a2a/ext/cost-v1";
@@ -49,6 +61,37 @@ function deferred<T>() {
 }
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("server timestamps are UTC, zoned or not (#4145)", () => {
+  // 23:11 on Oct 9 at UTC-7 (PDT) is 06:11 UTC on Oct 10. Read as LOCAL time, the zoneless
+  // spelling an older server sent showed that chat at "6:11 AM".
+  const INSTANT = Date.UTC(2026, 9, 10, 6, 11, 4);
+  const SPELLINGS = ["2026-10-10T06:11:04", "2026-10-10T06:11:04Z", "2026-10-10T06:11:04+00:00", "2026-10-10 06:11:04"];
+  // A fixed operator zone (Node re-reads TZ when it changes), restored after each case.
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("parses a zoneless and a zoned timestamp as the same instant", () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    for (const value of SPELLINGS) expect(parseServerInstant(value)).toBe(INSTANT);
+    expect(parseServerInstant("2026-10-10T08:11:04+02:00")).toBe(INSTANT); // an explicit zone is kept
+    expect(parseServerInstant(null)).toBeNaN();
+    expect(parseServerInstant("not a date")).toBeNaN();
+  });
+
+  it("renders a hydrated answer and session in the operator's local zone, for either spelling", () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    for (const value of ["2026-10-10T06:11:04", "2026-10-10T06:11:04+00:00"]) {
+      const answer = messagesFromDurableTurn(turn({ last_updated: value })).find((m) => m.role === "assistant");
+      expect(answer?.createdAt).toBe(INSTANT);
+      const local = new Date(answer!.createdAt!);
+      expect([local.getDate(), local.getHours(), local.getMinutes()]).toEqual([9, 23, 11]);
+      expect(sentTimestamp(answer!.createdAt)?.label).toMatch(/11:11/);
+
+      const session = sessionFromDurableTurns({ ...summary(), last_updated: value }, [turn({ last_updated: value })]);
+      expect([session?.createdAt, session?.updatedAt]).toEqual([INSTANT, INSTANT]);
+    }
+  });
+});
 
 describe("durable turn sent times (the chat footer's sent-time widget reads createdAt)", () => {
   const LANDED = Date.parse("2026-08-20T12:00:00Z");
@@ -95,6 +138,57 @@ describe("durable turn sent times (the chat footer's sent-time widget reads crea
 });
 
 describe("durable turn conversion", () => {
+  it("splits a turn at the HITL answer that continued it on the same task (#3930)", () => {
+    // A form answer continues its parked task (A2A §3.4.3), so ONE durable task holds the
+    // question, the operator's answer, and the work after it. The rebuild draws the answer
+    // where it was sent — not dropped, not merged into the opening prompt.
+    const messages = messagesFromDurableTurn(
+      turn({
+        text: "You like banana.",
+        artifacts: [{ parts: [{ text: "You like banana." }] }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "Ask me my favourite fruit" }] },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "ask-1", name: "ask_human", phase: "started", args: "" } },
+          },
+          { role: "ROLE_AGENT", parts: [{ text: "Favourite fruit?" }] },
+          { role: "ROLE_USER", parts: [{ text: "banana" }], metadata: { hitl_resume: true } },
+          {
+            role: "ROLE_AGENT",
+            parts: [],
+            metadata: { [TOOL]: { toolCallId: "ask-1", name: "ask_human", phase: "completed", result: "banana" } },
+          },
+        ],
+      }),
+    );
+    expect(messages.map((m) => [m.role, m.content])).toEqual([
+      ["user", "Ask me my favourite fruit"],
+      ["assistant", ""],
+      ["user", "banana"],
+      ["assistant", "You like banana."],
+    ]);
+    expect(messages[1]).toMatchObject({ status: "done", splitOf: "durable-task-1-assistant" });
+    expect(messages[1].toolCalls?.[0]).toMatchObject({ name: "ask_human", status: "done" });
+    expect(messages[3]).toMatchObject({ id: "durable-task-1-assistant", status: "done" });
+  });
+
+  it("a hidden continuation (an approval, a dismissal, a superseded-task settle) splits nothing", () => {
+    const messages = messagesFromDurableTurn(
+      turn({
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "deploy it" }] },
+          { role: "ROLE_USER", parts: [{ text: "approved" }], metadata: { hidden: true, hitl_resume: true } },
+        ],
+      }),
+    );
+    expect(messages.map((m) => [m.role, m.content])).toEqual([
+      ["user", "deploy it"],
+      ["assistant", "answer"],
+    ]);
+  });
+
   it("rebuilds the user bubble and drives assistant text/tools through shared reducers", () => {
     const messages = messagesFromDurableTurn(
       turn({
@@ -491,7 +585,6 @@ describe("boot hydration", () => {
       pendingDeleteRequest: null,
       pendingClearRequest: null,
       serverTurnControls: {},
-      loadStateMap: {},
     };
     expect(mergeHydratedSessions(current, [recovered]).sessions[0].incognito).toBe(true);
   });
@@ -546,7 +639,6 @@ describe("boot hydration", () => {
         pendingDeleteRequest: null,
         pendingClearRequest: null,
         serverTurnControls: {},
-        loadStateMap: {},
       },
       [recovered],
     );
@@ -623,7 +715,6 @@ describe("boot hydration", () => {
         pendingDeleteRequest: null,
         pendingClearRequest: null,
         serverTurnControls: {},
-        loadStateMap: {},
       },
       [recovered],
     );
@@ -683,7 +774,6 @@ describe("boot hydration", () => {
         pendingDeleteRequest: null,
         pendingClearRequest: null,
         serverTurnControls: {},
-        loadStateMap: {},
       },
       [recovered],
     );
@@ -778,7 +868,6 @@ describe("boot hydration", () => {
         pendingDeleteRequest: null,
         pendingClearRequest: null,
         serverTurnControls: {},
-        loadStateMap: {},
       },
       [recovered],
     );
@@ -823,7 +912,6 @@ describe("boot hydration", () => {
       pendingDeleteRequest: null,
       pendingClearRequest: null,
       serverTurnControls: {},
-      loadStateMap: {},
     };
     const recovered = sessionFromDurableTurns(summary(healthy.id), [turn({ text: canonical })]);
     if (!recovered) throw new Error("durable turn should produce a recovered session");
@@ -854,6 +942,57 @@ describe("boot hydration", () => {
     expect(reads.mock.calls.map(([id]) => id).sort()).toEqual(["chat-empty", "chat-fails", "chat-new"]);
     expect(commit).toHaveBeenCalledTimes(1);
     expect(commit.mock.calls[0][0].map((session) => session.id).sort()).toEqual(["chat-empty", "chat-new"]);
+  });
+
+  it("leaves a warm-cache PARKED turn to its reattach: not re-fetched, not clobbered (#3956)", async () => {
+    // Hydration skips a session already in the local cache on purpose — the local copy is
+    // the richer one. That is only safe because the live close now persists a parked turn
+    // as streaming + paused (settleStreamEnd): the boot sees a live turn, mounts the slot,
+    // and the reattach resubscribes to the session's OWN task and brings the form back.
+    const parked = {
+      id: "chat-parked",
+      title: "Fruit",
+      messages: [
+        { id: "u1", role: "user", content: "pick a fruit", status: "done" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          status: "streaming",
+          paused: true,
+          taskId: "task-parked",
+          toolCalls: [{ id: "ask-1", name: "ask_human", status: "running", paused: true }],
+          parts: [{ kind: "tools", ids: ["ask-1"] }],
+        },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    } as ChatSession;
+    expect(needsDurableHydration(parked)).toBe(false);
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [parked] } as never);
+    const commit = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [summary(parked.id)] });
+    const reads = vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [] });
+
+    await hydrateDurableChatSessions();
+
+    expect(reads).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+    // And a merge that did carry the recovered copy keeps the local parked bubble as is.
+    const current = {
+      sessions: [parked],
+      currentSessionId: parked.id,
+      activeSessions: [parked.id],
+      sessionStatusMap: {},
+      pendingDeleteRequest: null,
+      pendingClearRequest: null,
+      serverTurnControls: {},
+    };
+    const recovered = sessionFromDurableTurns(summary(parked.id), [
+      turn({ task_id: "task-parked", state: "TASK_STATE_INPUT_REQUIRED", status: { state: "TASK_STATE_INPUT_REQUIRED" }, text: "", artifacts: [] }),
+    ]);
+    expect(recovered).not.toBeNull();
+    expect(mergeHydratedSessions(current as never, [recovered!]).sessions[0]).toBe(parked);
   });
 
   it("fetches stale non-empty sessions that need durable render repair (#3340)", async () => {
@@ -993,7 +1132,7 @@ describe("boot hydration", () => {
 
     const hydration = hydrateDurableChatSessions();
     await vi.waitFor(() => expect(api.chatSessionTurns).toHaveBeenCalled());
-    chatStore.updateMessages(session.id, () => []);
+    chatStore.updateMessages(session.id, []);
     pending.resolve({ turns: [turn()] });
     await hydration;
 
@@ -1070,7 +1209,6 @@ describe("boot hydration", () => {
         pendingDeleteRequest: null,
         pendingClearRequest: null,
         serverTurnControls: {},
-        loadStateMap: {},
       } as never,
       [recovered],
     );
@@ -1078,5 +1216,442 @@ describe("boot hydration", () => {
     expect(
       messages.filter((m) => m.role === "assistant" && m.content.includes(ANSWER)).map((m) => m.id),
     ).toEqual(["msg-authored"]);
+  });
+});
+
+describe("a rejected durable turn (#3957)", () => {
+  it("rebuilds as an error, like failed — not as a clean answer", () => {
+    for (const state of ["TASK_STATE_REJECTED", "TASK_STATE_FAILED"]) {
+      const assistant = messagesFromDurableTurn(turn({ state, status: { state } })).find((m) => m.role === "assistant");
+      expect(assistant?.status, state).toBe("error");
+    }
+  });
+});
+
+describe("a stopped (canceled) durable turn (#4076)", () => {
+  const stoppedTurn = (state: string) =>
+    turn({
+      state,
+      status: { state },
+      text: "",
+      artifacts: [],
+      history: [
+        { role: "ROLE_USER", parts: [{ text: "Make me a mortgage table" }] },
+        { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "c1", name: "load_skill", phase: "started", args: "{}" } } },
+        { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "c1", name: "load_skill", phase: "completed", result: "ok" } } },
+        // Cancelled mid-call: a start frame, never a completion.
+        { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "c2", name: "show_artifact", phase: "started", args: "" } } },
+      ],
+    });
+
+  it("rebuilds neutral and marked stopped; the unfinished call reads stopped, not ✓ done", () => {
+    for (const state of ["TASK_STATE_CANCELED", "canceled", "TASK_STATE_CANCELLED"]) {
+      const assistant = messagesFromDurableTurn(stoppedTurn(state)).find((m) => m.role === "assistant");
+      expect(assistant, state).toMatchObject({ status: "done", stopped: true });
+      expect(assistant?.toolCalls, state).toMatchObject([
+        { id: "c1", name: "load_skill", status: "done" },
+        { id: "c2", name: "show_artifact", status: "done", stopped: true },
+      ]);
+      // The call that DID return is not tarred as stopped.
+      expect(assistant?.toolCalls?.[0].stopped, state).toBeUndefined();
+    }
+  });
+
+  it("a completed turn never carries the stopped marker", () => {
+    const assistant = messagesFromDurableTurn(turn()).find((m) => m.role === "assistant");
+    expect(assistant?.stopped).toBeUndefined();
+  });
+});
+
+describe("parked sessions survive the hydration cap (#3957)", () => {
+  const PARKED = "TASK_STATE_INPUT_REQUIRED";
+  const at = (minute: number) => new Date(Date.UTC(2026, 8, 1, 12, minute)).toISOString();
+  const newest = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      session_id: `chat-new-${i}`,
+      last_updated: at(59 - (i % 59)),
+      turn_count: 1,
+    }));
+  const parkedRow = (id: string, state = PARKED): DurableChatSession => ({
+    session_id: id,
+    last_updated: at(0),
+    turn_count: 1,
+    last_state: state,
+  });
+  const parkedTurn = (id: string) =>
+    turn({
+      task_id: `task-${id}`,
+      state: PARKED,
+      status: { state: PARKED },
+      text: "",
+      artifacts: [],
+      history: [{ role: "ROLE_USER", parts: [{ text: `pick a fruit for ${id}` }] }],
+    });
+
+  it("pins every parked session into the index, ahead of the newest, within the cap", () => {
+    const rows = pinParkedSessions(newest(SESSION_INDEX_LIMIT), [parkedRow("chat-parked")]);
+    expect(rows).toHaveLength(SESSION_INDEX_LIMIT);
+    expect(rows[0].session_id).toBe("chat-parked");
+    // The oldest of the newest gave its place up.
+    expect(rows.map((row) => row.session_id)).not.toContain(`chat-new-${SESSION_INDEX_LIMIT - 1}`);
+  });
+
+  it("bounds the parked set, so many parked sessions never crowd out the newest", () => {
+    const many = Array.from({ length: 80 }, (_, i) => parkedRow(`chat-parked-${i}`));
+    const rows = pinParkedSessions(newest(SESSION_INDEX_LIMIT), many);
+    expect(rows).toHaveLength(SESSION_INDEX_LIMIT);
+    expect(rows.filter((row) => row.session_id.startsWith("chat-parked-"))).toHaveLength(SESSION_PARKED_LIMIT);
+    expect(rows.filter((row) => row.session_id.startsWith("chat-new-"))).toHaveLength(
+      SESSION_INDEX_LIMIT - SESSION_PARKED_LIMIT,
+    );
+  });
+
+  it("ignores rows that do not say they are parked (a server that predates the parked index)", () => {
+    const base = newest(SESSION_INDEX_LIMIT);
+    const legacy = [{ session_id: "chat-stale", last_updated: at(0), turn_count: 1 }];
+    expect(pinParkedSessions(base, legacy)).toEqual(base);
+    expect(pinParkedSessions(base, [parkedRow("chat-done", "TASK_STATE_COMPLETED")])).toEqual(base);
+  });
+
+  it("counts a parked session that is already among the newest once", () => {
+    const base = newest(3);
+    const rows = pinParkedSessions(base, [{ ...base[2], last_state: PARKED }]);
+    expect(rows.map((row) => row.session_id)).toEqual(["chat-new-2", "chat-new-0", "chat-new-1"]);
+  });
+
+  it("a fresh profile hydrates the parked session the newest-50 index left out", async () => {
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [] } as never);
+    const commit = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    const index = vi.spyOn(api, "chatSessions").mockImplementation(async (limit, opts) =>
+      opts?.parked ? { sessions: [parkedRow("chat-parked")] } : { sessions: newest(limit ?? 50) },
+    );
+    vi.spyOn(api, "chatSessionTurns").mockImplementation(async (id) =>
+      id === "chat-parked"
+        ? { turns: [parkedTurn(id)], live_task_id: `task-${id}` }
+        : { turns: [turn({ task_id: `task-${id}` })], live_task_id: null },
+    );
+
+    await hydrateDurableChatSessions();
+
+    expect(index).toHaveBeenCalledWith(SESSION_INDEX_LIMIT);
+    expect(index).toHaveBeenCalledWith(SESSION_PARKED_LIMIT, { parked: true });
+    const hydrated = commit.mock.calls[0][0];
+    expect(hydrated).toHaveLength(SESSION_INDEX_LIMIT);
+    const parked = hydrated.find((session) => session.id === "chat-parked");
+    expect(parked?.messages[parked.messages.length - 1]).toMatchObject({ status: "streaming", paused: true, taskId: "task-chat-parked" });
+  });
+
+  it("still hydrates the newest when the parked index read fails", async () => {
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [] } as never);
+    const commit = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockImplementation(async (limit, opts) => {
+      if (opts?.parked) throw new Error("member cold");
+      return { sessions: newest(Math.min(limit ?? 50, 3)) };
+    });
+    vi.spyOn(api, "chatSessionTurns").mockImplementation(async (id) => ({ turns: [turn({ task_id: `task-${id}` })] }));
+
+    await hydrateDurableChatSessions();
+    expect(commit.mock.calls[0][0]).toHaveLength(3);
+  });
+
+  it("the store keeps a parked session over newer ones when the free slots run out", () => {
+    const local = Array.from({ length: MAX_SESSIONS - 2 }, (_, i) => ({
+      id: `chat-local-${i}`,
+      title: "Local",
+      messages: [{ id: `u-${i}`, role: "user", content: "local", status: "done" }],
+      createdAt: 1,
+      updatedAt: 1,
+    })) as ChatSession[];
+    const parked = sessionFromDurableTurns(parkedRow("chat-parked"), [parkedTurn("chat-parked")], "task-chat-parked");
+    const newer = [0, 1, 2].map((i) =>
+      sessionFromDurableTurns(
+        { session_id: `chat-newer-${i}`, last_updated: at(30 + i), turn_count: 1 },
+        [turn({ task_id: `task-newer-${i}`, last_updated: at(30 + i) })],
+      ),
+    );
+    const merged = mergeHydratedSessions(
+      {
+        version: 1,
+        sessions: local,
+        currentSessionId: local[0].id,
+        activeSessions: [local[0].id],
+        sessionStatusMap: {},
+        pendingDeleteRequest: null,
+        pendingClearRequest: null,
+        serverTurnControls: {},
+      } as never,
+      [parked!, ...newer.map((session) => session!)],
+    );
+    const ids = merged.sessions.map((session) => session.id);
+    expect(ids).toHaveLength(MAX_SESSIONS);
+    expect(ids).toContain("chat-parked");
+    expect(ids).toContain("chat-newer-2");
+    expect(ids).not.toContain("chat-newer-0");
+  });
+});
+
+// A re-hydrated turn renders the same as the live one (parts.ts foldPlan's lead): text that
+// streamed before the first tool comes back ABOVE it. The durable artifact flattens the
+// answer, so the work frames carry the offset they streamed at (a2a_impl TEXT_OFFSET_META)
+// and the replay slices the text back into stream order.
+describe("durable replay keeps stream order — the pre-tool sentence stays the lead", () => {
+  const OFFSET = "protoagent/textOffset";
+  const FINGERPRINT = "protoagent/textFingerprint";
+  const SENTENCE = "I am protoAgent 👋, a desktop agent.";
+  const ANSWER = `${SENTENCE}\n\nDone — noted.`;
+  const at = SENTENCE.length; // JS string length — UTF-16 units, emoji counts twice
+  // A finished turn's answer artifact proves what the offsets were measured against.
+  const fp = (measured: string) => ({ [FINGERPRINT]: { length: measured.length, fnv1a: utf16Fnv1a(measured) } });
+  const history = (withOffsets: boolean) => [
+    { role: "ROLE_USER", parts: [{ text: "Say hi, then note it." }] },
+    {
+      role: "ROLE_AGENT",
+      parts: [{ data: { text: "plan" }, metadata: { mimeType: REASONING } }],
+      ...(withOffsets ? { metadata: { [OFFSET]: 0 } } : {}),
+    },
+    {
+      role: "ROLE_AGENT",
+      metadata: { [TOOL]: { toolCallId: "n1", name: "append_note", phase: "started", args: "{}" }, ...(withOffsets ? { [OFFSET]: at } : {}) },
+    },
+    {
+      role: "ROLE_AGENT",
+      metadata: { [TOOL]: { toolCallId: "n1", name: "append_note", phase: "completed", result: "ok" }, ...(withOffsets ? { [OFFSET]: at } : {}) },
+    },
+  ];
+
+  it("a settled reload: [reasoning, sentence, tools, answer] — the sentence leads, nothing doubled", () => {
+    const [, assistant] = messagesFromDurableTurn(
+      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }], metadata: fp(ANSWER) }], history: history(true) }),
+    );
+    expect(assistant.parts).toEqual([
+      { kind: "reasoning", text: "plan" },
+      { kind: "text", text: SENTENCE },
+      { kind: "tools", ids: ["n1"] },
+      { kind: "text", text: "Done — noted." },
+    ]);
+    expect(foldPlan(assistant.parts!, false).leadParts).toEqual([
+      { kind: "reasoning", text: "plan" },
+      { kind: "text", text: SENTENCE },
+    ]);
+  });
+
+  it("a turn still WORKING (mid-turn reload): the sentence leads while the tool runs", () => {
+    const [, assistant] = messagesFromDurableTurn(
+      turn({
+        state: "TASK_STATE_WORKING",
+        status: { state: "TASK_STATE_WORKING" },
+        text: SENTENCE,
+        artifacts: [{ parts: [{ text: SENTENCE }] }],
+        history: history(true).slice(0, 3),
+      }),
+    );
+    expect(assistant.status).toBe("streaming");
+    expect(foldPlan(assistant.parts!, true)).toMatchObject({
+      fold: true,
+      leadParts: [{ kind: "reasoning", text: "plan" }, { kind: "text", text: SENTENCE }],
+    });
+  });
+
+  it("a turn recorded before the offsets existed keeps the old order (frames, then text)", () => {
+    const [, assistant] = messagesFromDurableTurn(
+      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }] }], history: history(false) }),
+    );
+    expect(assistant.parts?.map((p) => p.kind)).toEqual(["reasoning", "tools", "text"]);
+  });
+
+  it("an offset past the artifact (a rewritten final text) is ignored — the answer lands once", () => {
+    const h = history(true);
+    (h[2].metadata as Record<string, unknown>)[OFFSET] = 9999;
+    (h[3].metadata as Record<string, unknown>)[OFFSET] = 9999;
+    const [, assistant] = messagesFromDurableTurn(
+      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }], metadata: fp(ANSWER) }], history: h }),
+    );
+    expect(textRuns(assistant.parts).join("")).toBe(ANSWER);
+  });
+
+  it("a GOAL turn whose stored answer is not the streamed text never splits a word (falls back)", () => {
+    // Pass 1 streamed "Let me check the config." and called t1 at offset 24; the stored answer
+    // is only the last pass + the goal note. Offset 24 would cut it mid-word
+    // ("The config is fine and v" | tools | "erified…") — the fingerprint of the MEASURED
+    // text doesn't match the stored text's prefix, so the replay keeps the old order.
+    const streamed = "Let me check the config.The config is fine and verified.";
+    const stored = "The config is fine and verified.\n\n---\n🎯 Goal met";
+    const [, assistant] = messagesFromDurableTurn(
+      turn({
+        text: stored,
+        artifacts: [{ parts: [{ text: stored }], metadata: fp(streamed) }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "/goal verify the config" }] },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "t1", name: "read_file", phase: "started", args: "{}" }, [OFFSET]: 24 } },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "t1", name: "read_file", phase: "completed", result: "ok" }, [OFFSET]: 24 } },
+        ],
+      }),
+    );
+    expect(assistant.parts).toEqual([
+      { kind: "tools", ids: ["t1"] },
+      { kind: "text", text: stored },
+    ]);
+  });
+
+  it("hashes UTF-16 code units exactly like the executor (_utf16_fnv1a parity constants)", () => {
+    expect(utf16Fnv1a("")).toBe(2166136261);
+    expect(utf16Fnv1a("I am protoAgent 👋, a desktop agent.")).toBe(3055660355);
+    expect(utf16Fnv1a("Let me check the config.")).toBe(2152712979);
+  });
+
+  it("a finished turn with offsets but NO fingerprint keeps the old order", () => {
+    const [, assistant] = messagesFromDurableTurn(
+      turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }] }], history: history(true) }),
+    );
+    expect(assistant.parts?.map((p) => p.kind)).toEqual(["reasoning", "tools", "text"]);
+  });
+});
+
+describe("hydrated tool durations (#4076)", () => {
+  const withTools = (completedMeta: Record<string, unknown>) =>
+    turn({
+      history: [
+        { role: "ROLE_USER", parts: [{ text: "go" }] },
+        { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "c1", name: "load_skill", phase: "started", args: "{}" } } },
+        { role: "ROLE_AGENT", parts: [], metadata: { [TOOL]: { toolCallId: "c1", name: "load_skill", phase: "completed", result: "ok", ...completedMeta } } },
+      ],
+    });
+
+  it("restores the server-measured duration the end frame carries", () => {
+    const assistant = messagesFromDurableTurn(withTools({ durationMs: 1234 })).find((m) => m.role === "assistant");
+    expect(assistant?.toolCalls?.[0].durationMs).toBe(1234);
+  });
+
+  it("shows NO duration — never a fake 0ms — when the stored frame carries none", () => {
+    const assistant = messagesFromDurableTurn(withTools({})).find((m) => m.role === "assistant");
+    expect(assistant?.toolCalls?.[0].status).toBe("done");
+    expect(assistant?.toolCalls?.[0].durationMs).toBeUndefined();
+  });
+});
+
+describe("a cached chat behind the server reconciles on reload (another client's turns)", () => {
+  // Browser B cached chat X (here: its first turn), then browser A ran more turns in X.
+  // B's non-empty local copy used to win forever: every reload skipped the session, and
+  // the later turns never showed, though the server had them.
+  const first = turn({ task_id: "task-a", history: [{ role: "ROLE_USER", parts: [{ text: "first" }] }], text: "one", artifacts: [{ parts: [{ text: "one" }] }] });
+  const second = turn({ task_id: "task-b", history: [{ role: "ROLE_USER", parts: [{ text: "second" }] }], text: "two", artifacts: [{ parts: [{ text: "two" }] }] });
+  const stopped = turn({
+    task_id: "task-c",
+    state: "TASK_STATE_CANCELED",
+    status: { state: "TASK_STATE_CANCELED" },
+    history: [{ role: "ROLE_USER", parts: [{ text: "third" }] }],
+    text: "",
+    artifacts: [],
+  });
+  // The first turn as THIS browser rendered it live — local ids, richer than the server's.
+  const liveFirst: ChatMessage[] = [
+    { id: "u-local", role: "user", content: "first", status: "done" },
+    { id: "a-local", role: "assistant", content: "one", status: "done", taskId: "task-a", parts: [{ kind: "text", text: "one" }] },
+  ];
+  const cached = (messages: ChatMessage[], extra: Partial<ChatSession> = {}): ChatSession =>
+    ({ id: "chat-x", title: "first", messages, createdAt: 1, updatedAt: 1, ...extra }) as ChatSession;
+  const indexed = (count: number): DurableChatSession => ({ ...summary("chat-x"), turn_count: count });
+
+  it("is behind only when the server counts more turns than the copy holds or last reconciled", () => {
+    expect(localTurnIds(liveFirst)).toEqual(new Set(["task-a"]));
+    expect(isBehindServer(cached(liveFirst), indexed(1))).toBe(false);
+    expect(isBehindServer(cached(liveFirst), indexed(3))).toBe(true);
+    // Reconciled against 3 already (a count it can never match locally): not fetched again…
+    expect(isBehindServer(cached(liveFirst, { serverTurnCount: 3 }), indexed(3))).toBe(false);
+    // …until the server records yet another turn.
+    expect(isBehindServer(cached(liveFirst, { serverTurnCount: 3 }), indexed(4))).toBe(true);
+    // No durable turn of its own (a send that never got a task): nothing to anchor on.
+    expect(isBehindServer(cached([{ id: "u", role: "user", content: "x", status: "done" }]), indexed(2))).toBe(false);
+  });
+
+  it("adds the server turns after the newest local one, keeping the local render as it is", () => {
+    const next = reconcileServerTurns(liveFirst, [first, second, stopped], null);
+    if (!next || next === "retry") throw new Error("expected a reconciled transcript");
+    expect(next.slice(0, 2)).toEqual(liveFirst);
+    expect(next.slice(2).map((message) => [message.role, message.content, message.status, message.taskId])).toEqual([
+      ["user", "second", "done", undefined],
+      ["assistant", "two", "done", "task-b"],
+      ["user", "third", "done", undefined],
+      ["assistant", "", "done", "task-c"],
+    ]);
+    expect(next[5].stopped).toBe(true);
+  });
+
+  it("changes nothing when the server has no turn after the copy's newest", () => {
+    // An OLDER server turn the copy lacks (regenerated away here) is local intent.
+    const older = turn({ task_id: "task-old" });
+    expect(reconcileServerTurns(liveFirst, [older, first], null)).toBeNull();
+    // No local turn the server knows: nothing to anchor on.
+    expect(reconcileServerTurns(liveFirst, [second], null)).toBeNull();
+  });
+
+  it("redraws a turn this copy only held as a running SNAPSHOT from the server's finished copy", () => {
+    // B hydrated chat X while A's first turn was still running, then never mounted it.
+    const running = turn({ ...first, state: "TASK_STATE_WORKING", status: { state: "TASK_STATE_WORKING" }, text: "on", artifacts: [{ parts: [{ text: "on" }] }] });
+    const snapshot = messagesFromDurableTurn(running);
+    expect(snapshot[1].durableSnapshotFallback).toBe(true);
+    const next = reconcileServerTurns(snapshot, [first, second], null);
+    if (!next || next === "retry") throw new Error("expected a reconciled transcript");
+    expect(next.map((message) => [message.id, message.content, message.status])).toEqual([
+      ["durable-task-a-user", "first", "done"],
+      ["durable-task-a-assistant", "one", "done"],
+      ["durable-task-b-user", "second", "done"],
+      ["durable-task-b-assistant", "two", "done"],
+    ]);
+    expect(next.some((message) => message.durableSnapshotFallback)).toBe(false);
+  });
+
+  it("adds a turn still running elsewhere as the reattachable live bubble", () => {
+    const running = turn({ ...second, state: "TASK_STATE_WORKING", status: { state: "TASK_STATE_WORKING" } });
+    const next = reconcileServerTurns(liveFirst, [first, running], "task-b");
+    if (!next || next === "retry") throw new Error("expected a reconciled transcript");
+    expect(next[next.length - 1]).toMatchObject({ role: "assistant", status: "streaming", taskId: "task-b", durableSnapshotFallback: true });
+  });
+
+  it("leaves a copy whose own turn is still live to its reattach (retried next boot)", () => {
+    const streaming: ChatMessage[] = [liveFirst[0], { ...liveFirst[1], status: "streaming" }];
+    expect(reconcileServerTurns(streaming, [first, second], null)).toBe("retry");
+  });
+
+  it("boot re-reads a behind session and commits the reconcile with the server's count", async () => {
+    const local = cached(liveFirst);
+    vi.spyOn(chatStore, "getSnapshot").mockReturnValue({ sessions: [local] } as never);
+    vi.spyOn(chatStore, "captureHydrationEligibility").mockImplementation((id, opts) =>
+      ({ sessionId: id, localSession: local, behind: opts?.behind }),
+    );
+    const hydrate = vi.spyOn(chatStore, "hydrateSessions").mockImplementation(() => {});
+    const reconcile = vi.spyOn(chatStore, "reconcileSessions").mockImplementation(() => {});
+    vi.spyOn(api, "chatSessions").mockResolvedValue({ sessions: [indexed(2)] });
+    const reads = vi.spyOn(api, "chatSessionTurns").mockResolvedValue({ turns: [first, second], live_task_id: null });
+
+    await hydrateDurableChatSessions();
+
+    expect(reads).toHaveBeenCalledWith("chat-x", SESSION_TURN_LIMIT);
+    expect(hydrate).not.toHaveBeenCalled();
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    const [update] = reconcile.mock.calls[0][0];
+    expect(update.serverTurnCount).toBe(2);
+    expect(update.messages?.map((message) => message.content)).toEqual(["first", "one", "second", "two"]);
+  });
+
+  it("the store adopts the reconcile only while the session is the copy that was read", () => {
+    const session = chatStore.createSession();
+    chatStore.updateMessages(session.id, liveFirst);
+    const read = chatStore.captureHydrationEligibility(session.id, { behind: true });
+    if (!read) throw new Error("a non-empty session is eligible for a behind reconcile");
+    const messages = reconcileServerTurns(liveFirst, [first, second], null);
+    if (!messages || messages === "retry") throw new Error("expected a reconciled transcript");
+
+    // A local edit after the read (a send, a reattach settling a turn) vetoes it.
+    chatStore.updateMessages(session.id, [...liveFirst]);
+    chatStore.reconcileSessions([{ token: read, messages, serverTurnCount: 2 }]);
+    expect(chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages).toHaveLength(2);
+
+    const fresh = chatStore.captureHydrationEligibility(session.id, { behind: true });
+    chatStore.reconcileSessions([{ token: fresh!, messages, serverTurnCount: 2 }]);
+    const after = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
+    expect(after?.messages.map((message) => message.content)).toEqual(["first", "one", "second", "two"]);
+    expect(after?.serverTurnCount).toBe(2);
+    chatStore.deleteSession(session.id);
   });
 });

@@ -9,9 +9,9 @@
 .work-overview {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 12px;
+  gap: var(--pl-space-3);
   align-content: start;
-  padding: 12px;
+  padding: var(--pl-space-3);
   overflow-y: auto;
 }
 
@@ -25,7 +25,7 @@
   flex: none;
   display: flex;
   align-items: center;
-  padding: 4px 6px;
+  padding: var(--pl-space-1) var(--pl-space-1_5);
   border-bottom: 1px solid var(--pl-color-border);
 }
 
@@ -46,8 +46,8 @@
 }
 .work-card:hover {
   transform: translateY(-1px);
-  /* Raised-element shadow — same literal fallback as .chat-report-card / .pl-convo__jump. */
-  box-shadow: var(--pl-shadow-popover, 0 2px 8px rgba(0, 0, 0, 0.22));
+  /* Raised-element shadow — the DS popover shadow, as on .chat-report-card / .pl-convo__jump. */
+  box-shadow: var(--pl-shadow-popover);
   border-color: var(--pl-color-border-strong);
 }
 .work-card:focus-visible {
@@ -66,8 +66,8 @@
 .work-card-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px 0;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-2_5) var(--pl-space-3) 0;
 }
 .work-card-title {
   font-weight: 600;
@@ -83,24 +83,24 @@
 
 /* The pulse line — one muted sentence with the card's most useful live fact. */
 .work-card-pulse {
-  margin: 4px 0 0;
-  padding: 0 12px;
+  margin: var(--pl-space-1) 0 0;
+  padding: 0 var(--pl-space-3);
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 .work-card-body {
   list-style: none;
   margin: 0;
-  padding: 8px 12px 4px;
+  padding: var(--pl-space-2) var(--pl-space-3) var(--pl-space-1);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .work-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--pl-space-2);
   min-width: 0;
 }
 .work-row .pl-dot {
@@ -109,7 +109,7 @@
 .work-row-title {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -118,7 +118,7 @@
   flex: none;
   margin-left: auto;
   color: var(--pl-color-fg-subtle);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
   font-variant-numeric: tabular-nums;
 }
 
@@ -126,14 +126,14 @@
 .work-card-foot {
   display: flex;
   justify-content: flex-end;
-  padding: 2px 8px 8px;
+  padding: var(--pl-space-0_5) var(--pl-space-2) var(--pl-space-2);
   margin-top: auto;
 }
 
 /* Empty card body — the DS Empty scaled down to card size. */
 .work-card-blank {
-  padding: 14px 12px 16px;
+  padding: var(--pl-space-3) var(--pl-space-3) var(--pl-space-4);
 }
 .work-card-blank .pl-empty__desc {
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }

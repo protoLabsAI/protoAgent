@@ -65,10 +65,13 @@ describe("finalizeStoppedMessages", () => {
         ],
       }),
     ]);
+    // The unfinished call settles STOPPED (no spinner, no ✓ — #4076); a settled one keeps its status.
     expect(out[0].toolCalls).toEqual([
-      { id: "t1", name: "search", status: "done" },
+      { id: "t1", name: "search", status: "done", paused: undefined, stopped: true },
       { id: "t2", name: "read", status: "error" },
     ]);
+    // The bubble carries the footer's "Stopped" marker, so a reload still says why it ends early.
+    expect(out[0]).toMatchObject({ status: "done", stopped: true });
   });
 
   it("leaves user messages and non-streaming bubbles untouched (same reference)", () => {

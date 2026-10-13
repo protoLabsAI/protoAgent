@@ -13,6 +13,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from operator_api.browse_routes import register_browse_routes
+import pytest
+
+pytestmark = pytest.mark.platform_sensitive
 
 
 def _client():

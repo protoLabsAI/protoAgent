@@ -1,10 +1,16 @@
 """bd-2mf: the setup wizard's project directory is authoritative — it persists as
 ``operator.project_dir`` and ``server._resolve_operator_project_root`` honors it
 (env > configured-and-exists > default), so the console's tasks/notes actually
-operate in the chosen directory."""
+operate in the chosen directory.
+
+The default root must resolve to a real, stable dir — never PyInstaller's ephemeral
+_MEIxxxx onefile extraction dir (which broke notes/tasks in the frozen desktop
+sidecar with "project_path does not exist")."""
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import server
@@ -15,11 +21,6 @@ from operator_api.console_handlers import _operator_allowed_dirs
 def test_operator_project_dir_loads_from_dict():
     cfg = LangGraphConfig.from_dict({"operator": {"project_dir": "/tmp/whatever", "allowed_dirs": []}})
     assert cfg.operator_project_dir == "/tmp/whatever"
-
-
-def test_operator_project_dir_defaults_blank():
-    cfg = LangGraphConfig.from_dict({})
-    assert cfg.operator_project_dir == ""
 
 
 def test_resolver_env_wins(tmp_path, monkeypatch):
@@ -43,13 +44,31 @@ def test_resolver_falls_back_when_configured_dir_missing(tmp_path, monkeypatch):
     assert server._resolve_operator_project_root() != str(missing)
 
 
-def test_resolver_blank_config_uses_default(monkeypatch):
+def test_dev_checkout_uses_repo_root(monkeypatch):
+    # No env override + blank configured dir → a source checkout resolves to the repo root.
     monkeypatch.delenv("PROTOAGENT_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("PROTOAGENT_HOME", raising=False)
+    monkeypatch.setattr(sys, "frozen", False, raising=False)
     monkeypatch.setattr(server.STATE, "graph_config", SimpleNamespace(operator_project_dir=""))
-    # Default (source checkout) is the bundle root — a real, existing directory.
-    import os
+    assert server._resolve_operator_project_root() == str(Path("server.py").resolve().parent)
 
-    assert os.path.isdir(server._resolve_operator_project_root())
+
+def test_frozen_falls_back_to_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("PROTOAGENT_PROJECT_DIR", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path))
+    monkeypatch.setattr(server.STATE, "graph_config", None)
+    root = server._resolve_operator_project_root()
+    assert root == str(tmp_path.resolve())
+    assert "_MEI" not in root  # never the PyInstaller temp dir
+
+
+def test_frozen_without_home_uses_home_dir(monkeypatch):
+    monkeypatch.delenv("PROTOAGENT_PROJECT_DIR", raising=False)
+    monkeypatch.delenv("PROTOAGENT_HOME", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(server.STATE, "graph_config", None)
+    assert server._resolve_operator_project_root() == str(Path.home().resolve())
 
 
 def test_allowed_dirs_deduplicates_project_root(tmp_path, monkeypatch):

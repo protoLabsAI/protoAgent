@@ -169,7 +169,7 @@ jobs:
       - name: Generate + post release notes
         id: relnotes
         continue-on-error: true
-        uses: protoLabsAI/release-tools@d6bfc09ce7d17da3f196f3b54afde5830b8a6398 # v2.4.0 — first version with the out-file input (#1516/#1615)
+        uses: protoLabsAI/release-tools@32a25e78a7709d8476cf66de27b269f1820efdcc # v2.4.0 — first version with the out-file input (#1516/#1615)
         with:
           version: ${{ steps.version.outputs.tag }}
           previous-version: ${{ steps.version.outputs.prev_tag }}

@@ -77,3 +77,92 @@ def test_manager_resolves_the_registry_allowlist():
 
     assert _subagent_fence("researcher") == list(SUBAGENT_REGISTRY["researcher"].tools)
     assert _subagent_fence("not-a-registry-type") == []
+
+
+# ── the model is only SHOWN the fence (schemas trimmed at wrap_model_call) ─────────
+
+
+def _model_request(tool_names, fence):
+    """A real langchain ModelRequest — ``override`` must return a new request."""
+    from langchain.agents.middleware.types import ModelRequest
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.tools import tool as make_tool
+
+    def _mk(name):
+        @make_tool(name)
+        def _t(x: str = "") -> str:
+            """A bound tool."""
+            return x
+
+        return _t
+
+    state = {"messages": []}
+    if fence is not None:
+        state["subagent_fence"] = fence
+    return ModelRequest(
+        model=GenericFakeChatModel(messages=iter([])),
+        messages=[],
+        tools=[_mk(n) for n in tool_names],
+        state=state,
+    )
+
+
+_LEAD_TOOLS = ["web_search", "fetch_url", "execute_code", "load_skill", "browser_open", "campaign_create"]
+
+
+def _bound(request):
+    return [t.name for t in request.tools]
+
+
+def test_fenced_call_binds_only_the_fenced_tools():
+    """The brandLaunch case: a detached social_researcher (6-tool allowlist) was shown
+    every lead schema and kept calling execute_code / load_skill into the call-time block."""
+    seen = []
+    SubagentFenceMiddleware().wrap_model_call(
+        _model_request(_LEAD_TOOLS, ["web_search", "fetch_url", "social_brand_kit"]), seen.append
+    )
+    assert _bound(seen[0]) == ["web_search", "fetch_url"]
+
+
+@pytest.mark.asyncio
+async def test_async_model_call_is_trimmed_too():
+    seen = []
+
+    async def handler(request):
+        seen.append(request)
+
+    await SubagentFenceMiddleware().awrap_model_call(_model_request(_LEAD_TOOLS, ["fetch_url"]), handler)
+    assert _bound(seen[0]) == ["fetch_url"]
+
+
+@pytest.mark.parametrize(
+    "fence",
+    [
+        None,  # unfenced: an ordinary chat turn
+        [],  # an empty fence means "no fence"
+        ["<no tools>"],  # deny-all: keep schemas (a tool-call history needs `tools`); calls stay blocked
+        ["not_a_bound_tool"],  # nothing to bind → don't send an empty tool list
+    ],
+)
+def test_unfenced_deny_all_and_disjoint_fences_leave_the_schemas(fence):
+    req = _model_request(_LEAD_TOOLS, fence)
+    seen = []
+    SubagentFenceMiddleware().wrap_model_call(req, seen.append)
+    assert seen[0] is req
+    assert _bound(seen[0]) == _LEAD_TOOLS
+
+
+def test_provider_dict_tool_specs_are_trimmed_and_unnamed_entries_kept():
+    from graph.middleware.subagent_fence import fence_tools
+
+    unnamed = {"type": "web_search_20250305"}
+    req = _model_request([], ["fetch_url"])
+    req = req.override(
+        tools=[
+            {"type": "function", "function": {"name": "fetch_url"}},
+            {"name": "execute_code", "input_schema": {}},
+            unnamed,
+        ]
+    )
+    out = fence_tools(req)
+    assert out.tools == [{"type": "function", "function": {"name": "fetch_url"}}, unnamed]

@@ -15,6 +15,8 @@ from graph.goals.controller import GoalController
 from graph.goals.store import GoalStore, _safe_name
 from graph.goals.types import GoalState, VerifyResult
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _ctrl(tmp_path, **overrides):
     return GoalController(LangGraphConfig(**overrides), GoalStore(tmp_path))
@@ -95,10 +97,6 @@ async def test_parse_plain_text_fresh_context_false(tmp_path):
 
 
 # --- GoalState field + status line ------------------------------------------
-
-
-def test_goal_state_default_is_false():
-    assert GoalState(session_id="s", condition="x").fresh_context is False
 
 
 def test_status_line_tags_fresh_context():

@@ -70,7 +70,7 @@ export async function redeemPairingFromUrl(): Promise<PairResult> {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data?.token) {
-      return { ok: false, error: String(data?.error || "pairing failed") };
+      return { ok: false, error: `HTTP ${res.status}: ${String(data?.error || "pairing failed")}` };
     }
     // Strict (ADR 0114 D1): a token the browser failed to keep must not report success —
     // the throw lands in the catch below and comes back as { ok: false }.

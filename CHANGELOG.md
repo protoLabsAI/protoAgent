@@ -15,6 +15,1970 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.203.0] - 2026-10-13
+
+### Changed
+- **Artifact frame themes use the design system’s embed helpers (#4177).** The shared token snapshot and CSS serializer replace the hand-maintained palette, reject unsafe CSS values, and preserve usable defaults when tokens or the embed module are unavailable.
+
+- **Artifact controls use the shared design-system stylesheet (#4184).** Frames load the vendored element defaults instead of a hand-maintained CSS string. Static spacing and line-height tokens preserve readable controls when theme loading fails, while live theme tokens and author CSS still override the defaults.
+
+- **Artifact frame stylesheet vendored (#577).** The design system's element-default sheet (`@protolabsai/ui-css` `styles/embed.css`) is now vendored verbatim as `plugins/artifact/vendor/pl-embed.css` and served same-origin from the artifact vendor route. The route picks its media type by extension, so the `.css` sheet is served as `text/css` (never `application/javascript`) with the existing CORS header, while the `.js`/`.mjs` libs beside it are unchanged. The streamed console preview now sources those DS element defaults by fetching the served route (the way it already fetches the plugin-kit stylesheet), rather than bundling the `ui-css` sheet at build time, so the vendored copy is the single source; the artifact shell is wired to embed it in a later slice.
+
+- **Artifact vendors the DS embed theme-handoff module (#577).** `@protolabsai/design`'s `./embed` module (`themeTokenSnapshot` / `snapshotToCss`) and its `./tokens.js` dependency are now vendored verbatim under `plugins/artifact/vendor/` and served same-origin by the vendor route, so the artifact shell can load them with no bundler at runtime. Both names are allowlisted together: `embed.js` is not self-contained, and a regression guard + DS drift test keep the pair closed and in sync with the installed package.
+
+### Fixed
+- **Delegate status shows fresh evidence and readable diagnostics (#4072).** Successful dispatches clear stale probe failures and reset backoff. `list_agents` shows evidence age, marks results older than six minutes as stale, and accepts `detail=true` for probe and dispatch diagnostics without triggering extra probes.
+
+### Security
+- **Agent configuration inspection masks credential containers (#4181).** Sensitive-named settings are now redacted even when their values are lists or mappings, preventing credentials from entering model context through full, selected, or paginated `show_config` responses. Empty settings remain distinguishable from configured secrets.
+
+## [0.202.0] - 2026-10-12
+
+### Added
+- **Frame components can read live data through their host (#4143, ADR 0118 D5 amendment).**
+  `registry.register_component(name, validator, frame=..., reads=[...])` declares GET patterns under
+  the plugin's own `/api/plugins/<id>/` (`*` matches one segment). Patterns that escape the prefix,
+  or use `..`, a query string or `**`, are logged and skipped, and the testkit `FakeRegistry` raises
+  on them. `GET /api/components` now reports `{name, plugin, frame_url, reads}`. In the console, a
+  frame posts `protoComponent:read {cid, path}`, and `FrameComponentHost` checks the request: the
+  source frame, the declared allowlist, GET only, 4 reads/s and 2 in flight per frame, and that the
+  frame is mounted and visible. The host then makes the authed GET itself and posts back
+  `protoComponent:readResult {cid, ok, status, json|error}`. The response must be JSON of at most
+  256 KB, and the bearer and headers never reach the frame. Writes stay on the confirmed `send` bridge.
+  The capability is bound to the declared page by a handshake. The host loads the frame at
+  `<frame_url>#pair=<random>`. The frame posts `protoComponent:ready {pair}` once, echoing that
+  fragment. That earns exactly one `protoComponent:init {props, theme, nonce}`, and there are no
+  re-posts. The frame echoes `nonce` on every `protoComponent:read`, `protoComponent:send` and
+  `protoComponent:openLink`. A second load, a second or unpaired `ready`, or a wrong nonce revokes
+  the mount and unloads the frame, so a page that replaces the plugin page can't inherit its reads
+  or its "Always allow" send trust. **Existing frame components must now post `ready` (with
+  `pair`) to receive `init`, and echo `nonce` on `send`/`openLink`.** The artifact shell gets the
+  same protection: each srcdoc carries a per-render nonce that the shim echoes on
+  `ask`/`send`/`openLink`, and a nested frame that navigates itself loses the bridge. Component
+  reads also stream the body with a 256 KB cutoff and a 10 s timeout, and only a JSON error body's
+  `detail` is passed through.
+
+### Changed
+- **Vega-lite chart artifacts now theme from the design system, not a hand-rolled copy (#4171).**
+  The artifact shell's chart frame built its Vega config and picked its tooltip theme from a
+  `theme()`/`isDark()` pair hand-written inside `artVega`. Those are gone: the frame now draws
+  from `@protolabsai/design`'s pure `buildVegaConfig(tok)` / `vegaTooltipTheme(tok)`, vendored
+  verbatim beside the other chart libs and injected into the nonce-CSP frame as source. Every
+  consumer themes identically from one source, and a drift test keeps the vendored copy in step
+  with the package. Visible changes: legends move to the bottom (horizontal, four columns, no
+  symbol cap, so 8+ series wrap), axis/legend labels get more room, and sequential / heatmap /
+  diverging ranges are emitted as hex — so heat maps use the console palette instead of Vega's
+  default blues. The categorical palette is unchanged: the shell keeps its prior `range.category`
+  contract — a categorical palette is themed only when two or more `--pl-color-chart-series*`
+  colours are defined, and then from exactly those, otherwise Vega keeps its own default category
+  scheme. (The DS `buildVegaConfig` would instead backfill every empty slot with the accent and
+  always set `range.category`; a thin shell adapter trims that back so a custom theme with few or
+  no series colours never collapses a multi-series chart onto the single accent.) The loader deny,
+  `ast:true` interpreter, `prep()` autosize, and live re-theme are unchanged.
+
+- **Frame-rendered plugin components theme via the DS embed layer (#4170).** `FrameComponentHost`
+  now builds the theme it posts into the opaque-origin component frame from
+  `@protolabsai/design/embed` — `themeTokenSnapshot(document.documentElement)` (the live computed
+  `--pl-*` values plus `color-scheme`) routed through `snapshotToCss`, the frame-injection guard
+  that drops any value containing `<`, `{`, `}` or `;` and any non-`--pl-` name — instead of the
+  hand-written `consoleTheme()` token list. The theme is read at post time, so a live theme or
+  accent switch still re-posts fresh values and the frame repaints without a reload, and no bearer
+  is ever posted. The ADR 0026 plugin-view bridge (PluginView, App, Launcher, the command palette)
+  keeps using `consoleTheme()` unchanged. (ADR 0118 D5)
+
+### Fixed
+- **Checkpoint DBs now give freed space back to the disk (#4173).** `build_sqlite_checkpointer`
+  set `journal_mode=WAL` before `auto_vacuum=INCREMENTAL`. Switching to WAL writes the DB
+  header, so the auto_vacuum pragma was a silent no-op and every `checkpoints.db` was created
+  `auto_vacuum=NONE`. The prune pass deleted rows, but the file never shrank. On one machine
+  that meant a 34 GB file holding 85 MB of history and a 30 GB file holding 480 MB, until the
+  disk filled. New DBs are now really INCREMENTAL. At startup, before anything opens it, an
+  existing NONE DB is migrated once (`PRAGMA auto_vacuum=INCREMENTAL; VACUUM;`). That happens
+  only when at least half the file (or 256 MB) is free space, the disk has room for the
+  rewrite, and no other process has the DB open. The size before and after is logged.
+  `checkpoint.vacuum_legacy_on_start: false` turns this off. `protoagent checkpoint migrate`
+  (`--workspace <member>` / `--db <path>`) runs it on demand with the agent stopped.
+  **Upgrade note:** the first start after upgrading can take a few extra seconds for each
+  bloated checkpoint DB (a 34 GB file with 85 MB live took about 5 s).
+
+## [0.201.0] - 2026-10-12
+
+### Added
+- **Tables accept an optional source caption (#4077).** The inline `table` component now
+  takes an optional `source` prop — a short string (≤200 chars) naming where the rows came
+  from. `show_component` asks the agent to set it whenever the rows aren't the user's own
+  input (a web search, a fetched page, a file, a tool result) so the provenance travels
+  with the data. A non-string or over-long `source` is dropped from the props and the table
+  still renders; tables without a `source` are unchanged.
+
+- **Table source caption in chat (#4077).** The built-in `table` chat component now renders a muted `Source: <text>` caption under the table when its `source` prop is a non-empty string. The prop is untrusted, so a non-string is ignored, the text is capped at 200 chars, and it renders as plain text (never HTML). Tables without a `source` are unchanged.
+
+- **Streamed tool arguments (tool-args-v1) (#4078).** A tool can declare `metadata={"stream_args": "<arg>"}`; the server extracts that string argument incrementally as the model streams the tool call — a small partial-JSON string scanner that handles escapes and holds back an unterminated one — and relays it as a live-only `application/vnd.protolabs.tool-args-v1+json` DataPart on `WORKING` frames, so the console can preview an artifact as it is written. Previews flush at ≤4 Hz or every 2 KB and end with a final `done`; they are never persisted to task history nor replayed on reattach or reload. `tool-call-v1` is unchanged. (ADR 0118 D3)
+
+- **Console decodes streamed tool arguments (#4079).** The console now decodes the `tool-args-v1` frames the server streams (ADR 0118 D3) into a per-tool-call-id buffer, reassembling each tool's declared string argument from contiguous slices while tolerating out-of-order and duplicated/overlapping frames. The buffer is live-only — cleared when the turn ends and never rebuilt on hydration or reattach — and nothing renders it yet.
+
+- **Inline artifact placement (#4080).** `show_artifact` and the `artifact.show` service take `placement="inline"` to render an artifact in the conversation (html/svg/mermaid/react/vega-lite; any other kind falls back to the panel with a note). The `artifact-ref` chip gains optional `inline`/`height` hints, and the three write tools declare `stream_args: "code"` so the server can stream a live preview (ADR 0118).
+
+- **Artifact embed mode (#4081).** The artifact shell gains a chrome-less embed view at `/plugins/artifact/view?embed=<id>&v=<version>` that renders exactly one artifact version through the same sandboxed frame builder as the panel — nonce CSP, vendored SRI-pinned libraries, live theme tokens, loader lockdown and render-verdict reporting — reports its content height to the host on every size change, and shows an inert "unavailable" state for an unknown id or version. The panel view is unchanged.
+
+- **Inline frame budget (#4083).** Groundwork for inline artifact frames in chat (ADR 0118):
+  a framework-light `inlineFrames` module that clamps a frame's reported height to
+  [80, 1200] px, caps live inline frames at six per chat view — evicting the
+  least-recently-visible one (which the host then renders as a static "Click to resume" card
+  keeping its last height) — and lazily mounts a frame as it scrolls near the viewport. No UI
+  is wired to it yet.
+
+- **Inline artifacts in the transcript (#4083).** An `artifact-ref` with `inline: true` now hosts the artifact's own sandboxed frame right in the conversation instead of a chip that opens the panel. The frame mounts lazily near the viewport, is sized to the height it reports (clamped to 80–1200 px, taller content scrolls inside), and keeps an **Open in panel** button. At most six inline frames stay live per chat view; an older one that scrolls away becomes a "Click to resume" card that remembers its height. History replay renders inline identically, a deleted artifact or a disabled plugin falls back to the inert chip, and the live turn no longer auto-opens the panel for an inline answer.
+
+- **Partial-HTML sanitiser for streamed previews (#4084).** Groundwork for the ADR 0118
+  console artifact preview: a pure, DOM-free `processPartialHtml` (ported from
+  OpenIntelligentUI, MIT) that makes a still-streaming HTML buffer safe to show — it drops
+  the incomplete trailing tag, strips `<script>`/`<head>` and unclosed `<style>` blocks,
+  hoists complete `<style>` blocks to the top, and defensively removes inline `on*=`
+  event-handler attributes. Companion gating helpers (`firstStyleClosed` /
+  `bodyBytesWithoutStyle`) hold the preview back until the first stylesheet closes, or until
+  1.5 KB of body markup has streamed without one. No UI is wired to it yet.
+
+- **Streamed artifact preview frame (#4084).** A streaming `show_artifact` with inline placement now renders its inline card at once: a title + kind-aware status line, and for `html`/`svg` a sandboxed preview frame (`allow-scripts`, no same-origin) that morphs the still-streaming markup in place via vendored Idiomorph (0BSD) behind a nonce CSP. Model scripts and inline handlers never reach or run in the frame, and the preview stays hidden until the first style closes (or 1.5 KB of style-less body arrives).
+
+- **Live preview while an inline artifact is written (#4084).** The streamed artifact preview now updates at most once a second — with an immediate flush on the moments that read worst stale (the first `<style>` closing, the first body markup, and the stream's end) — instead of thrashing the frame on every chunk, and it sizes itself from the height the frame reports back. The preview appears in the transcript's work spotlight as a streaming inline `show_artifact` writes, and once the tool finishes and the artifact-ref lands it hands over to the artifact's own inline frame, keeping the last measured height so the layout doesn't jump.
+
+- **Presentation ladder in the rendering-artifacts skill (#4085).** The skill now teaches the
+  four-tier ladder (text → `show_component` → inline artifact via
+  `show_artifact(…, placement="inline")` → panel artifact) with "prefer the lowest tier that
+  answers" and "inline for an answer, panel for a work product", the html authoring order
+  (`<style>` first, readable markup, scripts last), and a quality bar for interactive answers
+  (every enabled control does real work; labelled, keyboard-operable inputs with visible focus;
+  validated numeric input; shown units and assumptions; reduced motion with pause/reset;
+  labelled value provenance; and `protoArtifact.send` only from a labelled button). Adds
+  `evals.md`, a hand-labelled prompt-to-tier set. The inline tier and the `send` bridge are the
+  interactive-answers capability (ADR 0118); the skill teaches the panel as the universal
+  fallback and feature-detected `send`, so an answer still renders where those aren't wired yet.
+
+- **Artifact send/openLink bridge gates (#4086).** Artifact frames now get `window.protoArtifact.send(text)` and `window.protoArtifact.openLink(url)` next to `ask` (ADR 0118 D4): the shim relays each through the shell up to the console host, which owns the gates — a real user gesture (missing API asks first), a 1–4000 char length, "the agent is busy" while a turn runs, and at most one send per 2 s per frame; `openLink` opens `https:` only (optionally narrowed by the new `artifact.open_link_origins` setting) with `noopener,noreferrer`. `ask` is unchanged and stays opt-in.
+
+- **Artifacts can send a visible message to chat (#4086).** An inline artifact may call `protoArtifact.send(text)` from a button to start a normal, visible user turn — gated in the console host (a real user gesture, length, "the agent is busy", and a 1-per-2s rate), tagged `{via: "artifact", artifact_id, version}` and shown with a small "from ‹title›" label so it reads exactly as what was sent. `protoArtifact.openLink(url)` opens an https link in a new tab with `noopener,noreferrer`, through the same host gate.
+
+- **Plugin components can declare a frame page (#4087).** `register_component(name, validator, frame=...)` lets a plugin point a component kind at one of its own public pages, relative to `/plugins/<id>`. The frame is refused (and the kind skipped) if it is an absolute path, contains a `..` segment, or is not listed in the manifest's `public_paths`, since an opaque-origin frame iframe carries no bearer. The host-free testkit `FakeRegistry` validates it the same way.
+
+- **GET /api/components catalog (#4087).** A new operator (bearer-gated) route lists the live
+  component-v1 kinds — the core widgets and every plugin-contributed kind — as
+  `{name, plugin, frame_url}`, where `frame_url` is the public `/plugins/<id>/<frame>` page a
+  frame kind (ADR 0118 D5) renders in, or null. Each plugin component's frame is carried
+  through the loader and rebound on every plugin reload beside the component set, so a disabled
+  plugin's kind drops out of the catalog.
+
+- **Frame-rendered plugin components host (#4088).** A console host that renders a plugin's `frame` component (`GET /api/components`) inside a locked-down `sandbox="allow-scripts"` iframe — no `allow-same-origin`, so it runs on an opaque origin and the operator bearer is never reachable or forwarded. It hands the frame the component props and the console theme over `postMessage` (re-posting the theme on a live theme switch), and reuses the shared inline-frame budget: `[80, 1200]` px height clamp, near-viewport lazy mount, and a six-live-frame cap per chat view.
+
+- **Plugin components render in chat without a console rebuild (#4088).** A plugin can contribute a chat component whose renderer is a frame page it serves: the console resolves a `show_component` kind through the live catalog (TS-registered renderer → built-in → plugin frame → unsupported) and hosts the plugin's page inline in a locked-down, bearer-free iframe. The frame reaches chat through the same gated send/openLink bridge as inline artifacts (`{via:"component", kind, plugin}` origin tag), so a frame-started turn is a normal, auditable, "from ‹component›"-labelled user message.
+
+- **three.js available in artifacts (#4118).** The `three` 3D library (r170, MIT) is now vendored same-origin and SRI-pinned alongside d3, so `html` and `react` artifacts can `import * as THREE from "three"` with no CDN, CSP, or SRI error. An html artifact that ships its own import map keeps it: the shell merges the two, with the author's entries winning, instead of injecting a second map ahead of it.
+
+- **anime.js available in artifacts (#4118).** The `animejs` animation library (4.5.0, MIT) is vendored same-origin and SRI-pinned next to three.js and d3, so `html` and `react` artifacts can `import { animate } from "animejs"` with no CDN, CSP or SRI error. It takes the animation slot ADR 0118 D6 planned for GSAP: GSAP's "no charge" license prohibits use in tools that build visual animations without code, and it isn't open source.
+
+- **Plugins can record friction from background work: `graph.sdk.record_friction` (#4164).** The friction ledger only heard from the agent's `record_friction` tool, so failures in a plugin's background loop never reached it. projectBoard's hung coder drives, missing epic base and preflight holds all went unrecorded, and protoEngineer's friction review stayed empty through two weeks of board trouble. The friction plugin now offers a `friction.record` service. `graph.sdk.record_friction(kind, summary, detail, severity, source=...)` writes through it into the same ledger, grouping and review, stamped `plugin:<source>`. With the friction plugin off it does nothing, and it never raises.
+
+### Changed
+- **Plugin frame handshake extracted (#4082).** The bearer + theme postMessage handshake PluginView performs for plugin iframes — the console theme snapshot, the init post that hands the page the operator bearer + theme, its load-time re-post schedule, and the live re-theme on a `protoagent:theme` change — now lives in a shared `pluginFrameHandshake` module so the later iframe hosts reuse it. Pure refactor with unchanged origin checks; no behavior change (ADR 0118, refs #4076).
+
+- **Artifacts render inline by default (#4117).** `show_artifact` (and the `artifact.show` service) now default `placement` to `"inline"`: the frame-renderable kinds (html, svg, mermaid, react, vega-lite) render beside your prose in the conversation, while markdown, decks, PDFs and files fall back to the Artifact panel silently. Pass `placement="panel"` for a work product you keep iterating on; the "not available inline" note now appears only when you explicitly request `placement="inline"` on a kind that can't render inline.
+
+- **Artifact docs list three.js, d3 and anime.js, and the html import map (#4118).** The
+  `show_artifact` tool description, the artifact plugin README and the `rendering-artifacts` skill
+  now name `three` (`import * as THREE from "three"`), `d3` and `animejs`
+  (`import { animate } from "animejs"`) as offline imports with a one-line example each, note that
+  `html` artifacts get the same import map from a `<script type="module">`, and explain that an
+  html artifact's own import map is merged with the shell's, with the author's entries winning.
+
+- **Inline answers stay available in chat history (#4138).** The artifact store now keeps up to 200 unpinned artifacts by default, up from 20 (the *Artifacts kept* setting, or `ARTIFACT_HISTORY`). Past that cap it evicts the oldest artifact that no surviving chat still shows. An artifact whose inline answer or chip went out in a console chat is kept until that chat is deleted. If every artifact is still shown, the store keeps them all, logs a warning, and says so in `list_artifacts`. Pinned artifacts are never evicted, as before. Plugins can check for deleted chats with the new `graph.sdk.deleted_chat_sessions()` helper.
+
+- **Inline artifact frames, their send/openLink confirm chips, the "from ‹title›" label and table sources now use the design system's components (#4165).** The console moves to `@protolabsai/ui` 0.67 / `@protolabsai/design` 0.12 and drops its hand-rolled versions. Inline frames and the streamed preview render in the DS `InlineFrameCard`: a loading skeleton, then the live frame, with "Click to resume" kept in the same box. A frame's proposal to send to chat or open a link is the DS `ConfirmChip`. It is still non-modal, never takes focus, and still resets "Always allow" for each new proposal. A frame-sent message shows its source as the DS `Message` origin line, and a table's source as the DS `Table` caption.
+
+### Fixed
+- **Inline artifacts follow the operator's theme and the design system (#4076).**
+  - **Problem:** in a dark theme, model-written artifacts showed white cards and inputs with dark-grey text, so labels were unreadable and the result looked like a generic web page.
+  - **Full palette in every frame:** each artifact frame now receives the operator's full `--pl-*` palette (raised/inset surfaces, muted text, status colours, radii, fonts), not just four colours, plus a matching `color-scheme`.
+  - **Themed defaults:** plain inputs, buttons, selects and tables get themed defaults at zero specificity, so they look native while the author's own CSS still wins.
+  - **Model guidance:** the artifact skill and the `show_artifact` description now require styling from `--pl-*` tokens and the `.pl-*` classes, with no hardcoded colours.
+
+- **Streamed artifact previews match the console, and a frame can't take your keyboard (#4076).** Fixes from the final interactive-answers regression:
+  - **Themed preview:** the live preview of an artifact being written now uses the console's own theme. It gets the full `--pl-*` palette, a `color-scheme` that follows the console rather than the OS, the same default control styles, and the design-system stylesheet, which is inlined so the preview's CSP stays closed. Before, it showed a white card or bare browser controls and then jumped to the themed frame.
+  - **No focus theft:** an inline artifact or plugin component can no longer take your keyboard. Frames keep running, so charts and animations stay live, but a frame becomes interactive only when you click it (the first click activates it) or Tab into it. It goes back to inactive when you click or tab back to the console. A frame that grabs focus on its own is stopped at once and replaced by "This artifact tried to take keyboard focus." with a **Run it** button, and focus goes back to the composer. This also stops a frame that re-focuses itself in a tight loop. The quarantine lasts for the session. Keyboard Tab into and through frames works again in desktop Chrome.
+  - **No inline card for panel artifacts:** a markdown (or other panel-only) artifact, or one placed in the panel, no longer briefly shows the inline "Preparing…" card. The server now sends the short arguments the model wrote before `code` (`kind`, `placement`, `title`) along with the streamed preview, once, and only those keys. The console reads them case-insensitively, as the plugin does.
+  - **Real tool durations after reload:** tool cards show the server-measured duration, which is now stored on the tool's end frame. When that duration isn't known, the card shows none instead of a fake "0ms".
+  - **Same turn time live and after reload:** a finished or stopped turn's footer time is now when the turn ended, which is what a reload shows, instead of when it started. This also holds when a reattached turn finishes or a stalled stream is settled from the server, both of which now use the server's own end time.
+
+- **Artifacts verify inline renders, file documents in the panel, and stop re-reporting verdicts (#4076).** An inline artifact's create/edit reply now names the `check_artifact(<id>)` call to make, because its chat frame mounts after the reply and no verdict can ride it. `check_artifact` waits the full window for an inline frame even when no panel has polled, so a check right after a reload no longer answers "no result yet" in milliseconds. The skill and `show_artifact` now send a standalone document (README, spec, report, letter) to the panel as a `markdown` artifact with a short summary in chat. A diagram is a `mermaid` artifact, not a chat-text fence (chat shows those as code). Text-only replies ask the model to quote the artifact id and not to offer buttons the client can't click. A vega-lite spec's `$schema` is dropped before drawing, so a v5 pin no longer logs a version warning against the bundled v6. The shell reports each render verdict once per artifact version, across remounts.
+
+- **No more lost keystrokes when an artifact grabs focus (#4076).** When an inline artifact or a frame component pulls keyboard focus away from the composer, the console now hands focus back straight away, and again a moment later as a fallback. Before, in Chrome it waited about 10 ms first. Every key you typed in that gap went to the artifact. This happened most with an artifact you had chosen to run anyway ("Run it") and then clicked away from. The frames also no longer request a `pointer-lock` permissions-policy feature that Chrome does not recognise. Pointer lock still works through the sandbox's `allow-pointer-lock` token.
+
+- **The Artifact panel follows only the active chat's artifacts (#4076).** A panel artifact made by
+  another chat tab, by a `/v1`, A2A or ACP client, or saved before chats were recorded no longer
+  takes the panel over. It stays in the picker, and **Open in panel** still shows it. The console
+  now tells the panel which chat tab is active, so switching tabs moves the panel to that chat's
+  newest panel artifact.
+- **"Open in panel" never opens a 0 px panel (#4076).** A right or bottom dock stored at 0 px
+  (left that way by a drag-to-collapse) reopens at its default size.
+- **Inline artifacts no longer stick at 80 px with a clipped heading (#4076).** A frame whose
+  content settled late inside a viewport-sized wrapper (`height: 100vh`) kept its first, too-early
+  measurement. The frame now re-measures as the content and fonts settle, and sizes a
+  viewport-sized layout to its content.
+
+- **Artifact frames use the console theme's scrollbars and controls, not the OS's (#4076).** An artifact frame's `color-scheme`, which controls native scrollbars, date pickers and form controls, was read from the shell page and so followed the operating system. On a dark console with a light OS, frames drew light scrollbars, and the reverse. It now follows the console's own background colour.
+
+- **"Open in panel" no longer shows a blank or stale Artifact panel (#4076).** Opening the panel from a chat chip rendered the artifact the panel last remembered and then, about 2ms later, the one you clicked. Chrome drops a frame swap made while the previous one is still loading, so the panel kept the old artifact, or stayed black, under the correct picker label until a reload. The panel now resolves the clicked artifact before it renders. A frame never re-loads identical content, and a second swap on a frame that has not finished its first load goes into a fresh frame, so the newest artifact always shows at once.
+
+- **The Artifact panel ignores stale poll answers, and a pending "open this" request survives them (#4076).**
+  - **Problem:** the panel's store poll can overlap with a second poll (started by a deep-link or by the tab coming back). If the older answer landed last, it rolled the panel's copy of the store back, so the panel could jump back to an older artifact for one poll. A poll already in flight when the agent announced a new artifact could also answer without that artifact. The panel then dropped the "open this artifact" request as if the artifact had been deleted, so a pinned panel never switched to the new artifact.
+  - **Fix:** polls are numbered. An answer older than the one already applied is ignored, and only a poll sent after the request arrived can drop it.
+  - **Placement is now covered by tests:** new tests check every store write an inline artifact goes through: create (same chat, `/v1`, `show_service`), the render-status stamp, edit, rewrite and pin. No poll can see an inline artifact without its `placement`.
+
+- **The Artifact panel stays put when an inline answer arrives, and its frame re-themes fully (#4076).**
+  The panel's follow-newest chased the store's current artifact, so an inline svg answered in the same
+  chat, or an inline artifact another session made over `/v1`, took over a panel that was showing a
+  document. Follow-newest now tracks panel-placed artifacts only (ADR 0118 D2), and a new panel
+  artifact still auto-opens. A live theme switch now flips the frame's `color-scheme` along with its
+  tokens, so native controls and scrollbars follow it. The shell page's own `color-scheme` follows the
+  console theme instead of the OS. An uncaught `send()`/`openLink()` refusal is no longer reported as
+  an uncaught promise rejection, and the panel frame drops `allow="pointer-lock"`, which Chrome
+  warned is an unrecognized feature. Pointer lock still works through the `allow-pointer-lock`
+  sandbox token.
+
+- **A stopped turn reads stopped, and the confirm chip's checkbox stays with its label (#4076).** Pressing Stop while a tool call was still running (say `show_artifact` streaming its code) used to settle that call as done, so after a reload the cancelled card showed a green ✓ with empty args and nothing said the turn had been stopped. A call cut off by a stop now shows a neutral "stopped" (no ✓, no spinner), the folded tools chip drops its ✓ too, and the turn's footer says **Stopped**. That holds for the live Stop, a reload, a cold rebuild from the server's `canceled` task, and a reattach. A canceled turn no longer rebuilds as an error bubble either. Separately, the send confirm chip's "Always allow from this artifact" checkbox stays next to its label on one line, and the whole control wraps below Send / Dismiss on a narrow column instead of splitting.
+
+- **Inline chart verdicts and quiet send refusals (#4076).** An inline `vega-lite` chart now reports its render verdict from its first successful draw: a theme push that lands mid-draw is coalesced into one redraw after it, instead of restarting the draw and holding back the verdict. A refused `protoArtifact.send()`/`openLink()` (agent busy, dismissed, rate-limited) no longer covers the artifact with the red error overlay or records a failed render — the shim tags bridge refusals and the error hook logs them quietly, while real errors still show. The `rendering-artifacts` skill now shows `send()` with its Promise handled ("Sent" only on success, a quiet "Not sent: …" on refusal), and says firmly that every standard chart is its own `vega-lite` artifact, even one added to an existing tool — never bars hand-built from divs, CSS or SVG.
+
+- **Inline artifact frames release their slot after resume (#4111).** Clicking "Click to resume" on an evicted inline artifact frame no longer claims the live slot a second time, so unmounting it frees the slot instead of leaking it; a mounting frame no longer flashes the resume card before it registers, and a remounted frame restores its last measured height.
+
+- **Streamed artifact previews stream on the Claude OAuth lane (#4120).** The `anthropic-oauth` client now sets `eager_input_streaming` on write tools that declare `stream_args` (show/update/rewrite_artifact), so a tool's streamed argument arrives incrementally and the D3 inline preview streams instead of landing in one burst at message end.
+
+- **Streamed preview shows on turns without reasoning (#4121).** The live inline-artifact preview (ADR 0118 D3 / S8c) now renders on an unfolded turn — a `show_artifact` call with no reasoning part, as Claude on the OAuth lane emits — not only inside the folded WorkBlock. ChatMessageView drives the spotlit call through the same `inlineArtifactPreview` / `StreamingPreview` path and hands it over to the real inline frame once the artifact-ref lands.
+
+- **Inline artifacts come back live after switching chats (#4123).** A hidden chat tab stays mounted and holds its live-frame slots, so inline frames in the chat you switched to could stay stuck on "Click to resume". An evicted inline frame now re-registers when it scrolls back into view, so least-recently-seen eviction reclaims a slot from the hidden tab's frames — no click needed. The re-register keeps the single-claim invariant, so no slot leaks (#4111).
+
+- **An inline artifact's tool result says it's inline in the chat (#4124).** `show_artifact`
+  no longer replies "now showing in the Artifact panel" for an artifact that renders inline —
+  it says "now showing inline in the chat". `check_artifact` is placement-aware: an inline
+  artifact with no render verdict yet reports that it's rendering inline in the chat or hasn't
+  been scrolled into view, instead of telling the model the panel may be closed (which led it
+  to tell the user to open a panel). Panel artifacts keep the open-the-panel hint.
+
+- **The "from ‹title›" label sits on its own line (#4124).** A send-to-chat user turn's artifact label was `inline-flex`, so it ran into the message ("from Bill SplitterI am splitting…"). It is now block-level `flex`, on its own line above the text. The inline preview placeholder is unchanged: with inline the default placement (S13), a call whose placement isn't known yet is treated as inline.
+
+- **Inline artifacts keep their own colours at handover (#4124).** The artifact frame's live re-theme used to write the console's background and text colour as inline styles on the artifact's `<html>`/`<body>`, which beat the artifact's own `body` rule. So once the real frame took over from the streamed preview, anything inheriting the artifact's text colour switched to the console's, and a dark card's title and buttons went near-black on a light console. The re-theme now updates only the `--pl-*` theme tokens, and the frame's base colours read those tokens. Unstyled artifacts still follow the console theme live, and an artifact's own colours always win.
+
+- **One live inline card per artifact (#4124).** When an agent revises an inline artifact several times in one chat (e.g. parallel `update_artifact` calls producing v2 through v6), only the newest version stays a live frame; earlier versions collapse to a compact "v2 → superseded by v6" chip that still opens its version in the Artifact panel and no longer uses a slot in the 6-live-frame cap. Different artifacts and other chats are unaffected, and a reloaded transcript follows the same rule.
+
+- **Plain API clients get honest artifact replies (#4144).** A `/v1/chat/completions`, `POST /api/chat` or relay-plugin (Discord, `HOST.invoke`) client receives only the reply text, yet `show_artifact` told the model the artifact was "now showing inline in the chat" and `check_artifact` said "check again shortly", which looped (one `/v1` call used ~222k prompt tokens). Each turn now stamps a `renders_ui` flag from its origin into the graph state; on a text-only client the artifact tools say the artifact was saved but can't be displayed (with its id), skip the render wait and the chat chip, and `check_artifact` answers at once that there is no viewer to check. On the console, an inline artifact with no verdict yet now says the render can't be confirmed and not to keep re-checking, instead of inviting a loop. The `artifact.show` plugin service takes the same flag (`renders_ui=`, read with the new `graph.sdk.renders_ui(state)`), so a caller like the data plugin's `data_chart` can return the honest text-only reply too.
+
+- **Chat history shows the right time again (#4145).** The chat session and turn routes now send `last_updated` as zoned UTC (`+00:00`) instead of a zoneless timestamp a browser read as local time, which stamped restored chats hours off (7 hours for an operator at UTC-7). The console also reads any zoneless server timestamp as UTC, so a response from an older server renders correctly too.
+
+- **An inline artifact reports its render check even when the chat isn't on screen (#4147).** The newest inline artifact from the turn in progress now loads straight away, even with the console in a background window, behind another chat tab, or scrolled out of view. Before, its frame waited until it was scrolled into view, so `check_artifact` kept answering "no render result yet". It still counts toward the six-live-frame limit. Artifacts from earlier turns and reloaded history still load only when scrolled into view.
+
+- **A reloaded chat shows the turns another browser ran in it after this one cached it (#4162).** Suppose a browser opened a chat (for example, while another browser's turn in it was still running) and kept it in its local cache. It would then never show that chat's later turns, finished or stopped, no matter how often it reloaded, even though the server had them. On boot the console now notices when the server has more turns for a cached chat than the cache holds. It adds the turns the cache never saw and redraws any turn it only held as a running snapshot. Turns it already rendered stay as they are.
+
+- **Secret redaction no longer eats the quote, bracket or comma after a token — and never leaves part of a secret behind (#4166).**
+  The bearer pattern matched `\S+`, so `"Authorization: Bearer <jwt>",` reached the
+  review panel as `"Authorization: Bearer [REDACTED]` and a PR was FAILed on a
+  SyntaxError that wasn't on disk. Header and `KEY=value` redaction is now quote-aware:
+  a quoted value is redacted up to its matching closing quote (kept), an unquoted one up
+  to whitespace, a quote or a closing bracket — so no suffix of the secret survives.
+  `github_pat_`, base64url `npm_` tokens, standalone JWTs, `ASIA` key ids and
+  URL-userinfo passwords are covered too, the AWS/npm key names are redacted in dict
+  form, and code-review roles are told `[REDACTED]` marks are the runtime's, never a
+  defect.
+
+- **Sensitive dict keys are redacted whatever their case or separator (#4167).**
+  `{"ApiKey": …}`, `apiKey`, `Api-Key`, `x-api-key` and `AUTHORIZATION` slipped past the
+  exact-spelling key check; keys are now casefolded with `-`/`_` dropped before lookup,
+  while ordinary keys like `tokenizer` or `author` stay untouched.
+
+- **A short stall timeout no longer stops `/workflow` and `/<subagent>` runs that are still working (#4168).** These runs report liveness at most every 5s. Before this fix, setting `model.turn_stall_timeout_seconds` below that cadence (for example `3`) made the stall guard stop a healthy run between two progress frames. Now any non-zero window below 15s (3x the cadence) is raised to 15s, and a one-time WARNING names the value that was used. The Settings page also refuses a value in that range and explains why. `0` still disables the guard. The turn-liveness tests also stop flaking under CI load: they now measure the stall window on a virtual clock (a new seam, `a2a_impl.executor._frame_within`) instead of racing a sub-second wall-clock window.
+
+### Security
+- **An artifact can't open a tab without asking you (#4076).** `protoArtifact.openLink(url)` from an inline artifact (and `protoComponent.openLink` from a frame-rendered plugin component) used to open the tab as soon as the https check passed. It now goes through the same confirm chip as `send`: "Open ‹host› in a new tab?" with **Open**, **Dismiss** and **Always allow links from this artifact**. Link trust is stored separately from send trust, so trusting an artifact's messages never lets it open tabs. The same rate limits apply (one open per 2 s, one chip at a time), the `artifact.open_link_origins` setting now actually narrows which origins may open, and the tab opens from your click with no opener and no referrer. The artifact's Promise now resolves only if the tab really opened: a dismissed link or a blocked pop-up rejects with the reason instead of reporting success.
+
+- **Artifact send requires a click inside the artifact (#4122).** An inline artifact (or frame-rendered plugin component) can only post a message to chat when the triggering gesture landed INSIDE its own frame — the send gate now also requires `document.activeElement` to be that frame's iframe, not just a live `navigator.userActivation`. A recent click on console chrome (a "Click to resume" card, a tab, "Open in panel") or a click meant for a sibling frame no longer satisfies the gate, closing a hole where an autosend-on-load could ride the resume click.
+
+- **A trusted artifact can't mislabel where its message came from (#4137).** A send from an "Always allow" artifact is now tagged with the host's own artifact id and version, the same as a confirmed send, never the id and version the frame claims. Each new send proposal also starts with "Always allow" unticked, so a tick on one message never carries over to the next.
+
+- **Artifacts propose, you decide, before anything is sent to chat (#4137).** `protoArtifact.send(text)` from an inline artifact (and `protoComponent.send` from a frame-rendered plugin component) no longer posts on its own. The console shows a confirm chip under the frame (`Send to chat: "…"` with **Send**, **Dismiss** and **Always allow from this artifact**), and the message goes out only when you click Send. This replaces the user-activation + focus gate, which an artifact could satisfy by focusing itself after any console click. "Always allow" trusts that artifact (all of its versions; for components, that plugin's component kind) in this browser and skips the chip, but the length, "the agent is busy" and rate limits still apply. Dismiss rejects the frame's Promise. A new proposal replaces the open chip instead of stacking, and proposals are rate-limited.
+
+## [0.200.0] - 2026-10-10
+
+### Fixed
+- **Moving a tool to a subagent no longer tells the agent the tool is gone (#4104).** Holding a tool for a subagent with `tools.subagent_only` made the agent's next turn say "No longer available" for that tool, although the agent still reaches it through `task`. A live agent answered that note instead of reporting the work it had just delegated. Only a real add or remove is announced now.
+
+- **A review lane that spends a whole turn thinking is retried with thinking off, not nudged into the same loop (#4115).** On the Qwen3.8 thinking lane a long turn can loop inside `<think>` and end with no text, which left the lane without its findings and the review incomplete. The completion guard's nudge sent the whole loop back to the model with thinking still on, and the model carried on repeating it. The retry now drops that turn's reasoning and makes one call with thinking off, so the lane writes its deliverable from what it has already read.
+
+### Docs
+- **PROTO.md documents how epic branches are reviewed and landed (#4110).** Slice PRs into `epic/<name>` are the review of record. A slice merges only on a complete panel pass; a `neutral` incomplete-coverage verdict means part of the diff is unreviewed. Slices bound for the epic get no `merge-hold`, because the hands-on test happens once, on the epic. `main` is synced into the epic regularly. The epic → `main` PR is reviewed by attestation (each commit traced to a reviewed slice or a clean sync merge) instead of re-reviewing the whole epic diff. The epic lands as a merge commit.
+
+- **App guides now cover model connections, documents, memory, and data recovery (#4113).**
+  Put prerequisites and current app controls first, shorten repeated introductions,
+  and separate user tasks from authoring reference. Correct source startup,
+  snapshot privacy, file locations, phone access, and stopped backup/restore
+  procedures while preserving existing guide section URLs.
+
+## [0.199.0] - 2026-10-09
+
+### Added
+- **The desktop app tells you when a download has landed (#4073).** Downloading a file (an artifact, a chat export) used to stop at "Download started", so a slow save looked like nothing happened. The desktop app now shows a "Downloaded" toast once the file is saved, with **Open** (the default app for that file type) and **Show in Finder**, or a "Download failed" toast if it didn't save. Downloads go to your Downloads folder and never overwrite an existing file.
+
+### Fixed
+- **Deleting a fleet member's chat from the hub no longer times out or fails on retry (#4071).** A delete with "save to memory" summarizes the whole thread first, and the hub cut it off after 20 seconds with "agent did not respond in time" while the member went on to finish it. Chat deletes, compacts and publishes through the hub now get the same long timeout as a turn. Deleting the same chat twice at once no longer fails with "database is locked": the second delete waits for the first.
+
+## [0.198.0] - 2026-10-08
+
+### Added
+- **Keep a domain's tools inside the subagent that owns it with `tools.subagent_only` (#4069).** Name tools there and the lead agent no longer has them: its model is never offered them, a call to one is blocked with a pointer to `task`, and neither `search_tools`, execute_code's bridge nor the operator MCP can surface them. Any subagent that allowlists them still gets them, in the foreground or in the background. The lead's prompt loses those schemas, and the domain's tool output stays in the subagent's context. `tools.disabled` still wins. The console's Tools list marks these "Subagents only". Agent self-config can no longer change a subagent's tool allowlist, since that list is a permission. See ADR 0117.
+
+### Fixed
+- **agent_browser reads the country back from an intl-tel-input v23+ phone picker (#4032).** On the live widget's newer markup — a `button.iti__selected-country` whose visible text is only the "+1" dial code, the committed country NAME in a `title`, and the dropdown portalled to a body-level `.iti--container` — `browser_select("Country", "United States")` no longer fails `Error: … reads "+1"`. The read-back resolves the owning `.iti` wrapper (via the button's `aria-controls`, so a selector that lands in the portalled container still works), reads the NAME from the button's title / aria-label / `.iti__a11y-text`, and a bare dial code (shared by the US and Canada) still never confirms a match. `browser_form_read` reports that field's value as the country NAME, not "+1".
+
+- **agent_browser handles a file input the widget REMOVES after attach (#4032).** On a Greenhouse résumé field that drops its `input[type=file]` from the DOM entirely on attach — leaving only a filename chip, the `<label for>` still pointing at the now-missing id — `browser_upload` no longer reports "nothing is attached". It re-finds the field's surviving wrapper (by its stored selector, then the orphaned `label[for]`, then the field label) and confirms the attach via the displayed filename, while still rejecting a chip that belongs to a sibling file field or a rejection message. `browser_form_read` now recovers such an orphaned file field as one `kind:'file'` row (the removed input's id, the bare filename as its value, required read off the label), without duplicating a field whose input is still live.
+
+- **The org chart draws a paired remote once, not twice (#4068).** A remote you add as a delegate from its fleet row points at the hub's proxy (`http://127.0.0.1:<hub>/agents/<id>/a2a`, ADR 0113), so the chart drew one node for the delegate and a second, dashed "member" node for the same agent at its real address. The chart now recognises that a hub-proxy delegate and the fleet member it reaches are the same agent. It draws one node with a delegate edge and crawls it with the member's stored token.
+
+## [0.197.0] - 2026-10-06
+
+### Added
+- **The skill index now flags skills that need tools the agent doesn't have (#4061).**
+  A skill whose frontmatter `tools:` names tools missing from this agent's bound toolset is
+  listed in `<available_skills>` with `missing_tools="a,b"`, so the model sees the gap before
+  loading the skill instead of partway through its procedure. The skill stays listed; when the
+  bound toolset isn't known, nothing is flagged (ADR 0060 amended).
+
+### Fixed
+- **`write_file` / `edit_file` can no longer leave a reader looking at an empty file (#4059).**
+  Writes truncated the file and then wrote it, so a parallel tool call (or a read right after
+  `edit_file`) could see 0 bytes — surfacing as "not valid JSON: line 1 column 1". Writes now go
+  to a temp file beside the target and are swapped in atomically with the original's permissions
+  kept; a failed write leaves the original untouched. `write_file` also now takes the same
+  per-file lock as `edit_file`, so a concurrent edit can't silently revert it.
+
+- **A task the agent just updated no longer shows its old status on the next step (#4060).**
+  The injected `<working_state>` was composed once per turn and re-sent unchanged on every model
+  call, so after `update_task` reported success the agent's very next call still saw the task as
+  open and re-did or doubted the update. Once a tool has run in the turn, the working-state block
+  is now re-read for each model call (in place, so prompt caching is unaffected); the rest of the
+  injected context stays the turn's snapshot.
+
+### Security
+- **Slide previews measure every image in a deck, not just those in `ppt/media/` (#4057).**
+  The `.pptx` safety check only measured images under `ppt/media/` with an image extension, so a
+  large image stored elsewhere in the file skipped the pixel caps. Every part is now sniffed by
+  its contents. One that's oversized, or a set that's too large together, refuses the slide
+  preview, and the outline card shows the reason.
+
+## [0.196.0] - 2026-10-06
+
+### Added
+- **Word documents render as real pages in the Artifact panel; CSV and xlsx tables done properly (#4054).**
+  A `.docx` saved with `save_file_artifact` now previews as its pages: Word styles, headings,
+  lists, tables, images, headers, footers and footnotes, fitted to the panel with − / Fit / +
+  zoom. Rendering uses vendored docx-preview on JSZip in the artifact sandbox, with no network.
+  A save-time check inflates every part of the file and measures every image under fixed budgets,
+  and refuses anything oversized or bomb-like, which keeps the text card with the reason. CSV
+  previews now detect `;`, tab and `|` delimiters, drop Excel's byte-order mark and right-align
+  numbers. An `.xlsx` shows one table per sheet instead of comma-joined text.
+
+### Changed
+- **Deleting or clearing a chat now harvests it into the knowledge base by default (#4053).** The delete and clear dialogs open with **Harvest** already ticked for an ordinary chat, so retiring a chat keeps a searchable summary unless you turn it off — the "keep this out of memory" decision is the incognito flag (ADR 0069 D3b), not a per-delete opt-in. Incognito chats are never harvested: their harvest switch is gone, replaced by a "never harvested" note, and the request always carries `harvest=false`. Harvest and forget are now mutually exclusive — ticking **Forget what this chat already saved** unticks harvest, so "just make it gone" is one click. Bulk tab-closes and the Shift+click quick-delete follow the same default (harvest regular chats, skip incognito ones). Client-only change; the server's incognito harvest skip stays the backstop.
+
+### Fixed
+- **agent_browser: `browser_form_read` folds react-select's hidden required input into its combobox (#4032).** On a live Greenhouse form, a `required` react-select renders a sibling `<input required tabindex="-1" aria-hidden="true">` (opacity 0 / 1px) next to `.select__control`, inside the container but NOT inside the control — so the combobox-skip never caught it, and every such input surfaced as an unlabelled, id-less, required "text" row after each combobox, polluting the form read (required fields nobody could answer). The in-page enumeration now recognises that hidden shadow input — a label-less, visually/semantically hidden `<input>` (not a combobox root, not a file input) sharing a react-select combobox's nearest container — skips it, and folds its `required` onto the labelled combobox row. The fold is **scoped to the combobox's own select container**, not a form-wide search: on the Greenhouse layout a combobox's container is three ancestors below the `<form>`, so scanning ancestors for a required shadow would have reached the whole form and marked *every* combobox (optional ones included) required — now a combobox is required only when its own container holds a required shadow. Visible unlabelled inputs and hidden file inputs (Greenhouse's `#resume`) are still listed. The saved Greenhouse fixture gives each react-select container that hidden shadow sibling — with `required` on the required comboboxes and without it on the optional ones.
+
+- **`browser_select` resolves "Country" to a phone-country picker labelled only by aria-label (#4032).**
+  A react-select / intl-tel-input phone-country picker on a Greenhouse form often has no
+  `<label for>` — its only accessible name is `aria-label` / `aria-labelledby` on the select
+  container or `.iti` wrapper (and on the listbox it controls). The in-page field enumeration now
+  adds that accessible name as a label candidate for a label-less combobox/phone picker, so
+  `browser_select(field="Country")` and `browser_form_read` address and report it by "Country"
+  instead of failing with "no options were found". Only the picker borrows that name — the
+  phone-number `<input type=tel>` beside it never does, even with no label of its own — and any
+  label of the picker's own (an explicit `<label for>` / wrapping `<label>` / `aria-label`) still
+  wins, so a labelled field never borrows a neighbour's accessible name.
+
+- **agent_browser: `browser_select` reads a phone-country picker back by the country NAME, not the "+1" dial code (#4032).** On the live GitLab Greenhouse form, selecting "United States +1" committed the country but failed the read-back with `reads "+1" after selecting …`: the widget renders only a flag + the dial code as visible text, stashing the country name in a `title` on a child span, and the driver compared the visible text only. The combobox and intl-tel-input read-back now derive the committed selection's identity from the `title`/`aria-label` on the single-value / selected-flag OR any descendant (plus any hidden input value), matching on the country name or its name part — and a bare dial code (empty or `+1`, shared by the US and Canada) never counts as a match, so a genuinely wrong country is still a hard mismatch. `browser_form_read` likewise reports the country name when the visible value is only a flag/dial code. A new self-contained fixture (`greenhouse_phone_country.html`) models the live picker.
+
+- **agent_browser: `browser_select` now opens a closed react-select itself (#4032).** On the live Greenhouse form every `browser_select` failed with "no options were found" unless the menu was already open, because the combobox driver made a single synthetic `mousedown` and gave up. It now escalates open strategies — a full primary-button pointer sequence on the control and its dropdown indicator, then focus + ArrowDown, then typing the filter (a type-to-search combobox renders its listbox only after input), then a real trusted CLI click — re-checking after each and never toggling an already-open menu closed, with an empty filtered scan clearing and rescanning unfiltered. When every strategy fails the result is an explicit "could not open the dropdown … (aria-expanded stayed …)" error instead of the misleading "no options were found". The saved Greenhouse fixture now models real react-select open semantics (button-0 only, `openAfterFocus`, toggle-closed on a second mousedown, ArrowDown opens, type-to-search open, a portalled menu named by `aria-controls`).
+
+- **agent_browser: browser_upload confirms an attach that survives the widget re-rendering its file input (#4032).** Greenhouse hides the real `input[type=file]` behind an "Attach" button and REPLACES it after the attach (a fresh input, same id/name, empty `files`, plus a filename chip) — so the old verify, which re-queried only the nonce tagged on the now-discarded node, failed with "the file input … could not be found to verify … nothing was confirmed attached". `browser_upload` now resolves a `#id`/bare-id file input directly (no climbing, even behind an Attach button), and verifies in order: the nonce node if it survived, else the input re-found by `#<id>` / `[name=…]`, else the field container's displayed filename chip — so the upload is confirmed (the success line names the evidence used). The chip evidence is a tight filename element scoped to the field's OWN container (never a sibling file field's chip): any element that IS, sits under, or CONTAINS a validation/alert is excluded — so a plain wrapper around a `role=alert` whose message NAMES the file ("… could not be attached: resume.pdf") is not mistaken for a displayed filename, and a widget that REJECTS the file stays a hard `Error:` with the message surfaced, not a false success. `browser_form_read` likewise falls back to that per-field chip when a file input reads back empty — but only to a chip carrying a DETACH control (× / Remove), the authoritative proof a file is attached, so incidental page text that merely ends in a dotted suffix ("jobs@acme.com", "greenhouse.io") is never read back as a filename and an unattached field reads '' rather than borrowing a neighbour's.
+
+## [0.195.0] - 2026-10-05
+
+### Added
+- **PDF file artifacts render as real pages in the Artifact panel (#4046).**
+  A `.pdf` saved with `save_file_artifact` now previews as its pages: one continuous scroll
+  fitted to the panel, a page indicator, and zoom (−/Fit/+), with the extracted text kept
+  underneath. Rendering uses vendored pdf.js on the sandboxed frame's main thread, with no
+  workers and no network. A save-time preflight decodes every stream under byte and time
+  budgets and refuses password-protected, oversized or bomb-like files, which keep the text card
+  with the reason.
+
+### Fixed
+- **`save_file_artifact` accepts the same project-relative paths as the fs tools (#4044).**
+  A file found with `find_files`/`read_file` (a project plus a relative path) now saves
+  as-is. Pass `project` to pick one, or omit it when only one project has the file. Before
+  this, a relative path resolved against the server's working directory and failed with
+  "No file at".
+
+## [0.194.0] - 2026-10-05
+
+### Added
+- **`browser_click` can fall back to a JS click, and the web-browse skill now teaches form filling (#4032).**
+  On Greenhouse the résumé "Enter manually" button opened its textarea only after a
+  JS-dispatched click; a plain CLI click exited 0 and nothing happened, and the agent had no
+  written doctrine for forms so it fell back to snapshot/`@eN`/type+Enter — the cause of most
+  of the failures in the issue. `browser_click` now takes an optional `js_fallback`: when set,
+  it fingerprints the page (element count + `document.activeElement` + the target's
+  `aria-expanded`), does the normal CLI click, re-fingerprints, and ONLY if nothing moved
+  resolves the element in the page and dispatches a bubbling `mousedown`/`mouseup` plus
+  `el.click()`, reporting `Clicked <x> (JS fallback)` — never a second click when the first
+  already worked. The default (`js_fallback=false`) is byte-for-byte unchanged, and the
+  selector also accepts the bd-12mo.1 label locator (`@eN` and CSS still pass through). The
+  web-browse skill gains a **Filling forms** section: start with `browser_form_read`, address
+  fields by LABEL not `@eN`, use `browser_select` for every dropdown/combobox/phone-country
+  picker (never type+Enter), pick the phone country before the number, `browser_upload` a file
+  made with `browser_pdf`, reach for `js_fallback` when a click visibly does nothing, read the
+  form back and diff every value — and never click submit, or touch a captcha/login, without
+  the operator saying so.
+
+- **Browser tools address form fields by label and read whole forms back (#4032).**
+  `browser_snapshot`'s `@eN` refs are resolved once and go stale the instant a page
+  re-renders — a reload, a React state change, a validation error redrawing a field — which
+  is why filling one long Greenhouse form could burn ~50 tool rounds on "Unknown ref". The
+  `agent_browser` plugin now lets a tool address a field by its visible **label** (falling
+  back to `aria-label`/`aria-labelledby`/`placeholder`/`name`), re-resolved in the page on
+  every call, so addressing survives the re-renders that invalidate a snapshot ref; a `@eN`
+  ref or a CSS selector still works unchanged. An ambiguous or missing label is a clear
+  error (the closest labels, or the fields it matched) rather than a silent action on the
+  wrong element. The new **`browser_form_read`** tool returns every field on the page (or
+  within a `scope` container) as JSON — `label`, `kind`, `name`, `id`, `required`, the
+  committed `value` (a react-select combobox reports its rendered selection, not half-typed
+  search text) and `options` — the reliable way to see a form before filling it and to
+  verify it after.
+
+- **`browser_select` sets native, react-select and phone-country dropdowns and verifies the result (#4032).**
+  The `agent_browser` plugin gains one tool for CHOICE fields — a native `<select>`, a
+  react-select-style combobox, and an intl-tel-input country picker — addressed by its visible
+  LABEL or a CSS selector (a snapshot `@ref` is refused here: the widget is set in the page,
+  where the CLI's ref can't be resolved). It matches `option_text`
+  case-insensitively (an exact match, or a unique prefix; zero or several candidates is an
+  error that lists the options), commits by CLICKING the matching option — never by pressing
+  Enter — and CLEARS a combobox before typing rather than appending to it. The two failure
+  modes on the Greenhouse form this targets are removed by construction: a type+Enter no
+  longer commits the highlighted-but-wrong option (visa "Yes, Ireland Highly Skilled Worker
+  Visa"), and typed text is no longer doubled ("YeYess"). After committing it reads the
+  rendered value back and compares it to what was chosen; a disagreement is a hard `Error:`,
+  so a wrong answer is never submitted silently. For a phone field, select the country first,
+  then `browser_fill` the national number.
+
+- **`browser_upload` attaches a file to a form's file input, fenced to the browser's own capture directory (#4032).**
+  Ashby and Greenhouse application forms want a résumé as a FILE, and the `agent_browser`
+  plugin had no way to set a file input. The new tool addresses the field by its visible
+  LABEL or a CSS selector (re-resolved in the page each call) — and when the located element
+  is the "Attach" button or wrapper that hides the real input, it uses the single
+  `input[type=file]` in that field's container (none, or more than one, is a clear error).
+  `file_path` is fenced exactly like a capture, in reverse: it may only read a file that
+  already lives inside the plugin's own capture directory, so a prompt-injected page cannot
+  make the agent upload an arbitrary local file (`~/.ssh/...`, a `..` escape or a symlink out
+  is refused before the CLI runs, and the file must exist and be non-empty). The résumé flow
+  is therefore `browser_pdf` → `browser_upload`, both inside the fence. After the attach it
+  reads `input.files[0].name` back and requires it to match the uploaded file — a mismatch or
+  empty read-back is a hard `Error:`, and any field-level validation message is surfaced — so
+  a silent non-attach is never reported as success.
+
+### Changed
+- **The Analyst persona points a new operator at its own data folder first (#4038).** data-plugin
+  v0.1.4 gives every agent a default data folder, `<workspace>/data`. It's created on load and
+  always allowlisted, and `data_sources` names it when nothing is connected. The `analyst` soul
+  preset's first-run section now says: drop files into your data folder (the path
+  `data_sources` shows) or add folders in Settings ▸ Plugins ▸ Data Analyst ▸ Data folders.
+  When the operator has turned the default folder off, it points at Settings only.
+
+### Fixed
+- **Browser form tools work against the real agent-browser CLI, now guarded by real-Chrome tests (#4032).**
+  The `agent_browser` form drivers — `browser_select`, `browser_upload`, `browser_form_read`
+  and `browser_click`'s JS fallback — run their logic as in-page JavaScript and read the
+  result back through `agent-browser eval`. The pinned CLI (0.27.1) serialises a returned
+  STRING one layer deeper than the CLI-mocking unit tests assumed, so against a real browser
+  every one of those tools failed with "the page returned unreadable data" (and a JS fallback
+  was mis-reported as a plain click) — a drift the mocked suite could never catch. The forms
+  parser now tolerates that extra encoding layer, so the tools actually drive native
+  `<select>`, react-select comboboxes, intl-tel-input phone pickers and file inputs in a real
+  browser. Saved, self-contained Greenhouse and Ashby application-form fixtures and a live
+  test module (skipped unless the CLI and Chrome are present, so the default gate stays
+  host-free) lock the behavior in: a vendor markup change now fails a test instead of letting
+  the agent submit a wrong answer.
+
+- **A wait picks back up as part of the chat (#4043).**
+  - When an agent's `wait` runs out, the turn it resumes with now streams and settles in the chat like any other reply. It used to fold into a collapsed "Scheduled task" card, a treatment meant for schedules set somewhere else. Goal runs already worked this way.
+  - A turn that ends on `wait` without saying anything now replies "I'll pick this back up in 45 minutes." It used to show the wait's raw confirmation, including the instruction the agent left for itself, so the reply read as the agent prompting itself.
+
+## [0.193.0] - 2026-10-04
+
+### Added
+- **New agent can start from any bundle URL, and preview archetypes are opt-in (#4030).**
+  Settings ▸ New agent has a third source, "From a bundle URL": paste a bundle's git URL
+  (plus an optional tag, branch or SHA; a GitHub `/tree/<ref>` link works too). You then see
+  what it installs before anything runs: each plugin and its ref, the built-ins it turns on,
+  and the settings it will ask for. A bundle from a non-official source asks you to confirm
+  "I trust this repository". The flow then continues into the same set-up dialog as the
+  catalog cards. `POST /api/fleet` accepts `ref`, and `GET /api/archetypes/from-url` returns
+  the read-only peek. Archetypes the catalog still holds back for testing now show under
+  Advanced ▸ "Show preview archetypes", marked with a **Preview** badge. They're off by
+  default and the setting is remembered per console (`GET /api/archetypes?include_held=1`).
+
+- **A path setting can hold a list of folders (`multiple: true`) (#4031).**
+  A `type: path` setting — core or plugin manifest `settings:` — that declares `multiple: true`
+  now renders one row per folder, each with its own **Browse…**, a Remove (×) button, and an
+  **Add folder** button that appends a row and opens Browse… for it straight away. Before,
+  Browse… replaced the whole value, so a field like the data plugin's **Data folders** could
+  only be edited as comma-separated text. The saved value is still one string (the rows joined
+  with newlines, duplicates dropped), so existing configs and older cores keep working; an
+  existing comma-separated value loads as rows. A bundle's `config_inputs` `type: path` honours
+  `multiple: true` in the New agent set-up step too.
+
+### Fixed
+- **A failed bundle install now says why, instead of four lines of httpx log (fleet create / archetype picker, #4029).**
+  `POST /api/fleet` with a `bundle` that failed to install returned
+  `400 bundle install failed: <INFO httpx HTTP Request: GET …>` cut off at 400 characters. That
+  was the first 400 characters of the `plugin install` child's stderr, which is where httpx
+  narrates every GitHub request, so the CLI's `✗ <reason>` line (written last) never made it in.
+  The analyst archetype hit this on the desktop app, where the hidden reason was
+  `'data' needs duckdb as a HOST-scoped dep…`. Now:
+  - the 400 detail carries that reason line, untruncated up to 1,500 characters (falling back
+    to a traceback's last line, then the exit code);
+  - the hub log gets the reason plus the child's full output at WARNING;
+  - `plugin` CLI commands no longer narrate httpx/httpcore requests at INFO;
+  - a timed-out install is a clean 400 rather than a 500.
+
+  Snapshot import's per-plugin `error` uses the same extraction.
+
+- **A long "background job running" strip no longer widens the chat (#4033).** The strip above the composer is one line; the composer wrapper sized itself to that line, so a long job label pushed the whole chat column wider than its panel and overflowed it. The label now ellipsizes (the full list is in its tooltip and behind View), and the spinner and View button keep their size.
+
+- **The background-agents pill keeps its spinner round while jobs run (#4034).** With the running count beside it, the bottom bar's spinner was squeezed into an oval and the count half-hidden; the pill now widens to fit both.
+
+- **A background delegation's progress card no longer blinks out and back while its job runs (#4035).**
+  Every `/api/events` stream ended after its first idle keepalive (15s): the keepalive came
+  from timing out a read of the bus subscription, and timing it out closed the subscription.
+  The console reconnected, re-hydrated its background-job store from `GET /api/background`,
+  and that hydrate rebuilt the job's entry without the delegate's live progress, so the card
+  vanished until the delegate's next snapshot. Now:
+  - the bus stream stays open through idle stretches;
+  - a re-hydrate merges into what the bus already delivered (it keeps progress, never drops
+    a job the page doesn't list, and doesn't re-render when nothing changed);
+  - the utility-bar widget keeps running jobs the list page omits.
+
+## [0.192.0] - 2026-10-03
+
+### Added
+- **Charts as Vega-Lite specs, and a plugin-services seam, for the local-first Data Analyst (ADR 0116) (#4025).**
+  The Artifact panel adds a `vega-lite` kind: a small JSON spec with its rows inline is drawn by vendored, SRI-pinned
+  Vega / Vega-Lite / vega-embed, in the console's own chart palette (dark or light, redrawn on a theme switch). It
+  runs under a no-network CSP: no `eval`, a loader that refuses every fetch, and inline data only. A chart is a query
+  plus a few hundred bytes of spec instead of a hand-written component. In the end-to-end run, "what were my best
+  weekdays last quarter? chart it" went from send to chart in about 18 s, against about 50 s for the component path.
+  Plugins also gain a call seam: `registry.register_service(name, fn)` offers a callable, and
+  `graph.sdk.service("<plugin>.<name>")` resolves it, or returns `None` when the provider is off. The first service
+  is `artifact.show`, which the new Data Analyst plugin (`protoLabsAI/data-plugin`) uses to put its charts in the panel.
+
+- **The Analyst archetype — answers questions from your own data files with read-only SQL and one live chart, held from the picker until it's been tested (#4026).**
+  Built on the data plugin (CSV, TSV, Parquet, JSON, Excel, SQLite via DuckDB) plus the Artifact panel's Vega-Lite charts: question → schema → query → one chart and a one-line takeaway, with its assumptions and the source file named. It never invents a number, reads only the folders the operator allows, and on first run tells the operator where to set them (Settings ▸ Plugins ▸ Data Analyst ▸ Data folders) instead of trying to. Needs core ≥ 0.192.0 for the data plugin; create one today with `POST /api/fleet` and the `analyst` persona.
+
+## [0.191.0] - 2026-10-03
+
+### Added
+- **The Artifact panel shows a `.pptx` as real slides, not a text outline (#4019).** A deck
+  saved with `save_file_artifact` now renders as a large current slide fitted to the panel with
+  a filmstrip underneath. Arrow keys, PageUp/PageDown, Home/End and clicks page through it. The
+  renderer is the vendored, SRI-pinned `@aiden0z/pptx-renderer` (Apache-2.0), so it works
+  offline on desktop and server installs. Theme colours, fonts, bullets, tables, images and
+  shapes come through, and text stays sharp at any width. Hostile files are bounded twice: once
+  at save time and again in the sandboxed frame. The limits cover zip bombs, oversized
+  entries, slide count, and images over 50 MP (shown as a placeholder). A nonce CSP blocks
+  script and network access from the deck. The text outline stays underneath for screen
+  readers, and it is the whole view when a deck can't be rendered.
+
+### Fixed
+- **A missing work folder no longer takes every filesystem tool with it, and a re-cloned one comes back in the same session (#3643).**
+  When a registered project's folder was gone at graph build, it was dropped from the fence;
+  if that left no folder, `build_fs_tools` bound nothing and the agent lost `read_file` /
+  `search_files` / `show_code` for the rest of the session, even after the folder was
+  re-cloned. Now the missing project is skipped while the others keep working, a call into
+  it says "project X's folder is missing" (and tells the model not to work around it with
+  `execute_code`), the tools stay bound even when every folder is missing, and the folder
+  is reachable again on the next tool call once it exists. The fence is unchanged: a
+  missing root resolves to nothing and a write never recreates it. The operator sees a
+  WARNING log line naming the project and path, plus a self-clearing console banner via
+  `GET /api/runtime/status`.
+
+- **Text the agent streams before a tool call no longer disappears from the chat (#4015).**
+  A reasoning model's turn could stream a sentence, then call a tool. At that moment the
+  console folded the whole turn into the collapsed "Working…" block, so the answer started
+  and then vanished, and it stayed hidden behind "Worked" after the turn finished. Text that
+  was already on screen before the turn folded now stays in place above the work block, and
+  later tool calls and narration fold below it. When the final full-turn text arrives, it
+  only extends what is already shown and never moves it.
+
+- **A reload or reattach in the middle of a turn keeps the agent's pre-tool text on screen (#4016).**
+  After #4015, text the agent streamed before a tool call stayed visible live. A reload or
+  reattach still hid it inside the collapsed "Working…" block, and on a reload of a finished
+  turn it moved below the block. This happened because the stored turn keeps the answer as
+  one flattened text, separate from the tool and reasoning steps. Each of those steps now
+  records how much text came before it, and a replay puts the text back in the order it
+  streamed in. Separately, a sentence that was cut off just before a tool call is now
+  completed where it is, instead of being split across the tool card.
+
+- **A chat answer no longer flashes as raw markdown before it renders (#4018).**
+  On a freshly loaded console, the first assistant answer could appear for about a third of
+  a second as unformatted source on one line, such as `- **bold** … \`code\``, before it
+  turned into the formatted list. This showed most on turns that called a tool, because their
+  whole answer arrives at once. The markdown renderer now loads ahead of the first message,
+  and while it loads the answer is blank. Raw source is never shown.
+
+- **A streaming chat answer no longer flashes stray markdown symbols (#4020).**
+  While an answer was still arriving, a formatting mark could show on its own for a moment
+  before its text arrived. For example, the `**` that opens a bold word appeared as two
+  literal asterisks. The same happened with a lone backtick, `~~`, `_`, and an empty `- `
+  bullet. The console now holds that trailing mark back until its text arrives. Finished
+  answers are shown exactly as written.
+
+- **The Browser panel's address bar now follows the tab (#4021).** When the agent opened a page, clicked a link, submitted a form, followed a redirect or went back or forward, the bar stayed on its placeholder, and back/forward were always enabled. The screencast bridge saw the navigation events but used them only to re-arm the stream. It now sends the tab's URL, title and back/forward state to the panel. The bar updates live but leaves the operator's text alone while they are typing in it.
+
+- **`Review at head` reads the strictest panel round for a head, as `QA panel` does (#4022).** It read the latest panel marker, so after a FAIL a re-review PASS on the same head turned this required check green while the plugin's `QA panel` stayed red. It now takes the strictest round (promotions are not rounds). A FAIL is dropped only when a later complete, verified round on the same head refuted every one of its blocking findings with evidence, the option-(a) rule of pr-reviewer-plugin#234. The rule is vendored into `scripts/review_at_head.py` with a hash, and a test fails if it is edited in place.
+
+- **A hung `gh` call can no longer stall the required `Review at head` check (#4023).** `scripts/review_at_head.py` ran `gh` with no timeout, so a hung call held the job until the Actions job timeout and no status was posted. Each call is now bounded at 120 seconds, and a timeout is treated like any failed API call: the job posts no status from a partial read and exits cleanly, as it already did for API errors (pr-reviewer-plugin#254).
+
+## [0.190.0] - 2026-10-02
+
+### Added
+- **The code pane updates itself — no more Refresh to see a delegate's edits (#4006).**
+  While `@claude-code` (or any coding delegate) edited a registered project, the Diff tab
+  kept saying "No changes vs HEAD" until Refresh was clicked. A delegate's edit tool calls
+  and the agent's own `write_file`/`edit_file`/`delete_file` now publish `fs.changed` on the
+  event bus, and the pane re-fetches the diff and the open file (debounced, coalesced). With
+  Follow on, a delegate's edit moves the pane to that file on the Diff tab. Edits nothing
+  reports, such as a terminal or an editor, are caught by a cheap `/api/fs/stamp` poll that
+  runs only while the pane is on screen.
+
+### Fixed
+- **A foreground `delegate_to` that times out on a still-working A2A peer now hands back a collectable task (#3775).**
+  The tool result names the peer's task id, last state and status message, and the exact
+  `delegate_to(target=…, query=…, resume_task_id=…)` call that collects it; it no longer reads
+  as "failed". `resume_task_id` on a task that is still working now waits on that same task with
+  `GetTask` only (never re-sending the work) and returns its answer once it lands, and a lead
+  that collects it this way stands down the room's own late collection so it isn't delivered twice.
+
+- **A2A runs on a2a-sdk 1.2.1, and a HITL answer is still re-routed when its task ends mid-flight (#3950).**
+  a2a-sdk 1.2 now refuses a message to an ended task with `UnsupportedOperationError` (-32004) instead of
+  `InvalidParamsError`. The parked-task router only retried on the old error, so an answer whose task ended
+  between routing and the SDK came back as an error instead of reaching the context's current pause. The
+  router now retries on both. The executor's own ended-task check raises the same error as the SDK. The
+  hardened task registry now also keeps the SDK's new task-store view and event stream. The floor is now
+  `a2a-sdk>=1.2.1`. A `contextId` placed on the request params, not on the message, is now ignored rather
+  than rejected with -32602. This matches upstream's forward-compatibility rule. Every sender in this repo
+  puts `contextId` on the message.
+
+- **`resolve_friction` now finds what the agent logged and says when it is already resolved (#4000).**
+  Re-resolving a row that was already resolved used to return "no matching entries found", so an agent
+  whose first resolve had worked (while a stale Friction view still showed the row) concluded the tool was
+  broken. The tool now answers "already resolved". Rows carry a stable id (in `friction_review`, the read
+  API and the working-state hint) that `resolve_friction(id=...)` takes. Text matching ignores case,
+  whitespace and quote style, and accepts the full text of a clipped summary. A no-match reply lists the
+  open rows' ids and summaries. The Friction view re-reads the ledger on focus and every 30s.
+
+- **Context compaction no longer fails `anthropic-oauth` turns with a fake 429 (#4001).**
+  With `compaction.trigger` set, an agent on a Claude subscription (`anthropic-oauth`) failed
+  turns with `429 rate_limit_error: "Error"` raised from `CountingSummarizationMiddleware.before_model`,
+  even with quota to spare. langchain's summarizer calls the model directly, with no system prompt, so the
+  request never got the exact Claude Code identity first block that Anthropic's OAuth enforcement
+  requires (ADR 0097, #2763). The OAuth client now adds that block to the body of every request it
+  sends, which covers summarization, titles, memory distill, judges, subagents and any future direct
+  call. A summarization call that fails for any reason is now logged, and the turn continues without
+  compacting instead of failing. After a failure, auto-compaction pauses on that thread instead of
+  retrying before every model step. The pause starts at 1 minute and doubles up to 30 minutes, and
+  the warning is logged once per pause. The summary call now retries only transient errors
+  (429, 5xx, timeouts), once. If the context window overflows while compaction is failing, the
+  error now names that compaction failure as the cause.
+
+- **An `@<name>` address now bills the peer's reported spend, and turns no model ran stay out of the per-model breakdown (#4004).**
+  An `@`-addressed turn skips the lead model, so its telemetry row read 0 LLM calls and 0 tokens
+  while still carrying a model label. When the addressed peer is a protoAgent that reports its own
+  cost, that spend now lands on the row the way a `delegate_to` call's does. A turn on which no
+  model of this agent ran (an address to a peer that reports no cost, a slash command's canned
+  reply) is now left out of `/api/telemetry/summary`'s `by_model` cache, cost and latency split,
+  and the new `no_model_turns` field counts how many were left out. The store-wide totals still
+  include them.
+
+- **One oversized image no longer breaks every later turn of a session (#4005).**
+  A tool screenshot (for example 2560×1600 from `campaign_view` or `agent_browser`) was stored in the
+  conversation history at full size. Once the conversation held more than 20 images, Anthropic
+  rejected every request with `400 … image dimensions exceed max allowed size for many-image requests: 2000 pixels`.
+  Because the image was in the checkpointed history, the session kept failing on every turn.
+  Images from tool results and chat attachments are now downscaled before they are stored, to
+  `model.image_max_side` (default 1568 px on the long side, never more than 2000). Every outgoing
+  request is also clamped to the provider's limits: anthropic-oauth, the gateway, and the Codex /
+  Responses API. URL images now count toward the 20-image limit too. Only the newest
+  `model.max_images_per_request` images (default 20) are sent, and older ones become an
+  `[image omitted: …]` note. The stored history is never changed, so sessions that were already
+  broken work again. A tiny file that declares a huge canvas is refused from its header before
+  it is decoded. 16-bit images keep their tones instead of turning white. Pillow is now a core
+  dependency, so server and Docker installs downscale too.
+
+- **The code pane's change poll no longer re-reads touched files, and A2A peers can't fake file changes (#4007).**
+  `/api/fs/stamp` used `git status`, which re-hashed every tracked file whose mtime changed
+  without its content changing (a `touch`, a formatter no-op save, rsync). It could never
+  save the refreshed stat, so it re-read them on every 2 s poll: about 2 s of a core per
+  open pane on a repo with 800 MB of such files. The stamp now uses git plumbing that never
+  hashes content (~0.08 s on the same repo). The console also backs off, up to 30 s, while
+  the server reports slow stamps. Separately, a remote A2A peer's tool-call paths no longer
+  become `fs.changed` events, which had let any peer trigger refetch storms and Follow
+  jumps in every open console. Only local delegates announce writes, and each delegation
+  is limited to 2 change events per second.
+
+- **A goal now visibly goes green when its verifier passes (#4008).** The Work ▸ Goals card
+  used to drop from "1 driving" straight to "No active goals" the moment a goal was achieved,
+  so the success was never shown. Finished goals now stay under a **Recent** divider for 30
+  minutes. An achieved goal shows a green check and `achieved · command: pytest -q · just now`;
+  a goal that stopped short shows its reason. Each can be dismissed, and the card flips live
+  without a refresh. A chat tab that is driving a goal now shows its status above the composer,
+  from "driving · iteration i/n" to "Goal achieved ✓". `/goal new` now runs the goal in its own
+  tab, so the work streams live there instead of arriving as a collapsed "Scheduled task" card.
+  Goal turns that run in the background also stay full-size, labelled as goal runs.
+
+- **`/goal new` can no longer start a second turn in a tab that is already busy, and goal events refresh only the goals list (#4009).**
+  If you sent a message while `/goal new` was still setting the goal, the goal's kickoff
+  turn ran at the same time as your turn, in the same tab. Now the kickoff waits until that
+  turn ends and then runs once. This applies to goals started from the Work panel too.
+  Every goal event also used to refetch every goal-detail drawer still in the cache, even
+  closed ones. Now it refetches the goals list and only the drawers that are open. The chat
+  goal strip no longer re-announces itself to screen readers every minute, and dismissing a
+  finished goal in one browser tab hides it in your other tabs too.
+
+- **A streaming A2A peer's delegation card no longer types out the peer's final answer before the chat renders it (#4010).**
+  The card showed every chunk of the peer's reply text as it arrived, so the answer streamed into the card and then appeared again in the chat. Delegate text is now held until a later tool call proves it was narration, and dropped when the run ends. The card shows the tool calls, the plan, produced artifacts and the narration between tool calls, but never the final reply, whether the delegate is an A2A peer or an ACP coder. The final `done` snapshot no longer carries the answer either.
+
+- **A goal's turn now stops once its check passes, ends on a short summary, and prints "Goal set." once (#4012).**
+  A goal started with `/goal new` used to keep running after the work was done. The agent
+  fixed the bug and saw the tests pass, then re-explored the repo and said "the goal is
+  already complete" two or three more times before the turn ended. In the chat this looked
+  like several runs stacked in one reply.
+  Now the goal's check (command, test, CI, data or plugin; never the LLM judge) runs after
+  each tool step of a goal turn. A fast check runs almost every step. A slow one waits at
+  least twice its own run time before running again. When the check passes, the goal is
+  marked achieved straight away, and the agent writes one or two sentences on what it
+  changed. It can't call tools or start new work at that point.
+  While a check runs, the goal status line reads "checking the goal…". These goal status
+  lines no longer count as tool calls or show up as text in a delegating agent's card. The
+  goal's set confirmation, in chat and in the Goals and Work panel toasts, no longer says
+  "Goal set." twice.
+
+- **A2A refuses a send whose `contextId` / `taskId` sits on `params` instead of the message (#4013).** Since a2a-sdk 1.2 the
+  SDK ignores unknown request fields, so a misplaced `contextId` silently started a fresh
+  session. `/a2a` now answers `-32602` naming the fix for exactly these keys on
+  `SendMessage` / `SendStreamingMessage` and v0.3 `message/send` / `message/stream`; other
+  unknown fields still pass through.
+
+### Security
+- **The fleet console proxy now forwards the raw member path and rejects ambiguous encodings (#3999).**
+  `graph/fleet/proxy.py` captured the `/agents/<slug>/…` sub-path decoded and let httpx/`websockets`
+  re-handle it, so the path the hub authorised (public-prefix / `member_public` / SSE-token checks)
+  could differ from the one the member's router dispatched — e.g. `…/plugins/foo/%2e%2e/%2e%2e/api/config`
+  was admitted anonymously under the public `/plugins/foo/` prefix, then collapsed to `/api/config`
+  upstream. The member's own default-deny auth already 401'd these (not exploitable), but the hub now
+  forwards the raw path (member decodes exactly once, as for a direct caller) and refuses encoded
+  separators, encoded dots, double-encoding, encoded NUL, literal `..`, and backslashes with 400 on
+  both the HTTP and WebSocket lanes.
+
+## [0.189.0] - 2026-10-02
+
+### Added
+- **A delegation to another agent over A2A now shows that agent's live work on its card too (#3980).**
+  When the peer supports streaming (every protoAgent agent does), its tool calls, files
+  and the answer as it streams in appear on the `@name` card and the `delegate_to` row
+  while it works — the same view coding-agent delegations got — and the result lands a
+  little sooner. Peers that don't stream, and model-endpoint delegates, keep the spinner
+  and the final reply.
+
+- **Brand & Launch replaces the Social Marketing archetype — a draft-only launch manager for any app, held from the picker until it's been tested (#3981).**
+  From a brief it writes a campaign plan, produces scripted screen recordings, GIFs, stills and social cards (Campaign Studio), drafts copy into a linted queue (Social Studio), tracks every asset to operator approval, and ends with a launch-day run sheet. It never posts, never invents a number, and keeps secrets off screen. The held `social-marketing` row, its `social-marketing` persona preset and the `social-archetype` registry entry are removed; create a Brand & Launch member today with `POST /api/fleet` and the `brand-launch` persona.
+
+- **Plugins can find the managed Python runtime through the SDK (#3992).**
+  `sdk.managed_python_exe()` returns the interpreter that `execute_code` runs on the desktop
+  app, or `None` when the runtime isn't installed. Plugins that run Python of their own no
+  longer need to import core internals to find it.
+
+- **Plugins that watch a coding agent through `dispatch_tapped` now see its plan as it changes (#3995).**
+  `dispatch_tapped` takes an optional `on_plan` callback. It receives the coder's full
+  current checklist (for Claude Code, every TaskCreate/TaskUpdate) while the run is still
+  going, so a plugin no longer waits for the final result to see it. The project board's
+  build drawer uses it to show a live plan. A callback that raises never breaks the run.
+
+### Changed
+- **Operator API status codes and validation changed for clients (#3973).** These are
+  visible to anything calling `/api` directly — see "Error shapes" in the operator API
+  reference.
+  - `POST /api/chat` answers a failed turn with a real HTTP error instead of a `200`
+    carrying the error as the reply (or a bare `500`): `429` / `502` / `503` / `400` /
+    `500` on the `/v1` policy, a provider that closed the stream is now `502` on both
+    surfaces, and the body is `{"detail": {code, message, upstream_status, session_id,
+    error_id}}` (an object, not a string).
+  - A missing id is `404`: `PUT` / `DELETE /api/scheduler/jobs/{id}` (were `400` /
+    `200 {canceled: false}`) and task `PATCH`, close and `DELETE` (were `500` /
+    `200 {deleted: false}`).
+  - With no task store, the task routes answer `503 "tasks not enabled"`.
+  - `POST /api/subagents/batch` takes at most 20 tasks, each with a non-empty `prompt`; a
+    task without one now fails the whole batch with `422`.
+  - `POST /api/goals` has a typed body: a wrong type, or `max_iterations` outside 1..1000
+    (`no_progress_limit` 1..100), is a `422`; `max_iterations: 0` no longer means "the
+    default".
+  - `GET /api/background?status=` must be `running`, `completed`, `failed` or `canceled`,
+    and every `/api/background/{id}` route rejects a malformed id with `400`.
+  - A malformed `schedule` or `timezone` is refused at the scheduler route with `400`.
+  - The console treats a `502` with a coded `detail` as the agent's own model failure,
+    never as a cold start to retry, and the goal form caps `max_iterations` at 1000.
+
+### Fixed
+- **The parked-sessions index reads the task store once (#3972).** `GET
+  /api/chat/sessions?parked=true` confirmed each candidate session with two queries, and the
+  task table has no `context_id` index, so each query scanned the whole table: up to 1,600
+  scans for `limit=200`. One windowed query now finds every candidate's newest turn, turn
+  count and last update. The session summary (`GET /api/chat/sessions/{id}`) also takes one
+  query instead of two. Results are unchanged, and stores other than SQLite still order
+  turns by last update.
+- **Console pollers stop on a task state the server can't name (#3972).** The command-palette
+  chat's reopen check and the cross-agent "finished a turn" watcher kept polling a task in
+  the `unknown` / `TASK_STATE_UNSPECIFIED` state. The palette held its composer locked for
+  about two minutes. Both now treat that state as settled, like the main chat already did.
+  The cross-agent watcher also reads GetTask results through the shared unwrap, so a tagged
+  status update is no longer mistaken for a finished task.
+
+- **Checkpoint pruning, knowledge forget-delete, and the non-streaming turn's HITL check hardened (#3973).**
+  Deleting a chat no longer also deletes other chats' goal-iteration checkpoints whose id
+  differs only by case or by a `_`/`%` wildcard (the cascade is an exact prefix match now). The prune sweep and aged-thread lookup are
+  one query each instead of one per thread. The age-based delete holds the write lock from its scan through the delete, so a
+  chat reopened mid-sweep can't lose its new turn. The periodic reclaim no longer runs a full
+  `VACUUM` on a legacy (`auto_vacuum=NONE`) checkpoint DB, which locked out live writes for the
+  whole rewrite; it logs the one-time `PRAGMA auto_vacuum=INCREMENTAL; VACUUM;` migration to run
+  with the server stopped instead. A memory forget-delete on a store with no vector table now deletes the chunks
+  instead of aborting (a transient vector error still fails it, so it is retried). A non-streaming turn
+  (`/api/chat`, `/v1`) now reads its pending HITL question while still holding the per-thread
+  lock, as the streaming driver does.
+
+- **Operator API routes no longer leak internals or die on bad input (#3973).** A 500 from
+  an `/api` operator route no longer returns the exception text (it leaked file paths and
+  library internals): the error is logged with its traceback and the client gets a generic
+  message with a short error id to find it by. One malformed bus event no longer ends the
+  `/api/events` stream. `/api/runtime/status`, `/api/goals/{id}` and `/api/subagents` are
+  guarded like their siblings. A goal spec's `max_iterations` / `no_progress_limit` are
+  type- and range-checked on every set path, so `"abc"` is no longer stored and left to
+  break the drive loop. With no task store wired, the task routes stop failing with an
+  AttributeError 500 and `/api/tasks/status` stops claiming `initialized: true`.
+
+- **A fresh install's agent card describes protoAgent instead of a template placeholder, and the default-on cowork pack's optional document libraries no longer warn on first boot (#3976).**
+  `/.well-known/agent-card.json` previously said "Replace this description with your agent's actual purpose"; it now describes the runtime, and `a2a.description` still overrides it. A plugin whose missing deps are all optional-tier now logs that at INFO with the `protoagent plugin install-deps <id>` fix instead of a WARNING; a missing required dep still warns and raises the banner.
+
+- **A `/<subagent>` slash run that keeps working is no longer cut off by the stall guard (#3977).**
+  The run now reports liveness the way a `/<workflow>` step does (#3940): each model call or
+  tool round it completes becomes a rate-limited (one per 5 s) `progress` frame the A2A stall
+  guard counts. It renders no card and sends no A2A frame. Before, the turn was silent from the
+  subagent's start card to its end card, so a run longer than `turn_stall_timeout_seconds`
+  (900 s) was stopped as stalled. A run wedged inside one call still reports nothing and is
+  still stopped at the stall window. Progress is scoped to the turn that started the run, so
+  another turn's subagent can't keep it alive. A native turn's `task()` and `run_workflow`
+  delegations already surfaced their subagents' tool rounds on the lead stream; a test now
+  guards that.
+
+- **"Test connection" and the model list now probe the lead model's own connection (#3978).**
+  With a provider-qualified lead (`gateway:protolabs/smart`) whose key lives only in the
+  connection, `POST /api/config/test-model` returned a spurious `HTTP 401 … No api key passed`
+  while chat worked: the probe went to the retired `model.api_base`/`model.api_key` default
+  route and sent the qualified string as the model id. Both routes now resolve the model the
+  same way the runtime does — that connection's endpoint and stored key, with the bare model id.
+
+- **A coding-agent delegation now shows its live work on its card, and its reply no longer opens with the same sentence twice (#3979).**
+  `@claude-code <task>` (or the agent delegating to an ACP coder — Claude Code, Codex,
+  protoCLI) used to show a spinner and a clock for the whole run. The card now shows the
+  coder's own plan as a checklist, the tool it is running (with its kind and file), its
+  last few tool calls and the tail of what it is saying — live, and still there after a
+  reload. Same view on a `delegate_to` row and a background delegation's row. Separately,
+  Claude Code re-sent each streamed block of text as one more chunk, which doubled the
+  opening sentence of replies; that replay is now dropped.
+
+- **The Install-from-URL dialog shows the whole git URL (#3982).**
+  The URL field shared a row with the ref field and was clipped to its tail (`…ub.com/protoLabsAI/terminal-plugin`); it now spans the dialog, with the ref field and Install button on the row below.
+
+- **Settings ▸ Plugins no longer says a plugin's console view or background surface needs a restart (#3988).**
+  Installing, enabling or disabling a plugin hot-reloads it. Its router, which serves the console view, mounts or unmounts on the live app (ADR 0096), and its background surfaces start or stop on the reconcile (ADR 0018). The hint beside **Restart server** now says that. It names the cases that still need a restart: env / launch-flag changes, and an update or uninstall whose toast asks for one. The plugin guides and the artifact plugin README were corrected to match.
+
+- **Updating, re-installing or uninstalling a plugin no longer asks for a restart it doesn't need (#3990).**
+  These actions recommended a restart for any plugin with a console view, route or background surface. That came from the old "the first router mount wins" limit (#942), which live re-mounting (ADR 0096) had already removed. A new test boots a real server and checks every step from install through update, force re-install, disable, enable and uninstall. At each step the plugin's routes serve the new code or 404 once removed, the old background surface stops and the new one starts. The restart prompt now appears only when a background surface can't be swapped live: its task won't stop, or it declares a `reload(cfg)` hook and keeps running the old code across an update. Disabling or uninstalling a plugin now also cancels a surface task that ignores `stop()`; before, that task kept running untracked.
+
+- **Three small follow-ups from the #3984/#3986/#3987 reviews (#3991).**
+  The fleet "finished a turn" toast no longer calls a turn that ended in an `unknown` /
+  unspecified state "done" — it gets a neutral "ended in an unknown state" toast. A
+  subagent run's model failure (`/api/subagents/run` and `/batch`, HTTP 429/502) now
+  carries the same object detail as `/api/chat` (`{code, message, upstream_status,
+  session_id, error_id}`), so the console no longer mistakes it for an agent that is
+  still booting and retries it up to 25 times. The `/<subagent>` turn-liveness tests
+  run in about 19 s instead of 43 s.
+
+- **A background subagent sees only the tools its fence allows (#3994).** A detached
+  subagent run carried every one of the lead's tool schemas on every model call, and its
+  allowlist was enforced only when a tool was called. On a 120-tool agent that was about
+  42k prompt tokens per call. A run with a 6-tool allowlist also spent rounds calling
+  tools it could see but not use. Fenced turns now bind only the fenced tools. The
+  call-time block is unchanged.
+
+### Security
+- **The agent's `set_config` tool can no longer point a plugin at a program to run (#3992).**
+  It already refused keys named exactly `command`, `args` or `interpreter`. It now also refuses
+  any key with one of those words, or `cmd`, `bin`, `exe` or `binary`, as part of its name
+  (`local_gate_cmd`, `rh_bin`, `binary_path`). It refuses any plugin setting whose manifest marks
+  it `spawns: true`, such as `ffmpeg_path`, even while that plugin is disabled. Keys hidden inside
+  a nested value (`{"some_plugin": {"command": …}}`) are checked too; before, they got past both
+  this check and the secret check. Operators set these keys from Settings as before.
+
+- **A plugin can no longer make the core plugin update and enable routes reachable without auth (#3997).**
+  `POST /api/plugins/<id>/update` and `POST /api/plugins/<id>/enabled` live inside each plugin's own `/api/plugins/<id>/` namespace, and so do the bundle routes under `/api/plugins/bundles/`. A plugin manifest's `public_paths` or `federation_paths` could cover these core routes. An installed plugin could then make its own update and enable routes callable with no credential, or by a federation-token holder. The auth middleware now always keeps these routes gated, the manifest parser drops entries that name them, and `bundles`, `ack` and `install-deps` are reserved plugin ids. A test boots a real server and checks every lifecycle route; another fails if a new core route under the plugin namespace isn't covered.
+
+### Docs
+- **README is now a launch landing page (#3975).** A new hero with download / one-command / from-source paths, a "Watch it" tour, and "Why it's built this way" sit up top. The full feature map is collapsed lower down, with its stale output-protocol row corrected, and the fork/template story moves to "Build your own agent".
+
+- **New "Network egress" page lists every outbound call protoAgent makes on its own (#3976).**
+  `docs/explanation/network-egress.md` covers what calls out, when, where and how to turn it off, backing the "no analytics or tracking SDKs" claim. The marketing site's plugin-install, cost-transport and wire-extension claims were also corrected to match the code.
+
+- **README states the privacy claim the egress audit backs (#3989).** The hero links the [network-egress](docs/explanation/network-egress.md) page, and the desktop line now says no runtime is downloaded at first launch instead of "nothing is fetched" — the app does check for updates and the console loads its fonts.
+
+## [0.188.0] - 2026-10-01
+
+### Fixed
+- **A long `/<workflow>` step is no longer cancelled for being quiet (#3940).** Since #3938,
+  a workflow step that ran longer than the turn stall window (`turn_stall_timeout_seconds`,
+  900s) without a start/end frame had its whole run cancelled. Each step now reports
+  liveness whenever its subagent finishes a model call or tool round, and the stall guard
+  counts that. A step stuck inside one call still reports nothing, so the guard still ends
+  it, as it ends any stuck turn. A step that keeps working stays bounded by its subagent's
+  `max_turns` and the recipe's optional per-step `timeout`.
+- **A `/<workflow>` whose output step failed ends its turn as failed (#3940, #3957).** It
+  used to report a completed A2A task whose answer was the step's `Error: …` text. The turn
+  now fails only when a step the output is rendered from failed, or when every step failed.
+  The run's output is still the turn's answer, so chat, the Activity feed, scheduled
+  reports and background jobs keep it, and the error is one line naming the failed steps.
+  A run that lost a branch but still produced its output completes as before, with the
+  failed-steps note.
+- **Workflow runs record why they stopped (#3940, #3957).** A run stopped by an operator
+  or an API cancel is recorded as `cancelled`, not `failed`, and so are its in-flight
+  steps. A run stopped by the stall guard is recorded as `failed`, with the stall message
+  as its error. The Workflows console shows both.
+- **Steering and workflow cleanup (#3940).** The per-session log of delivered steering
+  messages is now evicted on the same TTL and session cap as the steering queues; before,
+  only deleting the chat removed its entry. When the stall guard cancels its own wait for
+  an abandoned workflow runner, the runner's late failure is still retrieved, so asyncio
+  no longer logs "Task exception was never retrieved".
+
+- **Restart, schedule and watch edge cases no longer leave stale state or 500s (#3943).**
+  A background job interrupted by a restart now closes its delegation-ledger edge as
+  `failed`, so the org chart stops showing it as running forever. A malformed schedule
+  (for example an ISO time outside the datetime range, or a non-string timezone) is now
+  always a clear `invalid schedule` error: the schedule tool reports it and the REST
+  routes return 400 instead of 500. Clearing a watch while its verifier is mid-check no
+  longer brings the watch back, and the check no longer overwrites a new watch created
+  under the same id. `PUT /api/scheduler/jobs/{id}` is now a partial update, so sending
+  only `schedule` keeps the current prompt and timezone instead of returning 422 (#3957).
+
+- **A rejected chat turn now shows as failed, and parked chats come back in a fresh browser (#3957).**
+  The console classified task states in several places, and they had drifted apart: a turn
+  the agent rejected was settled as done, and a turn whose state the server reported as
+  unknown kept the chat busy for up to 10 minutes. All of these surfaces now use one shared
+  classification. In a fresh browser profile, a chat waiting on an `ask_human` answer or an
+  approval is now restored even when it is older than the 50 newest chats. The new
+  `GET /api/chat/sessions?parked=true` lists those chats, and up to 20 of them are kept in
+  the restored set.
+
+- **Smoke follow-ups: honest telemetry, explicit model-override errors, and error statuses (#3957).**
+  A per-turn model pick that cannot be used now fails the turn with a short error naming it,
+  on `/v1`, the console and A2A, instead of silently running on the default model: `/v1`
+  answers 400 for an unknown connection, a rejected model id or a connection that needs
+  setting up, and 503 with `Retry-After` only for a transient cause (a network error, a
+  token refresh that could not reach the provider). The console also shows the fix-it
+  hint ("Run `codex login`"). **Behaviour change:** a pick now applies to its own turn
+  only — a turn without one (including a scheduled or watch fire into a chat) runs on the
+  default model instead of inheriting the chat's last pick. A goal keeps the pick it was
+  set with (an explicit pick on a later goal turn replaces it); if that model can no
+  longer be built, the goal's turns run on the default with a one-line notice instead of
+  failing. `/api/subagents/run` and `/batch` answer a provider 429 as 429 (with
+  `Retry-After`) and other upstream failures as 502, not 500. Telemetry rows name the
+  requested model when no call reported one, and `/<subagent>` and `/<workflow>` turns
+  bill their model calls and tokens. `/goal` with an unknown verifier type says so. The
+  "goal paused — round cap reached" note is in the transcript export. Deleting a chat with
+  "forget" hides its memory, retires it, then deletes exactly what it hid: a failed
+  retirement loses nothing, a harvest ticked alongside keeps everything it derives, and an
+  interrupted forget is settled by the maintenance sweep.
+
+- **Desktop agents keep their note after upgrading (#3967).** The one-time Notes
+  migration looked for the old note under the desktop app's box root, but the desktop
+  sidecar had written it to `~/.protoagent/notes/<instance>` — so a desktop agent came
+  up with an empty note. The migration now also adopts it from there (desktop members
+  only; an isolated server still never touches the operator's home note).
+
+## [0.187.0] - 2026-10-01
+
+### Added
+- **Goal-driven turns get their own round cap, `goal.max_rounds_per_turn` (#3957).**
+  An unsatisfiable goal could spin one turn for 130+ model calls because
+  `model.round_hard_cap` is off by default. A goal turn now ends with a hand-back at 50
+  model rounds (default; `0` = unlimited, and `model.round_hard_cap` still applies if set —
+  the smaller wins), and the goal drive pauses with "round cap reached" instead of
+  re-driving at once; the goal stays active. Editable in Settings ▸ Goal mode.
+
+### Fixed
+- **A per-request model override now reaches every subagent run (#3955).** `/api/chat` and
+  `/v1` `/<subagent>` runs, `/<workflow>` steps (on every surface), and a plugin's
+  `sdk.run_subagent` / `sdk.spawn_background` ran on the default model even when the
+  request picked another — with the default rate-limited, `/v1` answered HTTP 500. They
+  now follow the same precedence as `task`: the subagent's pinned model > the turn's
+  override > `routing.aux_model` > the main model.
+
+- **Console: a turn parked on an `ask_human` question now waits for you live and keeps its form across a reload (#3956).**
+  The live stream closes when a turn parks, and the console settled that close like a
+  finished turn: the `ask_human` card showed done ✓ while the form was up, and the saved
+  transcript said the turn was over, so a reload in the same browser never reattached and
+  the form was gone. A parked turn now stays paused ("waiting for you"), even when the
+  stream drops or errors after the park, and after a reload each parked tab resubscribes to
+  its own task and brings its form back. Parked tabs no longer show a streaming dot.
+
+- **Concurrent turns each deliver their own projected context (#3958).** The per-turn
+  composed context (memory, working state, skills index) and the one-shot toolset
+  notice now travel with each run in a private, never-checkpointed state channel
+  instead of on the middleware instance shared by every concurrent turn, so a turn's
+  later model calls no longer pick up the context composed for another overlapping turn.
+
+- **A resumed turn's context recompose now retrieves for the turn's own input and is logged (#3960).**
+  After a HITL resume, retrieval uses the turn's newest operator message, and a mid-turn steer counts as one. Guard notes and conversation summaries written above that message are skipped. Each resume compose now writes its own row to the memory injection log.
+
+- **Console: a question the agent asked again after a plain message now keeps its form, in a fresh browser and after a reload (#3963).**
+  A message sent while a turn waited on an `ask_human` question moves the question to a new
+  task and closes the old one. The server listed a chat's turns by when each last changed,
+  so the closed task came last and the console took it as the latest turn. The form never
+  came back, and a reply typed in the composer was asked again on yet another task. Turns
+  are now listed in the order they began, and the response names the turn that is still
+  live. The console draws the waiting turn last whatever order it receives. A tab that
+  still points at the old task follows it to the new one. The form answer continues the
+  task that holds the question, and nothing is left waiting.
+
+- **A goal-driven turn applies the goal's tool scope before pre-turn dispatch (#3964).** In a session
+  whose active goal runs with a restricted tool scope, slash/@/workflow/subagent shortcuts no longer
+  run outside it (a one-line notice says commands are paused), an ACP runtime declines the turn, and
+  the `/btw` side question runs under the same scope; `/goal` (status, clear, replace) always works.
+
+## [0.186.0] - 2026-09-30
+
+### Changed
+- **Background maintenance loops now live in `server/maintenance_loops.py` (#3807).** The checkpoint-prune, watch, A2A-reaper, memory-guard, plugin auto-update and secrets-refresh loops, `_retire_thread`, and the persona drift/audit passes moved out of `server/agent_init.py` (−700 lines) with no behavior change; `server.agent_init` and `server` re-export them. Tests that fake their collaborators (`_server_is_idle`, `_run_soul_drift_pass`, `_last_soul_drift_check`, `_event_bus`) now patch `server.maintenance_loops`, and a seam guard fails any test that still patches those names on `agent_init`, where the patch would silently not intercept.
+
+- **Console: `lib/api.ts` split into slug-routing, HTTP and A2A-stream modules (#3808).**
+  `apps/web/src/lib/api/routing.ts` (slug routing + auth header), `api/http.ts` (`ApiError`,
+  error predicates, `request`/`requestForm`/`memberRequest`) and `api/a2aStream.ts` (A2A part
+  decoders, SSE parsing, the shared frame dispatcher) now hold what was the first ~1,000 lines
+  of `api.ts`. `api.ts` re-exports every moved name, so no importer changes.
+
+- **Chat session ops now live in `server/chat_session_ops.py`, and the non-streaming usage helpers in `server/turn_telemetry.py` (#3810).**
+  `/compact`, export, publish preview/publish/revoke, the `/btw` aside, rewind, fork and the delegate-continuity
+  cleanup moved out of `server/chat.py`, as did the usage callback, the usage folds and the non-streaming telemetry
+  row writer — about 680 lines, with no behavior change. `server.chat` re-exports every moved name, so imports and
+  `operator_api.chat_routes` are unchanged; the moved gestures reach `server.chat`'s thread lock and thread-id
+  resolver at call time, and a seam guard fails any test that patches a moved name on `server.chat`, where the
+  patch would silently not intercept.
+
+- **Plugin wiring moved out of `server/agent_init.py` (#3821).** Plugin router mounting + HTTP
+  wrapping, the plugin registries and host, and plugin-surface hot-reload reconcile now live in
+  `server/plugin_wiring.py` (second slice of the agent_init decomposition, epic #3804). Every
+  moved name is re-exported from `server.agent_init` and `server`; no behavior change.
+
+- **Console: the Workflows and Model ▸ Connections surfaces now read the DS radius + spacing scales (#3887, Refs protoContent#525, Refs protoContent#547).**
+  Now that `@protolabsai/design` 0.11.0 ships the radius scale (`--pl-radius-md/-lg/-xl/-pill`)
+  and the spacing half-steps (`--pl-space-0_5/-1_5/-2_5`), every `border-radius` in
+  `workflows.css` moves onto a token — `5px → var(--pl-radius)`, the `9px` count badge →
+  `var(--pl-radius-lg)`, and the five `999px` chips/pills/dots (`.builder-dot`, `.lane-chip`,
+  `.run-status`, `.builder-chip`, `.builder-toolchip`, all genuine pills, none a rectangle) →
+  `var(--pl-radius-pill)`. Off-scale `padding`/`margin`/`gap`/`left` literals in `workflows.css`
+  and two `10px` gaps in `providers.css` snap to the nearest scale token so the operator's chosen
+  density flows through (e.g. `6px → --pl-space-1_5`, `10px → --pl-space-2_5`, `2px → --pl-space-0_5`,
+  `left: -14px → calc(-1 * var(--pl-space-4))`). Border/outline widths, icon sizes, `1px`/`18px` and
+  other uncovered values are left as literals. The `offScaleSpacing3b` guard's two workflows pins are
+  re-pointed at the fully tokenized strings.
+
+- **Console: the Plugins and folder/file Path-picker surfaces now read the DS radius + spacing scales (#3887, Refs protoContent#525, Refs protoContent#547).**
+  Following the workflows/providers card, `settings/plugins.css` and `settings/pathpicker.css` move
+  onto `@protolabsai/design` 0.11.0's radius scale (`--pl-radius-md/-lg/-pill`) and spacing
+  half-steps (`--pl-space-0_5/-1_5/-2_5`). Every `border-radius` becomes a token — the plugin
+  marketplace link / installed-bundle row / path-browser list `8px` and the plugin card `9px` →
+  `var(--pl-radius-lg)`, the path-browser row `6px` → `var(--pl-radius-md)`, and the `.plugin-chip`
+  `999px` (a genuine pill, not a rectangle) → `var(--pl-radius-pill)`. Off-scale
+  `padding`/`margin`/`gap` literals snap to the nearest scale token so the operator's chosen density
+  flows through (`2px → --pl-space-0_5`, `6px → --pl-space-1_5`, `10px → --pl-space-2_5`, and the
+  snaps `3px gap → --pl-space-1`, `7px → --pl-space-1_5`, `14px → --pl-space-4`); `1px` borders/gap
+  and the `18px` deps-list indent stay literal (out of scope). No behavior change.
+
+- **Bump @protolabsai/design to ^0.11.0 and @protolabsai/ui to ^0.66.1; tokenNameGuard accepts `_` in token names (#3887).** Adds radius scale (`--pl-radius-md/-lg/-xl/-pill`) and spacing half-steps (`--pl-space-0_5/-1_5/-2_5`) to the installed DS. The token-name guard's `DECL` and `VAR_REF` regexes are widened from `[a-z0-9-]` to `[a-z0-9_-]` so `var(--pl-space-0_5)` is captured whole rather than truncated at the underscore.
+
+- **Console: the Work hub overview and the app menu drawer read the DS radius + spacing scales (Refs protoContent#525, Refs protoContent#547).**
+  Step 3 of the DS-audit migration for `apps/web/src/app/work.css` and `app/app-drawer.css`.
+  Both `border-radius` literals in the drawer move onto `@protolabsai/design` 0.11.0's radius
+  scale: the launcher `.app-drawer-item` container (`8px`, not `12px`) → `var(--pl-radius-lg)`
+  by the table, and the `.app-drawer-version` badge's `999px` (a genuine pill, not a rectangle)
+  → `var(--pl-radius-pill)`. Off-scale `padding`/`margin`/`gap` literals move onto the #547
+  spacing scale, using the half-step tokens (`--pl-space-0_5/-1_5/-2_5`): the exact half-steps
+  `2px → --pl-space-0_5`, `6px → --pl-space-1_5`, `10px → --pl-space-2_5`, and the off-grid
+  values snapped to the nearest step on the local rhythm — the `.work-row` `gap: 7px → --pl-space-2`
+  (aligning the dot-to-title gap with the card head's 8px icon gap), the `.work-card-blank`
+  `padding` top `14px → --pl-space-3` (keeping top < the 16px bottom), and the drawer
+  `.app-drawer-item` `padding: 9px 10px → var(--pl-space-2) var(--pl-space-2_5)`. No 7px or 12px
+  radius calls, and the only `999px` is on a pill, not a rectangle. `1px` hairlines/borders,
+  `outline-offset`, and width/element sizes are left as literals (out of scope). Pure token
+  substitution with ≤2px snaps; the `offScaleSpacing3d` guard's work/app-drawer pins are re-pinned
+  to the tokenized strings.
+
+- **Console: the Settings surface and the Keyboard rebind list now read the DS radius and spacing scales (protoContent#525/#547).**
+  Every `border-radius` px literal in `settings/settings.css` and `settings/keybindings.css` moved
+  onto the radius scale (`--pl-radius` for 4px corners, `--pl-radius-md` for the 6px secrets-var
+  chips, `--pl-radius-pill` for the keybinding scope badge). Spacing px on padding/margin/gap moved
+  onto the DS spacing scale, using the new half-step tokens (`--pl-space-0_5/-1_5/-2_5`) for the
+  2/6/10px values; off-scale half-steps that the DS scale still has no step for (7→`--pl-space-2`,
+  the three `gap: 14px`→`--pl-space-4`, and the two `margin: 3/5px`→`--pl-space-1`) snapped to the
+  nearest token on the local rhythm. Uncovered values (18/26/28px, border widths, track/viewport
+  sizes) are left as literals. Pure token substitution — no visual or behavioural change.
+
+- **Console: `app/theme.css` + `docviewer.css` radius & spacing literals now read the DS radius/spacing tokens (Refs protoContent#525, Refs protoContent#547).** Step 3 of the DS-audit migration: every `border-radius` px moves onto the #525 radius scale (`4px→--pl-radius`, `6px→-md`, `8/9px→-lg`, `999px→-pill`), and every off-scale spacing px on a `padding*`/`margin*`/`gap`/`row-gap`/`column-gap` declaration moves onto the #547 spacing scale — the exact half-steps `2/6/10px` to `--pl-space-0_5/-1_5/-2_5`, the on-scale `20px` to `--pl-space-5`, and the off-grid `3/5/7/9/14px` snapped to their nearest step (e.g. `14px→--pl-space-3`), with negative margins expressed as `calc(-1 * var(--pl-space-*))`. The safe-area gutters (`max(env(safe-area-inset-bottom), 12px)`, `calc(8px + env(…))`) and off-grid survivors with no DS token (`18/22/28/33/60px`) are left verbatim. Visual output is unchanged; the sites now track operator density/radius rescales instead of painting hardcoded px. The `offScaleSpacing3a` guard is updated to pin the tokenized values and gains a half-step scan plus a radius scan.
+
+- **Console: chat.css and hitl.css radius + off-scale spacing now read DS tokens (protoContent#525/#547).**
+  Every `border-radius` px literal in `apps/web/src/chat/chat.css` and `chat/hitl.css` moves onto the DS
+  radius scale (`--pl-radius`/`-md`/`-lg`/`-pill`) — dots/chips/badges → `-pill`, the 8–12px in-flow cards
+  (`.chat-scheduled-card`, `.chat-server-result-card`, `.chat-delegation-row`) → `-lg`, 6px → `-md`, and
+  2–5px → `--pl-radius` — and every padding/margin/gap/inset/offset px moves onto the spacing scale,
+  including the half-steps the DS shipped on `@protolabsai/design` 0.11.0 (`--pl-space-0_5/-1_5/-2_5`).
+  Off-scale 3/5/7/14px values snap to the nearest DS step (rounding down with the local rhythm); 1px
+  hairlines, border/outline widths, font/icon sizes and `50%`/`0` radii are left alone. Visual-only token
+  substitution — the token values equal the literals they replace.
+
+- **Console palette button + crash screen adopt the DS spacing scale (#3688, protoContent#547).** The one off-scale spacing site in `app/palette.css` — the palette button's `padding-left: 7px` optical nudge — snaps up to the 8px grid step and reads the bare `var(--pl-space-2)` token (a shipped sheet always resolves the DS tokens, so it carries no fallback). The root error-boundary crash screen `app/app-crash.css` moves its `gap: 12px`, `padding: 24px`, `gap: 10px` and `margin-top: 6px` onto `--pl-space-3` / `-6` / `-2_5` / `-1_5` — but, exactly like its colour reads, each keeps the original px as a literal fallback so the screen still lays out if the DS token stylesheet never loaded, which is why app-crash.css is the one file the token guard's literal-fallback sweep exempts. Font sizes, the sr-only 1px box, the list metrics and other non-spacing values are intentionally left as literals.
+
+- **Console: Fleet Room's roster and activity feed now read the DS radius and spacing scales (protoContent#525, protoContent#547).**
+  Every `border-radius` and off-scale spacing literal in `fleet-room.css` and `fleet-activity.css`
+  moved onto @protolabsai/design 0.11.0 tokens. Radii map to `--pl-radius`/`-md`/`-lg`/`-pill`
+  (2–5px → base, 7px → `-md` on the small chips / `-lg` on the content boxes, 8–10px → `-lg`, the
+  two status/task pills → `-pill`); the `50%` presence dots are left alone. Padding/margin/gap plus
+  the mention-popover inset and offsets map to `--pl-space-0_5…-5` (2 → `0_5`, 6 → `1_5`, 10 → `2_5`,
+  20 → `-5`, and the 14px header gutters snap up to `-4`). Genuinely off-scale values (1/11/28px,
+  border widths, font and element sizes) stay literals. Visual output is unchanged apart from ≤2px
+  snaps on the former 5/7/9/14px sites; the `offScaleSpacing3d` guard's fleet pins were re-pinned to
+  the tokenized strings.
+
+- **Console: the archetype picker's "What's included" control is now a DS Button (#3832, protoContent#551).**
+  The per-card `What's included →` action in `ArchetypePicker` moved off the hand-rolled
+  `.archetype-preview-link` button onto the design-system `Button` (variant `ghost`, size
+  `sm`), satisfying the DS action-button rule. Its aria-label and preview handler are
+  unchanged; the old `.archetype-preview-link` CSS is gone, leaving only a layout-only
+  start-alignment rule for the card's button.
+
+- **Console: the per-shortcut "reset to default" control in Settings ▸ Keyboard is now a DS Button (#3832, protoContent#551).** The hand-rolled `↺` `<button className="kb-reset">` became a `<Button variant="ghost" size="xs" icon>` rendering a lucide `RotateCcw` glyph (`aria-hidden`), satisfying protoContent#551's action-button rule. Its title, aria-label and reset handler are unchanged; the `kb-key` combo recorders stay raw (they capture keys, they aren't actions), and the now-dead `.kb-reset` CSS rules were removed.
+
+- **Console: chat action controls now use the DS `Button` primitive (#3832, protoContent#551).** The three report/scheduled-result dismiss ✕ buttons, the delegation "Show/Hide brief" toggle, and the background-work "View" button in `ChatMessageView`/`BackgroundWorkStrip` render through `@protolabsai/ui` `Button` (ghost variant, `xs`/`sm` size, `icon` for the dismiss glyphs) instead of hand-rolled `<button>` elements — same handlers, `aria-label` and `aria-expanded`. Their now-unused `.chat-report-dismiss`, `.chat-delegation-toggle` and `.chat-bgwork-open` rules were removed from `chat.css`.
+
+- **Console: the MCP catalog "All servers" back control is now the DS `Button` (#3832, protoContent#551).**
+  The action-button rule (design-system card 3a) moves the hand-rolled
+  `<button className="mcp-catalog-back">` in the Add-a-common-MCP-server dialog to
+  `<Button variant="ghost" size="sm">` with the same click behavior and children, and
+  drops the now-unused `.mcp-catalog-back` rule from `theme.css`. The UpdateNotice update
+  pill is left as-is: its floating look (999px pill radius, raised background, popover
+  shadow) has no DS `Button` prop or token equivalent, and reproducing it would mean
+  hand-rolled overrides the rule is meant to remove.
+
+- **Console: the month calendar's prev/next controls are DS Buttons (#3832, protoContent#551).** The New Schedule builder's `MonthCalendar` now renders its Previous/Next month controls as the DS `Button` (`variant="ghost"`, `size="sm"`, `icon`) instead of the hand-rolled `.cal-nav` `<button>`, per the action-button rule. The aria-labels and step handlers are unchanged, and the `.cal-day` grid cells stay raw (they are grid cells, not actions). The now-unused `.cal-nav`/`.cal-nav:hover` CSS is removed.
+
+- **Console: the mobile header's Back, Menu, Search and New-chat actions now render via the DS `Button` (#3832, protoContent#551).** Per the protoContent#551 action-button rule (an action — a label or a single-purpose icon — uses the DS `Button`, not a raw `<button>`), MobileShell's four header icon buttons are now `<Button variant="ghost" size="md" icon>`, keeping their existing `type`, `aria-label`, `title`, `disabled`, `onClick`, the `data-testid="header-menu"` hook the drawer e2e specs pin, and the lucide glyph. The session-title switcher stays a sanctioned composite `<button>`, and the centring spacer stays an `aria-hidden` `<span>`. The hand-rolled `.mshell-head-btn` CSS (border/background/colour/tap-highlight/`:active`) is retired in favour of a chrome-free `.mshell-head-spacer` that keeps the 44px touch floor.
+
+- **Org Chart view's Refresh and panel Close buttons now use the DS plugin-kit button (#3832, protoContent#551).** Both action buttons were hand-rolled `<button>`s with local CSS; they now carry the kit's `pl-btn` classes (`pl-btn--sm` for Refresh, `pl-btn--ghost pl-btn--icon pl-btn--sm` for Close), gaining `type="button"` and, for Close, `aria-label="Close"`. The local `.refresh`/`.close` rules are dropped (only the Close float layout stays); no literal colours or sizes are introduced and the click behaviour is unchanged.
+
+- **Console: the ScheduleBuilder 12h/24h toggle is now a DS Button (#3832, protoContent#551).** The Repeat
+  tab's hour-format toggle swaps the hand-rolled `.hour-toggle` `<button>` for the design-system
+  `Button` (variant `ghost`, size `xs`) per the #551 action-button rule, keeping the same title,
+  click handler and 12h/24h label. The now-unused `.hour-toggle` CSS is removed.
+
+- **Console: the chat tool-call value renderers read the DS radius and spacing half-step tokens (protoContent#525, protoContent#547).** `chat/tool-calls.css` moves every `border-radius` px onto the DS radius scale (5px→`--pl-radius`, 6px→`--pl-radius-md`) and every off-scale spacing px (2/3/5/6/7/10px on padding/margin/gap) onto the scale, using the new half-step tokens (`--pl-space-0_5`, `--pl-space-1_5`, `--pl-space-2_5`) alongside `-1`/`-2`, so the tool-card bodies track the operator's chosen density and theme instead of frozen literals. Off-grid gaps snap to the nearest step (`3px→space-1`, `5px→space-1_5`, `10px→space-2_5`), and the two 7px sites snap by intent (the cancel-button padding and the web-search result-list gap →`space-2`, the fetch head-row gap →`space-1_5`); 1px verticals, border widths, and size/`max-height` lengths are untouched. The tool-calls pins in `offScaleSpacing3h` and `chat-type-scale-rem` are re-pinned to the tokenized strings; no radius or spacing site keeps a raw px.
+
+- **Console: a tree-wide guard pins radius & off-scale spacing literals out of every console stylesheet (Refs protoContent#525, Refs protoContent#547).** Step 3 (final) of the DS-audit migration: `apps/web/src/app/radiusSpacingGuard.test.ts` sweeps every `apps/web/src/**/*.css` (via a Vite `?raw` glob, comments stripped, line numbers preserved) and fails with `src/<path>:<line>` on (1) any `border-radius` — or per-corner longhand (`border-{top,bottom}-{left,right}-radius`, `border-{start,end}-{start,end}-radius`) — whose value carries a px/rem literal (only `var(--pl-radius*)`, `0`, `50%`, `inherit` clear), and (2) any 2/3/5/6/7/9/10/14px literal (incl. negatives) on a spacing property (`padding*`/`margin*`/`gap`/`row-gap`/`column-gap`/`inset*`/`top`/`right`/`bottom`/`left`) — `1px`, `0`, `var(--pl-space-*)` and `calc(-1 * var(--pl-space-*))` clear. `env(safe-area-inset*)` values (pinned by `mobileBottomInset`) and the px in a `var(--pl-space-*, <px>)` fallback (`app-crash.css`) are exempt. This turns the per-file guards (`offScaleSpacing3a` et al.) into one tree-wide invariant, so a reintroduced `border-radius: 5px` or `padding: 7px` in any surface fails with its file:line. The allowlist is empty and its size is asserted, so any future carve-out is deliberate. Test-only; no shipped behavior change.
+
+- **Console: Settings ▸ Devices and the Telemetry dashboard now read the DS radius and spacing scales (protoContent#525, protoContent#547).**
+  Every off-scale `border-radius` and spacing literal in `apps/web/src/settings/devices.css` and
+  `settings/telemetry.css` moved onto @protolabsai/design 0.11.0 tokens. The one radius — the QR
+  quiet-zone box's `border-radius: 8px` — maps to `--pl-radius-lg` (no 7px/12px radii, no pills).
+  Padding/margin/gap map to `--pl-space-0_5…-5`: the lossless half-steps `2 → 0_5`, `6 → 1_5`,
+  `10 → 2_5`, the exact steps `16 → -4` and `20 → -5`, and the rhythm snaps `5 → 1_5`, `7 → 1_5`,
+  `3 → 0_5`, `14 → -4`. Genuinely off-scale values stay literals (Telemetry's `22px` section
+  margin, `18px` insights margin, and the `1px` trace-copy hairline). Visual output is unchanged
+  apart from ≤2px snaps on the former 3/5/7/14px sites; the `offScaleSpacing3f` guard's
+  devices/telemetry pins were re-pinned to the tokenized strings.
+
+- **Console: the mobile shell, delegates form and watches panel now read the DS half-step spacing scale (Refs protoContent#525, Refs protoContent#547).**
+  Step 3 of the DS-audit spacing migration: every off-scale spacing px on a
+  `padding*`/`margin*`/`gap`/`top`/`right`/`bottom`/`left` declaration in `app/mobile-shell.css`,
+  `settings/delegates.css` and `watches/watches.css` moves onto the half-step tokens
+  @protolabsai/design 0.11.0 shipped — `6px→--pl-space-1_5`, `10px→--pl-space-2_5` (the watches
+  row padding, the delegates env-editor gaps, the delegates advanced-group gap/padding-top, the
+  watches clear-button `right`), and the exact-scale `8px` sites (mobile toast side gutters, watches
+  clear-button `top`) to `--pl-space-2`. The one gap with no exact half-step, the session-row
+  `gap: 9px`, snaps down to `--pl-space-2` (8px). The uncovered `34px` watches reveal gutter, the
+  `1px` border widths, and every value that reads `env(safe-area-inset*)` — including the pinned
+  home-indicator gutter `max(env(safe-area-inset-bottom), 12px)` and the toast `top` offset — are
+  left verbatim. Pure token substitution; the only visible change is the ≤1px `gap: 9px→8px` snap.
+  The `offScaleSpacing3h` guard's watches/mobile-shell/delegates pins are re-pinned to the
+  tokenized strings.
+
+- **Console: Activity feed and Identity panel read the new DS radius + spacing tokens (protoContent#525/#547).** The Activity provenance/inbox surface (`activity.css`) and the SOUL Identity panel (`agent/identity.css`) move their remaining literal `border-radius`/spacing pixels onto the `@protolabsai/design` 0.11.0 scale that #3888 installed: the two `999px` pills read `var(--pl-radius-pill)`, and padding/margin/gap literals read the radius and half-step spacing tokens (`--pl-space-0_5/-1_5/-2_5`, plus `-1/-2/-3`). A handful of off-grid gaps are snapped to the nearest step (`14px→space-3`, `5px→space-1`, `7px→space-2`); non-spacing lengths (18px, 260px, border widths) are untouched. The `offScaleSpacing3e` guard's activity/identity pins are re-pinned to the tokenized strings.
+
+- **Console: the Tools panel and Goals side-panel CSS read the DS radius and spacing half-step tokens (protoContent#525, protoContent#547).**
+  `apps/web/src/app/tools.css` and `apps/web/src/goals/goals.css` move every hardcoded
+  `border-radius` px onto the `@protolabsai/design` 0.11.0 radius scale (`--pl-radius-md`,
+  `--pl-radius-lg`) and every off-scale spacing px on padding/margin/gap/top/right onto the scale —
+  including the protoContent#547 half-steps `--pl-space-{0_5,1_5,2_5}` — so both surfaces track the
+  operator's chosen density and radii instead of frozen literals. Direct half-steps are exact
+  (`2px`→`0_5`, `6px`→`1_5`, `10px`→`2_5`, `8px`→`2`); one value snaps by +1px (the tools-row
+  vertical `padding: 7px`→`--pl-space-2`, keeping the panel's dominant 8px rhythm). No radius or
+  spacing site keeps a raw px; uncovered values stay literal (the goals row's `34px` horizontal
+  padding, the goals list's `18px` indent, `1px` hairlines/margins, border/outline widths and
+  element sizes).
+
+- **Console: Code pane and Fleet manager read the new DS radius + spacing tokens (protoContent#525/#547).** The docked code/diff viewer (`codeviewer/code-pane.css`) and the fleet manager + pairing forms (`fleet/fleet.css`) move their remaining literal `border-radius`/spacing pixels onto the `@protolabsai/design` 0.11.0 scale that #3888 installed: every `border-radius` reads `var(--pl-radius)` (all were 4px in code-pane, one 3px in fleet — no rectangle pills), and padding/margin/gap literals read the half-step spacing tokens (`--pl-space-0_5/-1_5/-2_5`, plus `-1/-2/-3`), including the drag-handle's matched `6px 2px` padding / `-6px -2px` negative-margin pair (now `var(--pl-space-1_5) var(--pl-space-0_5)` and `calc(-1 * …)`). A few off-grid values are snapped to the nearest step (`14px→space-3`, `5px→space-1_5`, `7px→space-2`, `3px→space-1`); non-spacing lengths (border/outline widths, box-shadow offsets, `outline-offset`, `width`/`14px`/`18px`, the `1px` clip margin) are untouched. The `offScaleSpacing3e` guard's code-pane/fleet pins are re-pinned to the tokenized strings.
+
+- **Console: the schedule builder and agent-snapshot CSS move border-radius and off-scale spacing onto DS radius/space tokens (protoContent#525, protoContent#547).**
+  `apps/web/src/schedule/schedule.css` and `apps/web/src/settings/snapshot.css` now read the
+  `@protolabsai/design` 0.11.0 radius scale (`--pl-radius` / `-md` / `-lg`) for every
+  `border-radius`, and the spacing scale — including the protoContent#547 half-steps
+  `--pl-space-{0_5,1_5,2_5}` and `-5` — for padding/margin/gap, so both surfaces track the
+  operator's chosen density and radii instead of hardcoded px. Off-scale spacing snaps: `3px`→`0_5`,
+  `5px`→`1`, `14px`→`3` (schedule mode button) and `14px`→`4` (snapshot source tab). No visual
+  behaviour otherwise changes; `1px` hairlines, border widths and element sizes stay as literals.
+
+- **Console: the chat inline-component and prompt-viewer surfaces read the DS radius and spacing half-step tokens (protoContent#525, protoContent#547).** `chat-component.css` and `promptviewer.css` move every hardcoded `border-radius` px onto the DS radius scale (`--pl-radius`, `--pl-radius-lg`, `--pl-radius-pill`) and every off-scale spacing px (2/6/7/9/10px on padding/margin/gap) onto the new half-step tokens (`--pl-space-0_5`, `--pl-space-1_5`, `--pl-space-2_5`), so both surfaces track the operator's chosen density and theme instead of frozen literals. Two spacing values snap by ±1px to the nearest token (the timeline step `gap: 9px`→`--pl-space-2`, the code-ref chip's vertical `padding: 7px`→`--pl-space-2`); no radius or spacing site keeps a raw px.
+
+- **Console: the three sanctioned composite raw-`<button>` controls carry the DS-audit `hand-rolled-control` line-level exception (#3832, protoContent#551).**
+  The app-drawer surface rows, the app-drawer Settings row and the composer's model-menu
+  trigger are deliberate composite controls (icon + label, and a menu trigger); designSystem
+  ruled they stay raw `<button>`s rather than a DS primitive, and the audit heuristic is not
+  being widened. Each now carries an inline `/* ds-audit-ignore hand-rolled-control … */`
+  block comment so the design-system audit stops flagging them. Comments only — no markup,
+  props, classNames, handlers or behaviour changed.
+
+### Fixed
+- **`onboard_project` says when it re-cloned a registered project's missing checkout (#3643).**
+  If a registered project's folder had been deleted, the tool cloned it back but still
+  replied "Reused the existing checkout — nothing changed", which hid that the checkout had
+  been missing. A missing registered root is what unbinds the filesystem tools. The reply
+  now says the checkout was missing and was re-cloned, and that `read_file` / `search_files`
+  come back in a new chat if they dropped out of the session.
+
+- **`/v1`, `/api/chat` and plugin turns now recover from a context-window overflow and run `/<subagent>` commands (#3805).**
+  The non-streaming turn driver carried its own drifted copy of the pre-turn dispatch and error handling: an
+  overflowing turn failed instead of force-compacting and retrying once, and `/<subagent> <prompt>` fell through
+  to a plain agent turn. Both drivers now share one dispatch chain and one failure classifier, so a dropped
+  provider stream also records the same transcript text on either surface.
+  A turn carrying a `tool_fence` (an untrusted party relayed by a plugin surface) now runs
+  none of the slash / @-mention short-circuits, which do their work outside the fence; the
+  text goes to the fenced lead turn instead.
+
+- **Chat stream survives one malformed SSE frame (#3811).**
+  A single unparsable event used to throw out of the frame parser and drop every
+  frame after it, failing the whole turn; it is now skipped with a console warning.
+
+- **Windows `run_command` can run commands with quoted paths (#3813).** Under the default `cmd` shell, `"C:\Program Files\Tool\tool.exe" --version` failed with `'\"C:\...\"' is not recognized`. The argv list was re-quoted with backslash escapes that cmd.exe does not understand. cmd now receives the command line verbatim (`cmd /d /s /c "<command>"`), and the goal `command` verifier gets the same fix. POSIX and PowerShell are unchanged.
+
+- **Redacting a secret no longer eats the closing quote or backtick after it (#3816).**
+  The env-var assignment pattern (`OPENAI_API_KEY=…`, `A2A_AUTH_TOKEN: …`) matched up to the
+  next whitespace, so it swallowed a closing `"` or `` ` `` along with the value. Redacted
+  source stopped parsing, and a reviewer reading through the redaction layer FAILed a PR on
+  a syntax error that wasn't on disk. The value now stops at the first whitespace or closing
+  delimiter (an opening quote is kept, and what it wraps is still redacted), so string
+  literals, JSON values and markdown code spans keep their delimiters.
+
+- **`fetch_url` reports a redirect loop instead of returning the redirect stub as the page (#3817).**
+  Past the 5-hop cap the last response was still a 30x, and its "Moved" body came back to the
+  model as the page content under a `[302]` header; it now returns a "too many redirects" error.
+
+- **An ACP turn now stops when its client goes away (#3837).** Closing the console tab,
+  a dropped connection or an A2A cancel mid-turn used to leave the external coding agent
+  working on an orphaned turn while its runtime was released as idle. The turn is now
+  cancelled — the agent is sent ACP `session/cancel` — and has stopped before the runtime
+  is released, bounded at 10 seconds for an agent that has stopped reading.
+
+- **A chat turn abandoned mid-stream now releases its thread lock and flushes its trace right away (#3870).**
+  When a client disconnected or closed the tab during a streamed turn, the outer stream closed but the
+  inner turn generator was left for garbage collection, so the per-thread lock and the Langfuse trace
+  flush waited on the async-generator finalizer and the next turn on that thread could queue behind it.
+  Closing the stream now closes the turn before the close returns.
+
+- **A failed chat turn is now recorded on the thread it ran on (#3871).**
+  The failure record (#2593) re-resolved the thread without the turn's request metadata, so under a
+  metadata-aware thread resolver (ADR 0069 D4 — per-project scoping, A2A `contextId`) the `**Error:**`
+  entry landed on a different thread than the conversation that failed. Both turn drivers now hand the
+  thread they resolved to `record_failed_turn`.
+
+- **A no-reply turn is now a failed turn on `/v1`, and auto-answered turns keep their early text (#3873).**
+  A non-streaming turn that produced no reply returned `**Error:** …` content with no structured `error`,
+  so telemetry counted it completed and `/v1/chat/completions` answered it 200 as if it were the answer; it
+  now carries the `error` key and `/v1` answers `500 server_error` like any other failed turn. On the
+  streaming driver, text streamed before an interrupt the agent auto-answered (an autonomous or goal-driven
+  turn) never reached the terminal `done`, so a consumer rendering from it (the A2A terminal artifact) lost
+  the start of the answer; it is now carried across the auto-answer, joined as a new paragraph on the live
+  stream and in `done` alike.
+
+- **An A2A turn now releases its thread lock and flushes its trace before the turn returns (#3876).**
+  The A2A executor returned on the terminal frame without closing the turn stream, so on every
+  A2A turn the chat driver's cleanup (per-thread lock release, trace flush) waited for the event
+  loop's async-generator finalizer. The executor now closes the stream right after emitting the
+  terminal state, and the stall guard closes the stream it wraps when it is itself closed or
+  cancelled.
+
+- **Closing a streaming chat turn early now closes its inner turn generators too (#3877).**
+  The native turn and its graph event loops (initial, goal continuation, overflow retry)
+  are wrapped in `contextlib.aclosing`, so their cleanup runs before the stream's
+  `aclose()` returns instead of at garbage collection.
+
+- **Goal turns over `/v1`, `/api/chat` and plugin surfaces no longer fail when two approval-gated tools pause at once (#3884).**
+  When a goal-driven turn hit a HITL interrupt with nobody to answer it, the non-streaming driver auto-answered
+  with a bare resume value, which LangGraph rejects when more than one interrupt is pending (two gated tool calls
+  in one step). It now resumes by interrupt id, as the streaming driver always did (#3872). The goal drive loop
+  and the autonomous auto-answer now have one shared implementation (`server/goal_loop.py`) used by both drivers.
+
+- **Goal-driven and autonomous turns now behave the same on the streaming and non-streaming chat paths (#3891).**
+  A context-overflow retry on a goal's first turn re-runs the recovery prompt as-is instead of wrapping it in
+  the goal kickoff. A `chat()` turn from a server-fired origin (scheduler, watch, webhook, background…)
+  auto-answers a HITL pause instead of echoing it; operator surfaces (`/api/chat`, `/v1`, plugins) still park.
+  An interrupt raised inside a goal continuation is auto-answered under the turn's one budget when the turn is
+  autonomous, and otherwise stops the drive and surfaces the ask (streaming no longer leaks a stray
+  `input_required` mid-drive; non-streaming no longer drops it). The goal verifier judges the answer after the
+  empty-reply fallback on both paths, with the goal note appended after evaluation.
+
+- **The per-turn tool allowlist now applies to every graph pass of a turn (#3908).** Goal-mode
+  continuations on the streaming driver (including fresh-context ones) and HITL resumes on both
+  drivers now carry the fence, matching the initial pass.
+
+- **Tool-fenced turns follow one set of rules across streaming dispatch, resumes and held messages (#3926).**
+  A fenced streaming turn skips the pre-turn short-circuits and is refused on an ACP runtime (background
+  subagent jobs excepted); a fenced resume intersects with the parked turn's fence; a parked question
+  completes on its own resume while an out-of-fence approval is declined; and a held fenced message narrows the pass that reads it.
+
+- **Native Codex (ChatGPT OAuth) turns no longer fail with Langfuse tracing on (#3928).**
+  The trace-context middleware stamped Langfuse `metadata` onto every client with an
+  `extra_body` slot, and the ChatGPT Codex backend rejects it (`400 Unsupported parameter:
+  metadata`), so every turn on a native Codex model failed. The stamp now goes only to
+  clients built for an OpenAI-compatible (gateway) connection; native Codex and Claude
+  generations are still recorded in the agent's own Langfuse trace.
+
+- **Five server gaps from a dev smoke are closed (#3929).** A failed non-streaming turn
+  (`/v1`, `/api/chat`) now writes a `failed` telemetry row even with zero usage;
+  `/api/chat/sessions/{id}/aside` reports a model error as `{found: false, reason:
+  "model_error"}` at 502 instead of a plain 500; `/v1/chat/completions` answers a missing
+  user message or malformed `messages` with an OpenAI-shaped 400; `/goal` with goal mode
+  off replies that it is off (enable with `goal.enabled: true`) instead of reaching the
+  model; and a v0.3 `tasks/get` for a missing task returns -32001, like the v1 path.
+
+- **A paused HITL turn no longer hangs a fresh browser, and answering it no longer orphans the task that paused (#3930).**
+  Reattaching to a turn waiting on a form now settles off the subscription's input-required snapshot instead of
+  waiting for a stream the server rightly holds open (A2A: input-required is interrupted, not terminal), so the
+  form's Send/Dismiss work at once. A form answer now continues the task that paused, as A2A specifies (the console
+  sends its task id; the server routes an answer without one), and a composer message held behind the form hands the
+  pause to its own task and completes the older one, so no input-required task is left behind to rebuild as a
+  spinning card.
+
+- **Non-streaming chat surfaces a HITL question even when the turn also wrote text (#3931).**
+  `/api/chat`, `/v1` and plugin `invoke()` turns that wrote text and then paused for input
+  used to return the text alone — the question was lost, and a goal set during that turn
+  was driven on into a thread still waiting for its answer. The reply now carries the text
+  followed by the question, and the goal drive stops at the pause, as streaming does.
+
+- **Three turn-lifecycle leaks closed: orphaned `/workflow` runs, stranded server-turn controls, stale steering queues (#3933).**
+  A `/<workflow>` command whose turn ended early (A2A cancel, stall guard) left its workflow running
+  unobserved; it is now cancelled and awaited (bounded) with the turn, as native and ACP turns already
+  were. A plain client disconnect still lets it finish, like any other turn.
+  A server-fired turn that crashed before its terminal update kept its operator-control entry forever;
+  the executor now signals every exit and the registry is capped at 1024 (oldest evicted, logged).
+  Steering queues for sessions whose turn never took another model step are evicted after 7 idle days
+  or past 1024 sessions (least recently written first), with a warning when messages are dropped.
+
+- **Unfenced turns start unfenced; work a fenced turn leaves behind stays fenced (#3939).**
+  A plain streaming turn no longer inherits a tool fence left on its thread by an
+  earlier turn. Background-job briefings, scheduled and `wait` resumes, watch reactions
+  and hooks, goal completion hooks and lifecycle reactions now run under the fence of the
+  turn that created them. A goal set by a fenced turn is pursued under that fence by every
+  turn that drives it, and a narrowed fence holds for a turn's goal continuations and
+  overflow retry on both drivers. Subagents a fenced turn delegates to (background or
+  in-turn `task`) run under their allowlist intersected with that fence — one whose
+  allowlist doesn't overlap the fence now runs with no tools. A goal set by a fenced turn
+  no longer queues a self-improvement review.
+
+- **Concurrent config reads and writes no longer corrupt each other's YAML parse (#3941).**
+  `graph/config_io.py` shared one ruamel parser across threads, and ruamel keeps its
+  reader state on the instance, so a config read on the event loop could collide with a
+  write loading the same file in a worker thread (two `POST /api/delegates` at once failed
+  with `IndexError: string index out of range` or a spurious `ParserError`). Each thread now gets its own parser,
+  configured the same way.
+
+- **A turn's model override now reaches its subagents and background jobs (#3944).**
+  One precedence everywhere: the subagent's own pinned model (`subagents.<name>.model`),
+  then the turn's model override (the chat tab's pick, `metadata.model`), then
+  `routing.aux_model` / the main model. In-graph `task()` / `task_batch()` delegations
+  and `/<subagent>` slash runs used to skip the override; a background job's detached
+  turn carried no model at all and ran on the default even with its subagent pinned.
+  It now carries the resolved model in its fire metadata. With no pin and no override
+  nothing changes.
+
+- **Non-streaming telemetry rows get their trace id and A2A's statuses; failed background jobs keep their error (#3945).**
+  `/v1` and `/api/chat` rows now carry the turn's Langfuse trace id (captured inside the
+  trace scope), a HITL park or hold on those surfaces is recorded `input_required` instead
+  of `completed`, and slash-command replies write a row as they do over A2A. A background
+  job that fails now stores its terminal error on the job row, the `background.completed`
+  event and the `<task-notification>`, so the agent reports the real cause (e.g. a 429).
+
+- **An unknown goal verifier is refused on every entry point; `/v1` answers 502 for an unreachable gateway; workflow replies lose the raw subagent marker; the workflows plugin's config no longer collides with core; a parked turn renders as paused (#3946).**
+  `POST /api/goals`, `set_goal_safe` (plugin SDK / agent tool) and the chat `/goal` path now reject a
+  `plugin` verifier whose check isn't registered — the route returns 400 naming the available
+  verifiers and kicks no turn, instead of creating a goal that could never pass. A model gateway
+  that can't be reached (connection refused / DNS / timeout) is now an OpenAI-shaped 502 from
+  `/v1/chat/completions`, not a 500. Workflow step outputs drop the internal
+  `[<subagent> completed: workflow …]` header (warning headers are kept). The workflows plugin's
+  settings move to their own `workflow_runs` section (`workflows:` is core's), so `max_runs` binds
+  and the "collides with a built-in" warning is gone. In the console, a turn parked on operator
+  input shows its `ask_human` card and bubble as waiting — no spinner, timer or streaming placeholder.
+
+### Security
+- **A fenced message on an ACP-runtime agent is refused instead of run unrestricted (#3846).** A `tool_fence` (the allowlist a plugin surface such as Discord's peer path puts on an untrusted party's message) is enforced only on the native turn, so on an agent whose `agent_runtime` is `acp:*` the external coding agent received that message with its full toolset. The turn is now answered with a refusal and runs nowhere. Unfenced turns on ACP are unchanged.
+
+## [0.185.0] - 2026-09-29
+
+### Added
+- **execute_code spills long output to a file instead of dropping it (#3701).** When a script's stdout exceeds `output_truncate`, the head is still returned inline, but the FULL output is now written to a per-session scratch file under the plugin store (`spill/`) and the marker names the absolute path plus a **paged** recovery read that starts past the head — so a follow-up read returns the tail, not the same head again, and evidence sweeps no longer have to re-run with narrower prints. Spill files are capped at 5 MB and pruned after 24h; a failed write falls back to the old truncation marker and never fails the run.
+
+- **`onboard_project(refresh=true)` fetches and fast-forwards an existing clone (#3733).** Re-onboarding a checkout already on disk never fetched, so its "up to date with origin/main" was only as fresh as the last fetch, and an agent with no shell had no safe way to update it. `refresh=true` fetches the upstream and fast-forwards. It never resets or merges: it refuses, with the reason, on uncommitted tracked changes, a branch with no upstream, or local commits the upstream doesn't have. Without `refresh`, reuse still leaves the directory untouched and now says how to refresh it.
+
+- **Langfuse: Claude Code coder runs now trace every model call. Its native OTel spans nest under the `acp:` span through a local relay that strips account identity and maps token usage (#3742).**
+  While tracing is on, a `claude-agent-acp` coder is spawned with Claude Code's native tracing, exporting to `127.0.0.1`. The relay drops `user.email`, `organization.id` and account ids, which Claude Code can't turn off. It redacts string attributes, maps token counts to `gen_ai.usage.*` (so Langfuse prices each call), moves a pooled process's later turns into their own traces, and forwards with this process's credentials. The agent-reported turn totals become a generation only if no native model-call span arrives for that turn, so the spend is never counted twice or lost. The coder never sees the Langfuse keys, and prompt and tool content stay off. Opt out with `PROTOAGENT_ACP_NATIVE_TRACING=0`.
+
+- **Model in-flight limiter settings (#3760).** New agent-scoped, hot-reloadable config keys `model.max_inflight` (default 0, limiter off), `model.inflight_queue_timeout` (300 s), and `model.inflight_interactive_reserve` (1) size a per-process cap on concurrent model calls per lane (ADR 0115 D2); nothing reads them yet.
+
+- **Per-lane in-flight limiter core for model calls (#3760).** New `graph/llm_limiter.py` implements the pure ADR 0115 mechanism — a bounded, priority-ordered (`interactive` > `default` > `bulk`, with per-minute aging and an interactive reserve) wait queue per `(base_url, model)` lane, a `GatewayQueueTimeout`, and a D8 snapshot — off by default and wired in by later cards.
+
+- **Model lane telemetry: queue depth, wait time, GET /api/telemetry/llm-lanes (#3760).** The ADR 0115 in-flight limiter now feeds four Prometheus signals (inflight, queue depth, queue wait, queue timeouts) and exposes its per-lane snapshot over `GET /api/telemetry/llm-lanes` and `sdk.llm_lanes()`, so operators and in-process plugins can tell a lane that is deliberately queuing from a gateway that has gone slow.
+
+- **Priority classes for the model in-flight limiter (#3760).** Operator chat and console turns now run under the ADR 0115 `interactive` class and recipe fan-out steps under `bulk`, while A2A, background and scheduled turns stay `default`; `sdk.llm_priority(cls)` lets a plugin tag its own block of model calls (pr-reviewer marks its review panels `bulk`).
+
+- **Model calls acquire a per-lane in-flight slot when model.max_inflight is set (#3760).** Every gateway, codex, and anthropic-oauth chat call now takes one ADR 0115 slot per `(base_url, model)` lane — acquired outside the stream timeout guard so queue wait never counts toward `request_timeout`, held until the stream ends or is cancelled, and re-acquired (with the original arrival) across reconnects; `max_inflight: 0` stays a pure pass-through.
+
+### Changed
+- **Fleet Room composer moves onto the design system (#3683).** The broadcast bar's raw text
+  input and send button are replaced by the DS `PromptInput` from `@protolabsai/ui/ai`, which
+  now owns the field/send chrome. The @-mention / broadcast target renders as a `PromptInput`
+  attachment chip above the field: a specific member is a removable chip (removing it clears the
+  target back to broadcast) and the "Everyone else · N" fan-out is a read-only chip. Enter, ⌘↵
+  (force broadcast) and the @-mention flow are unchanged. Part of #3683.
+
+- **Remaining hand-rolled form controls move onto the design system (#3683).** The Skills
+  editor's two raw `<input type="checkbox">` (invokable-as-slash and its user-only companion)
+  become the DS `Checkbox` from `@protolabsai/ui/forms`, and the workflow gate editors' raw
+  `<textarea className="workflow-gate-edit">` (PendingGateCard + the inline run-timeline gate)
+  become the DS `Textarea`. Behaviour is unchanged: each checkbox keeps its `aria-label`
+  accessible name and its visible `/slash` label, unchecking the slash trigger still clears
+  "user only", and each textarea keeps its `workflow-gate-edit` styling, `edited prompt`
+  accessible name, `rows`, value and change handler. Separately, the activity feed's local
+  `Badge` helper — which shadowed the DS `Badge` name yet only renders the provenance row — is
+  renamed `OriginProvenance`; its markup is unchanged.
+
+- **Fleet Room roster + diagnostics controls move onto the design system (#3683).** The last raw
+  `<button>`s and `<input>` in the Fleet Room are replaced by the DS `Button` and `Input`: the
+  roster member button, the per-row start/stop, diagnostics and open-console icon buttons, the
+  @-mention list items, and the diagnostics drawer's Back, Retry, Refresh and Inspect buttons plus
+  the task-id field. Refresh and Inspect now use `Button`'s `loading` prop while their read is in
+  flight (spinner + disabled), and the field/button chrome — padding, border, background, radius,
+  hover and focus rings — is owned by the DS instead of hand-rolled CSS. Behaviour, disabled
+  conditions and accessible names are unchanged. Completes #3683.
+
+- **Background-agents dialog markup moved to design-system Button + Accordion (#3684).** Clear-finished, jump-to-chat, stop and delete are now DS `Button`s (destructive stop/delete use the `danger` variant), and each job is a DS `Accordion`/`AccordionItem` disclosure instead of a hand-rolled expander — non-expandable jobs render an inert trigger.
+
+- **Mobile session switcher rebuilt on the DS Drawer (#3684).** The mobile chat-first shell's session sheet now renders a DS `Drawer side="bottom"` with DS Buttons instead of hand-rolled sheet chrome, so it inherits the design system's scrim, slide-in, Escape/overlay dismiss, focus trap and `<body>` portal (focus return to the trigger is added in the consumer, since the DS Drawer doesn't restore it yet).
+
+- **Utility-bar pills use the design-system Button (#3684).** The command palette, background-agents, and shared utility-widget pills are now DS `<Button icon size="xs" variant="ghost">` instead of bespoke `.util-btn` elements, keeping their testids, aria-labels, tooltips, and the background-jobs unread dot.
+
+- **Utility-bar chrome now uses DS Button (#3684).** The Settings pill and the bottom/left/right panel toggles are DS `Button icon size="xs" variant="ghost"`; the panel toggles expose their shown/collapsed state via `aria-pressed` (true = shown) instead of the old `is-off` class, and the dead `.status-dot` topbar-health CSS is removed.
+
+- **App chrome no longer re-implements the design system (#3684).** The operator console's app
+  chrome is fully on DS components now: the utility-bar pills and panel toggles are DS `Button`s
+  (xs, ≥24px touch targets, `aria-pressed` reflecting shown/hidden state), the mobile session
+  switcher rides a DS `Drawer side="bottom"`, and the Background agents dialog is a DS
+  `Accordion`/`AccordionItem` + `Button` disclosure. All the hand-rolled chrome those replaced —
+  `.util-btn`, `.status-dot`, the mobile sheet's backdrop/grip, and the Background-jobs
+  `rowmain`/`rowhead`/`stop`/`clear` control rules — is deleted, and the surviving `.bg-jobs-*`
+  content styling drops its `#hex` fallbacks and literal radii for DS tokens.
+
+- **App shell, tools rail and the protoLabs icon drop their dark-only token fallbacks and legacy `--brand-*` aliases (#3685).**
+  `app/theme.css`, `app/tools.css` and `app/ProtoLabsIcon.tsx` pinned `var(--pl-…, #hex)`
+  fallbacks (activity/field/inbox status tints, input inset, resize handle, tools-row pulse,
+  knowledge drop, the accent icon and its gradient) and leaned on the retired `--brand-violet*`
+  / `--brand-indigo-bright` aliases (metric/status/setup icons, setup progress + icon chrome,
+  settings/setup help links). Since `@protolabsai/design` loads before any app CSS the `--pl-*`
+  tokens always resolve, so the fallbacks could only ever paint a frozen dark colour — deaf to
+  light mode and to ThemePanel overrides. All hex fallbacks are dropped for the bare
+  `var(--pl-…)`; alias TEXT/icon sites now read `--pl-color-accent-fg` (AA on light and dark)
+  and fill/border sites read `--pl-color-accent`.
+
+- **The last legacy `--brand-*` accent aliases are deleted and the token-hygiene invariants go tree-wide (#3685).**
+  `app/theme-base.css` was the final home of the retired `--brand-violet`/`--brand-violet-light`/
+  `--brand-indigo`/`--brand-indigo-bright`/`--brand-pink` aliases (two of them still carrying a
+  dark-only `var(--pl-color-accent, #hex)` fallback); with every consumer already re-pointed onto
+  real `@protolabsai/design` tokens they are now removed, so `--brand-*` appears nowhere in the
+  console. The `--success`/`--warning`/`--error`/`--danger`/`--info` status compat aliases are
+  kept byte-identical. `app/tokenNameGuard.test.ts` gains two tree-wide sweeps that turn the
+  earlier per-sheet strips into repo-wide guards: no `var(--pl-…, #hex)` fallback may ship outside
+  `app/app-crash.css` and the `theme-base.css` status aliases, and the `--brand-` prefix may not
+  appear anywhere but that guard (built by concat). Both report `src/<path>:<line>` and self-test
+  their patterns.
+
+- **Chat stylesheets drop dead literal fallbacks in `var(--pl-*, …)` reads (#3685).** The pinned design-system tokens are always loaded before app CSS — and `tokenNameGuard.test.ts` proves every `var(--pl-*)` (including `--pl-motion-base`/`--pl-motion-ease`) is declared by the installed DS — so a literal fallback could never paint. The chat mono-stack sites (`chat-component.css`, `promptviewer.css`), the usage-tip `--pl-font-sans` and the model-select `--pl-color-bg-raised` in `chat.css`, and the tool-spotlight animation's `--pl-motion-base`/`--pl-motion-ease` in `tool-calls.css` now read the bare tokens. Value-only edits; nested token fallbacks (`var(--pl-a, var(--pl-b))`) are untouched.
+
+- **Code viewer, activity feed and schedule builder drop their dark-only token fallbacks (#3685).**
+  These three stylesheets read `var(--pl-…, #hex)` custom properties, but the design
+  package loads before any app CSS so the `--pl-*` tokens always resolve — the hex
+  fallbacks could only ever paint a frozen dark colour, never help. They are removed, and
+  the retired `--brand-*` aliases are re-pointed to real DS tokens: the scheduler origin
+  tint uses `--pl-color-chart-series2`, the a2a origin uses `--pl-color-chart-series8`, and
+  the calendar's selected day uses the `--pl-color-accent` / `--pl-color-fg-on-accent` pair
+  instead of a hardcoded violet with white text. All now track light mode and per-agent
+  ThemePanel overrides.
+
+- **Settings and Memory stylesheets drop their dark-only hex fallbacks and legacy `--brand-*` aliases (#3685).** The pinned design-system tokens are always loaded before app CSS, so a `var(--pl-…, #hex)` fallback could only ever paint a wrong, dark-only colour. The snapshot, path-picker, settings and memory sheets now reference the bare `--pl-*` tokens, and the path-picker selection tint plus the settings dirty-row marker read `--pl-color-accent` instead of the retired `--brand-violet*` aliases — so muted text, the snapshot tab underline and status text, the selection tint and the active-row marker all track the active theme (e.g. memory muted text resolves to the light `#52525b` under `data-theme="light"`). No new hex literals.
+
+- **Console: drop the dead literal `var(--pl-X, …)` fallbacks in fleet-room / fleet-activity / work / hitl CSS (#3685).**
+  `main.tsx` imports `@protolabsai/design` before any app CSS and `tokenNameGuard.test.ts`
+  proves every `var(--pl-*)` resolves to an installed-DS token, so a literal fallback in
+  `var(--pl-X, <literal>)` can never paint — it is dead, drifted code. The mono font stacks
+  (`ui-monospace, "SF Mono", Menlo, monospace`) and the popover-shadow literals
+  (`0 2px 8px rgba(…)` / `0 -10px 28px -14px rgba(…)`) are removed, leaving the bare
+  `var(--pl-font-mono)` / `var(--pl-shadow-popover)` — rendering is unchanged. The two
+  token-to-token fallbacks in `fleet-room.css` (the @-mention popover's raised-surface and
+  strong-border sites) are left intact. A new source-level guard (`dsStaleFallbackDrop1b.test.ts`)
+  pins the drop for the four files.
+
+- **Drop dead literal `var(--pl-*)` fallbacks in goals/memory CSS (#3685).** `main.tsx` loads
+  `@protolabsai/design` before any app CSS and `tokenNameGuard.test.ts` proves every `var(--pl-*)`
+  resolves, so a literal fallback can never paint — it is drifted, dark-only dead code. Rewrote the
+  two audited sites to read the bare token: `goals.css` `.goal-row:hover` background
+  (`var(--pl-color-bg-hover, rgba(127,127,127,0.06))` → `var(--pl-color-bg-hover)`) and `memory.css`
+  `.memory-detail-snippet` color (`var(--pl-color-fg, inherit)` → `var(--pl-color-fg)`). Added
+  `apps/web/src/app/dsStaleFallbackGoalsMemory.test.ts`, a compile-time `?raw` guard (no `node:fs`)
+  that fails if a literal `var(--pl-*, …)` fallback creeps back into either sheet while still allowing
+  nested token fallbacks (`var(--pl-x, var(--pl-y))`). Part of the DS-adoption audit (rule
+  stale-fallback).
+
+- **The stale-fallback cleanup goes tree-wide: no `var(--pl-…, <literal>)` fallback may ship (#3685).**
+  Cards 1a–1f dropped every literal `var(--pl-…, <value>)` fallback from `apps/web/src` one surface
+  at a time; `app/tokenNameGuard.test.ts` now turns that into a single tree-wide invariant, strictly
+  wider than the existing hex sweep. Because the pinned `@protolabsai/design` tokens always load
+  before app CSS, any literal fallback is dead weight that can only paint a wrong, theme-deaf value —
+  so hex, `rgba()`/`color-mix()`, font stacks, shadows, `inherit` and bare px values are all now
+  rejected. The one legal shape is a nested TOKEN fallback whose value is ENTIRELY another
+  `var(--pl-…)` read (e.g. `var(--pl-color-fg-subtle, var(--pl-color-fg-muted))`); the fallback is
+  parsed with balanced parentheses so an `rgba(…)` or `0 2px 8px rgba(…)` shadow is caught whole.
+  Only `app/app-crash.css` (the root error-boundary screen, #872) and `*.test.ts(x)` fixtures are
+  exempt. `theme-base.css` is no longer exempt from the hex rule either — card 1a dropped its
+  status-alias hex fallbacks — while its `--success`/`--info` status compat aliases stay pinned.
+  Both sweeps report sorted `src/<path>:<line>` and self-test their patterns (built by concat).
+
+- **Web: dropped dead literal `var(--pl-*, <fallback>)` font fallbacks in four DS-token sites (#3685).** `main.tsx` loads `@protolabsai/design` before any app CSS, so `--pl-font-mono`/`--pl-font-sans` always resolve and the literal `ui-monospace, monospace`/`monospace`/`inherit` fallbacks in the activity feed, Identity panel, and code viewer were dead code — rewritten to bare `var(--pl-X)`. Nested token fallbacks (`var(--pl-a, var(--pl-b))`) and the type-scale-owned `fontSize` are untouched; a source-level guard pins the strip.
+
+- **Telemetry, schedule and snapshot stylesheets drop their literal `var(--pl-…, <literal>)` fallbacks (#3685).** The design package's tokens are always loaded (via `main.tsx`) before any app CSS, so a literal fallback in `var(--pl-…, <literal>)` is dead code that could never paint. The telemetry trace links now read `var(--pl-font-mono)`, the schedule calendar hover states read `var(--pl-color-bg-hover)`, and the snapshot rows/caveat read `var(--pl-color-bg-inset)` — all bare tokens. No token names change, no new literals are added, and token-to-token `var()` fallbacks are left untouched.
+
+- **Workflows surface CSS drops its stale dark-only hex fallbacks (#3685).**
+  Every `var(--pl-…, #hex)` in `apps/web/src/workflows/workflows.css` — status
+  dots, badges, borders and accent text, including the ones nested in
+  `color-mix()` — is now a bare `var(--pl-…)`. The design package's tokens are
+  always loaded before any app CSS, so those `#hex` fallbacks could never paint
+  anything but a wrong, dark-only colour; removing them lets the workflow
+  status/accent colours track the active theme (they resolve to the light token
+  values under `data-theme="light"`). No token names change and no new hex
+  literals are added; token-to-token `var()` fallbacks are left untouched.
+
+- **Feed pill unread badge is now the DS `Count` primitive (#3688).** The Activity/Feed
+  widget's hand-rolled `<span>` badge is replaced by `Count` from `@protolabsai/ui/primitives`,
+  so it renders as `span.pl-count`. The alert-state `.activity-badge--alert` rule in
+  `app/theme.css` colours it with the bare `var(--pl-color-status-error)` token (no hex
+  fallback) and still wins over `.pl-count` at equal specificity. Text logic, the
+  `data-alert="now"` blocked-page marker, and the unread/pending render condition are unchanged.
+
+- **Tabbed AppShell columns use the DS `<Tabs attached>` fused-surface layout (#3688).** The
+  plugin sub-tab strip now fuses to its panel card via `@protolabsai/ui` 0.63's `<Tabs attached>`
+  (top-radiused `bg-raised` strip, border on every side but the bottom, next-sibling panel drops
+  its own top edge) instead of the local `.pl-appshell__col > .pl-tabs` / `.pl-appshell__bottom`
+  override, which is deleted. Rail and bottom-dock plugin views read as one card as before;
+  embedded Configure mode stays detached.
+
+- **Chat ▸ chat / prompt-viewer / chat-component / HITL stylesheets adopt the DS type scale (#3688).** The 42 in-range `font-size:<n>px` literals in `chat/chat.css`, `promptviewer.css`, `chat-component.css` and `hitl.css` now reference the bare `--pl-font-size-*` tokens (9/11/12/13px map to `3xs`/`2xs`/`xs`/`sm` at identical px). Seven half-pixel sites snapped to their nearest token px (12.5px → `sm`/13px, 10.5px → `2xs`/11px) — a +0.5px change; every site is in the 9-18px range, so no DS gap remains. Only `font-size` values changed — the HITL accent chain and the composer field outline suppression are untouched. No px fallbacks, no new hex literals.
+
+- **Console: drop the app-wide `.pl-dialog__body` padding rule now that dialogs carry the DS `padding` prop (#3688).**
+  Every content `<Dialog>` in the console passes `padding="roomy"` (`.pl-dialog__body--roomy`, 24px)
+  and the three edge-to-edge dialogs pass `padding="none"` (`.pl-dialog__body--flush`, 0), so the
+  body inset is sourced entirely from the design-system `Dialog` component. This removes the redundant
+  local CSS: the unscoped `.pl-dialog__body { padding: 24px }` default in `theme.css`, and the
+  `padding: 0` counter-overrides on `.settings-overlay`/`.theme-quick-dialog` (`settings.css`) and
+  `.goal-create-modal` (`goals.css`). Dialogs render identically — content dialogs keep a 24px body,
+  the settings/theme/goal dialogs stay flush with their existing height/overflow/flex behaviour.
+  Final part of #3688 (DS 0.63 card 3, Dialog body padding).
+
+- **Console: edge-to-edge content dialogs opt into DS 0.63 `<Dialog padding="none">` (#3688).**
+  The settings overlay (`SettingsOverlay`), the theme quick dialog (`ThemeQuickButton`) and the
+  goal-create dialog (`GoalsPanel`) now pass `padding="none"`, which `@protolabsai/ui` 0.63.0
+  renders as `.pl-dialog__body--flush` (padding 0). These three dialogs are edge-to-edge today only
+  because scoped CSS counter-overrides the app-wide `.pl-dialog__body { padding: 24px }` rule; while
+  that global rule still exists the scoped rules win and these dialogs render identically. Declaring
+  the intent on the component is what keeps them flush once a later card deletes both the scoped
+  `padding: 0` declarations and the global rule (the DS default is 16px). Each dialog keeps its
+  scoped className; no CSS changes. Part of #3688 (DS 0.63 card 3, Dialog body padding).
+
+- **Console: mcp-catalog, docviewer, knowledge & memory content dialogs opt into DS 0.63 `<Dialog padding="roomy">` (#3688).**
+  The common-MCP-server catalog dialog (`McpCatalogDialog`), the document reader
+  (`DocumentViewer`), both knowledge-store dialogs — add-source and add-entry
+  (`KnowledgeStore`) — and the memory injection-detail dialog (`MemorySurface`) now pass
+  `padding="roomy"`, which `@protolabsai/ui` 0.63.0 renders as `.pl-dialog__body--roomy`
+  (24px). While the app-wide `.pl-dialog__body { padding: 24px }` rule still exists these
+  dialogs render identically; the opt-in is what preserves their 24px body padding once a
+  later card deletes that global rule (the DS default is 16px). No CSS changes. Part of
+  #3688 (DS 0.63 card 3, Dialog body padding).
+
+- **Console: schedule & settings content dialogs opt into DS 0.63 `<Dialog padding="roomy">` (#3688).**
+  The new-schedule and edit/view-schedule dialogs (`SchedulePanel`), the add/edit-delegate dialog
+  (`DelegatesSection`), the archetype setup dialog (`NewAgentPanel`) and the pair-remote-fleet dialog
+  (`PairRemoteDialog`) now pass `padding="roomy"`, which `@protolabsai/ui` 0.63.0 renders as
+  `.pl-dialog__body--roomy` (24px). While the app-wide `.pl-dialog__body { padding: 24px }` rule still
+  exists these dialogs render identically; the opt-in is what preserves their 24px body padding once a
+  later card deletes that global rule (the DS default is 16px). No CSS changes. Part of #3688 (DS 0.63
+  card 3, Dialog body padding).
+
+- **Content dialogs opt into DS Dialog `padding="roomy"` (#3688).** The persona version-history,
+  auth-required, update-available, and watch-create dialogs now pass `padding="roomy"` so their
+  bodies keep 24px padding once the app-wide `.pl-dialog__body` rule is removed by a later DS 0.63
+  card. While that global rule still exists these render identically — this is a no-visual-change
+  opt-in ahead of the deletion.
+
+- **Console: content dialogs opt into DS `Dialog padding="roomy"` — utility pills (#3688).**
+  The shared utility-pill dialog (`UtilityWidget`, covering every consumer) plus the Background
+  agents, Work folders and New task dialogs now pass `padding="roomy"`, adding the DS 0.63
+  `.pl-dialog__body--roomy` modifier (`var(--pl-space-6)` = 24px). This is a no-op while the
+  app-wide `.pl-dialog__body` theme.css rule still forces 24px; it opts these bodies in ahead of
+  a later card that deletes that rule, so they keep their padding instead of falling back to the
+  DS default `var(--pl-space-4)` = 16px. Part of #3688.
+
+- **Console: playbook & plugin content dialogs opt into DS 0.63 `<Dialog padding="roomy">` (#3688).**
+  The skill author/edit dialog (`PlaybooksSurface`), the git-URL install dialog
+  (`InstallPluginDialog`), the per-plugin settings dialog (`PluginSettingsDialog`) and the
+  install-time Python-deps prompt (`depsInstall`) now pass `padding="roomy"`, which `@protolabsai/ui`
+  0.63.0 renders as `.pl-dialog__body--roomy` (24px). While the app-wide
+  `.pl-dialog__body { padding: 24px }` rule still exists these dialogs render identically; the opt-in
+  is what preserves their 24px body padding once a later card deletes that global rule (the DS default
+  is 16px). No CSS changes. Part of #3688 (DS 0.63 card 3, Dialog body padding).
+
+- **Content dialogs opt into DS `Dialog padding="roomy"` (#3688).** The path picker, the two
+  provider-connection dialogs (add/edit and remove), the QuickSetting editor and the archetype
+  "What's included" preview now pass `padding="roomy"` to the design-system `Dialog` (DS 0.63).
+  While `theme.css`'s app-wide `.pl-dialog__body` padding still exists this renders identically;
+  it makes each content dialog keep its 24px body padding once that global rule is removed.
+
+- **Console: bumped `@protolabsai/design` to ^0.10.0 and `@protolabsai/ui` to ^0.62.1 for the DS type scale (#3688).**
+  The design package now ships the `--pl-font-size-{3xs,2xs,xs,sm,base,lg,xl}` custom
+  properties (10/11/12/13/14/16/18px) that the console's font-size migration will move
+  sites onto. This card is dependency-only — no CSS or component source changes — and lays
+  the foundation the later type-scale cards build on.
+
+- **Console literal-`font-size` guard (#3688).** Added `apps/web/src/app/fontSizeGuard.test.ts`,
+  which sweeps every `apps/web/src` stylesheet (via a compile-time `?raw` glob, no `node:fs`)
+  and fails on any literal px `font-size` declaration — including custom properties whose name
+  ends in `font-size` (e.g. `--diffs-font-size: 12px`) — reporting sorted `src/<path>:<line>`.
+  Comments are stripped first, so only live declarations count. The only exemptions are the
+  root crash-fallback `app/app-crash.css` (whole file, #872) and the two `settings/devices.css`
+  `.devices-code` pairing-code sites (`28px` / mobile `22px`), pinned by selector + value as the
+  known DS-scale gap protoLabsAI/protoContent#534. This closes the type-scale migration: a
+  hard-coded px `font-size` can no longer creep back into a shipped surface. Part of #3688.
+
+- **Composer model menu adopts the DS base `.pl-menu` scroll cap and `Menu className` (#3688).**
+  `@protolabsai/ui` 0.63 moved the menu scroll cap (`max-height` to the Radix-measured available
+  height, `overflow-y: auto`, `overscroll-behavior: contain`) onto base `.pl-menu`, so the console's
+  local override in `theme.css` is deleted — every DS Menu now caps and scrolls from the design
+  system alone. `<Menu>` also accepts a `className` now (landed on the Radix Content next to
+  `pl-menu`), so the composer's model picker carries `className="composer-model-menu"` directly
+  instead of a hidden marker child; the phone full-screen-sheet rule retargets from
+  `.pl-menu:has(> .composer-model-menu)` to `.pl-menu.composer-model-menu`. Behaviour is unchanged.
+
+- **Settings ▸ Path picker / Telemetry / Providers / Delegates stylesheets adopt the DS type scale (#3688).** The 14 in-range `font-size:<n>px` literals in `settings/pathpicker.css`, `telemetry.css`, `providers.css` and `delegates.css` now reference the bare `--pl-font-size-*` tokens (11/12/13px map to `2xs`/`xs`/`sm` at identical px). Four half-pixel sites snapped to their nearest token px (12.5px → `sm`/13px, 11.5px → `2xs`/11px) — a ±0.5px change; every site is in the 9-18px range, so no DS gap remains. No px fallbacks, no new hex literals.
+
+- **Settings ▸ Plugins / Snapshot / Devices / Keyboard stylesheets adopt the DS type scale (#3688).** The 39 in-range `font-size:<n>px` literals in `settings/plugins.css`, `snapshot.css`, `devices.css` and `keybindings.css` now reference the bare `--pl-font-size-*` tokens — 10/11/12/13/14px map to `3xs`/`2xs`/`xs`/`sm`/`base` at identical px, so nothing renders larger or smaller. The two big pairing-code sites in `devices.css` (`.devices-code code` at 28px and its `max-width: 767px` 22px override) have no matching DS token and stay as literal px, flagged as a design-system gap. No px fallbacks, no new hex literals.
+
+- **Schedule builder, activity feed and code-pane font-sizes move onto the DS type scale (#3688).**
+  The three stylesheets carried bare `font-size: <n>px` literals; each now reads the matching
+  `--pl-font-size-*` step (10/11/12/13/14px → `3xs`/`2xs`/`xs`/`sm`/`base`) with no px fallback,
+  so text sizing tracks the design system. The code-pane's `--diffs-font-size` custom property
+  hands `var(--pl-font-size-xs)` (12px) into pierre's diff viewer, so diff code still renders at
+  12px. Size-only change — no colour, spacing or layout was touched. Part of #3688.
+
+- **Console: docviewer + fleet font-size onto the DS type scale (#3688).**
+  Every px font-size in `docviewer/docviewer.css` (2 sites) and `fleet/fleet.css`
+  (8 sites) now reads the matching `--pl-font-size-*` scale token with no px fallback;
+  size is theme-invariant so nothing renders differently. The `.fleet-name-link`
+  focus-ring outline is left untouched.
+
+- **Console: app/theme.css font sizes move onto the DS type scale (#3688).**
+  Every hard-coded px `font-size` in `app/theme.css` now reads a bare
+  `var(--pl-font-size-{3xs,2xs,xs,sm,base,lg,xl})` token (no px fallback). Five half-pixel
+  values snap to the nearest step (theme-invariant): the archetype-preview description and
+  playbook description `12.5px → 13px`, the playbook title strong `13.5px → 14px`, and the
+  archetype-preview soul block and playbook meta `11.5px → 11px`. Everything else renders
+  identically; pre-existing rem/em font-sizes are left untouched. Part of #3688.
+
+- **Console: fleet-room / fleet-activity / app-drawer / work overview font sizes move onto the DS type scale (#3688).**
+  Every hard-coded px `font-size` in `app/fleet-room.css`, `app/fleet-activity.css`,
+  `app/app-drawer.css` and `app/work.css` now reads a bare
+  `var(--pl-font-size-{3xs,2xs,xs,sm,base,lg,xl})` token (no px fallback). Seven half-pixel
+  values snap to the nearest step (theme-invariant): the feed source and text plus the
+  diagnostics state line `12.5px → 13px`, the roster meta, diagnostics log and pre blocks
+  `11.5px → 11px`, and the roster tag `9.5px → 10px`. Part of #3688.
+
+- **Console: shell / mobile font sizes move onto the DS type scale (#3688).**
+  Every hard-coded px `font-size` in `app/theme-base.css`, `app/mobile-shell.css`,
+  `app/mobile-native.css` and `app/tools.css` now reads a bare
+  `var(--pl-font-size-{3xs,2xs,xs,sm,base,lg,xl})` token (no px fallback). The console body and
+  `h1`/`h2` map to `base` (14px, unchanged); the mobile-native `input,textarea,select` iOS
+  focus-zoom guard maps to `lg`, which still resolves to exactly 16px. Two values snap to the
+  nearest step (theme-invariant): the mobile shell title `15px → 16px` and the tools name
+  `12.5px → 13px`. Part of #3688.
+
+- **Console: workflows / goals / watches / agent-identity font sizes move onto the DS type scale (#3688).**
+  Every hard-coded px `font-size` in `workflows.css`, `goals.css`, `watches.css` and
+  `agent/identity.css` now reads a bare `var(--pl-font-size-{3xs,2xs,xs,sm,base,lg,xl})` token
+  (no px fallback). Five half-pixel values snap to the nearest step (theme-invariant): the run
+  history row and goal timeline reason `12.5px → 13px`, and the run history steps, builder chip
+  and goal evidence block `11.5/10.5px → 11px`. Part of #3688.
+
+- **Console DS foundation: bump `@protolabsai/ui` to `^0.63.0` and `@protolabsai/design` to `^0.10.1` (#3688).**
+  0.63.0 carries the base `.pl-menu` scroll cap, `<Menu className>`, `<Tabs attached>`, `<Dialog padding>`
+  and the `Count` primitive — the design-system fixes the follow-up cards adopt in place of local console
+  overrides. The `uiDependencyFloor` guard's minimum moves to `0.63.0` so the declared range can't silently
+  regress below the versions carrying those fixes. Dependency-floor bump only; no console code or CSS ships
+  in this card.
+
+- **The shipped Design System Engineer persona preset now reflects the archetype's current reach (#3719).**
+  The preset (`config/soul-presets/design-system.md`) describes, in first person, the three
+  capabilities it can perform today — adherence audits of a codebase or a live URL (a score plus
+  findings split into system gaps vs. consumer fixes), breaking a rendered site into repeated UI
+  patterns classified as covered / needs-a-variant / genuinely-missing, and generating a full
+  dark + light brand theme against the live token contract with every foreground/background pair
+  contrast-checked — and the two-board operating model: the persona owns the design-system repos
+  and briefs the consuming app's project manager rather than editing the app, with cross-repo work
+  not called done until it is verified merged **and** published. All prior principles and the
+  Personality section are preserved; it stays pure persona (ADR 0079).
+
+- **Theme, fleet and devices stylesheets drop their literal `var(--pl-…, <literal>)` fallbacks (#3774).**
+  `@protolabsai/design` loads before any app CSS and `tokenNameGuard.test.ts` already proves
+  every `var(--pl-…)` in `apps/web/src` resolves to an installed token, so a literal fallback
+  is dead code — and several had drifted from the DS values (the status-alias hexes in
+  `theme-base.css`, the `--pl-space-4`/`--pl-radius` px stand-ins, and the mono font stacks).
+  `app/theme-base.css` (the `--success`/`--warning`/`--error`/`--danger`/`--info` compat
+  aliases, hexes removed but the aliases kept), `app/theme.css`, `fleet/fleet.css` and
+  `settings/devices.css` now read the bare `var(--pl-X)`. Value-only edits; nested
+  `var(--pl-a, var(--pl-b))` fallbacks and the deliberately-exempt `app-crash.css` are left
+  in place. A new `app/dsStaleFallbackDrop.test.ts` pins the four sheets.
+
+- **App theme + docviewer stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `app/theme.css` and `docviewer/docviewer.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so the console's remaining hand-rolled chrome and the full-screen document reader track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 0 10px 8px` → `0 10px var(--pl-space-2)`, `padding: 4px 12px 12px 33px` → `var(--pl-space-1) var(--pl-space-3) var(--pl-space-3) 33px`). Off-scale half-steps (2/6/10/14/22/28/33px, …), negative margins, non-spacing properties (`border-radius`, `left`, `width`) and calc() interiors are intentionally left as literals — the half-steps wait on the DS gap protoContent#547 — and the pinned home-indicator gutter `padding-bottom: max(env(safe-area-inset-bottom), 12px)` is kept verbatim. The streamdown table "copy as" menu shadow in `theme.css` is also tokenized (`0 6px 20px rgb(0 0 0 / 28%)` → `var(--pl-shadow-popover)`); the auth-dialog overlay scrim keeps its theme-independent near-black `rgb(8, 8, 12)` (the DS `--pl-color-bg` token is light in light mode, which would defeat the fully-opaque scrim's intent). A scoped regression guard (`offScaleSpacing3a.test.ts`) sweeps the two files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Workflows / plugins / path-picker stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `workflows/workflows.css`, `settings/plugins.css` and `settings/pathpicker.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 8px 10px` → `var(--pl-space-2) 10px`, `padding: 10px 12px` → `10px var(--pl-space-3)`). Off-scale half-steps (2/3/5/6/7/10/14/18px, …), negative margins, and non-spacing properties (`border-radius`, `left`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. A scoped regression guard (`offScaleSpacing3b.test.ts`) sweeps the three files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Providers connections stylesheet adopts the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration in `settings/providers.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so the Model ▸ Connections panel tracks the operator's chosen density instead of hardcoding it. Off-scale half-steps (`10px`), negative margins, and non-spacing properties are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. The `settings-type-scale-tokens-7b` guard pins the tokenized `.providers-panel > .muted` margin.
+
+- **Chat + HITL stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `chat/chat.css` and `chat/hitl.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so the chat surface and the HITL request card track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 10px 12px` → `10px var(--pl-space-3)`, `margin: 0 12px 8px` → `0 var(--pl-space-3) var(--pl-space-2)`). Off-scale half-steps (2/5/6/7/10/14px, …), negative margins, and non-spacing properties (`border-radius`, `left`, `width`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. The `chat-type-scale-tokens` guard's `.chat-memory-note` pin is updated to the tokenized margin, and a scoped regression guard (`offScaleSpacing3c.test.ts`) sweeps the two files and fails on any exact-scale px that returns in a spacing declaration.
+</content>
+
+- **Chat-component + prompt-viewer stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `chat/chat-component.css` and `chat/promptviewer.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so the inline chat components and the prompt viewer track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 10px 12px` → `10px var(--pl-space-3)`, `gap: 4px 16px` → `var(--pl-space-1) var(--pl-space-4)`). Off-scale half-steps (2/6/7/9/10px, …), negative margins, and non-spacing properties (`border-radius`, `line-height`, `width`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. The `chat-type-scale-tokens` guard's two `padding` pins are updated to the tokenized shorthand, and a scoped regression guard (`offScaleSpacing3c2.test.ts`) sweeps the two files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Fleet Room / Fleet Activity / Work overview / app drawer stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `app/fleet-room.css`, `app/fleet-activity.css`, `app/work.css` and `app/app-drawer.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 12px 14px 8px` → `var(--pl-space-3) 14px var(--pl-space-2)`). Off-scale half-steps (2/6/10/11/14/28px, …), negative margins, and non-spacing properties are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. A scoped regression guard (`offScaleSpacing3d.test.ts`) sweeps the four files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Activity / code pane / identity / fleet stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `activity/activity.css`, `codeviewer/code-pane.css`, `agent/identity.css` and `fleet/fleet.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 6px 8px 6px 6px` → `6px var(--pl-space-2) 6px 6px`). Off-scale half-steps (2/5/6/7/10/14/18px, …), negative margins, and non-spacing properties (`border-radius`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. A scoped regression guard (`offScaleSpacing3e.test.ts`) sweeps the four files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Snapshot / devices / schedule / telemetry stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `settings/snapshot.css`, `settings/devices.css`, `schedule/schedule.css` and `settings/telemetry.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 8px 10px` → `var(--pl-space-2) 10px`, `gap: 8px 16px` → `var(--pl-space-2) var(--pl-space-4)`). Off-scale half-steps (2/3/5/6/7/10/14/18/20px, …), negative margins, and non-spacing properties (`border-radius`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. A scoped regression guard (`offScaleSpacing3f.test.ts`) sweeps the four files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Goals / tools / settings / keybindings stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `goals/goals.css`, `app/tools.css`, `settings/settings.css` and `settings/keybindings.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 8px 10px` → `var(--pl-space-2) 10px`, `margin: 4px 0 12px` → `var(--pl-space-1) 0 var(--pl-space-3)`, `padding: 10px 34px 10px 12px` → `10px 34px 10px var(--pl-space-3)`). Off-scale half-steps (2/6/7/10/14/18/28/34px, …), negative margins, and non-spacing properties (`top`, `border-radius`, `min-width`, `grid-template-columns`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547. A scoped regression guard (`offScaleSpacing3g.test.ts`) sweeps the four files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Mobile-shell / tool-calls / delegates / watches stylesheets adopt the DS spacing scale (#3688).** Every exact-scale px value in a `padding*`, `margin*`, `gap`, `row-gap` or `column-gap` declaration across `app/mobile-shell.css`, `chat/tool-calls.css`, `settings/delegates.css` and `watches/watches.css` now reads the bare `--pl-space-*` tokens (4/8/12/16/24px map to `1`/`2`/`3`/`4`/`6` at identical px), so these surfaces track the operator's chosen density instead of hardcoding it. Mixed shorthand is tokenized per value (e.g. `padding: 6px 8px` → `6px var(--pl-space-2)`, `padding: 10px 34px 10px 12px` → `10px 34px 10px var(--pl-space-3)`). Off-scale half-steps (2/3/5/6/7/9/10/34px, …), negative margins, and non-spacing properties (`left`/`top`/`border-radius`) are intentionally left as literals — the half-steps wait on the DS gap protoContent#547 — and the mobile shell's pinned home-indicator gutter `padding-bottom: max(env(safe-area-inset-bottom), 12px)` is kept verbatim. A scoped regression guard (`offScaleSpacing3h.test.ts`) sweeps the four files and fails on any exact-scale px that returns in a spacing declaration.
+
+- **Theme / settings / memory stylesheets move rem/em font-sizes onto the DS type scale (#3688).** `fontSizeGuard` (#3772) bans only px, so rem/em font-sizes sat off the scale. Every rem/em font-size in `app/theme.css`, `settings/settings.css` and `memory/memory.css` now reads a bare `--pl-font-size-*` step (1rem = 16px; 0.72–0.8rem → `xs`, 0.82–0.86rem → `sm`, 0.85em → `sm`, 0.8em → `xs`), and IdentityPanel's inline soul-textarea `fontSize: "13px"` becomes `var(--pl-font-size-sm)`, so these surfaces track the DS type scale instead of hardcoding sizes. The `.update-notice-ver` rule also drops its literal `ui-monospace, monospace` stack for `var(--pl-font-mono)` — it renders in the fixed-size DS Dialog title, so the `em` bought no scaling. Font-size only otherwise (that one font-family swap is the sole exception). A scoped guard (`app/dsTypeScaleRemEm2a.test.ts`) sweeps the three sheets plus the IdentityPanel inline style and fails on any rem/em font-size that returns.
+
+- **Chat ▸ chat / tool-calls stylesheets move their rem font-sizes onto the DS type scale (#3688).** Every `font-size:<n>rem` in `chat/chat.css` (20 sites) and `chat/tool-calls.css` (18 sites) now reads a bare `--pl-font-size-*` token per the audit mapping (1rem = 16px): `0.72–0.8rem` → `xs` (12px), `0.82–0.86rem` → `sm` (13px), `0.9rem` → `base` (14px), so these surfaces track the DS scale instead of hardcoding rem. The one deliberate survivor is the inline mono slash-command chip (`.chat-user-text.chat-slash-cmd`, `0.9em`) — inline code the brief allows to stay em-relative. Only `font-size` values changed; a scoped guard (`chat-type-scale-rem.test.ts`) sweeps both files and fails on any returning rem, on any second em, and the sibling `chat-type-scale-tokens.test.ts` count pin is bumped accordingly.
+
+- **fontSizeGuard now fails on rem/em CSS font-sizes and inline `fontSize` literals, not just px (#3688).** The type-scale audit's final guard extends `fontSizeGuard.test.ts` two ways. In CSS it now flags `font-size:<n>rem` and `<n>em` (previously only `<n>px`), sweeping every `apps/web/src` stylesheet; the sole pinned survivors are the crash-fallback file (`app/app-crash.css`, whole file), the `.devices-code code` pairing-code display (`28px`/`22px`, protoContent#534), and the inline mono slash-command chip (`chat/chat.css .chat-user-text.chat-slash-cmd`, `0.9em`) which the brief allows to stay em-relative. A second glob now also sweeps every non-test TSX under `apps/web/src` and fails on any inline `fontSize:` whose value is a numeric literal (`fontSize: 13`) or a px/rem/em string (`fontSize: "0.8rem"`), while allowing a token read (`fontSize: "var(--pl-font-size-*)"`) and non-length theme-blob values (`fontSize: "lg"`). The tree already passes: 2a/2b tokenized every in-range rem/em, and the one inline `fontSize` (agent `IdentityPanel.tsx`) already reads `--pl-font-size-sm`.
+
+### Fixed
+- **Artifact plugin resolves its store through the instance plugin store, honouring the box root (#3644).**
+  `_store_path()` derived the store's directory straight from the home dir
+  (`~/.protoagent/artifact[/<PROTOAGENT_INSTANCE>]`), ignoring `PROTOAGENT_BOX_ROOT` /
+  `PROTOAGENT_HOME` (ADR 0004 / 0065): a box-scoped server wrote its artifacts into the
+  real home, and a default install with no instance stored them one level ABOVE the
+  instance root. It now resolves through `sdk.plugin_store(plugin_id="artifact")` — the
+  same seam the friction and notes plugins use — so the dev sandbox and every fleet member
+  get their own copy. A pre-scoping store is migrated into the new location on first access
+  — both `history.json` AND its `blobs/` move together, so file-artifact downloads keep
+  resolving — while sibling instance subdirectories under a bare legacy dir are left where
+  they are. The migration source is the store's OLD location,
+  `~/.protoagent/artifact[/<inst>]` (HOME-relative, exactly where the pre-scoping code wrote
+  it), NOT the box root: the desktop sidecar and containers point the box root at their own
+  directory (Tauri's config dir; `/sandbox`) while the old store lived under HOME, so reading
+  the legacy source from HOME is what keeps a desktop or container upgrade from silently
+  losing its history and pins. `ARTIFACT_DIR` is unchanged (still an env-only override, still
+  `/<PROTOAGENT_INSTANCE>`-scoped), and a path-resolution failure falls back to the legacy
+  path so a store access never fails over where its file lives.
+
+- **Notes plugin resolves its note through the instance store, honouring the box root (#3644).**
+  `_note_path()` derived the note's directory straight from the home dir, so an isolated
+  server wrote its note into the real home, fleet members sharing a HOME shared one note,
+  and a default install stored it one level above the instance root. It now resolves
+  through `sdk.plugin_store(plugin_id="notes")` (ADR 0004 / 0065) — the same fix as the
+  artifact plugin — and adopts a pre-scoping note (and its history) on first access. The
+  legacy dir is BOX-SCOPED (`box_root()/notes`, honouring `PROTOAGENT_BOX_ROOT`), so a
+  box-rooted server sharing the operator's real HOME never reaches into their live
+  `~/.protoagent/notes` to move or leak it. `NOTES_DIR` is unchanged, and a
+  path-resolution failure falls back to the legacy path so a note tool never fails over
+  where its file lives.
+
+- **Chat-scoped keyboard shortcuts now fire whenever the chat panel is the active region, not only while the composer holds focus (#3677).**
+  ⌘T / ⌘K / Esc / ⌃Tab / the ⌘1–9 tab jumps / ⌘O only fired while a focusable control inside the chat surface had DOM focus, because the keydown host resolved scopes from `document.activeElement`. Clicking the transcript, a message, or whitespace leaves focus on `<body>` (and in WebKit even clicking a tab/toolbar `<button>` doesn't focus it), so the scope chain came back empty and every scoped binding was dropped. The host now tracks the last pointerdown/focusin target and, when the keydown target has fallen back to body, resolves the scope against it — provided it's still in the DOM and not inside a `hidden` / `aria-hidden="true"` region. This is generic to every `data-kb-scope` panel, including fork/plugin ones.
+
+- **The code pane no longer drags a wheel-up back to the bottom after opening a file (#3679).**
+  The scroll-to-line loop kept re-snapping to its target for about 4 s after every open, and a line near the end of a short file never counted as "arrived", so scrolling up over the pane was undone until the loop ran out. It now stops as soon as you wheel, touch, press or use a scroll key in the pane. The agent's next open (show_code, a link, follow mode) still moves it.
+
+- **`execute_code`: `tools.*` calls made from threads no longer cross responses (#3681).**
+  The script-side tool bridge shared one socket with no lock, so a `ThreadPoolExecutor`
+  fanning out `tools.fetch_url` got other calls' results back, or died with a
+  `JSONDecodeError` near char 8190. Now each call holds a lock for its whole exchange,
+  and a reply with the wrong id raises instead of being handed over. Bridged calls are
+  thread-safe but serialized, as the tool description now says. The parent also answers
+  a malformed request frame with an error instead of dropping it, which used to leave the
+  caller hanging until the timeout.
+
+- **Memory, chat, workflows and the app-crash screen now follow the theme instead of a frozen dark fallback (#3682).**
+  These surfaces read CSS variables the pinned design package never defines
+  (`--pl-color-text-muted`, `--pl-color-success`/`--pl-color-error`, and a nested
+  `--pl-bg`/`--pl-fg`), so the `var()`s never resolved and each site painted its hardcoded
+  dark hex — deaf to light mode and to per-agent ThemePanel overrides. They now reference
+  the real tokens (`--pl-color-fg-muted`, `--pl-color-status-success`/`-error`,
+  `--pl-color-bg`/`--pl-color-fg`) with the same fallbacks, so muted text and the workflow
+  status dots/borders track the active theme (e.g. memory muted text resolves to the light
+  `#52525b` under `data-theme="light"`).
+
+- **Console `--pl-*` token-name guard (#3682).** Added `apps/web/src/app/tokenNameGuard.test.ts`, which derives the set of `--pl-*` custom properties the installed design system actually defines (from `@protolabsai/design`'s tokens plus `@protolabsai/ui`'s plugin-kit — never a hand-copied list) and fails on any `var(--pl-…)` in the console source, including nested fallbacks, that names a token the DS never declares. Fixed the four phantom names the sweep surfaced so they resolve to real DS tokens (and honor light mode / operator theme overrides) instead of painting a permanent fallback: `--pl-color-border-danger` → `--pl-color-status-error` (failed scheduled + server-result cards), `--pl-color-bg-sunken` → `--pl-color-bg-inset` (active roster chip), `--pl-color-border-subtle` → `--pl-color-border` (keybinding rows) and `--pl-color-text` → `--pl-color-fg` (memory snippet).
+
+- **Plugin theming bridge: the six legacy curated keys now read the real `--pl-color-*` tokens instead of retired aliases (#3682).**
+  `consoleTheme()`'s backward-compat keys (`bg`/`bgPanel`/`fg`/`fgMuted`/`brand`/`border`) read `--bg`/`--bg-panel`/`--fg`/`--fg-muted`/`--brand-violet-light`/`--border`, which `theme-base.css` retired (#2233), so older plugin-kits received empty strings (or a stray shadcn `--border`). The keys are unchanged — they now read `--pl-color-bg`, `--pl-color-bg-raised`, `--pl-color-fg`, `--pl-color-fg-muted`, `--pl-color-accent` and `--pl-color-border`.
+
+- **Chat accents now follow the workspace/theme accent instead of a frozen dark fallback (#3685).**
+  The HITL request card (border, wizard dot, option hover/focus/selected fill, checkmark),
+  the slash-command user bubble and badge, the success system note and the slash-menu name
+  all pinned legacy `--brand-*` aliases or `var(--pl-…, #hex)` fallbacks. Since the DS tokens
+  are always loaded, those fallbacks could only ever paint a wrong, dark-only colour — deaf
+  to light mode and to per-agent ThemePanel overrides. These sites now read the semantic
+  `--pl-color-accent` / `--pl-color-accent-fg` DS tokens directly.
+
+- **Chat, tool-call and prompt-viewer accents now follow the theme instead of a frozen dark fallback (#3685).**
+  `chat-component.css`, `tool-calls.css` and `promptviewer.css` pinned a `var(--pl-…, #hex)`
+  fallback on every accent/surface/focus site and leaned on the retired `--brand-violet*`
+  aliases. Since the design package's tokens are always loaded, those hex fallbacks could only
+  paint a wrong, dark-only colour, and the aliases bypassed the semantic tokens. All fallbacks
+  are dropped for the bare `var(--pl-…)`; tool-call accent TEXT (chips, links, calc result,
+  wait icon, editor links) now reads `--pl-color-accent-fg` so it stays readable on the card
+  body under `data-theme="light"`, and the prompt-viewer budget bars/borders read
+  `--pl-color-accent`.
+
+- **The desktop launcher panel is now a solid surface and every focus ring is a 2px accent ring (#3687).**
+  Two brand-rule breaks in the console, fixed as a pure consumer change (no dependency
+  bump). The frameless quick-launcher palette dropped its glass morphism — the
+  translucent `color-mix` surface and the `backdrop-filter` blur, banned on UI surfaces by
+  the design ruling — for a solid `--pl-color-bg-raised` card carrying only the standard
+  `--pl-shadow-popover`; the see-through window margin still comes from the transparent
+  overlay scrim. The global `:focus-visible` ring on buttons/inputs/textareas/selects (and
+  the matching fleet name-link ring) moves from `1px solid --pl-color-fg` to the
+  DS-standard `2px solid --pl-color-focus`, so the whole console shows one consistent
+  focus ring that clears WCAG 1.4.11 contrast in both themes.
+
+- **browser_eval sends scripts over stdin (#3689).** The agent_browser plugin now runs `agent-browser eval --stdin` with the JavaScript on the child's standard input instead of passing it as an argv item. A large script (design-system-plugin's ~32K-char `SITE_PROBE_JS`) built a command line past Windows' 32,767-char `CreateProcess` limit and failed with WinError 206 before it ever ran; on stdin the command line stays tiny regardless of script size. The about:blank page-content probe used by `browser_screenshot`/`browser_pdf` takes the same path. Expression validation, error strings, and the setup-gap recheck behavior are unchanged.
+
+- **Langfuse: board-dispatched ACP coder runs now carry a session, the agent tag and their input; coder tool spans record the real arguments; and every turn records its output, even one with no final model reply (#3690).**
+  A board coder run had no enclosing turn, so it became a sessionless, untagged root trace. Its session is now `coder:<name>:<worktree>`.
+  claude-agent-acp sends a tool's arguments in a later `tool_call_update`, which is now folded in, so a span shows `tool:Read src/app.py` with its `file_path` instead of `{"input": "read"}`.
+  `@delegate` exchanges, `ask_human` or approval parks and errors now write their terminal frame as the trace output.
+
+- **ACP tool cards now show the real file or command, not just the tool kind (`read` / `execute`) (#3691).**
+  claude-agent-acp opens each call with empty arguments and a generic title, then sends the real ones in a later `tool_call_update`. The ACP client now forwards that as an `update` tool event, and the ACP runtime re-announces the same card id with the refined name and args, which the console fills in by id. It isn't counted as another call. The end event is also named after the refined card instead of `tool`. Consumers that only handle `start`/`end` ignore the new phase.
+  The console now fills in an existing card on a repeated `start` for the same id, keeping its position, nesting and timer. Before, a repeated start could render the card twice if text arrived in between, including after a reload.
+
+- **Deleting a referenced delegate names its references (#3692).** Removing (or renaming) a delegate in Settings ▸ Delegates now refuses with a 409 that names every config path still pointing at it — `project_board.coder`, the `project_board.coders` model-tier ladder (each rung), any per-project `project_board.projects.<p>.coder`/`.coders`, and `fallback`/`fallbacks` lists on other delegate entries — instead of succeeding silently and letting the board loop pause itself at save time. Pass `force` to delete anyway, or `repoint_to=<other delegate>` to rewrite every reference in the same save.
+
+- **Langfuse: non-streaming turns (`/v1`, `/api/chat`, `HOST.invoke()`) now record their reply as the trace output on every path, not only when the turn ends on a final model reply (#3695).**
+  `@delegate` exchanges, slash commands, HITL parks and error bubbles previously left `chat` traces with input and no output. The output is redacted before it is capped, and incognito turns stay empty. This matches the streaming fix in #3693.
+
+- **Langfuse: a coder run started under a non-exported OTel span (such as an a2a-sdk handler span) is now a proper root trace with its session and tags, not a child of a parent that never reaches Langfuse (#3696).**
+  `tracing.in_active_trace()` now counts only spans the Langfuse SDK exports, using its own public `is_default_export_span` filter. `trace_span(root=True)` starts from an empty OTel context, the same way `trace_session` does for turns.
+
+- **Streaming model calls honor request_timeout (#3699).** A streaming model request now enforces `model.request_timeout` as both a time-to-first-token deadline and an inter-chunk idle deadline, so a provider that holds an SSE stream open while producing nothing (including the native `anthropic-oauth` path, where an httpx read timeout never caught it) aborts within the timeout, retries per `max_retries`, and then fails the turn with a clear error naming the provider/model — instead of hanging silently for minutes. A stream that keeps producing chunks is unbounded, so long outputs still complete.
+
+- **Background A2A delegations no longer lose a finished peer's reply (#3700).** A `delegate_to(background=True)` whose peer ran past `poll_timeout_s` used to come back FAILED ("still running … without observable progress") even after the peer finished — the reply was lost and the caller had no task id, so the only recovery was a re-send that double-boards the work. Progress for the poll deadline is now the PEER's own task status (a status-message change resets it, so a long tool chain that emits no text is not timed out), a background delegation keeps polling the peer's task after the deadline (reusing the late-collection GetTask poll) and delivers its real reply as the job result if it finishes, and when the deadline genuinely stands the result names the peer task id, its last state and status message, and how to resume/collect it — never "retry". `poll_timeout_s` stays per-delegate configurable and the error text says so.
+
+- **execute_code's Exposed-tools setting describes the real default; new additive extra_tools (#3701).** The "Exposed tools" (`tools`) description no longer claims "empty = all" — empty means the curated read-only default set, and a non-empty list replaces it. A new `extra_tools` config key bridges tools (e.g. a plugin read tool like `github_search_issues`) on top of whichever set applies, so operators no longer have to re-list every core tool just to add one. Unregistered names are ignored and logged; `execute_code` can't bridge itself.
+
+- **ACP coder timeouts now count time the machine spends asleep. An 1800s bound no longer holds a board coder for hours on a Mac that sleeps (#3724).**
+  asyncio's clock (`time.monotonic()`, which is `mach_absolute_time` on macOS) stops during sleep, so `asyncio.wait_for(…, 1800)` meant 1800s of *awake* time. Coders dispatched during a sleeping Mac's background wakes ran 2,089s to 12,802s of wall time. The new `infra.clock.wait_for` keeps its deadline on a sleep-counting clock (`CLOCK_MONOTONIC` on macOS, `CLOCK_BOOTTIME` on Linux) and re-checks it every 15s, so a timeout fires at most 15s after a wake. `AcpClient` uses it for `session/prompt` and the turn-lock acquire.
+
+- **Langfuse: ACP coder runs trace their real tool durations, model usage and cost, and why they failed; work interrupted by a restart no longer orphans its trace (#3725).**
+  Coder tool spans open at the call's start and close at its end, instead of showing 0s. claude-agent-acp's reported token usage and API-equivalent cost become a generation under the `acp:` span, labelled with the session's model. A failed coder run (timeout, agent error, cancel) writes its reason as the output. The span also carries the coder's plan and a redacted reasoning tail.
+  At shutdown, spans still open are ended as `WARNING` before the flush, so an operator restart no longer leaves nameless orphan traces. A turn that ends with an empty reply records that, instead of recording nothing. A workflow run cancelled by its caller is now marked `ERROR` with a `[cancelled]` output, and its run record is finished instead of being left `running`.
+
+### Removed
+- **Removed the orphaned `.util-btn` CSS (#3684).** Every utility-bar pill is now a DS `<Button>`, so `theme.css`'s `.util-btn` rules (and their `#7c8cff`/`#1a1a1f` hex fallbacks + 5px radius) and the `.util-btn:active` mobile press-feedback selector are deleted; the `.utility-bar` container and its `[aria-pressed="false"]` collapsed-toggle tint stay.
+
+- **Removed the now-unused shadcn/Tailwind npm deps and `components.json` from the console (#3686).**
+  With part 1's Tailwind CSS wiring gone, nothing imports `@radix-ui/react-dropdown-menu`,
+  `class-variance-authority`, `clsx`, `react-markdown`, `rehype-highlight`, `remark-gfm`,
+  `tailwind-merge`, `tailwindcss-animate` or `tailwindcss` — all are dropped from
+  `apps/web/package.json`, and the stale shadcn config (`components.json`, which pointed at a
+  `src/components/ui` and `src/lib/cn` that never existed) is deleted. `autoprefixer` and
+  `postcss` stay, since part 1 left an autoprefixer-only `postcss.config.cjs`. The markdown /
+  code-block / graph stack (streamdown, katex, shiki, `@xyflow/react`, the DS packages) is
+  untouched. (Part 2 of 2, closes the issue.)
+
+- **Dropped the dead shadcn/Tailwind CSS wiring from the operator console (#3686).**
+  ADR 0037's incremental migration left `app/tailwind.css` (the `@tailwind` layers plus a
+  shadcn `:root` token block) and `tailwind.config.cjs` behind, but nothing consumed them —
+  no Tailwind utility classNames, no `@apply`, and preflight was already off. The stylesheet,
+  its config and the `main.tsx` import are removed; `postcss.config.cjs` is reduced to
+  autoprefixer only (Tailwind is gone, but autoprefixer still supplies the `-moz-user-select`
+  and other vendor prefixes the source relies on). The built CSS loses only the 65 unused
+  `--tw-*` custom properties and the shadcn `:root` block — every colour already resolves
+  through the `--pl-*` design tokens, so nothing renders differently. (Part 1 of 2; part 2
+  removes the now-unused npm deps and `components.json`.)
+
+### Security
+- **`run_command` runs project code with a scrubbed environment (#3801).** A command the agent runs inside a managed project (its test suite, a build, a script) no longer inherits the running agent's identity (`A2A_AUTH_TOKEN`, `AGENT_NAME`), its instance (`PROTOAGENT_HOME` and every other `PROTOAGENT_*`, so it can't write into the live agent's data) or credential-shaped variables (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, …). List names in the new **Filesystem ▸ Env vars passed to commands** (`filesystem.run_command_env_passthrough`) to pass specific ones through, e.g. `GH_TOKEN` for a project that calls `gh`.
+
+### Docs
+- **ADR 0115: gateway in-flight limiter (#3760).** Proposed design for a bounded, priority-ordered per-lane in-flight limit on model calls, off by default.
+
+- **Operator guide for the model in-flight limiter (#3760).** New how-to on sizing, priority classes, `GatewayQueueTimeout`, and reading the lane metrics (`local_queue` vs `gateway_degraded`), plus the three `model.*` config keys and `GET /api/telemetry/llm-lanes` in the references.
+
 ## [0.184.1] - 2026-09-27
 
 ### Added

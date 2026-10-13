@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import signal
 import subprocess
 import threading
@@ -47,7 +48,7 @@ import time
 
 from langchain_core.tools import tool
 
-from . import cli_fetch, preflight, storage
+from . import cli_fetch, forms, preflight, storage
 from .runtime import bad_operand, flag, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
@@ -185,13 +186,20 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
                 f"point the plugin's `binary` setting at the native agent-browser binary, or put "
                 f"node on PATH. The console's setup banner says so too.")
 
-    def _run(*args: str) -> str:
+    def _run(*args: str, stdin: str | None = None) -> str:
         """Run `agent-browser <args>` and return stdout, or a readable error.
 
         Uses Popen with one drain thread per pipe (concurrent, so a full stderr can't
         deadlock stdout) enforcing an aggregate byte cap owned here. On overflow the child
         is killed and a bounded diagnostic is returned; on timeout the child is terminated.
         Either way the child is reaped — no zombies.
+
+        `stdin`, when given, is fed to the child on its standard input — the path
+        `browser_eval` takes so the JS goes to `agent-browser eval --stdin` rather than
+        into argv, where a script over ~24K chars overruns Windows' 32,767-char
+        command-line limit and CreateProcess rejects it before it runs (#3689). A feeder
+        thread does the write so a script larger than the OS pipe buffer can't deadlock
+        against the concurrent output drains.
         """
         # PATH > pinned path > the fetched CLI; on first use with none, the pinned download.
         exe = preflight.cli_for_run(binary, autofetch=autofetch,
@@ -199,7 +207,9 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         try:
             # Its own session: its pid becomes a process-group id, so a timeout can kill
             # everything it started (see _kill_tree). Ignored on Windows.
-            proc = subprocess.Popen([exe, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            proc = subprocess.Popen([exe, *args],
+                                    stdin=subprocess.PIPE if stdin is not None else None,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     start_new_session=True)
         except OSError as e:
             # Surface it to the OPERATOR too, not just into the model's loop: the console
@@ -247,6 +257,23 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         for t in drains:
             t.start()
 
+        feeder = None
+        if stdin is not None:
+            def _feed() -> None:
+                # The drains are already reading stdout/stderr, so a child that streams
+                # output while it consumes a large script can't wedge this write.
+                try:
+                    proc.stdin.write(stdin.encode("utf-8"))
+                except (OSError, ValueError):
+                    pass  # child closed its end / exited early — its exit code carries the story
+                finally:
+                    try:
+                        proc.stdin.close()
+                    except Exception:
+                        pass
+            feeder = threading.Thread(target=_feed, daemon=True)
+            feeder.start()
+
         timed_out = False
         try:
             proc.wait(timeout=timeout)
@@ -266,6 +293,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         # read, so the snapshot below is its full output.
         for t in drains:
             t.join(timeout=_JOIN_TIMEOUT_S)
+        if feeder is not None:
+            feeder.join(timeout=_JOIN_TIMEOUT_S)  # the write is done once the child exits
         if any(t.is_alive() for t in drains):
             log.warning("[agent_browser] `agent-browser %s` exited but something it started "
                         "kept its output open; returning what it wrote", " ".join(args[:2]))
@@ -288,10 +317,34 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         _recheck(failed=False)  # a clean run is evidence the setup works — clear any banner
         return out or "(ok)"
 
-    async def _ab(*args: str) -> str:
-        return await asyncio.to_thread(_run, *args)
+    async def _ab(*args: str, stdin: str | None = None) -> str:
+        return await asyncio.to_thread(_run, *args, stdin=stdin)
 
     _bad_operand = bad_operand  # runtime.bad_operand — shared with the panel's /nav route
+
+    async def _resolve_field(selector: str) -> tuple[str, str]:
+        """Resolve a model-supplied locator to a selector the CLI can act on THIS call.
+
+        A ``@eN`` ref or a CSS selector passes straight through to the CLI unchanged (so a
+        snapshot ref keeps working exactly as before); a visible LABEL is re-resolved in the
+        page on every call via the shared ``forms`` resolver — the one copy of the locator
+        logic — so label addressing survives the re-renders that make an ``@eN`` ref go stale.
+
+        Returns ``(selector, "")`` on success, or ``("", "Error: …")`` with a ready-to-return
+        message: a flag-shaped operand, an eval/CLI failure, or a label that matches no field
+        (closest candidates) or more than one (the ambiguous matches — never a guess).
+        """
+        # A flag-shaped operand is refused before ANY subprocess — the eval resolver included
+        # — exactly as the direct-to-CLI path did.
+        if (bad := _bad_operand(selector=selector)):
+            return "", bad
+        if forms.classify(selector) in ("ref", "css"):
+            return selector.strip(), ""
+        out = await _ab("eval", "--stdin", stdin=forms.resolve_js(selector))
+        if out.startswith("Error:"):
+            return "", out
+        match = forms.resolve_target(selector, forms.parse_resolve(out))
+        return ("", match.error) if not match.ok else (match.selector, "")
 
     async def _capture(verb: str, path: str, default_name: str) -> str:
         """Run a file-producing command (``screenshot`` / ``pdf``) inside the fence.
@@ -332,7 +385,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         if current.startswith("Error:"):
             return current
         if (current.splitlines() or [""])[0].strip() == "about:blank":
-            has = await _ab("eval", _PAGE_HAS_CONTENT_JS)
+            has = await _ab("eval", "--stdin", stdin=_PAGE_HAS_CONTENT_JS)
             if (has.splitlines() or [""])[0].strip() != "1":
                 return ("Error: the page is blank (about:blank, with nothing on it), so there is "
                         "nothing to capture. Open a page with browser_open first. If you have HTML "
@@ -431,25 +484,238 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     async def browser_get_value(selector: str) -> str:
-        """Get the current value of a form field (a `@eN` ref or CSS selector)."""
-        return _bad_operand(selector=selector) or await _ab("get", "value", selector)
+        """Get the current value of a form field by its visible LABEL (re-resolved in the page
+        each call, so it survives re-renders), a `@eN` ref, or a CSS selector. For a whole-form
+        view (every field, committed values included) prefer `browser_form_read`."""
+        sel, err = await _resolve_field(selector)
+        return err or await _ab("get", "value", sel)
+
+    @tool
+    async def browser_form_read(scope: str = "") -> str:
+        """Read every form field on the page in ONE call — the reliable way to see a form
+        before filling it, and to verify it afterwards.
+
+        Returns a JSON array, one object per field in document order, each with `label`,
+        `kind` (text/textarea/email/tel/number/native-select/combobox/checkbox/radio-group/
+        file/other), `name`, `id`, `required`, the current committed `value` (for a
+        react-select-style combobox the RENDERED selection, not any half-typed search text;
+        for a radio group the checked option's label; for a file input the attached
+        filename) and, where they live in the DOM, `options` (native-select / radio-group).
+
+        `scope` optionally restricts the read to one container — a CSS selector
+        (`#application`) or a visible container label (a `<fieldset>` legend / `aria-label`);
+        leave it blank for the whole page.
+
+        The labels this returns are exactly what the other form tools address by, and that
+        addressing is re-resolved in the page on every call, so it survives the re-renders
+        that make a `browser_snapshot` `@eN` ref go stale."""
+        # scope is embedded in the eval script (stdin), never an argv element, so it needs no
+        # argv-option guard — but a snapshot @ref can't be resolved inside an eval, so say so
+        # rather than silently reading the whole page.
+        if scope and forms.is_ref(scope):
+            return ("Error: browser_form_read can't scope by a @ref — those are resolved by the "
+                    "CLI, not in the page. Pass a CSS selector or a visible container label, or "
+                    "leave scope blank to read the whole page.")
+        out = await _ab("eval", "--stdin", stdin=forms.read_form_js(scope))
+        if out.startswith("Error:"):
+            return out
+        return forms.render_form_read(out, scope)
 
     # ── interaction ───────────────────────────────────────────────────────────
     @tool
-    async def browser_click(selector: str) -> str:
-        """Click an element by `@eN` ref (from `browser_snapshot`) or a CSS selector
-        (e.g. `#submit`). Snapshot first to get the ref."""
-        return _bad_operand(selector=selector) or await _ab("click", selector)
+    async def browser_click(selector: str, js_fallback: bool = False) -> str:
+        """Click a form field by its visible LABEL (re-resolved in the page each call, so it
+        survives re-renders — a checkbox, radio or combobox by label), a `@eN` ref (from
+        `browser_snapshot`), or a CSS selector (e.g. `#submit`). Address buttons and links,
+        which are not form fields, by ref or CSS; `browser_form_read` lists the labels.
+
+        Set `js_fallback=true` when a click reports success but the page visibly does
+        NOTHING (a Greenhouse "Enter manually" button that won't open its textarea, a custom
+        control that ignores a synthetic click): the tool fingerprints the page, does the
+        normal CLI click, re-fingerprints, and ONLY if nothing changed dispatches an in-page
+        click (a bubbling mousedown/mouseup plus `el.click()`) and reports `(JS fallback)`. It
+        never clicks twice when the first click already worked. Because the fallback dispatches
+        the click in the page, address the target by its LABEL or a CSS selector when you set
+        `js_fallback` — a `@eN` ref is resolved by the CLI, not in the page, so it can't drive
+        the fallback and is refused (as `browser_select`/`browser_upload`/`browser_form_read`
+        refuse refs for the same in-page limit). The default (`js_fallback` off) is the plain
+        CLI click, unchanged — a ref still works there."""
+        # A @ref drives the JS fallback through an in-page document.querySelector, where "@e5"
+        # is invalid CSS and throws: the dispatch would do NOTHING while the CLI's success text
+        # stood, so the model would believe a fallback ran that didn't. Refuse a ref up front
+        # when a fallback is asked for (browser_select / browser_upload / browser_form_read
+        # refuse refs for the same reason); a ref still works for the plain CLI click below.
+        if js_fallback and forms.is_ref(selector):
+            return ("Error: browser_click can't run its JS fallback on a @ref — a ref is "
+                    "resolved by the CLI, not in the page, and the fallback dispatches the "
+                    "click in-page. Pass the button's visible LABEL or a CSS selector "
+                    "(browser_form_read lists the labels), or drop js_fallback to click the "
+                    "ref with the plain CLI.")
+        sel, err = await _resolve_field(selector)
+        if err:
+            return err
+        if not js_fallback:
+            return await _ab("click", sel)
+        # Fingerprint → CLI click → re-fingerprint. Only a click that moved NOTHING (and whose
+        # fingerprints we could actually read) earns the in-page dispatch; see fingerprint_changed.
+        before = await _ab("eval", "--stdin", stdin=forms.fingerprint_js(sel))
+        clicked = await _ab("click", sel)
+        if clicked.startswith("Error:"):
+            return clicked            # the CLI click itself failed — nothing to fall back from
+        after = await _ab("eval", "--stdin", stdin=forms.fingerprint_js(sel))
+        if forms.fingerprint_changed(before, after):
+            return clicked            # the click DID something (or we can't tell) — no second click
+        dispatched = await _ab("eval", "--stdin", stdin=forms.js_click_js(sel))
+        return forms.render_js_click(dispatched, selector, clicked)
 
     @tool
     async def browser_fill(selector: str, text: str) -> str:
-        """Clear a field and fill it with `text` (a `@eN` ref or CSS selector)."""
-        return _bad_operand(selector=selector, text=text) or await _ab("fill", selector, text)
+        """Clear a field and fill it with `text`. Address the field by its visible LABEL
+        (re-resolved in the page each call, so it survives re-renders), a `@eN` ref, or a CSS
+        selector. A label that matches no field, or more than one, is a clear error — call
+        `browser_form_read` to see the fields."""
+        if (bad := _bad_operand(text=text)):
+            return bad
+        sel, err = await _resolve_field(selector)
+        return err or await _ab("fill", sel, text)
 
     @tool
     async def browser_type(selector: str, text: str) -> str:
-        """Type `text` into an element without clearing it first (a ref or selector)."""
-        return _bad_operand(selector=selector, text=text) or await _ab("type", selector, text)
+        """Type `text` into a field without clearing it first. Address the field by its visible
+        LABEL (re-resolved each call, so it survives re-renders), a `@eN` ref, or a CSS
+        selector."""
+        if (bad := _bad_operand(text=text)):
+            return bad
+        sel, err = await _resolve_field(selector)
+        return err or await _ab("type", sel, text)
+
+    @tool
+    async def browser_select(field: str, option_text: str) -> str:
+        """Set a CHOICE field to the option whose visible text is `option_text`, then PROVE it
+        by reading the committed value back. Handles a native `<select>`, a react-select-style
+        combobox, and an intl-tel-input country picker — the widgets a plain `browser_fill`
+        cannot drive — and verifies the result so a wrong answer is never submitted silently.
+
+        Address `field` by its visible LABEL (re-resolved in the page each call, so it survives
+        re-renders) or a CSS selector — NOT a `@eN` snapshot ref: this tool sets the widget in
+        the page, where the CLI's ref can't be resolved (`browser_form_read` has the same limit).
+        `browser_form_read` lists the labels. `option_text` is matched case-insensitively and
+        whitespace-collapsed: an exact match wins, and the only non-exact that resolves is a
+        UNIQUE prefix. If no option — or more than one — matches, the tool lists the available
+        options and changes nothing. The combobox is cleared before typing (never appended to)
+        and committed by CLICKING the option, never by pressing Enter. On success you get
+        `Selected "<text>" in <label>`; if the field reads back a different value it is a hard
+        `Error:`, not a success.
+
+        PHONE fields (intl-tel-input): select the COUNTRY with THIS tool BEFORE you
+        `browser_fill` the national number. Changing the country after the number is filled
+        reformats or clears it, so the order matters — country first, then the number."""
+        if (bad := _bad_operand(field=field, option_text=option_text)):
+            return bad
+        # A @ref is resolved by the CLI, not in the page — but browser_select sets the widget
+        # via an in-page document.querySelector, where "@e5" is invalid CSS and throws, which
+        # was swallowed as 'not-found' so EVERY ref-addressed select failed. Refuse it up front
+        # (browser_form_read does the same) rather than claim support it cannot honour.
+        if forms.is_ref(field):
+            return ("Error: browser_select can't address a field by a @ref — a ref is resolved "
+                    "by the CLI, not in the page, and this tool sets the widget in-page. Pass "
+                    "the field's visible LABEL or a CSS selector; browser_form_read lists them.")
+        sel, err = await _resolve_field(field)
+        if err:
+            return err
+        out = await _ab("eval", "--stdin", stdin=forms.select_js(sel, option_text))
+        if out.startswith("Error:"):
+            return out
+        # A react-select that refused EVERY in-page open strategy (the pointer sequence AND
+        # ArrowDown) reports reason:'not-open'. A REAL, trusted CLI click opens a widget that
+        # gates on isTrusted where a synthetic event cannot — do ONE on the control, then re-run
+        # the in-page select once. If it STILL won't open, render_select returns the explicit
+        # "could not open the dropdown" error (never the misleading "no options were found").
+        if (control_sel := forms.select_reopen_target(out)):
+            clicked = await _ab("click", control_sel)
+            if not clicked.startswith("Error:"):
+                out = await _ab("eval", "--stdin", stdin=forms.select_js(sel, option_text))
+                if out.startswith("Error:"):
+                    return out
+        return forms.render_select(out, field, option_text)
+
+    @tool
+    async def browser_upload(field: str, file_path: str) -> str:
+        """Attach a local file to a form's file input and VERIFY it took. Use this for an
+        application form that wants a résumé/CV FILE (Ashby, Greenhouse) — a plain
+        `browser_fill` cannot set a file input.
+
+        `file_path` is FENCED to this plugin's own capture directory: a bare filename or
+        relative path resolves inside it, and an absolute path is accepted only if it already
+        lies inside it. A path that escapes — `..`, a symlink out, `~/.ssh/...`, any absolute
+        path elsewhere — is refused, so a prompt-injected page cannot make the agent upload an
+        arbitrary local file. The way to get a file here is `browser_pdf`, which writes into
+        this same directory and returns the path to pass straight to `browser_upload`; the
+        file must exist and be non-empty.
+
+        Address `field` by its visible LABEL (re-resolved in the page each call, so it survives
+        re-renders), a CSS selector, or `#id` / a bare id of the file input — NOT a `@eN` ref (the
+        input is located and tagged in the page, where a ref can't be resolved; `browser_form_read`
+        has the same limit). A `#id`/bare id of an `input[type=file]` resolves directly, even when
+        it is hidden behind an "Attach" button; otherwise, if the located element isn't the file
+        input itself (Greenhouse/Ashby hide it behind "Attach"), the single file input in its
+        container is used — none, or more than one, is a clear error. When two file fields share a
+        label (two "Attach" buttons), address each by its id.
+
+        On success you get `Uploaded <name> to <label>`, returned only after confirming the attach:
+        by reading the attached filename back from the input (even if the widget re-rendered it and
+        re-found it by id/name), or — when the widget replaced the input and left the filename
+        showing as a chip — via that displayed filename (the line then says so). An attach with no
+        file and no displayed filename is a hard `Error:`, as is a read-back of a different name,
+        and any validation message the field shows is surfaced."""
+        if (bad := _bad_operand(field=field)):
+            return bad
+        # A @ref is resolved by the CLI, not in the page — but the file input is located AND
+        # tagged via an in-page querySelector, where "@e5" is invalid CSS and throws. Refuse it
+        # up front (browser_select / browser_form_read do the same) rather than fail obscurely.
+        if forms.is_ref(field):
+            return ("Error: browser_upload can't address a field by a @ref — a ref is resolved "
+                    "by the CLI, not in the page, and the file input is located and tagged "
+                    "in-page. Pass the field's visible LABEL or a CSS selector; browser_form_read "
+                    "lists them.")
+        # Fence the SOURCE path FIRST — a rejected path never reaches the CLI, and the file must
+        # exist and be non-empty. The résumé flow hands this the path browser_pdf returned.
+        try:
+            source = await asyncio.to_thread(storage.resolve_upload_path, file_path)
+        except ValueError as e:
+            return f"Error: {e}"
+        except Exception as e:  # noqa: BLE001 — an unreadable store informs the loop, never crashes it
+            return f"Error: could not prepare the upload: {e}"
+        # Resolve the field FRESH this call (the bd-12mo.1 locator), then refine to the file
+        # input and tag it with a nonce so the CLI acts on a stable selector, never a stale ref.
+        sel, err = await _resolve_field(field)
+        if err:
+            return err
+        nonce = secrets.token_hex(8)
+        located = await _ab("eval", "--stdin", stdin=forms.upload_js(sel, nonce))
+        if located.startswith("Error:"):
+            return located
+        info, locate_err = forms.parse_upload(located, field)
+        if locate_err:
+            return locate_err
+        target, label = info["selector"], info["label"]
+        # A file being uploaded must not be pruned mid-call (a concurrent capture's prune, or
+        # one over budget) — mark it in flight for the duration of the CLI call.
+        with storage.in_flight(source):
+            up = await _ab("upload", target, str(source))
+        if up.startswith("Error:"):
+            return up
+        # Verify against the input's id/name/container/label too, not just the nonce: a Greenhouse
+        # widget either re-renders its file input after the attach (the nonce rode off with the old
+        # node) OR removes it from the DOM entirely, so the attach is confirmed by re-finding the
+        # fresh input, or re-finding the field container (by its stored selector or its label) and
+        # reading the filename chip there.
+        read = await _ab("eval", "--stdin", stdin=forms.upload_verify_js(
+            target, info["id"], info["name"], info["container"], source.name,
+            info["label_for"], info["label_text"]))
+        if read.startswith("Error:"):
+            return read
+        return forms.render_upload(read, field, source.name, label=label)
 
     @tool
     async def browser_press(key: str) -> str:
@@ -459,8 +725,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     async def browser_hover(selector: str) -> str:
-        """Hover the pointer over an element (a `@eN` ref or CSS selector)."""
-        return _bad_operand(selector=selector) or await _ab("hover", selector)
+        """Hover the pointer over a form field by its visible LABEL (re-resolved each call, so
+        it survives re-renders), a `@eN` ref, or a CSS selector."""
+        sel, err = await _resolve_field(selector)
+        return err or await _ab("hover", sel)
 
     @tool
     async def browser_eval(expression: str) -> str:
@@ -468,7 +736,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         Use sparingly — prefer snapshot + the action tools. An expression that starts with
         a dash and a letter (`-a`) must be wrapped, `(-a)`, or the CLI reads it as an
         option; `-1` is fine."""
-        return _bad_operand(expression=expression) or await _ab("eval", expression)
+        # The script goes to `agent-browser eval --stdin` on stdin, never into argv: a large
+        # script (design-system-plugin's ~32K SITE_PROBE_JS) would otherwise overrun
+        # Windows' 32,767-char command-line limit and fail before running (#3689).
+        return _bad_operand(expression=expression) or await _ab("eval", "--stdin", stdin=expression)
 
     # ── capture + session ─────────────────────────────────────────────────────
     @tool
@@ -507,6 +778,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     return [
         browser_open, browser_back, browser_forward, browser_reload,
         browser_snapshot, browser_get_text, browser_get_html, browser_get_value,
-        browser_click, browser_fill, browser_type, browser_press, browser_hover,
+        browser_form_read,
+        browser_click, browser_fill, browser_type, browser_select, browser_upload,
+        browser_press, browser_hover,
         browser_eval, browser_screenshot, browser_pdf, browser_close,
     ]

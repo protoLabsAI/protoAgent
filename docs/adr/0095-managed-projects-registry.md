@@ -121,6 +121,15 @@ naming it, and `GET /api/projects` reports `fence_source: "unbound"` with a cons
 An *absent* registry still gets the workspace default — that is the default-install path
 and is deliberately unchanged.
 
+**A missing folder no longer unbinds the toolset** (amended, #3643). A registered entry
+whose folder is gone is skipped from the fence but remembered by name: the other projects
+keep working, a tool call into it returns "project X's folder is missing" (never a
+resolved path, and a write never recreates the root), the fs tools stay bound even when
+every folder is missing, and the live registry re-admits the folder on the next tool call
+once it exists again — same session, no rebuild. The operator sees it as a WARNING log line
+and a `GET /api/runtime/status` warning banner that clears itself. `fs: false` is
+unaffected: an all-opt-out registry still binds nothing.
+
 Should a population source ever be introduced, entries from it must land `fs: false` and
 require explicit local promotion. That is a property of *imported* entries, not of the
 registry.

@@ -799,9 +799,23 @@ def test_resume_of_a_finished_task_reports_instead_of_resending(patched):
     assert [b.get("method") for b in bodies] == ["GetTask"]  # no answer sent into a done task
 
 
-def test_resume_of_a_running_task_refuses_legibly(patched):
+def test_resume_of_a_running_task_collects_it_instead_of_resending(patched):
+    """A resume id naming a task that is still WORKING is a COLLECTION (#3775): it waits on
+    that task with GetTask only and, when the wait runs out, hands the task id back again —
+    it never sends the "answer" into a task that is still busy."""
+    _clock(patched, step=0.3)
     running = {"jsonrpc": "2.0", "result": {"task": {"id": "t-9", "status": {"state": "TASK_STATE_WORKING"}}}}
-    _install_capture_client(patched, send_resp=_Resp(running), get_resp=_Resp(running))
+    bodies = _install_capture_client(patched, send_resp=_Resp(running), get_resp=_Resp(running))
+
+    with pytest.raises(DelegateError, match="still running") as ei:
+        asyncio.run(A.dispatch(_parse(poll_timeout_s=1), "the answer", resume_task_id="t-9"))
+    assert "resume_task_id='t-9'" in str(ei.value)
+    assert "SendMessage" not in [b.get("method") for b in bodies]
+
+
+def test_resume_of_a_stateless_task_refuses_legibly(patched):
+    stateless = {"jsonrpc": "2.0", "result": {"task": {"id": "t-9", "status": {}}}}
+    _install_capture_client(patched, send_resp=_Resp(stateless), get_resp=_Resp(stateless))
 
     with pytest.raises(DelegateError, match="not parked for input"):
         asyncio.run(A.dispatch(_parse(poll_timeout_s=10), "the answer", resume_task_id="t-9"))
@@ -887,7 +901,7 @@ def test_dispatch_warns_on_a_short_reply_but_returns_it_unchanged(patched, caplo
     """End to end: the dispatch path flags a suspiciously short reply (elapsed floor
     neutralised so the fast fake client trips it) yet still returns the text verbatim —
     the diagnostic is post-hoc, never a behavior change (#3085)."""
-    monkeypatch.setattr("plugins.delegates.adapters._SHORT_REPLY_MIN_ELAPSED_S", 0.0)
+    monkeypatch.setattr("plugins.delegates.a2a._SHORT_REPLY_MIN_ELAPSED_S", 0.0)
     patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "narration only" if result else "")
     _install_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "narration only"}}))
     with caplog.at_level(logging.WARNING, logger=_DELEGATE_LOGGER):
@@ -899,7 +913,7 @@ def test_dispatch_warns_on_a_short_reply_but_returns_it_unchanged(patched, caplo
 def test_dispatch_does_not_warn_on_a_full_length_reply(patched, caplog, monkeypatch):
     """The same path stays silent when the peer returns a full answer, even with the
     elapsed floor neutralised — the trigger is length, not merely slowness."""
-    monkeypatch.setattr("plugins.delegates.adapters._SHORT_REPLY_MIN_ELAPSED_S", 0.0)
+    monkeypatch.setattr("plugins.delegates.a2a._SHORT_REPLY_MIN_ELAPSED_S", 0.0)
     long = "x" * 600
     patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: long if result else "")
     _install_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": long}}))

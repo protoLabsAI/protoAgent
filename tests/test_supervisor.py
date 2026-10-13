@@ -14,6 +14,17 @@ from graph.sdk import supervise as sdk_supervise  # re-exported on the plugin SD
 from graph.supervisor import RetryAfter, Supervisor, supervise
 
 
+async def _until(pred, timeout: float = 10.0) -> None:
+    """Wait for ``pred`` rather than a fixed wall-clock window: a fixed sleep either
+    wastes time on a fast machine or loses the race on a descheduled CI runner (#3549).
+    Fails loudly at the deadline."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not pred():
+        assert loop.time() < deadline, "condition not met before the deadline"
+        await asyncio.sleep(0.005)
+
+
 def test_supervise_is_exported_on_the_sdk():
     assert sdk_supervise is supervise
 
@@ -29,7 +40,7 @@ async def test_loops_back_to_back_then_stops():
     sv = supervise(work, interval=10, breath=0.0)  # watchdog idle; we only test the loop
     sv.start()
     assert sv.start().endswith("already running")  # idempotent
-    await asyncio.sleep(0.1)
+    await _until(lambda: n >= 3)
     looped = n
     assert looped >= 3, looped
     assert sv.running() and sv.status()["result"] == looped
@@ -49,7 +60,8 @@ async def test_run_once_completes_and_is_not_rekicked():
 
     sv = supervise(work, loop=False, interval=0.02)
     sv.start()
-    await asyncio.sleep(0.15)  # several watchdog ticks — a one-shot must NOT be re-run
+    await _until(lambda: sv.status()["want_running"] is False)  # watchdog saw it complete
+    await asyncio.sleep(0.06)  # several more watchdog ticks — a one-shot must NOT be re-run
     assert runs == 1
     assert not sv.running()
     assert sv.status()["result"] == "done"
@@ -96,7 +108,7 @@ async def test_unrecoverable_crash_clears_want_running():
 
     sv = supervise(work, interval=0.02, on_crash=on_crash)
     sv.start()
-    await asyncio.sleep(0.12)
+    await _until(lambda: sv.status()["want_running"] is False and not sv.running())
     assert sv.status()["want_running"] is False
     assert not sv.running()
     await sv.aclose()
@@ -109,8 +121,11 @@ async def test_default_one_shot_preserved_on_repeated_crashes():
     """Backward-compat: with the default (max_attempts=1), on_crash still fires at most once
     per down-streak even when the runner keeps re-crashing fast — then blind-re-kicks."""
     on_crash_calls = 0
+    work_calls = 0
 
     async def work():
+        nonlocal work_calls
+        work_calls += 1
         raise ValueError("always boom")
 
     def on_crash(_r):
@@ -120,7 +135,7 @@ async def test_default_one_shot_preserved_on_repeated_crashes():
 
     sv = supervise(work, interval=0.02, breath=0.0, on_crash=on_crash)  # default max_attempts=1
     sv.start()
-    await asyncio.sleep(0.2)  # many crash / re-kick cycles
+    await _until(lambda: work_calls >= 5)  # many crash / re-kick cycles
     assert on_crash_calls == 1  # one-shot latch preserved
     assert sv.status()["want_running"] is True  # blind re-kick continues (historical behavior)
     await sv.aclose()
@@ -141,7 +156,7 @@ async def test_bounded_retry_reinvokes_on_crash_then_stops():
 
     sv = supervise(work, interval=0.02, breath=0.0, on_crash=on_crash, on_crash_max_attempts=3)
     sv.start()
-    await asyncio.sleep(0.3)
+    await _until(lambda: sv.status()["want_running"] is False and not sv.running())
     assert on_crash_calls == 3  # re-invoked on each re-crash, up to the bound
     assert sv.status()["want_running"] is False  # exhausted → stopped, not a blind loop
     assert not sv.running()
@@ -170,7 +185,7 @@ async def test_retry_after_polls_without_rekick_then_recovers():
 
     sv = supervise(work, interval=0.02, breath=0.0, on_crash=on_crash, on_crash_max_attempts=5)
     sv.start()
-    await asyncio.sleep(0.25)
+    await _until(lambda: len(seen) >= 3 and work_calls >= 2 and sv.running())
     assert len(seen) == 3  # polled 3× (2× RetryAfter + 1× True)
     assert [wc for (_r, wc) in seen] == [1, 1, 1]  # runner NOT re-kicked during polling
     assert work_calls >= 2  # re-kicked only after True → work ran again
@@ -192,7 +207,7 @@ async def test_retry_after_exhausted_stops():
 
     sv = supervise(work, interval=0.02, breath=0.0, on_crash=on_crash, on_crash_max_attempts=2)
     sv.start()
-    await asyncio.sleep(0.2)
+    await _until(lambda: sv.status()["want_running"] is False)
     assert calls == 2  # polled up to the bound
     assert sv.status()["want_running"] is False  # exhausted → stop
     await sv.aclose()
@@ -217,7 +232,7 @@ async def test_stall_is_detected_and_restarted():
         stall_check=lambda: True,  # confirmed stalled
     )
     sv.start()
-    await asyncio.sleep(0.2)
+    await _until(lambda: sv.status()["restarts"] >= 1)
     assert sv.status()["restarts"] >= 1
     await sv.aclose()
 
@@ -250,9 +265,9 @@ async def test_request_stop_is_graceful():
 
     sv = supervise(work, interval=10, breath=0.0)
     sv.start()
-    await asyncio.sleep(0.05)
+    await _until(lambda: windows >= 1)
     sv.request_stop()  # finish the current window, then stop — no re-kick
-    await asyncio.sleep(0.1)
+    await _until(lambda: not sv.running())
     assert not sv.running()
     assert sv.status()["want_running"] is False
     settled = windows
@@ -269,7 +284,7 @@ async def test_status_shape():
     s = sv.status()
     assert s["name"] == "probe" and s["running"] is False and s["restarts"] == 0
     sv.start()
-    await asyncio.sleep(0.02)
+    await _until(lambda: sv.status()["running"])
     s = sv.status()
     assert s["running"] and s["want_running"] and s["watchdog"]
     assert "started" in s["events"]

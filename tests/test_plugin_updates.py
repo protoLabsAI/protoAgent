@@ -380,6 +380,9 @@ def _wire_state(monkeypatch, *, enabled, disabled, meta):
     cfg = types.SimpleNamespace(plugins_enabled=list(enabled), plugins_disabled=list(disabled))
     monkeypatch.setattr(rs.STATE, "graph_config", cfg, raising=False)
     monkeypatch.setattr(rs.STATE, "plugin_meta", meta, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_surface_reconcile", None, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces_stuck", {}, raising=False)
+    monkeypatch.setattr(rs.STATE, "plugin_surfaces_started", False, raising=False)
     return captured
 
 
@@ -529,7 +532,9 @@ def test_update_route_disabled_plugin_reinstalls_without_reload(monkeypatch):
     assert "config" not in captured
 
 
-def test_update_route_flags_restart_for_view_plugin(monkeypatch):
+def test_update_route_hot_reloads_a_view_plugin_without_a_restart(monkeypatch):
+    # The reload re-mounts its router with the new code (ADR 0096); proven against a
+    # real server in tests/test_plugin_lifecycle_real_process.py.
     _lock(
         monkeypatch,
         [
@@ -550,7 +555,7 @@ def test_update_route_flags_restart_for_view_plugin(monkeypatch):
     )
     body = _client().post("/api/plugins/boardy/update").json()
     assert body["reloaded"] is True
-    assert body["restart_recommended"] is True
+    assert body["restart_recommended"] is False
 
 
 def test_update_route_404_on_unknown_id(monkeypatch):

@@ -316,6 +316,10 @@ checkpoint:
   # knowledge base (searchable via memory_recall) before dropping the raw
   # checkpoints. Needs the knowledge middleware enabled.
   harvest_enabled: true
+  # A history DB created before incremental vacuum never gives freed space back to
+  # the disk. The first start after upgrading migrates it once (a few seconds per
+  # bloated DB) when it's worth it and the disk has room. false = leave it alone.
+  # vacuum_legacy_on_start: true
 
 # Media output store (#1929) — binary artifacts (images/audio/video) plugin
 # tools persist via registry.save_media() and the core /media/<file> route

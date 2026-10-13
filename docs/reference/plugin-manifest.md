@@ -5,8 +5,8 @@
 # Plugin manifest
 
 Every field of `protoagent.plugin.yaml` — the file that makes a directory a plugin.
-Generated from the `PluginManifest` dataclass in `graph/plugins/manifest.py`, which is
-what the loader actually reads, so this list is complete by construction.
+Generated from the `PluginManifest` dataclass in `src/graph/plugins/manifest.py`, which is
+the schema read by the loader. CI checks the generated page for drift.
 
 The manifest is **declarative on purpose**: it is parsed before the plugin's Python is
 ever imported, so the host can gate, configure, and display a plugin it has never run.
@@ -31,7 +31,7 @@ See [Plugins](/guides/plugins) for how to use these fields, and
 | [`config_section`](#field-config-section) | `str` | `''` | the top-level YAML section the plugin claims (default: id) |
 | [`config`](#field-config) | `dict` | `{}` | defaults for that section (key → default value) |
 | [`secrets`](#field-secrets) | `list[str]` | `[]` | keys in the section routed to the secrets.yaml overlay |
-| [`settings`](#field-settings) | `list[dict]` | `[]` | Settings-schema field specs ({key, label, type, ...}) |
+| [`settings`](#field-settings) | `list[dict]` | `[]` | Settings-schema field specs ({key, label, type, ...}); `spawns: true` marks one that names a program the plugin runs, which the agent's set_config tool then refuses to write ([ADR… |
 | [`settings_tabs`](#field-settings-tabs) | `list[dict]` | `[]` | Ordered Configure-dialog tabs ([#3179](https://github.com/protoLabsAI/protoAgent/issues/3179)/#3180) |
 | [`test`](#field-test) | `bool` | `False` | Test action ([ADR 0029](/adr/0029-communication-plugins-standard)) — when true, the plugin serves a credential check at `POST /api/config/test-<config_section>` (e.g. the chat_surface wirer mounts… |
 | [`guide_url`](#field-guide-url) | `str` | `''` | Optional setup-guide URL ([ADR 0059](/adr/0059-unified-plugin-manager)) — the console renders a generic "Setup guide" link next to the plugin's settings, so no per-plugin frontend is needed |
@@ -129,7 +129,7 @@ keys in the section routed to the secrets.yaml overlay
 
 - **Type** `list[dict]` · **Default** `[]`
 
-Settings-schema field specs ({key, label, type, ...})
+Settings-schema field specs ({key, label, type, ...}); `spawns: true` marks one that names a program the plugin runs, which the agent's set_config tool then refuses to write ([ADR 0019](/adr/0019-plugin-config-settings-secrets) §3b)
 
 ### `settings_tabs` {#field-settings-tabs}
 
@@ -165,7 +165,7 @@ Palette commands ([ADR 0057](/adr/0057-command-palette)) — declarative command
 
 - **Type** `list[str]` · **Default** `[]`
 
-Auth-exempt paths — prefixes under THIS plugin's own /plugins/&lt;id&gt;/ (or /api/plugins/&lt;id&gt;/) namespace that the default-deny auth middleware lets through WITHOUT a bearer. The escape hatch for an inbound webhook (no bearer — the plugin verifies its own signature) or a public view page that must load in a browser iframe under a token-gated deployment. Namespace-scoped by the parser so a plugin can never exempt a core route.
+Auth-exempt paths — prefixes under THIS plugin's own /plugins/&lt;id&gt;/ (or /api/plugins/&lt;id&gt;/) namespace that the default-deny auth middleware lets through WITHOUT a bearer. The escape hatch for an inbound webhook (no bearer — the plugin verifies its own signature) or a public view page that must load in a browser iframe under a token-gated deployment. Namespace-scoped by the parser so a plugin can never exempt a core route — including the core operator routes core mounts inside that namespace (/api/plugins/&lt;id&gt;/update and /api/plugins/&lt;id&gt;/enabled), which stay gated even under a /api/plugins/&lt;id&gt;/ prefix.
 
 ### `federation_paths` {#field-federation-paths}
 

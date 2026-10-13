@@ -40,6 +40,14 @@ only fetches turns for server-only or locally empty sessions.
 Only `chat-` contexts are indexed: the same task store also contains Activity,
 delegation, Fleet Room, and API contexts, none of which are console chat tabs.
 
+`?parked=true` (#3957) narrows the index to the sessions whose **newest-created** turn
+is parked on the operator (input-required / auth-required), newest first, each row
+also carrying `last_state`. The newest-N cut alone can leave an older session that is
+still waiting on an `ask_human` answer or an approval out of a fresh browser's restored
+set. The console reads both indexes and pins up to 20 parked sessions into its 50, so a
+pile of parked chats never crowds out the newest ones. A server that predates the flag
+ignores it, and its rows carry no `last_state`, so the console pins nothing from them.
+
 It reads the **A2A task store** (the SDK's `tasks` table — turns are keyed by
 `context_id`, which IS the console session id) via the engine the server
 already exposes (`STATE.a2a_task_engine`), ordered by `last_updated`, and
@@ -107,9 +115,16 @@ final pass's text, as it always has.
 
 The console consumes the index opportunistically at boot. `localStorage` stays
 the primary store (it holds client-side niceties the task store doesn't —
-ordered parts, per-message usage pins): a non-empty local session always wins,
-while a missing or empty one is rebuilt from durable turns through the same
-A2A reducers used by live and reattached turns. Fetches are bounded and a
+ordered parts, per-message usage pins): a non-empty local session wins for the
+turns it holds, while a missing or empty one is rebuilt from durable turns through
+the same A2A reducers used by live and reattached turns. A non-empty local copy
+the server has MORE turns for (the index's `turn_count` above the copy's own
+turns and the count it last reconciled against) is behind — another client ran
+turns in it after this cache was written — and is re-read: the server turns after
+its newest one are added, a turn it held only as a running durable snapshot is
+redrawn from the server's copy, and older server turns it lacks stay out (their
+absence is local intent, e.g. a regenerate). A copy whose own turn is still live
+is left to its reattach until the next boot. Fetches are bounded and a
 failed member/read leaves the local console usable. Each read captures the
 eligible local session object; delete, clear, send, rename, or another local
 edit before commit changes/removes that object and vetoes the stale result.

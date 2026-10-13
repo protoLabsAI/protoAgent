@@ -95,6 +95,29 @@ seam), not via state updates that enter the checkpointer. The projection:
 3. Is NOT returned as a `messages` state update.
 4. Is NOT checkpointed.
 5. IS captured by prompt observability (D5) for after-the-fact inspection.
+6. Is turn-scoped: it travels from `before_agent()` to that run's model calls
+   in a private, untracked state channel (`UntrackedValue` + `PrivateStateAttr`
+   — absent from invoke results, state snapshots and checkpoints), not on the
+   middleware instance, which one compiled graph shares across every
+   concurrent turn. A HITL resume (`Command(resume=…)`) does not re-run
+   `before_agent()` and starts with the channel empty, so `before_model()`
+   recomposes once for the resumed run — querying with the turn's newest
+   operator input (a folded steer counts; guard notes, summaries and context
+   frames do not) and writing its own ADR 0069 D6 injection-log row. The same
+   holds for the one-shot toolset notice (restored per thread on resume).
+7. **Amendment (working-state refresh).** The `<working_state>` part is the one
+   piece of the projection the agent changes *during* a turn (`update_task`,
+   `update_goal_plan`, scheduling). Once a tool result has landed since the
+   turn's newest operator input, `wrap_model_call` re-reads it
+   (`graph.middleware.knowledge.refresh_working_state`) and swaps it in place
+   for every later model call of the run; the first call is served by the
+   turn-entry compose unchanged. Every other part — digest, always-on memory,
+   RAG hits, skill index — stays the turn-entry snapshot, and no injection-log
+   row is written for the refresh (working state is not memory). Caching is
+   unaffected: the frame is already composed after the last cache breakpoint
+   and the working state is its final, never-shed part (D6), so the swap
+   changes no byte ahead of it. Cost: one read of the same stores the compose
+   reads (sqlite + in-memory work-provider snapshots) per post-tool model call.
 
 **Migration.** Existing checkpoints with stored context frames continue to
 work: the projection layer detects frames already in the checkpoint

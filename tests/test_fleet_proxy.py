@@ -657,3 +657,16 @@ async def test_member_turn_start_touches_recency(monkeypatch):
     assert touched == ["ava"]
     await proxy.forward_to("ava", FakeRequest(method="GET"), "api/tools")
     assert touched == ["ava"]  # non-turn traffic doesn't churn LRU order
+
+
+def test_chat_session_mutations_get_the_turn_lane_but_its_polls_stay_bounded():
+    """Deleting a chat with "save to memory" summarizes the whole thread before it answers;
+    under the 20s view lane the hub returned 504 while the member went on to succeed, and the
+    operator's retry raced the first delete for the checkpoint DB lock. Mutations under
+    api/chat/ take the turn lane; its GET polls keep the view lane (#2590)."""
+    turn = proxy._TURN_TIMEOUT.read
+    assert proxy._timeout_for(FakeRequest(method="DELETE"), "api/chat/sessions/chat-1").read == turn
+    assert proxy._timeout_for(FakeRequest(method="POST"), "api/chat/sessions/chat-1/compact").read == turn
+    view = proxy._READ_TIMEOUT.read
+    assert proxy._timeout_for(FakeRequest(method="GET"), "api/chat/attend").read == view
+    assert proxy._timeout_for(FakeRequest(method="GET"), "api/chat/sessions/chat-1/turns").read == view

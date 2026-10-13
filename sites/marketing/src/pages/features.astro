@@ -24,9 +24,14 @@ const pillars = [
 // framing. `key` is the scannable mono label in the row's first column.
 const differentiators = [
   {
+    key: 'acp',
+    title: 'Drive any coding agent (ACP)',
+    body: 'Delegate a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI over the Agent Client Protocol — or run the whole turn on one. protoAgent orchestrates coding agents rather than competing as one.',
+  },
+  {
     key: 'a2a 1.0',
     title: 'A2A 1.0 as the native interface',
-    body: 'protoAgent IS a spec-compliant A2A 1.0 server — HTTP/JSON-RPC, an agent card, and wire extensions (per-turn cost, confidence). A hot-swappable delegate registry fans a sub-task out to other a2a / openai / acp endpoints, so agents discover and delegate to each other over the open standard.',
+    body: 'protoAgent IS a spec-compliant A2A 1.0 server — HTTP/JSON-RPC, an agent card, and wire extensions (per-turn cost, worldstate deltas, tool calls) carried in the A2A metadata map. A hot-swappable delegate registry fans a sub-task out to other a2a / openai / acp endpoints, so agents discover and delegate to each other over the open standard.',
   },
   {
     key: 'langgraph',
@@ -62,11 +67,6 @@ const differentiators = [
     key: 'telemetry',
     title: 'Built-in cost & latency telemetry',
     body: 'A per-turn telemetry store (cost, p50/p95 latency, tokens, cache-hit, by-model) with CSV export and a retention guardrail — plus first-class Langfuse + Prometheus. Cost and latency visibility is treated as core, not an add-on.',
-  },
-  {
-    key: 'acp',
-    title: 'Drive any coding agent (ACP)',
-    body: 'Delegate a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI over the Agent Client Protocol — or run the whole turn on one. protoAgent orchestrates coding agents rather than competing as one.',
   },
   {
     key: 'local-first',

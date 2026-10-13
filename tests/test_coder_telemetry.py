@@ -347,7 +347,7 @@ async def test_a_second_run_does_not_inherit_the_first_runs_tool_count(wired, tm
 
 async def test_the_agents_own_acp_runtime_turn_writes_no_coder_row(wired, tmp_path, monkeypatch):
     """Under `agent_runtime: acp:<agent>` the coding agent IS the brain, and
-    `server.chat._acp_drive_turn` already books that turn under the same `acp:<agent>`
+    `server.chat_acp._acp_drive_turn` already books that turn under the same `acp:<agent>`
     label. A row from here too would double every ACP-runtime turn — and misfile a chat
     turn as a coder run. Drives the REAL client factory against a real fake agent, so
     this fails if the production wiring stops opting out."""
@@ -508,6 +508,7 @@ def _rows_written_by(store, before: set) -> list[dict]:
     return [r for r in store.recent(500) if r["row_id"] not in before]
 
 
+@pytest.mark.platform_sensitive
 async def test_a_run_that_dies_before_it_starts_books_none_of_the_previous_runs_effort(wired, tmp_path):
     """The reported case, end to end: run A does three tool calls in session
     ``sess-run-a``; run B's worktree is gone before it starts, so it never gets past
@@ -772,7 +773,13 @@ while True:
             os._exit(1)
         else:
             tool("own")
-            time.sleep(2.8)
+            # Keep generating until the test stops the orphan (its pipe closes), then
+            # a little longer, so that EOF lands mid-turn — without a fixed multi-second
+            # guess at when the test gets there. Bounded, in case it never does.
+            deadline = time.monotonic() + 10
+            while not os.path.exists(SENTINEL) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            time.sleep(0.3)
             chunk()
             send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn"}})
 '''

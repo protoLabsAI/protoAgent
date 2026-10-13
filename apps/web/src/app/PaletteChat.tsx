@@ -10,22 +10,14 @@ import { ChatMessageView } from "../chat/ChatMessageView";
 import { addToolRef, appendReasoning, appendText, replaceText } from "../chat/parts";
 import { api } from "../lib/api";
 import { chatStore, effectiveReasoningEffort } from "../chat/chat-store";
+import { isTaskFailed, isTaskStateUnknown, isTaskTerminal } from "../chat/taskState";
 import type { ChatMessage, ToolCall, ToolEvent } from "../lib/types";
-import {
-  beginPaletteThreadLoad,
-  freshPaletteThread,
-  newPaletteContextId,
-  PALETTE_LOAD_TIMEOUT_MS,
-  readPaletteContextId,
-  savePaletteThread,
-  type PaletteThread,
-} from "./paletteChatStore";
-import { PanelSkeleton } from "./ErrorBoundary";
+import { freshPaletteThread, loadPaletteThread, savePaletteThread } from "./paletteChatStore";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
 import "../chat/chat.css"; // .markdown / .tool-calls / .chat-user-text / .slash-menu styles
 
 // Upsert a streaming tool event onto a message's toolCalls AND its ordered `parts`
-// (mirrors ChatSurface's onToolCall): start → a running card (nested under its parent
+// (mirrors ChatSessionSlot's onToolCall): start → a running card (nested under its parent
 // `task` — authoritative `evt.parentId`, else last-open-task), and a top-level tool
 // opens/extends a `tools` part in emission order so text↔tool interleave renders live;
 // end → flip the matching card to done/error and stamp elapsed.
@@ -34,12 +26,15 @@ function upsertTool(message: ChatMessage, evt: ToolEvent): ChatMessage {
   const idx = calls.findIndex((c) => c.id === evt.id);
   const now = Date.now();
   let nextParts = message.parts;
-  if (evt.phase === "start") {
+  if (evt.phase === "start" && idx >= 0) {
+    // A re-announce of a known card (full args / an ACP refinement, #3691): fill it in,
+    // keeping its clock, nesting and position — no second ref, no reset elapsed time.
+    calls[idx] = { ...calls[idx], name: evt.name || calls[idx].name, input: evt.input ?? calls[idx].input };
+  } else if (evt.phase === "start") {
     const openTask = [...calls].reverse().find((c) => c.name === "task" && c.status === "running" && c.id !== evt.id);
     const parentId = evt.parentId ?? openTask?.id;
     const card: ToolCall = { id: evt.id, name: evt.name, input: evt.input, status: "running", startedAt: now, parentId };
-    if (idx >= 0) calls[idx] = { ...calls[idx], ...card };
-    else calls.push(card);
+    calls.push(card);
     // Children (parentId set) nest under their parent's card — only top-level tools get a block.
     if (parentId == null) nextParts = addToolRef(message.parts, evt.id);
   } else {
@@ -84,67 +79,15 @@ export function PaletteChat({
   // scoped so DMing different members never crosses transcripts. No slug = the normal
   // palette chat with this window's agent (unchanged).
   const scope = agentSlug ? `dm:${agentSlug}` : undefined;
-  // ADR 0114 D2 load barrier: the thread is read once per open, and NOTHING that writes
-  // it — the save effect, the unmount flush, the self-heal, the `initial` auto-send, a
-  // send or /clear — runs before it has loaded. A synchronous read (today's default)
-  // lands `loaded` on the first render; an asynchronous one starts `pending`.
-  const [boot] = useState(() => beginPaletteThreadLoad(scope)); // run once
-  const [loadState, setLoadState] = useState<"pending" | "loaded" | "failed">(boot.state);
-  const loadStateRef = useRef(loadState);
-  loadStateRef.current = loadState;
-  const [messages, setMessages] = useState<ChatMessage[]>(
-    boot.state === "loaded" ? (boot.thread?.messages ?? []) : [],
-  );
+  const [boot] = useState(() => loadPaletteThread(scope)); // run once
+  const [messages, setMessages] = useState<ChatMessage[]>(boot.messages);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  // The stable A2A contextId (= thread_id server-side). Taken from the stored thread and
-  // never replaced by a freshly minted one because a read is unfinished, failed or came
-  // back empty: a new id is minted only once a read has LOADED and no thread exists.
-  const contextRef = useRef<string | null>(
-    boot.state === "loaded"
-      ? (boot.thread?.contextId ?? readPaletteContextId(scope) ?? newPaletteContextId())
-      : readPaletteContextId(scope),
-  );
+  const contextRef = useRef(boot.contextId); // stable A2A contextId (= thread_id server-side)
   const messagesRef = useRef(messages); // latest, for the unmount flush + self-heal
   messagesRef.current = messages;
-
-  // An asynchronous read: adopt it when it lands — even after the timeout marked it
-  // `failed` (a late success still loads).
-  useEffect(() => {
-    if (boot.state !== "pending") return;
-    let cancelled = false;
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (!cancelled && !settled) setLoadState("failed");
-    }, PALETTE_LOAD_TIMEOUT_MS);
-    const adopt = (thread: PaletteThread | null) => {
-      contextRef.current = thread?.contextId ?? contextRef.current ?? newPaletteContextId();
-      messagesRef.current = thread?.messages ?? [];
-      setMessages(messagesRef.current);
-      setLoadState("loaded");
-    };
-    boot.promise.then(
-      (thread) => {
-        if (cancelled) return;
-        settled = true;
-        clearTimeout(timer);
-        adopt(thread);
-      },
-      () => {
-        if (cancelled) return;
-        settled = true;
-        clearTimeout(timer);
-        setLoadState("failed");
-      },
-    );
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one read per open
-  }, []);
 
   // Focus the composer on open AND after each turn settles (streaming → false).
   useEffect(() => {
@@ -156,36 +99,27 @@ export function PaletteChat({
   // self-heal below reconnects to it on reopen. Abort last (it can't race the flush).
   useEffect(
     () => () => {
-      // Never flush a thread that didn't load: that would write an empty transcript over
-      // the stored one.
-      if (loadStateRef.current === "loaded" && contextRef.current) {
-        savePaletteThread({ contextId: contextRef.current, messages: messagesRef.current }, true, scope);
-      }
+      savePaletteThread({ contextId: contextRef.current, messages: messagesRef.current }, true, scope);
       abortRef.current?.abort();
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
-  // Preserve the thread (debounced) — survives close/reopen and reload. Only once loaded.
+  // Preserve the thread (debounced) — survives close/reopen and reload.
   useEffect(() => {
-    if (loadState !== "loaded" || !contextRef.current) return;
     savePaletteThread({ contextId: contextRef.current, messages }, false, scope);
-  }, [messages, scope, loadState]);
+  }, [messages, scope]);
 
   // Reconnect an interrupted turn (ADR 0057 durability). Runs once per open: if the last
   // assistant message is stuck "streaming" with a durable taskId — the palette was closed
   // mid-turn — reconcile it against the server's A2A task (tasks/get), finalizing when
-  // terminal and polling briefly while it's genuinely still running. Mirrors ChatSurface's
+  // terminal and polling briefly while it's genuinely still running. Mirrors ChatSessionSlot's
   // self-heal so a reopened palette shows the turn still running, or its finished result.
-  const selfHealRan = useRef(false);
   useEffect(() => {
-    if (loadState !== "loaded" || selfHealRan.current) return; // only a loaded thread, once
-    selfHealRan.current = true;
     if (abortRef.current) return; // a live turn in this session owns the stream
     const last = messagesRef.current[messagesRef.current.length - 1];
     if (!last || last.role !== "assistant" || last.status !== "streaming" || !last.taskId) return;
     const taskId = last.taskId;
-    const TERMINAL = /completed|failed|canceled|cancelled/i;
     let cancelled = false;
     let polls = 0;
     const MAX_POLLS = 40; // ~2 min at 3s, then unlock and let the next open re-poll
@@ -199,8 +133,11 @@ export function PaletteChat({
         return; // best-effort — leave it for the next open to retry
       }
       if (cancelled) return;
-      if (!res.state || TERMINAL.test(res.state)) {
-        const failed = /fail|cancel/i.test(res.state);
+      // Settled: gone from the store (no state), terminal, or a state the server cannot
+      // name (`unknown` / UNSPECIFIED) — no producer will ever move that one on, so polling
+      // it only holds the composer locked for the whole budget (taskState.ts, #3972).
+      if (!res.state || isTaskTerminal(res.state) || isTaskStateUnknown(res.state)) {
+        const failed = isTaskFailed(res.state);
         update((m) => ({ ...finalize(m), content: res.text || m.content, status: failed ? "error" : "done" }));
         setStreaming(false);
         return;
@@ -213,7 +150,7 @@ export function PaletteChat({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadState]);
+  }, []);
 
   const update = (fn: (m: ChatMessage) => ChatMessage) =>
     setMessages((ms) => {
@@ -226,10 +163,9 @@ export function PaletteChat({
   // `/clear` — wipe the server checkpoint for the current thread (no attachments on a
   // palette chat, so the full retire is harmless) + start a fresh local thread.
   const clearThread = () => {
-    if (loadStateRef.current !== "loaded") return; // ADR 0114 D2
     // For a DM, api.deleteChatSession would target THIS window's agent, not the member —
     // so skip the server-side wipe there and just mint a fresh local thread.
-    if (!agentSlug && contextRef.current) void api.deleteChatSession(contextRef.current, false).catch(() => {});
+    if (!agentSlug) void api.deleteChatSession(contextRef.current, false).catch(() => {});
     contextRef.current = freshPaletteThread(scope).contextId;
     setMessages([]);
     setDraft("");
@@ -238,9 +174,7 @@ export function PaletteChat({
 
   const send = async (raw: string) => {
     const content = raw.trim();
-    const contextId = contextRef.current;
-    // ADR 0114 D2: no send into a thread that hasn't loaded (and so has no settled contextId).
-    if (!content || streaming || loadStateRef.current !== "loaded" || !contextId) return;
+    if (!content || streaming) return;
     if (content === "/clear") {
       clearThread();
       return;
@@ -260,7 +194,7 @@ export function PaletteChat({
     try {
       await api.streamChat(
         content,
-        contextId,
+        contextRef.current,
         {
           signal: controller.signal,
           // Pin the server task id to the streaming message so a palette closed mid-turn
@@ -302,14 +236,14 @@ export function PaletteChat({
   // below owns that reconnect, and a concurrent send would clobber the same message.
   const initialSent = useRef(false);
   useEffect(() => {
-    if (!initial || initialSent.current || loadState !== "loaded") return; // only once loaded
+    if (!initial || initialSent.current) return;
     const last = messagesRef.current[messagesRef.current.length - 1];
     if (last?.role === "assistant" && last.status === "streaming" && last.taskId) return;
     initialSent.current = true;
     void send(initial);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadState]);
-  const empty = loadState === "loaded" && messages.length === 0;
+  }, []);
+  const empty = messages.length === 0;
   // Minimal slash menu — `/clear` hint while the draft starts with "/".
   const slashMatches = draft.startsWith("/")
     ? SLASH.filter((c) => c.name.startsWith(draft.slice(1).toLowerCase()))
@@ -321,18 +255,6 @@ export function PaletteChat({
   return (
     <div className="palette-chat" style={{ display: "flex", flexDirection: "column", height: 440, minHeight: 0 }}>
       <Conversation style={{ flex: 1, minHeight: 0, padding: "8px 8px 0" }}>
-        {loadState === "pending" ? (
-          <div data-testid="palette-chat-loading">
-            <PanelSkeleton label="Loading this chat…" />
-          </div>
-        ) : null}
-        {loadState === "failed" ? (
-          <Message role="assistant">
-            <span style={{ color: "var(--pl-color-fg-muted)" }} data-testid="palette-chat-load-failed">
-              This chat's history couldn't be loaded. Close and reopen to try again.
-            </span>
-          </Message>
-        ) : null}
         {empty ? (
           <Message role="assistant">
             <span style={{ color: "var(--pl-color-fg-muted)" }}>Ask {agentName} anything. /clear wipes this thread.</span>
@@ -350,7 +272,6 @@ export function PaletteChat({
         onChange={setDraft}
         onSubmit={() => (streaming ? stop() : send(draft))}
         loading={streaming}
-        disabled={loadState !== "loaded"}
         inputRef={inputRef}
         placeholder={`Message ${agentName}…  (/clear)`}
         overlay={

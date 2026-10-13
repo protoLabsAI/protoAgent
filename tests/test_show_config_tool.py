@@ -478,3 +478,46 @@ def test_operator_can_turn_it_off():
         assert "show_config" not in names
     finally:
         set_disabled_tools([])
+
+
+@pytest.mark.parametrize("value", [
+    ["synthetic-secret"],
+    [["synthetic-secret"]],
+    [{"value": "synthetic-secret"}],
+    {"primary": "synthetic-secret", "nested": ["synthetic-secret"]},
+])
+def test_sensitive_container_is_masked_without_mutating_config(value):
+    import copy
+
+    original = {"plugin": {"API_KEYS": value, "endpoint": "https://example.com"}}
+    before = copy.deepcopy(original)
+    redacted = redact_for_agent(original)
+    assert redacted["plugin"]["API_KEYS"] == _REDACTED
+    assert "synthetic-secret" not in json.dumps(redacted)
+    assert redacted["plugin"]["endpoint"] == "https://example.com"
+    assert original == before
+
+
+@pytest.mark.parametrize("empty", [None, "", [], {}])
+def test_unset_sensitive_containers_remain_unset(empty):
+    assert redact_for_agent({"credentials": empty}) == {"credentials": empty}
+
+
+def test_show_config_masks_secret_containers_before_selection_and_pagination():
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {"future_plugin": {
+        "api_keys": ["synthetic-secret"],
+        "credentials": {"primary": "synthetic-secret"},
+        "endpoint": "https://example.com",
+    }}
+    tool = build_config_tools(cfg)[0]
+    for args in ({}, {"section": "future_plugin"},
+                 {"section": "future_plugin", "limit": 1},
+                 {"section": "future_plugin.api_keys"},
+                 {"section": "future_plugin.api_keys.0"},
+                 {"section": "future_plugin.credentials.primary"}):
+        result = tool.invoke(args)
+        assert "synthetic-secret" not in result
+    assert json.loads(tool.invoke({"section": "future_plugin.api_keys"})) == {
+        "future_plugin.api_keys": _REDACTED
+    }

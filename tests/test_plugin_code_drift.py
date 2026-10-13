@@ -8,6 +8,8 @@ import pytest
 
 from graph.plugins import loader
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture(autouse=True)
 def _clean_registry():

@@ -1,27 +1,27 @@
 /* Inline chat components (ADR 0051 Slice 2) — table / key-value / timeline. */
 .chat-comp {
-  margin: 8px 0;
-  border: 1px solid var(--pl-color-border, #2a2a31);
-  border-radius: 8px;
-  background: var(--pl-color-bg-raised, #16161b);
-  padding: 10px 12px;
-  font-size: 13px;
+  margin: var(--pl-space-2) 0;
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-lg);
+  background: var(--pl-color-bg-raised);
+  padding: var(--pl-space-2_5) var(--pl-space-3);
+  font-size: var(--pl-font-size-sm);
   overflow-x: auto;
 }
 .chat-comp-title {
   font-weight: 600;
-  margin-bottom: 8px;
+  margin-bottom: var(--pl-space-2);
 }
 
-/* table — chrome comes from the DS `Table` primitives (.pl-table); this wrapper
-   only owns the surrounding card layout (.chat-comp / .chat-comp-table). */
-
+/* table — chrome comes from the DS `Table` primitives (.pl-table), including the `source`
+   caption (.pl-table__source); this wrapper only owns the surrounding card layout
+   (.chat-comp / .chat-comp-table). */
 /* key-value */
 .chat-comp-kv dl {
   margin: 0;
   display: grid;
   grid-template-columns: minmax(0, max-content) 1fr;
-  gap: 4px 16px;
+  gap: var(--pl-space-1) var(--pl-space-4);
 }
 .chat-comp-kv-row {
   display: contents;
@@ -40,28 +40,28 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .chat-comp-step {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
+  gap: var(--pl-space-2);
 }
 .chat-comp-step-dot {
   flex: none;
   width: 9px;
   height: 9px;
-  margin-top: 4px;
-  border-radius: 999px;
-  border: 1.5px solid var(--pl-color-fg-subtle, #555);
+  margin-top: var(--pl-space-1);
+  border-radius: var(--pl-radius-pill);
+  border: 1.5px solid var(--pl-color-fg-subtle);
 }
 .chat-comp-step.is-done .chat-comp-step-dot {
-  background: var(--pl-color-accent, #7c8cff);
-  border-color: var(--pl-color-accent, #7c8cff);
+  background: var(--pl-color-accent);
+  border-color: var(--pl-color-accent);
 }
 .chat-comp-step.is-active .chat-comp-step-dot {
-  border-color: var(--pl-color-accent, #7c8cff);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-accent, #7c8cff) 25%, transparent);
+  border-color: var(--pl-color-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pl-color-accent) 25%, transparent);
 }
 .chat-comp-step-body {
   display: flex;
@@ -71,63 +71,63 @@
 }
 .chat-comp-step-detail {
   color: var(--pl-color-fg-muted);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 .chat-comp-step.is-done .chat-comp-step-label {
   color: var(--pl-color-fg-muted);
 }
 .chat-comp-unknown {
   color: var(--pl-color-fg-muted);
-  font-size: 12px;
+  font-size: var(--pl-font-size-xs);
 }
 
 /* code-ref (ADR 0112) — show_code's pointer: a compact chip, click opens the code pane. */
 .code-ref-chip {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  margin: 8px 0;
-  padding: 7px 10px;
+  gap: var(--pl-space-2);
+  margin: var(--pl-space-2) 0;
+  padding: var(--pl-space-2) var(--pl-space-2_5);
   max-width: 100%;
-  border: 1px solid var(--pl-color-border, #2a2a31);
-  border-radius: 8px;
-  background: var(--pl-color-bg-raised, #16161b);
-  color: var(--pl-color-fg, #e8e8ea);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-lg);
+  background: var(--pl-color-bg-raised);
+  color: var(--pl-color-fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--pl-font-size-sm);
   text-align: left;
   cursor: pointer;
 }
 .code-ref-chip:hover {
-  border-color: var(--pl-color-accent, #9b87f2);
-  background: var(--pl-color-bg-hover, #1d1d23);
+  border-color: var(--pl-color-accent);
+  background: var(--pl-color-bg-hover);
 }
 .code-ref-chip:focus-visible {
-  outline: 2px solid var(--pl-color-focus, #9b87f2);
+  outline: 2px solid var(--pl-color-focus);
   outline-offset: 2px;
 }
 .code-ref-chip__icon {
   flex: none;
-  margin-top: 2px;
-  color: var(--pl-color-accent, #9b87f2);
+  margin-top: var(--pl-space-0_5);
+  color: var(--pl-color-accent);
 }
 .code-ref-chip__body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
   min-width: 0;
 }
 .code-ref-chip__path {
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-font-size-xs);
   overflow-wrap: anywhere;
 }
 .code-ref-chip__project,
 .code-ref-chip__sep {
-  color: var(--pl-color-fg-muted, #9a9aa3);
+  color: var(--pl-color-fg-muted);
 }
 .code-ref-chip__note {
-  color: var(--pl-color-fg-muted, #9a9aa3);
+  color: var(--pl-color-fg-muted);
   line-height: 1.4;
 }
 /* code-ref with the code pane toolset OFF (ADR 0112 amendment): the same pointer as plain,
@@ -135,19 +135,19 @@
 .code-ref-inert {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  margin: 6px 0;
-  color: var(--pl-color-fg-muted, #9a9aa3);
-  font-size: 12px;
+  gap: var(--pl-space-1_5);
+  margin: var(--pl-space-1_5) 0;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
 .code-ref-inert__icon {
   flex: none;
-  margin-top: 2px;
+  margin-top: var(--pl-space-0_5);
 }
 .code-ref-inert__path {
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
+  font-family: var(--pl-font-mono);
 }
 
 /* artifact-ref (#3617) — the artifact plugin's pointer at one artifact version; a sibling of
@@ -156,7 +156,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0 4px;
+  gap: 0 var(--pl-space-1);
   min-width: 0;
 }
 .artifact-ref-chip__title {
@@ -164,15 +164,90 @@
   overflow-wrap: anywhere;
 }
 .artifact-ref-chip__version {
-  font-family: var(--pl-font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-font-size-xs);
+}
+/* An earlier inline version superseded by a newer one in the same chat (ADR 0118 / S18d): a
+   compact, muted pointer — no live frame. */
+.artifact-ref-chip--superseded {
+  color: var(--pl-color-fg-muted);
 }
 .artifact-ref-chip__kind {
-  margin-left: 4px;
-  padding: 0 6px;
-  border: 1px solid var(--pl-color-border, #2a2a31);
-  border-radius: 999px;
-  color: var(--pl-color-fg-muted, #9a9aa3);
-  font-size: 11px;
+  margin-left: var(--pl-space-1);
+  padding: 0 var(--pl-space-1_5);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
   line-height: 16px;
+}
+
+/* inline artifact host (ADR 0118 D2 / S7b) — the artifact's own embed frame rendered right in
+   the transcript. The card chrome (head, Open in panel, loading / building / resume states) is the
+   DS InlineFrameCard (.pl-frame-card); this wrapper only spaces it in the message flow and stacks
+   the send/openLink notice under it. */
+.artifact-ref-inline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+  max-width: 100%;
+  margin: var(--pl-space-1) 0;
+}
+/* Frame focus guard (ADR 0118, #4076; frameFocusGuard.ts). An inactive hosted frame keeps
+   running under a transparent click-catcher; the first press activates it. A frame that took
+   keyboard focus on its own is replaced by the quarantine notice. */
+.frame-guard {
+  position: relative;
+}
+.frame-guard__shield {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+}
+.frame-guard__hint {
+  position: absolute;
+  top: var(--pl-space-1);
+  right: var(--pl-space-1);
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: var(--pl-color-bg-raised);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.frame-guard__shield:hover .frame-guard__hint {
+  opacity: 1;
+}
+.frame-guard__quarantine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pl-space-2);
+  padding: var(--pl-space-2);
+  border-radius: var(--pl-radius);
+  background: var(--pl-color-bg-inset);
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-xs);
+}
+.frame-guard__run {
+  flex: 0 0 auto;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius-pill);
+  background: transparent;
+  color: var(--pl-color-fg-muted);
+  font-size: var(--pl-font-size-2xs);
+  cursor: pointer;
+}
+.frame-guard__run:hover {
+  color: var(--pl-color-fg);
+  border-color: var(--pl-color-accent);
+}
+.frame-guard__run:focus-visible {
+  outline: 2px solid var(--pl-color-accent);
+  outline-offset: 1px;
 }

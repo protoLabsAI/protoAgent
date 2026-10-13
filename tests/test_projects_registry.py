@@ -14,6 +14,8 @@ import pytest
 from graph.config import LangGraphConfig
 from graph.config_io import config_to_dict
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 def _p(posix: str) -> str:
     """A platform-absolute fixture path from a POSIX-flavored literal.

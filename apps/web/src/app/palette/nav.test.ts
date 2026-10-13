@@ -137,3 +137,31 @@ describe("setPaletteNavigator — the launcher's window handoff", () => {
     expect(useUI.getState().surface).toBe("memory");
   });
 });
+
+describe("openView — a dock stored at 0 px opens at a usable size (#4076)", () => {
+  it("right dock collapsed at width 0 reopens at the default width", () => {
+    useUI.setState({ rightWidth: 0, rightCollapsed: true });
+    openView("work");
+    const s = useUI.getState();
+    expect(s.rightCollapsed).toBe(false);
+    expect(s.rightWidth).toBe(360);
+  });
+
+  it("a right width below the DS minimum is restored; a sane one is left alone", () => {
+    useUI.setState({ rightWidth: 120, rightCollapsed: true });
+    openView("work");
+    expect(useUI.getState().rightWidth).toBe(360);
+    useUI.setState({ rightWidth: 540, rightCollapsed: true });
+    openView("work");
+    expect(useUI.getState().rightWidth).toBe(540); // the operator's own width wins
+  });
+
+  it("bottom dock collapsed at height 0 reopens at the default height", () => {
+    useUI.setState({ bottomHeight: 0, bottomCollapsed: true });
+    openView("logs");
+    expect(useUI.getState().bottomHeight).toBe(240);
+    useUI.setState({ bottomHeight: 300, bottomCollapsed: true });
+    openView("logs");
+    expect(useUI.getState().bottomHeight).toBe(300);
+  });
+});

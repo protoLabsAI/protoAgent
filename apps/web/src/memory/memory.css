@@ -12,8 +12,8 @@
 
 .memory-panel-hint {
   margin: 0;
-  font-size: 0.82rem;
-  color: var(--pl-color-text-muted, #8a8f98);
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg-muted);
 }
 
 .memory-list {
@@ -55,18 +55,18 @@
 }
 
 .memory-row-title code {
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   overflow-wrap: anywhere;
 }
 
 .memory-row-topic {
-  font-size: 0.85rem;
+  font-size: var(--pl-font-size-sm);
   overflow-wrap: anywhere;
 }
 
 .memory-row-meta {
-  font-size: 0.75rem;
-  color: var(--pl-color-text-muted, #8a8f98);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
 }
 
 .memory-edit-form {
@@ -85,7 +85,7 @@
 .memory-session-pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 0.82rem;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.5;
 }
 
@@ -112,14 +112,14 @@
 }
 
 .memory-none {
-  color: var(--pl-color-text-muted, #8a8f98);
+  color: var(--pl-color-fg-muted);
 }
 
 /* Injection detail dialog — the resolved items, grouped + scannable. */
 .memory-detail-meta {
   margin: 0 0 0.75rem;
-  font-size: 0.78rem;
-  color: var(--pl-color-text-muted, #8a8f98);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
 }
 
 .memory-detail {
@@ -130,9 +130,9 @@
 
 .memory-detail-group h4 {
   margin: 0 0 0.4rem;
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   font-weight: 600;
-  color: var(--pl-color-text-muted, #8a8f98);
+  color: var(--pl-color-fg-muted);
 }
 
 .memory-detail-group ul {
@@ -148,7 +148,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
-  font-size: 0.85rem;
+  font-size: var(--pl-font-size-sm);
   overflow-wrap: anywhere;
 }
 
@@ -157,17 +157,17 @@
 }
 
 .memory-detail-source {
-  font-size: 0.78rem;
-  color: var(--pl-color-text-muted, #8a8f98);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
 }
 
 .memory-detail-snippet {
-  color: var(--pl-color-text, inherit);
+  color: var(--pl-color-fg);
 }
 
 .memory-detail-gone {
   font-style: italic;
-  color: var(--pl-color-text-muted, #8a8f98);
+  color: var(--pl-color-fg-muted);
 }
 
 /* Header · tab strip · scrolling body. The tab strip is a direct child of the

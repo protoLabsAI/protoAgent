@@ -2,10 +2,9 @@
 /* Moved from app/theme.css (#832) — settings-form chrome rendered by
    SettingsCategory + the DelegatesSection footer. Banners are DS Alert (pl-alert)
    now; only the stage spacing lives here. Left in theme.css: .settings-status
-   (also rendered by SchedulePanel) and the .settings-help-link / .setup-link rule
-   (it pairs the setup wizard's link styling). */
+   (also rendered by SchedulePanel) and the .settings-help-link rule. */
 .settings-banner {
-  margin-bottom: 10px;
+  margin-bottom: var(--pl-space-2_5);
 }
 /* QuickSetting dialog (ADR 0048) — contextual settings shortcut. Reuses the
    .setting-row chrome; the dialog just stacks the rows with breathing room. */
@@ -22,7 +21,7 @@
 .quick-setting-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--pl-space-4);
 }
 /* Chip trigger (summaryKey) — e.g. the model alias on the chat composer. Truncate
    so a long alias can't blow out its host row. */
@@ -43,8 +42,8 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
-  padding: 16px 4px;
+  gap: var(--pl-space-1_5);
+  padding: var(--pl-space-4) var(--pl-space-1);
 }
 
 /* ── Settings shell: DS SideNav rail + content ───────────────────────────────
@@ -56,9 +55,9 @@
   flex: 1 1 0;
   min-height: 0;
   display: flex;
-  gap: 14px;
+  gap: var(--pl-space-4);
   /* Breathing room on the left so the sidenav + panel don't hug the rail edge. */
-  padding-left: 16px;
+  padding-left: var(--pl-space-4);
 }
 /* The rail column — fixed width (SideNav renders without `responsive`, so it stays a
    vertical tablist and never collapses to the <select>; see SettingsSurface). */
@@ -66,7 +65,7 @@
   flex: 0 0 200px;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 12px;
+  padding-right: var(--pl-space-3);
   border-right: 1px solid var(--pl-color-border);
 }
 /* The content column hosts the section's full .stage-panel; let it own its scroll.
@@ -86,9 +85,9 @@
 @container settings-content (max-width: 560px) {
   .settings-content .setting-row {
     grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
+    gap: var(--pl-space-2_5);
     align-items: stretch;
-    padding: 16px 6px;
+    padding: var(--pl-space-4) var(--pl-space-1_5);
   }
   .settings-content .setting-control { width: 100%; }
   .settings-content .setting-input { max-width: none; }
@@ -102,7 +101,7 @@
 @media (max-width: 767px) {
   .settings-shell {
     flex-direction: column;
-    gap: 10px;
+    gap: var(--pl-space-2_5);
     padding-left: 0;
   }
   .settings-shell > .pl-sidenav-wrap {
@@ -110,7 +109,7 @@
     width: 100%;
     overflow: visible;
     padding-right: 0;
-    padding-bottom: 10px;
+    padding-bottom: var(--pl-space-2_5);
     border-right: none;
     border-bottom: 1px solid var(--pl-color-border);
   }
@@ -125,19 +124,20 @@
 /* Collapsible field groups (DS Accordion, 0.29). Drop the default muted panel
    tint so field labels render at full contrast, and let the dirty-count badge sit
    inline in the trigger title. */
-.settings-groups { margin-bottom: 16px; }
+.settings-groups { margin-bottom: var(--pl-space-4); }
 .settings-groups .pl-accordion__panel { color: var(--pl-color-fg); padding-top: var(--pl-space-2); }
 .settings-group-head {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 
 /* The one-stop-shop Settings overlay + the theme quick dialog (ADR 0048) embed a
-   full surface inside a dialog — drop the dialog's own body padding (the panels
-   carry their own chrome). The settings overlay uses a FIXED-height, non-scrolling
-   body so the shell's two columns scroll independently (rail stays put, content
-   scrolls); the theme quick dialog keeps the simple scroll-the-whole-body behavior.
+   full surface inside a dialog — the body padding now comes from `<Dialog padding="none">`
+   (the panels carry their own chrome), so these rules only set the sizing/scroll
+   behavior. The settings overlay uses a FIXED-height, non-scrolling body so the
+   shell's two columns scroll independently (rail stays put, content scrolls); the
+   theme quick dialog keeps the simple scroll-the-whole-body behavior.
 
    `>` NOT a descendant combinator (#2019). A descendant selector also matched the
    .pl-dialog__body of any dialog opened from INSIDE Settings (Add Delegate, plugin
@@ -149,7 +149,6 @@
    .pl-dialog itself (cx("pl-dialog", className)), which travels with the portal, so
    the body they target is always a direct child either way. */
 .settings-overlay > .pl-dialog__body {
-  padding: 0;
   height: 80vh;
   height: 80dvh; /* dvh so the overlay fits the visible viewport on mobile */
   overflow: hidden;
@@ -160,7 +159,6 @@
   flex-direction: column;
 }
 .theme-quick-dialog > .pl-dialog__body {
-  padding: 0;
   max-height: 80vh;
   max-height: 80dvh;
   min-height: 50vh;
@@ -176,11 +174,11 @@
 .settings-group-actions {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-top: 10px;
+  gap: var(--pl-space-4);
+  margin-top: var(--pl-space-2_5);
 }
 .settings-inline-status {
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 .setting-row {
@@ -188,26 +186,26 @@
   grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
   gap: 28px;
   align-items: center;
-  padding: 26px 6px;
+  padding: 26px var(--pl-space-1_5);
   border-bottom: 1px solid var(--pl-color-border);
 }
 .setting-row.dirty {
   /* subtle marker that this field has unsaved edits */
-  box-shadow: inset 2px 0 0 var(--brand-violet);
-  padding-left: 10px;
+  box-shadow: inset 2px 0 0 var(--pl-color-accent);
+  padding-left: var(--pl-space-2_5);
 }
 .setting-meta { min-width: 0; }
 .setting-label {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 0.86rem;
+  gap: var(--pl-space-2);
+  font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg);
 }
 /* .setting-restart retired — the "restart" / "box-shared" markers are DS <Badge>s now. */
 .setting-desc {
-  margin: 3px 0 0;
-  font-size: 0.76rem;
+  margin: var(--pl-space-1) 0 0;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   color: var(--pl-color-fg-subtle);
 }
@@ -215,14 +213,14 @@
 .setting-inheritance {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 5px 0 0;
+  gap: var(--pl-space-2);
+  margin: var(--pl-space-1) 0 0;
 }
 /* "Saving overrides the Global default for this agent" — shown when a still-inherited
    box-shared field is edited in the Workspace view (PR4). */
 .setting-override-note {
-  margin: 4px 0 0;
-  font-size: 0.74rem;
+  margin: var(--pl-space-1) 0 0;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.4;
   color: var(--pl-color-status-warning);
 }
@@ -235,9 +233,9 @@
 .setting-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--pl-space-2);
   font-family: var(--pl-font-mono);
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
@@ -248,7 +246,7 @@
 .settings-overlay-title {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .settings-scope-badge {
   display: inline-flex;
@@ -260,40 +258,40 @@
 .secrets-status {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   border-top: 1px solid var(--pl-color-border);
-  padding-top: 14px;
-  margin-top: 6px;
+  padding-top: var(--pl-space-4);
+  margin-top: var(--pl-space-1_5);
 }
 .secrets-status-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--pl-space-2);
   flex-wrap: wrap;
 }
 .secrets-status-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--pl-space-2);
 }
 .secrets-status-meta {
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
 }
 .secrets-status-vars {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .secrets-status-vars code {
   font-family: var(--pl-font-mono);
-  font-size: 0.72rem;
-  padding: 2px 6px;
+  font-size: var(--pl-font-size-xs);
+  padding: var(--pl-space-0_5) var(--pl-space-1_5);
   border: 1px solid var(--pl-color-border);
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   color: var(--pl-color-fg-muted);
 }
-.plugin-settings-dialog .pl-tabs-wrap { margin-bottom: 12px; }
+.plugin-settings-dialog .pl-tabs-wrap { margin-bottom: var(--pl-space-3); }
 .plugin-configure-view { min-height: min(60vh, 560px); display: flex; }
 .plugin-configure-view > .plugin-view--embedded {
   flex: 1;

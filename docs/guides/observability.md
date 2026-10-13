@@ -59,10 +59,23 @@ restart, not a reload.
 
 ### What gets traced
 
-- Each A2A task → a root span named `a2a-stream` (the name to filter on in Langfuse — it is set at `server/chat.py::_run_turn_stream` and pinned by `tests/test_tracing.py`)
+- Each A2A task → a root span named `a2a-stream` (the name to filter on in Langfuse — it is set at `server/chat.py::_chat_langgraph_stream_impl` and pinned by `tests/test_tracing.py`)
 - Each LangGraph run → a child span with tool calls + LLM calls nested beneath
 - Each subagent delegation → a nested span under the parent's
 - Each tool call → a `tool:<name>` observation with args + result preview + duration
+- Each ACP coding-agent run → an `acp:<delegate>` agent span with its brief, reply (or `[failed] <reason>`), plan, and one `tool:` span per coder tool call
+
+### Coding-agent model calls (Claude Code)
+
+A Claude Code coder (`claude-agent-acp`) calls its model itself, so no gateway or middleware sees those calls. While tracing is on, protoAgent spawns it with Claude Code's native OpenTelemetry tracing (beta), pointed at a **local relay** (`observability/otlp_relay.py`, `127.0.0.1` only) that forwards to your Langfuse project. The coder's own spans then nest under the run's `acp:` span: `claude_code.interaction` per turn, a `claude_code.llm_request` **generation per model call** (model, tokens, cost, time to first token, stop reason), and `claude_code.tool` spans.
+
+The relay does three things before anything reaches Langfuse:
+
+- **Strips account identity.** Claude Code stamps `user.email`, `organization.id` and account ids on every span and offers no switch for the email or org. The relay drops them, and redacts the remaining string attributes.
+- **Maps usage.** Claude Code's token attributes become `gen_ai.usage.*`, so Langfuse shows per-call usage and computes per-call cost. The run's agent-reported turn totals go in the `acp:` span's metadata (`reported_usage`, `reported_cost_usd`), not a second generation, so spend isn't counted twice. If no model-call span arrives for a turn within 45 seconds (an older Claude Code, an export Langfuse rejected), the relay records those totals as one `acp:<delegate>-model` generation instead, so the cost is never silently lost.
+- **Keeps turns apart.** A pooled coder process serves many turns but gets its trace context once, at spawn; the relay moves each later turn's spans into that turn's trace.
+
+The coder process never sees your Langfuse keys, only a per-process relay URL. Prompt and tool content stay off (Claude Code's `OTEL_LOG_*` flags are not set). To turn this off, set `PROTOAGENT_ACP_NATIVE_TRACING=0` in the agent's environment.
 
 ### Cross-agent trace propagation
 
@@ -108,7 +121,7 @@ my_agent_tool_calls_total{tool_name="web_search",success="True"} 17
 my_agent_active_sessions 3
 ```
 
-The LLM series (`*_llm_calls_total`, `*_llm_latency_seconds`, `*_llm_tokens_total`, `*_llm_cache_tokens_total`, `*_llm_cost_usd_total`) are emitted per LLM call from `server._run_turn_stream` (ADR 0006); cache + cost are best-effort and depend on the gateway surfacing prompt-cache token details. Tool series come from `AuditMiddleware`.
+The LLM series (`*_llm_calls_total`, `*_llm_latency_seconds`, `*_llm_tokens_total`, `*_llm_cache_tokens_total`, `*_llm_cost_usd_total`) are emitted per LLM call from `server/turn_stream.py::_run_turn_stream` (ADR 0006); cache + cost are best-effort and depend on the gateway surfacing prompt-cache token details. Tool series come from `AuditMiddleware`.
 
 Example Prometheus scrape config:
 
@@ -127,7 +140,7 @@ scrape_configs:
 
 Prometheus is live-scrape-only and Langfuse is opt-in/external — so protoAgent also keeps a **durable, queryable per-turn rollup** of its own (ADR 0006 Slice 2). One row is written per terminal turn leg (completed / failed / canceled / parked) — from either turn driver through the shared writer `server/turn_telemetry.py::record_turn`, plus one per CLI coding-agent run since #3015 — with accumulated token usage (incl. prompt-cache), USD cost, wall-clock duration, and LLM-call + tool-call counts. This is the substrate for "what was expensive/slow over time" and the self-improving flywheel.
 
-ON by default (one cheap write per turn). The SQLite path follows the usual `/sandbox` → `~/.protoagent` fallback and is instance-scoped (ADR 0004). Disable or relocate via config:
+ON by default (one cheap write per turn). The default SQLite path is `<instance_root>/telemetry.db` (ADR 0065). Disable or relocate via config:
 
 ```yaml
 telemetry:

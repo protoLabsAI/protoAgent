@@ -47,7 +47,7 @@ const ORIGIN: Record<string, { icon: typeof Clock; label: string }> = {
 // inbox priority tier → tone class (shared with the completed-entry priority badge).
 const PRIORITY_TONE: Record<string, string> = { now: "now", next: "next", later: "later" };
 
-function Badge({ entry }: { entry: ActivityEntry }) {
+export function OriginProvenance({ entry }: { entry: ActivityEntry }) {
   const o = ORIGIN[entry.origin] ?? { icon: Zap, label: entry.origin || "agent" };
   const Icon = o.icon;
   return (
@@ -258,7 +258,7 @@ export function ActivitySurface() {
             data-state={e.state}
           >
             <div className="activity-entry-head">
-              <Badge entry={e} />
+              <OriginProvenance entry={e} />
               {/* Open the full entry in the shared full-screen reader (ADR 0062) —
                   the same view the chat report card opens. */}
               <button

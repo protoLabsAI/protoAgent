@@ -22,6 +22,8 @@ from infra.proc import (
     terminate_tree,
 )
 
+pytestmark = pytest.mark.platform_sensitive
+
 _IS_WINDOWS = os.name == "nt"
 
 # A child that spawns a grandchild, records its PID, then sleeps — the shape

@@ -131,8 +131,17 @@ describe("the quota latch: evict → retry → latch", () => {
     local.setItem("plugin.hog", big(480));
     writeKey("local", "protoagent.chat.sessions", big(100));
     expect(storagePressure().state).toBe("failing");
-    window.dispatchEvent(new StorageEvent("storage", { key: "plugin.hog", newValue: null }));
+    window.dispatchEvent(new StorageEvent("storage", { key: "plugin.hog", oldValue: big(480), newValue: null }));
     expect(storagePressure().state).toBe("ok");
+  });
+
+  it("does not hide a quota warning after a no-op removal or a growing cross-tab write", () => {
+    local.setItem("plugin.hog", big(480));
+    writeKey("local", "protoagent.chat.sessions", big(100));
+    removeKey("local", "absent");
+    expect(storagePressure().state).toBe("failing");
+    window.dispatchEvent(new StorageEvent("storage", { key: "other", oldValue: "a", newValue: "ab" }));
+    expect(storagePressure().state).toBe("failing");
   });
 
   it("releases the latch when a later eviction frees space", () => {
@@ -181,13 +190,13 @@ describe("the latch never blocks a write that frees space (review r1)", () => {
     expect(writeKey("local", "protoagent.ui", "{}")).toEqual({ ok: true }); // layout saves again
   });
 
-  it("an equal-size rewrite also goes through (usage doesn't grow)", () => {
+  it("an equal-size rewrite goes through without clearing the quota warning", () => {
     local.setItem("protoagent.ui", big(100));
     local.setItem("plugin.hog", big(370)); // 988 of 1000 bytes used
     expect(writeKey("local", "protoagent.chat.sessions", big(50)).ok).toBe(false);
     expect(storagePressure().state).toBe("failing");
     expect(writeKey("local", "protoagent.ui", "y".repeat(100))).toEqual({ ok: true });
-    expect(storagePressure().state).toBe("ok");
+    expect(storagePressure().state).toBe("failing");
   });
 
   it("a GROWING evictable write still fails fast while latched", () => {
@@ -213,7 +222,8 @@ describe("eviction isn't re-run for a write that already failed at that size (re
     expect(writeKey("local", "protoagent.inputHistoryish", big(100)).ok).toBe(false); // another key
     expect(hook).toHaveBeenCalledTimes(2);
     // A release (here: a removal) clears the memo — the next failure may evict again.
-    removeKey("local", "protoagent.editor");
+    local.setItem("tiny", "x");
+    removeKey("local", "tiny");
     expect(writeKey("local", "protoagent.keybindings", big(100)).ok).toBe(false);
     expect(hook).toHaveBeenCalledTimes(3);
   });

@@ -605,3 +605,155 @@ async def test_a_short_answer_without_reasoning_still_gets_both_nudges(monkeypat
     out = await _run_with(ping, "Review the diff.")
     assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
     assert len(models[-1].seen) == 3
+
+
+# ── a reasoning-only turn is retried ONCE with thinking off, its loop not replayed ──────
+#
+# protoAgent#4108 on Vera, 2026-10-10: `find_correctness` and `find_removed_behavior` each
+# ended reasoning-only (45k / 87k chars, `content: ""`). The gateway's own record of the
+# reasoning shows a degenerate loop — the same paragraph 20+ times ("Now let me think about
+# whether there are any other behavioral changes I might have missed.") — closed by a
+# literal `<|im_end|>` sampled INSIDE the think block (Qwen3.8 EOS-in-think). No findings
+# JSON anywhere in it. The nudge then round-tripped that whole loop back as the turn's
+# `reasoning_content` (the retry's input grew by exactly the failed turn's output tokens),
+# with thinking still on, and the model continued the SAME paragraph word for word.
+
+
+class _ThinkingModel(_ScriptedModel):
+    """A scripted model on a thinking gateway slot: records each call's bind kwargs."""
+
+    extra_body: dict = {}
+    binds: list = []
+
+    def bind_tools(self, tools, **kwargs):
+        self.binds.append(dict(kwargs))
+        return self
+
+
+LOOP = "Now let me think about whether there are any other behavioral changes I might have missed.\n\n" * 60
+
+
+def _looping(text: str = "") -> AIMessage:
+    return AIMessage(
+        content=text,
+        additional_kwargs={"reasoning_content": LOOP + "If the version is trimmed, an<|im_end|>"},
+        response_metadata={"finish_reason": "stop"},
+    )
+
+
+def _arm_thinking_finder(monkeypatch, probe, script, *, extra_body=None):
+    ping, models = _arm_finder_like(monkeypatch, probe, script)
+    made: list[_ThinkingModel] = []
+
+    def _create_llm(*_a, **_k):
+        m = _ThinkingModel(
+            script=script,
+            seen=[],
+            binds=[],
+            extra_body=dict(
+                extra_body
+                if extra_body is not None
+                else {"thinking": {"type": "enabled"}, "chat_template_kwargs": {"keep": 1}}
+            ),
+        )
+        made.append(m)
+        return m
+
+    monkeypatch.setattr(agent_mod, "create_llm", _create_llm)
+    return ping, made
+
+
+def _thinking_off(bind_kwargs: dict) -> bool:
+    body = bind_kwargs.get("extra_body") or {}
+    return (body.get("chat_template_kwargs") or {}).get("enable_thinking") is False
+
+
+async def test_a_reasoning_only_turn_is_retried_with_thinking_off(monkeypatch, probe):
+    ping, models = _arm_thinking_finder(monkeypatch, probe, [_looping(), AIMessage(content=DELIVERABLE)])
+    out = await _run_with(ping, "Review the diff.")
+    assert DELIVERABLE in out and "ended without its deliverable" not in out, out
+    model = models[-1]
+    assert len(model.seen) == 2
+    assert not _thinking_off(model.binds[0])  # the lane itself thinks as configured
+    assert _thinking_off(model.binds[1])  # only the retry is asked not to
+    # The switch the live lane honours is the chat-template kwarg (probed through the
+    # gateway: `thinking: {type: disabled}` alone still produced reasoning). Everything the
+    # slot already sends rides along unchanged.
+    body = model.binds[1]["extra_body"]
+    assert body["chat_template_kwargs"]["keep"] == 1
+    assert body["thinking"] == {"type": "disabled"}
+    assert model.extra_body["chat_template_kwargs"] == {"keep": 1}  # the slot itself is not mutated
+
+
+async def test_the_failed_turns_reasoning_is_not_replayed_into_the_retry(monkeypatch, probe):
+    ping, models = _arm_thinking_finder(monkeypatch, probe, [_looping(), AIMessage(content=DELIVERABLE)])
+    await _run_with(ping, "Review the diff.")
+    retry = models[-1].seen[1]
+    assert is_guard_note(retry[-1])
+    failed = [m for m in retry if isinstance(m, AIMessage)][-1]
+    extra = failed.additional_kwargs or {}
+    assert not extra.get("reasoning_content") and not extra.get("reasoning"), "the loop was round-tripped"
+    assert not any("<|im_end|>" in str(m.additional_kwargs) for m in retry)
+
+
+async def test_thinking_comes_back_on_after_the_retry(monkeypatch, probe):
+    # The retry may answer with the tool call it was about to make; the lane then goes on
+    # thinking as configured — thinking-off is one call, not the rest of the run.
+    ping, models = _arm_thinking_finder(monkeypatch, probe, [_looping(), _call(1), AIMessage(content=DELIVERABLE)])
+    out = await _run_with(ping, "Review the diff.")
+    assert DELIVERABLE in out, out
+    binds = models[-1].binds
+    assert [_thinking_off(b) for b in binds] == [False, True, False]
+
+
+async def test_a_retry_that_is_still_reasoning_only_ends_the_lane(monkeypatch, probe):
+    # Bounded: one thinking-off retry per stall, never a loop of them.
+    ping, models = _arm_thinking_finder(monkeypatch, probe, [_looping(), _looping(), _looping()])
+    out = await _run_with(ping, "Review the diff.")
+    assert out.startswith(f"[{PROBE} ended without its deliverable: lane"), out
+    assert len(models[-1].seen) == 2
+
+
+async def test_a_reasoning_only_stall_after_a_plain_nudge_still_gets_the_thinking_off_retry(monkeypatch, probe):
+    # #3584's rule was "a reasoning-only turn after ANY nudge ends the lane" — measured on
+    # thinking-ON nudges that replayed the loop. A thinking-off retry is a different ask.
+    script = [AIMessage(content=NARRATION), _looping(), AIMessage(content=DELIVERABLE)]
+    ping, models = _arm_thinking_finder(monkeypatch, probe, script)
+    out = await _run_with(ping, "Review the diff.")
+    assert DELIVERABLE in out and "ended without its deliverable" not in out, out
+    assert [_thinking_off(b) for b in models[-1].binds] == [False, False, True]
+
+
+async def test_a_slot_with_no_thinking_switch_is_sent_nothing_new(monkeypatch, probe):
+    # A model that is not a thinking gateway slot (no extra_body thinking / template kwargs —
+    # Claude, a plain OpenAI model) must never be sent a chat_template_kwargs it would 400 on.
+    ping, models = _arm_thinking_finder(monkeypatch, probe, [_looping(), AIMessage(content=DELIVERABLE)], extra_body={})
+    out = await _run_with(ping, "Review the diff.")
+    assert DELIVERABLE in out, out
+    assert all("extra_body" not in b for b in models[-1].binds)
+
+
+def test_the_thinking_off_switch_reaches_the_gateway_request_body(monkeypatch):
+    # The real gateway client, configured like Vera (`thinking: enabled`): the retry's
+    # settings must land in the outbound body, and the #2642 reasoning round-trip must stay
+    # armed (DeepSeek 400s an assistant turn without the key once thinking was ever on).
+    from graph.llm import create_llm
+    from graph.middleware.completion_guard import thinking_off_settings
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    cfg = LangGraphConfig()
+    cfg.model_name = "protolabs/smart"
+    cfg.thinking = "enabled"
+    llm = create_llm(cfg)
+    settings = thinking_off_settings(llm)
+    assert settings is not None
+    turn = AIMessage(content="", additional_kwargs={"reasoning_content": "x"})
+    payload = llm._get_request_payload([HumanMessage("hi"), turn, HumanMessage("now")], **settings)
+    body = payload["extra_body"]
+    assert body["chat_template_kwargs"]["enable_thinking"] is False
+    assert body["thinking"] == {"type": "disabled"}
+    assert [m.get("reasoning_content") for m in payload["messages"] if m["role"] == "assistant"] == ["x"]
+    # …and an ordinary call on the same slot is untouched.
+    plain = llm._get_request_payload([HumanMessage("hi")])
+    assert plain["extra_body"]["thinking"] == {"type": "enabled"}
+    assert "enable_thinking" not in (plain["extra_body"].get("chat_template_kwargs") or {})

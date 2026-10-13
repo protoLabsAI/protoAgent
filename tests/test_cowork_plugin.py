@@ -251,7 +251,7 @@ def test_a_fresh_server_with_no_document_libraries_says_so(tmp_path, monkeypatch
 
     import logging
 
-    with caplog.at_level(logging.WARNING, logger="protoagent.plugins"):
+    with caplog.at_level(logging.INFO, logger="protoagent.plugins"):
         res = loader.load_plugins(LangGraphConfig(plugins_enabled=["cowork"]))
     meta = next(m for m in res.meta if m["id"] == "cowork")
     assert meta["loaded"], "the pack still loads — a missing doc library must not disable it"
@@ -259,6 +259,9 @@ def test_a_fresh_server_with_no_document_libraries_says_so(tmp_path, monkeypatch
     # is the one place a BUNDLED plugin's gap exists, since the inventory has no row for it.
     assert meta["deps_missing"] == ["openpyxl", "pypdf", "python-docx", "python-pptx", "reportlab"]
     assert "install-deps cowork" in caplog.text  # …and the log names the fix
+    # …at INFO: an optional-only gap is not a fault, so a bare `uvx … protoagent serve`
+    # must not open with a WARNING about it. (A missing REQUIRED dep still warns.)
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING and "cowork" in r.getMessage()]
     # No GLOBAL banner: every cowork dep is optional-tier, whose contract is "runs
     # without them" — six of the ten skills need none of these libraries.
     assert not [g for g in setup_gaps.active() if g["key"] == loader.DEPS_GAP_KEY]
@@ -462,7 +465,10 @@ def _in_tree_tool_names() -> set[str]:
     roots = ("tools", "graph", "plugins", "knowledge", "scheduler", "server", "operator_api", "runtime")
     names: set[str] = set()
     for root in roots:
-        for path in (REPO / root).rglob("*.py"):
+        source_root = REPO if root == "plugins" else REPO / "src"
+        package = source_root / root
+        assert package.is_dir(), f"missing source directory: {package}"
+        for path in package.rglob("*.py"):
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
             except SyntaxError:  # a fixture of deliberately broken source
@@ -518,7 +524,7 @@ def test_no_skill_backticks_an_unknown_tool_name():
 
 def test_the_watch_args_the_drop_folder_skill_names_are_real_create_watch_params():
     """drop-folder walks the operator through create_watch by parameter name."""
-    source = (REPO / "tools" / "lg_tools.py").read_text(encoding="utf-8")
+    source = (REPO / "src" / "tools" / "scheduler_tools.py").read_text(encoding="utf-8")  # #3830 moved it
     tree = ast.parse(source)
     fn = next(
         node

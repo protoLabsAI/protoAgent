@@ -38,8 +38,21 @@ vi.mock("@protolabsai/ui/primitives", () => ({
 }));
 
 vi.mock("@protolabsai/ui/overlays", () => ({
-  Dialog: ({ open, title, footer, children }: { open: boolean; title?: ReactNode; footer?: ReactNode; children?: ReactNode }) =>
-    open ? h("section", { "data-testid": "update-dialog" }, title, children, footer) : null,
+  // Surface `padding` as a data attr so the card-3b opt-in (padding="roomy") is assertable.
+  Dialog: ({
+    open,
+    title,
+    footer,
+    children,
+    padding,
+  }: {
+    open: boolean;
+    title?: ReactNode;
+    footer?: ReactNode;
+    children?: ReactNode;
+    padding?: string;
+  }) =>
+    open ? h("section", { "data-testid": "update-dialog", "data-padding": padding }, title, children, footer) : null,
   useToast: () => mocks.toast,
 }));
 
@@ -200,6 +213,15 @@ describe("UpdateNotice launch and ambient ownership", () => {
     await vi.waitFor(() => expect(document.querySelector('[data-testid="update-dialog"]')).not.toBeNull());
     expect(document.body.textContent).toContain("Release A");
     expect(mocks.checkUpdate).not.toHaveBeenCalled();
+  });
+
+  it("opts the update dialog into roomy DS Dialog padding (card 3b)", async () => {
+    mocks.launchUpdateResult.mockResolvedValue({ done: true, update: updateA });
+
+    await mountNotice();
+
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="update-dialog"]')).not.toBeNull());
+    expect(document.querySelector('[data-testid="update-dialog"]')?.getAttribute("data-padding")).toBe("roomy");
   });
 
   it("waits past the 10s ambient timer for a slow launch check and still auto-opens it", async () => {

@@ -5,7 +5,7 @@ import { followRefFromTool } from "./followRef";
 import { followCode, openCode } from "./open";
 
 // The code pane's two hooks into the LIVE turn stream (ADR 0112). Called ONLY from
-// ChatSurface's own stream handlers — never from reattach, boot hydration or the palette
+// ChatSessionSlot's own stream handlers — never from reattach, boot hydration or the palette
 // chat — because a component or tool call replayed from history is not the agent pointing at
 // something NOW, and re-opening the pane on every reload would be the pane fighting the
 // operator.

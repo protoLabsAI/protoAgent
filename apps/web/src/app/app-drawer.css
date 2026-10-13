@@ -5,31 +5,31 @@
 .app-drawer-group {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 4px 0;
+  gap: var(--pl-space-0_5);
+  padding: var(--pl-space-1) 0;
 }
 .app-drawer-group + .app-drawer-group {
   border-top: 1px solid var(--pl-color-border);
-  margin-top: 4px;
-  padding-top: 8px;
+  margin-top: var(--pl-space-1);
+  padding-top: var(--pl-space-2);
 }
 .app-drawer-label {
-  font-size: 11px;
+  font-size: var(--pl-font-size-2xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--pl-color-fg-subtle);
-  margin: 0 6px 4px;
+  margin: 0 var(--pl-space-1_5) var(--pl-space-1);
 }
 .app-drawer-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  border-radius: 8px;
+  gap: var(--pl-space-2_5);
+  padding: var(--pl-space-2) var(--pl-space-2_5);
+  border-radius: var(--pl-radius-lg);
   border: 0;
   background: transparent;
   color: var(--pl-color-fg);
-  font-size: 14px;
+  font-size: var(--pl-font-size-base);
   text-align: left;
   text-decoration: none;
   cursor: pointer;
@@ -53,15 +53,15 @@
   flex: 1;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
+  gap: var(--pl-space-2);
+  font-size: var(--pl-font-size-xs);
 }
 .app-drawer-version {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  padding: var(--pl-space-0_5) var(--pl-space-2);
   border: 1px solid var(--pl-color-border);
-  border-radius: 999px;
+  border-radius: var(--pl-radius-pill);
   color: var(--pl-color-fg-subtle);
   font-variant-numeric: tabular-nums;
 }
@@ -89,7 +89,7 @@
    header carries the SESSION title, not the DS Header, so this is where a fleet operator
    sees and switches which agent they're talking to. */
 .app-drawer-identity {
-  padding: 4px 8px 10px;
-  margin-bottom: 4px;
+  padding: var(--pl-space-1) var(--pl-space-2) var(--pl-space-2_5);
+  margin-bottom: var(--pl-space-1);
   border-bottom: 1px solid var(--pl-color-border);
 }

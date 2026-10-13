@@ -135,7 +135,7 @@ Note the message has **no `parts`** — the frame is pure telemetry, which is ex
 
 There is no `total_tokens`; derive it.
 
-**Producer** — `server/chat.py::_run_turn_stream` yields a `("usage", {...})` frame per LLM call (line 793), carrying the cache fields, the per-call `cost_usd` from `observability/pricing.py::cost_usd`, and the *actual* model that served the call. `a2a_impl/executor.py` accumulates them (line 469) and `_terminal_parts` (line 649) builds the fragment via `pa.cost_metadata(...)`. Requires `stream_usage=True` on the client — `graph/llm.py` sets it.
+**Producer** — `server/turn_stream.py::_run_turn_stream` yields a `("usage", {...})` frame per LLM call, carrying the cache fields, the per-call `cost_usd` from `observability/pricing.py::cost_usd`, and the *actual* model that served the call. `a2a_impl/executor.py` accumulates them (line 469) and `_terminal_parts` (line 649) builds the fragment via `pa.cost_metadata(...)`. Requires `stream_usage=True` on the client — `graph/llm.py` sets it.
 
 **Consumers** call `pa.parse_cost(artifact["metadata"])` (or read the URI key directly) and record per-(agent, skill) samples. The consumer keys on the `skill` ID from the card, so **skill IDs must be stable**. The in-repo reference consumer is `evals/client.py::_extract`, which scans both the artifact's and the terminal status message's `metadata`.
 
@@ -216,7 +216,7 @@ This is how a live consumer (the React operator console) watches the agent work:
 | `error` | Error text (on `failed`). |
 | `parentToolCallId` | Present only when the tool ran *inside* a subagent delegation: the parent `task` call's id, so a client can nest the child card under it. Not part of the SDK's `ToolCallPayload` — the executor sets it as an extra key on the fragment (`a2a_impl/executor.py` line 639). |
 
-**Producer** — `server/chat.py::_run_turn_stream` yields structured `("tool_start" | "tool_end", {id, name, input|output, parentId?})` tuples off langchain's `astream_events` (lines 676–745). Values are coerced by `_coerce_tool_value` / `_coerce_tool_output` and truncated. The executor's event loop turns each into a frame via `_tool_call_frame` (`a2a_impl/executor.py` line 606), which returns a `(part, metadata)` pair where **exactly one side is non-`None`**:
+**Producer** — `server/turn_stream.py::_run_turn_stream` yields structured `("tool_start" | "tool_end", {id, name, input|output, parentId?})` tuples off langchain's `astream_events`. Values are coerced by `_coerce_tool_value` / `_coerce_tool_output` (which stay in `server/chat.py`) and truncated. The executor's event loop turns each into a frame via `_tool_call_frame` (`a2a_impl/executor.py` line 606), which returns a `(part, metadata)` pair where **exactly one side is non-`None`**:
 
 - a **dict** payload → `(None, {TOOL_CALL_EXT_URI: {...}})` — the URI-keyed fragment, emitted as a status message with *no* parts;
 - a **plain-string** payload (legacy producers; the goal-mode `🎯 …` notes still take this path) → `(text_part, None)` — a plain text status part, so text-only consumers see progress.
@@ -245,9 +245,97 @@ These are **not** on the agent card and have no SDK helper. They stay MIME-typed
 | `application/vnd.protolabs.reasoning-v1+json` | `WORKING` frames | `{"text": "…"}` — streamed `scratch_pad` "thinking", batched ~24 chars per frame | `a2a_impl/executor.py` line 314 (const at line 57) | `reasoningFromParts` (`api.ts` line 546) |
 | `application/vnd.protolabs.component-v1+json` | `WORKING` frames | `{"component": "table"\|"keyvalue"\|"timeline", "props": {...}}` — ADR 0051 Slice 2 generative components | `a2a_impl/executor.py` line 451; MIME + types in `graph/components.py` line 17 | `componentFromParts` (`api.ts` line 533) |
 | `application/vnd.protolabs.context-v1+json` | terminal artifact | `{contextTokens, enabled?, trigger?, compactionAtTokens?}` — context-window / compaction readout | `a2a_impl/executor.py` line 685 (const at line 646) | `contextFromParts` (`api.ts` line 587) |
+| `application/vnd.protolabs.tool-args-v1+json` | `WORKING` frames | `{id, arg, offset, chunk, done}` — a streamed preview of one tool's declared string argument, decoded incrementally server-side (ADR 0118 D3). **Live-only** (see below). | `a2a_impl/executor.py` (`TOOL_ARGS_MIME` const, `tool_args` branch); produced by `server/turn_stream.py` | S3 console decode (`a2aStream.ts`) |
 | `application/vnd.protolabs.<schema>+json` | terminal artifact | a schema-validated structured skill result, when the caller sent a `skillHint` for a skill declaring an `output_schema` | `ProtoAgentExecutor._append_structured` (line 208), MIME from `pa.skill_result_mime(name)` | any consumer matching the declared MIME off the card's skill |
 
 Reasoning deltas are a *streaming* affordance, but the a2a-sdk `TaskManager` moves every status frame's message into durable `history` — so `a2a_impl/stores.py::coalesce_reasoning_history` (line 240) collapses each contiguous run of reasoning messages into one before the task is saved. Without it a single turn persisted ~700 near-single-word `Message` rows and `tasks/get?historyLength=N` returned word fragments instead of conversation.
+
+### `tool-args-v1` — streamed tool arguments (ADR 0118 D3)
+
+A tool may declare `metadata={"stream_args": "<arg>"}` to opt one **string** argument into live streaming. While the model streams that tool's `tool_call_chunks`, `server/turn_stream.py` accumulates the raw arg JSON per tool-call id and extracts the named value **incrementally on the server** with a small partial-JSON string scanner — it decodes `\n`, `\"`, `\\` and `\uXXXX`, holds back an unterminated trailing escape until more arrives, accepts the arg in any key position, and emits **nothing** for a non-string value. The console never parses partial JSON; it receives already-decoded substrings.
+
+The producer yields `("tool_args", {id, arg, offset, chunk, done})` frames, flushed at **≤4 Hz or every 2 KB** (whichever first) plus a final `done: true`; streaming stops silently once the value passes the artifact size cap. The executor relays each as a `tool-args-v1` DataPart on a `WORKING` frame.
+
+| Field | What |
+|---|---|
+| `id` | The tool-call id — the same id the eventual `tool-call-v1` card carries, so a consumer binds the preview to its tool card. |
+| `arg` | The streamed argument's name (the tool's declared `stream_args` value, e.g. `"code"`). |
+| `offset` | Character offset into the decoded value where `chunk` begins — frames are contiguous, so `offset` of frame *n+1* equals `offset + len(chunk)` of frame *n*. |
+| `chunk` | The newly decoded substring of the value. |
+| `done` | `true` on the final frame for this arg (the value's closing quote was reached, or the model call ended). |
+
+It is **live-only**: previews are **never persisted to task history and never replayed** on resubscribe or hydration. The executor emits them on `WORKING` status frames, so the a2a-sdk `TaskManager` would move them into durable `history` like any other status message — `a2a_impl/stores.py::drop_tool_args_history` removes them on every save, so a reattach or reload replays the finished artifact, never a stale partial. Being template-local content, `tool-args-v1` is **not** declared on the agent card; a consumer that ignores it still gets the finished tool-call card and the answer. There is no change to `tool-call-v1`.
+
+### Frame components: the host-mediated read channel (ADR 0118 D5, #4143)
+
+A `component-v1` kind a plugin renders in a **frame** (`register_component(..., frame=...)`) runs
+in a sandboxed, opaque-origin iframe with no bearer. It talks to the console host over
+`postMessage` and never over A2A. The host-to-frame messages are `protoComponent:init {props, theme, nonce}`
+and `protoComponent:theme`. The frame-to-host messages are `protoComponent:height`, plus
+`protoComponent:send` and `protoComponent:openLink` (ADR 0118 D4). For **live data**, a kind
+declares which of its plugin's own GET routes it reads:
+
+```python
+registry.register_component(
+    "board-card", validate_card, frame="card.html", reads=["features", "features/*", "status"]
+)
+```
+
+Patterns are relative to `/api/plugins/<id>/`. `*` matches exactly one path segment. Patterns
+that escape the prefix, or that contain `..`, a query string or `**`, are logged and skipped, and
+`reads` requires `frame`. `GET /api/components` reports each kind as
+`{name, plugin, frame_url, reads}`.
+
+| Direction | Message | Fields |
+|---|---|---|
+| frame to host | `protoComponent:ready` | **`pair`**: the value of `#pair=<32 hex>` in the frame's own `location.hash`. Post it **exactly once**, when the script runs. |
+| host to frame | `protoComponent:init` | `props`, `theme`, and **`nonce`**: this mount's capability (32 hex chars). It is sent **once**, only in answer to a correctly paired `ready`, and is never re-posted. |
+| frame to host | `protoComponent:read` | `cid` (number, echoed back), `path` (relative to `/api/plugins/<plugin>/`, e.g. `features/bd-vbyd.24`), **`nonce`** (echoed from `init`). An optional `method` other than `GET` is refused. |
+| host to frame | `protoComponent:readResult` | `cid`, `ok`, `status` (the HTTP status, or `0` when the host refused before making a request), and either `json` (the parsed body, when `ok`) or `error` (a short reason). |
+
+**The handshake.** The host loads the frame at `<frame_url>#pair=<pair>`, a fresh secret for each
+mount. A fragment never reaches a server and is dropped by any new navigation, so only the
+declared page can read it.
+
+1. The frame reads `pair` from `location.hash` and posts `{type: "protoComponent:ready", pair}`
+   once. After that it may clear the fragment with `history.replaceState`.
+2. The host answers with exactly one `{type: "protoComponent:init", props, theme, nonce}`.
+3. The frame echoes `nonce` on every `protoComponent:read`, `protoComponent:send` and
+   `protoComponent:openLink`. A message without the current nonce is refused with
+   `"missing or invalid nonce"`.
+
+Any sign of a second document revokes the mount immediately and unloads the frame for a
+"navigated away" notice: a second `load`, a second `ready`, or a `ready` with a missing or wrong
+`pair`. Reload mounts a fresh frame with a new `pair`. A page that replaces the plugin page
+therefore can't inherit its reads or its send trust. A frame that never sends `ready` never
+receives `init`.
+
+A minimal frame script:
+
+```js
+var pair = (location.hash.match(/pair=([0-9a-f]+)/) || [])[1];
+var nonce = null;
+addEventListener("message", function (e) {
+  if (e.source !== parent || !e.data) return;
+  if (e.data.type === "protoComponent:init") { nonce = e.data.nonce; /* render e.data.props */ }
+});
+parent.postMessage({ type: "protoComponent:ready", pair: pair }, "*");
+// later: parent.postMessage({ type: "protoComponent:read", cid: 1, path: "features/x", nonce: nonce }, "*");
+```
+
+The host serves a read only when all of these hold:
+
+- The message came from that frame's own window and carries the mount's `nonce`.
+- The path matches a declared pattern.
+- The frame has at most 4 reads per second and 2 in flight.
+- The frame is mounted and visible (otherwise the error is `paused: …`).
+- The response is JSON of at most 256 KB (streamed and cut off at the cap), with no redirect,
+  within a 10 s timeout. A non-2xx error passes its `detail` through only when the error body is
+  JSON; otherwise the error is `HTTP <status>`.
+
+The host makes the GET with the operator's auth. Only the JSON, or the reason, reaches the frame:
+never the bearer, the headers or a non-JSON body. Reads are the only thing this channel does.
+Mutations go through `protoComponent:send`, which is a confirmed, visible user turn.
 
 ## Fork-only declarative extensions
 

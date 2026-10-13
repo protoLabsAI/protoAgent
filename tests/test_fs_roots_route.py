@@ -20,6 +20,8 @@ from operator_api.browse_routes import register_browse_routes
 from runtime.state import STATE
 from tools.fs_tools import _RegistryRef
 
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def client(monkeypatch):

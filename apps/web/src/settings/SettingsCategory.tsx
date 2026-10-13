@@ -17,6 +17,7 @@ import { api, isHostConsole } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { PluginSettingsTabDescriptor, SettingsField, SettingsGroup } from "../lib/types";
+import { PathListPicker } from "./PathListPicker";
 import { PathPicker } from "./PathPicker";
 import { fieldVisible } from "./visibility";
 
@@ -692,6 +693,19 @@ export function SettingInput({ field, value, onChange }: { field: SettingsField;
         rows={4}
         value={typeof value === "string" ? value : value === undefined || value === null ? "" : String(value)}
         onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+  if (field.type === "path" && field.multiple) {
+    // Several paths (`multiple: true`, e.g. a plugin's data folders): one row per path,
+    // each with its own Browse…, saved as ONE "\n"-joined string like the single box.
+    return (
+      <PathListPicker
+        id={id}
+        label={field.label}
+        kind={field.path_kind === "file" ? "file" : "dir"}
+        value={typeof value === "string" ? value : ""}
+        onChange={onChange}
       />
     );
   }

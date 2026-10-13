@@ -389,6 +389,7 @@ function ProviderConnectionDialog({
       onClose={close}
       title={editing ? `Edit ${initial.display}` : "Add a connection"}
       width="min(520px, 94vw)"
+      padding="roomy"
       className="provider-dialog"
       footer={
         <>
@@ -567,6 +568,7 @@ function ResolveReferencesDialog({
       onClose={close}
       title={`Remove ${provider.display}`}
       width="min(560px, 94vw)"
+      padding="roomy"
       className="provider-dialog"
       footer={
         <>

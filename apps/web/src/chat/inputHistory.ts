@@ -1,7 +1,7 @@
 // Terminal-style chat input history (#1496) — the last N submitted messages, so the
 // composer can recall/edit/resend them with ↑/↓ like a shell (readline). Persisted in
 // localStorage and shared across chat slots (one ring, like a terminal's history file);
-// nav state (where you are in the ring) is per-composer and lives in ChatSurface.
+// nav state (where you are in the ring) is per-composer and lives in ChatSessionSlot.
 //
 // Read `inputHistory()` for the current ring (oldest → newest); call `pushInputHistory()`
 // when a message is submitted. The in-memory cache avoids re-parsing localStorage on every

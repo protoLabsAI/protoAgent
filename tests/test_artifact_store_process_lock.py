@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.platform_sensitive
+
 ROOT = Path(__file__).resolve().parent.parent / "plugins" / "artifact"
 _PKG = "artifact_proc_under_test"
 _HOLD_S = 1.0  # how long a process sits in its read-modify-write window waiting for the other to read
@@ -293,7 +295,7 @@ def test_n_processes_creating_and_editing_concurrently_lose_nothing(art, procs):
     from graph.components import strip_component
 
     reported = sorted(
-        int(strip_component(r).split("version ")[1].rstrip(".")) for r in flat if r.startswith("Updated")
+        int(strip_component(r).split("version ")[1].split(".")[0]) for r in flat if r.startswith("Updated")
     )
     assert reported == list(range(2, 2 + n * (rounds - 1)))
 

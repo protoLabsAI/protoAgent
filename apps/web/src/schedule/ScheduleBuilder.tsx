@@ -1,5 +1,6 @@
 import { DropdownSelect, Input } from "@protolabsai/ui/forms";
 import { Tabs } from "@protolabsai/ui/navigation";
+import { Button } from "@protolabsai/ui/primitives";
 import { AlertTriangle } from "lucide-react";
 import { type FocusEvent, useEffect, useMemo, useState } from "react";
 
@@ -203,10 +204,10 @@ export function ScheduleBuilder({
             <span className="field-label-row">
               {freq === "hourly" ? "Minute" : "Time"}
               {freq !== "hourly" && (
-                <button type="button" className="hour-toggle" onClick={() => setHour12((v) => !v)}
+                <Button type="button" variant="ghost" size="xs" onClick={() => setHour12((v) => !v)}
                         title="Switch between 24-hour and 12-hour input">
                   {hour12 ? "12h" : "24h"}
-                </button>
+                </Button>
               )}
             </span>
             {hour12 && freq !== "hourly" ? (

@@ -1,6 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { NO_MEMORY_CHANGE, canClearSession, retireChatSession } from "./sessionRetirement";
+import { NO_MEMORY_CHANGE, canClearSession, defaultMemoryChoice, retireChatSession } from "./sessionRetirement";
+
+describe("defaultMemoryChoice (#4053)", () => {
+  it("harvests a regular chat by default, never forgetting", () => {
+    expect(defaultMemoryChoice(false)).toEqual({ harvest: true, forget: false });
+    // No flag given (the common call shape) is treated as a regular chat.
+    expect(defaultMemoryChoice()).toEqual({ harvest: true, forget: false });
+  });
+
+  it("never harvests an incognito chat", () => {
+    expect(defaultMemoryChoice(true)).toEqual({ harvest: false, forget: false });
+  });
+
+  it("is distinct from NO_MEMORY_CHANGE, which still touches nothing (goal-tab closes)", () => {
+    expect(NO_MEMORY_CHANGE).toEqual({ harvest: false, forget: false });
+    expect(defaultMemoryChoice(false)).not.toEqual(NO_MEMORY_CHANGE);
+  });
+});
 
 describe("retireChatSession", () => {
   it("removes the local handle only after durable retirement succeeds", async () => {

@@ -30,7 +30,11 @@ function titleOf(sessionId: string): string | undefined {
  */
 export async function exportChatToFile(sessionId: string): Promise<void> {
   const title = titleOf(sessionId);
-  const append = (m: ChatMessage) => chatStore.updateMessages(sessionId, (messages) => [...messages, m]);
+  const append = (m: ChatMessage) =>
+    chatStore.updateMessages(sessionId, [
+      ...(chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)?.messages ?? []),
+      m,
+    ]);
 
   try {
     const res = await api.exportChatSession(sessionId, title);

@@ -57,6 +57,35 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* A card whose turn is PAUSED on the operator (#3946): the DS frame is rendered "done"
+   for want of a paused glyph, so hide that glyph; the header's "waiting for you" chip
+   carries the state. */
+.tool-paused .pl-toolcard__status {
+  display: none;
+}
+.tool-waiting {
+  color: var(--pl-color-fg-subtle);
+  white-space: nowrap;
+}
+.tool-waiting svg {
+  vertical-align: -1px;
+}
+/* A call still in flight when its turn was STOPPED (#4076): settled, but it never returned —
+   so no ✓. Same move as .tool-paused: hide the DS glyph (the summary chip's too, when the
+   fold holds a stopped call) and let the header's neutral "stopped" chip carry the state.
+   Scoped to the card's / chip's OWN head so a folded sibling that did finish keeps its ✓. */
+.pl-toolcard.tool-stopped > .pl-toolcard__head-row .pl-toolcard__status,
+.pl-toolcard-summary.tool-stopped > .pl-toolcard-summary__head > .pl-toolcard__status {
+  display: none;
+}
+.tool-stopped-label {
+  color: var(--pl-color-fg-subtle);
+  white-space: nowrap;
+}
+.tool-stopped-label svg {
+  vertical-align: -1px;
+}
+
 /* Estimated context cost on a SETTLED card (toolCost.ts, #2282). Like .tool-elapsed it
    only appears past a threshold, so its presence is itself the signal — the operator is
    looking for the expensive call, not reading a number off every row. Same subtle
@@ -78,7 +107,7 @@
 .reasoning-text {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 0.82rem;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.55;
   color: var(--pl-color-fg-muted);
   max-height: 340px;
@@ -112,7 +141,7 @@
 .work-text {
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 0.85rem;
+  font-size: var(--pl-font-size-sm);
   line-height: 1.5;
   color: var(--pl-color-fg-muted);
 }
@@ -122,7 +151,7 @@
 .work-stats {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--pl-space-2_5);
 }
 .work-stat-label {
   font-weight: 500;
@@ -130,7 +159,7 @@
 .work-stat {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--pl-space-1);
   color: var(--pl-color-fg-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -142,8 +171,8 @@
 .work-breakdown {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  font-size: 0.78rem;
+  gap: var(--pl-space-0_5);
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   max-width: 280px;
 }
@@ -161,7 +190,7 @@
   min-height: 30px; /* ~ one collapsed ToolCard head row */
 }
 .tool-spotlight > * {
-  animation: tool-spotlight-in var(--pl-motion-base, 160ms) var(--pl-motion-ease, ease) both;
+  animation: tool-spotlight-in var(--pl-motion-base) var(--pl-motion-ease) both;
 }
 @keyframes tool-spotlight-in {
   from {
@@ -193,11 +222,11 @@
 .tool-cancel-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 1px 7px;
+  gap: var(--pl-space-1);
+  padding: 1px var(--pl-space-2);
   width: auto;
-  border-radius: 6px;
-  font-size: 0.72rem;
+  border-radius: var(--pl-radius-md);
+  font-size: var(--pl-font-size-xs);
   font-weight: 500;
   line-height: 1.6;
   color: var(--pl-color-fg-subtle);
@@ -218,17 +247,17 @@
 .tool-manage-btn {
   display: inline-flex;
   align-items: center;
-  padding: 2px;
+  padding: var(--pl-space-0_5);
   width: auto;
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   color: var(--pl-color-fg-subtle);
   border: 1px solid transparent;
   opacity: 0.7;
 }
 .tool-manage-btn:hover {
-  color: var(--pl-color-accent, #7c8cff);
-  background: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 12%, transparent);
-  border-color: color-mix(in srgb, var(--pl-color-accent, #7c8cff) 28%, transparent);
+  color: var(--pl-color-accent);
+  background: color-mix(in srgb, var(--pl-color-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--pl-color-accent) 28%, transparent);
   opacity: 1;
 }
 .tool-manage-btn svg {
@@ -242,9 +271,9 @@
 .tool-dismiss-btn {
   display: inline-flex;
   align-items: center;
-  padding: 2px;
+  padding: var(--pl-space-0_5);
   width: auto;
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   color: var(--pl-color-fg-subtle);
   border: 1px solid transparent;
   opacity: 0.7;
@@ -273,11 +302,11 @@
 /* Generic JSON-blob fallback box, scoped to the DS body slot. */
 .pl-toolcard__body pre {
   margin: 0;
-  padding: 6px 8px;
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   background: var(--pl-color-bg);
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   font-family: var(--pl-font-mono);
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   color: var(--pl-color-fg-muted);
   white-space: pre-wrap;
@@ -290,11 +319,11 @@
    The shared surface for a scalar/text value is a padded, monospace-ish box. */
 .pl-toolcard__section .tool-text,
 .tool-fetch-body {
-  padding: 6px 8px;
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   background: var(--pl-color-bg);
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   font-family: var(--pl-font-mono);
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.5;
   color: var(--pl-color-fg-muted);
   white-space: pre-wrap;
@@ -309,24 +338,24 @@
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--pl-space-1);
 }
 .tool-kv-row {
   display: grid;
   grid-template-columns: minmax(72px, 22%) minmax(0, 1fr);
-  gap: 10px;
+  gap: var(--pl-space-2_5);
   align-items: baseline;
 }
 .tool-kv-key {
   font-family: var(--pl-font-mono);
-  font-size: 0.74rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
   word-break: break-word;
 }
 .tool-kv-val {
   margin: 0;
   min-width: 0;
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg);
 }
 .tool-scalar {
@@ -335,13 +364,13 @@
 }
 .tool-chip {
   display: inline-block;
-  padding: 1px 6px;
-  border-radius: 5px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
   font-family: var(--pl-font-mono);
-  font-size: 0.74rem;
-  color: var(--brand-violet-light);
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-accent-fg);
 }
 .tool-null {
   color: var(--pl-color-fg-subtle);
@@ -350,8 +379,8 @@
 .tool-link {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  color: var(--brand-violet-light);
+  gap: var(--pl-space-1);
+  color: var(--pl-color-accent-fg);
   text-decoration: none;
   word-break: break-all;
 }
@@ -367,20 +396,20 @@
   padding-left: 1.1em;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--pl-space-1);
 }
 
 /* Error result — any tool output starting with "Error:". */
 .tool-error {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  gap: var(--pl-space-1_5);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
+  border-radius: var(--pl-radius-md);
   background: color-mix(in srgb, var(--pl-color-status-error) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--pl-color-status-error) 28%, transparent);
   color: var(--pl-color-status-error);
-  font-size: 0.8rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   /* Cap like .tool-text — a long error body (a failed command echoing its whole
      input) must scroll inside the card, not fill the pane (#1691). */
@@ -402,19 +431,19 @@
 .tool-multimodal {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .tool-multimodal-note {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--pl-space-1_5);
   align-self: flex-start;
-  padding: 1px 6px;
-  border-radius: 5px;
+  padding: 1px var(--pl-space-1_5);
+  border-radius: var(--pl-radius);
   background: var(--pl-color-bg);
   border: 1px solid var(--pl-color-border);
   font-family: var(--pl-font-mono);
-  font-size: 0.74rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 .tool-multimodal-note svg {
@@ -428,18 +457,18 @@
 .tool-wait {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  font-size: 0.8rem;
+  gap: var(--pl-space-1_5);
+  font-size: var(--pl-font-size-xs);
 }
 .tool-wait-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
   color: var(--pl-color-fg);
 }
 .tool-wait-head svg {
   flex: none;
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 .tool-wait-then {
   color: var(--pl-color-fg-subtle);
@@ -450,7 +479,7 @@
   overflow-wrap: anywhere;
 }
 .tool-wait-hint {
-  font-size: 0.76rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 /* "· ~5 minutes" in the card header — same quiet treatment as the nested-tools count. */
@@ -464,8 +493,8 @@
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 6px;
-  font-size: 0.84rem;
+  gap: var(--pl-space-1_5);
+  font-size: var(--pl-font-size-sm);
 }
 .tool-calc code {
   font-family: var(--pl-font-mono);
@@ -476,22 +505,22 @@
 }
 .tool-calc strong {
   font-family: var(--pl-font-mono);
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
 }
 
 /* current_time */
 .tool-time {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--pl-space-0_5);
 }
 .tool-time .tool-mono {
   font-family: var(--pl-font-mono);
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg);
 }
 .tool-time-human {
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-subtle);
 }
 
@@ -499,12 +528,12 @@
 .tool-fetch {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--pl-space-1_5);
 }
 .tool-fetch-head {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--pl-space-1_5);
   min-width: 0;
 }
 /* .tool-badge retired (#832) — the fetch status code is now the DS <Badge
@@ -517,19 +546,19 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: var(--pl-space-2);
 }
 .tool-result {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
+  gap: var(--pl-space-0_5);
+  padding: var(--pl-space-1_5) var(--pl-space-2);
   background: var(--pl-color-bg);
-  border-radius: 6px;
+  border-radius: var(--pl-radius-md);
   border: 1px solid var(--pl-color-border);
 }
 .tool-result-snippet {
-  font-size: 0.76rem;
+  font-size: var(--pl-font-size-xs);
   line-height: 1.45;
   color: var(--pl-color-fg-subtle);
 }
@@ -538,7 +567,7 @@
    inline-flex: they sit inside pre-wrap text (a search hit's `file:line`), and a flex box
    there would break the line flow and the selection/copy of the surrounding text. */
 .tool-editor-link {
-  color: var(--brand-violet-light);
+  color: var(--pl-color-accent-fg);
   text-decoration: none;
 }
 .tool-editor-link:hover {
@@ -547,15 +576,15 @@
 .tool-fs {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--pl-space-1_5);
 }
 .tool-fs-head {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: var(--pl-space-1_5);
   min-width: 0;
   font-family: var(--pl-font-mono);
-  font-size: 0.78rem;
+  font-size: var(--pl-font-size-xs);
   word-break: break-all;
 }
 .tool-fs-head svg {

@@ -1,0 +1,65 @@
+/* New agent ▸ "From a bundle URL" — URL + ref entry, then the bundle preview + trust step.
+   Width stays with the AppShell's controlled container; the form wraps on a phone. */
+.bundle-url-source {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+}
+.bundle-url-form {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--pl-space-2) var(--pl-space-3);
+  margin-top: var(--pl-space-2);
+}
+@media (max-width: 640px) {
+  .bundle-url-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.bundle-url-form .pl-input {
+  width: 100%;
+}
+.bundle-url-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: var(--pl-space-0_5);
+}
+.bundle-url-source .bundle-url-hint {
+  margin: 0;
+}
+.bundle-url-error {
+  margin: 0;
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-status-error);
+}
+.bundle-url-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  margin-top: var(--pl-space-2);
+  padding: var(--pl-space-3);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  min-width: 0;
+}
+.bundle-url-preview-head {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2_5);
+  min-width: 0;
+}
+.bundle-url-preview-head code {
+  overflow-wrap: anywhere;
+}
+.bundle-url-preview-icon {
+  display: inline-flex;
+  color: var(--pl-color-accent);
+}
+.bundle-url-preview .pl-callout p {
+  margin: 0 0 var(--pl-space-2);
+}
+.archetype-setup-dialog .bundle-url-setup-source {
+  margin: 0 0 var(--pl-space-3);
+  overflow-wrap: anywhere;
+}

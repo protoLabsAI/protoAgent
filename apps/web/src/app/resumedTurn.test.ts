@@ -202,3 +202,35 @@ describe("streamedTextIsFinal — keep the live layout when the words didn't cha
     expect(streamedTextIsFinal([{ kind: "tools", ids: ["tc1"] }], "")).toBe(false);
   });
 });
+
+describe("resumedTurnRender — goal runs", () => {
+  it("tags a goal-run fire with the goal origin so it settles full-size", () => {
+    const r = resumedTurnRender({
+      session_id: "chat-1",
+      text: "All tests pass.",
+      task_id: "t1",
+      origin: "scheduler",
+      trigger: "goal-run:chat-1",
+    });
+    expect(r!.origin).toBe("goal");
+    expect(r!.toast.title).toBe("Goal run finished");
+  });
+
+  it("tags a wait wake-up with the wait-resume origin so it settles as a chat message", () => {
+    const r = resumedTurnRender({
+      session_id: "chat-1",
+      text: "bd-49yo merged.",
+      task_id: "t3",
+      origin: "scheduler",
+      trigger: "wait:chat-1",
+    });
+    expect(r!.origin).toBe("wait-resume");
+    expect(r!.toast.title).toBe("Task resumed");
+  });
+
+  it("leaves a plain scheduled fire as a scheduler result", () => {
+    const r = resumedTurnRender({ session_id: "chat-1", text: "done", task_id: "t2", origin: "scheduler", trigger: "job-1" });
+    expect(r!.origin).toBe("scheduler");
+    expect(r!.toast.title).toBe("Task resumed");
+  });
+});

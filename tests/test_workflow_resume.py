@@ -303,3 +303,27 @@ def test_resume_edit_null_prompt_leaves_run_paused(tmp_path):
     with pytest.raises(ValueError, match="edits.prompt"):
         asyncio.run(_resume(_Reg(), run_id, "edit", edits={"prompt": None}, run_store=store))
     assert store.load(run_id)["status"] == "paused"  # not orphaned in `running`
+
+
+def test_a_resumed_run_cancelled_mid_step_is_recorded_cancelled(tmp_path, monkeypatch):
+    """The resume path records a cancel as ``cancelled`` too (#3957), not ``failed``."""
+    import pytest
+
+    store, run_id = _pause_gated(monkeypatch, tmp_path)
+
+    async def scenario():
+        started = asyncio.Event()
+
+        async def run_subagent(subagent_type, prompt, description=""):
+            started.set()
+            await asyncio.sleep(3600)
+
+        monkeypatch.setattr(wf.sdk, "run_subagent", run_subagent)
+        task = asyncio.create_task(wf._resume(_GatedReg(), run_id, "approve", run_store=store))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert store.load(run_id)["status"] == "cancelled"

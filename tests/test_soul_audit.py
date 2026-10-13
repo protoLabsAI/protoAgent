@@ -110,10 +110,11 @@ def test_empty_persona_and_determinism():
 
 def _wired(monkeypatch, soul: str, tool_names: list[str]):
     """Run agent_init._audit_persona_tools against a fake graph + captured bus."""
-    from server import agent_init
+    from server import agent_init, maintenance_loops
 
     events: list[tuple[str, dict]] = []
-    monkeypatch.setattr(agent_init, "_event_bus", SimpleNamespace(publish=lambda t, d: events.append((t, d))))
+    # The audit lives in maintenance_loops (#3807) — its _event_bus is that module's.
+    monkeypatch.setattr(maintenance_loops, "_event_bus", SimpleNamespace(publish=lambda t, d: events.append((t, d))))
     monkeypatch.setattr(config_io, "read_soul", lambda: soul)
     monkeypatch.setattr(config_io, "soul_revision", lambda: "cafebabe")
     graph = SimpleNamespace(bound_tools=[SimpleNamespace(name=n) for n in tool_names])
@@ -140,10 +141,10 @@ def test_wiring_is_silent_when_the_persona_is_fully_tooled(monkeypatch):
 
 
 def test_wiring_skips_a_none_graph_and_swallows_audit_failures(monkeypatch):
-    from server import agent_init
+    from server import agent_init, maintenance_loops
 
     events: list = []
-    monkeypatch.setattr(agent_init, "_event_bus", SimpleNamespace(publish=lambda t, d: events.append((t, d))))
+    monkeypatch.setattr(maintenance_loops, "_event_bus", SimpleNamespace(publish=lambda t, d: events.append((t, d))))
     agent_init._audit_persona_tools(None, trigger="boot")  # setup pending — no tools bound
 
     monkeypatch.setattr(config_io, "read_soul", lambda: (_ for _ in ()).throw(OSError("disk")))

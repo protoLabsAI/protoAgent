@@ -99,6 +99,16 @@ describe("DepsInstallDialog", () => {
     expect(btn("Not now")).toBeTruthy();
   });
 
+  it("opts the dialog body into DS 0.63 roomy padding (padding=\"roomy\")", () => {
+    // DS 0.63 card 3d: content dialogs opt into roomy body padding so they render
+    // identically once the app-wide `.pl-dialog__body { padding }` rule is deleted.
+    // padding="roomy" makes the DS Dialog add `pl-dialog__body--roomy` to its body.
+    render();
+    const body = document.querySelector(".pl-dialog__body");
+    expect(body).toBeTruthy();
+    expect(body?.classList.contains("pl-dialog__body--roomy")).toBe(true);
+  });
+
   it("on the desktop app it names the managed Python runtime as where they install", () => {
     // The frozen sidecar's install response targets the managed runtime (ADR 0094); the
     // dialog shows the server's own wording for it.

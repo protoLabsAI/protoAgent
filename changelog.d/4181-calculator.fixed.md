@@ -1,0 +1,1 @@
+- **Calculator work is bounded (#4181).** Oversized powers are rejected before computation, and expression length, nesting, node count, and intermediate integer sizes have limits. Ordinary arithmetic remains available with readable errors for requests that exceed the budget.

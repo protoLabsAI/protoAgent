@@ -8,6 +8,7 @@ import {
   depsInstallBusyId,
   filterInstalled,
   needsAttention,
+  PLUGIN_RESTART_HINT,
   sortInstalled,
   statusCounts,
   toggleToast,
@@ -198,6 +199,13 @@ describe("uninstall wording for a plugin that now ships with protoAgent (#3445)"
     expect(uninstallToast("Board", {})).toEqual({ title: "Plugin uninstalled", message: "Board removed." });
     expect(uninstallToast("Board", undefined).title).toBe("Plugin uninstalled");
   });
+
+  it("says when the removed plugin's surface didn't stop (restart_recommended)", () => {
+    expect(uninstallToast("Feed", { restart_recommended: true })).toEqual({
+      title: "Plugin uninstalled",
+      message: "Feed removed. Its background surface didn't stop — restart to end it.",
+    });
+  });
 });
 
 
@@ -217,6 +225,27 @@ describe("Install deps while an install is running (one pip per environment)", (
   });
 });
 
+describe("PLUGIN_RESTART_HINT", () => {
+  // Every lifecycle action hot-mounts / re-mounts / unmounts views and routes and swaps
+  // surfaces — proven against a real server (tests/test_plugin_lifecycle_real_process.py).
+  // The hint once claimed a view or surface needed a restart, which was stale (ADR 0096).
+  it("says every plugin lifecycle action applies live, views and surfaces included", () => {
+    expect(PLUGIN_RESTART_HINT).toMatch(
+      /^Installing, updating, enabling, disabling or uninstalling a plugin applies live/,
+    );
+    expect(PLUGIN_RESTART_HINT).toContain("console view");
+    expect(PLUGIN_RESTART_HINT).toContain("background surface");
+    expect(PLUGIN_RESTART_HINT).toContain("no restart");
+  });
+
+  it("names only env / launch flags and a surface that can't be swapped as restart cases", () => {
+    expect(PLUGIN_RESTART_HINT).toContain("env / launch-flag changes");
+    expect(PLUGIN_RESTART_HINT).toContain("background surface can't be swapped live; its toast says so");
+    expect(PLUGIN_RESTART_HINT).not.toMatch(/console view[^.]*need a\s+(server )?restart/);
+    expect(PLUGIN_RESTART_HINT).not.toContain("whose toast asks for one");
+  });
+});
+
 describe("toggleToast", () => {
   it("names a just-enabled plugin's missing packages and where to install them (#3450)", () => {
     expect(toggleToast("Cowork", { enabled: true, deps_missing: ["pypdf", "openpyxl"] })).toEqual({
@@ -232,6 +261,18 @@ describe("toggleToast", () => {
 
   it("never mentions deps on a disable, and keeps the restart hint", () => {
     expect(toggleToast("Cowork", { enabled: false, deps_missing: ["pypdf"] }).message).toBe("Cowork is off.");
-    expect(toggleToast("Cowork", { enabled: false, restart_recommended: true }).title).toBe("Plugin disabled");
+    expect(toggleToast("Cowork", { enabled: false, restart_recommended: true })).toEqual({
+      tone: "info",
+      title: "Plugin disabled",
+      message: "Cowork is off. Its background surface didn't stop — restart to end it.",
+    });
+  });
+
+  it("blames the surface, not the view, when an enable can't swap it", () => {
+    expect(toggleToast("Feed", { enabled: true, restart_recommended: true })).toEqual({
+      tone: "info",
+      title: "Plugin enabled",
+      message: "Feed is live. Its background surface couldn't be swapped live — restart to finish.",
+    });
   });
 });

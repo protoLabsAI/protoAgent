@@ -31,7 +31,7 @@ Two deliberate limits, so the gate stays a tripwire and not a pile of exceptions
   ("⌘K at the time — it is ⌘⇧K now") is left alone.
 * **Only the console's own chords are judged.** The docs legitimately name OS-global chords
   the desktop shell owns — the ⌥Space quick launcher *is* this same palette — so those are
-  read out of `apps/desktop/src-tauri/src/lib.rs` and skipped. Without that, CI would tell an
+  read out of `apps/desktop/src-tauri/src/hotkeys.rs` and skipped. Without that, CI would tell an
   author to "correct" a true sentence about ⌥Space into the in-app chord.
 """
 
@@ -52,7 +52,7 @@ PALETTE_ADAPTER = REPO / "apps" / "web" / "src" / "app" / "palette"
 # One module in that directory needs reading a SECOND way, not just globbed for `label:` —
 # see `_keyboard_action_labels`.
 KEYBINDING_COMMANDS = PALETTE_ADAPTER / "keybindingCommands.ts"
-DESKTOP_SHELL = REPO / "apps" / "desktop" / "src-tauri" / "src" / "lib.rs"
+DESKTOP_SHELL = REPO / "apps" / "desktop" / "src-tauri" / "src" / "hotkeys.rs"
 PALETTE_GUIDE = REPO / "docs" / "guides" / "command-palette.md"
 
 # The pages that state chords. `.vitepress/dist` + `cache` are build output — gitignored, but

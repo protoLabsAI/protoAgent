@@ -1,5 +1,9 @@
 """Unit tests for graph.middleware.redaction module."""
 
+import json
+
+import pytest
+
 from graph.middleware.redaction import redact, PATTERNS
 
 
@@ -339,3 +343,173 @@ def test_provider_token_shapes_redacted():
     assert "[REDACTED]" in redact("client_secret: " + "A" * 16)
     # benign text is left intact (no over-redaction)
     assert redact("the quick brown fox AKIA jumps") == "the quick brown fox AKIA jumps"
+
+
+# ---------------------------------------------------------------------------
+# Standalone redact() contract tests
+# ---------------------------------------------------------------------------
+
+
+def test_redact_returns_valid_json_serializable_values():
+    """Ensure [REDACTED] placeholder is JSON-safe."""
+    data = {
+        "OPENAI_API_KEY": "sk-secret12345678901234",
+        "normal": "value",
+    }
+    result = redact(data)
+    serialized = json.dumps(result)
+    parsed = json.loads(serialized)
+    assert parsed["OPENAI_API_KEY"] == "[REDACTED]"
+    assert parsed["normal"] == "value"
+
+
+def test_redact_does_not_mutate_original():
+    """redact() must not modify the input dict in place."""
+    original = {"OPENAI_API_KEY": "sk-real-key-1234567890abcdef"}
+    _ = redact(original)
+    assert original["OPENAI_API_KEY"] == "sk-real-key-1234567890abcdef"
+
+
+# ---------------------------------------------------------------------------
+# #3816: env-var assignment redaction keeps the surrounding source parseable
+# ---------------------------------------------------------------------------
+#
+# Fixtures are assembled from pieces so no key-shaped literal sits in this file.
+_K = "OPENAI_" + "API_KEY"
+_V = "sk-" + "Z" * 40
+
+
+def test_env_var_redaction_keeps_a_python_string_literals_closing_quote():
+    src = '"entries": [{"content": "rotate ' + _K + "=" + _V + '" + "Z" * 40 + " for acme"}]'
+    out = redact(src)
+    assert _V not in out
+    assert out == '"entries": [{"content": "rotate ' + _K + '=[REDACTED]" + "Z" * 40 + " for acme"}]'
+
+
+def test_env_var_redaction_keeps_a_json_values_closing_quote():
+    out = redact('{"env": "' + _K + "=" + _V + '", "n": 1}')
+    assert _V not in out and out == '{"env": "' + _K + '=[REDACTED]", "n": 1}'
+
+
+def test_env_var_redaction_keeps_a_markdown_code_spans_closing_backtick():
+    out = redact("(`export " + _K + "=" + _V + "`) then restart")
+    assert _V not in out and out == "(`export " + _K + "=[REDACTED]`) then restart"
+
+
+def test_env_var_redaction_still_covers_a_quoted_value():
+    """The value class stops at quotes, so a value that STARTS with one must still be
+    redacted — keep the opening quote, redact what it wraps, keep the closing one."""
+    for q in ('"', "'", "`"):
+        out = redact(_K + "=" + q + _V + q)
+        assert _V not in out and out == _K + "=" + q + "[REDACTED]" + q
+    assert redact("A2A_AUTH_" + "TOKEN: 'abc123def456'") == "A2A_AUTH_" + "TOKEN: '[REDACTED]'"
+
+
+def test_env_var_redaction_does_not_rewrap_an_already_redacted_value():
+    # generic_api_key runs first and leaves `api_key=[REDACTED]`; the env-var pass must
+    # not turn that into `[REDACTED]]`.
+    out = redact("api_" + "key=" + "abcdefghijklmnop1234")
+    assert out.count("[REDACTED]") == 1 and "]]" not in out
+
+
+# ---------------------------------------------------------------------------
+# Key spelling — case, `-` and `_` don't let a sensitive key through (#4166 review)
+# ---------------------------------------------------------------------------
+#
+# Realistic, token-shaped literals on purpose: this file is gitleaks-allowlisted, and a
+# reviewer reading the redacted diff must not mistake the marks for a SyntaxError.
+
+_SECRETS = [
+    "sk-proj-4fT9qLmZ2xVbN8cR1wYhK6uE3sJdP7gA0oXi5nQy",
+    "ghp_Q7mX2vL9bK4nR8wT1yZ6cH3jF5sD0gA2pE7u",
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+    "Zx81-qP_44mmTn0vLr2kWb9s",
+]
+
+_MIXED_CASE_KEYS = [
+    "ApiKey",
+    "apiKey",
+    "Api-Key",
+    "api-key",
+    "x-api-key",
+    "X-Api-Key",
+    "X_API_KEY",
+    "Authorization",
+    "AUTHORIZATION",
+    "accessToken",
+    "Access-Token",
+    "clientSecret",
+    "Client-Secret",
+    "refreshToken",
+    "privateKey",
+    "Openai-Api-Key",
+    "openaiApiKey",
+    "A2A_Auth_Token",
+    "awsSecretAccessKey",
+    "NpmToken",
+]
+
+
+def _assert_no_leak(secret: str, out: object) -> None:
+    text = json.dumps(out)
+    assert secret not in text, text
+    for i in range(1, len(secret) - 3):
+        assert secret[i:] not in text, f"suffix {secret[i:]!r} leaked: {text!r}"
+
+
+@pytest.mark.parametrize("key", _MIXED_CASE_KEYS)
+@pytest.mark.parametrize("secret", _SECRETS)
+def test_mixed_case_dict_keys_are_redacted(key, secret):
+    out = redact({key: secret, "other": "kept"})
+    assert out == {key: "[REDACTED]", "other": "kept"}
+    _assert_no_leak(secret, out)
+
+
+@pytest.mark.parametrize("key", _MIXED_CASE_KEYS)
+def test_mixed_case_keys_are_redacted_when_nested(key):
+    secret = _SECRETS[0]
+    out = redact({"headers": [{key: secret}], "env": {"ok": 1}})
+    assert out == {"headers": [{key: "[REDACTED]"}], "env": {"ok": 1}}
+    _assert_no_leak(secret, out)
+
+
+@pytest.mark.parametrize(
+    "src, secret",
+    [
+        ("OPENAI_API_KEY=sk-proj-4fT9qLmZ2xVbN8cR1wYhK6uE3sJdP7gA0oXi5nQy", _SECRETS[0]),
+        ("openai_api_key=Zx81-qP_44mmTn0vLr2kWb9s", _SECRETS[3]),
+        ("export Api_Key=Zx81-qP_44mmTn0vLr2kWb9s", _SECRETS[3]),
+        ("X-Api-Key: Zx81-qP_44mmTn0vLr2kWb9s", _SECRETS[3]),
+        ('headers = {"apiKey": "Zx81-qP_44mmTn0vLr2kWb9s"}', _SECRETS[3]),
+        ('headers = {"Authorization": "Bearer Zx81-qP_44mmTn0vLr2kWb9s"}', _SECRETS[3]),
+        ("curl -H 'authorization: bearer Zx81-qP_44mmTn0vLr2kWb9s' https://api.example.com", _SECRETS[3]),
+        ("GH_PAT=ghp_Q7mX2vL9bK4nR8wT1yZ6cH3jF5sD0gA2pE7u", _SECRETS[1]),
+    ],
+)
+def test_env_var_and_header_string_forms_leak_nothing(src, secret):
+    out = redact(src)
+    assert "[REDACTED]" in out
+    _assert_no_leak(secret, out)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "tokenizer",
+        "author",
+        "authors",
+        "keyboard",
+        "key",
+        "token_count",
+        "max_tokens",
+        "public",
+        "secretary",
+        "api",
+        "apiVersion",
+        "access",
+        "client_id",
+    ],
+)
+def test_ordinary_keys_are_not_redacted(key):
+    data = {key: "gpt-tokenizer-v2"}
+    assert redact(data) == data

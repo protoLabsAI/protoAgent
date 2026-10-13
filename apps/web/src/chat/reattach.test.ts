@@ -17,8 +17,10 @@ import { landResumedTurn } from "../app/ChatResumeWatch";
 import { resumedTurnRender, settleResumedTurn } from "../app/resumedTurn";
 import { applyProgressFrame } from "../app/serverTurnProgress";
 import { api } from "../lib/api";
+import { makeA2ADispatcher } from "../lib/api/a2aStream";
+import { foldPlan } from "./parts";
 import { chatStore } from "./chat-store";
-import { reattachKeyForMessages, reattachOrReconcile, reattachTurn } from "./reattach";
+import { reattachKeyForMessages, reattachOrReconcile, reattachTurn, settleAnsweredPause } from "./reattach";
 import { liveMessageId } from "./server-turn-store";
 import { messagesFromDurableTurn } from "./sessionHydration";
 import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
@@ -51,10 +53,10 @@ it("changes the reattach dependency when hydration fills an already-mounted empt
 });
 
 /** A session whose last assistant message is stuck `streaming` — the exact
- *  shape the ChatSurface reattach effect hands to reattachTurn. */
+ *  shape the ChatSessionSlot reattach effect hands to reattachTurn. */
 function seedStuckSession(): string {
   const session = chatStore.createSession();
-  chatStore.updateMessages(session.id, () => [
+  chatStore.updateMessages(session.id, [
     { id: "u1", role: "user", content: "deploy the release", status: "done" },
     { id: ASSISTANT_ID, role: "assistant", content: "partial answer", status: "streaming", taskId: TASK_ID },
   ]);
@@ -70,7 +72,7 @@ function seedStuckSession(): string {
  *  patches `content` would leave the transcript stopped at the last tool card. */
 function seedStuckMultiPartSession(preamble = ""): string {
   const session = chatStore.createSession();
-  chatStore.updateMessages(session.id, () => [
+  chatStore.updateMessages(session.id, [
     { id: "u1", role: "user", content: "deploy the release", status: "done" },
     {
       id: ASSISTANT_ID,
@@ -143,7 +145,7 @@ describe("reattach cancelled before it settles", () => {
     const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
     chatStore.updateMessages(
       sessionId,
-      () => cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
+      cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
     );
     cancel();
 
@@ -194,12 +196,12 @@ describe("reattach cancelled before it settles", () => {
     const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
     chatStore.updateMessages(
       sessionId,
-      () => cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
+      cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
     );
     cancel();
     expect(sessionStatus(sessionId)).toBe("idle");
     const next = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
-    chatStore.updateMessages(sessionId, () => [
+    chatStore.updateMessages(sessionId, [
       ...next.messages,
       { id: "u2", role: "user", content: "and the changelog", status: "done" },
       { id: "a2", role: "assistant", content: "", status: "streaming" },
@@ -251,7 +253,7 @@ describe("reattach key skips participant rows", () => {
   it("a delegate's reply mid-turn keeps the reattach, so the turn's own end releases the session", async () => {
     const session = chatStore.createSession();
     const liveId = liveMessageId(TASK_ID, session.id);
-    chatStore.updateMessages(session.id, () => [
+    chatStore.updateMessages(session.id, [
       { id: "u1", role: "user", content: "ask claude-code to check the diff", status: "done" },
       { id: liveId, role: "assistant", content: "Asking claude-code…", status: "streaming", taskId: TASK_ID },
     ]);
@@ -260,7 +262,7 @@ describe("reattach key skips participant rows", () => {
     const messagesOf = () => chatStore.getSnapshot().sessions.find((s) => s.id === session.id)!.messages;
 
     // The slot: its reattach effect is keyed on reattachKeyForMessages and cancels the
-    // reattach whenever that key changes (ChatSurface's `[sessionId, reattachKey]` deps).
+    // reattach whenever that key changes (ChatSessionSlot's `[sessionId, reattachKey]` deps).
     const cancel = reattachTurn(session.id, liveId, TASK_ID);
     cancels.push(cancel);
     let key = reattachKeyForMessages(messagesOf());
@@ -280,7 +282,7 @@ describe("reattach key skips participant rows", () => {
     // already settled, AFTER the still-streaming preview. The turn has not ended.
     chatStore.updateMessages(
       session.id,
-      () => applyProgressFrame(messagesOf(), {
+      applyProgressFrame(messagesOf(), {
         session: session.id,
         taskId: TASK_ID,
         kind: "room",
@@ -297,7 +299,7 @@ describe("reattach key skips participant rows", () => {
     // The turn ends: `chat.resumed` settles the preview, which is what ends the reattach —
     // and with the reattach still the one holding the status, the session is handed back.
     const render = resumedTurnRender({ session_id: session.id, task_id: TASK_ID, text: "Checked: clean.", state: "completed" })!;
-    chatStore.updateMessages(session.id, () => settleResumedTurn(messagesOf(), render, undefined, "resume-1"));
+    chatStore.updateMessages(session.id, settleResumedTurn(messagesOf(), render, undefined, "resume-1"));
     rerender();
     expect(slotCancelled).toBe(true);
     expect(sessionStatus(session.id)).toBe("idle");
@@ -348,7 +350,7 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
   function seedServerTurn(): { sessionId: string; liveId: string } {
     const session = chatStore.createSession();
     const liveId = liveMessageId(TASK_ID, session.id);
-    chatStore.updateMessages(session.id, () => [
+    chatStore.updateMessages(session.id, [
       { id: "u1", role: "user", content: "check the nightly report", status: "done" },
       { id: liveId, role: "assistant", content: "Reading the report…", status: "streaming", taskId: TASK_ID },
     ]);
@@ -367,7 +369,7 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
     const cur = messagesOf(sessionId);
     chatStore.updateMessages(
       sessionId,
-      () => cur.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
+      cur.map((m) => (m.id === ASSISTANT_ID ? { ...m, content: "final answer", status: "done" as const } : m)),
     );
     expect(reconcileSessionStatus(sessionId)).toBe(false);
     expect(sessionStatus(sessionId)).toBe("streaming");
@@ -383,7 +385,7 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
     const { sessionId, liveId } = seedServerTurn();
     chatStore.updateMessages(
       sessionId,
-      () => messagesOf(sessionId).map((m) => (m.id === liveId ? { ...m, content: "Report is clean.", status: "done" as const } : m)),
+      messagesOf(sessionId).map((m) => (m.id === liveId ? { ...m, content: "Report is clean.", status: "done" as const } : m)),
     );
     expect(sessionStatus(sessionId)).toBe("streaming");
 
@@ -484,16 +486,16 @@ describe("the reconciler never idles a live turn, and always idles an ended one"
     await settle();
     expect(sessionStatus(sessionId)).toBe("streaming");
 
-    // Stop (ChatSurface.stop): settle every streaming bubble and go idle. The slot's key goes
+    // Stop (ChatSessionSlot.stop): settle every streaming bubble and go idle. The slot's key goes
     // "" and it cancels the reattach.
-    chatStore.updateMessages(sessionId, () => finalizeStoppedMessages(messagesOf(sessionId)));
+    chatStore.updateMessages(sessionId, finalizeStoppedMessages(messagesOf(sessionId)));
     chatStore.setSessionStatus(sessionId, "idle");
     slot.rerender();
     expect(sessionStatus(sessionId)).toBe("idle");
 
     // The operator sends at once (runTurn): a new streaming bubble, a claimed session.
     const endTurn = beginLocalTurn(sessionId);
-    chatStore.updateMessages(sessionId, () => [
+    chatStore.updateMessages(sessionId, [
       ...messagesOf(sessionId),
       { id: "u2", role: "user", content: "and the changelog", status: "done" },
       { id: "a2", role: "assistant", content: "", status: "streaming" },
@@ -531,7 +533,7 @@ describe("reattach run(): paused states", () => {
     assistant.components = [{ component: "key-value", props: { version: "1.2.3" } }];
     assistant.toolCalls = [{ id: "call-1", name: "run_command", status: "running" }];
     expect(assistant).toMatchObject({ content: "partial", status: "streaming", durableSnapshotFallback: true });
-    chatStore.updateMessages(session.id, () => messages);
+    chatStore.updateMessages(session.id, messages);
     chatStore.setSessionStatus(session.id, "streaming");
     resumeTask.mockImplementation(async (_taskId, _sessionId, handlers) => {
       handlers?.onTaskSnapshot?.();
@@ -566,7 +568,7 @@ describe("reattach run(): paused states", () => {
       history: [{ role: "ROLE_USER", parts: [{ text: "ship it" }] }],
     });
     const assistant = messages.find((message) => message.role === "assistant")!;
-    chatStore.updateMessages(session.id, () => messages);
+    chatStore.updateMessages(session.id, messages);
     resumeTask.mockRejectedValue(new Error("task unavailable"));
     replayTask.mockRejectedValue(new Error("task unavailable"));
     getTask.mockRejectedValue(new Error("task unavailable"));
@@ -592,7 +594,7 @@ describe("reattach run(): paused states", () => {
       history: [{ role: "ROLE_USER", parts: [{ text: "ship it" }] }],
     });
     const assistant = messages.find((message) => message.role === "assistant")!;
-    chatStore.updateMessages(session.id, () => messages);
+    chatStore.updateMessages(session.id, messages);
     chatStore.setSessionStatus(session.id, "streaming");
     const emitFullSnapshot = (handlers: Parameters<typeof api.resumeTask>[2]) => {
       handlers?.onTaskSnapshot?.();
@@ -648,6 +650,141 @@ describe("reattach run(): paused states", () => {
 });
 
 // ---------------------------------------------------------------------------
+// run(): the subscription stays OPEN on a paused task (#3930)
+// ---------------------------------------------------------------------------
+//
+// The real server holds `SubscribeToTask` open for an input-required task — spec-correct:
+// input-required is interrupted, not terminal, and the stream ends only at a terminal
+// state (A2A §3.1.6). These mocks mirror that: the subscription delivers its frames and
+// then never resolves until its signal aborts. Waiting for the close held the session
+// "streaming" — Stop up, the form's Send/Dismiss disabled — until the operator answered
+// the form they could not answer.
+
+/** A subscription the server keeps open: emits `frames`, then settles only on abort. */
+function heldOpen(frames: (handlers: NonNullable<Parameters<typeof api.resumeTask>[2]>) => void) {
+  return (_taskId: string, _sessionId: string, handlers: Parameters<typeof api.resumeTask>[2] = {}) =>
+    new Promise<void>((_resolve, reject) => {
+      frames(handlers);
+      handlers.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    });
+}
+
+describe("reattach run(): a paused task's subscription is held open (#3930)", () => {
+  it("settles paused off the INPUT_REQUIRED snapshot without waiting for the stream to close", async () => {
+    const sessionId = seedStuckSession();
+    let signal: AbortSignal | undefined;
+    resumeTask.mockImplementation(
+      heldOpen((handlers) => {
+        signal = handlers.signal;
+        handlers.onTaskSnapshot?.();
+        handlers.onText?.("partial answer", false);
+        handlers.onInputRequired?.({ kind: "approval", title: "Approve the deploy?" });
+        handlers.onTaskState?.("TASK_STATE_INPUT_REQUIRED");
+      }),
+    );
+    const onHitl = vi.fn();
+
+    attach(sessionId, { onHitl });
+    await settle();
+
+    // The form is up and ACTIONABLE: the session is idle (HitlForm busy = false)…
+    expect(onHitl).toHaveBeenCalledWith(expect.objectContaining({ title: "Approve the deploy?" }));
+    expect(sessionStatus(sessionId)).toBe("idle");
+    // …without finalizing a turn the server still owns…
+    expect(assistantMessage(sessionId)?.status).toBe("streaming");
+    expect(assistantMessage(sessionId)?.content).toBe("partial answer");
+    expect(getTask).not.toHaveBeenCalled();
+    expect(replayTask).not.toHaveBeenCalled();
+    // …and the socket the server keeps open for the answer is released.
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it.each(["input-required", "TASK_STATE_AUTH_REQUIRED"])("settles paused on a %s snapshot", async (state) => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockImplementation(heldOpen((handlers) => handlers.onTaskState?.(state)));
+
+    attach(sessionId);
+    await settle();
+
+    expect(sessionStatus(sessionId)).toBe("idle");
+    expect(assistantMessage(sessionId)?.status).toBe("streaming");
+  });
+
+  it("settles paused when a running turn PARKS while attached (a live status update)", async () => {
+    const sessionId = seedStuckSession();
+    let park: () => void = () => {};
+    resumeTask.mockImplementation(
+      heldOpen((handlers) => {
+        handlers.onTaskSnapshot?.();
+        handlers.onTaskState?.("TASK_STATE_WORKING");
+        park = () => {
+          handlers.onInputRequired?.({ question: "Favourite fruit?" });
+          handlers.onTaskState?.("TASK_STATE_INPUT_REQUIRED");
+        };
+      }),
+    );
+    const onHitl = vi.fn();
+
+    attach(sessionId, { onHitl });
+    await settle();
+    expect(sessionStatus(sessionId)).toBe("streaming"); // still working: stay attached
+
+    park();
+    await settle();
+    expect(onHitl).toHaveBeenCalledWith({ question: "Favourite fruit?" });
+    expect(sessionStatus(sessionId)).toBe("idle");
+    expect(assistantMessage(sessionId)?.status).toBe("streaming");
+  });
+
+  it("mutes frames the let-go stream still delivers (the desktop relay cannot be aborted)", async () => {
+    const sessionId = seedStuckSession();
+    let late: () => void = () => {};
+    // The desktop path ignores the abort signal: this subscription NEVER settles.
+    resumeTask.mockImplementation((_taskId, _sessionId, handlers = {}) => {
+      handlers.onTaskState?.("TASK_STATE_INPUT_REQUIRED");
+      late = () => handlers.onText?.("an answer another tab resumed", false);
+      return new Promise<void>(() => {});
+    });
+
+    attach(sessionId);
+    await settle();
+    expect(sessionStatus(sessionId)).toBe("idle");
+
+    late();
+    expect(assistantMessage(sessionId)?.content).toBe("partial answer");
+  });
+});
+
+describe("settleAnsweredPause (#3930)", () => {
+  it("settles the paused bubble a form answer continues past — no card spinning for good", () => {
+    const messages = settleAnsweredPause(
+      [
+        { id: "u1", role: "user", content: "fruit?", status: "done" },
+        {
+          id: "a1",
+          role: "assistant",
+          content: "",
+          status: "streaming",
+          taskId: "t1",
+          durableSnapshotFallback: true,
+          toolCalls: [{ id: "ask-1", name: "ask_human", status: "running" }],
+        },
+      ],
+      "a1",
+    );
+    expect(messages[1]).toMatchObject({ status: "done", toolCalls: [{ name: "ask_human", status: "done" }] });
+    expect(messages[1].durableSnapshotFallback).toBeUndefined();
+  });
+
+  it("leaves a settled bubble, and every other bubble, alone", () => {
+    const done = { id: "a1", role: "assistant" as const, content: "x", status: "error" as const };
+    const other = { id: "a2", role: "assistant" as const, content: "", status: "streaming" as const };
+    expect(settleAnsweredPause([done, other], "a1")).toEqual([done, other]);
+    expect(settleAnsweredPause([done, other], undefined)).toEqual([done, other]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // fallbackPoll(): resubscribe rejected, the poller consults the durable task
 // ---------------------------------------------------------------------------
 
@@ -686,7 +823,7 @@ describe("reattach fallbackPoll(): paused and rejected states", () => {
     expect(sessionStatus(sessionId)).toBe("idle");
   });
 
-  it("treats rejected as TERMINAL: finalizes on the first poll instead of looping", async () => {
+  it("treats rejected as TERMINAL and FAILED: finalizes on the first poll as an error (#3957)", async () => {
     const sessionId = seedStuckSession();
     resumeTask.mockRejectedValue(new Error("task is not running (UnsupportedOperationError)"));
     replayTask.mockResolvedValue("TASK_STATE_REJECTED");
@@ -696,10 +833,58 @@ describe("reattach fallbackPoll(): paused and rejected states", () => {
     await settle();
 
     expect(replayTask).toHaveBeenCalledTimes(1);
-    expect(sessionStatus(sessionId)).toBe("idle");
-    // Rejected is settled — the bubble must not stay `streaming`.
-    expect(assistantMessage(sessionId)?.status).toBe("done");
+    // Rejected is settled — the bubble must not stay `streaming` — and it is a failure,
+    // not a clean "done": the TERMINAL set held `rejected` but the failure check read
+    // `/fail|cancel/`, so a rejected turn used to settle as done (#3957).
+    expect(assistantMessage(sessionId)?.status).toBe("error");
+    expect(sessionStatus(sessionId)).toBe("error");
   });
+
+  it("settles a rejected 0.3 `rejected` state the stream-close path reads as an error too", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "rejected", text: "" });
+
+    attach(sessionId);
+    await settle();
+
+    expect(assistantMessage(sessionId)?.status).toBe("error");
+    expect(sessionStatus(sessionId)).toBe("error");
+  });
+
+  it("stops polling on auth-required like input-required: paused, idle, not finalized", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockRejectedValue(new Error("task is not running (UnsupportedOperationError)"));
+    replayTask.mockResolvedValue("TASK_STATE_AUTH_REQUIRED");
+
+    attach(sessionId);
+    await settle();
+
+    expect(replayTask).toHaveBeenCalledTimes(1);
+    expect(getTask).not.toHaveBeenCalled();
+    expect(sessionStatus(sessionId)).toBe("idle");
+    expect(assistantMessage(sessionId)?.status).toBe("streaming");
+    expect(assistantMessage(sessionId)?.paused).toBe(true);
+  });
+
+  for (const state of ["unknown", "TASK_STATE_UNSPECIFIED"]) {
+    it(`settles a task whose state is ${state} on the first poll instead of spinning MAX_POLLS (#3957)`, async () => {
+      const sessionId = seedStuckSession();
+      resumeTask.mockRejectedValue(new Error("task is not running (UnsupportedOperationError)"));
+      replayTask.mockResolvedValue(state);
+      getTask.mockResolvedValue({ state, text: "" });
+
+      attach(sessionId);
+      await settle();
+
+      // One poll, then settled like a task that is gone: nothing will ever move an
+      // indeterminate task on, so the session is not held "streaming" for 10 minutes.
+      expect(replayTask).toHaveBeenCalledTimes(1);
+      expect(getTask).toHaveBeenCalledTimes(1);
+      expect(assistantMessage(sessionId)?.status).toBe("done");
+      expect(sessionStatus(sessionId)).toBe("idle");
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -733,7 +918,7 @@ describe("reattach: terminal turns are unchanged", () => {
     expect(sessionStatus(sessionId)).toBe("error");
   });
 
-  it("canceled (via the poller) → message error, session error", async () => {
+  it("canceled (via the poller) → a neutral STOPPED message, session idle (#4076)", async () => {
     const sessionId = seedStuckSession();
     resumeTask.mockRejectedValue(new Error("task is not running (UnsupportedOperationError)"));
     replayTask.mockResolvedValue("TASK_STATE_CANCELLED");
@@ -743,8 +928,10 @@ describe("reattach: terminal turns are unchanged", () => {
     await settle();
 
     expect(replayTask).toHaveBeenCalledTimes(1);
-    expect(assistantMessage(sessionId)?.status).toBe("error");
-    expect(sessionStatus(sessionId)).toBe("error");
+    // A stop is not a failure: settled, marked stopped — not an error bubble.
+    expect(assistantMessage(sessionId)?.status).toBe("done");
+    expect(assistantMessage(sessionId)?.stopped).toBe(true);
+    expect(sessionStatus(sessionId)).toBe("idle");
   });
 });
 
@@ -796,11 +983,14 @@ describe("reattach: a completed multi-part turn replays its trailing text", () =
     expect(assistantMessage(sessionId)?.status).toBe("done");
   });
 
-  it("does not double a pre-tool preamble: replaceText drops the partial run and lands the whole answer once", async () => {
+  it("does not double or move a pre-tool preamble: the answer lands after the tools, the preamble stays put", async () => {
     // The client had rendered a preamble text part BEFORE the tools; the canonical
-    // answer re-sends it. It must appear exactly once (as the single trailing run).
+    // answer re-sends it. It must appear exactly once — and, being already on screen, stay
+    // where it is (above the tools), with only the unstreamed tail landing after them.
     const preamble = "Deploying now. ";
-    const full = `${preamble}${ANSWER}`;
+    // The server opens each model call after a tool with a paragraph break
+    // (server/turn_stream.py), so the post-tool answer is NEW text below the tools.
+    const full = `${preamble.trim()}\n\n${ANSWER}`;
     const sessionId = seedStuckMultiPartSession(preamble);
     resumeTask.mockResolvedValue(undefined);
     getTask.mockResolvedValue({ state: "TASK_STATE_COMPLETED", text: full });
@@ -810,10 +1000,29 @@ describe("reattach: a completed multi-part turn replays its trailing text", () =
 
     const parts = assistantMessage(sessionId)?.parts ?? [];
     const textParts = parts.filter((p) => p.kind === "text");
-    // Exactly ONE text run (the trailing answer) — the preamble was rebuilt into it, not doubled.
-    expect(textParts).toHaveLength(1);
-    expect(trailingText(sessionId)).toBe(full);
+    expect(textParts.map((p) => (p.kind === "text" ? p.text : ""))).toEqual([preamble, ANSWER]);
+    expect(parts[0]).toEqual({ kind: "text", text: preamble });
+    expect(trailingText(sessionId)).toBe(ANSWER);
   });
+
+  it("a preamble cut off mid-paragraph is completed IN PLACE above the tools — never split across them", async () => {
+    // Only "Deploying no" streamed before the tool; the canonical text continues the same
+    // paragraph. Completing the run above the card beats "…no" above it and "w. …" below.
+    const sessionId = seedStuckMultiPartSession("Deploying no");
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "TASK_STATE_COMPLETED", text: `Deploying now.\n\n${ANSWER}` });
+
+    attach(sessionId);
+    await settle();
+
+    const parts = assistantMessage(sessionId)?.parts ?? [];
+    expect(parts).toEqual([
+      { kind: "text", text: "Deploying now." },
+      { kind: "tools", ids: ["c1"] },
+      { kind: "text", text: ANSWER },
+    ]);
+  });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -837,5 +1046,166 @@ describe("reattach: paused states leave the ordered parts untouched", () => {
     expect(assistantMessage(sessionId)?.status).toBe("streaming");
     expect(sessionStatus(sessionId)).toBe("idle");
     expect(getTask).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3946: the paused settle marks the BUBBLE paused, not just the session idle
+// ---------------------------------------------------------------------------
+
+describe("reattach: a paused settle renders the bubble as waiting (#3946)", () => {
+  it("marks the replayed ask_human card and its bubble paused — still streaming, never finalized", async () => {
+    const sessionId = seedStuckSession();
+    resumeTask.mockImplementation(
+      heldOpen((handlers) => {
+        handlers.onTaskSnapshot?.();
+        handlers.onToolCall?.({ id: "ask-1", name: "ask_human", phase: "start", input: "{}" });
+        handlers.onInputRequired?.({ question: "Favourite fruit?" });
+        handlers.onTaskState?.("TASK_STATE_INPUT_REQUIRED");
+      }),
+    );
+
+    attach(sessionId);
+    await settle();
+
+    const msg = assistantMessage(sessionId);
+    expect(sessionStatus(sessionId)).toBe("idle");
+    expect(msg?.status).toBe("streaming");
+    expect(msg?.paused).toBe(true);
+    expect(msg?.toolCalls?.[0]).toMatchObject({ name: "ask_human", status: "running", paused: true });
+  });
+
+  it("the fallback poller's paused branch marks it too", async () => {
+    const sessionId = seedStuckMultiPartSession();
+    resumeTask.mockRejectedValue(new Error("task is not running (UnsupportedOperationError)"));
+    replayTask.mockResolvedValue("TASK_STATE_INPUT_REQUIRED");
+
+    attach(sessionId);
+    await settle();
+
+    expect(assistantMessage(sessionId)?.paused).toBe(true);
+    expect(assistantMessage(sessionId)?.toolCalls?.[0].paused).toBe(true);
+  });
+
+  it("a snapshot of a turn that is WORKING again clears a stale pause", async () => {
+    const sessionId = seedStuckSession();
+    chatStore.updateMessages(
+      sessionId,
+      chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!.messages.map((m) =>
+        m.id === ASSISTANT_ID ? { ...m, paused: true } : m,
+      ),
+    );
+    resumeTask.mockImplementation(
+      heldOpen((handlers) => {
+        handlers.onTaskSnapshot?.();
+        handlers.onTaskState?.("TASK_STATE_WORKING");
+      }),
+    );
+
+    attach(sessionId);
+    await settle();
+
+    expect(assistantMessage(sessionId)?.paused).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reattach MID-TURN keeps stream order: the pre-tool sentence stays the lead
+// ---------------------------------------------------------------------------
+
+describe("reattach: a mid-turn snapshot replays text in stream order", () => {
+  it("the sentence that streamed before the running tool comes back ABOVE it, not folded into Working…", async () => {
+    const SENTENCE = "I am protoAgent, a desktop agent.";
+    const sessionId = seedStuckSession();
+    resumeTask.mockImplementation(async (_taskId, sid, handlers) => {
+      // The REAL snapshot replay (a2aStream replayTaskSnapshot) into reattach's handlers.
+      makeA2ADispatcher(sid, handlers ?? {})({
+        result: {
+          task: {
+            id: TASK_ID,
+            contextId: sid,
+            status: { state: "TASK_STATE_WORKING" },
+            artifacts: [{ parts: [{ text: SENTENCE }] }],
+            history: [
+              { role: "ROLE_USER", parts: [{ text: "deploy the release" }] },
+              {
+                role: "ROLE_AGENT",
+                parts: [{ data: { text: "plan" }, metadata: { mimeType: "application/vnd.protolabs.reasoning-v1+json" } }],
+                metadata: { "protoagent/textOffset": 0 },
+              },
+              {
+                role: "ROLE_AGENT",
+                metadata: {
+                  "https://proto-labs.ai/a2a/ext/tool-call-v1": { toolCallId: "n1", name: "append_note", phase: "started", args: "{}" },
+                  "protoagent/textOffset": SENTENCE.length,
+                },
+              },
+            ],
+          },
+        },
+      } as never);
+      return new Promise(() => {}); // the stream stays open — the turn is still running
+    });
+
+    cancels.push(reattachTurn(sessionId, ASSISTANT_ID, TASK_ID));
+    await settle();
+
+    const parts = assistantMessage(sessionId)?.parts ?? [];
+    expect(parts).toEqual([
+      { kind: "reasoning", text: "plan" },
+      { kind: "text", text: SENTENCE },
+      { kind: "tools", ids: ["n1"] },
+    ]);
+    expect(foldPlan(parts, true).leadParts).toEqual([
+      { kind: "reasoning", text: "plan" },
+      { kind: "text", text: SENTENCE },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// footer time: a reattach settles at the task's OWN settle instant (#4154 review)
+// ---------------------------------------------------------------------------
+
+describe("reattach footer time matches a reload", () => {
+  const HYDRATED_AT = Date.parse("2026-10-11T09:00:00Z"); // when the WORKING turn was hydrated
+  const SETTLED_AT = Date.parse("2026-10-11T09:03:21Z"); // the task's status timestamp = last_updated
+
+  function seedHydrated(): string {
+    const sessionId = seedStuckSession();
+    const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)!;
+    chatStore.updateMessages(
+      sessionId,
+      cur.messages.map((m) => (m.id === ASSISTANT_ID ? { ...m, createdAt: HYDRATED_AT } : m)),
+    );
+    return sessionId;
+  }
+
+  it("a completed turn stamps the task's settle time, not the hydration-time createdAt", async () => {
+    const sessionId = seedHydrated();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "completed", text: "done", settledAt: SETTLED_AT });
+    attach(sessionId);
+    await settle();
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "done", createdAt: SETTLED_AT });
+  });
+
+  it("a cancelled turn (stopped) stamps the task's settle time too", async () => {
+    const sessionId = seedHydrated();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "TASK_STATE_CANCELED", text: "", settledAt: SETTLED_AT });
+    attach(sessionId);
+    await settle();
+    expect(assistantMessage(sessionId)).toMatchObject({ status: "done", stopped: true, createdAt: SETTLED_AT });
+  });
+
+  it("with no server timestamp it stamps when the reattach saw the end — never the hydration time", async () => {
+    const sessionId = seedHydrated();
+    resumeTask.mockResolvedValue(undefined);
+    getTask.mockResolvedValue({ state: "completed", text: "done" });
+    const before = Date.now();
+    attach(sessionId);
+    await settle();
+    expect(assistantMessage(sessionId)!.createdAt).toBeGreaterThanOrEqual(before);
   });
 });
