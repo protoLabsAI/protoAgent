@@ -7,7 +7,7 @@
 # registered in ``tools/lg_tools.py``.
 
 # Model connections (ADR 0106) — the registry that replaces `model.provider`,
-# `model.api_base` and `model.api_key` (all three are retiring, #3128). One entry per
+# `model.api_base` and `model.api_key` (legacy compatibility fields; removal is deferred, #3128). One entry per
 # endpoint; a slot names a model within one of them — a bare alias routes to
 # `gateway`, and `<id>:<model>` picks a connection, so slots can mix a gateway with a
 # Claude / ChatGPT subscription. Manage them in Settings ▸ Model ▸ Connections.
@@ -20,9 +20,9 @@
 # cannot hand one out.
 #
 # Declared explicitly below (ADR 0106 / #3128): the template no longer leans on the
-# load-time migration that synthesises a `gateway` connection from the retired
+# load-time migration that synthesises a `gateway` connection from the legacy
 # `model.api_base`/`model.api_key`. `base_url` here is exactly the App-default endpoint
-# that migration used, so a config with the retired fields removed keeps resolving the
+# that migration used, so a config with the legacy fields removed keeps resolving the
 # SAME gateway. The key is NOT carried in this file — put it in secrets.yaml under
 # `providers: {gateway: sk-...}` (an OPENAI_API_KEY env key is a migration-only
 # convenience; a declared connection reads its key only from its own fields/secrets).

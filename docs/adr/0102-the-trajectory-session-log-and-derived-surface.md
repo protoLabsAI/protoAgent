@@ -1,7 +1,13 @@
 # 0102 — The trajectory: append-only session log + derived surface
 
-Status: **Proposed** (umbrella #2806; the log half of ADR 0101's deferred
-log/surface split, giving #2786 its home)
+Status: **Partially implemented; remaining scope deferred** (October 13, 2026 closeout of #2806).
+
+The reference writer (S1, #2813) and read API/chat command (S2, #2821) shipped.
+Search (S3), full-text capture/arbitrary-point forks (S4), and derived-view
+compaction (S5) are not implemented and are not current delivery commitments.
+Full-text capture needs a retention/sensitive-content design; compaction keeps
+ADR 0101's telemetry gate. The proposal below records the original direction,
+including those deferred capabilities, rather than claiming they all exist.
 
 ## Context
 

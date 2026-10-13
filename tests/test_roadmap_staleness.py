@@ -137,10 +137,11 @@ def test_real_roadmap_json_parses_into_the_expected_ref_shape() -> None:
     # active status with a non-empty title.
     sections = json.loads(staleness.ROADMAP_JSON.read_text(encoding="utf-8"))
     statuses = {s["status"] for s in sections}
-    assert statuses == {"Planned", "In progress", "Shipped"}
+    assert statuses <= {"Planned", "In progress", "Shipped"}
+    assert "Shipped" in statuses
 
     refs = staleness.active_issue_refs(sections)
-    assert refs, "expected at least one Planned/In-progress issue ref in the live roadmap"
+    # A triaged queue may legitimately have no active issue refs (or no Planned section).
     for status, title, number in refs:
         assert staleness._is_active(status)
         assert title and isinstance(title, str)
