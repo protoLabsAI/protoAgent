@@ -383,3 +383,11 @@ def test_compact_archive_row_carries_thread_source_and_dates(monkeypatch, tmp_pa
         "User [2026-09-09]: favorite color?",
         "Assistant [2026-09-09]: teal",
     ]
+
+
+def test_safe_cut_skips_orphan_tool_block_without_parent():
+    from graph.compaction_op import _safe_cut_index
+
+    msgs = [HumanMessage(content="q"), ToolMessage(content="orphan", tool_call_id="missing"),
+            ToolMessage(content="also orphan", tool_call_id="missing2"), AIMessage(content="answer")]
+    assert _safe_cut_index(msgs, keep_last=3) == 3
