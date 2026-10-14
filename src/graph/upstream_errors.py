@@ -123,7 +123,10 @@ def provider_retry_delay(headers, *, now=None) -> float | None:
             try:
                 retry = float(raw)
             except ValueError:
-                retry = (parsedate_to_datetime(raw) - now).total_seconds()
+                date = parsedate_to_datetime(raw)
+                if date.tzinfo is None:
+                    date = date.replace(tzinfo=UTC)
+                retry = (date - now).total_seconds()
         except (ValueError, TypeError, OverflowError):
             pass
     return retry if retry is not None and math.isfinite(retry) and retry > 0 else None
