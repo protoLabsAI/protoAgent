@@ -8,10 +8,27 @@ from graph.providers.anthropic_oauth import _OAuthChatAnthropic
 import anthropic._base_client as sdk_base
 
 
+@pytest.fixture(params=["seconds", "milliseconds"] + [
+    (bad, fallback) for bad in ("invalid", "nan", "inf", "0", "-1")
+    for fallback in ("seconds", "date")
+])
+def long_retry_headers(request):
+    from datetime import UTC, datetime, timedelta
+    from email.utils import format_datetime
+
+    if request.param == "seconds":
+        return {"retry-after": "130287"}
+    if request.param == "milliseconds":
+        return {"retry-after-ms": "130287000"}
+    bad, fallback = request.param
+    value = "130287" if fallback == "seconds" else format_datetime(datetime.now(UTC) + timedelta(hours=36))
+    return {"retry-after-ms": bad, "retry-after": value}
+
+
 @pytest.mark.parametrize("status", [429, 503])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.asyncio
-async def test_long_provider_retry_is_reported_without_sleep(monkeypatch, stream, status):
+async def test_long_provider_retry_is_reported_without_sleep(monkeypatch, stream, status, long_retry_headers):
     monkeypatch.setattr(_OAuthChatAnthropic, "_refresh_oauth_token", lambda self: None)
     llm = _OAuthChatAnthropic(model="claude-test", oauth_token="test", max_retries=2)
     http = sdk_base.httpx2
@@ -19,7 +36,7 @@ async def test_long_provider_retry_is_reported_without_sleep(monkeypatch, stream
 
     def respond(request):
         requests.append(request)
-        return http.Response(status, headers={"retry-after": "130287"}, json={
+        return http.Response(status, headers=long_retry_headers, json={
             "type": "error", "error": {"type": "rate_limit_error", "message": "Weekly quota exhausted"},
         })
 
@@ -36,7 +53,7 @@ async def test_long_provider_retry_is_reported_without_sleep(monkeypatch, stream
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_sync_long_retry_does_not_sleep(monkeypatch, stream):
+def test_sync_long_retry_does_not_sleep(monkeypatch, stream, long_retry_headers):
     monkeypatch.setattr(_OAuthChatAnthropic, "_refresh_oauth_token", lambda self: None)
     llm = _OAuthChatAnthropic(model="claude-test", oauth_token="test", max_retries=2)
     http = sdk_base.httpx2
@@ -44,7 +61,7 @@ def test_sync_long_retry_does_not_sleep(monkeypatch, stream):
 
     def respond(request):
         calls.append(request)
-        return http.Response(429, headers={"retry-after-ms": "130287000"}, json={
+        return http.Response(429, headers=long_retry_headers, json={
             "error": {"type": "rate_limit_error", "message": "Weekly quota exhausted"},
         })
 

@@ -104,27 +104,14 @@ def upstream_http_status(exc: BaseException | None) -> int | None:
     return None
 
 
-def rate_limit_details(exc: BaseException | None) -> dict:
-    """Preserve a provider's cooldown without waiting through it (#4205).
-
-    Only explicit 429 responses qualify; an OAuth identity refusal or an ordinary
-    stream stall must not be diagnosed as exhausted subscription quota.
-    """
+def provider_retry_delay(headers, *, now=None) -> float | None:
+    """Parse a positive finite cooldown, falling back from unusable milliseconds."""
     import math
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, datetime
     from email.utils import parsedate_to_datetime
 
-    seen: set[int] = set()
-    while exc is not None and id(exc) not in seen and len(seen) < 16:
-        seen.add(id(exc))
-        if upstream_status(exc) == 429:
-            break
-        exc = exc.__cause__
-    else:
-        return {}
-    headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
     retry: float | None = None
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     try:
         retry = float(headers.get("retry-after-ms", "")) / 1000
     except (ValueError, TypeError, OverflowError):
@@ -139,6 +126,29 @@ def rate_limit_details(exc: BaseException | None) -> dict:
                 retry = (parsedate_to_datetime(raw) - now).total_seconds()
         except (ValueError, TypeError, OverflowError):
             pass
+    return retry if retry is not None and math.isfinite(retry) and retry > 0 else None
+
+
+def rate_limit_details(exc: BaseException | None) -> dict:
+    """Preserve a provider's cooldown without waiting through it (#4205).
+
+    Only explicit 429 responses qualify; an OAuth identity refusal or an ordinary
+    stream stall must not be diagnosed as exhausted subscription quota.
+    """
+    import math
+    from datetime import UTC, datetime, timedelta
+
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen and len(seen) < 16:
+        seen.add(id(exc))
+        if upstream_status(exc) == 429:
+            break
+        exc = exc.__cause__
+    else:
+        return {}
+    headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+    now = datetime.now(UTC)
+    retry = provider_retry_delay(headers, now=now)
     body = getattr(exc, "body", None)
     error = body.get("error", body) if isinstance(body, dict) else {}
     reason = str(error.get("message") or str(exc)) if isinstance(error, dict) else str(exc)

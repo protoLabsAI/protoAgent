@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import PrivateAttr
 
 from graph.providers.oauth import resolve_anthropic_oauth
+from graph.upstream_errors import provider_retry_delay
 
 if TYPE_CHECKING:
     from graph.config import LangGraphConfig
@@ -205,7 +206,7 @@ try:
         """
 
         def _should_retry(self, response):
-            delay = self._parse_retry_after_header(response.headers)
+            delay = provider_retry_delay(response.headers)
             if delay is not None and delay > 10:
                 return False
             return super()._should_retry(response)
