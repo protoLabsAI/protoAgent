@@ -8,7 +8,7 @@ from graph.providers.anthropic_oauth import _OAuthChatAnthropic
 import anthropic._base_client as sdk_base
 
 
-@pytest.fixture(params=["seconds", "milliseconds"] + [
+@pytest.fixture(params=["seconds", "milliseconds", "asctime"] + [
     (bad, fallback) for bad in ("invalid", "nan", "inf", "0", "-1")
     for fallback in ("seconds", "date")
 ])
@@ -20,6 +20,8 @@ def long_retry_headers(request):
         return {"retry-after": "130287"}
     if request.param == "milliseconds":
         return {"retry-after-ms": "130287000"}
+    if request.param == "asctime":
+        return {"retry-after": (datetime.now(UTC) + timedelta(hours=36)).strftime("%a %b %d %H:%M:%S %Y")}
     bad, fallback = request.param
     value = "130287" if fallback == "seconds" else format_datetime(datetime.now(UTC) + timedelta(hours=36))
     return {"retry-after-ms": bad, "retry-after": value}
