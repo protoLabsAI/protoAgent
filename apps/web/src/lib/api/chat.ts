@@ -447,6 +447,19 @@ export const chatApi = {
     handlers.onDone?.();
   },
 
+  localChatTurns(sessionId: string) {
+    return request<{ turns: { id: string; origin: string; started_at: string; cancel_requested: boolean }[] }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/local-turns`,
+    );
+  },
+
+  cancelLocalChatTurn(sessionId: string, turnId: string) {
+    return request<{ stopped: boolean }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/local-turns/${encodeURIComponent(turnId)}/cancel`,
+      { method: "POST" },
+    );
+  },
+
   cancelTask(taskId: string) {
     // A2A 1.0 (a2a-sdk 1.1): proto method name + the version header — `tasks/cancel`
     // is -32601 Method not found on the live server (same rot class as the eval

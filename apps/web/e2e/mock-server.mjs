@@ -1177,6 +1177,10 @@ const server = createServer(async (req, res) => {
   // Non-streaming chat send — the Fleet Room address/broadcast (/api/chat) and the desktop
   // streaming fallback. A member send arrives here too: the /agents/<slug> prefix was already
   // stripped above, so /agents/ava/api/chat proxies to this same handler.
+  if (/^\/api\/chat\/sessions\/[^/]+\/local-turns$/.test(pathname) && req.method === "GET") {
+    return sendJson(res, { turns: [] });
+  }
+
   if (pathname === "/api/chat" && req.method === "POST") {
     const body = await readBody(req);
     return sendJson(res, { response: `ack: ${String(body?.message ?? "").slice(0, 40)}` });
