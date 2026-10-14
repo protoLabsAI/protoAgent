@@ -19,6 +19,7 @@ const ns = <const T extends readonly (string | number)[]>(...key: T) =>
   [currentSlug(), ...key] as const;
 
 export const queryKeys = {
+  localChatTurns: (sessionId: string) => ns("chat", sessionId, "local-turns"),
   get goals() {
     return ns("goals");
   },
@@ -563,3 +564,12 @@ export const knowledgeQuery = (q: string, reviewState?: ReviewState) =>
       : ([...queryKeys.knowledge, q] as const),
     queryFn: () => api.knowledgeSearch(q, { reviewState }),
   });
+
+
+export function localChatTurnsQuery(sessionId: string) {
+  return queryOptions({
+    queryKey: queryKeys.localChatTurns(sessionId),
+    queryFn: () => api.localChatTurns(sessionId),
+    refetchInterval: 1000,
+  });
+}

@@ -42,6 +42,7 @@ from graph.middleware.wait_yield import wait_turn_reply
 from graph.output_format import extract_output
 from runtime import turn_activity as _turn_activity
 from runtime.state import STATE
+from runtime import local_turns
 from server import turn_telemetry as _turn_telemetry
 
 # The ACP runtime registry + turn driving moved to server/chat_acp.py (#3828). The
@@ -1763,6 +1764,7 @@ def turn_error(exc: BaseException | None, message: str | None = None) -> dict[st
     return err
 
 
+@local_turns.tracked
 async def _chat_langgraph(
     message: str,
     session_id: str,
@@ -1818,6 +1820,9 @@ async def _chat_langgraph(
         else:
             state = sink.get("state") or "completed"
         return result
+    except asyncio.CancelledError:
+        state = "canceled" if local_turns.cancellation_requested() else "failed"
+        raise
     finally:
         _turn_control._turn_ended(session_id)
         _turn_telemetry.record_local_turn(sink, session_id=session_id, origin=origin, state=state, started=started)
