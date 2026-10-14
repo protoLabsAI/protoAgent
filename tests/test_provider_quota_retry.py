@@ -90,6 +90,8 @@ async def test_short_retry_remains_cancelable(monkeypatch):
 @pytest.mark.parametrize("headers,expected", [
     ({"retry-after": "130287"}, 130287),
     ({"retry-after-ms": "1500"}, 2),
+    ({"retry-after-ms": "invalid", "retry-after": "130287"}, 130287),
+    ({"retry-after-ms": "nan", "retry-after": "130287"}, 130287),
     ({"retry-after": "invalid"}, None),
     ({"retry-after": "nan"}, None),
     ({"retry-after": "inf"}, None),
@@ -97,7 +99,7 @@ async def test_short_retry_remains_cancelable(monkeypatch):
 ])
 def test_quota_metadata_reaches_chat_http_error(headers, expected):
     from graph.upstream_errors import rate_limit_details
-    from operator_api.chat_routes import _api_chat_error
+    from operator_api.chat_routes import _api_chat_error, _v1_error_response
     from server.chat import turn_error
 
     http = sdk_base.httpx2
@@ -109,11 +111,19 @@ def test_quota_metadata_reaches_chat_http_error(headers, expected):
     assert detail.get("retry_after") == expected
     assert "Weekly quota exhausted" in detail["message"]
     assert "model selector" in detail["message"]
-    error = _api_chat_error(turn_error(exc), "same-session")
+    classified = turn_error(exc)
+    error = _api_chat_error(classified, "same-session")
     assert error.status_code == 429
     assert error.detail["quota_exhausted"] is True
     assert error.detail.get("retry_after") == expected
     assert error.headers == ({"Retry-After": str(expected)} if expected else None)
+    import json
+
+    v1 = _v1_error_response(classified)
+    payload = json.loads(v1.body)["error"]
+    assert payload["quota_exhausted"] is True
+    assert payload.get("retry_after") == expected
+    assert payload.get("retry_at") == error.detail.get("retry_at")
 
 
 def test_stream_stall_is_not_quota_exhaustion():

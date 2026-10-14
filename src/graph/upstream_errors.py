@@ -126,16 +126,19 @@ def rate_limit_details(exc: BaseException | None) -> dict:
     retry: float | None = None
     now = datetime.now(UTC)
     try:
-        if headers.get("retry-after-ms"):
-            retry = float(headers["retry-after-ms"]) / 1000
-        elif headers.get("retry-after"):
-            raw = headers["retry-after"]
+        retry = float(headers.get("retry-after-ms", "")) / 1000
+    except (ValueError, TypeError, OverflowError):
+        pass
+    if retry is None or not math.isfinite(retry) or retry <= 0:
+        retry = None
+        try:
+            raw = headers.get("retry-after", "")
             try:
                 retry = float(raw)
             except ValueError:
                 retry = (parsedate_to_datetime(raw) - now).total_seconds()
-    except (ValueError, TypeError, OverflowError):
-        pass
+        except (ValueError, TypeError, OverflowError):
+            pass
     body = getattr(exc, "body", None)
     error = body.get("error", body) if isinstance(body, dict) else {}
     reason = str(error.get("message") or str(exc)) if isinstance(error, dict) else str(exc)
