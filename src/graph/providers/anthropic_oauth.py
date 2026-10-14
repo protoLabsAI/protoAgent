@@ -189,7 +189,32 @@ def _stream_args_tool_names(tools: Any) -> set[str]:
 
 
 try:
+    import anthropic
     from langchain_anthropic import ChatAnthropic
+    from langchain_anthropic.chat_models import (
+        _get_default_async_httpx_client,
+        _get_default_httpx_client,
+    )
+
+    class _InteractiveRetry:
+        """Return long provider cooldowns to the operator, never sleep through them.
+
+        Keep the SDK's transient retry/auth policy, but a requested delay over ten
+        seconds belongs in the error response. In particular, subscription resets
+        must not turn into repeated first-token stalls (#4205).
+        """
+
+        def _should_retry(self, response):
+            delay = self._parse_retry_after_header(response.headers)
+            if delay is not None and delay > 10:
+                return False
+            return super()._should_retry(response)
+
+    class _InteractiveAnthropic(_InteractiveRetry, anthropic.Anthropic):
+        pass
+
+    class _AsyncInteractiveAnthropic(_InteractiveRetry, anthropic.AsyncAnthropic):
+        pass
 
     class _OAuthChatAnthropic(ChatAnthropic):
         """``ChatAnthropic`` that authenticates with a Bearer OAuth token.
@@ -223,6 +248,30 @@ try:
             params.pop("api_key", None)
             params["auth_token"] = self.oauth_token
             return params
+
+        def _http_client_params(self) -> dict[str, Any]:
+            # Match ChatAnthropic's transport construction, including its proxy and
+            # shared pool. Wire tests pin this private upstream integration seam.
+            params = {"base_url": self._client_params["base_url"]}
+            if "timeout" in self._client_params:
+                params["timeout"] = self._client_params["timeout"]
+            if self.anthropic_proxy:
+                params["anthropic_proxy"] = self.anthropic_proxy
+            return params
+
+        @cached_property
+        def _client(self):
+            return _InteractiveAnthropic(
+                **self._client_params,
+                http_client=_get_default_httpx_client(**self._http_client_params()),
+            )
+
+        @cached_property
+        def _async_client(self):
+            return _AsyncInteractiveAnthropic(
+                **self._client_params,
+                http_client=_get_default_async_httpx_client(**self._http_client_params()),
+            )
 
         def _refresh_oauth_token(self) -> None:
             """Push the CURRENT credential into the live SDK clients, before each request.

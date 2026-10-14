@@ -1354,7 +1354,10 @@ async def _fail_turn(exc: BaseException, session_id: str, *, tag: str, thread_id
         hint = getattr(pick_failure, "hint", "") or ""
         await record_failed_turn(session_id, f"**Error:** {msg} {hint}".rstrip(), thread_id=thread_id)
         return f"{msg} {hint}".rstrip() if hint and _operator_caller() else msg
-    if _is_provider_stream_drop(exc):
+    rate_limit = _upstream_errors.rate_limit_details(exc)
+    if rate_limit:
+        msg = rate_limit["message"]
+    elif _is_provider_stream_drop(exc):
         log.warning(
             "[%s] provider closed the stream for session=%s (%s: %s) — possible rate limit; failing the turn cleanly",
             tag,
@@ -1725,6 +1728,11 @@ def turn_error(exc: BaseException | None, message: str | None = None) -> dict[st
         # None for a failure with no exception behind it (a turn that produced no reply, #3873).
         "exception": type(exc).__name__ if exc is not None else None,
     }
+    rate_limit = _upstream_errors.rate_limit_details(exc)
+    if rate_limit:
+        err.update(rate_limit)
+        err["upstream_status"] = 429
+        err["type"] = "rate_limit_error"
     pick_failure = _model_pick_failure(exc)
     if pick_failure is not None:
         from graph.middleware.model_override import ModelOverrideError

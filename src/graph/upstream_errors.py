@@ -102,3 +102,51 @@ def upstream_http_status(exc: BaseException | None) -> int | None:
     if code is not None or upstream_unreachable(exc):
         return 502
     return None
+
+
+def rate_limit_details(exc: BaseException | None) -> dict:
+    """Preserve a provider's cooldown without waiting through it (#4205).
+
+    Only explicit 429 responses qualify; an OAuth identity refusal or an ordinary
+    stream stall must not be diagnosed as exhausted subscription quota.
+    """
+    import math
+    from datetime import UTC, datetime, timedelta
+    from email.utils import parsedate_to_datetime
+
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen and len(seen) < 16:
+        seen.add(id(exc))
+        if upstream_status(exc) == 429:
+            break
+        exc = exc.__cause__
+    else:
+        return {}
+    headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+    retry: float | None = None
+    now = datetime.now(UTC)
+    try:
+        if headers.get("retry-after-ms"):
+            retry = float(headers["retry-after-ms"]) / 1000
+        elif headers.get("retry-after"):
+            raw = headers["retry-after"]
+            try:
+                retry = float(raw)
+            except ValueError:
+                retry = (parsedate_to_datetime(raw) - now).total_seconds()
+    except (ValueError, TypeError, OverflowError):
+        pass
+    body = getattr(exc, "body", None)
+    error = body.get("error", body) if isinstance(body, dict) else {}
+    reason = str(error.get("message") or str(exc)) if isinstance(error, dict) else str(exc)
+    details = {"provider_rate_limited": True}
+    if any(marker in reason.lower() for marker in ("quota", "weekly limit", "usage limit", "insufficient_quota")):
+        details["quota_exhausted"] = True
+    message = f"Model provider rate limit: {reason}"
+    if retry is not None and math.isfinite(retry) and 0 < retry <= 315360000:
+        seconds = math.ceil(retry)
+        details["retry_after"] = seconds
+        details["retry_at"] = (now + timedelta(seconds=seconds)).isoformat()
+        message += f" Retry after {seconds} seconds (reset {details['retry_at']})."
+    details["message"] = message + " Choose another configured model in the chat model selector, or wait and retry."
+    return details

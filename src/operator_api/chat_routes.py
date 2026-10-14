@@ -514,7 +514,7 @@ def _turn_error_status(err: dict) -> tuple[int, dict[str, str] | None]:
     else:
         status = 500
     # A transient model-pick failure says when to come back (#3957).
-    headers = {"Retry-After": str(err["retry_after"])} if status == 503 and err.get("retry_after") else None
+    headers = {"Retry-After": str(err["retry_after"])} if status in (429, 503) and err.get("retry_after") else None
     return status, headers
 
 
@@ -556,6 +556,7 @@ def _api_chat_error(
             "upstream_status": err.get("upstream_status"),
             "session_id": session_id,
             "error_id": error_id,
+            **{key: err[key] for key in ("retry_after", "retry_at", "quota_exhausted", "provider_rate_limited") if key in err},
         },
     )
 
