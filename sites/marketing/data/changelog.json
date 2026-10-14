@@ -4,6 +4,7 @@
     "date": "2026-10-14",
     "changes": [
       "Stop pending chat requests and recover in the same conversation (#4205).",
+      "Gateway calls keep each conversation on a warm replica (#4210).",
       "Keep the console usable when browser storage is full (#3703).",
       "A full browser-storage quota no longer crashes the console (#3708).",
       "Recover from failed pairing credential saves (#3703).",
