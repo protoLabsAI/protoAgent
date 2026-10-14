@@ -626,6 +626,7 @@ def _v1_error_response(err: dict) -> JSONResponse:
                 # Non-standard but additive: which hop actually failed, for operators
                 # staring at a 502 wondering whose credential expired.
                 "upstream_status": upstream,
+                **{key: err[key] for key in ("retry_after", "retry_at", "quota_exhausted", "provider_rate_limited") if key in err},
             }
         },
         status_code=status,
