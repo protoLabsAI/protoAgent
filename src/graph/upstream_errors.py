@@ -150,6 +150,6 @@ def rate_limit_details(exc: BaseException | None) -> dict:
         seconds = math.ceil(retry)
         details["retry_after"] = seconds
         details["retry_at"] = (now + timedelta(seconds=seconds)).isoformat()
-        message += f" Retry after {seconds} seconds (reset {details['retry_at']})."
+        message += f" Retry after {seconds} seconds (retry at {details['retry_at']})."
     details["message"] = message + " Choose another configured model in the chat model selector, or wait and retry."
     return details

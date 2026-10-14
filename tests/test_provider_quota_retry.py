@@ -8,9 +8,10 @@ from graph.providers.anthropic_oauth import _OAuthChatAnthropic
 import anthropic._base_client as sdk_base
 
 
+@pytest.mark.parametrize("status", [429, 503])
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.asyncio
-async def test_long_quota_retry_is_reported_without_sleep(monkeypatch, stream):
+async def test_long_provider_retry_is_reported_without_sleep(monkeypatch, stream, status):
     monkeypatch.setattr(_OAuthChatAnthropic, "_refresh_oauth_token", lambda self: None)
     llm = _OAuthChatAnthropic(model="claude-test", oauth_token="test", max_retries=2)
     http = sdk_base.httpx2
@@ -18,13 +19,13 @@ async def test_long_quota_retry_is_reported_without_sleep(monkeypatch, stream):
 
     def respond(request):
         requests.append(request)
-        return http.Response(429, headers={"retry-after": "130287"}, json={
+        return http.Response(status, headers={"retry-after": "130287"}, json={
             "type": "error", "error": {"type": "rate_limit_error", "message": "Weekly quota exhausted"},
         })
 
     async with http.AsyncClient(transport=http.MockTransport(respond)) as client:
         llm._async_client._client = client
-        with pytest.raises(anthropic.RateLimitError, match="Weekly quota exhausted"):
+        with pytest.raises(anthropic.RateLimitError if status == 429 else anthropic.InternalServerError, match="Weekly quota exhausted"):
             async with asyncio.timeout(5):
                 if stream:
                     async for _ in llm.astream("hello"):

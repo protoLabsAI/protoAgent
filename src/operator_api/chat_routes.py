@@ -518,6 +518,11 @@ def _turn_error_status(err: dict) -> tuple[int, dict[str, str] | None]:
     return status, headers
 
 
+def _rate_limit_fields(err: dict) -> dict:
+    """The additive cooldown fields shared by both HTTP error envelopes."""
+    return {key: err[key] for key in ("retry_after", "retry_at", "quota_exhausted", "provider_rate_limited") if key in err}
+
+
 def _api_chat_error(
     err: dict, session_id: str, exc: BaseException | None = None, *, raised: bool = False
 ) -> HTTPException:
@@ -556,7 +561,7 @@ def _api_chat_error(
             "upstream_status": err.get("upstream_status"),
             "session_id": session_id,
             "error_id": error_id,
-            **{key: err[key] for key in ("retry_after", "retry_at", "quota_exhausted", "provider_rate_limited") if key in err},
+            **_rate_limit_fields(err),
         },
     )
 
@@ -594,7 +599,7 @@ def _v1_error_response(err: dict) -> JSONResponse:
                 # Non-standard but additive: which hop actually failed, for operators
                 # staring at a 502 wondering whose credential expired.
                 "upstream_status": upstream,
-                **{key: err[key] for key in ("retry_after", "retry_at", "quota_exhausted", "provider_rate_limited") if key in err},
+                **_rate_limit_fields(err),
             }
         },
         status_code=status,
