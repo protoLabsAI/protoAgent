@@ -60,6 +60,21 @@ to different models. Changing **Primary model** does not automatically replace
 every explicitly configured slot. Keep the defaults until you need those routes;
 see [Configuration](/reference/configuration#model) for their meanings.
 
+## Recover from a provider quota limit
+
+If a subscription is exhausted, chat shows the provider's reason and retry/reset
+time when the provider supplies it. Anthropic cooldowns longer than ten seconds
+return immediately rather than keeping the chat waiting through the reset.
+
+Choose another configured model with the composer’s model control, then continue
+in the same conversation. A pending non-streaming request appears above the
+composer with **Stop request**. The model control also stops these requests and
+waits for their cleanup before changing the chat's model. If stopping fails, the
+model stays unchanged and the control reports the error; retry Stop.
+
+No new provider is selected automatically by this recovery flow. The choice
+changes this chat only; it does not rewrite your workspace's primary model.
+
 ## Update a key or reconnect
 
 Choose **Edit** on a gateway connection, enter the replacement key, and choose

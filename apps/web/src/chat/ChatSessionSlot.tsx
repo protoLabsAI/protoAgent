@@ -32,6 +32,7 @@ import { ArtifactChatSendContext, type ArtifactChatSend } from "../artifacts/Art
 import { ComponentChatSendContext, ComponentFrameRegistryContext, type ComponentChatSend } from "./FrameComponentHost";
 import { createFrameRegistry } from "../artifacts/inlineFrames";
 import { ComposerModelSelect } from "./ComposerModelSelect";
+import { LocalTurnControls } from "./LocalTurnControls";
 import {
   noteTurnFinished,
   noteTurnStarted,
@@ -1924,6 +1925,7 @@ export function ChatSessionSlot({
             </div>
           </div>
         ) : null}
+        <LocalTurnControls sessionId={sessionId} visible={visible && surfaceActive} />
         {signedOut ? (
           /* Deliberate OAuth signed-out state (#2513): the composer is out of
              service — an enabled Send would only fail locally. Reconnect opens

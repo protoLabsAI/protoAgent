@@ -15,6 +15,7 @@ HTTP layer over it. ``ui`` (the deployment tier) is passed in because
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -492,6 +493,41 @@ def _v1_invalid_request(message: str, *, param: str | None = None) -> JSONRespon
     )
 
 
+async def _run_disconnectable_chat(request: Request, call):
+    """The interactive REST fallback stops when its client leaves (#4205).
+
+    /v1 deliberately uses _run_v1_turn instead: its documented run-to-completion
+    contract survives disconnect, while the registered turn remains cancelable.
+    """
+    turn = asyncio.create_task(call)
+
+    async def disconnected():
+        while True:
+            if (await request.receive())["type"] == "http.disconnect":
+                return
+
+    watcher = asyncio.create_task(disconnected())
+    try:
+        done, _ = await asyncio.wait({turn, watcher}, return_when=asyncio.FIRST_COMPLETED)
+        if turn in done:
+            return await turn
+        raise asyncio.CancelledError("chat client disconnected")
+    finally:
+        watcher.cancel()
+        if not turn.done() and not turn.cancelling():
+            turn.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watcher
+        # Stop or disconnect already initiated cancellation. Keep ownership of
+        # cleanup without forwarding later ASGI cancellations into the driver.
+        # A pending turn here means the try block is already raising cancellation.
+        while not turn.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(turn)
+        with contextlib.suppress(asyncio.CancelledError):
+            turn.result()
+
+
 def _turn_error_status(err: dict) -> tuple[int, dict[str, str] | None]:
     """The HTTP status (and headers) for a failed turn's ``turn_error`` dict — the one
     policy ``/v1`` and ``POST /api/chat`` share (#3973). See ``_v1_error_response`` for
@@ -507,6 +543,8 @@ def _turn_error_status(err: dict) -> tuple[int, dict[str, str] | None]:
         # The turn's model pick names a known connection that could not be set up right
         # now (#3957) — a sign-in refresh that failed, say. Retryable, not the caller's fault.
         status = 503
+    elif err.get("type") == "turn_cancelled":
+        status = 409
     elif err.get("type") == "invalid_request_error":
         # Our own refusal of the request as sent — e.g. a `model` naming a connection this
         # agent doesn't have (#3957). No hop failed; the caller's input did.
@@ -653,7 +691,7 @@ def register_chat_routes(app, ui: str) -> None:
 
     # --- Chat API -----------------------------------------------------------
     @app.post("/api/chat")
-    async def _api_chat(req: ChatRequest):
+    async def _api_chat(req: ChatRequest, request: Request):
         # Echo the (possibly minted) session_id so callers can continue the
         # session — additive key, existing consumers unaffected.
         session_id = req.session_id.strip() or _mint_session_id()
@@ -662,14 +700,14 @@ def register_chat_routes(app, ui: str) -> None:
         # back as a structured error bubble a 200 a client counted as an answer. The
         # console's /api/chat fallback already reads a non-2xx `detail` as a failed turn.
         try:
-            result = await chat(
+            result = await _run_disconnectable_chat(request, chat(
                 req.message,
                 session_id,
                 model=req.model,
                 incognito=req.incognito,
                 hitl_resume=req.hitl_resume,
                 origin="api-chat",
-            )
+            ))
         except Exception as exc:
             raise _api_chat_error(turn_error(exc), session_id, exc, raised=True) from exc
         turn_err = next((m["error"] for m in result if isinstance(m.get("error"), dict)), None)
@@ -975,6 +1013,22 @@ def register_chat_routes(app, ui: str) -> None:
             raise HTTPException(status_code=404, detail={"code": "not_found", "reason": f"unknown session: {session_id}"})
         return summary
 
+    @app.get("/api/chat/sessions/{session_id}/local-turns")
+    async def _api_local_turns(session_id: SessionId):
+        from runtime import local_turns
+
+        return {"turns": local_turns.snapshot(session_id)}
+
+    @app.post("/api/chat/sessions/{session_id}/local-turns/{turn_id}/cancel")
+    async def _api_cancel_local_turn(session_id: SessionId, turn_id: str):
+        from runtime import local_turns
+
+        try:
+            stopped = await local_turns.cancel(session_id, turn_id)
+        except TimeoutError:
+            raise HTTPException(status_code=409, detail="Turn is still stopping; retry shortly.") from None
+        return {"stopped": stopped}
+
     @app.get("/api/chat/sessions/{session_id}/turns")
     async def _api_session_turns(session_id: SessionId, limit: int = 50):
         """The session's durable turns from the A2A task store (ADR 0104, Swap &
@@ -991,9 +1045,12 @@ def register_chat_routes(app, ui: str) -> None:
         access, no flag gate (the export sibling's rule)."""
         from runtime.state import STATE
 
+        from runtime import local_turns
+
+        local = local_turns.snapshot(session_id)
         engine = getattr(STATE, "a2a_task_engine", None)
         if engine is None:
-            return {"turns": [], "reason": "task store not initialized"}
+            return {"turns": [], "local_turns": local, "live_task_id": None, "reason": "task store not initialized"}
         limit = max(1, min(int(limit), 200))
         try:
             from sqlalchemy import exists, select
@@ -1029,7 +1086,7 @@ def register_chat_routes(app, ui: str) -> None:
                 rows.reverse()
         except Exception as exc:  # noqa: BLE001 — a read API must degrade, not 500 the console
             log.warning("[chat] session turns read failed for %s: %s", session_id, exc)
-            return {"turns": [], "reason": f"read failed: {type(exc).__name__}"}
+            return {"turns": [], "local_turns": local, "live_task_id": None, "reason": f"read failed: {type(exc).__name__}"}
 
         def _text(artifacts) -> str:
             # One paragraph per artifact: a task resumed after a HITL pause answers in one
@@ -1067,7 +1124,7 @@ def register_chat_routes(app, ui: str) -> None:
         live = _live_turn(turns, turn_activity.holding_task(session_id))
         for turn in turns:
             turn["live"] = turn is live
-        return {"turns": turns, "live_task_id": live["task_id"] if live else None}
+        return {"turns": turns, "local_turns": local_turns.snapshot(session_id), "live_task_id": live["task_id"] if live else None}
 
     @app.get("/api/chat/sessions/{session_id}/publish/preview")
     async def _api_publish_preview(session_id: SessionId, title: str | None = None):
