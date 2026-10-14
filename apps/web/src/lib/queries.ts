@@ -565,7 +565,6 @@ export const knowledgeQuery = (q: string, reviewState?: ReviewState) =>
     queryFn: () => api.knowledgeSearch(q, { reviewState }),
   });
 
-
 export function localChatTurnsQuery(sessionId: string) {
   return queryOptions({
     queryKey: queryKeys.localChatTurns(sessionId),
