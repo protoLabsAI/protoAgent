@@ -633,6 +633,21 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         every model that doesn't set it, so this never touches Claude/GPT/ungated
         gateway slots."""
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        # Resolve at request time: one cached client can serve concurrent threads.
+        # Hash custom thread ids so arbitrary Unicode/paths stay out of HTTP headers.
+        try:
+            from langgraph.config import get_config
+
+            thread_id = ((get_config() or {}).get("configurable") or {}).get("thread_id")
+        except RuntimeError:  # no runnable context (probes and standalone calls)
+            thread_id = None
+        if thread_id:
+            headers = dict(payload.get("extra_headers") or {})
+            if not any(key.lower() == "x-litellm-session-id" for key in headers):
+                headers["x-litellm-session-id"] = (
+                    "protoagent:" + hashlib.sha256(str(thread_id).encode()).hexdigest()
+                )
+            payload["extra_headers"] = headers
         if (self.extra_body or {}).get("thinking", {}).get("type") == "enabled":
             messages = self._convert_input(input_).to_messages()
             payload_messages = payload.get("messages") or []
