@@ -514,12 +514,18 @@ async def _run_disconnectable_chat(request: Request, call):
         raise asyncio.CancelledError("chat client disconnected")
     finally:
         watcher.cancel()
-        if not turn.done():
+        if not turn.done() and not turn.cancelling():
             turn.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await watcher
+        # Stop or disconnect already initiated cancellation. Keep ownership of
+        # cleanup without forwarding later ASGI cancellations into the driver.
+        # A pending turn here means the try block is already raising cancellation.
+        while not turn.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(turn)
         with contextlib.suppress(asyncio.CancelledError):
-            await turn
+            turn.result()
 
 
 def _turn_error_status(err: dict) -> tuple[int, dict[str, str] | None]:

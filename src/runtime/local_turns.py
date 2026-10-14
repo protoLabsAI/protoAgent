@@ -47,7 +47,9 @@ async def cancel(session_id: str, turn_id: str, *, timeout: float = 5) -> bool:
         return False
     if not turn.cancel_requested:
         turn.cancel_requested = True
-        turn.task.cancel()
+        # Disconnect may already be unwinding this same driver.
+        if not turn.task.cancelling():
+            turn.task.cancel()
     await asyncio.wait_for(turn.stopped.wait(), timeout)
     return True
 

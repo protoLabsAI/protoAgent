@@ -174,3 +174,69 @@ async def test_queued_turn_can_be_cancelled_without_canceling_lock_holder(app, m
     release.set()
     assert (await holder)[0]["content"] == "first"
     assert not local_turns.snapshot("queued")
+
+
+@pytest.mark.parametrize("first", ["stop", "disconnect", "request_cancel"])
+@pytest.mark.asyncio
+async def test_stop_and_disconnect_preserve_inflight_cleanup(first):
+    from operator_api.chat_routes import _run_disconnectable_chat
+
+    entered = asyncio.Event()
+    cleaning = asyncio.Event()
+    release = asyncio.Event()
+    completed = asyncio.Event()
+    gone = asyncio.Event()
+    lock = asyncio.Lock()
+
+    class Request:
+        async def receive(self):
+            await gone.wait()
+            return {"type": "http.disconnect"}
+
+    @local_turns.tracked
+    async def driver(message, session_id):
+        async with lock:
+            try:
+                entered.set()
+                await asyncio.Event().wait()
+            finally:
+                cleaning.set()
+                await release.wait()
+                completed.set()
+
+    pending = asyncio.create_task(_run_disconnectable_chat(Request(), driver("hi", "cleanup-race")))
+    await asyncio.wait_for(entered.wait(), 5)
+    turn_id = local_turns.snapshot("cleanup-race")[0]["id"]
+    stop = None
+    try:
+        if first == "stop":
+            stop = asyncio.create_task(local_turns.cancel("cleanup-race", turn_id))
+        elif first == "disconnect":
+            gone.set()
+        else:
+            pending.cancel()
+        await asyncio.wait_for(cleaning.wait(), 5)
+        if stop is None:
+            stop = asyncio.create_task(local_turns.cancel("cleanup-race", turn_id))
+        gone.set()
+        # Let the disconnect and Stop handlers both reach the cleanup wait.
+        for _ in range(10):
+            await asyncio.sleep(0)
+        # An ASGI task can also be canceled while draining the disconnected turn.
+        pending.cancel()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert lock.locked()
+        assert local_turns.snapshot("cleanup-race")
+        assert not stop.done() and not pending.done()
+        assert not completed.is_set()
+        release.set()
+        assert await asyncio.wait_for(stop, 5)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(pending, 5)
+        assert completed.is_set()
+        assert not lock.locked()
+        assert not local_turns.snapshot("cleanup-race")
+    finally:
+        release.set()
+        await asyncio.gather(pending, *([stop] if stop else []), return_exceptions=True)
