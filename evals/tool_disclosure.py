@@ -6,9 +6,6 @@ stores, plugins or OAuth stores are used. Reports contain unkeyed content digest
 """
 import argparse
 import asyncio
-import json
-import os
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -17,11 +14,12 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 
+from evals.isolation import isolated_instance, write_report
 from evals.prompt_context import RequestProbe
 from graph.config import LangGraphConfig
 from graph.message_blocks import text_of
 from graph.subagents.config import SubagentConfig, SUBAGENT_REGISTRY
-from infra.paths import instance_paths, reset_instance_paths
+
 
 
 def catalog(size=40):
@@ -103,33 +101,18 @@ def main(argv=None):
     p.add_argument("--output", required=True, type=Path)
     args = p.parse_args(argv)
     source = LangGraphConfig.from_yaml(args.config)
-    previous = {k: os.environ.get(k) for k in ("PROTOAGENT_BOX_ROOT", "PROTOAGENT_HOME")}
     probe, outcomes = RequestProbe(), []
     failure = None
-    try:
-        with tempfile.TemporaryDirectory(prefix="pa-tool-eval-") as root:
-            os.environ.update(PROTOAGENT_BOX_ROOT=root, PROTOAGENT_HOME=root)
-            reset_instance_paths()
-            soul = instance_paths().soul_path
-            soul.parent.mkdir(parents=True, exist_ok=True)
-            soul.write_text("# Identity\nAn assistant evaluating synthetic catalog tools.\n")
-            try:
-                asyncio.run(experiment(source, args.model, max(1, args.repeat), probe, outcomes))
-            except Exception as exc:
-                failure = type(exc).__name__
-    finally:
-        for k, v in previous.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        reset_instance_paths()
+    with isolated_instance('pa-tool-eval-', "# Identity\nAn assistant evaluating synthetic catalog tools.\n"):
+        try:
+            asyncio.run(experiment(source, args.model, max(1, args.repeat), probe, outcomes))
+        except Exception as exc:
+            failure = type(exc).__name__
     for row in probe.rows:
         row["scope"] = "worker" if row["tool_order"] and all(n.startswith("fixture_") for n in row["tool_order"]) else "lead"
     report = {**probe.report(), "model_target": args.model, "quality": outcomes, "failure_type": failure,
               "cost_scope": "lead plus in-graph catalog worker calls; no external workers"}
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    write_report(args.output, report)
     print(f"Recorded {len(probe.rows)} model calls and {len(outcomes)} outcomes to {args.output}")
     return 1 if failure or not outcomes or not all(x["passed"] for x in outcomes) else 0
 

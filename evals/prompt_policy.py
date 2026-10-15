@@ -9,9 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import re
-import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,10 +17,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from evals import judge, verify
+from evals.isolation import isolated_instance, write_report
 from evals.prompt_context import RequestProbe
 from graph.config import LangGraphConfig
 from graph.message_blocks import text_of
-from infra.paths import instance_paths, reset_instance_paths
+from infra.paths import instance_paths
 
 
 def continuity_cases():
@@ -94,30 +93,15 @@ def main(argv=None):
     p.add_argument("--output", required=True, type=Path)
     args = p.parse_args(argv)
     source = LangGraphConfig.from_yaml(args.config)
-    previous = {k: os.environ.get(k) for k in ("PROTOAGENT_BOX_ROOT", "PROTOAGENT_HOME")}
     probe, outcomes = RequestProbe(), []
     failure = None
-    try:
-        with tempfile.TemporaryDirectory(prefix="pa-policy-eval-") as root:
-            os.environ.update(PROTOAGENT_BOX_ROOT=root, PROTOAGENT_HOME=root)
-            reset_instance_paths()
-            soul = instance_paths().soul_path
-            soul.parent.mkdir(parents=True, exist_ok=True)
-            soul.write_text("# Identity\nAn assistant evaluating synthetic continuity fixtures.\n")
-            try:
-                asyncio.run(experiment(source, args.model, max(1, args.repeat), probe, outcomes))
-            except Exception as exc:
-                failure = type(exc).__name__
-    finally:
-        for k, v in previous.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        reset_instance_paths()
+    with isolated_instance('pa-policy-eval-', "# Identity\nAn assistant evaluating synthetic continuity fixtures.\n"):
+        try:
+            asyncio.run(experiment(source, args.model, max(1, args.repeat), probe, outcomes))
+        except Exception as exc:
+            failure = type(exc).__name__
     report = {**probe.report(), "model_target": args.model, "quality": outcomes, "failure_type": failure}
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    write_report(args.output, report)
     print(f"Recorded {len(probe.rows)} agent calls and {len(outcomes)} outcomes to {args.output}")
     return 1 if failure or not outcomes or not all(x["passed"] for x in outcomes) else 0
 
