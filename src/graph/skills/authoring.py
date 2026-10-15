@@ -252,7 +252,9 @@ def replace_skill(index, root: Path, current: dict, name: str, description: str,
         origin, editable = classify(current, root)
         if not editable:
             raise ValueError(f"{origin} skills are read-only")
-        if any(s.get("id") != current["id"] and slugify(s["name"]) == slugify(name)
+        # Commons rows live outside this root; private skills may shadow them.
+        if any(s.get("tier") != "commons" and s.get("id") != current["id"]
+               and slugify(s["name"]) == slugify(name)
                for s in index.all_skills()):
             raise ValueError("destination collides with another skill")
         if new != old and new.parent.exists():

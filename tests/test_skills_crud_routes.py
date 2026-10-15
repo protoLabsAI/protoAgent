@@ -235,3 +235,26 @@ def test_edit_rejects_explicit_null_before_mutating(monkeypatch, tmp_path, field
     assert idx.all_skills() == before
     assert path.read_bytes() == original
     assert not (root / '.history').exists()
+
+
+@pytest.mark.parametrize("rename", [False, True])
+def test_edit_promoted_private_skill_preserves_commons(monkeypatch, tmp_path, rename):
+    c, idx = _client_layered(monkeypatch, tmp_path)
+    try:
+        _seed_emitted(idx._private, name="First")
+        _seed_emitted(idx._private, name="Deploy")
+        assert idx.promote("Deploy")
+        if rename:
+            _seed_emitted(idx._commons, name="Release")
+        shared = idx._commons.all_skills()
+        current = idx._private.get_skill("Deploy")
+        assert current["id"] != idx._commons.get_skill("Deploy")["id"]
+        name = "Release" if rename else "Deploy"
+        response = c.put(f"/api/playbooks/{current['id']}", json={
+            "name": name, "description": "updated", "body": "updated body",
+        })
+        assert response.status_code == 200, response.text
+        assert idx._private.get_skill(name)["id"] == current["id"]
+        assert idx._commons.all_skills() == shared
+    finally:
+        idx.close()

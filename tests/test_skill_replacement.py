@@ -200,3 +200,28 @@ def test_failed_materialization_removes_only_new_empty_directories(skill, preexi
     # The failed destination must not block a subsequent legitimate edit.
     authoring.replace_skill(idx, root, before, 'Release', 'new', 'new body')
     assert idx.get_skill('Release')['prompt_template'] == 'new body'
+
+
+@pytest.mark.parametrize("rename", [False, True])
+def test_private_replacement_can_shadow_commons(skill, tmp_path, rename):
+    private, root, before, _ = skill
+    commons = SkillsIndex(str(tmp_path / 'commons.db'))
+    layered = LayeredSkillsIndex(private, commons)
+    commons_root = tmp_path / 'commons-files'
+    try:
+        commons.add_skill(authoring.write_skill(commons_root, 'First', 'first', 'first body'))
+        assert layered.promote('Deploy')
+        if rename:
+            commons.add_skill(authoring.write_skill(commons_root, 'Release', 'shared', 'shared body'))
+        snapshot = commons.all_skills()
+        files = {p: p.read_bytes() for p in commons_root.rglob('SKILL.md')}
+        assert commons.get_skill('Deploy')['id'] != before['id']
+        current = next(s for s in layered.all_skills() if s['tier'] == 'private')
+        name = 'Release' if rename else 'Deploy'
+        authoring.replace_skill(layered, root, current, name, 'new', 'new body')
+        assert private.get_skill(name)['id'] == before['id']
+        assert private.get_skill(name)['description'] == 'new'
+        assert commons.all_skills() == snapshot
+        assert {p: p.read_bytes() for p in commons_root.rglob('SKILL.md')} == files
+    finally:
+        commons.close()

@@ -244,7 +244,8 @@ def _build_skill_editor_tools(*, provenance_required: bool = False):
         if not target_slug:
             return "Error: refusing to update a skill with an empty storage slug."
         if any(
-            s.get("id") != current.get("id") and slugify(str(s.get("name", ""))) == target_slug
+            s.get("tier") != "commons" and s.get("id") != current.get("id")
+            and slugify(str(s.get("name", ""))) == target_slug
             for s in idx.all_skills()
         ):
             return f"Error: refusing to update {name!r}; its storage path collides with another skill."

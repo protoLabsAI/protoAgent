@@ -330,7 +330,8 @@ def register_knowledge_routes(app) -> None:
             return JSONResponse({"detail": "name, description, and body are required"}, status_code=400)
         new_slug, old_slug = slugify(name), slugify(cur.get("name", ""))
         if new_slug != old_slug and any(
-            slugify(s.get("name", "")) == new_slug and s.get("id") != skill_id for s in idx.all_skills()
+            s.get("tier") != "commons" and slugify(s.get("name", "")) == new_slug
+            and s.get("id") != skill_id for s in idx.all_skills()
         ):
             return JSONResponse({"detail": f"a skill named “{name}” already exists"}, status_code=409)
         try:
