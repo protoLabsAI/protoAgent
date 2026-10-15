@@ -227,7 +227,7 @@ def _build_skill_editor_tools(*, provenance_required: bool = False):
         reason. The outgoing version is archived for rollback and the replacement is
         stamped with the producing session. Bundled and commons skills are read-only.
         """
-        from graph.skills.authoring import archive_skill, classify, restore_skill_snapshot, slugify, write_skill
+        from graph.skills.authoring import classify, replace_skill, slugify
         from infra.paths import user_skills_dir
         from runtime.state import STATE
 
@@ -255,10 +255,9 @@ def _build_skill_editor_tools(*, provenance_required: bool = False):
         session_id = trusted_session_id if provenance_required else ((source_session_id or "").strip() or trusted_session_id)
         if provenance_required and not session_id:
             return "Error: self-improvement writes require a trusted source session."
-        backup = archive_skill(root, current, session_id=session_id, reason=reason.strip())
         try:
-            artifact = write_skill(
-                root,
+            backup = replace_skill(
+                idx, root, current,
                 current.get("name", name),
                 description.strip(),
                 body.strip(),
@@ -267,17 +266,10 @@ def _build_skill_editor_tools(*, provenance_required: bool = False):
                 slash=str(current.get("slash", "") or ""),
                 user_only=bool(current.get("user_only", False)),
                 provenance={"session_id": session_id, "reason": reason.strip()},
+                session_id=session_id, reason=reason.strip(),
             )
-            if not idx.delete_skill(int(current["id"])):
-                restore_skill_snapshot(root, current.get("name", name), backup)
-                return f"Error updating skill: the index did not confirm removal of the old row; restored {backup}."
-            inserted_id = idx.add_skill(artifact, source="disk")
-            if inserted_id is None:
-                restored = restore_skill_snapshot(root, current.get("name", name), backup)
-                idx.add_skill(restored, source="disk")
-                return f"Error updating skill: the index did not confirm the replacement; restored {backup}."
         except Exception as exc:  # noqa: BLE001
-            return f"Error updating skill (backup retained at {backup}): {exc}"
+            return f"Error updating skill: {exc}"
         return f"Updated skill {name!r}; previous version archived at {backup}."
 
     @tool

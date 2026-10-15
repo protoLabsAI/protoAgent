@@ -65,8 +65,13 @@ class LayeredSkillsIndex:
         return self._private.get_skill(name) or self._commons.get_skill(name)
 
     # ── writes → private only ─────────────────────────────────────────────────
-    def add_skill(self, artifact, source: str = "emitted") -> None:
-        self._private.add_skill(artifact, source)
+    def add_skill(self, artifact, source: str = "emitted") -> int | None:
+        return self._private.add_skill(artifact, source)
+
+    def replace_skill(self, expected: dict, publish, restore) -> int:
+        if expected.get("tier") == "commons":
+            raise ValueError("commons skills are read-only")
+        return self._private.replace_skill(expected, publish, restore)
 
     def replace_disk_skills(self, artifacts: list) -> None:
         self._private.replace_disk_skills(artifacts)
@@ -74,8 +79,8 @@ class LayeredSkillsIndex:
     def update_confidence(self, skill_id: int, confidence: float) -> None:
         self._private.update_confidence(skill_id, confidence)
 
-    def delete_skill(self, skill_id: int) -> None:
-        self._private.delete_skill(skill_id)
+    def delete_skill(self, skill_id: int) -> bool:
+        return self._private.delete_skill(skill_id)
 
     def rebuild_index(self, artifacts: list) -> None:
         self._private.rebuild_index(artifacts)
