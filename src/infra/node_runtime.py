@@ -140,6 +140,12 @@ def format_node_version(version: tuple[int, ...]) -> str:
 
 
 _VERSION_CACHE: dict[tuple[str, int, int], tuple[int, int, int] | None] = {}
+
+
+def _same_path_key(path: str | os.PathLike) -> str:
+    """A comparison key for a filesystem path: absolute + ``normcase`` (case-insensitive on
+    Windows, where ``which`` returns ``node.EXE`` for the file a dir probe calls ``node.exe``)."""
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
 _VERSION_LOCK = threading.Lock()
 
 
@@ -155,7 +161,9 @@ def node_version(exe: str | os.PathLike) -> tuple[int, int, int] | None:
         st = os.stat(path)
     except OSError:
         return None
-    key = (path, st.st_mtime_ns, st.st_size)
+    # normcase: on Windows ``shutil.which`` spells the hit with PATHEXT's case (``node.EXE``)
+    # while a directory probe finds ``node.exe`` — one binary, one cache entry.
+    key = (os.path.normcase(path), st.st_mtime_ns, st.st_size)
     with _VERSION_LOCK:
         if key in _VERSION_CACHE:
             return _VERSION_CACHE[key]
@@ -273,7 +281,7 @@ def _is_managed(exe: str, managed_bin: Path | None) -> bool:
     if managed_bin is None:
         return False
     try:
-        return Path(exe).resolve().parent == managed_bin.resolve()
+        return _same_path_key(Path(exe).resolve().parent) == _same_path_key(managed_bin.resolve())
     except OSError:
         return False
 
@@ -296,9 +304,10 @@ def resolve_node(min_version: str | None = None) -> NodeResolution | None:
         if not exe:
             return None
         exe = os.path.abspath(exe)
-        if exe in seen:
+        key = _same_path_key(exe)
+        if key in seen:
             return None
-        seen.add(exe)
+        seen.add(key)
         version = node_version(exe)
         if not _satisfies(version, floor):
             return None

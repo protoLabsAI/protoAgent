@@ -54,11 +54,13 @@ def _fake_node(bin_dir: Path) -> Path:
 
 def _stub_versions(monkeypatch, versions: dict[Path, tuple[int, int, int] | None]) -> list[str]:
     """Answer ``node_version`` from a {path: version} table; record every probe."""
-    table = {os.path.abspath(p): v for p, v in versions.items()}
+    # Keyed like the code compares paths: on Windows ``which`` returns ``…\\node.EXE`` (the
+    # PATHEXT spelling) for the ``node.exe`` this fixture wrote.
+    table = {nr._same_path_key(p): v for p, v in versions.items()}
     probed: list[str] = []
 
     def _fake(exe):
-        path = os.path.abspath(os.fspath(exe))
+        path = nr._same_path_key(exe)
         probed.append(path)
         return table.get(path)
 
