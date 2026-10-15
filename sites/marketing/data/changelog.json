@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.205.0",
+    "date": "2026-10-15",
+    "changes": [
+      "Clearer delegation rules with a smaller system prompt (#4218).",
+      "Knowledge search preserves distinct sources with identical text (#4200).",
+      "Prompt guidance follows available tools (#4219)",
+      "Live commitments remain visible without knowledge or skills (#4220)",
+      "Browser setup banners stay current after CLI and Chrome installation (#4228)."
+    ]
+  },
+  {
     "version": "v0.204.0",
     "date": "2026-10-14",
     "changes": [
