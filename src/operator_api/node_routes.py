@@ -34,6 +34,22 @@ def _payload() -> dict:
     return {"node": node_status(), "install": dict(_install)}
 
 
+def _refresh_runtime_gaps() -> None:
+    """Re-check the plugins whose ``requires_runtimes`` gap is up (ADR 0085 amendment), so
+    their "needs Node.js" banner clears the moment the managed install lands — no reload.
+    Runs BEFORE the install state flips to ``done``, so a console that refetches runtime
+    status on ``done`` already sees the cleared gap. Best-effort: a failure here must not
+    turn a successful install into an error."""
+    try:
+        from graph.plugins.loader import refresh_runtime_gaps
+
+        cleared = refresh_runtime_gaps()
+        if cleared:
+            log.info("[node] runtime requirement now met for: %s", ", ".join(cleared))
+    except Exception:  # noqa: BLE001 — the install succeeded; a stale banner self-heals on reload
+        log.warning("[node] couldn't re-check plugin runtime requirements", exc_info=True)
+
+
 def _run_install(force: bool) -> None:
     from runtime.node_install import NodeRuntimeError, install_managed_node
 
@@ -44,6 +60,7 @@ def _run_install(force: bool) -> None:
 
     try:
         install_managed_node(force=force, on_progress=_progress)
+        _refresh_runtime_gaps()
         _install.update(state="done", pct=100, message="installed", error=None)
         log.info("[node] managed Node provisioned via console")
     except NodeRuntimeError as exc:

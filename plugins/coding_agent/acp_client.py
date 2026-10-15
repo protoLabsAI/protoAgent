@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import glob
 import hashlib
 import json
 import logging
@@ -38,11 +37,12 @@ import signal
 import time
 from collections import deque
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from infra import clock
+from infra.node_runtime import _version_sort_key  # noqa: F401 — re-export (tests, callers)
+from infra.node_runtime import discovered_node_dirs as _discovered_node_dirs
 from infra.proc import child_env, group_kwargs, signal_tree, track_tree, untrack_tree
 
 # A repeated chunk shorter than this is plausibly deliberate ("...", a bullet, a short
@@ -295,55 +295,11 @@ _NESTED_CLAUDE_ENV_PREFIX = "CLAUDE_CODE_"
 _NODE_TOOL_BASENAMES = frozenset({"npx", "node", "npm", "pnpm", "yarn", "bun", "corepack"})
 
 
-def _version_sort_key(bin_dir: str) -> tuple[int, ...]:
-    """Sort key for a version-manager node `bin` dir, newest-first. The version is the
-    dir component holding the semver (``…/node/v22.22.0/bin`` → ``v22.22.0``; fnm's
-    ``…/<ver>/installation/bin`` → the grandparent). Non-versioned dirs sort last."""
-    p = Path(bin_dir)
-    for name in (p.parent.name, p.parent.parent.name):
-        nums = re.findall(r"\d+", name)
-        if nums:
-            return tuple(int(n) for n in nums[:3])
-    return (0,)
-
-
-@lru_cache(maxsize=1)
-def _discovered_node_dirs() -> tuple[str, ...]:
-    """Existing node `bin` dirs from the common version managers + standard locations,
-    most-preferred first (newest version), for augmenting a minimal launch PATH. Only
-    dirs that actually contain a ``node`` executable are returned. Cached — the
-    filesystem probe runs once per process. Best-effort: any error yields fewer dirs."""
-    home = Path.home()
-    cands: list[str] = []
-
-    def _versioned(root: str | os.PathLike, pattern: str) -> None:
-        try:
-            hits = glob.glob(os.path.join(str(root), pattern))
-        except OSError:
-            return
-        cands.extend(sorted(hits, key=_version_sort_key, reverse=True))
-
-    # nvm: ~/.nvm/versions/node/<ver>/bin   (NVM_DIR overrides the location)
-    _versioned(os.environ.get("NVM_DIR") or home / ".nvm", "versions/node/*/bin")
-    # fnm: <root>/node-versions/<ver>/installation/bin
-    for fnm_root in (os.environ.get("FNM_DIR"), home / ".local/share/fnm", home / ".fnm"):
-        if fnm_root:
-            _versioned(fnm_root, "node-versions/*/installation/bin")
-    # Single shim/bin dirs: volta, asdf, nodenv, homebrew, common system.
-    cands.append(str(Path(os.environ.get("VOLTA_HOME") or home / ".volta") / "bin"))
-    cands.append(str(Path(os.environ.get("ASDF_DATA_DIR") or home / ".asdf") / "shims"))
-    cands.append(str(home / ".nodenv" / "shims"))
-    cands.extend(["/opt/homebrew/bin", "/usr/local/bin"])
-
-    out: list[str] = []
-    seen: set[str] = set()
-    for d in cands:
-        if d in seen:
-            continue
-        seen.add(d)
-        if os.path.exists(os.path.join(d, "node")) or os.path.exists(os.path.join(d, "node.exe")):
-            out.append(d)
-    return tuple(out)
+# The discovery itself lives in ``infra.node_runtime`` (ADR 0085, amended 2026-10-15) so
+# every Node consumer — this client, ``sdk.node_executable``, the plugin deps gate — shares
+# ONE notion of where a user's Node lives. Imported at the top of this module under the
+# historical private names (``_discovered_node_dirs`` / ``_version_sort_key``); the
+# launch-env builder below calls them through this module, so tests monkeypatch them here.
 
 
 def _split_env_remove(env_remove: list[str] | None) -> tuple[frozenset[str], tuple[str, ...]]:

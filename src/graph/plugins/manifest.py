@@ -215,6 +215,15 @@ class PluginManifest:
     #     tools import it in-process would pass the install gate and then die at tool time.
     #     Only non-default (``host``) entries are recorded; absent ⇒ runtime.
     pip_scopes: dict[str, str] = field(default_factory=dict)
+    #   requires_runtimes: non-Python runtimes the plugin needs, as ``{runtime: ">=N"}`` —
+    #     today only ``node`` (ADR 0085, amended 2026-10-15), e.g. ``{node: ">=20"}`` for a
+    #     plugin that runs a vendored JS bundle. The spec must be ``>=N``, ``>=N.N`` or
+    #     ``>=N.N.N``; a malformed spec or an unknown runtime warns and is ignored. The deps
+    #     gate checks it with the shared resolver (PATH → version managers → the managed
+    #     runtime) and, when nothing satisfies it, raises the setup banner with an
+    #     **Install Node runtime** button. At call time, spawn the node
+    #     ``sdk.node_executable(min_version)`` returns.
+    requires_runtimes: dict[str, str] = field(default_factory=dict)
     repository: str = ""
     homepage: str = ""
     min_protoagent_version: str = ""
@@ -1140,6 +1149,53 @@ def _parse_requires_pip(entries, plugin_id: str) -> tuple[list[str], list[str], 
     return hard, optional, scopes
 
 
+#: Runtimes ``requires_runtimes:`` understands (ADR 0085 amendment). Anything else warns.
+_KNOWN_RUNTIMES = ("node",)
+_RUNTIME_SPEC_RE = re.compile(r"^>=\s*(\d+(?:\.\d+){0,2})$")
+
+
+def _parse_requires_runtimes(raw, plugin_id: str) -> dict[str, str]:
+    """Parse ``requires_runtimes:`` → ``{runtime: ">=N[.N[.N]]"}`` (normalized, no spaces).
+
+    .. code-block:: yaml
+
+        requires_runtimes:
+          node: ">=20"
+
+    Only ``node`` is recognized; an unknown runtime, a non-mapping value, or a spec that
+    isn't a ``>=`` floor (``"^20"``, ``"20"``, ``"<22"``) warns and is dropped — it never
+    fails the manifest load (mirroring ``_parse_requires_pip``)."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        log.warning(
+            "[plugins] %s: requires_runtimes must be a mapping like {node: '>=20'} — ignored", plugin_id
+        )
+        return {}
+    out: dict[str, str] = {}
+    for name, spec in raw.items():
+        runtime = str(name or "").strip().lower()
+        if runtime not in _KNOWN_RUNTIMES:
+            log.warning(
+                "[plugins] %s: requires_runtimes names unknown runtime %r (known: %s) — ignored",
+                plugin_id,
+                name,
+                ", ".join(_KNOWN_RUNTIMES),
+            )
+            continue
+        m = _RUNTIME_SPEC_RE.match(str(spec).strip()) if isinstance(spec, str) else None
+        if not m:
+            log.warning(
+                "[plugins] %s: requires_runtimes.%s spec %r is not a '>=N[.N[.N]]' floor — ignored",
+                plugin_id,
+                runtime,
+                spec,
+            )
+            continue
+        out[runtime] = f">={m.group(1)}"
+    return out
+
+
 # A remote git source in URL form (``https://host/owner/repo``) or scp form
 # (``git@host:owner/repo``). Local paths and ``file://`` are deliberately not remote
 # sources: nothing a bundled copy could retire, so ``supersedes`` rejects them.
@@ -1448,6 +1504,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
         requires_pip=requires_pip,
         optional_pip=optional_pip,
         pip_scopes=pip_scopes,
+        requires_runtimes=_parse_requires_runtimes(data.get("requires_runtimes"), pid),
         repository=str(data.get("repository", "")).strip(),
         homepage=str(data.get("homepage", "")).strip(),
         min_protoagent_version=str(data.get("min_protoagent_version", "")).strip(),
