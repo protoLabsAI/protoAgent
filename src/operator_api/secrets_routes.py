@@ -63,6 +63,9 @@ def register_secrets_routes(app) -> None:
             raise HTTPException(status_code=400, detail=str(e)) from None
         except SecretsRequiredError as e:
             raise HTTPException(status_code=502, detail=str(e))
+        except Exception:  # noqa: BLE001 — safe boundary for unexpected provider failures
+            logging.getLogger(__name__).warning("Secrets sync failed unexpectedly")
+            raise HTTPException(status_code=500, detail="secrets sync failed unexpectedly") from None
         if result is None:
             raise HTTPException(
                 status_code=400,
@@ -133,5 +136,10 @@ def register_secrets_routes(app) -> None:
             return await asyncio.to_thread(_probe)
         except ConfigLoadError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="invalid secrets connection configuration") from None
+        except Exception:  # noqa: BLE001 — never echo arbitrary provider/configuration values
+            logging.getLogger(__name__).warning("Secrets connection test failed unexpectedly")
+            raise HTTPException(status_code=500, detail="secrets connection test failed unexpectedly") from None
 
     app.include_router(router)

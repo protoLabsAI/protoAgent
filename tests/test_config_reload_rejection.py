@@ -168,3 +168,79 @@ def test_connection_test_preserves_opaque_credential_whitespace(config_file, mon
         response = client.post('/api/secrets/test', json={'client_secret': ' opaque credential '})
     assert response.json()['ok'] is True
     assert seen == [' opaque credential ']
+
+
+@pytest.mark.parametrize('route,seam', [
+    ('sync', 'infra.secrets.hydrate_from_docs'),
+    ('test', 'infra.secrets.source_from_docs'),
+])
+def test_secrets_route_unexpected_failure_is_safe(config_file, monkeypatch, caplog, route, seam):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.secrets_routes import register_secrets_routes
+    config_file.write_text('{}')
+    def broken(*a, **k):
+        raise RuntimeError('DO_NOT_ECHO_SECRET')
+    monkeypatch.setattr(seam, broken)
+    app = FastAPI()
+    register_secrets_routes(app)
+    before = dict(os.environ)
+    with TestClient(app) as client:
+        response = client.post(f'/api/secrets/{route}', json={})
+    assert response.status_code == 500
+    assert 'failed unexpectedly' in response.json()['detail']
+    assert 'DO_NOT_ECHO_SECRET' not in response.text + caplog.text
+    assert dict(os.environ) == before
+
+
+def test_invalid_source_allowlist_returns_configuration_error(config_file, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.secrets_routes import register_secrets_routes
+    config_file.write_text('plugins:\n  sources:\n    allow: invalid\n')
+    calls = []
+    monkeypatch.setattr('infra.secrets.hydrate_from_docs', lambda *a, **k: calls.append(True))
+    app = FastAPI()
+    register_secrets_routes(app)
+    with TestClient(app) as client:
+        response = client.post('/api/secrets/sync')
+    assert response.status_code == 400
+    assert 'plugins.sources.allow' in response.json()['detail']
+    assert calls == []
+
+
+def test_invalid_secrets_connection_fields_are_safe(config_file):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.secrets_routes import register_secrets_routes
+    config_file.write_text('secrets_manager:\n  timeout_seconds: DO_NOT_ECHO_SECRET\n')
+    app = FastAPI()
+    register_secrets_routes(app)
+    with TestClient(app) as client:
+        response = client.post('/api/secrets/test', json={})
+    assert response.status_code == 400
+    assert 'DO_NOT_ECHO_SECRET' not in response.text
+
+
+@pytest.mark.parametrize('outcome,status_code', [('success', 200), ('disabled', 400), ('required', 502)])
+def test_secret_sync_outcomes(config_file, monkeypatch, outcome, status_code):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from infra.secrets import SecretsRequiredError
+    from operator_api.secrets_routes import register_secrets_routes
+    config_file.write_text('{}')
+    def hydrate(*a, **k):
+        assert k['force'] is True
+        if outcome == 'required':
+            raise SecretsRequiredError('required source unavailable')
+        return None if outcome == 'disabled' else object()
+    monkeypatch.setattr('infra.secrets.hydrate_from_docs', hydrate)
+    monkeypatch.setattr('infra.secrets.status', lambda: {'ok': True, 'names': ['EXAMPLE_KEY']})
+    app = FastAPI()
+    register_secrets_routes(app)
+    with TestClient(app) as client:
+        response = client.post('/api/secrets/sync')
+        assert client.get('/api/secrets/status').json() == {'ok': True, 'names': ['EXAMPLE_KEY']}
+    assert response.status_code == status_code
+    if outcome == 'success':
+        assert response.json() == {'ok': True, 'names': ['EXAMPLE_KEY']}
