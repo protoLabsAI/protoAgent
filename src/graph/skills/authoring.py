@@ -228,3 +228,75 @@ def classify(skill: dict, root: Path) -> tuple[str, bool]:
         return "bundled", False
     # emitted / distilled / promoted-in-a-flat-library → operator-curatable
     return "learned", True
+
+
+def replace_skill(index, root: Path, current: dict, name: str, description: str, body: str,
+                  *, session_id: str = "", reason: str = "operator edit", **options) -> Path:
+    """Replace an editable skill, compensating ordinary failures on disk and in SQLite.
+
+    Rename moves the whole skill directory, preserving scripts/assets. Recovery
+    preserves absence for learned skills, and exact bytes for file-backed skills.
+    Archives survive both success and failure. No power-loss atomicity is promised.
+    """
+    old = skill_path(root, current["name"])
+    new = skill_path(root, name)
+    backup = None
+    original = None
+    existed = False
+    moved = False
+    started = False
+    preexisting_dirs = set()
+
+    def publish():
+        nonlocal backup, original, existed, moved, started
+        origin, editable = classify(current, root)
+        if not editable:
+            raise ValueError(f"{origin} skills are read-only")
+        # Commons rows live outside this root; private skills may shadow them.
+        if any(s.get("tier") != "commons" and s.get("id") != current["id"]
+               and slugify(s["name"]) == slugify(name)
+               for s in index.all_skills()):
+            raise ValueError("destination collides with another skill")
+        if new != old and new.parent.exists():
+            raise ValueError("destination directory already exists")
+        preexisting_dirs.update(folder for folder in (old.parent, new.parent) if folder.exists())
+        existed = old.is_file()
+        original = old.read_bytes() if existed else None
+        backup = archive_skill(root, current, session_id=session_id, reason=reason)
+        started = True
+        if new != old and old.parent.exists():
+            moved = True  # rename can complete before an injected/OS error surfaces
+            old.parent.rename(new.parent)
+        return write_skill(root, name, description, body, **options)
+
+    def restore():
+        if not started:
+            return
+        if moved and new.parent.exists() and not old.parent.exists():
+            new.parent.rename(old.parent)
+        if existed:
+            _atomic_copy_file(backup, old)
+            if old.read_bytes() != original:
+                raise RuntimeError("restored artifact differs from original bytes")
+        else:
+            old.unlink(missing_ok=True)
+            if new != old:
+                new.unlink(missing_ok=True)
+            if old.exists() or new.exists():
+                raise RuntimeError("new artifact still exists")
+            for folder in {old.parent, new.parent} - preexisting_dirs:
+                try:
+                    folder.rmdir()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    # Preserve files added independently; remove only empty directories.
+                    if not any(folder.iterdir()):
+                        raise
+
+    try:
+        index.replace_skill(current, publish, restore)
+    except Exception as exc:
+        location = f"backup retained at {backup}" if backup else "no completed backup"
+        raise RuntimeError(f"{exc}; {location}") from exc
+    return backup
