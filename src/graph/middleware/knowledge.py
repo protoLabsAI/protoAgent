@@ -1,4 +1,4 @@
-"""KnowledgeMiddleware — injects relevant knowledge context before LLM calls.
+"""Shared projection middleware — live commitments plus optional knowledge/skills.
 
 Composes the per-turn dynamic context projection ONCE in ``before_agent`` and
 delivers it ephemerally via ``wrap_model_call`` (ADR 0108 D2) — the projection
@@ -225,8 +225,10 @@ class KnowledgeMiddleware(AgentMiddleware):
         options: ProjectionOptions | None = None,
         config=None,
         bound_tool_names: frozenset[str] | None = None,
+        prior_sessions_enabled: bool = True,
     ):
         super().__init__()
+        self._prior_sessions_enabled = prior_sessions_enabled
         # The tool names bound to the graph this middleware serves (graph/agent.py
         # passes its assembled surface). Lets the skill index flag a skill whose
         # declared tools this agent lacks (ADR 0060 amendment); None = unknown.
@@ -297,11 +299,15 @@ class KnowledgeMiddleware(AgentMiddleware):
         # by every concurrent turn.
 
     def _with_bound_tools(self, opts: ProjectionOptions) -> ProjectionOptions:
-        if self._bound_tool_names is None or opts.bound_tool_names is not None:
-            return opts
         from dataclasses import replace
 
-        return replace(opts, bound_tool_names=self._bound_tool_names)
+        # Apply after model-specific options are resolved, so a per-chat override
+        # cannot reactivate recall on an operational-state-only projection.
+        if not self._prior_sessions_enabled:
+            opts = replace(opts, prior_sessions_policy="off")
+        if self._bound_tool_names is not None and opts.bound_tool_names is None:
+            opts = replace(opts, bound_tool_names=self._bound_tool_names)
+        return opts
 
     def _options(self, state=None) -> ProjectionOptions:
         """This middleware's delivery knobs in the shared composer's shape — the

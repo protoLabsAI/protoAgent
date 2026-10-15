@@ -293,33 +293,34 @@ def _build_middleware(
 
     middleware.append(build_multimodal_middleware(config))
 
-    # KnowledgeMiddleware also carries the always-on skill index (the
-    # <available_skills> injection, ADR 0060). Build it when knowledge OR skills
-    # is active, so skills work even on a KB-less agent (the store is None-tolerant).
+    # One always-installed projection carries live commitments even without
+    # knowledge or skills. Keep prior-session recall at its previous activation
+    # boundary: restoring operational state must not silently enable memory.
     _skills_index = skills_index if config.skills_enabled else None
-    if (config.knowledge_middleware and knowledge_store) or _skills_index is not None:
-        # ONE wiring (ADR 0108 D6/D8): every delivery knob — RAG top-k, namespace
-        # scope, trust floor, the skill-index caps (~2% of the model window as chars,
-        # 8KB when no window is reported, #2867) and the projected-context budget
-        # (`context.budget_pct`) — is read off the config by
-        # ProjectionOptions.from_config, the same reader the external runtime uses,
-        # so the two paths cannot drift.
-        from graph.projection import ProjectionOptions
+    recall_active = bool(config.knowledge_middleware and knowledge_store) or _skills_index is not None
+    # ONE wiring (ADR 0108 D6/D8): every delivery knob — RAG top-k, namespace
+    # scope, trust floor, the skill-index caps (~2% of the model window as chars,
+    # 8KB when no window is reported, #2867) and the projected-context budget
+    # (`context.budget_pct`) — is read off the config by
+    # ProjectionOptions.from_config, the same reader the external runtime uses,
+    # so the two paths cannot drift.
+    from graph.projection import ProjectionOptions
 
-        middleware.append(
-            KnowledgeMiddleware(
-                knowledge_store if config.knowledge_middleware else None,
-                skills_index=_skills_index,
-                options=ProjectionOptions.from_config(config),
-                # …and the config itself, so the window-derived knobs can be
-                # re-read against a per-chat model override (the graph is
-                # compiled once, but each tab picks its own model).
-                config=config,
-                # The assembled tool surface, so the skill index can flag skills whose
-                # declared tools this agent doesn't have (ADR 0060 amendment).
-                bound_tool_names=bound_tool_names,
-            )
+    middleware.append(
+        KnowledgeMiddleware(
+            knowledge_store if config.knowledge_middleware else None,
+            skills_index=_skills_index,
+            prior_sessions_enabled=recall_active,
+            options=ProjectionOptions.from_config(config),
+            # …and the config itself, so the window-derived knobs can be
+            # re-read against a per-chat model override (the graph is
+            # compiled once, but each tab picks its own model).
+            config=config,
+            # The assembled tool surface, so the skill index can flag skills whose
+            # declared tools this agent doesn't have (ADR 0060 amendment).
+            bound_tool_names=bound_tool_names,
         )
+    )
 
     # Runtime toolset changes (#2640), announced once to the next turn. ALWAYS on:
     # an agent that refuses work it can now do is a worse failure than a missed
@@ -1847,6 +1848,12 @@ def create_agent_graph(
         # which broke wait's same-session resume (ADR 0053) and set_goal.
         state_schema=ProtoAgentState,
     )
+
+    # Direct graph consumers need the same configured step budget as server
+    # turns. LangGraph's default of 25 can expire during a single tool round
+    # once the always-on projection lifecycle nodes are present. Call-specific
+    # recursion_limit overrides (including tighter subagent budgets) still win.
+    agent = agent.with_config({"recursion_limit": config.max_iterations})
 
     # Single source of truth for "what tools the model has". Stamp the final
     # assembled set on the compiled graph so the Tools tab (/api/tools) and any
