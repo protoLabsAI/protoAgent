@@ -153,10 +153,16 @@ def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
     return merged, secrets, True
 
 
-def load_config_docs(path: str | Path) -> tuple[dict, dict]:
+def load_config_docs(path: str | Path, *, validate: bool = False) -> tuple[dict, dict]:
     """Public doc loader for callers that need the raw (merged, secrets) pair without
-    a full parse — the secrets refresh loop and operator sync/test routes (ADR 0080)."""
+    a full parse. Hydrating callers must request ``validate=True`` so a rejected
+    candidate cannot change credentials through refresh/sync (ADR 0080). Validation
+    parses without hydrating secrets or publishing runtime state."""
     merged, secrets, _ = _read_config_docs(Path(path))
+    if validate:
+        from graph.config import LangGraphConfig
+
+        LangGraphConfig.from_dict(merged, secrets=secrets, config_dir=Path(path).parent)
     return merged, secrets
 
 

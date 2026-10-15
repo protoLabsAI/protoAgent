@@ -48,15 +48,18 @@ def register_secrets_routes(app) -> None:
         """Force a fetch-and-apply now (bypasses the TTL gate) — the panel's
         "Sync now" button and the post-rotation nudge."""
         from graph.config import load_config_docs
+        from graph.config_load import ConfigLoadError
         from graph.config_io import config_yaml_path
         from infra.secrets import SecretsRequiredError, hydrate_from_docs, status
 
         def _sync():
-            merged, secrets_doc = load_config_docs(config_yaml_path())
+            merged, secrets_doc = load_config_docs(config_yaml_path(), validate=True)
             return hydrate_from_docs(merged, secrets_doc, force=True)
 
         try:
             result = await asyncio.to_thread(_sync)
+        except ConfigLoadError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
         except SecretsRequiredError as e:
             raise HTTPException(status_code=502, detail=str(e))
         if result is None:

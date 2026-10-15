@@ -833,7 +833,7 @@ async def _secrets_refresh_loop() -> None:
         from infra.secrets import SecretsRequiredError, hydrate_from_docs
 
         try:
-            merged, secrets_doc = load_config_docs(config_yaml_path())
+            merged, secrets_doc = load_config_docs(config_yaml_path(), validate=True)
             await asyncio.to_thread(hydrate_from_docs, merged, secrets_doc, force=True)
         except SecretsRequiredError as e:
             log.warning("[secrets] refresh failed (required source): %s", e)

@@ -92,3 +92,36 @@ def test_valid_hydration_refreshes_environment_defaults(config_file, monkeypatch
     monkeypatch.delenv('PROTOAGENT_MODEL', raising=False)
     monkeypatch.setattr('graph.config._hydrate_external_secrets', lambda *a: monkeypatch.setenv('PROTOAGENT_MODEL', 'hydrated-model'))
     assert LangGraphConfig.from_yaml(config_file).model_name == 'hydrated-model'
+
+
+def test_secret_sync_rejects_invalid_candidate_before_applying(config_file, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.secrets_routes import register_secrets_routes
+    calls = []
+    monkeypatch.setattr('infra.secrets.hydrate_from_docs', lambda *a, **k: calls.append(True))
+    app = FastAPI()
+    register_secrets_routes(app)
+    with TestClient(app) as client:
+        response = client.post('/api/secrets/sync')
+    assert response.status_code == 400
+    assert 'sample: expected a mapping' in response.json()['detail']
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_background_refresh_rejects_invalid_candidate(config_file, monkeypatch, caplog):
+    import asyncio
+    import server.maintenance_loops as loops
+    calls, sleeps = [], []
+    monkeypatch.setattr(STATE, 'graph_config', SimpleNamespace(secrets_manager_enabled=True, secrets_manager_refresh_seconds=30))
+    monkeypatch.setattr('infra.secrets.hydrate_from_docs', lambda *a, **k: calls.append(True))
+    async def one_iteration(*args):
+        sleeps.append(True)
+        if len(sleeps) > 1:
+            raise asyncio.CancelledError()
+    monkeypatch.setattr(asyncio, 'sleep', one_iteration)
+    with pytest.raises(asyncio.CancelledError):
+        await loops._secrets_refresh_loop()
+    assert calls == []
+    assert 'sample: expected a mapping' in caplog.text
