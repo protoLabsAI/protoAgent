@@ -1849,6 +1849,12 @@ def create_agent_graph(
         state_schema=ProtoAgentState,
     )
 
+    # Direct graph consumers need the same configured step budget as server
+    # turns. LangGraph's default of 25 can expire during a single tool round
+    # once the always-on projection lifecycle nodes are present. Call-specific
+    # recursion_limit overrides (including tighter subagent budgets) still win.
+    agent = agent.with_config({"recursion_limit": config.max_iterations})
+
     # Single source of truth for "what tools the model has". Stamp the final
     # assembled set on the compiled graph so the Tools tab (/api/tools) and any
     # other consumer read exactly what's BOUND, instead of re-deriving the list

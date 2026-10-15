@@ -68,6 +68,10 @@ sources retain their existing switches, and incognito still suppresses memory.
 Working state refreshes after a tool runs; memory and skill retrieval remain the
 turn snapshot. The block stays after history cache boundaries, is never checkpointed,
 and is recomposed on resume through the existing untracked-state lifecycle.
+Direct graph calls and streaming helpers use the configured `model.max_iterations`
+step budget when no caller limit is supplied. Extra middleware nodes must not make
+an ordinary tool round hit LangGraph's 25-step fallback; explicit caller limits
+still take precedence.
 
 ## 2. Subagent — `build_subagent_prompt()`
 

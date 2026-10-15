@@ -56,11 +56,12 @@ async def test_real_graph_delivers_one_live_state_without_checkpointing(monkeypa
                           context_prior_sessions="off" if knowledge_enabled else "newest")
     store = SimpleNamespace(get_hot_memory=lambda **kw: "memory-fixture", search=lambda *a, **kw: [])
     graph = agent.create_agent_graph(cfg, knowledge_store=store, checkpointer=InMemorySaver())
+    assert graph.config["recursion_limit"] == cfg.max_iterations
     run = {"configurable": {"thread_id": "fixture"}}
     for _ in range(2):
         await graph.ainvoke({"messages": [HumanMessage(content="status")], "session_id": "fixture", "incognito": incognito}, run)
     for messages in seen:
-        frames = [m for m in messages if is_context_frame(m)]
+        frames = [m for m in messages if is_context_frame(m) and "<working_state>" in str(m.content)]
         assert len(frames) == 1
         text = str(frames[0].content)
         assert text.count("<working_state>") == 1
@@ -73,6 +74,10 @@ async def test_real_graph_delivers_one_live_state_without_checkpointing(monkeypa
     assert TURN_PROJECTION_KEY not in checkpoint.values
     assert not any(is_context_frame(m) for m in checkpoint.values["messages"])
     assert all("working_state" not in text for _, text in graph.system_prompt_parts)
+    from langgraph.errors import GraphRecursionError
+    with pytest.raises(GraphRecursionError):
+        await graph.ainvoke({"messages": [HumanMessage(content="bounded")], "session_id": "bounded"},
+                            {"configurable": {"thread_id": "bounded"}, "recursion_limit": 1})
 
 
 def test_model_override_cannot_reenable_prior_recall():
