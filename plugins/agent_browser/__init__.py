@@ -24,6 +24,7 @@ browser call fail silently into the model's loop.
 from __future__ import annotations
 
 import logging
+import threading
 
 # Module-level, not inside register(): a call-time `from . import x` resolves through
 # sys.modules, which a later load of this package (a reload, a second test loader) has
@@ -35,6 +36,7 @@ log = logging.getLogger("protoagent.plugins.agent_browser")
 
 def register(registry) -> None:
     cfg = registry.config or {}
+    refresh_lock = threading.Lock()
 
     def _live_cfg() -> dict:
         return registry.live_config() or cfg
@@ -42,7 +44,10 @@ def register(registry) -> None:
     def _refresh_gaps():
         """Re-probe and re-report. Returns the probe, so the tools track what the banner
         actually says rather than what the last call's exit code suggested."""
-        return preflight.report(registry, _live_cfg())
+        # Keep the probe and publication together: a slower pre-download probe
+        # must not overwrite the completion callback's newer setup state.
+        with refresh_lock:
+            return preflight.report(registry, _live_cfg())
 
     # The setup steps behind the banners' buttons ("Download agent-browser", "Install
     # Chrome"). Registered BEFORE the preflight reports, so the first banner's buttons
@@ -61,7 +66,7 @@ def register(registry) -> None:
     # gaps — the CLI, and whether that CLI has a Chrome to drive. It never downloads.
     start_gap = False
     try:
-        probe = preflight.report(registry, cfg)
+        probe = _refresh_gaps()
         # The tools must START in the state the boot probe found: a banner raised here has to
         # be cleared by the first good call even when no call ever fails first (otherwise an
         # operator who fixed the setup before using the browser kept the banner forever).

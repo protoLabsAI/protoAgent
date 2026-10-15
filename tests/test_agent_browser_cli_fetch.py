@@ -527,6 +527,61 @@ def test_the_download_button_fetches_in_the_background_and_the_banner_moves_on(m
     assert reg.setup_gap_actions[preflight.CHROME_GAP]["step"] == "install-chrome"  # …and Chrome is next
 
 
+@pytest.mark.parametrize("step", ["download-cli", "install-chrome"])
+def test_setup_refresh_serializes_probe_and_banner_publication(monkeypatch, step):
+    _cli_env(monkeypatch, which=None)
+    reg = _registry()
+    _PKG.register(reg)
+    callbacks = []
+    method = "download_cli" if step == "download-cli" else "install_chrome"
+    monkeypatch.setattr(setup_steps, method, lambda cfg, refresh: callbacks.append(refresh))
+    reg.setup_steps[step]()
+    refresh = callbacks[0]
+    old_probe_started = threading.Event()
+    release_old_probe = threading.Event()
+    new_refresh_started = threading.Event()
+    new_probe_started = threading.Event()
+    errors = []
+
+    def probe(cfg, **kwargs):
+        if not old_probe_started.is_set():
+            old_probe_started.set()
+            assert release_old_probe.wait(5)
+            return preflight.Probe(binary="agent-browser")
+        new_probe_started.set()
+        return preflight.Probe(binary="agent-browser", cli_path="/installed/ab", chrome="ok")
+
+    def run(new=False):
+        try:
+            if new:
+                new_refresh_started.set()
+            refresh()
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(preflight, "probe", probe)
+    old = threading.Thread(target=run)
+    new = threading.Thread(target=run, args=(True,))
+    old.start()
+    try:
+        assert old_probe_started.wait(5)
+        new.start()
+        assert new_refresh_started.wait(5)
+        # Completion refresh must wait for the old probe AND its publication.
+        # Without serialization it publishes success here, then the old missing
+        # result resurrects the banner when released below.
+        assert not new_probe_started.wait(0.2)
+    finally:
+        release_old_probe.set()
+        old.join(5)
+        if new.ident is not None:
+            new.join(5)
+    assert not old.is_alive() and not new.is_alive()
+    assert not errors
+    assert new_probe_started.is_set()
+    assert reg.setup_gaps == {}
+
+
 def test_the_download_button_is_a_no_op_when_a_cli_is_on_path(monkeypatch):
     _cli_env(monkeypatch, which="/opt/ab")
     calls = []
