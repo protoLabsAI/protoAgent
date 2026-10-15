@@ -398,6 +398,9 @@ def test_reload_restamps_a_members_fleet_display_name(tmp_path, monkeypatch):
     (ws / "config").mkdir(parents=True)
     (ws / "workspace.yaml").write_text(yaml.safe_dump({"name": "scout", "id": "scout-1a2b", "port": 7871}))
     monkeypatch.setattr("infra.paths.instance_paths", lambda: type("P", (), {"instance_root": ws})())
+    # This test isolates fleet-label propagation, not host/plugin discovery.
+    monkeypatch.setattr("graph.config._load_host_layer", lambda: {})
+    monkeypatch.setattr("graph.config._resolve_plugin_config", lambda *a, **k: {})
 
     leaf = ws / "config" / "langgraph-config.yaml"
     leaf.write_text("scheduler:\n  enabled: false\nidentity:\n  name: ranger\n")
