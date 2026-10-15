@@ -160,7 +160,7 @@ def test_connection_test_preserves_opaque_credential_whitespace(config_file, mon
     seen = []
     def fetch(cfg):
         seen.append(cfg.client_secret)
-        return FetchResult(ok=True, values={})
+        return FetchResult(values={})
     monkeypatch.setattr('infra.secrets.get_provider', lambda _: SimpleNamespace(fetch=fetch))
     app = FastAPI()
     register_secrets_routes(app)
