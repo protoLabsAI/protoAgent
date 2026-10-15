@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { parsePluginCodeOpen, routePluginCodeOpen, targetLabel, type RouteDeps } from "./fromPlugin";
+import { codeOpenNotice, parsePluginCodeOpen, routePluginCodeOpen, targetLabel, type RouteDeps } from "./fromPlugin";
 
 // `protoagent:code:open` from a plugin view (the Artifact panel's code-linked diagrams, ADR 0038
 // amendment): the payload is shape-checked, then routed to the code pane, the external editor,
@@ -29,6 +29,15 @@ describe("parsePluginCodeOpen", () => {
     expect(parsePluginCodeOpen({ ...MSG, line: "12" })).toMatchObject({ line: undefined });
     expect(parsePluginCodeOpen({ ...MSG, end_line: 5 })).toMatchObject({ line: 12, endLine: undefined });
     expect(parsePluginCodeOpen({ ...MSG, note: "x".repeat(400) })!.note).toHaveLength(280);
+  });
+
+  it("takes open_in only as 'pane' or 'editor' — anything else routes by preference", () => {
+    expect(parsePluginCodeOpen(MSG)).not.toHaveProperty("openIn");
+    expect(parsePluginCodeOpen({ ...MSG, open_in: "pane" })!.openIn).toBe("pane");
+    expect(parsePluginCodeOpen({ ...MSG, open_in: "editor" })!.openIn).toBe("editor");
+    for (const open_in of ["Editor", "zed", "", 1, true, null, { pane: true }]) {
+      expect(parsePluginCodeOpen({ ...MSG, open_in }), String(open_in)).not.toHaveProperty("openIn");
+    }
   });
 
   it("labels a target as project/path:range", () => {
@@ -89,5 +98,83 @@ describe("routePluginCodeOpen", () => {
     const d = deps({ paneOn: false, roots: vi.fn(async () => ({ other: "/work/other" })) });
     expect(await routePluginCodeOpen(t, d)).toBe("copied");
     expect(d.navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("routePluginCodeOpen — explicit open_in", () => {
+  const pane = parsePluginCodeOpen({ ...MSG, open_in: "pane" })!;
+  const editor = parsePluginCodeOpen({ ...MSG, open_in: "editor" })!;
+
+  it("'pane' opens the pane even when the operator prefers the editor", async () => {
+    const d = deps({ openIn: "editor" });
+    expect(await routePluginCodeOpen(pane, d)).toBe("pane");
+    expect(d.navigate).not.toHaveBeenCalled();
+  });
+
+  it("'pane' falls back to the editor, then to a copy, while the pane is off", async () => {
+    const d = deps({ paneOn: false });
+    expect(await routePluginCodeOpen(pane, d)).toBe("editor");
+    expect(d.navigate).toHaveBeenCalledWith("zed://file/work/demo/src/agent.py:12");
+    const d2 = deps({ paneOn: false, editor: "off" });
+    expect(await routePluginCodeOpen(pane, d2)).toBe("copied");
+    expect(d2.copy).toHaveBeenCalledWith("demo/src/agent.py:12-20");
+  });
+
+  it("'editor' opens the editor even when the operator prefers the pane", async () => {
+    const d = deps({ openIn: "protoagent" });
+    expect(await routePluginCodeOpen(editor, d)).toBe("editor");
+    expect(d.navigate).toHaveBeenCalledWith("zed://file/work/demo/src/agent.py:12");
+    expect(d.open).not.toHaveBeenCalled();
+  });
+
+  it("'editor' falls back to the pane without an editor link, then to a copy", async () => {
+    const off = deps({ editor: "off" });
+    expect(await routePluginCodeOpen(editor, off)).toBe("pane");
+    expect(off.roots).not.toHaveBeenCalled();
+    const noRoots = deps({ roots: vi.fn(async () => null) });
+    expect(await routePluginCodeOpen(editor, noRoots)).toBe("pane");
+    const nothing = deps({ paneOn: false, editor: "off" });
+    expect(await routePluginCodeOpen(editor, nothing)).toBe("copied");
+    const noClipboard = deps({ paneOn: false, editor: "off", copy: vi.fn(async () => false) });
+    expect(await routePluginCodeOpen(editor, noClipboard)).toBe("none");
+  });
+});
+
+describe("codeOpenNotice", () => {
+  const base = parsePluginCodeOpen(MSG)!;
+  const pane = { ...base, openIn: "pane" as const };
+  const editor = { ...base, openIn: "editor" as const };
+  const on = { paneOn: true, editor: "zed" as const };
+  const off = { paneOn: false, editor: "off" as const };
+
+  it("keeps the pre-open_in toasts: silent unless copied or nowhere", () => {
+    expect(codeOpenNotice(base, "pane", on)).toBeNull();
+    expect(codeOpenNotice(base, "editor", on)).toBeNull();
+    expect(codeOpenNotice(base, "copied", off)).toEqual({
+      title: "Path copied", message: "demo/src/agent.py:12-20 — no code pane or editor is set up.",
+    });
+    expect(codeOpenNotice(base, "none", off)).toEqual({ title: "Code location", message: "demo/src/agent.py:12-20" });
+  });
+
+  it("is silent when the explicit destination was honoured", () => {
+    expect(codeOpenNotice(pane, "pane", on)).toBeNull();
+    expect(codeOpenNotice(editor, "editor", on)).toBeNull();
+  });
+
+  it("'pane' landing elsewhere hints that the code pane toolset can be turned on", () => {
+    const viaEditor = codeOpenNotice(pane, "editor", { paneOn: false, editor: "zed" })!;
+    expect(viaEditor.title).toBe("Opened in Zed");
+    expect(viaEditor.message).toContain("Tools ▸ Filesystem");
+    const copied = codeOpenNotice(pane, "copied", off)!;
+    expect(copied.title).toBe("Path copied");
+    expect(copied.message).toContain("Tools ▸ Filesystem");
+  });
+
+  it("'editor' landing elsewhere says why there was no editor", () => {
+    expect(codeOpenNotice(editor, "pane", { paneOn: true, editor: "off" })!.message).toContain("Settings ▸ Chat ▸ Open files in");
+    expect(codeOpenNotice(editor, "pane", on)!.message).toContain("No Zed link");
+    const copied = codeOpenNotice(editor, "copied", off)!;
+    expect(copied.title).toBe("Path copied");
+    expect(copied.message).toMatch(/no external editor is set .* and the code pane is off\.$/);
   });
 });

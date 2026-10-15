@@ -2,7 +2,7 @@ import { useToast } from "@protolabsai/ui/overlays";
 
 import { FS_ROOTS_QUERY_KEY } from "../chat/useEditorLinker";
 import { api } from "../lib/api";
-import { makeEditorLinker, joinProjectPath, type EditorId } from "../lib/editorLinks";
+import { editorLabel, makeEditorLinker, joinProjectPath, type EditorId } from "../lib/editorLinks";
 import { getEditorPref, getOpenFilesIn, type OpenFilesIn } from "../lib/editorPref";
 import { queryClient } from "../lib/queryClient";
 import { isCodePaneEnabled } from "./enabled";
@@ -19,6 +19,10 @@ import type { CodeRef } from "./store";
 //      which also refuses secret-like paths, so nothing here widens what can be shown;
 //   2. otherwise the external editor link (Settings ▸ Chat ▸ Open files in), when there is one;
 //   3. otherwise the path is copied, so the operator can still get there.
+// A page may instead name the destination with `open_in` — the same two actions a chat file
+// link offers (click = pane, ⌘/Ctrl-click = editor; see makeFileLinker): "pane" prefers the code
+// pane, "editor" the external editor, each falling back to the other and then to a copy. Absent
+// or unknown = the preference routing above, so older pages behave exactly as before.
 
 export type PluginCodeTarget = {
   project: string;
@@ -26,7 +30,11 @@ export type PluginCodeTarget = {
   line?: number;
   endLine?: number;
   note?: string;
+  /** The page's explicit destination (`open_in`); undefined = route by the operator's prefs. */
+  openIn?: PluginCodeDestination;
 };
+
+export type PluginCodeDestination = "pane" | "editor";
 
 const MAX = { project: 200, path: 4096, note: 280 };
 
@@ -46,7 +54,8 @@ export function parsePluginCodeOpen(m: unknown): PluginCodeTarget | null {
   const end = o.end_line ?? o.endLine;
   const endLine = line && posInt(end) && end >= line ? end : undefined;
   const note = typeof o.note === "string" && o.note.trim() ? o.note.trim().slice(0, MAX.note) : undefined;
-  return { project, path, line, endLine, note };
+  const openIn = o.open_in === "pane" || o.open_in === "editor" ? o.open_in : undefined;
+  return { project, path, line, endLine, note, ...(openIn ? { openIn } : {}) };
 }
 
 export function targetLabel(t: PluginCodeTarget): string {
@@ -82,7 +91,9 @@ async function editorHref(t: PluginCodeTarget, deps: RouteDeps): Promise<string 
 export async function routePluginCodeOpen(t: PluginCodeTarget, deps: RouteDeps): Promise<RouteOutcome> {
   const pane = () =>
     deps.open({ project: t.project, path: t.path, line: t.line, endLine: t.endLine, note: t.note, source: "link" });
-  if (deps.paneOn && deps.openIn !== "editor") {
+  // The pane first: an explicit "pane", or no explicit choice and the operator didn't pick the editor.
+  const paneFirst = t.openIn ? t.openIn === "pane" : deps.openIn !== "editor";
+  if (deps.paneOn && paneFirst) {
     pane();
     return "pane";
   }
@@ -91,12 +102,42 @@ export async function routePluginCodeOpen(t: PluginCodeTarget, deps: RouteDeps):
     deps.navigate(href);
     return "editor";
   }
-  // "Open files in: editor" with no usable editor link still has the pane to fall back on.
+  // An editor-first route with no usable editor link still has the pane to fall back on.
   if (deps.paneOn) {
     pane();
     return "pane";
   }
   return (await deps.copy(targetLabel(t))) ? "copied" : "none";
+}
+
+const PANE_HINT = "Turn on the Code pane in Tools ▸ Filesystem ▸ Shell & filesystem tools to view it here.";
+
+/** The toast for a routed target, or null when it went where it was asked (or, without an
+ *  explicit `open_in`, anywhere but a copy — the pre-`open_in` behaviour). Pure; unit-tested. */
+export function codeOpenNotice(
+  t: PluginCodeTarget,
+  outcome: RouteOutcome,
+  ctx: Pick<RouteDeps, "paneOn" | "editor">,
+): { title: string; message: string } | null {
+  const label = targetLabel(t);
+  if (outcome === "none") return { title: "Code location", message: label };
+  if (!t.openIn) {
+    return outcome === "copied" ? { title: "Path copied", message: `${label} — no code pane or editor is set up.` } : null;
+  }
+  if (outcome === t.openIn) return null;
+  const editor = ctx.editor === "off" ? "an external editor" : editorLabel(ctx.editor);
+  if (t.openIn === "editor") {
+    const why = ctx.editor === "off"
+      ? "No external editor is set (Settings ▸ Chat ▸ Open files in)"
+      : `No ${editor} link for this file — it needs a filesystem shared with the agent`;
+    return outcome === "pane"
+      ? { title: "Opened in the code pane", message: `${why}.` }
+      : { title: "Path copied", message: `${label} — ${why.charAt(0).toLowerCase()}${why.slice(1)}, and the code pane is off.` };
+  }
+  // Asked for the pane, which is off (the only way a "pane" request lands elsewhere).
+  return outcome === "editor"
+    ? { title: `Opened in ${editor}`, message: `The code pane is off. ${PANE_HINT}` }
+    : { title: "Path copied", message: `${label} — the code pane is off and no editor link is available. ${PANE_HINT}` };
 }
 
 /** The console's deps. The pane opens on the dock the operator keeps it on (placeCodeSurface),
