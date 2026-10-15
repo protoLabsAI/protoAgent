@@ -810,9 +810,9 @@ function abEnumerate(root){
   var fboxes = (root.querySelectorAll && root.querySelectorAll('[data-pa-file-for]')) || [];
   for(var bi = 0; bi < fboxes.length; bi++){
     var fbox = fboxes[bi], fid = fbox.getAttribute('data-pa-file-for') || '';
-    if(!fid || seenIds[fid]) continue;
+    if(!fid || fid.indexOf('@@') === 0 || seenIds[fid]) continue;   // '@@…': an id-less input
     var fliveEl = null; try { fliveEl = document.getElementById(fid); } catch(e){ fliveEl = null; }
-    if(fliveEl) continue;                      // live input still there — the main walk covers it
+    if(fliveEl && fliveEl.tagName === 'INPUT' && (fliveEl.getAttribute('type') || '').toLowerCase() === 'file') continue;   // live input — the main walk covers it
     if(fbox.querySelector && fbox.querySelector('input[type="file"]')) continue;
     var fchip = abChipElement(fbox, null);
     if(!fchip || !(abRemoveControl(fchip) || abRemoveControl(fchip.parentElement))) continue;
@@ -1733,14 +1733,31 @@ _UPLOAD_DRIVER = r"""
   // field's box; the outer `role=group` wrapper ("Resume/CV*") survives the swap and shows the chip.
   // Tagged `data-pa-file-for=<id>` (plus label / required) so browser_form_read can still report the
   // field under its id once the input is gone (#resume: input AND label removed).
+  // Stop BEFORE any ancestor that holds another field: (a) another live file input; (b) a box an
+  // earlier upload tagged for a DIFFERENT field (its input may already be gone) — a tag that
+  // CONTAINS this input is this field's own, from an earlier attempt; (c) a filename CHIP with a
+  // detach control — before the attach this field shows none, so any chip is a neighbour's whose
+  // input was already swapped away (attached by hand, or by an earlier upload). Without (b)/(c)
+  // the box swallowed such a neighbour and its chip was read as this field's filename.
+  var fileKey = inId || ('@@pa-' + NONCE);     // '@@' — never a real id; form_read skips these
   var fieldBox = '', fbNode = null, fn = input.parentElement;
   for(var fu = 0; fn && fu < 6; fu++){
     if(fn.tagName === 'FORM' || fn === document.body) break;
     var ff = (fn.querySelectorAll && fn.querySelectorAll('input[type="file"]')) || [], other = false;
     for(var fj = 0; fj < ff.length; fj++){ if(ff[fj] !== input){ other = true; break; } }
-    if(!other && fn.querySelector){
-      var fb = fn.querySelectorAll('[data-pa-file-for]');
-      for(var fk = 0; fk < fb.length; fk++){ if(fb[fk].getAttribute('data-pa-file-for') !== inId){ other = true; break; } }
+    if(!other && fn.querySelectorAll){
+      var fb = fn.querySelectorAll('[data-pa-file-for], [data-pa-filebox], [data-pa-upbox]');
+      for(var fk = 0; fk < fb.length; fk++){
+        var ptag = fb[fk];
+        if(ptag.contains && ptag.contains(input)) continue;      // this field's own (earlier) tag
+        var tFor = ptag.getAttribute('data-pa-file-for');
+        var tNonce = ptag.getAttribute('data-pa-filebox') || ptag.getAttribute('data-pa-upbox');
+        if((tFor && tFor !== fileKey) || (!tFor && tNonce && tNonce !== NONCE)){ other = true; break; }
+      }
+    }
+    if(!other){
+      var nchip = abChipElement(fn, input);
+      if(nchip && (abRemoveControl(nchip) || abRemoveControl(nchip.parentElement))) other = true;
     }
     if(other) break;
     fbNode = fn;
@@ -1754,10 +1771,9 @@ _UPLOAD_DRIVER = r"""
   if(!groupLabel) groupLabel = labelText || label;
   if(fbNode){
     try {
-      if(inId){                                 // form_read can only report it under a real id
-        fbNode.setAttribute('data-pa-file-for', inId);
-        fbNode.setAttribute('data-pa-file-label', abClean(groupLabel));
-      }
+      // Always tagged (a later upload's climb stops at it); form_read reports only a real id.
+      fbNode.setAttribute('data-pa-file-for', fileKey);
+      fbNode.setAttribute('data-pa-file-label', abClean(groupLabel));
       var req = !!input.required || (input.getAttribute('aria-required') === 'true') ||
                 !!(grp && grp.getAttribute('aria-required') === 'true') ||
                 !!(grp && /\*/.test(String(grp.getAttribute('aria-labelledby') || '').split(/\s+/).map(function(i){

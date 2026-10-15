@@ -2772,10 +2772,11 @@ def test_upload_verify_js_surfaces_a_rejection_message_with_no_filename():
 _GH_CHIP_HTML = (REPO / "tests" / "fixtures" / "ats" / "greenhouse_resume_chip.html").read_text(encoding="utf-8")
 
 
-def _run_upload_flow_js(html, selector, fake_name, nonce="n1"):
+def _run_upload_flow_js(html, selector, fake_name, nonce="n1", pre_js=""):
     """Full browser_upload flow in jsdom, scripts ON: locate (upload_js) → the widget's own change
     handler fires (it swaps the input for a chip) → verify (upload_verify_js with what locate
-    returned) → browser_form_read's script. Returns ``(info, verify_raw, form_raw)``."""
+    returned) → browser_form_read's script. ``pre_js`` runs first (to reshape the page).
+    Returns ``(info, verify_raw, form_raw)``."""
     if not NODE:
         pytest.skip("node not on PATH")
     probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
@@ -2786,6 +2787,7 @@ def _run_upload_flow_js(html, selector, fake_name, nonce="n1"):
         "const { JSDOM } = require('jsdom');\n"
         "const dom = new JSDOM(" + json.dumps(html) + ", {runScripts: 'dangerously'});\n"
         "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        + pre_js + "\n"
         "const info = JSON.parse((0, eval)(" + json.dumps(forms.upload_js(selector, nonce)) + "));\n"
         "const inp = document.querySelector(info.selector);\n"
         "inp.setAttribute('data-fake-name', " + json.dumps(fake_name) + ");\n"
@@ -2819,6 +2821,72 @@ def test_upload_verifies_when_greenhouse_removes_the_input_and_its_label():
     assert out.startswith("Uploaded resume-gitlab.pdf to"), out
     assert "verified via the field's displayed filename" in out
     assert "nothing is attached" not in out
+
+
+def test_upload_verifies_via_the_field_box_alone_when_the_group_label_is_missing():
+    """Review: the group-label text fallback alone also found the chip, so the test above passed
+    with the field-box lookup disabled. Strip the group's label so ONLY the field box captured
+    before the attach can lead the verify (and form_read) to the chip."""
+    pre = ("var g=document.querySelector('[aria-labelledby=\"upload-label-resume\"]');"
+           "g.removeAttribute('aria-labelledby');"
+           "document.getElementById('upload-label-resume').remove();")
+    info, verify, form = _run_upload_flow_js(_GH_CHIP_HTML, "#resume", "resume-gitlab.pdf", pre_js=pre)
+    assert info["group_label"] == "Attach"           # no group label → the text fallback can't match
+    out = forms.render_upload(verify, "#resume", "resume-gitlab.pdf", label=info["label"])
+    assert out.startswith("Uploaded resume-gitlab.pdf to"), out
+    assert "verified via the field's displayed filename" in out
+    rows = json.loads(forms.render_form_read(form))
+    assert [r["value"] for r in rows if r["id"] == "resume"] == ["resume-gitlab.pdf"], rows
+
+
+# Review repro: two sibling file fields under ONE wrapper; the cover letter was ALREADY attached
+# (its input swapped for a "cv.pdf" chip, by hand or an earlier upload), so no live input or tag
+# stops the résumé's field-box climb at its own field. `data-no-chip` makes the résumé widget
+# swallow the file without rendering a chip (a silent non-attach).
+_NEIGHBOUR_CHIP_HTML = """<!doctype html><html><body>
+<form><div class="uploads">
+  <div class="f1"><div class="lbl">Resume</div>
+    <div class="btn"><label for="resume">Attach</label><input id="resume" type="file"></div></div>
+  <div class="f2"><div class="lbl">Cover letter</div>
+    <div class="file-chip"><span class="chip">cv.pdf</span><button type="button">Remove</button></div></div>
+</div></form>
+<script>
+var inp = document.getElementById('resume');
+inp.addEventListener('change', function () {
+  var nm = inp.getAttribute('data-fake-name') || '';
+  var btn = inp.closest('.btn'), f1 = btn.parentNode;
+  f1.removeChild(btn);
+  if (inp.hasAttribute('data-no-chip')) return;
+  var chip = document.createElement('div'); chip.className = 'file-chip';
+  var s = document.createElement('span'); s.className = 'chip'; s.textContent = nm;
+  var rm = document.createElement('button'); rm.type = 'button'; rm.textContent = 'Remove';
+  chip.appendChild(s); chip.appendChild(rm); f1.appendChild(chip);
+});
+</script></body></html>"""
+
+
+def test_field_box_never_swallows_an_already_attached_neighbour():
+    """Review (MEDIUM): the field box climbed past the résumé's own wrapper into the shared one,
+    since the attached cover letter has no live input to stop it — so the verify read the
+    neighbour's shorter "cv.pdf" chip (false "nothing is attached") and form_read reported
+    resume = "cv.pdf". The climb now stops at an ancestor already showing a detach-able chip."""
+    info, verify, form = _run_upload_flow_js(_NEIGHBOUR_CHIP_HTML, "#resume", "resume-gitlab.pdf")
+    out = forms.render_upload(verify, "#resume", "resume-gitlab.pdf", label=info["label"])
+    assert out.startswith("Uploaded resume-gitlab.pdf to"), out
+    rows = json.loads(forms.render_form_read(form))
+    assert [r["value"] for r in rows if r["id"] == "resume"] == ["resume-gitlab.pdf"], rows
+
+
+def test_neighbours_chip_never_falsely_verifies_a_same_named_upload():
+    """…and the false-VERIFIED half: upload a file named like the neighbour's chip ("cv.pdf") into
+    a widget that swallows it without rendering a chip. The neighbour's chip must not confirm it,
+    and form_read must not report the résumé as "cv.pdf"."""
+    pre = "document.getElementById('resume').setAttribute('data-no-chip', '');"
+    info, verify, form = _run_upload_flow_js(_NEIGHBOUR_CHIP_HTML, "#resume", "cv.pdf", pre_js=pre)
+    out = forms.render_upload(verify, "#resume", "cv.pdf", label=info["label"])
+    assert out.startswith("Error:") and "nothing is attached" in out, out
+    read = forms.render_form_read(form)
+    assert read == "No form fields found.", read     # NOT a resume row borrowing "cv.pdf"
 
 
 def test_form_read_reports_the_removed_greenhouse_input_under_its_id():
