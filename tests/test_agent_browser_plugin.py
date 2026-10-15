@@ -1285,6 +1285,60 @@ async def test_fill_resolves_a_label_in_the_page_then_acts(monkeypatch):
     assert rec[1] == ["ab", "fill", '[data-ab-field="1"]', "ada@x.io"]   # then act on the match
 
 
+async def test_parallel_fills_on_one_session_do_not_interleave(monkeypatch):
+    """jobCoach friction: the model fired parallel browser_fill calls on an Ashby form and the
+    harness ran them concurrently — focus is shared page state, so the LinkedIn URL landed in Email
+    and location + LinkedIn in Phone. Every tool now holds its session's lock for its whole body:
+    each fill's resolve→fill pair runs back to back, one call at a time, in arrival order. The stub
+    CLI is slow and counts how many invocations are in flight at once; it must never exceed 1."""
+    fields = [
+        {"label": n, "labels": [n], "selector": f'[data-ab-field="{i}"]', "kind": "text"}
+        for i, n in enumerate(["Email", "Phone", "LinkedIn", "Location"])
+    ]
+    payload = json.dumps({"mode": "enumerate", "fields": fields}).encode()
+    gate = __import__("threading").Lock()
+    state = {"active": 0, "max": 0}
+    rec: list = []
+
+    class _SlowProc(_FakeProc):
+        def wait(self, timeout=None):
+            time.sleep(0.03)               # hold the "page" long enough for a racer to arrive
+            with gate:
+                state["active"] -= 1
+            return super().wait(timeout)
+
+    def _popen(argv, **kw):
+        with gate:
+            state["active"] += 1
+            state["max"] = max(state["max"], state["active"])
+            rec.append(list(argv))
+        return _SlowProc(argv, out=payload if argv[1:2] == ["eval"] else b"(ok)")
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    t = _toolmap({"binary": "ab"})
+    calls = [("Email", "ada@x.io"), ("Phone", "555-0100"), ("LinkedIn", "linkedin.com/in/ada"),
+             ("Location", "London")]
+    outs = await asyncio.gather(*(t["browser_fill"].ainvoke({"selector": s, "text": v}) for s, v in calls))
+    assert all(not o.startswith("Error:") for o in outs), outs
+    assert state["max"] == 1, f"{state['max']} CLI calls overlapped"
+    # each fill's own resolve is IMMEDIATELY followed by its fill, in arrival order
+    acts = [r for r in rec if r[1] != "eval"]
+    assert [r[1:] for r in acts] == [["fill", f'[data-ab-field="{i}"]', v] for i, (_, v) in enumerate(calls)]
+    assert [r[1] for r in rec] == ["eval", "fill"] * len(calls)
+
+
+async def test_different_sessions_are_not_serialised_against_each_other(monkeypatch):
+    """The lock is per agent-browser SESSION: a call on another session doesn't wait."""
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "s-one")
+    held = tools._session_lock()
+    async with held:
+        monkeypatch.setenv("AGENT_BROWSER_SESSION", "s-two")
+        other = tools._session_lock()
+        assert other is not held and not other.locked()
+        monkeypatch.setenv("AGENT_BROWSER_SESSION", "s-one")
+        assert tools._session_lock() is held
+
+
 async def test_click_and_get_value_resolve_labels_too(monkeypatch):
     fields = [{"label": "Subscribe", "labels": ["Subscribe"], "selector": '[data-ab-field="0"]', "kind": "checkbox"}]
     rec = []
@@ -2715,6 +2769,142 @@ def test_upload_verify_js_surfaces_a_rejection_message_with_no_filename():
     assert "could not be attached" in res["error"]
 
 
+_GH_CHIP_HTML = (REPO / "tests" / "fixtures" / "ats" / "greenhouse_resume_chip.html").read_text(encoding="utf-8")
+
+
+def _run_upload_flow_js(html, selector, fake_name, nonce="n1", pre_js=""):
+    """Full browser_upload flow in jsdom, scripts ON: locate (upload_js) → the widget's own change
+    handler fires (it swaps the input for a chip) → verify (upload_verify_js with what locate
+    returned) → browser_form_read's script. ``pre_js`` runs first (to reshape the page).
+    Returns ``(info, verify_raw, form_raw)``."""
+    if not NODE:
+        pytest.skip("node not on PATH")
+    probe = subprocess.run([NODE, "-e", "require.resolve('jsdom')"], cwd=REPO,
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("jsdom not installed (run npm ci in apps/web or the repo root)")
+    harness = (
+        "const { JSDOM } = require('jsdom');\n"
+        "const dom = new JSDOM(" + json.dumps(html) + ", {runScripts: 'dangerously'});\n"
+        "global.window = dom.window; global.document = dom.window.document; global.CSS = dom.window.CSS;\n"
+        + pre_js + "\n"
+        "const info = JSON.parse((0, eval)(" + json.dumps(forms.upload_js(selector, nonce)) + "));\n"
+        "const inp = document.querySelector(info.selector);\n"
+        "inp.setAttribute('data-fake-name', " + json.dumps(fake_name) + ");\n"
+        "inp.dispatchEvent(new dom.window.Event('change', {bubbles: true}));\n"
+        "const verifyTpl = " + json.dumps(forms.upload_verify_js(
+            "@@SEL@@", "@@ID@@", "@@NAME@@", "@@CONTAINER@@", fake_name, "@@LFOR@@", "@@LTEXT@@",
+            "@@FBOX@@", "@@GLABEL@@")) + ";\n"
+        "const sub = {SEL: info.selector, ID: info.id, NAME: info.name, CONTAINER: info.container,\n"
+        "  LFOR: info.label_for, LTEXT: info.label_text, FBOX: info.field_box, GLABEL: info.group_label};\n"
+        "let v = verifyTpl; for (const k in sub) v = v.split(JSON.stringify('@@' + k + '@@')).join(JSON.stringify(sub[k] || ''));\n"
+        "const verify = (0, eval)(v);\n"
+        "const form = (0, eval)(" + json.dumps(forms.read_form_js("")) + ");\n"
+        "console.log(JSON.stringify({info, verify, form}));\n"
+    )
+    out = subprocess.run([NODE, "-e", harness], cwd=REPO, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    res = json.loads(out.stdout)
+    return res["info"], res["verify"], res["form"]
+
+
+def test_upload_verifies_when_greenhouse_removes_the_input_and_its_label():
+    """jobCoach friction: live Greenhouse swaps the résumé's button container — input#resume AND its
+    `<label for=resume>Attach</label>` — for a "resume-gitlab.pdf" chip. The old verify re-found the
+    field only via that container / label[for] / the "Attach" text, all gone, so it reported "nothing
+    is attached" for a file the page shows attached. The field box captured BEFORE the attach (the
+    surviving `role=group` "Resume/CV*" wrapper) now finds the chip."""
+    info, verify, _ = _run_upload_flow_js(_GH_CHIP_HTML, "#resume", "resume-gitlab.pdf")
+    assert info["id"] == "resume" and info["field_box"]
+    assert info["group_label"] == "Resume/CV"
+    out = forms.render_upload(verify, "#resume", "resume-gitlab.pdf", label=info["label"])
+    assert out.startswith("Uploaded resume-gitlab.pdf to"), out
+    assert "verified via the field's displayed filename" in out
+    assert "nothing is attached" not in out
+
+
+def test_upload_verifies_via_the_field_box_alone_when_the_group_label_is_missing():
+    """Review: the group-label text fallback alone also found the chip, so the test above passed
+    with the field-box lookup disabled. Strip the group's label so ONLY the field box captured
+    before the attach can lead the verify (and form_read) to the chip."""
+    pre = ("var g=document.querySelector('[aria-labelledby=\"upload-label-resume\"]');"
+           "g.removeAttribute('aria-labelledby');"
+           "document.getElementById('upload-label-resume').remove();")
+    info, verify, form = _run_upload_flow_js(_GH_CHIP_HTML, "#resume", "resume-gitlab.pdf", pre_js=pre)
+    assert info["group_label"] == "Attach"           # no group label → the text fallback can't match
+    out = forms.render_upload(verify, "#resume", "resume-gitlab.pdf", label=info["label"])
+    assert out.startswith("Uploaded resume-gitlab.pdf to"), out
+    assert "verified via the field's displayed filename" in out
+    rows = json.loads(forms.render_form_read(form))
+    assert [r["value"] for r in rows if r["id"] == "resume"] == ["resume-gitlab.pdf"], rows
+
+
+# Review repro: two sibling file fields under ONE wrapper; the cover letter was ALREADY attached
+# (its input swapped for a "cv.pdf" chip, by hand or an earlier upload), so no live input or tag
+# stops the résumé's field-box climb at its own field. `data-no-chip` makes the résumé widget
+# swallow the file without rendering a chip (a silent non-attach).
+_NEIGHBOUR_CHIP_HTML = """<!doctype html><html><body>
+<form><div class="uploads">
+  <div class="f1"><div class="lbl">Resume</div>
+    <div class="btn"><label for="resume">Attach</label><input id="resume" type="file"></div></div>
+  <div class="f2"><div class="lbl">Cover letter</div>
+    <div class="file-chip"><span class="chip">cv.pdf</span><button type="button">Remove</button></div></div>
+</div></form>
+<script>
+var inp = document.getElementById('resume');
+inp.addEventListener('change', function () {
+  var nm = inp.getAttribute('data-fake-name') || '';
+  var btn = inp.closest('.btn'), f1 = btn.parentNode;
+  f1.removeChild(btn);
+  if (inp.hasAttribute('data-no-chip')) return;
+  var chip = document.createElement('div'); chip.className = 'file-chip';
+  var s = document.createElement('span'); s.className = 'chip'; s.textContent = nm;
+  var rm = document.createElement('button'); rm.type = 'button'; rm.textContent = 'Remove';
+  chip.appendChild(s); chip.appendChild(rm); f1.appendChild(chip);
+});
+</script></body></html>"""
+
+
+def test_field_box_never_swallows_an_already_attached_neighbour():
+    """Review (MEDIUM): the field box climbed past the résumé's own wrapper into the shared one,
+    since the attached cover letter has no live input to stop it — so the verify read the
+    neighbour's shorter "cv.pdf" chip (false "nothing is attached") and form_read reported
+    resume = "cv.pdf". The climb now stops at an ancestor already showing a detach-able chip."""
+    info, verify, form = _run_upload_flow_js(_NEIGHBOUR_CHIP_HTML, "#resume", "resume-gitlab.pdf")
+    out = forms.render_upload(verify, "#resume", "resume-gitlab.pdf", label=info["label"])
+    assert out.startswith("Uploaded resume-gitlab.pdf to"), out
+    rows = json.loads(forms.render_form_read(form))
+    assert [r["value"] for r in rows if r["id"] == "resume"] == ["resume-gitlab.pdf"], rows
+
+
+def test_neighbours_chip_never_falsely_verifies_a_same_named_upload():
+    """…and the false-VERIFIED half: upload a file named like the neighbour's chip ("cv.pdf") into
+    a widget that swallows it without rendering a chip. The neighbour's chip must not confirm it,
+    and form_read must not report the résumé as "cv.pdf"."""
+    pre = "document.getElementById('resume').setAttribute('data-no-chip', '');"
+    info, verify, form = _run_upload_flow_js(_NEIGHBOUR_CHIP_HTML, "#resume", "cv.pdf", pre_js=pre)
+    out = forms.render_upload(verify, "#resume", "cv.pdf", label=info["label"])
+    assert out.startswith("Error:") and "nothing is attached" in out, out
+    read = forms.render_form_read(form)
+    assert read == "No form fields found.", read     # NOT a resume row borrowing "cv.pdf"
+
+
+def test_form_read_reports_the_removed_greenhouse_input_under_its_id():
+    """…and browser_form_read reports the vanished #resume as a kind 'file' row with id "resume" and
+    value == the bare filename, so careercoach_verify_fill's `#resume → resume-gitlab.pdf` matches.
+    The untouched cover letter keeps its own (empty) row and never borrows the chip."""
+    _, _, form = _run_upload_flow_js(_GH_CHIP_HTML, "#resume", "resume-gitlab.pdf")
+    rows = json.loads(forms.render_form_read(form))
+    resume = [r for r in rows if r["id"] == "resume"]
+    assert len(resume) == 1, rows
+    assert resume[0]["kind"] == "file"
+    assert resume[0]["value"] == "resume-gitlab.pdf"
+    assert resume[0]["label"] == "Resume/CV"
+    assert resume[0]["required"] is True
+    cover = [r for r in rows if r["id"] == "cover_letter"]
+    assert len(cover) == 1 and cover[0]["value"] == "", rows
+
+
 def test_upload_is_a_registered_tool_with_a_usable_docstring():
     t = _toolmap()["browser_upload"]
     assert "browser_upload" in EXPECTED_TOOLS
@@ -3803,6 +3993,9 @@ async def test_m4_another_captures_prune_never_takes_a_file_mid_re_export(fake_c
     fake_cli.set("mode_screenshot", "write")
     a = asyncio.create_task(t["browser_pdf"].ainvoke({"path": "resume.pdf"}))   # will fail
     await fake_cli.reached("started_pdf")
+    # Calls on ONE session are serialised, so the racing capture comes from ANOTHER session
+    # sharing the capture store (a second agent / subagent) — still a live prune mid-export.
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "m4-other-session")
     assert "Saved to" in await t["browser_screenshot"].ainvoke({"path": "shot2.png"})   # prunes now
     assert (await a).startswith("Error:")
     assert (root / "resume.pdf").read_bytes() == b"%PDF-1.4 LAST-GOOD-RESUME"

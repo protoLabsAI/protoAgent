@@ -1,0 +1,77 @@
+<!doctype html>
+<!--
+  SAVED ATS FORM FIXTURE — live Greenhouse résumé upload (jobCoach friction report, 2026-10-15).
+
+  Modeled on the live job-boards.greenhouse.io application form markup (captured 2026-10-15):
+  the résumé field is a `role=group` wrapper labelled by a plain <div id="upload-label-resume">
+  ("Resume/CV*"), and the real <input type=file id=resume> sits in a small button container
+  next to its OWN visually-hidden `<label for="resume">Attach</label>`. On change Greenhouse
+  REPLACES that whole button container — input AND <label for> — with a filename chip
+  ("resume-gitlab.pdf" + a remove button). So neither `#resume`, the upload nonce, nor
+  `label[for=resume]` resolves afterwards; only the outer field wrapper survives.
+
+  A sibling cover-letter field (same shape, untouched) proves the chip is never borrowed.
+
+  In a real browser the chip shows `input.files[0].name`; under jsdom (where files can't be
+  set) the handler falls back to the input's `data-fake-name`.
+-->
+<html>
+<head><meta charset="utf-8"><title>Greenhouse résumé chip fixture</title></head>
+<body>
+<form id="application">
+  <div class="field-wrapper">
+    <div role="group" aria-labelledby="upload-label-resume" aria-required="true" class="file-upload">
+      <div id="upload-label-resume" class="label upload-label">Resume/CV<span class="required">*</span></div>
+      <div class="file-upload__wrapper">
+        <div class="button-container">
+          <div class="secondary-button"><div>
+            <button type="button" class="btn btn--pill">Attach</button>
+            <label class="visually-hidden" for="resume">Attach</label>
+            <input id="resume" class="visually-hidden" type="file" accept=".pdf,.doc,.docx,.txt,.rtf">
+          </div></div>
+          <p class="file-upload__filetypes">Accepted file types: pdf, doc, docx, txt, rtf</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="field-wrapper">
+    <div role="group" aria-labelledby="upload-label-cover_letter" aria-required="false" class="file-upload">
+      <div id="upload-label-cover_letter" class="label upload-label">Cover Letter</div>
+      <div class="file-upload__wrapper">
+        <div class="button-container">
+          <div class="secondary-button"><div>
+            <button type="button" class="btn btn--pill">Attach</button>
+            <label class="visually-hidden" for="cover_letter">Attach</label>
+            <input id="cover_letter" class="visually-hidden" type="file" accept=".pdf,.doc,.docx,.txt,.rtf">
+          </div></div>
+          <p class="file-upload__filetypes">Accepted file types: pdf, doc, docx, txt, rtf</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+<script>
+document.querySelectorAll('input[type=file]').forEach(function (inp) {
+  inp.addEventListener('change', function () {
+    var nm = (inp.files && inp.files.length) ? inp.files[0].name : (inp.getAttribute('data-fake-name') || '');
+    if (!nm) return;
+    var container = inp.closest('.button-container');
+    var wrap = container.parentNode;
+    wrap.removeChild(container);                       // input AND its <label for> go away
+    var chip = document.createElement('div');
+    chip.className = 'file-upload__filename';
+    var name = document.createElement('span');
+    name.className = 'chip';
+    name.textContent = nm;
+    var rm = document.createElement('button');
+    rm.type = 'button';
+    rm.setAttribute('aria-label', 'Remove file');
+    rm.textContent = '×';
+    chip.appendChild(name);
+    chip.appendChild(rm);
+    wrap.appendChild(chip);
+  });
+});
+</script>
+</body>
+</html>
