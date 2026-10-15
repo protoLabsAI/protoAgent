@@ -28,11 +28,11 @@ from graph.subagents.config import SUBAGENT_REGISTRY
 
 # ── ceilings (chars) — mirror docs/explanation/prompt-contracts.md ───────────────────
 
-LEAD_DOCTRINE_MAX = 7_700  # Subagents + Operating model + Guidelines, all capabilities bound
-LEAD_SUBAGENTS_MAX = 3_700
-LEAD_OPERATING_MODEL_MAX = 3_050
-LEAD_GUIDELINES_MAX = 1_050
-LEAD_MINIMAL_MAX = 500  # no subagents, no autonomous primitives
+LEAD_DOCTRINE_MAX = 4_200  # Subagents + Operating model + Guidelines, all capabilities bound
+LEAD_SUBAGENTS_MAX = 2_000
+LEAD_OPERATING_MODEL_MAX = 1_350
+LEAD_GUIDELINES_MAX = 900
+LEAD_MINIMAL_MAX = 410  # no subagents, no autonomous primitives
 SUBAGENT_PROMPT_MAX = 8_500
 LEAD_VISIBLE_SUBAGENT_PROMPT_MAX = 4_000
 
