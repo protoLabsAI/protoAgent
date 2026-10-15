@@ -128,7 +128,7 @@ async def test_background_refresh_rejects_invalid_candidate(config_file, monkeyp
 
 
 @pytest.mark.parametrize('failure', ['configuration', 'provider'])
-def test_secret_connection_test_contains_errors_without_values(config_file, monkeypatch, failure):
+def test_secret_connection_test_contains_errors_without_values(config_file, monkeypatch, failure, caplog):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from operator_api.secrets_routes import register_secrets_routes
@@ -146,5 +146,25 @@ def test_secret_connection_test_contains_errors_without_values(config_file, monk
     if failure == 'provider':
         assert response.json()['ok'] is False
         assert response.json()['error_kind'] == 'internal'
+        assert 'provider violated the fetch result contract' in caplog.text
+    assert 'DO_NOT_ECHO_SECRET' not in caplog.text
     assert 'DO_NOT_ECHO_SECRET' not in response.text
     assert dict(os.environ) == before
+
+
+def test_connection_test_preserves_opaque_credential_whitespace(config_file, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from infra.secrets import FetchResult
+    from operator_api.secrets_routes import register_secrets_routes
+    seen = []
+    def fetch(cfg):
+        seen.append(cfg.client_secret)
+        return FetchResult(ok=True, values={})
+    monkeypatch.setattr('infra.secrets.get_provider', lambda _: SimpleNamespace(fetch=fetch))
+    app = FastAPI()
+    register_secrets_routes(app)
+    with TestClient(app) as client:
+        response = client.post('/api/secrets/test', json={'client_secret': ' opaque credential '})
+    assert response.json()['ok'] is True
+    assert seen == [' opaque credential ']

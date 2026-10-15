@@ -10,6 +10,7 @@ Gated by the ``/api/*`` operator bearer (a2a_impl/auth.py) like every operator r
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from pydantic import BaseModel
 
@@ -100,6 +101,7 @@ def register_secrets_routes(app) -> None:
                     "path": req.path.strip(),
                     "recursive": req.recursive,
                     "client_id": req.client_id.strip(),
+                    # Credentials are opaque: whitespace may be intentional.
                     "client_secret": req.client_secret,
                     "timeout_seconds": req.timeout_seconds,
                 }.items()
@@ -114,6 +116,8 @@ def register_secrets_routes(app) -> None:
             except Exception:  # noqa: BLE001 — contain a provider violating the never-raise contract
                 result = None
             if not isinstance(result, FetchResult):
+                # Exception text/tracebacks may include credentials or response bodies.
+                logging.getLogger(__name__).warning("Secrets connection test: provider violated the fetch result contract")
                 return {"ok": False, "error": "secrets provider failed during connection test",
                         "error_kind": "internal", "count": 0, "names": []}
             names = sorted(result.values or {}) if result.ok else []
