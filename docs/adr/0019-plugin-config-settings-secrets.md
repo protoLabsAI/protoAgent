@@ -150,3 +150,11 @@ rejects the load: running plugins with missing policy is not a safe fallback.
 Disabled plugins remain excluded by discovery. Missing optional files remain
 allowed; present malformed or unreadable files reject the load with diagnostics
 that omit secret values.
+
+Configuration loading parses the candidate before external-secrets hydration.
+Rejected malformed configuration therefore cannot change process credentials
+before the reload handler retains the last-known-good graph and policy. If a
+secrets manager is enabled, the final parse reuses the already-resolved plugin
+configuration while refreshing environment-derived defaults; discovery does not
+run again after hydration. This guarantee covers configuration rejection, not
+arbitrary failures during subsequent plugin registration or graph construction.
