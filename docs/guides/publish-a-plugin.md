@@ -114,7 +114,7 @@ hand-rolling a preflight:
 
 ```yaml
 requires_runtimes:
-  node: ">=20"          # >=N, >=N.N or >=N.N.N; only `node` is recognized today
+  node: ">=20"          # a floor: >=N, >=N.N or >=N.N.N (a bare 20 or "v20" means >=20); only `node` today
 ```
 
 On every load, the host resolves a `node` that satisfies the floor. It checks the PATH

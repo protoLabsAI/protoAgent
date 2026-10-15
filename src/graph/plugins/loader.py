@@ -778,8 +778,8 @@ def _runtime_gap(manifest: PluginManifest) -> tuple[str | None, list[dict], list
         NODE_VERSION, offer = "", False
     if offer:
         fix = (
-            f"Install the managed Node runtime ({NODE_VERSION}) here, "
-            "or run `protoagent runtime install-node`."
+            f"Install the managed Node runtime ({NODE_VERSION}) here, or run "
+            "`protoagent runtime install-node` and then restart protoAgent (or reload the plugin)."
         )
         actions.append({"kind": "install_node", "label": "Install Node runtime"})
     else:
@@ -788,15 +788,16 @@ def _runtime_gap(manifest: PluginManifest) -> tuple[str | None, list[dict], list
     return message, actions, [f"node{spec}"]
 
 
-def _report_runtime_gap(manifest: PluginManifest) -> list[str]:
+def _report_runtime_gap(manifest: PluginManifest, *, generation: int | None = None) -> list[str]:
     """Report (or clear) the "a declared runtime isn't available" gap for an ENABLED plugin,
     and return the unmet specs (``["node>=20"]``, or ``[]``).
 
     The fix is a host action, not a plugin one: ``install_node`` — the banner button that
     POSTs ``/api/runtime/node/install`` (the Node runtime card's own route). When the
     install lands, ``refresh_runtime_gaps`` re-checks every plugin carrying this gap, so the
-    banner clears without a reload. Never raises: a resolver failure leaves the plugin
-    loaded with no banner rather than breaking the load."""
+    banner clears without a reload. ``generation`` (see ``setup_gaps.report``) makes the
+    report a no-op when the plugin was cleared since the caller read it. Never raises: a
+    resolver failure leaves the plugin loaded with no banner rather than breaking the load."""
     from graph.plugins import setup_gaps
 
     try:
@@ -812,6 +813,7 @@ def _report_runtime_gap(manifest: PluginManifest) -> list[str]:
         message,
         label=str(manifest.name or manifest.id),
         action=actions or None,
+        generation=generation,
     )
     return missing
 
@@ -819,21 +821,33 @@ def _report_runtime_gap(manifest: PluginManifest) -> list[str]:
 def refresh_runtime_gaps() -> list[str]:
     """Re-check every plugin that currently carries a ``runtime-missing`` gap — what the
     Node install route runs after a managed install lands, so the banner clears with no
-    reload. Only plugins with an ACTIVE gap are re-checked, so a disabled plugin (whose gaps
-    were cleared) can't be brought back. Returns the ids whose gap cleared."""
+    reload. Returns the ids whose gap cleared.
+
+    Only plugins with an ACTIVE gap are re-checked, and each re-report is pinned to the
+    plugin's generation read while its gap was still up: a plugin disabled (cleared) at any
+    point during the refresh has its generation bumped, so the re-report is dropped and its
+    banner can't come back."""
     from graph.plugins import installer, setup_gaps
 
-    cleared: list[str] = []
-    copies = None
+    pending: list[tuple[str, int]] = []
     for gap in setup_gaps.active():
         if gap.get("key") != RUNTIME_GAP_KEY:
             continue
-        if copies is None:
-            copies = installer.effective_copies()
-        manifest = copies.get(gap.get("plugin", ""))
+        pid = str(gap.get("plugin", ""))
+        gen = setup_gaps.generation(pid)
+        # Re-confirm AFTER reading the generation: a clear that landed before the read has
+        # already removed the gap (skip it); one after it bumps the generation (report drops).
+        if any(g.get("plugin") == pid and g.get("key") == RUNTIME_GAP_KEY for g in setup_gaps.active()):
+            pending.append((pid, gen))
+    if not pending:
+        return []
+    copies = installer.effective_copies()
+    cleared: list[str] = []
+    for pid, gen in pending:
+        manifest = copies.get(pid)
         if manifest is None:
             continue
-        if not _report_runtime_gap(manifest):
+        if not _report_runtime_gap(manifest, generation=gen) and setup_gaps.generation(pid) == gen:
             cleared.append(manifest.id)
     return cleared
 
@@ -1107,8 +1121,8 @@ def load_plugins(config, *, core_tool_names: set[str] | None = None) -> PluginLo
         entry["deps_missing"] = _report_deps_gap(manifest)
         # Declared-runtime gate (ADR 0085 amendment) — `requires_runtimes: {node: ">=20"}`
         # checked with the shared resolver; unmet → a banner whose button installs the
-        # managed Node. Reported in `runtimes_missing` for the Plugins row / wizard.
-        entry["runtimes_missing"] = _report_runtime_gap(manifest)
+        # managed Node (cleared live by `refresh_runtime_gaps` after the install lands).
+        _report_runtime_gap(manifest)
 
         kept = []
         for tool in registry.tools:

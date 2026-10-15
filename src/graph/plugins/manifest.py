@@ -217,8 +217,9 @@ class PluginManifest:
     pip_scopes: dict[str, str] = field(default_factory=dict)
     #   requires_runtimes: non-Python runtimes the plugin needs, as ``{runtime: ">=N"}`` —
     #     today only ``node`` (ADR 0085, amended 2026-10-15), e.g. ``{node: ">=20"}`` for a
-    #     plugin that runs a vendored JS bundle. The spec must be ``>=N``, ``>=N.N`` or
-    #     ``>=N.N.N``; a malformed spec or an unknown runtime warns and is ignored. The deps
+    #     plugin that runs a vendored JS bundle. The spec is a floor: ``>=N``, ``>=N.N`` or
+    #     ``>=N.N.N`` (a bare ``20`` / ``"v20"`` means ``>=20``); a malformed spec or an
+    #     unknown runtime warns and is ignored. The deps
     #     gate checks it with the shared resolver (PATH → version managers → the managed
     #     runtime) and, when nothing satisfies it, raises the setup banner with an
     #     **Install Node runtime** button. At call time, spawn the node
@@ -1151,7 +1152,9 @@ def _parse_requires_pip(entries, plugin_id: str) -> tuple[list[str], list[str], 
 
 #: Runtimes ``requires_runtimes:`` understands (ADR 0085 amendment). Anything else warns.
 _KNOWN_RUNTIMES = ("node",)
-_RUNTIME_SPEC_RE = re.compile(r"^>=\s*(\d+(?:\.\d+){0,2})$")
+# ``>=20`` / ``>= 20.6.1`` / ``>=v20``, or a bare floor ``20`` / ``v20.6`` (YAML int ``20``
+# too) — all normalized to ``>=N[.N[.N]]``, the same floors ``sdk.node_executable`` accepts.
+_RUNTIME_SPEC_RE = re.compile(r"^(?:>=\s*)?v?(\d+(?:\.\d+){0,2})$")
 
 
 def _parse_requires_runtimes(raw, plugin_id: str) -> dict[str, str]:
@@ -1162,9 +1165,10 @@ def _parse_requires_runtimes(raw, plugin_id: str) -> dict[str, str]:
         requires_runtimes:
           node: ">=20"
 
-    Only ``node`` is recognized; an unknown runtime, a non-mapping value, or a spec that
-    isn't a ``>=`` floor (``"^20"``, ``"20"``, ``"<22"``) warns and is dropped — it never
-    fails the manifest load (mirroring ``_parse_requires_pip``)."""
+    Only ``node`` is recognized. A bare floor (``20``, ``"20.6"``, ``"v20"``) means the
+    same as ``>=`` it and is normalized to ``">=20"``. An unknown runtime, a non-mapping
+    value, or any other spec (``"^20"``, ``"<22"``, ``"20.x"``) warns and is dropped — it
+    never fails the manifest load (mirroring ``_parse_requires_pip``)."""
     if raw is None:
         return {}
     if not isinstance(raw, dict):
@@ -1183,10 +1187,15 @@ def _parse_requires_runtimes(raw, plugin_id: str) -> dict[str, str]:
                 ", ".join(_KNOWN_RUNTIMES),
             )
             continue
-        m = _RUNTIME_SPEC_RE.match(str(spec).strip()) if isinstance(spec, str) else None
+        if isinstance(spec, bool):
+            m = None
+        elif isinstance(spec, int):
+            m = _RUNTIME_SPEC_RE.match(str(spec))
+        else:
+            m = _RUNTIME_SPEC_RE.match(str(spec).strip()) if isinstance(spec, str) else None
         if not m:
             log.warning(
-                "[plugins] %s: requires_runtimes.%s spec %r is not a '>=N[.N[.N]]' floor — ignored",
+                "[plugins] %s: requires_runtimes.%s spec %r is not a version floor ('>=N[.N[.N]]' or 'N[.N[.N]]') — ignored",
                 plugin_id,
                 runtime,
                 spec,

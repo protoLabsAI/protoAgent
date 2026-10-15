@@ -214,7 +214,7 @@ pkg name -> "host" | "runtime" ([#2246](https://github.com/protoLabsAI/protoAgen
 
 - **Type** `dict[str, str]` · **Default** `{}`
 
-non-Python runtimes the plugin needs, as `{runtime: ">=N"}` — today only `node` ([ADR 0085](/adr/0085-managed-node-runtime), amended 2026-10-15), e.g. `{node: ">=20"}` for a plugin that runs a vendored JS bundle. The spec must be `>=N`, `>=N.N` or `>=N.N.N`; a malformed spec or an unknown runtime warns and is ignored. The deps gate checks it with the shared resolver (PATH → version managers → the managed runtime) and, when nothing satisfies it, raises the setup banner with an **Install Node runtime** button. At call time, spawn the node `sdk.node_executable(min_version)` returns.
+non-Python runtimes the plugin needs, as `{runtime: ">=N"}` — today only `node` ([ADR 0085](/adr/0085-managed-node-runtime), amended 2026-10-15), e.g. `{node: ">=20"}` for a plugin that runs a vendored JS bundle. The spec is a floor: `>=N`, `>=N.N` or `>=N.N.N` (a bare `20` / `"v20"` means `>=20`); a malformed spec or an unknown runtime warns and is ignored. The deps gate checks it with the shared resolver (PATH → version managers → the managed runtime) and, when nothing satisfies it, raises the setup banner with an **Install Node runtime** button. At call time, spawn the node `sdk.node_executable(min_version)` returns.
 
 ### `repository` {#field-repository}
 

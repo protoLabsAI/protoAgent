@@ -48,6 +48,10 @@ log = logging.getLogger("protoagent.infra.node")
 #: runtime, when one is installed (``augment_path_with_managed_node``).
 CORE_NODE_FLOOR = "20"
 
+#: Opt-out for that shadowing: ``PROTOAGENT_NODE_SHADOW=0`` keeps an old PATH Node first
+#: (the managed runtime is not prepended); the below-floor condition is still logged once.
+NODE_SHADOW_ENV = "PROTOAGENT_NODE_SHADOW"
+
 # The managed install is extracted to a stable ``current/`` dir (a real directory,
 # not a symlink — Windows symlink creation needs elevation) so consumers resolve
 # the bin dir without knowing the pinned version.
@@ -156,8 +160,10 @@ def node_version(exe: str | os.PathLike) -> tuple[int, int, int] | None:
         if key in _VERSION_CACHE:
             return _VERSION_CACHE[key]
     try:
+        # No console window flashes up per probe on Windows (a GUI-launched server has none).
+        extra = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
         out = subprocess.run(  # noqa: S603 — an absolute node path we resolved, fixed args
-            [path, "--version"], capture_output=True, text=True, timeout=10, check=False
+            [path, "--version"], capture_output=True, text=True, timeout=10, check=False, **extra
         )
         version = parse_node_version(out.stdout or "") if out.returncode == 0 else None
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -326,7 +332,8 @@ def augment_path_with_managed_node() -> str | None:
     * no ``node`` on PATH → APPEND the managed bin dir (fill the gap; an explicitly
       configured PATH keeps priority for everything else it provides);
     * a PATH ``node`` OLDER than ``CORE_NODE_FLOOR`` → PREPEND it, so spawned processes
-      get a Node that works instead of the stale one (logged once);
+      get a Node that works instead of the stale one (logged once). ``PROTOAGENT_NODE_SHADOW=0``
+      opts out: PATH is left alone and only the log line remains;
     * a PATH ``node`` that meets the floor (or whose version can't be read) → untouched:
       the user's own install wins.
 
@@ -353,6 +360,19 @@ def augment_path_with_managed_node() -> str | None:
     floor = parse_min_version(CORE_NODE_FLOOR)
     if version is None or _satisfies(version, floor):
         return None  # the user's own Node is new enough (or unreadable — don't second-guess it)
+    if os.environ.get(NODE_SHADOW_ENV, "").strip() == "0":
+        if not _SHADOW_LOGGED:
+            _SHADOW_LOGGED = True
+            log.info(
+                "[node] PATH node %s is %s, older than core's floor (>=%s); NOT shadowing it "
+                "with the managed runtime (%s) because %s=0",
+                current,
+                format_node_version(version),
+                CORE_NODE_FLOOR,
+                added,
+                NODE_SHADOW_ENV,
+            )
+        return None
     os.environ["PATH"] = os.pathsep.join([added, *(p for p in parts if p != added)])
     if not _SHADOW_LOGGED:
         _SHADOW_LOGGED = True

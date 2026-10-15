@@ -33,6 +33,7 @@ def box(tmp_path, monkeypatch):
     empty = tmp_path / "emptybin"
     empty.mkdir()
     monkeypatch.setenv("PATH", str(empty))
+    monkeypatch.delenv(nr.NODE_SHADOW_ENV, raising=False)
     monkeypatch.setattr(nr, "discovered_node_dirs", lambda: ())
     monkeypatch.setattr(nr, "_SHADOW_LOGGED", False)
     nr._reset_version_cache()
@@ -214,6 +215,45 @@ def test_augment_moves_an_appended_managed_dir_to_the_front(box, tmp_path, monke
     assert os.environ["PATH"].split(os.pathsep) == [str(managed.parent), str(user.parent)]
 
 
+def test_augment_shadow_opt_out_keeps_the_old_path_node_but_still_logs(box, tmp_path, monkeypatch, caplog):
+    user = _fake_node(tmp_path / "user")
+    managed = _fake_node(_managed_bin())
+    monkeypatch.setenv("PATH", str(user.parent))
+    monkeypatch.setenv(nr.NODE_SHADOW_ENV, "0")
+    _stub_versions(monkeypatch, {user: (18, 19, 0), managed: (24, 18, 0)})
+    with caplog.at_level(logging.INFO, logger="protoagent.infra.node"):
+        assert nr.augment_path_with_managed_node() is None
+        assert nr.augment_path_with_managed_node() is None
+    assert os.environ["PATH"] == str(user.parent)
+    assert sum("NOT shadowing" in r.getMessage() for r in caplog.records) == 1
+    # any other value keeps the default behaviour
+    monkeypatch.setenv(nr.NODE_SHADOW_ENV, "1")
+    assert nr.augment_path_with_managed_node() == str(managed.parent)
+
+
+def test_node_version_probe_hides_the_console_window_on_windows(box, tmp_path, monkeypatch):
+    exe = _fake_node(tmp_path / "w")
+    seen: dict = {}
+
+    class _Out:
+        returncode, stdout = 0, "v22.0.0\n"
+
+    def _run(cmd, **kw):
+        seen.update(kw)
+        return _Out()
+
+    monkeypatch.setattr(nr.subprocess, "run", _run)
+    monkeypatch.setattr(nr.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(nr.os, "name", "nt")
+    assert nr.node_version(exe) == (22, 0, 0)
+    assert seen.get("creationflags") == 0x08000000
+    monkeypatch.setattr(nr.os, "name", "posix")
+    nr._reset_version_cache()
+    seen.clear()
+    nr.node_version(exe)
+    assert "creationflags" not in seen
+
+
 def test_augment_keeps_a_path_node_that_meets_the_floor(box, tmp_path, monkeypatch):
     user = _fake_node(tmp_path / "user")
     _fake_node(_managed_bin())
@@ -250,7 +290,16 @@ def test_requires_runtimes_parses_valid_floors():
     assert _parse_requires_runtimes(None, "p") == {}
 
 
-@pytest.mark.parametrize("spec", ["^20", "20", 20, "<22", ">=20.x", ">=20.1.2.3", "", None])
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [("20", ">=20"), (20, ">=20"), ("v20", ">=20"), ("v20.6.1", ">=20.6.1"), (">=v22", ">=22"), (" 20.1 ", ">=20.1")],
+)
+def test_requires_runtimes_normalizes_a_bare_floor(spec, expected):
+    """A bare floor means the same as ``sdk.node_executable("20")``: at least that version."""
+    assert _parse_requires_runtimes({"node": spec}, "p") == {"node": expected}
+
+
+@pytest.mark.parametrize("spec", ["^20", "<22", ">=20.x", ">=20.1.2.3", "20.x", "latest", "", None, True, 20.5, -1])
 def test_requires_runtimes_drops_a_malformed_spec(spec, caplog):
     with caplog.at_level(logging.WARNING):
         assert _parse_requires_runtimes({"node": spec}, "p") == {}
@@ -348,6 +397,30 @@ def test_refresh_runtime_gaps_clears_the_banner_after_a_managed_install(box, gap
     _stub_versions(monkeypatch, {managed: (24, 18, 0)})
     assert loader.refresh_runtime_gaps() == ["atlas"]
     assert _gap() is None
+
+
+def test_refresh_drops_the_report_of_a_plugin_disabled_mid_refresh(box, gaps, tmp_path, monkeypatch):
+    """The plugin is cleared AFTER the refresh snapshotted its gap but BEFORE it re-reports:
+    the generation pinned at snapshot time no longer matches, so the banner stays gone."""
+    _stub_versions(monkeypatch, {})
+    manifest = _plugin(tmp_path)
+    loader._report_runtime_gap(manifest)
+    assert _gap() is not None
+
+    def _copies_while_disabling():
+        setup_gaps.clear_plugin("atlas")  # the operator disables it right now
+        return {"atlas": manifest}
+
+    monkeypatch.setattr("graph.plugins.installer.effective_copies", _copies_while_disabling)
+    assert loader.refresh_runtime_gaps() == []
+    assert _gap() is None
+
+
+def test_unmet_requirement_message_says_a_cli_install_needs_a_restart(box, gaps, tmp_path, monkeypatch):
+    _stub_versions(monkeypatch, {})
+    monkeypatch.setattr("runtime.node_install.is_supported", lambda: True)
+    loader._report_runtime_gap(_plugin(tmp_path))
+    assert "`protoagent runtime install-node` and then restart protoAgent (or reload the plugin)" in _gap()["message"]
 
 
 def test_refresh_never_resurrects_a_cleared_plugin(box, gaps, tmp_path, monkeypatch):

@@ -144,16 +144,21 @@ LikeC4 viewer vendors a single-file engine that needs Node 20 or newer):
    or its version can't be read, the user's Node still wins and PATH is untouched. When it
    is older than the floor and a managed install exists, `augment_path_with_managed_node()`
    prepends the managed bin dir, logs that once, and stays idempotent. With no PATH node it
-   appends, as before.
+   appends, as before. Setting `PROTOAGENT_NODE_SHADOW=0` opts out of the prepend: the old
+   PATH Node stays first, and the below-floor condition is still logged once.
 4. **Manifest + deps gate.** `requires_runtimes: {node: ">=20"}` takes only `node` for now,
-   and the spec must be `>=N`, `>=N.N` or `>=N.N.N`. A malformed spec or an unknown runtime
+   and the spec is a floor: `>=N`, `>=N.N` or `>=N.N.N`. A bare `20`, a YAML int `20` or
+   `"v20"` means `>=20` and is normalized to it. A malformed spec or an unknown runtime
    logs a warning and is ignored; it doesn't fail the manifest. On every load, an enabled
    plugin whose requirement `resolve_node` can't meet gets a `runtime-missing` setup gap
    with a new closed action kind, `install_node`. That button POSTs the existing
    `/api/runtime/node/install`. The action is offered only when this platform has a managed
    build and the pinned version meets the floor. When the install lands, the route runs
    `loader.refresh_runtime_gaps()`, which re-checks every plugin with an active gap, so the
-   banner clears without a reload. The gap is separate from `deps-missing` because that
+   banner clears without a reload. Each re-report carries the plugin's setup-gap generation,
+   so a plugin disabled during the refresh can't get its banner back. Installing from the
+   CLI instead (`protoagent runtime install-node`) runs in another process, so the banner
+   says a restart or plugin reload is needed for the running server to pick it up. The gap is separate from `deps-missing` because that
    gap's fix is pip, and `deps_missing` must never carry a runtime name.
 
 **Guidance for plugin authors.** Ship a **vendored single-file JS bundle** (esbuild or
