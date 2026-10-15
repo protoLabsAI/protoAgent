@@ -1,0 +1,1 @@
+- **Rejected configuration reloads leave live credentials unchanged (#4204).** Configuration is validated before secrets hydration, and active plugin resolution is reused after hydration to avoid a second discovery failure.

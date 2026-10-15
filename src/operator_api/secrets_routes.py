@@ -10,6 +10,7 @@ Gated by the ``/api/*`` operator bearer (a2a_impl/auth.py) like every operator r
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from pydantic import BaseModel
 
@@ -48,17 +49,23 @@ def register_secrets_routes(app) -> None:
         """Force a fetch-and-apply now (bypasses the TTL gate) — the panel's
         "Sync now" button and the post-rotation nudge."""
         from graph.config import load_config_docs
+        from graph.config_load import ConfigLoadError
         from graph.config_io import config_yaml_path
         from infra.secrets import SecretsRequiredError, hydrate_from_docs, status
 
         def _sync():
-            merged, secrets_doc = load_config_docs(config_yaml_path())
+            merged, secrets_doc = load_config_docs(config_yaml_path(), validate=True)
             return hydrate_from_docs(merged, secrets_doc, force=True)
 
         try:
             result = await asyncio.to_thread(_sync)
+        except ConfigLoadError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
         except SecretsRequiredError as e:
             raise HTTPException(status_code=502, detail=str(e))
+        except Exception:  # noqa: BLE001 — safe boundary for unexpected provider failures
+            logging.getLogger(__name__).warning("Secrets sync failed unexpectedly")
+            raise HTTPException(status_code=500, detail="secrets sync failed unexpectedly") from None
         if result is None:
             raise HTTPException(
                 status_code=400,
@@ -76,7 +83,8 @@ def register_secrets_routes(app) -> None:
 
         from graph.config import load_config_docs
         from graph.config_io import config_yaml_path
-        from infra.secrets import SourceConfig, get_provider, source_from_docs
+        from graph.config_load import ConfigLoadError
+        from infra.secrets import FetchResult, SourceConfig, get_provider, source_from_docs
 
         def _probe():
             merged, secrets_doc = load_config_docs(config_yaml_path())
@@ -96,6 +104,7 @@ def register_secrets_routes(app) -> None:
                     "path": req.path.strip(),
                     "recursive": req.recursive,
                     "client_id": req.client_id.strip(),
+                    # Credentials are opaque: whitespace may be intentional.
                     "client_secret": req.client_secret,
                     "timeout_seconds": req.timeout_seconds,
                 }.items()
@@ -105,8 +114,16 @@ def register_secrets_routes(app) -> None:
             provider = get_provider(cfg.provider)
             if provider is None:
                 return {"ok": False, "error": f"unknown provider {cfg.provider!r}", "error_kind": "not_configured"}
-            result = provider.fetch(cfg)
-            names = sorted(result.values) if result.ok else []
+            try:
+                result = provider.fetch(cfg)
+            except Exception:  # noqa: BLE001 — contain a provider violating the never-raise contract
+                result = None
+            if not isinstance(result, FetchResult):
+                # Exception text/tracebacks may include credentials or response bodies.
+                logging.getLogger(__name__).warning("Secrets connection test: provider violated the fetch result contract")
+                return {"ok": False, "error": "secrets provider failed during connection test",
+                        "error_kind": "internal", "count": 0, "names": []}
+            names = sorted(result.values or {}) if result.ok else []
             return {
                 "ok": result.ok,
                 "error": result.error,
@@ -115,6 +132,14 @@ def register_secrets_routes(app) -> None:
                 "names": names[:100],
             }
 
-        return await asyncio.to_thread(_probe)
+        try:
+            return await asyncio.to_thread(_probe)
+        except ConfigLoadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="invalid secrets connection configuration") from None
+        except Exception:  # noqa: BLE001 — never echo arbitrary provider/configuration values
+            logging.getLogger(__name__).warning("Secrets connection test failed unexpectedly")
+            raise HTTPException(status_code=500, detail="secrets connection test failed unexpectedly") from None
 
     app.include_router(router)
