@@ -162,7 +162,10 @@ def load_config_docs(path: str | Path, *, validate: bool = False) -> tuple[dict,
     if validate:
         from graph.config import LangGraphConfig
 
-        LangGraphConfig.from_dict(merged, secrets=secrets, config_dir=Path(path).parent)
+        try:
+            LangGraphConfig.from_dict(merged, secrets=secrets, config_dir=Path(path).parent)
+        except ConfigLoadError as exc:
+            raise ConfigLoadError(f"{path}: {exc}") from None
     return merged, secrets
 
 

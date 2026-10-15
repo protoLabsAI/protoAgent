@@ -106,6 +106,7 @@ def test_secret_sync_rejects_invalid_candidate_before_applying(config_file, monk
         response = client.post('/api/secrets/sync')
     assert response.status_code == 400
     assert 'sample: expected a mapping' in response.json()['detail']
+    assert str(config_file) in response.json()['detail']
     assert calls == []
 
 
@@ -125,6 +126,7 @@ async def test_background_refresh_rejects_invalid_candidate(config_file, monkeyp
         await loops._secrets_refresh_loop()
     assert calls == []
     assert 'sample: expected a mapping' in caplog.text
+    assert str(config_file) in caplog.text
 
 
 @pytest.mark.parametrize('failure', ['configuration', 'provider'])
@@ -206,6 +208,7 @@ def test_invalid_source_allowlist_returns_configuration_error(config_file, monke
         response = client.post('/api/secrets/sync')
     assert response.status_code == 400
     assert 'plugins.sources.allow' in response.json()['detail']
+    assert str(config_file) in response.json()['detail']
     assert calls == []
 
 
