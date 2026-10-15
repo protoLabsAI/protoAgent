@@ -1861,7 +1861,10 @@ class LangGraphConfig:
         locates plugin config (ADR 0019). Both optional so callers/tests can parse a
         bare dict. Behavior is identical to the old inline ``from_yaml`` parse.
         """
-        data = data or {}
+        from graph.config_load import _mapping
+
+        data = _mapping(data, "configuration")
+        secrets = _mapping(secrets, "secrets.yaml")
         # A top-level section present but empty/commented-out in YAML parses to
         # None (e.g. a bare `routing:` with every key commented). The many
         # `data.get("x", {}).get(...)` reads below would then return None and
@@ -1869,9 +1872,10 @@ class LangGraphConfig:
         # commenting a whole block out — can't break the loader. (Subsumes the
         # per-section `or {}` guards; top-level config keys are all mappings.)
         data = {k: ({} if v is None else v) for k, v in data.items()}
-        secrets = secrets or {}
+        secrets = {k: _mapping(v, f"secrets.yaml: {k}") for k, v in secrets.items()}
         config_dir = Path(config_dir) if config_dir is not None else Path(".")
 
+        plugin_config = _resolve_plugin_config(data, secrets, config_dir)
         model = data.get("model", {})
         subagents = data.get("subagents", {})
         middleware = data.get("middleware", {})
@@ -2284,7 +2288,7 @@ class LangGraphConfig:
             security_redact_tool_output=bool(
                 (data.get("security") or {}).get("redact_tool_output", cls.security_redact_tool_output)
             ),
-            plugin_config=_resolve_plugin_config(data, secrets, config_dir),
+            plugin_config=plugin_config,
         )
 
         for name in ("researcher",):
