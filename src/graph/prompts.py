@@ -56,17 +56,24 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
             "- **Act** — do the step.",
             "",
         ])
+    def available(name: str) -> bool:
+        return bound_tools is None or name in bound_tools
+
     if has_goal:
-        lines.append(
-            "- **Goals:** `set_goal` establishes an objective; `update_goal_plan` keeps its plan current. "
-            "Only the deterministic verifier decides DONE. Continue until it passes, or use "
-            "`abandon_goal` when the objective is out of scope."
-        )
+        actions = [text for name, text in (
+            ("set_goal", "`set_goal` establishes an objective."),
+            ("update_goal_plan", "`update_goal_plan` keeps its plan current."),
+            ("abandon_goal", "Use `abandon_goal` when the objective is out of scope."),
+        ) if available(name)]
+        lines.append("- **Goals:** " + " ".join(actions) +
+                     " Only the deterministic verifier decides DONE; continue until it passes or report a blocker.")
     if has_tasks:
-        lines.append(
-            "- **Tasks:** decompose work on your durable board with `task_create`; "
-            "record progress with `task_update` and finish with `task_close`."
-        )
+        actions = [text for name, text in (
+            ("task_create", "decompose work with `task_create`"),
+            ("task_update", "record progress with `task_update`"),
+            ("task_close", "finish with `task_close`"),
+        ) if available(name)]
+        lines.append("- **Tasks:** " + "; ".join(actions) + ".")
     if has_schedule:
         lines.append(
             "- **Schedules:** use `schedule_task` for a known future time or cadence. "
@@ -115,7 +122,7 @@ def build_system_prompt(
     ``bound_tool_names`` (#3190, ADR 0108 D6) — the set of tool names actually
     bound on this graph build. When provided, capability-specific doctrine
     (operating model, guidelines) is generated only for bound capabilities.
-    None emits everything unconditionally (legacy behavior).
+    None retains potential-capability guidance with a runtime-availability qualifier.
     """
     return "\n\n".join(
         text
@@ -144,7 +151,7 @@ def build_system_prompt_parts(
 
     ``bound_tool_names`` (#3190): when provided, capability-specific sections
     are generated only for tools that are actually bound. None = emit
-    everything (legacy behavior, safe default for callers that don't thread it).
+    potential capabilities with an explicit runtime-availability qualification.
     """
     parts: list[tuple[str, str]] = []
 
@@ -188,12 +195,12 @@ def build_system_prompt_parts(
         )
 
     # 2. Subagent instructions
-    if include_subagents:
-        parts.append(("Subagents", _build_subagent_section()))
+    if include_subagents and (bound_tool_names is None or bound_tool_names & {"task", "task_batch"}):
+        parts.append(("Subagents", _build_subagent_section(bound_tool_names)))
 
     # 2b. Managed project workspaces (ADR 0007 — fenced filesystem toolset).
     if projects:
-        section = _build_projects_section(projects)
+        section = _build_projects_section(projects, bound_tool_names)
         if section:
             parts.append(("Managed projects", section))
 
@@ -203,11 +210,11 @@ def build_system_prompt_parts(
     # cannot address each other, so someone has to run the back-and-forth, and that
     # someone is the orchestrator. A single `@x @y` from the operator is one round each,
     # not a discussion.
-    collab = _build_collaboration_section()
+    collab = _build_collaboration_section() if bound_tool_names is None or "delegate_to" in bound_tool_names else ""
     if collab:
         parts.append(("Collaboration", collab))
 
-    # 3. Dynamic context (typically from KnowledgeMiddleware)
+    # 3. Legacy static context; runtime projection never uses this seam.
     if context:
         parts.append(("Context", f"\n# Context\n\n{context}"))
 
@@ -236,23 +243,28 @@ def build_system_prompt_parts(
             "Do not poll, re-check or spawn duplicates to wait for a result. "
             "For fan-out, synthesize once all required results arrive."
         )
+    if bound_tool_names is None:
+        guideline_lines.append("- Capability guidance describes potential features; use only tools exposed by your runtime.")
     parts.append(("Guidelines", "\n".join(guideline_lines)))
 
     return parts
 
 
-def _build_projects_section(projects) -> str:
-    """Render the managed-project workspaces the fs tools are fenced to."""
+def _build_projects_section(projects, bound_tool_names: frozenset[str] | None = None) -> str:
+    """Render roots and only the filesystem operations reachable by this lead."""
+    ordered = ("list_projects", "read_file", "list_dir", "find_files", "search_files",
+               "write_file", "edit_file", "delete_file")
+    available = [name for name in ordered if bound_tool_names is None or name in bound_tool_names]
+    if not available:
+        return ""
     lines = [
-        "# Managed projects",
-        "",
-        "You operate on these project workspaces via the filesystem tools "
-        "(`list_projects`, `read_file`, `list_dir`, `find_files`, `search_files`, "
-        "and — in read-write projects — `write_file`/`edit_file`, plus `delete_file`, "
-        "which always asks first and is off in no-delete projects). All paths are "
-        "fenced to these roots; you cannot read or write outside them.",
-        "",
+        "# Managed projects", "",
+        "Available filesystem tools: " + ", ".join(f"`{name}`" for name in available) + ". "
+        "Paths are fenced to these roots. Project permissions still apply; read-only roots cannot be modified.",
     ]
+    if "delete_file" in available:
+        lines.append("`delete_file` always asks first and is unavailable in no-delete projects.")
+    lines.append("")
     rendered = 0
     for p in projects:
         if not isinstance(p, dict):
@@ -301,12 +313,15 @@ def _build_collaboration_section() -> str:
     )
 
 
-def _build_subagent_section() -> str:
+def _build_subagent_section(bound_tools: frozenset[str] | None = None) -> str:
     """Lead-visible roles; detailed arguments live in task/task_batch schemas."""
+    has_task = bound_tools is None or "task" in bound_tools
+    has_batch = bound_tools is None or "task_batch" in bound_tools
+    invocation = "`task`" if has_task else "`task_batch`"
     lines = [
         "# Subagent Delegation",
         "",
-        "Use `task` for specialized or long-running work; answer simple requests directly. "
+        f"Use {invocation} for specialized or long-running work; answer simple requests directly. "
         "Choose the best matching role and use its name verbatim as `subagent_type`:",
         "",
     ]
@@ -315,7 +330,8 @@ def _build_subagent_section() -> str:
             lines.append(f"- **{name}**: {config.description}")
     lines.extend([
         "",
-        "Run independent delegations concurrently with `task_batch` or parallel `task` calls. "
+        ("Run independent delegations concurrently with `task_batch`. " if has_batch else
+         "Run independent delegations with parallel `task` calls. ") +
         "Subagents cannot spawn further subagents.",
         "Use `run_in_background=true` for long independent work; results arrive automatically "
         "on a later turn. Use foreground when you need the result to finish this reply. "

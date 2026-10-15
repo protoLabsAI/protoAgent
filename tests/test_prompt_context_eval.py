@@ -140,7 +140,7 @@ def test_failed_live_run_retains_completed_quality_outcomes(monkeypatch, tmp_pat
 
 @pytest.mark.platform_sensitive
 @pytest.mark.asyncio
-@pytest.mark.parametrize("profile", ["minimal", "full", "projects_delegates", "catalog", "background", "incognito"])
+@pytest.mark.parametrize("profile", ["minimal", "full", "projects_delegates", "catalog", "background", "incognito", "task_disabled", "held_filesystem", "deferred"])
 async def test_real_graph_request_profiles_and_reload(monkeypatch, tmp_path, profile):
     from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
     from langchain_core.tools import StructuredTool
@@ -173,6 +173,12 @@ async def test_real_graph_request_profiles_and_reload(monkeypatch, tmp_path, pro
         cfg.filesystem_enabled = True
         cfg.projects = [{"name": "fixture", "path": str(tmp_path), "write": False}]
         monkeypatch.setattr(STATE, "delegate_registry", SimpleNamespace(names=lambda: ["reviewer"]))
+    if profile == "task_disabled":
+        cfg.tools_disabled = ["task", "task_batch"]
+    if profile == "held_filesystem":
+        cfg.tools_subagent_only = ["read_file"]
+    if profile == "deferred":
+        cfg.tools_deferred_enabled = True
     state = {"messages": [HumanMessage(content="hello")], "session_id": "fixture"}
     if profile == "background":
         state["subagent_fence"] = ["current_time"]
@@ -181,7 +187,19 @@ async def test_real_graph_request_profiles_and_reload(monkeypatch, tmp_path, pro
     for _ in range(2):  # actual graph rebuild, same config and synthetic input
         graph = agent.create_agent_graph(cfg, extra_tools=extras, include_subagents=profile != "minimal")
         if profile == "projects_delegates":
-            assert {"Managed projects", "Collaboration"} <= {label for label, _ in graph.system_prompt_parts}
+            parts = dict(graph.system_prompt_parts)
+            assert "Managed projects" in parts
+            # Registry alone is not a callable tool. This synthetic registry has
+            # no delegate_to tool factory attached to the graph.
+            assert "Collaboration" not in parts
+        if profile == "task_disabled":
+            assert "Subagents" not in dict(graph.system_prompt_parts)
+        if profile == "held_filesystem":
+            parts = dict(graph.system_prompt_parts)
+            assert "Subagents" in parts  # delegation remains reachable
+            assert "`read_file`" not in parts.get("Managed projects", "")
+        if profile == "deferred":
+            assert "Subagents" in dict(graph.system_prompt_parts)
         await graph.ainvoke(state, {"recursion_limit": 100})
     if profile == "incognito":
         assert probe.rows == []
