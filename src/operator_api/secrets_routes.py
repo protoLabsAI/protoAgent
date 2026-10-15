@@ -79,7 +79,8 @@ def register_secrets_routes(app) -> None:
 
         from graph.config import load_config_docs
         from graph.config_io import config_yaml_path
-        from infra.secrets import SourceConfig, get_provider, source_from_docs
+        from graph.config_load import ConfigLoadError
+        from infra.secrets import FetchResult, SourceConfig, get_provider, source_from_docs
 
         def _probe():
             merged, secrets_doc = load_config_docs(config_yaml_path())
@@ -108,8 +109,14 @@ def register_secrets_routes(app) -> None:
             provider = get_provider(cfg.provider)
             if provider is None:
                 return {"ok": False, "error": f"unknown provider {cfg.provider!r}", "error_kind": "not_configured"}
-            result = provider.fetch(cfg)
-            names = sorted(result.values) if result.ok else []
+            try:
+                result = provider.fetch(cfg)
+            except Exception:  # noqa: BLE001 — contain a provider violating the never-raise contract
+                result = None
+            if not isinstance(result, FetchResult):
+                return {"ok": False, "error": "secrets provider failed during connection test",
+                        "error_kind": "internal", "count": 0, "names": []}
+            names = sorted(result.values or {}) if result.ok else []
             return {
                 "ok": result.ok,
                 "error": result.error,
@@ -118,6 +125,9 @@ def register_secrets_routes(app) -> None:
                 "names": names[:100],
             }
 
-        return await asyncio.to_thread(_probe)
+        try:
+            return await asyncio.to_thread(_probe)
+        except ConfigLoadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
     app.include_router(router)

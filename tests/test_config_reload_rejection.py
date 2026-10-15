@@ -125,3 +125,26 @@ async def test_background_refresh_rejects_invalid_candidate(config_file, monkeyp
         await loops._secrets_refresh_loop()
     assert calls == []
     assert 'sample: expected a mapping' in caplog.text
+
+
+@pytest.mark.parametrize('failure', ['configuration', 'provider'])
+def test_secret_connection_test_contains_errors_without_values(config_file, monkeypatch, failure):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from operator_api.secrets_routes import register_secrets_routes
+    def broken_fetch(cfg):
+        raise TimeoutError('DO_NOT_ECHO_SECRET')
+    monkeypatch.setattr('infra.secrets.get_provider', lambda _: SimpleNamespace(fetch=broken_fetch))
+    if failure == 'configuration':
+        config_file.write_text('auth: [DO_NOT_ECHO_SECRET')
+    before = dict(os.environ)
+    app = FastAPI()
+    register_secrets_routes(app)
+    with TestClient(app) as client:
+        response = client.post('/api/secrets/test', json={})
+    assert response.status_code == (400 if failure == 'configuration' else 200)
+    if failure == 'provider':
+        assert response.json()['ok'] is False
+        assert response.json()['error_kind'] == 'internal'
+    assert 'DO_NOT_ECHO_SECRET' not in response.text
+    assert dict(os.environ) == before
