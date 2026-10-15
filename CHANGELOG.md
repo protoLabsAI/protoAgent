@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.205.0] - 2026-10-15
+
+### Changed
+- **Clearer delegation rules with a smaller system prompt (#4218).** The agent continues independent work while background jobs run and yields when their results are needed. Repeated operating instructions are consolidated, and explicit requests to use a tool take precedence over answering a simple question directly.
+
+### Fixed
+- **Knowledge search preserves distinct sources with identical text (#4200).** Layered search combines only matching cross-tier provenance, one pair at a time, while preserving separate records within each tier.
+
+- **Prompt guidance follows available tools (#4219)** — disabled delegation and partial goal, task, and filesystem tool groups no longer advertise unavailable operations. Deferred tools retain stable guidance, and external runtimes with unknown capabilities get an explicit availability qualification.
+
+- **Live commitments remain visible without knowledge or skills (#4220)** — goals, plans, tasks, watches, schedules, and plugin work now reach the agent through the shared operational projection in stripped configurations, without enabling prior-session recall or persisting derived context in chat history.
+
+- **Browser setup banners stay current after CLI and Chrome installation (#4228).** Serialize setup probes and their banner updates so an older missing-dependency result cannot overwrite a completed installation.
+
 ## [0.204.0] - 2026-10-14
 
 ### Changed
