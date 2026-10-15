@@ -293,33 +293,34 @@ def _build_middleware(
 
     middleware.append(build_multimodal_middleware(config))
 
-    # KnowledgeMiddleware also carries the always-on skill index (the
-    # <available_skills> injection, ADR 0060). Build it when knowledge OR skills
-    # is active, so skills work even on a KB-less agent (the store is None-tolerant).
+    # One always-installed projection carries live commitments even without
+    # knowledge or skills. Keep prior-session recall at its previous activation
+    # boundary: restoring operational state must not silently enable memory.
     _skills_index = skills_index if config.skills_enabled else None
-    if (config.knowledge_middleware and knowledge_store) or _skills_index is not None:
-        # ONE wiring (ADR 0108 D6/D8): every delivery knob — RAG top-k, namespace
-        # scope, trust floor, the skill-index caps (~2% of the model window as chars,
-        # 8KB when no window is reported, #2867) and the projected-context budget
-        # (`context.budget_pct`) — is read off the config by
-        # ProjectionOptions.from_config, the same reader the external runtime uses,
-        # so the two paths cannot drift.
-        from graph.projection import ProjectionOptions
+    recall_active = bool(config.knowledge_middleware and knowledge_store) or _skills_index is not None
+    # ONE wiring (ADR 0108 D6/D8): every delivery knob — RAG top-k, namespace
+    # scope, trust floor, the skill-index caps (~2% of the model window as chars,
+    # 8KB when no window is reported, #2867) and the projected-context budget
+    # (`context.budget_pct`) — is read off the config by
+    # ProjectionOptions.from_config, the same reader the external runtime uses,
+    # so the two paths cannot drift.
+    from graph.projection import ProjectionOptions
 
-        middleware.append(
-            KnowledgeMiddleware(
-                knowledge_store if config.knowledge_middleware else None,
-                skills_index=_skills_index,
-                options=ProjectionOptions.from_config(config),
-                # …and the config itself, so the window-derived knobs can be
-                # re-read against a per-chat model override (the graph is
-                # compiled once, but each tab picks its own model).
-                config=config,
-                # The assembled tool surface, so the skill index can flag skills whose
-                # declared tools this agent doesn't have (ADR 0060 amendment).
-                bound_tool_names=bound_tool_names,
-            )
+    middleware.append(
+        KnowledgeMiddleware(
+            knowledge_store if config.knowledge_middleware else None,
+            skills_index=_skills_index,
+            prior_sessions_enabled=recall_active,
+            options=ProjectionOptions.from_config(config),
+            # …and the config itself, so the window-derived knobs can be
+            # re-read against a per-chat model override (the graph is
+            # compiled once, but each tab picks its own model).
+            config=config,
+            # The assembled tool surface, so the skill index can flag skills whose
+            # declared tools this agent doesn't have (ADR 0060 amendment).
+            bound_tool_names=bound_tool_names,
         )
+    )
 
     # Runtime toolset changes (#2640), announced once to the next turn. ALWAYS on:
     # an agent that refuses work it can now do is a worse failure than a missed
@@ -1325,24 +1326,19 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
         state: Annotated[Any, InjectedState] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
     ) -> str:
-        """Delegate a single task to a specialized subagent.
+        """Delegate one focused task to a specialized subagent.
 
-        Use this for one focused delegation. To run several independent
-        delegations at once, use ``task_batch`` instead — it runs them
-        concurrently rather than one after another.
+        Use task_batch for independent fan-out.
 
         Args:
-            description: Short description of what this task will accomplish
-            prompt: Detailed instructions for the subagent
-            subagent_type: Which subagent to use — one of the registered roster
-                shown in the system prompt (e.g. researcher, strategist, …)
-            run_in_background: Set True for long-running, independent work (deep
-                research, multi-step gathering) you don't need to block on. The
-                task runs detached as its own turn and returns IMMEDIATELY with a
-                job id; you will be notified of the result automatically on a
-                later turn. When you set this, do NOT poll, re-check, or spawn a
-                duplicate — just continue with other work. Leave False (the
-                default) when you need the result to finish the current turn.
+            description: Short summary of the task.
+            prompt: Self-contained instructions for the subagent.
+            subagent_type: Registered role to use.
+            run_in_background: True for long independent work. With background
+                execution enabled, returns a job id and delivers the result on a
+                later turn. Continue independent work or yield if nothing else can
+                progress; do not poll or spawn a duplicate. False waits for the result
+                in this turn. Without background support, either setting runs foreground.
         """
 
         async def _spawn_bg() -> str:
@@ -1376,7 +1372,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 f"Background agent started: {job_id} ({subagent_type}: {description}). "
                 "It is running detached; you will be notified of the result automatically "
                 "on a later turn. Do NOT poll, re-check, or spawn a duplicate for this — "
-                "continue with other work in the meantime."
+                "Continue independent work; otherwise yield until the result arrives."
             )
 
         # Delegated model-call usage rows, billed to the parent turn's telemetry
@@ -1422,7 +1418,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             return (
                 f"This '{subagent_type}' delegation ran past the {auto_s:.0f}s inline budget, "
                 f"so I moved it to the background as {job_id}. You'll be notified when it "
-                "finishes — continue with other work; do NOT re-spawn it."
+                "finishes. Continue independent work; otherwise yield. Do NOT re-spawn it."
             )
 
         # Foreground delegation: a blocking `await` that would freeze the turn until
@@ -1486,34 +1482,22 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
         state: Annotated[Any, InjectedState] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
     ) -> str:
-        """Delegate several independent tasks to subagents concurrently.
+        """Delegate independent tasks concurrently within the configured concurrency cap.
 
-        Prefer this over multiple sequential ``task`` calls whenever the
-        delegations don't depend on each other (e.g. research three topics,
-        check several sources) — they run in parallel, bounded by the
-        configured concurrency cap, so total latency is roughly the slowest
-        task rather than the sum. Use plain ``task`` for a single delegation
-        or when one task's output feeds the next.
+        Use task for one delegation or for steps that depend on preceding results.
 
         Args:
-            tasks: A list of task specs. Each item is an object with:
-                - ``description`` (str, required): short summary of the task
-                - ``prompt`` (str, required): detailed instructions
-                - ``subagent_type`` (str, optional): defaults to "researcher"
-            run_in_background: Set True to fan the whole batch out DETACHED — every
-                task spawns as its own background agent and this returns IMMEDIATELY
-                with their job ids, instead of blocking until they finish. Use it for a
-                wide fan-out of long / independent / quota-heavy work (research several
-                topics at once) you don't need to wait on; you'll be notified as each
-                finishes. When you set this, do NOT poll, re-check, or re-spawn — just
-                continue. Leave False (the default) when you need the results in this
-                turn. Concurrency is capped either way.
+            tasks: Objects with required description and prompt strings, and optional
+                subagent_type (default researcher). Each prompt must stand alone.
+            run_in_background: True returns job ids and delivers results on later turns
+                when background execution is enabled. Continue independent work or yield
+                if nothing else can progress; do not poll or re-spawn. False waits for
+                all results. Without background support, either setting runs foreground.
 
-        Returns the results concatenated in the same order as ``tasks``, each
-        prefixed with its 1-based index. Individual failures are reported
-        inline and do not abort the batch. With ``run_in_background`` the return is
-        instead the list of started job ids (results arrive later as notifications).
+        Foreground results follow input order with 1-based indices; a failure is
+        reported inline without aborting siblings. Background results arrive as notifications.
         """
+
         if not tasks:
             return "Error: task_batch called with an empty task list."
         if not isinstance(tasks, list):
@@ -1562,7 +1546,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             return (
                 f"Started {started} background agent(s), running detached. You will be "
                 "notified automatically as each finishes — do NOT poll, re-check, or "
-                "re-spawn; continue with other work.\n" + "\n".join(lines)
+                "re-spawn. Continue independent work; otherwise yield.\n" + "\n".join(lines)
             )
 
         sem = asyncio.Semaphore(max_concurrency)
@@ -1864,6 +1848,12 @@ def create_agent_graph(
         # which broke wait's same-session resume (ADR 0053) and set_goal.
         state_schema=ProtoAgentState,
     )
+
+    # Direct graph consumers need the same configured step budget as server
+    # turns. LangGraph's default of 25 can expire during a single tool round
+    # once the always-on projection lifecycle nodes are present. Call-specific
+    # recursion_limit overrides (including tighter subagent budgets) still win.
+    agent = agent.with_config({"recursion_limit": config.max_iterations})
 
     # Single source of truth for "what tools the model has". Stamp the final
     # assembled set on the compiled graph so the Tools tab (/api/tools) and any

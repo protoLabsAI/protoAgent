@@ -28,11 +28,11 @@ from graph.subagents.config import SUBAGENT_REGISTRY
 
 # ── ceilings (chars) — mirror docs/explanation/prompt-contracts.md ───────────────────
 
-LEAD_DOCTRINE_MAX = 7_700  # Subagents + Operating model + Guidelines, all capabilities bound
-LEAD_SUBAGENTS_MAX = 3_700
-LEAD_OPERATING_MODEL_MAX = 3_050
-LEAD_GUIDELINES_MAX = 1_050
-LEAD_MINIMAL_MAX = 500  # no subagents, no autonomous primitives
+LEAD_DOCTRINE_MAX = 4_200  # Subagents + Operating model + Guidelines, all capabilities bound
+LEAD_SUBAGENTS_MAX = 2_000
+LEAD_OPERATING_MODEL_MAX = 1_350
+LEAD_GUIDELINES_MAX = 900
+LEAD_MINIMAL_MAX = 410  # no subagents, no autonomous primitives
 SUBAGENT_PROMPT_MAX = 8_500
 LEAD_VISIBLE_SUBAGENT_PROMPT_MAX = 4_000
 
@@ -47,7 +47,7 @@ _RAISE_HINT = (
 
 ALL_CAPABILITY_TOOLS = frozenset().union(*CAPABILITY_GROUPS.values())
 # Every autonomous primitive plus the two tools the guidelines gate on.
-ALL_BOUND = ALL_CAPABILITY_TOOLS | {"task", "current_time"}
+ALL_BOUND = ALL_CAPABILITY_TOOLS | {"task", "task_batch", "current_time"}
 FILLER_ONLY = frozenset({"current_time"})
 
 
@@ -90,11 +90,15 @@ def test_lead_doctrine_within_budget():
     _assert_under("lead Guidelines section", len(s["Guidelines"]), LEAD_GUIDELINES_MAX)
 
 
-def test_legacy_none_is_not_larger_than_all_bound():
-    """``bound_tool_names=None`` (legacy) emits everything — and nothing more."""
+def test_legacy_none_qualifies_unknown_capabilities():
+    """Unknown capability callers retain legacy guidance with an honest qualifier."""
     legacy = _sections(include_subagents=True, bound_tool_names=None)
     full = _sections(include_subagents=True, bound_tool_names=ALL_BOUND)
-    assert {k: len(v) for k, v in legacy.items()} == {k: len(v) for k, v in full.items()}
+    assert {k: v for k, v in legacy.items() if k != "Guidelines"} == {
+        k: v for k, v in full.items() if k != "Guidelines"
+    }
+    assert "use only tools exposed by your runtime" in legacy["Guidelines"]
+    _assert_under("legacy guidelines", len(legacy["Guidelines"]), LEAD_GUIDELINES_MAX)
 
 
 def test_lead_minimal_within_budget():

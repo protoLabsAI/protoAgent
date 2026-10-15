@@ -86,13 +86,13 @@ def tasks(monkeypatch):
     return store
 
 
-def _graph(tasks: _Tasks, frames: list[str]):
+def _graph(tasks: _Tasks, frames: list[str], with_memory=True):
     def update_task(status: str) -> str:
         """Update task-1's status."""
         tasks.items[0]["status"] = status
         return f"Updated task-1 → {status}"
 
-    knowledge = KnowledgeMiddleware(_HotStore())
+    knowledge = KnowledgeMiddleware(_HotStore() if with_memory else None, prior_sessions_enabled=with_memory)
     knowledge._prior_sessions_cache = ""
     return create_agent(
         model=_Model(frames=frames),
@@ -104,7 +104,7 @@ def _graph(tasks: _Tasks, frames: list[str]):
     )
 
 
-def _assert_refreshed(frames: list[str], tasks: _Tasks):
+def _assert_refreshed(frames: list[str], tasks: _Tasks, with_memory=True):
     assert len(frames) == 2, frames
     first, second = frames
     assert "[open] task-1" in first
@@ -113,32 +113,35 @@ def _assert_refreshed(frames: list[str], tasks: _Tasks):
     assert "[open] task-1" not in second
     # The rest of the projection is the turn's snapshot, unchanged and still ahead of
     # the working state (its position in the frame is stable).
-    assert HOT in second
-    assert second.index(HOT) < second.index("<working_state>")
+    assert (HOT in second) == with_memory
+    if with_memory:
+        assert second.index(HOT) < second.index("<working_state>")
     assert second.count("<working_state>") == 1
     # Composed once at turn entry + re-read once after the tool — the first model call
     # does not re-read what the compose just read.
     assert tasks.reads == 2, tasks.reads
 
 
-def test_task_updated_mid_turn_shows_new_status_on_next_call(tasks):
+@pytest.mark.parametrize("with_memory", [True, False])
+def test_task_updated_mid_turn_shows_new_status_on_next_call(tasks, with_memory):
     frames: list[str] = []
-    _graph(tasks, frames).invoke(
+    _graph(tasks, frames, with_memory).invoke(
         {"messages": [{"role": "user", "content": "start the task"}]},
         {"configurable": {"thread_id": "t"}},
     )
-    _assert_refreshed(frames, tasks)
+    _assert_refreshed(frames, tasks, with_memory)
 
 
-def test_task_updated_mid_turn_shows_new_status_on_next_call_async(tasks):
+@pytest.mark.parametrize("with_memory", [True, False])
+def test_task_updated_mid_turn_shows_new_status_on_next_call_async(tasks, with_memory):
     frames: list[str] = []
     asyncio.run(
-        _graph(tasks, frames).ainvoke(
+        _graph(tasks, frames, with_memory).ainvoke(
             {"messages": [{"role": "user", "content": "start the task"}]},
             {"configurable": {"thread_id": "t"}},
         )
     )
-    _assert_refreshed(frames, tasks)
+    _assert_refreshed(frames, tasks, with_memory)
 
 
 # ── refresh_working_state: the in-place swap ──────────────────────────────────────

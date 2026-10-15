@@ -157,7 +157,7 @@ def test_managed_projects_section_reaches_the_prefix():
 
     prefix = build_stable_prefix(
         include_subagents=False,
-        bound_tool_names=frozenset({"current_time"}),
+        bound_tool_names=frozenset({"current_time", "read_file"}),
         projects=[{"name": "api", "path": "/p/api", "write": True}],
     )
     assert "# Managed projects" in prefix and "**api** (read-write) — `/p/api`" in prefix

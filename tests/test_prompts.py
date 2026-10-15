@@ -103,28 +103,27 @@ def test_operating_model_legacy_none_emits_everything():
         assert tool in prompt
 
 
-def test_guidelines_omit_wait_when_unbound():
-    """The Guidelines section should not reference ``wait`` when it isn't bound."""
+def test_operating_model_omits_wait_when_unbound():
+    """The operating model should not reference ``wait`` when it isn't bound."""
     no_wait = frozenset({"current_time", "task_create"})
     prompt = build_system_prompt(include_subagents=False, bound_tool_names=no_wait)
-    # The wait guideline starts with "When you're waiting"
     assert "wait(seconds" not in prompt
 
 
-def test_guidelines_include_wait_when_bound():
-    """The Guidelines section references ``wait`` when it is bound."""
+def test_operating_model_includes_wait_when_bound():
+    """The operating model references ``wait`` when it is bound."""
     with_wait = frozenset({"current_time", "wait"})
     prompt = build_system_prompt(include_subagents=False, bound_tool_names=with_wait)
     assert "wait(seconds" in prompt
 
 
 def test_wait_only_produces_clean_handoff_text():
-    """When only wait is bound, the handoff sentence has no stray parenthesis."""
+    """Wait-only capability keeps both its invocation and the common yield rule."""
     wait_only = frozenset({"wait", "current_time"})
     prompt = build_system_prompt(include_subagents=False, bound_tool_names=wait_only)
     assert "Do not spin" in prompt
-    assert "`wait` for a short countdown and END" in prompt
-    assert ")" not in prompt.split("Do not spin")[1].split("and END")[0]
+    assert "`wait(seconds, then=…)` ends this turn and resumes you" in prompt
+    assert "When no independent step can progress, END your turn" in prompt
 
 
 def test_watch_only_produces_clean_handoff_text():
@@ -200,13 +199,21 @@ def test_template_soul_names_no_capability_tools():
             assert not re.search(pattern, text), f"SOUL mentions capability tool {name!r}"
 
 
-def test_act_line_names_task_only_when_bound():
-    """The operating model's Act step mentions delegating with `task` only when the
-    `task` tool is bound — a subagent build or an external runtime without it gets none."""
-    with_task = build_system_prompt(include_subagents=False, bound_tool_names=_ALL_OM_TOOLS | {"task"})
-    assert "delegating with `task`" in with_task
-    without = build_system_prompt(include_subagents=False, bound_tool_names=_ALL_OM_TOOLS)
-    assert "# Operating model" in without and "delegating with `task`" not in without
-    assert "- **Act** — do the step." in without
-    legacy = build_system_prompt(include_subagents=False, bound_tool_names=None)
-    assert "delegating with `task`" in legacy
+def test_delegation_and_async_rules_have_one_home():
+    """Delegation invocation belongs to the roster, async policy to Guidelines.
+
+    Duplicating these in the operating model previously introduced contradictory
+    instructions to end immediately versus continue independent work.
+    """
+    from graph.prompts import build_system_prompt_parts
+
+    parts = dict(build_system_prompt_parts(include_subagents=True, bound_tool_names=_ALL_OM_TOOLS | {"task"}))
+    assert "`task`" in parts["Subagents"]
+    assert "`task`" not in parts["Operating model"]
+    assert "Do not spin" in parts["Guidelines"]
+    assert sum(text.count("Do not spin") for text in parts.values()) == 1
+    assert "Continue independent work" in parts["Guidelines"]
+    assert "When no independent step can progress, END your turn" in parts["Guidelines"]
+    assert "END your turn" not in parts["Subagents"]
+    assert "Without a background manager" in parts["Subagents"]
+    assert "Honor explicit requests to use a tool" in parts["Guidelines"]
