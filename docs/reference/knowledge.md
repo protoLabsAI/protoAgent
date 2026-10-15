@@ -172,6 +172,20 @@ tiers, deduplicates matches, and writes private. **Share** in **Knowledge → St
 promotes a private chunk (`POST /api/knowledge/{id}/promote`); **Unshare** removes
 its commons copy (`POST /api/knowledge/{id}/forget`). Private copies remain.
 
+Layered search keeps distinct records within each tier, even when their text is
+identical. Across tiers it pairs matching text and provenance one-to-one and adds
+their reciprocal-rank scores; the editable private record represents each pair.
+Provenance includes namespace, domain, source and source type, heading, finding
+type, epoch, memory kind, subject, expiry, and delivery policy. Review state may
+differ because promotion confirms the commons copy. Different provenance stays
+visible as separate results, subject to the requested result limit and filters.
+
+Promotion does not persist a lineage identifier, so this matching rule is an
+equivalence heuristic, not proof of shared origin. It changes search results only:
+listing, stored chunks, and the existing content-based promotion idempotency are
+unchanged. Explicit promotion lineage and changes to ingestion/promotion identity
+remain separate work.
+
 All agents pointing at the same `commons.path` can read it, regardless of
 instance ID. Give isolated fleets different commons paths. Agents sharing a
 commons should use the same `embed_model`: a mismatched agent searches that

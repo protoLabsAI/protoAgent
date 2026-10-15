@@ -17,6 +17,7 @@ overridden. Drop-in for ``KnowledgeStore`` everywhere the runtime uses it.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict, deque
 from dataclasses import fields, is_dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -36,10 +37,20 @@ _RRF_K = 60
 _SPLIT_KEYS = frozenset({"total", "private", "commons"})
 
 
-def _dedup_key(row: dict) -> str:
-    """Identity for cross-tier de-dup: a chunk promoted into the commons has the SAME
-    content as its private original, so key on content (ids differ across tiers)."""
-    return (row.get("content") or "").strip()
+def _dedup_key(row: dict) -> tuple | None:
+    """Cross-tier equivalence using the provenance preserved by promotion.
+
+    There is no persisted promotion lineage. Text alone cannot establish that two
+    sources are the same. Review state is intentionally excluded: promotion confirms
+    the commons copy while leaving the private verdict unchanged.
+    """
+    content = (row.get("content") or "").strip()
+    if not content:
+        return None
+    return (content, *(row.get(field) or "" for field in (
+        "domain", "namespace", "source", "source_type", "heading", "finding_type",
+        "epoch", "memory_kind", "subject", "expires_at", "delivery_policy",
+    )))
 
 
 def _tag(chunk, tier: str):
@@ -94,8 +105,9 @@ class LayeredKnowledgeStore:
         prefix: bool = False,
     ) -> list[dict]:
         """Top-k across BOTH tiers, fused by RRF over each tier's rank, tier-tagged.
-        A chunk promoted into the commons (same content as its private original) is
-        de-duped — the private record wins (it's editable) but keeps the summed score.
+        Cross-tier copies with matching text and provenance are paired one-to-one;
+        the private record wins (it's editable) and keeps the summed score. Distinct
+        records within a tier are never collapsed, even when their text is identical.
         ``namespace`` (ADR 0069 D3a), ``include_invalidated`` (ADR 0069 D9 —
         superseded rows are excluded by default), ``epoch`` (#1634 — era scoping),
         ``memory_kind`` / ``review_state`` (#3072 — typed-memory classification),
@@ -113,19 +125,28 @@ class LayeredKnowledgeStore:
             deliverable=deliverable, prefix=prefix,
         )
 
-        fused: dict[str, dict] = {}
-        scores: dict[str, float] = {}
-        for tier, rows in (("commons", comm), ("private", priv)):  # private listed last → wins ties
-            for rank, r in enumerate(rows):
-                key = _dedup_key(r)
-                if not key:
+        fused: list[dict] = []
+        scores: list[float] = []
+        commons_matches: dict[tuple, deque[int]] = defaultdict(deque)
+        for tier, rows in (("commons", comm), ("private", priv)):
+            for rank, row in enumerate(rows):
+                key = _dedup_key(row)
+                if key is None:
                     continue
-                scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_K + rank)
-                # First write seeds the record; private overwrites the tier tag + fields.
-                if key not in fused or tier == "private":
-                    fused[key] = {**r, "tier": tier}
-        ranked = sorted(fused.values(), key=lambda r: scores[_dedup_key(r)], reverse=True)
-        return ranked[:k]
+                score = 1.0 / (_RRF_K + rank)
+                matches = commons_matches.get(key)
+                if tier == "private" and matches:
+                    index = matches.popleft()
+                    fused[index] = {**row, "tier": tier}
+                    scores[index] += score
+                else:
+                    index = len(fused)
+                    fused.append({**row, "tier": tier})
+                    scores.append(score)
+                    if tier == "commons":
+                        commons_matches[key].append(index)
+        ranked = sorted(range(len(fused)), key=scores.__getitem__, reverse=True)
+        return [fused[index] for index in ranked[:k]]
 
     def list_chunks(self, *args, **kwargs) -> list[Chunk] | list[dict]:
         """Union both tiers' chunks, tier-tagged (backs the console's tier badges).
