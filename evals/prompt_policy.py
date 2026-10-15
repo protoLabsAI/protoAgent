@@ -25,7 +25,7 @@ from infra.paths import instance_paths
 
 
 def continuity_cases():
-    tasks = json.loads(Path(__file__).with_name("tasks.json").read_text())
+    tasks = json.loads(Path(__file__).with_name("tasks.json").read_text(encoding="utf-8"))
     names = {"continuity_direct_recall", "continuity_vague_recall", "continuity_update",
              "continuity_unrelated_noise", "continuity_abstention"}
     # Keep all continuity cases except transfer/tool-specific acceptance tests.
