@@ -1,6 +1,6 @@
 ---
 name: repo-onboard
-description: Get the OPERATOR up to speed in an unfamiliar repository fast — clone or register it, find its manifest(s) and README and put them in front of the operator (the README as a markdown artifact, the manifest in the code pane), draw a code-linked Mermaid architecture overview, prove the toolchain, write a short repo card, then offer a guided tour one stop per turn. Use when the operator points you at a new repo or directory, says "get up to speed", "onboard", "what is this codebase", "how does this project fit together", "show me the readme", "show me the package.json", or before debugging code you haven't mapped yet.
+description: Get the OPERATOR up to speed in an unfamiliar repository fast — clone or register it, find its manifest(s) and README and put them in front of the operator (the README as a markdown artifact, the manifest in the code pane), show the architecture (the repo's Atlas model in `architecture/` when the Atlas plugin is on and the repo has one — else a code-linked Mermaid overview, plus an offer to map it in Atlas), prove the toolchain, write a short repo card, then offer a guided tour one stop per turn (an Atlas tour when there's a model). Use when the operator points you at a new repo or directory, says "get up to speed", "onboard", "what is this codebase", "how does this project fit together", "show me the readme", "show me the package.json", or before debugging code you haven't mapped yet.
 ---
 
 # Repo onboard
@@ -8,13 +8,19 @@ description: Get the OPERATOR up to speed in an unfamiliar repository fast — c
 Goal: in a few minutes the **operator** knows what the code is, how it runs, and where to
 look, well enough to explain it. Steps 1–7 are plumbing: do them in **one turn**, then stop
 with a choice. The tour (step 8) is interactive: one stop per turn. Cite `path:line`.
-**Never change code during onboarding** — no edits, no writes, no commits.
+**Never change code during onboarding** — no edits, no writes, no commits. The one
+exception is the Atlas model (step 9), and only after the operator says yes to it.
 
 **Read with the filesystem tools** — `list_dir`, `find_files`, `search_files`, `read_file` —
 not `execute_code` or ad-hoc scripts: their `file:line` output is what `show_code` and the
 diagram links need, and they stay inside the project fence. Setup commands go through
 `run_command`. Every onboarding produces all three views: the README artifact, the manifest
-in the code pane, and the overview diagram.
+in the code pane, and the architecture overview (Atlas or Mermaid, step 5).
+
+**Is Atlas here?** If `atlas_validate`, `atlas_describe` and `atlas_show` are bound, the
+Atlas plugin is on: it renders the repo's LikeC4 model (`architecture/*.c4`) as a
+drill-down diagram in the console. If they aren't bound, everything below that says
+"Atlas" doesn't apply — the Mermaid path is the whole story.
 If those tools aren't bound ("`list_dir` is not a valid tool"), tell the operator first —
 the filesystem toolset is off or a registered work folder is missing, and the server log's
 `[fs]` line names it — then carry on with what you have, citing `path:line` in text.
@@ -78,7 +84,24 @@ the filesystem toolset is off or a registered work folder is missing, and the se
   and `stop_reason` / `finish_reason`, where the final answer is extracted, and the config/env
   it depends on (API keys, model names, timeouts, max tokens/iterations).
 
-## 5. Architecture overview → a code-linked Mermaid `flowchart`
+## 5. Architecture overview → the Atlas model, else a code-linked Mermaid `flowchart`
+
+**5a. Atlas is on and the repo already has a model.** Look for `architecture/likec4.config.json`
+(Atlas's default `model_dir`), else any other LikeC4 project (`find_files` for
+`**/likec4.config.json`, `**/*.c4`). If there is one, it **is** the overview — don't draw a
+Mermaid one:
+- `atlas_validate`. Problems it reports (engine errors, `no-drilldown`, `code-link-missing`, …)
+  are a **finding** for the repo card, not something to fix now.
+- `atlas_describe()` for the view tree and tours, then `atlas_show(view="index")` so it's
+  open beside chat. Ground what you say about it in the `.c4` source and its code links.
+- A model somewhere other than `architecture/` renders only if Atlas's `model_dir` setting
+  points at it: say so (Settings ▸ Plugins ▸ Atlas) rather than moving files.
+- It's stale or missing the parts you traced in step 4 → note the gaps; extending it is a
+  step 9 offer, never done silently.
+
+**5b. No model (or Atlas is off) → the Mermaid overview, as follows.** When Atlas is on,
+this is the overview for *now*; the persistent map is the offer at the end of step 7.
+
 Follow the **`diagramming-code`** skill (read first, anchors, check the reply) — the rules
 there apply in full. For the overview specifically:
 - `show_artifact(kind="mermaid", title="<repo> — architecture overview", code="flowchart LR …", links=…)`.
@@ -138,9 +161,27 @@ beside chat — click any node to jump to its code"), then **end the turn with t
 all three options, in one line: *"Want a guided tour of <flow 1>, <flow 2> or <flow 3>, a
 sequence diagram of one of them, or straight to the bug?"*
 
+**Atlas on, no model yet (5b)** → add the offer as one more line, because it writes into
+their repo: *"I can also map this architecture as an Atlas model in `architecture/` — a few
+`.c4` files plus a tour, meant to be committed and reviewed with the code. Want me to write
+it?"* (A model that exists but has gaps → *"…extend `architecture/` with <the gaps>?"*)
+
 ## 8. Guided tour (only if the operator wants it; ONE stop per turn)
-Walk the chosen flow as 3–5 stops (e.g. entry → request/turn loop → model call → tool
-execution → answer extraction). At each stop:
+
+**With an Atlas model** the tour is an Atlas tour, so it lives in the repo and the next
+person can replay it:
+- Find a tour for the chosen flow in `architecture/atlas.tours.json` (`atlas_describe()`
+  lists them). None → add one (3–5 slides; a slide is `{view, focus?, step?, via?, note}`,
+  usually over that flow's `dynamic view <flow>_flow`), then `atlas_validate` until it
+  reports no broken slides. That edits their repo: do it only if they said yes to the model
+  (step 9) or say yes now.
+- Present it **one slide per turn**: `atlas_show(tour="<id>", slide=<n>, present=true)`, then
+  `show_code` on the exact lines behind that slide's element or step (from its code link,
+  confirmed with `search_files`/`read_file(offset)`), 2–4 sentences on what it does and the
+  contract it relies on, and one question — the same three beats as below.
+
+**Without Atlas** (or if they'd rather not touch the repo), walk the chosen flow as 3–5
+stops (e.g. entry → request/turn loop → model call → tool execution → answer extraction). At each stop:
 - `show_code` on the key range with a short `note` saying what this stop does, so the
   operator reads the real code in the pane beside chat (line numbers from `search_files` or
   `read_file(offset)`),
@@ -153,3 +194,21 @@ execution → answer extraction). At each stop:
 A sequence diagram of a flow follows `diagramming-code` (a `sequenceDiagram`, `msg:<n>`
 links). Move to the next stop only when the operator says so. Skip ahead if they say
 "got it" or "let's debug".
+
+## 9. Map it in Atlas (only after the operator says yes)
+The model is part of their repo: it gets committed and reviewed like code. Follow the
+**`atlas-likec4`** skill (bundled with Atlas) in full; for onboarding specifically:
+- Write with the file tools into `architecture/` (or extend the model you found in 5a):
+  `likec4.config.json` (`{"name": "<repo>"}`), `spec.c4`, `model.c4`, `views.c4`, and
+  `atlas.tours.json` with one tour per key flow from step 4. Touch nothing outside the model
+  directory.
+- **Only what you read**, as with the Mermaid overview: every element is grounded in code you
+  opened, and gets a project-root code link (`link /src/app/server.ts#L12-L40 'Source'`) with
+  line numbers from `search_files`/`read_file(offset)`, never guessed.
+- Levels: the system → its containers (the step-4 layers/packages) → components where they
+  earn it; ≤ 12 nodes per view; every element with children gets its `_detail` view; each
+  key flow is a `dynamic view <flow>_flow`.
+- `atlas_validate` after every write and fix the first error per file, until it says
+  `Engine: OK` and `Lint: clean`. Then `atlas_show(view="index")`.
+- Hand over: list the files you created, say they're uncommitted and theirs to review and
+  commit (you don't commit), and end with the tour choice from step 7.

@@ -1,16 +1,18 @@
 id: engineer
 # The console's plugin table renders only this name, so it says what you get.
 name: Engineer (navigator skills)
-version: 0.2.0
+version: 0.3.0
 # The skills point with `show_code` — the code-pane toolset (filesystem.code_pane)
 # first shipped in 0.179.0.
 min_protoagent_version: "0.179.0"
 description: >-
   The skill pack behind protoAgent's Engineer archetype — a hands-on pair-programming
   NAVIGATOR. repo-onboard gets the operator up to speed in an unfamiliar repository
-  (clone or register it, show its README and manifest, a code-linked Mermaid
-  architecture overview, prove the toolchain, a short repo card, then a guided tour
-  one stop per turn); debug-loop walks them through a bug one checkpoint per turn —
+  (clone or register it, show its README and manifest, the architecture — the repo's
+  Atlas model in architecture/ when the Atlas plugin is on, else a code-linked Mermaid
+  overview plus an offer to write the Atlas model, asked first because it lands in the
+  repo — prove the toolchain, a short repo card, then a guided tour one stop per turn,
+  an Atlas presenter tour when there's a model); debug-loop walks them through a bug one checkpoint per turn —
   reproduce, narrow, their hypothesis first, they write the fix, the agent reviews
   and verifies, they commit. Built so the operator ends up understanding and owning
   the change, not watching the agent make it. Prompt-only: no tools, routes,

@@ -39,7 +39,10 @@ is the output produced → which branches skip it). Use `search_files` / `read_f
 `git log -p` of recent changes as evidence. **Don't assume the bug is in the last commit**:
 check it, but verify against the code path. Summarize what's ruled in or out, with
 `path:line`, and `show_code` on the most suspicious range, with a `note` that says what to
-look at (a fact or a question, NOT the diagnosis). **Show the evidence (the code, the recent
+look at (a fact or a question, NOT the diagnosis). If the repo has an Atlas model, `atlas_show(view=…,
+focus=…)` on the element that code belongs to so they see where in the architecture we are
+(don't edit the model while debugging); a one-off call sequence for this bug is a Mermaid
+artifact (`diagramming-code`), not an addition to the model. **Show the evidence (the code, the recent
 diff) but NOT your conclusion:** don't name the bug, don't say "there it is". Let them find
 it in what you've put in front of them.
 Ask: *"The problem is in this region. What do you think is going wrong here?"*
