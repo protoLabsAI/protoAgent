@@ -237,6 +237,7 @@ def test_edit_rejects_explicit_null_before_mutating(monkeypatch, tmp_path, field
     assert not (root / '.history').exists()
 
 
+@pytest.mark.platform_sensitive
 @pytest.mark.parametrize("rename", [False, True])
 def test_edit_promoted_private_skill_preserves_commons(monkeypatch, tmp_path, rename):
     c, idx = _client_layered(monkeypatch, tmp_path)
