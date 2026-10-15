@@ -14,6 +14,9 @@
 
   In a real browser the chip shows `input.files[0].name`; under jsdom (where files can't be
   set) the handler falls back to the input's `data-fake-name`.
+
+  `?chip_delay_ms=N` removes the input at once but shows the chip only N ms later — on a cold page
+  live Greenhouse renders its chip a beat late, so browser_upload's first verify sees neither.
 -->
 <html>
 <head><meta charset="utf-8"><title>Greenhouse résumé chip fixture</title></head>
@@ -51,6 +54,7 @@
   </div>
 </form>
 <script>
+var CHIP_DELAY_MS = parseInt((/[?&]chip_delay_ms=(\d+)/.exec(location.search) || [])[1] || '0', 10);
 document.querySelectorAll('input[type=file]').forEach(function (inp) {
   inp.addEventListener('change', function () {
     var nm = (inp.files && inp.files.length) ? inp.files[0].name : (inp.getAttribute('data-fake-name') || '');
@@ -69,7 +73,8 @@ document.querySelectorAll('input[type=file]').forEach(function (inp) {
     rm.textContent = '×';
     chip.appendChild(name);
     chip.appendChild(rm);
-    wrap.appendChild(chip);
+    if (CHIP_DELAY_MS) { setTimeout(function () { wrap.appendChild(chip); }, CHIP_DELAY_MS); }
+    else { wrap.appendChild(chip); }
   });
 });
 </script>
