@@ -2479,6 +2479,8 @@ async def test_upload_empty_readback_is_a_hard_error_and_surfaces_validation(mon
     surfaced so the agent learns why."""
     root = storage.capture_root().resolve()
     (root / "cv.pdf").write_bytes(b"%PDF resume")
+    monkeypatch.setattr(tools, "_UPLOAD_SETTLE_S", 0.05)
+    monkeypatch.setattr(tools, "_UPLOAD_POLL_S", 0.01)
     monkeypatch.setattr(tools.subprocess, "Popen", _upload_popen(
         {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
         {"ok": True, "name": "", "error": "Résumé is required"}))
@@ -2486,6 +2488,71 @@ async def test_upload_empty_readback_is_a_hard_error_and_surfaces_validation(mon
         {"field": "#resume", "file_path": "cv.pdf"})
     assert out.startswith("Error:") and "nothing is attached" in out
     assert "Résumé is required" in out
+
+
+def _settling_popen(locate, verifies, record):
+    """Like _upload_popen, but the verify evals answer from ``verifies`` in turn (the last one
+    repeats) — a widget whose chip shows up only after a few read-backs."""
+    state = {"evals": 0}
+
+    def _popen(argv, **kw):
+        record.append(list(argv))
+        out = b"(ok)"
+        if argv[1:2] == ["eval"]:
+            n = state["evals"]
+            state["evals"] += 1
+            out = json.dumps(locate if n == 0 else verifies[min(n - 1, len(verifies) - 1)]).encode()
+        return _FakeProc(argv, out=out)
+
+    return _popen
+
+
+async def test_upload_rechecks_an_empty_readback_until_the_chip_shows(monkeypatch):
+    """Live QA of #4237: on a cold page Greenhouse renders its chip a beat AFTER the attach, so the
+    first verify reads {name:'', displayed:false}. The tool re-checks while nothing shows and
+    returns success on the first read-back with the chip — no further evals after it."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF resume")
+    monkeypatch.setattr(tools, "_UPLOAD_POLL_S", 0.01)
+    empty = {"ok": True, "name": "", "displayed": False, "error": ""}
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _settling_popen(
+        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
+        [empty, empty, {"ok": True, "name": "", "displayed": True, "error": ""}], rec))
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    assert out == "Uploaded cv.pdf to Résumé (verified via the field's displayed filename)"
+    assert [a[1] for a in rec] == ["eval", "upload", "eval", "eval", "eval"]
+
+
+async def test_upload_empty_readback_errors_after_the_bounded_wait(monkeypatch):
+    """…and a genuinely empty attach still errors, once the settle window has passed — re-checked
+    several times, never hanging past the bound."""
+    root = storage.capture_root().resolve()
+    (root / "cv.pdf").write_bytes(b"%PDF resume")
+    monkeypatch.setattr(tools, "_UPLOAD_SETTLE_S", 0.2)
+    monkeypatch.setattr(tools, "_UPLOAD_POLL_S", 0.02)
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _settling_popen(
+        {"ok": True, "selector": '[data-pa-upload="x"]', "label": "Résumé"},
+        [{"ok": True, "name": "", "displayed": False, "error": ""}], rec))
+    t0 = time.monotonic()
+    out = await _toolmap({"binary": "ab"})["browser_upload"].ainvoke(
+        {"field": "#resume", "file_path": "cv.pdf"})
+    elapsed = time.monotonic() - t0
+    assert out.startswith("Error:") and "nothing is attached" in out
+    assert 0.2 <= elapsed < 2.0, elapsed
+    assert sum(a[1] == "eval" for a in rec) > 2          # locate + several verify re-checks
+
+
+def test_upload_settling_only_while_there_is_no_evidence():
+    """forms.upload_settling: keep re-checking only for an ok read-back with no name AND nothing
+    displayed; a name, a chip, not-found, or garbage are all final."""
+    assert forms.upload_settling(json.dumps({"ok": True, "name": "", "displayed": False}))
+    assert not forms.upload_settling(json.dumps({"ok": True, "name": "cv.pdf", "displayed": False}))
+    assert not forms.upload_settling(json.dumps({"ok": True, "name": "", "displayed": True}))
+    assert not forms.upload_settling(json.dumps({"ok": False, "reason": "not-found"}))
+    assert not forms.upload_settling("not json")
 
 
 # ── #4032 bug 3: the attach survives the widget RE-RENDERING its file input ─────────

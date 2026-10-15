@@ -1972,6 +1972,20 @@ def parse_upload(output: str, field: str) -> tuple[dict | None, str]:
     return None, f"Error: could not locate a file input for {field!r}."
 
 
+def upload_settling(output: str) -> bool:
+    """True while ``upload_verify_js`` found the field but NO evidence of the attach yet — no
+    filename read back and none displayed. Live Greenhouse renders its filename chip a beat AFTER
+    the change event (on a cold page often after the first verify), so ``browser_upload`` re-runs
+    the verify while this holds, for a bounded wait, before calling it "nothing is attached".
+    Anything else — a name, a chip, an unreadable or not-found result — is final. Never raises."""
+    try:
+        data = _loads(output)
+    except (ValueError, TypeError):
+        return False
+    return (isinstance(data, dict) and bool(data.get("ok"))
+            and not str(data.get("name") or "").strip() and not data.get("displayed"))
+
+
 def render_upload(output: str, field: str, basename: str, label: str = "") -> str:
     """Turn ``upload_verify_js``'s JSON into the result. Success — ``Uploaded <name> to <label>``
     — when a re-found input reads ``basename`` back via ``input.files[0].name``, OR when the

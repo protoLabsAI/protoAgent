@@ -986,6 +986,37 @@ async def test_live_greenhouse_removes_input_and_label_upload_and_form_read_see_
         f.unlink(missing_ok=True)
 
 
+async def test_upload_waits_for_a_chip_greenhouse_renders_late(browser):
+    """Live QA of #4237: on a cold page Greenhouse drops the input at once but renders the filename
+    chip a beat later, so a single verify right after the attach saw neither and reported "nothing is
+    attached" (6/26 live runs). The verify now re-checks an empty read-back for a bounded wait."""
+    await _open(browser, RESUME_CHIP + "?chip_delay_ms=600")
+    root = storage.capture_root().resolve()
+    f = root / "resume-late.pdf"; f.write_bytes(b"%PDF-1.4 late chip\n%%EOF\n")
+    try:
+        out = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "resume-late.pdf"})
+        assert out == "Uploaded resume-late.pdf to Attach (verified via the field's displayed filename)", out
+    finally:
+        f.unlink(missing_ok=True)
+
+
+async def test_upload_still_errors_when_no_chip_appears_within_the_wait(browser):
+    """…and the wait is bounded: a chip that never shows within it (here 6 s, past the settle window)
+    is still a hard "nothing is attached" error, returned after the wait rather than hanging."""
+    await _open(browser, RESUME_CHIP + "?chip_delay_ms=6000")
+    root = storage.capture_root().resolve()
+    f = root / "resume-never.pdf"; f.write_bytes(b"%PDF-1.4 no chip\n%%EOF\n")
+    try:
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        out = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "resume-never.pdf"})
+        elapsed = loop.time() - t0
+        assert out.startswith("Error:") and "nothing is attached" in out, out
+        assert tools._UPLOAD_SETTLE_S <= elapsed < 6, elapsed
+    finally:
+        f.unlink(missing_ok=True)
+
+
 # ── js-fallback click: a native click reports success but does nothing ───────────
 
 

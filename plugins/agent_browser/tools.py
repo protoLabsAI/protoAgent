@@ -61,6 +61,10 @@ _READ_CHUNK = 65_536
 # How long to wait for the pipe-draining threads once the CLI has exited (or been killed).
 # Normally they finish at once; see _run for the case where they can't.
 _JOIN_TIMEOUT_S = 5.0
+# browser_upload's post-attach verify: how long an EMPTY read-back (no filename, no chip) is
+# re-checked before it is reported as "nothing is attached", and how often.
+_UPLOAD_SETTLE_S = 2.5
+_UPLOAD_POLL_S = 0.25
 
 
 def _kill_tree(proc) -> None:
@@ -770,11 +774,20 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         # node) OR removes it from the DOM entirely, so the attach is confirmed by re-finding the
         # fresh input, or re-finding the field container (by its stored selector or its label) and
         # reading the filename chip there.
-        read = await _ab("eval", "--stdin", stdin=forms.upload_verify_js(
+        # The widget may render its chip a beat AFTER the attach (live Greenhouse, cold page), so an
+        # empty first read-back is re-checked every _UPLOAD_POLL_S until _UPLOAD_SETTLE_S has passed;
+        # the first read with a filename or a chip returns at once.
+        verify_js = forms.upload_verify_js(
             target, info["id"], info["name"], info["container"], source.name,
-            info["label_for"], info["label_text"], info["field_box"], info["group_label"]))
-        if read.startswith("Error:"):
-            return read
+            info["label_for"], info["label_text"], info["field_box"], info["group_label"])
+        deadline = time.monotonic() + _UPLOAD_SETTLE_S
+        while True:
+            read = await _ab("eval", "--stdin", stdin=verify_js)
+            if read.startswith("Error:"):
+                return read
+            if not forms.upload_settling(read) or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(_UPLOAD_POLL_S)
         return forms.render_upload(read, field, source.name, label=label)
 
     @tool
