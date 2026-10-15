@@ -1090,7 +1090,8 @@ async def _run_turn_stream(
     # astream_events normalizes an omitted limit to LangGraph's 25-step default
     # before graph defaults are merged. Match the configured server budget here
     # too, while preserving an explicit caller/goal/subagent limit.
-    config = {"recursion_limit": getattr(STATE.graph_config, "max_iterations", 200), **config}
+    if "recursion_limit" not in config:
+        config = {**config, "recursion_limit": getattr(STATE.graph_config, "max_iterations", 200)}
     human = _chat()._vision_human_message(message, images, session_id=session_id, incognito=incognito)
     background_messages, background_replies = (
         ([], []) if resume_value is not None else _chat()._drain_background(session_id)
