@@ -37,6 +37,7 @@ GREENHOUSE = (FIXTURES / "greenhouse.html").as_uri()
 ASHBY = (FIXTURES / "ashby.html").as_uri()
 PHONE_COUNTRY = (FIXTURES / "greenhouse_phone_country.html").as_uri()
 PHONE_COUNTRY_ITI = (FIXTURES / "greenhouse_phone_country_iti.html").as_uri()
+RESUME_CHIP = (FIXTURES / "greenhouse_resume_chip.html").as_uri()
 
 # Load the plugin the way the host does, so its relative imports resolve (same shape as
 # tests/test_agent_browser_plugin.py).
@@ -960,6 +961,31 @@ async def test_removing_widget_inside_a_wrapping_label_verifies_via_outside_chip
         f.unlink(missing_ok=True)
 
 
+async def test_live_greenhouse_removes_input_and_label_upload_and_form_read_see_the_chip(browser):
+    """jobCoach friction: live Greenhouse swaps the résumé's button container — input#resume AND its
+    `<label for=resume>Attach</label>` — for a filename chip. browser_upload must confirm the attach
+    via the chip in the surviving "Resume/CV*" field wrapper, and browser_form_read must report the
+    vanished #resume under its id with value == the filename (cover letter stays empty)."""
+    await _open(browser, RESUME_CHIP)
+    root = storage.capture_root().resolve()
+    f = root / "resume-gitlab.pdf"; f.write_bytes(b"%PDF-1.4 gitlab\n%%EOF\n")
+    try:
+        out = await browser["browser_upload"].ainvoke({"field": "#resume", "file_path": "resume-gitlab.pdf"})
+        assert out.startswith("Uploaded resume-gitlab.pdf to"), out
+        assert "nothing is attached" not in out
+        gone = await browser["browser_eval"].ainvoke({"expression":
+            "(function(){return document.getElementById('resume')===null"
+            " && document.querySelector('label[for=resume]')===null"
+            " && !!document.querySelector('.file-upload__filename .chip');})()"})
+        assert gone == "true", gone
+        by_id = await _form_by_id(browser)
+        assert by_id["resume"]["kind"] == "file"
+        assert by_id["resume"]["value"] == "resume-gitlab.pdf"
+        assert by_id["cover_letter"]["value"] == ""
+    finally:
+        f.unlink(missing_ok=True)
+
+
 # ── js-fallback click: a native click reports success but does nothing ───────────
 
 
@@ -1131,7 +1157,7 @@ async def test_ashby_required_resume_upload_and_radio_group(browser):
 def test_fixtures_are_self_contained_with_no_network_resources():
     comment = re.compile(r"<!--.*?-->", re.S)
     for name in ("greenhouse.html", "ashby.html", "greenhouse_phone_country.html",
-                 "greenhouse_phone_country_iti.html"):
+                 "greenhouse_phone_country_iti.html", "greenhouse_resume_chip.html"):
         body = comment.sub("", (FIXTURES / name).read_text(encoding="utf-8")).lower()
         for marker in ("http://", "https://", "<script src", "<link ", "<img ", "url("):
             assert marker not in body, f"{name} references an external/network resource: {marker!r}"

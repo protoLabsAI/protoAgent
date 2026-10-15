@@ -799,6 +799,35 @@ function abEnumerate(root){
     });
     idx++;
   }
+  // ── orphaned file fields whose <label for> went WITH the input (live Greenhouse) ──────────
+  // Greenhouse keeps `<label for=resume>Attach</label>` beside the input and swaps BOTH for the chip,
+  // so the label[for] pass above finds nothing. browser_upload tagged the field's outer wrapper
+  // `data-pa-file-for=<id>` before the attach; when that id no longer resolves to a live element and
+  // the wrapper shows an attached-file chip, report it under the SAME id so a selector→value verifier
+  // (#resume → resume.pdf) matches.
+  var seenIds = {};
+  for(var si = 0; si < out.length; si++){ if(out[si].id) seenIds[out[si].id] = true; }
+  var fboxes = (root.querySelectorAll && root.querySelectorAll('[data-pa-file-for]')) || [];
+  for(var bi = 0; bi < fboxes.length; bi++){
+    var fbox = fboxes[bi], fid = fbox.getAttribute('data-pa-file-for') || '';
+    if(!fid || seenIds[fid]) continue;
+    var fliveEl = null; try { fliveEl = document.getElementById(fid); } catch(e){ fliveEl = null; }
+    if(fliveEl) continue;                      // live input still there — the main walk covers it
+    if(fbox.querySelector && fbox.querySelector('input[type="file"]')) continue;
+    var fchip = abChipElement(fbox, null);
+    if(!fchip || !(abRemoveControl(fchip) || abRemoveControl(fchip.parentElement))) continue;
+    var flabel = abClean(fbox.getAttribute('data-pa-file-label') || '');
+    try { fbox.setAttribute('data-ab-field', String(idx)); } catch(e){}
+    out.push({
+      idx: idx, label: flabel, labels: flabel ? [flabel] : [],
+      kind: 'file', name: fid, id: fid,
+      required: fbox.getAttribute('data-pa-file-required') === 'true',
+      selector: '[data-ab-field="' + idx + '"]',
+      value: abStripLabelPrefix(abClean(abTextNoControls(fchip)), flabel)
+    });
+    seenIds[fid] = true;
+    idx++;
+  }
   return out;
 }
 function abScopeRoot(q, isCss){
@@ -1696,10 +1725,53 @@ _UPLOAD_DRIVER = r"""
       try { box.setAttribute('data-pa-upbox', NONCE); container = '[data-pa-upbox="' + NONCE + '"]'; } catch(e){}
     }
   }
+  // The FIELD BOX — the widest ancestor that is still THIS field's alone, captured BEFORE the attach.
+  // Live Greenhouse keeps its <label for=resume> ("Attach") in the SAME small <div> as the input and
+  // REPLACES that whole button container with the filename chip — so the label-anchored `container`
+  // above, `label[for]` and its "Attach" text all vanish with the input, and nothing re-found the
+  // field. Climb (bounded, never FORM/body) while the ancestor holds no OTHER file input and no other
+  // field's box; the outer `role=group` wrapper ("Resume/CV*") survives the swap and shows the chip.
+  // Tagged `data-pa-file-for=<id>` (plus label / required) so browser_form_read can still report the
+  // field under its id once the input is gone (#resume: input AND label removed).
+  var fieldBox = '', fbNode = null, fn = input.parentElement;
+  for(var fu = 0; fn && fu < 6; fu++){
+    if(fn.tagName === 'FORM' || fn === document.body) break;
+    var ff = (fn.querySelectorAll && fn.querySelectorAll('input[type="file"]')) || [], other = false;
+    for(var fj = 0; fj < ff.length; fj++){ if(ff[fj] !== input){ other = true; break; } }
+    if(!other && fn.querySelector){
+      var fb = fn.querySelectorAll('[data-pa-file-for]');
+      for(var fk = 0; fk < fb.length; fk++){ if(fb[fk].getAttribute('data-pa-file-for') !== inId){ other = true; break; } }
+    }
+    if(other) break;
+    fbNode = fn;
+    fn = fn.parentElement;
+  }
+  var groupLabel = '';
+  var grp = input.closest && input.closest('[role="group"][aria-labelledby], [role="group"][aria-label]');
+  if(grp){
+    groupLabel = abByIds(grp.getAttribute('aria-labelledby')) || abClean(grp.getAttribute('aria-label') || '');
+  }
+  if(!groupLabel) groupLabel = labelText || label;
+  if(fbNode){
+    try {
+      if(inId){                                 // form_read can only report it under a real id
+        fbNode.setAttribute('data-pa-file-for', inId);
+        fbNode.setAttribute('data-pa-file-label', abClean(groupLabel));
+      }
+      var req = !!input.required || (input.getAttribute('aria-required') === 'true') ||
+                !!(grp && grp.getAttribute('aria-required') === 'true') ||
+                !!(grp && /\*/.test(String(grp.getAttribute('aria-labelledby') || '').split(/\s+/).map(function(i){
+                  var n = i && document.getElementById(i); return n ? n.textContent : ''; }).join(' ')));
+      fbNode.setAttribute('data-pa-file-required', req ? 'true' : 'false');
+      fbNode.setAttribute('data-pa-filebox', NONCE);
+      fieldBox = '[data-pa-filebox="' + NONCE + '"]';
+    } catch(e){}
+  }
   return JSON.stringify({ok:true, selector:'[data-pa-upload="' + NONCE + '"]', label:label,
                          name:(input.getAttribute && input.getAttribute('name')) || '',
                          id:(input.getAttribute && input.getAttribute('id')) || '',
-                         container:container, label_for:labelFor, label_text:labelText});
+                         container:container, label_for:labelFor, label_text:labelText,
+                         field_box:fieldBox, group_label:abClean(groupLabel)});
 })()
 """
 
@@ -1724,6 +1796,11 @@ _UPLOAD_VERIFY = r"""
     var b = null;
     if(CONTAINER){ try { b = document.querySelector(CONTAINER); } catch(e){ b = null; } }
     if(b) return b;
+    // (1b) the FIELD BOX the driver tagged before the attach — the widest ancestor holding only this
+    //      field. Live Greenhouse swaps out the input's button container, <label for> and all, so
+    //      (1) and (2) both vanish; the outer field wrapper survives and holds the chip.
+    if(FIELD_BOX){ try { b = document.querySelector(FIELD_BOX); } catch(e){ b = null; } }
+    if(b) return b;
     // (2) the wrapper of this field's own label[for=LABEL_FOR], climbing to its attached-file chip
     //     without ever crossing into a sibling file field's container (abOrphanBox).
     if(LABEL_FOR){
@@ -1733,10 +1810,13 @@ _UPLOAD_VERIFY = r"""
       var ob = abOrphanBox(lab);
       if(ob) return ob;
     }
-    // (3) last resort: the tightest element whose text STARTS WITH the field label and that holds a
-    //     chip, skipping any element that still holds a file input (a sibling field).
-    if(LABEL_TEXT){
-      var want = abNorm(LABEL_TEXT), all = document.querySelectorAll('*');
+    // (3) last resort: the tightest element whose text STARTS WITH the field label (the <label for>
+    //     text, then the field's group label, e.g. "Resume/CV") and that holds a chip, skipping any
+    //     element that still holds a file input (a sibling field).
+    var texts = [LABEL_TEXT, GROUP_LABEL];
+    for(var ti = 0; ti < texts.length; ti++){
+      if(!texts[ti]) continue;
+      var want = abNorm(texts[ti]), all = document.querySelectorAll('*');
       var best = null, bestLen = 1e9;
       for(var i = 0; i < all.length; i++){
         var el = all[i];
@@ -1812,13 +1892,15 @@ def upload_js(selector: str, nonce: str) -> str:
 
 def upload_verify_js(selector: str, input_id: str = "", input_name: str = "",
                      container: str = "", basename: str = "", label_for: str = "",
-                     label_text: str = "") -> str:
+                     label_text: str = "", field_box: str = "", group_label: str = "") -> str:
     """Script ``browser_upload`` evals AFTER the attach. Reads ``input.files[0].name`` back from
     the nonce-tagged node (``selector``) if it survived, else from the input the widget
     re-rendered (re-found by ``input_id``, then ``input_name``), and reports whether the field
     ``container``'s visible text shows ``basename`` (the filename chip) — plus any field-level
     validation text. ``label_for`` / ``label_text`` re-find the field's container when the widget
-    REMOVED the input from the DOM entirely, so neither the nonce nor ``input_id`` resolves."""
+    REMOVED the input from the DOM entirely, so neither the nonce nor ``input_id`` resolves;
+    ``field_box`` (the field's outer wrapper, tagged before the attach) and ``group_label`` cover a
+    widget that removes the ``<label for>`` along with the input (live Greenhouse)."""
     return (_JS_LIB + "\n(function(){\n"
             "var SEL = " + _js(selector) + ";\n"
             "var ID = " + _js(input_id) + ";\n"
@@ -1827,12 +1909,14 @@ def upload_verify_js(selector: str, input_id: str = "", input_name: str = "",
             "var BASENAME = " + _js(basename) + ";\n"
             "var LABEL_FOR = " + _js(label_for) + ";\n"
             "var LABEL_TEXT = " + _js(label_text) + ";\n"
+            "var FIELD_BOX = " + _js(field_box) + ";\n"
+            "var GROUP_LABEL = " + _js(group_label) + ";\n"
             "return " + _UPLOAD_VERIFY.strip() + ";\n})()")
 
 
 def parse_upload(output: str, field: str) -> tuple[dict | None, str]:
     """Parse ``upload_js``'s JSON → ``(info, error)``. On success ``info`` is a dict
-    ``{selector, label, id, name, container, label_for, label_text}`` — ``selector`` is the
+    ``{selector, label, id, name, container, label_for, label_text, field_box, group_label}`` — ``selector`` is the
     ``[data-pa-upload=…]`` tag the CLI uploads to, and ``id``/``name``/``container`` /
     ``label_for``/``label_text`` let the verify step re-find the field after a re-render drops the
     tag OR the widget removes the input entirely. On failure ``info`` is ``None`` and ``error`` is a
@@ -1852,6 +1936,8 @@ def parse_upload(output: str, field: str) -> tuple[dict | None, str]:
             "container": data.get("container") or "",
             "label_for": data.get("label_for") or "",
             "label_text": data.get("label_text") or "",
+            "field_box": data.get("field_box") or "",
+            "group_label": data.get("group_label") or "",
         }
         return info, ""
     reason, label = data.get("reason"), (data.get("label") or field)

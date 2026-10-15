@@ -38,6 +38,7 @@ Three things the in-tree copy adds (#3451):
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import secrets
@@ -45,6 +46,7 @@ import signal
 import subprocess
 import threading
 import time
+import weakref
 
 from langchain_core.tools import tool
 
@@ -76,6 +78,50 @@ def _kill_tree(proc) -> None:
             os.killpg(pid, signal.SIGKILL)
         except OSError:  # group already gone (ProcessLookupError) or not ours
             pass
+
+
+# ── browser actions are serialised per session ───────────────────────────────────────
+# The model can emit several tool calls in one step and the harness runs them CONCURRENTLY.
+# But the browser session is ONE page with ONE focus: two parallel `browser_fill`s each
+# focus their field and type, and the keystrokes interleave — observed live on an Ashby
+# form, where the LinkedIn URL was appended into Email and location + LinkedIn into Phone.
+# Multi-step tools (upload's locate → attach → verify, select's open → pick → read-back)
+# are equally unsafe to interleave. So every tool holds its session's lock for its WHOLE
+# body: parallel calls run one at a time, in arrival order (asyncio.Lock is FIFO).
+#
+# Keyed by the agent-browser session name (AGENT_BROWSER_SESSION, read per call — the CLI
+# reads the same variable), so DIFFERENT sessions still run concurrently. Read-only tools
+# take the lock too: a snapshot taken mid-fill is a torn read, and simplicity beats the
+# little parallelism a read would win. asyncio.Lock binds to one event loop, so the table is
+# per loop; parallel tool calls from one graph step always share the step's loop. No tool
+# calls another tool, so the lock need not be reentrant. Mirrors edit_file's per-path lock
+# (#3400).
+_SESSION_LOCKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _session_key() -> str:
+    return os.environ.get("AGENT_BROWSER_SESSION") or "default"
+
+
+def _session_lock() -> asyncio.Lock:
+    """The lock serialising actions on the current agent-browser session (this event loop).
+    Created on first use; a check-and-set with no await between, so it is atomic on the loop."""
+    per_loop = _SESSION_LOCKS.setdefault(asyncio.get_running_loop(), {})
+    key = _session_key()
+    lock = per_loop.get(key)
+    if lock is None:
+        lock = per_loop[key] = asyncio.Lock()
+    return lock
+
+
+def _serialized(fn):
+    """Run the async tool ``fn`` while holding its session's lock (see above)."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        async with _session_lock():
+            return await fn(*args, **kwargs)
+    return wrapper
+
 
 # Setup re-probe rate limits (see _recheck). A probe is ~40 ms, but it is two subprocesses,
 # and a failing agent loop can fire several calls a second.
@@ -436,6 +482,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     # ── navigation ────────────────────────────────────────────────────────────
     @tool
+    @_serialized
     async def browser_open(url: str = "") -> str:
         """Launch the browser (or navigate the current session). Pass a `url` to go
         there, or leave blank to open about:blank. Start every browsing task here.
@@ -447,22 +494,26 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return await _ab(*flags, "open", url) if url else await _ab(*flags, "open")
 
     @tool
+    @_serialized
     async def browser_back() -> str:
         """Navigate back in history."""
         return await _ab("back")
 
     @tool
+    @_serialized
     async def browser_forward() -> str:
         """Navigate forward in history."""
         return await _ab("forward")
 
     @tool
+    @_serialized
     async def browser_reload() -> str:
         """Reload the current page."""
         return await _ab("reload")
 
     # ── perception ────────────────────────────────────────────────────────────
     @tool
+    @_serialized
     async def browser_snapshot() -> str:
         """Get the page's accessibility tree with compact `@eN` element refs. Call
         this before clicking/filling — the refs (e.g. `@e2`) are what the action
@@ -470,12 +521,14 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return await _ab("snapshot")
 
     @tool
+    @_serialized
     async def browser_get_text(selector: str = "body") -> str:
         """Get the visible text of an element (a `@eN` ref or a CSS selector;
         defaults to the whole `body`). Use to extract/read page content."""
         return _bad_operand(selector=selector) or await _ab("get", "text", selector)
 
     @tool
+    @_serialized
     async def browser_get_html(selector: str = "") -> str:
         """Get the HTML of an element (a `@eN` ref or CSS selector), or the page."""
         if (bad := _bad_operand(selector=selector)):
@@ -483,6 +536,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return await _ab("get", "html", selector) if selector else await _ab("get", "html")
 
     @tool
+    @_serialized
     async def browser_get_value(selector: str) -> str:
         """Get the current value of a form field by its visible LABEL (re-resolved in the page
         each call, so it survives re-renders), a `@eN` ref, or a CSS selector. For a whole-form
@@ -491,6 +545,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return err or await _ab("get", "value", sel)
 
     @tool
+    @_serialized
     async def browser_form_read(scope: str = "") -> str:
         """Read every form field on the page in ONE call — the reliable way to see a form
         before filling it, and to verify it afterwards.
@@ -523,6 +578,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     # ── interaction ───────────────────────────────────────────────────────────
     @tool
+    @_serialized
     async def browser_click(selector: str, js_fallback: bool = False) -> str:
         """Click a form field by its visible LABEL (re-resolved in the page each call, so it
         survives re-renders — a checkbox, radio or combobox by label), a `@eN` ref (from
@@ -569,6 +625,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return forms.render_js_click(dispatched, selector, clicked)
 
     @tool
+    @_serialized
     async def browser_fill(selector: str, text: str) -> str:
         """Clear a field and fill it with `text`. Address the field by its visible LABEL
         (re-resolved in the page each call, so it survives re-renders), a `@eN` ref, or a CSS
@@ -580,6 +637,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return err or await _ab("fill", sel, text)
 
     @tool
+    @_serialized
     async def browser_type(selector: str, text: str) -> str:
         """Type `text` into a field without clearing it first. Address the field by its visible
         LABEL (re-resolved each call, so it survives re-renders), a `@eN` ref, or a CSS
@@ -590,6 +648,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return err or await _ab("type", sel, text)
 
     @tool
+    @_serialized
     async def browser_select(field: str, option_text: str) -> str:
         """Set a CHOICE field to the option whose visible text is `option_text`, then PROVE it
         by reading the committed value back. Handles a native `<select>`, a react-select-style
@@ -640,6 +699,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return forms.render_select(out, field, option_text)
 
     @tool
+    @_serialized
     async def browser_upload(field: str, file_path: str) -> str:
         """Attach a local file to a form's file input and VERIFY it took. Use this for an
         application form that wants a résumé/CV FILE (Ashby, Greenhouse) — a plain
@@ -712,18 +772,20 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         # reading the filename chip there.
         read = await _ab("eval", "--stdin", stdin=forms.upload_verify_js(
             target, info["id"], info["name"], info["container"], source.name,
-            info["label_for"], info["label_text"]))
+            info["label_for"], info["label_text"], info["field_box"], info["group_label"]))
         if read.startswith("Error:"):
             return read
         return forms.render_upload(read, field, source.name, label=label)
 
     @tool
+    @_serialized
     async def browser_press(key: str) -> str:
         """Press a key or chord on the focused element (e.g. `Enter`, `Tab`,
         `Control+a`)."""
         return _bad_operand(key=key) or await _ab("press", key)
 
     @tool
+    @_serialized
     async def browser_hover(selector: str) -> str:
         """Hover the pointer over a form field by its visible LABEL (re-resolved each call, so
         it survives re-renders), a `@eN` ref, or a CSS selector."""
@@ -731,6 +793,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return err or await _ab("hover", sel)
 
     @tool
+    @_serialized
     async def browser_eval(expression: str) -> str:
         """Evaluate a JavaScript `expression` in the page and return the result.
         Use sparingly — prefer snapshot + the action tools. An expression that starts with
@@ -743,6 +806,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     # ── capture + session ─────────────────────────────────────────────────────
     @tool
+    @_serialized
     async def browser_screenshot(path: str = "") -> str:
         """Save a PNG screenshot of the current page. Returns the absolute file path —
         hand that to `save_file_artifact` to put the image in the Artifact panel.
@@ -754,6 +818,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return await _capture("screenshot", path, "page.png")
 
     @tool
+    @_serialized
     async def browser_pdf(path: str = "") -> str:
         """Print the current page to PDF (Chrome's print-to-PDF) and return the absolute
         file path. This is the HTML→PDF path: open a page — or an artifact/report you
@@ -771,6 +836,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         return await _capture("pdf", path, "page.pdf")
 
     @tool
+    @_serialized
     async def browser_close() -> str:
         """Close the browser session. Call when the task is done to free the daemon."""
         return await _ab("close")
