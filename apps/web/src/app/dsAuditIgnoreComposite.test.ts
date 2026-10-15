@@ -51,7 +51,7 @@ const MATCHER = /ds-audit-ignore(-next-line)?(?:[:\s]+([a-z][a-z,\s-]*))?/;
 const TARGETS = [
   { suffix: "/AppDrawer.tsx", line: 74, note: "surface-row button" },
   { suffix: "/AppDrawer.tsx", line: 91, note: "Settings-row button" },
-  { suffix: "/ComposerModelSelect.tsx", line: 97, note: "model-menu trigger" },
+  { suffix: "/ComposerModelSelect.tsx", line: 113, note: "model-menu trigger" },
 ];
 
 describe(`sanctioned composite ${BTN}> DS-audit exceptions (protoContent#551)`, () => {
@@ -100,7 +100,7 @@ describe(`sanctioned composite ${BTN}> DS-audit exceptions (protoContent#551)`, 
     );
     const composer = source("/ComposerModelSelect.tsx");
     expect(composer).toContain(
-      `${BTN} ${EXCEPTION} type="button" className="composer-model-select" aria-label="Model for this chat">`,
+      `${BTN} ${EXCEPTION} type="button" className="composer-model-select" disabled={switching} aria-label="Model for this chat">`,
     );
   });
 });

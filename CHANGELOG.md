@@ -15,6 +15,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.204.0] - 2026-10-14
+
+### Changed
+- **Stop pending chat requests and recover in the same conversation (#4205).** Show active non-streaming turns in chat, wait for cancellation cleanup before switching models, and release disconnected interactive requests while retaining the OpenAI-compatible API's run-to-completion contract.
+
+### Fixed
+- **Gateway calls keep each conversation on a warm replica (#4210).** OpenAI-compatible model requests send a stable per-thread session header for LiteLLM session affinity, including streaming calls and retries. Concurrent threads sharing a client keep separate keys.
+
+- **Keep the console usable when browser storage is full (#3703).** Browser storage failures no longer crash persisted UI updates; a visible warning explains unsaved changes, credential writes report failures, and crash recovery can clear transcript caches while preserving credentials and layout.
+
+- **A full browser-storage quota no longer crashes the console (#3708).** Once `localStorage` filled up, the console fell through to the crash page with "The quota has been exceeded.", and Reload looped straight back to it. Persisted layout, UI-slice and keybinding stores wrote synchronously inside every state update and never caught the error. Every console storage access now goes through one seam (`apps/web/src/lib/storage.ts`, ADR 0114) that never throws on a full quota. Credential writes still fail loudly: a token the browser couldn't keep is reported instead of silently dropped. One throwing event-bus listener can no longer starve the others. The crash page recognises a quota error and offers **Free up space & reload**, which clears only saved chat transcripts and stops the crashed page from writing them back. When that isn't enough, it lists the largest stored keys.
+
+- **Recover from failed pairing credential saves (#3703).** Pairing failures now show recovery instructions before the console opens. Credential removal reports storage errors, and a failed token rollback preserves the previous token for recovery. Chat reset preserves dismissal sets.
+
+- **Recalled memories include deletion handles (#4075).** Search results expose private chunk IDs so an agent can forget stale memories outside the recent-list window. Shared commons rows are identified separately in recall and list output so their IDs are not mistaken for private deletion handles.
+
+- **Calculator work is bounded (#4181).** Oversized powers are rejected before computation, and expression length, nesting, node count, and intermediate integer sizes have limits. Ordinary arithmetic remains available with readable errors for requests that exceed the budget.
+
+- **Snapshot import bounds its upload read (#4181).** The import handler reads at most the archive limit plus one byte before rejecting an oversized snapshot, avoiding an unbounded in-memory copy. Archives exactly at the limit remain accepted.
+
+- **Preserve runtime configuration and recovered turn details (#4181).** Invalid plugin source allowlists now fail clearly instead of becoming character lists; the CLI also refuses unreadable source policies. Literal inline-code reasoning close tags survive output filtering. Recovered deck turns retain failure messages and correctly replace stale output sizes with zero.
+- **Keep failed runtime operations contained (#4181).** Fleet discovery and activation run status probes off the event loop. Settings saves restore prior config after partial write failures. Out-of-range waits return an error without replacing a pending wake-up, and rewind no longer absorbs unrelated tool replies.
+
+- **Stable instance identity during simultaneous startup (#4197).** Serialize first-use creation across processes and publish the complete identity atomically, preventing competing processes from returning different IDs for the same data root.
+
+- **Provider quota recovery (#4205).** Return long Anthropic retry delays immediately with the provider reason and retry time, so exhausted quota does not masquerade as a stalled stream.
+
+### Security
+- **Reject local paths in untrusted multimodal tool results (#4181).** Parsed image envelopes can no longer request host file reads. Plugins can still pass local images to the public helper, which embeds their data before returning a tool result.
+
 ## [0.203.0] - 2026-10-13
 
 ### Changed

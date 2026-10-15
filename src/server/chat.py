@@ -42,6 +42,7 @@ from graph.middleware.wait_yield import wait_turn_reply
 from graph.output_format import extract_output
 from runtime import turn_activity as _turn_activity
 from runtime.state import STATE
+from runtime import local_turns
 from server import turn_telemetry as _turn_telemetry
 
 # The ACP runtime registry + turn driving moved to server/chat_acp.py (#3828). The
@@ -1354,7 +1355,10 @@ async def _fail_turn(exc: BaseException, session_id: str, *, tag: str, thread_id
         hint = getattr(pick_failure, "hint", "") or ""
         await record_failed_turn(session_id, f"**Error:** {msg} {hint}".rstrip(), thread_id=thread_id)
         return f"{msg} {hint}".rstrip() if hint and _operator_caller() else msg
-    if _is_provider_stream_drop(exc):
+    rate_limit = _upstream_errors.rate_limit_details(exc)
+    if rate_limit:
+        msg = rate_limit["message"]
+    elif _is_provider_stream_drop(exc):
         log.warning(
             "[%s] provider closed the stream for session=%s (%s: %s) — possible rate limit; failing the turn cleanly",
             tag,
@@ -1725,6 +1729,11 @@ def turn_error(exc: BaseException | None, message: str | None = None) -> dict[st
         # None for a failure with no exception behind it (a turn that produced no reply, #3873).
         "exception": type(exc).__name__ if exc is not None else None,
     }
+    rate_limit = _upstream_errors.rate_limit_details(exc)
+    if rate_limit:
+        err.update(rate_limit)
+        err["upstream_status"] = 429
+        err["type"] = "rate_limit_error"
     pick_failure = _model_pick_failure(exc)
     if pick_failure is not None:
         from graph.middleware.model_override import ModelOverrideError
@@ -1755,6 +1764,7 @@ def turn_error(exc: BaseException | None, message: str | None = None) -> dict[st
     return err
 
 
+@local_turns.tracked
 async def _chat_langgraph(
     message: str,
     session_id: str,
@@ -1810,6 +1820,9 @@ async def _chat_langgraph(
         else:
             state = sink.get("state") or "completed"
         return result
+    except asyncio.CancelledError:
+        state = "canceled" if local_turns.cancellation_requested() else "failed"
+        raise
     finally:
         _turn_control._turn_ended(session_id)
         _turn_telemetry.record_local_turn(sink, session_id=session_id, origin=origin, state=state, started=started)

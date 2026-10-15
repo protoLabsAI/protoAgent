@@ -27,12 +27,12 @@ the equivalence, so the labels annotate the real prompt). Section order:
 | # | Label | Source | Present when |
 |---|-------|--------|--------------|
 | 1 | `SOUL` | `instance_paths().soul_path` → `{workspace}/SOUL.md` → repo default | always (placeholder if none) |
-| 2 | `Subagents` | `_build_subagent_section()` over `SUBAGENT_REGISTRY` | `include_subagents=True`; lists only `lead_visible` entries |
-| 3 | `Managed projects` | `_build_projects_section(projects)` | `projects` non-empty (ADR 0007 fenced fs toolset) |
-| 4 | `Collaboration` | `_build_collaboration_section()` | a delegate registry has names (#3042) |
+| 2 | `Subagents` | `_build_subagent_section()` over `SUBAGENT_REGISTRY` | `include_subagents=True` and `task` or `task_batch` reachable; lists only `lead_visible` entries |
+| 3 | `Managed projects` | `_build_projects_section(projects)` | `projects` non-empty and at least one listed filesystem operation reachable |
+| 4 | `Collaboration` | `_build_collaboration_section()` | a delegate registry has names and `delegate_to` is reachable (#3042) |
 | 5 | `Context` | the `context` argument under a `# Context` heading | legacy callers only — no runtime caller passes it since ADR 0108 D2 (context is a projected message) |
 | 6 | `Operating model` | `_build_operating_model(bound_tool_names)` | at least one autonomous primitive is bound (goal / tasks / schedule / watch / wait) |
-| 7 | `Guidelines` | inline, fork-override point | always; the `task` and `wait` lines only when those tools are bound |
+| 7 | `Guidelines` | inline, fork-override point | always; the async-work rule only when an async capability is bound |
 
 **Deliberately excluded:** retrieved memory, the prior-session digest, the
 `<available_skills>` index, and `<working_state>` — these are the *projected
@@ -44,8 +44,9 @@ bound at the model API, never rendered into prose.
 
 - `bound_tool_names` — the capability map `graph/prompts.py::CAPABILITY_GROUPS`
   (goal / tasks / schedule / watch / wait → tool names) decides which operating-model
-  paragraphs appear; the `task` and `wait` guideline lines are gated the same way.
-  `None` means "emit everything" (legacy callers).
+  paragraphs appear; the shared async-work guideline is gated on delegation, schedule, watch or wait capabilities.
+  Each tool is checked individually, including partial groups. `None` retains legacy
+  potential-capability guidance with an explicit runtime-availability qualification.
 - `include_subagents` — whether the roster section exists at all.
 - `SubagentConfig.lead_visible` — a workflow-internal subagent (`antagonist`,
   `verifier`, `synthesizer`, `codebase-mapper`, `review-finder`, `review-synthesizer`,
@@ -55,6 +56,22 @@ bound at the model API, never rendered into prose.
   three-entry template fixture; the ceiling below guards the template's static composition.
 - `config/SOUL.md` — the persona; the only part an operator is expected to edit.
 - `projects` and a configured delegate registry add their sections.
+
+The graph passes its final lead-visible tool catalog, including discoverable deferred
+tools and excluding held subagent-only tools. Loading deferred schemas on a later
+model call does not regenerate this prefix. Configuration changes rebuild it.
+
+The native projection middleware is always installed, including when knowledge and
+skills are disabled. Its one turn-scoped block carries live operational commitments;
+it does not activate previously disabled prior-session recall. Knowledge and skill
+sources retain their existing switches, and incognito still suppresses memory.
+Working state refreshes after a tool runs; memory and skill retrieval remain the
+turn snapshot. The block stays after history cache boundaries, is never checkpointed,
+and is recomposed on resume through the existing untracked-state lifecycle.
+Direct graph calls and streaming helpers use the configured `model.max_iterations`
+step budget when no caller limit is supplied. Extra middleware nodes must not make
+an ordinary tool round hit LangGraph's 25-step fallback; explicit caller limits
+still take precedence.
 
 ## 2. Subagent — `build_subagent_prompt()`
 
@@ -101,7 +118,7 @@ set, and names none when the set is not yet known. `projects` is threaded throug
 plane does carry the filesystem tools.
 
 Callers that cannot know their tool set may still pass `bound_tool_names=None` and
-receive the full doctrine — honest only when every capability is really reachable;
+receive legacy potential-capability guidance qualified by actual runtime availability;
 prefer a `bound_tool_names_factory` resolved at the first real turn.
 
 ## 4. Provider-transformed — `ProviderShapeMiddleware`
@@ -148,17 +165,24 @@ billing).
 
 | Contract / section | Chars | ≈ tokens |
 |--------------------|------:|---------:|
-| Lead · `Subagents` (3 lead-visible entries) | 3,024 | 756 |
-| Lead · `Operating model` (all capabilities) | 2,531 | 632 |
-| Lead · `Guidelines` (all capabilities) | 856 | 214 |
-| **Lead · doctrine total (ex-SOUL)** | **6,411** | **1,602** |
-| Lead · minimal (no subagents, no autonomous tools) | 412 | 103 |
+| Lead · `Subagents` (3 lead-visible entries) | 1,612 | 403 |
+| Lead · `Operating model` (all capabilities) | 1,099 | 274 |
+| Lead · `Guidelines` (all capabilities) | 718 | 179 |
+| **Lead · doctrine total (ex-SOUL)** | **3,429** | **857** |
+| Lead · minimal (no subagents, no autonomous tools) | 340 | 85 |
 | Subagent · smallest (`self-improve`) | 1,091 | 272 |
 | Subagent · largest lead-visible (`researcher`) | 3,317 | 829 |
 | Subagent · largest overall (`review-finder`) | 7,051 | 1,762 |
 | ACP prefix (same `include_subagents` / `bound_tool_names` / `projects`) | = lead | = lead |
 | ACP prefix as the runtime builds it (no roster, doctrine only for exposed tools, no projects) | ≤ lead | ≤ lead |
 | Provider transform (`anthropic-oauth`) | + 57 (identity line) | + 14 |
+
+The #4218 cleanup reduced core doctrine from 6,411 to 3,462 characters (46%).
+Delegation selection lives in the roster, invocation arguments in tool schemas,
+and one async-work rule in Guidelines: continue independent work, then yield when
+nothing independent can progress. Configured collaboration guidance is 809
+characters (previously 1,623). These edits change the prefix once on graph reload;
+they introduce no per-call formatting or ordering changes.
 
 The SOUL is excluded on purpose: it is operator content with no engineering ceiling.
 
@@ -171,11 +195,11 @@ duplicate section fails CI with the actual and allowed sizes printed.
 
 | Golden | Ceiling (chars) |
 |--------|----------------:|
-| Lead doctrine total (ex-SOUL, all capabilities) | 7,700 |
-| Lead `Subagents` section | 3,700 |
-| Lead `Operating model` section | 3,050 |
-| Lead `Guidelines` section | 1,050 |
-| Lead minimal (no subagents, no autonomous tools) | 500 |
+| Lead doctrine total (ex-SOUL, all capabilities) | 4,200 |
+| Lead `Subagents` section | 2,000 |
+| Lead `Operating model` section | 1,350 |
+| Lead `Guidelines` section | 900 |
+| Lead minimal (no subagents, no autonomous tools) | 410 |
 | Any subagent prompt | 8,500 |
 | Any **lead-visible** subagent prompt | 4,000 |
 

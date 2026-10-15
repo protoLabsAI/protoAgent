@@ -216,6 +216,8 @@ async def test_batch_background_spawns_each_spec(monkeypatch):
     assert rec.calls[1]["subagent_type"] == "researcher"  # default applied
     assert "bg-1" in body and "bg-2" in body
     assert "Started 2 background" in body
+    assert "Continue independent work; otherwise yield" in body
+    assert "do NOT poll" in body
 
 
 @pytest.mark.asyncio

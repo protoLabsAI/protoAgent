@@ -102,3 +102,67 @@ def upstream_http_status(exc: BaseException | None) -> int | None:
     if code is not None or upstream_unreachable(exc):
         return 502
     return None
+
+
+def provider_retry_delay(headers, *, now=None) -> float | None:
+    """Parse a positive finite cooldown, falling back from unusable milliseconds."""
+    import math
+    from datetime import UTC, datetime
+    from email.utils import parsedate_to_datetime
+
+    retry: float | None = None
+    now = now or datetime.now(UTC)
+    try:
+        retry = float(headers.get("retry-after-ms", "")) / 1000
+    except (ValueError, TypeError, OverflowError):
+        pass
+    if retry is None or not math.isfinite(retry) or retry <= 0:
+        retry = None
+        try:
+            raw = headers.get("retry-after", "")
+            try:
+                retry = float(raw)
+            except ValueError:
+                date = parsedate_to_datetime(raw)
+                if date.tzinfo is None:
+                    date = date.replace(tzinfo=UTC)
+                retry = (date - now).total_seconds()
+        except (ValueError, TypeError, OverflowError):
+            pass
+    return retry if retry is not None and math.isfinite(retry) and retry > 0 else None
+
+
+def rate_limit_details(exc: BaseException | None) -> dict:
+    """Preserve a provider's cooldown without waiting through it (#4205).
+
+    Only explicit 429 responses qualify; an OAuth identity refusal or an ordinary
+    stream stall must not be diagnosed as exhausted subscription quota.
+    """
+    import math
+    from datetime import UTC, datetime, timedelta
+
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen and len(seen) < 16:
+        seen.add(id(exc))
+        if upstream_status(exc) == 429:
+            break
+        exc = exc.__cause__
+    else:
+        return {}
+    headers = getattr(getattr(exc, "response", None), "headers", {}) or {}
+    now = datetime.now(UTC)
+    retry = provider_retry_delay(headers, now=now)
+    body = getattr(exc, "body", None)
+    error = body.get("error", body) if isinstance(body, dict) else {}
+    reason = str(error.get("message") or str(exc)) if isinstance(error, dict) else str(exc)
+    details = {"provider_rate_limited": True}
+    if any(marker in reason.lower() for marker in ("quota", "weekly limit", "usage limit", "insufficient_quota")):
+        details["quota_exhausted"] = True
+    message = f"Model provider rate limit: {reason}"
+    if retry is not None and math.isfinite(retry) and 0 < retry <= 315360000:
+        seconds = math.ceil(retry)
+        details["retry_after"] = seconds
+        details["retry_at"] = (now + timedelta(seconds=seconds)).isoformat()
+        message += f" Retry after {seconds} seconds (retry at {details['retry_at']})."
+    details["message"] = message + " Choose another configured model in the chat model selector, or wait and retry."
+    return details
