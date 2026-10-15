@@ -76,6 +76,7 @@ def build_runtime_status(
             "scheduler": {"enabled": False, "backend": "disabled"},
             "cache_warmer": {"enabled": False, "loaded": False},
             "code_pane": {"enabled": False},
+            "editor_command_configured": False,
             "warnings": warnings_block,
             "instance_uid": instance_uid,
             "version": version,
@@ -153,6 +154,9 @@ def build_runtime_status(
         # shows the Code surface, the "Open files in ▸ protoAgent" choice and pane-routed
         # file links only while this is on — per agent, so each fleet window reads its own.
         "code_pane": {"enabled": _code_pane_enabled(config)},
+        # Whether `filesystem.editor_command` names a host editor — the console's last-resort
+        # "Open in editor" (POST /api/fs/open-in-editor). Never the command itself.
+        "editor_command_configured": _editor_command_configured(config),
         # On-disk store sizes (bytes) so growth is visible from the console.
         "storage": {
             "knowledge_bytes": _file_size(getattr(knowledge_store, "path", None)),
@@ -177,6 +181,16 @@ def _code_pane_enabled(config: Any) -> bool:
 
         return code_pane_enabled(config)
     except Exception:  # noqa: BLE001 — status must never raise
+        return False
+
+
+def _editor_command_configured(config: Any) -> bool:
+    """``tools.fs_tools.host_editor_name`` — the same predicate that binds ``open_in_editor``."""
+    try:
+        from tools.fs_tools import host_editor_name
+
+        return bool(host_editor_name(config))
+    except Exception:  # noqa: BLE001 — a status read must never fail over this
         return False
 
 

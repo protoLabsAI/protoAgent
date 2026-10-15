@@ -181,9 +181,17 @@ editor — names the destination:
 
 | `open_in` | Tries, in order | Toast when it lands elsewhere |
 |---|---|---|
-| *(absent)* | pane (unless Open files in = editor) → editor → copy | only on a copy |
-| `"pane"` | code pane → external editor → copy | the pane is off, and how to turn it on (Tools ▸ Filesystem ▸ Shell & filesystem tools ▸ Code pane) |
-| `"editor"` | external editor → code pane → copy | why there was no editor link (none set in Settings ▸ Chat ▸ Open files in, or no filesystem shared with the agent) |
+| *(absent)* | pane (unless Open files in = editor) → editor → host editor → copy | only on a copy |
+| `"pane"` | code pane → external editor → host editor → copy | the pane is off, and how to turn it on (Tools ▸ Filesystem ▸ Shell & filesystem tools ▸ Code pane) |
+| `"editor"` | external editor → host editor → code pane → copy | why there was no editor link (none set in Settings ▸ Chat ▸ Open files in, or no filesystem shared with the agent) |
+
+"External editor" is the console's editor link (Settings ▸ Chat ▸ Open files in: `zed://`,
+`vscode://`, `cursor://`, opened on the operator's machine). "Host editor" is the agent's
+`filesystem.editor_command` (the one `open_in_editor` uses), run by the server through
+`POST /api/fs/open-in-editor` — tried only when `/api/runtime/status`
+`editor_command_configured` is true, and refused (`not_local`) unless the console runs on the
+server's own machine, so it never opens a window on a screen nobody is looking at (a LAN
+browser, a remote fleet member, Docker).
 
 Any other value is ignored (the default routing), so a page can send it unconditionally.
 
@@ -195,11 +203,10 @@ const show = (open_in) => parent.postMessage({ type: "protoagent:code:open",
 
 **Knowing what's available.** Whether the code pane is on is the agent's toolset state, which
 `GET /api/runtime/status` already reports as `code_pane.enabled` — `kit.apiFetch` it to hide or
-relabel a "View" action (it's hot-reloadable; re-read it if your view stays mounted). The external
-editor is a per-browser console preference and is **not** exposed to pages: offer "Open in editor"
-unconditionally and let the host's fallback and toast cover an operator without one. The editor
-link is the console's (`zed://`, `vscode://`, `cursor://`); the host-side
-`filesystem.editor_command` (the agent's `open_in_editor` tool) is not used here.
+relabel a "View" action (it's hot-reloadable; re-read it if your view stays mounted). The same
+status reports `editor_command_configured` (a host editor exists; never the command). The console's
+own editor choice is a per-browser preference and is **not** exposed to pages: offer "Open in
+editor" unconditionally and let the fallback and toast cover an operator without one.
 
 A page that renders untrusted content (a sandboxed frame of its own) should forward only targets
 it validated — never a path the untrusted frame supplied.

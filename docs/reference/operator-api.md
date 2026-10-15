@@ -32,7 +32,7 @@ tells the two apart this way.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | Liveness probe |
-| GET | `/api/runtime/status` | Setup state, model, enabled middleware, knowledge/scheduler/skills counts, `code_pane: {enabled}` (the console gates the code pane on it) |
+| GET | `/api/runtime/status` | Setup state, model, enabled middleware, knowledge/scheduler/skills counts, `code_pane: {enabled}` (the console gates the code pane on it), `editor_command_configured` (a host `filesystem.editor_command` is set — never the command itself) |
 
 ## Chat & sessions
 
@@ -147,6 +147,7 @@ and `file`/`diff` never return a secret-like file's content ([ADR 0112](../adr/0
 | GET | `/api/fs/roots` | `{roots: {project: absolute root}}` — the live fs fence |
 | GET | `/api/fs/file` | Code pane toolset only (`filesystem.code_pane`, default off — otherwise 404 `{code: "disabled"}`). `?project=&path=[&start=&end=]` → `{project, path, size, line_count, start, end, truncated, language, binary, text}`. Lines are `\n`-delimited, endings preserved; capped at 2 MB / 20,000 lines / 2,000 chars per line (`truncated: true`, page with `start=end+1`). Binary → `text: null`. Errors carry `detail: {code, reason}`: `bad_path` 400 (unknown project / fence escape), `denied` 403 (secret-like name, checked before existence), `not_found` 404, `not_a_file` / `bad_range` (also a non-integer `start`/`end`) / `unreadable` 400 |
 | GET | `/api/fs/diff` | Code pane toolset only (off → 404 `{code: "disabled"}`). `?project=` → the working tree vs `HEAD`: `{project, is_git, head, branch, files: [{path, status: M\|A\|D\|R\|?, additions, deletions, binary, denied, old_path?, reason?, too_large?}], patch, truncated}`. Hardened git (no external diff, textconv, filter, fsmonitor, hook or submodule recursion can run), scoped to the project root, untracked text files ≤ 256 KB as synthetic new-file patches, secret-like paths — and symlinks resolving outside the project or onto one — listed `denied` (with a `reason`) and content omitted, larger untracked files flagged `too_large`, patch capped at 1 MB and the file list at 5,000 entries (`truncated: true`). Not a repo → `{is_git: false, files: [], patch: ""}`; 10 s timeout → 504 |
+| POST | `/api/fs/open-in-editor` | Body `{project, path, line?}` → `{ok, editor}`: opens the fenced file in the **host's** `filesystem.editor_command` (the agent's `open_in_editor`, for the console's "Open in editor" fallback). Only for a console on the server's own machine — loopback peer and a loopback/desktop `Origin` — else 403 `not_local`. No editor command → 404 `disabled`; fence escape → 400 `bad_path`; secret-like name → 403 `denied` (before existence); `not_found` 404; `not_a_file` / `bad_line` / `bad_request` 400; a missing or failing editor CLI → 502 `launch_failed`. `/api/runtime/status` `editor_command_configured` says whether one is set (never the command) |
 
 ## Editor hand-off
 

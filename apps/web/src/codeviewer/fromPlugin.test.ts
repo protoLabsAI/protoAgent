@@ -52,6 +52,8 @@ function deps(over: Partial<RouteDeps> = {}): RouteDeps {
     openIn: "protoagent",
     editor: "zed",
     roots: vi.fn(async () => ({ demo: "/work/demo" })),
+    hostEditor: false,
+    openHost: vi.fn(async () => true),
     open: vi.fn(),
     navigate: vi.fn(),
     copy: vi.fn(async () => true),
@@ -140,6 +142,42 @@ describe("routePluginCodeOpen — explicit open_in", () => {
   });
 });
 
+describe("routePluginCodeOpen — the host editor (filesystem.editor_command)", () => {
+  const editor = parsePluginCodeOpen({ ...MSG, open_in: "editor" })!;
+  const pane = parsePluginCodeOpen({ ...MSG, open_in: "pane" })!;
+
+  it("is tried after the console's editor link, before the pane", async () => {
+    const d = deps({ editor: "off", hostEditor: true });
+    expect(await routePluginCodeOpen(editor, d)).toBe("host-editor");
+    expect(d.openHost).toHaveBeenCalledWith(editor);
+    expect(d.open).not.toHaveBeenCalled();
+  });
+
+  it("never runs when the console already has an editor link", async () => {
+    const d = deps({ hostEditor: true });
+    expect(await routePluginCodeOpen(editor, d)).toBe("editor");
+    expect(d.openHost).not.toHaveBeenCalled();
+  });
+
+  it("is skipped unless the status says one is configured", async () => {
+    const d = deps({ editor: "off", hostEditor: false });
+    expect(await routePluginCodeOpen(editor, d)).toBe("pane");
+    expect(d.openHost).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the pane, then a copy, when the server refuses or throws", async () => {
+    const refused = deps({ editor: "off", hostEditor: true, openHost: vi.fn(async () => false) });
+    expect(await routePluginCodeOpen(editor, refused)).toBe("pane");
+    const threw = deps({ paneOn: false, editor: "off", hostEditor: true, openHost: vi.fn(async () => { throw new Error("403"); }) });
+    expect(await routePluginCodeOpen(editor, threw)).toBe("copied");
+  });
+
+  it("backs a 'pane' request while the pane is off", async () => {
+    const d = deps({ paneOn: false, editor: "off", hostEditor: true });
+    expect(await routePluginCodeOpen(pane, d)).toBe("host-editor");
+  });
+});
+
 describe("codeOpenNotice", () => {
   const base = parsePluginCodeOpen(MSG)!;
   const pane = { ...base, openIn: "pane" as const };
@@ -159,6 +197,8 @@ describe("codeOpenNotice", () => {
   it("is silent when the explicit destination was honoured", () => {
     expect(codeOpenNotice(pane, "pane", on)).toBeNull();
     expect(codeOpenNotice(editor, "editor", on)).toBeNull();
+    expect(codeOpenNotice(editor, "host-editor", off)).toBeNull();
+    expect(codeOpenNotice(base, "host-editor", off)).toBeNull();
   });
 
   it("'pane' landing elsewhere hints that the code pane toolset can be turned on", () => {
@@ -168,6 +208,9 @@ describe("codeOpenNotice", () => {
     const copied = codeOpenNotice(pane, "copied", off)!;
     expect(copied.title).toBe("Path copied");
     expect(copied.message).toContain("Tools ▸ Filesystem");
+    const viaHost = codeOpenNotice(pane, "host-editor", off)!;
+    expect(viaHost.title).toBe("Opened in your editor");
+    expect(viaHost.message).toContain("Tools ▸ Filesystem");
   });
 
   it("'editor' landing elsewhere says why there was no editor", () => {

@@ -41,6 +41,24 @@ function subscribe(cb: () => void): () => void {
   };
 }
 
+// The host editor (`filesystem.editor_command`, reported as `editor_command_configured`) —
+// synced by App alongside the pane flag, read synchronously by the plugin code-open router.
+let hostEditor = false;
+
+export function hostEditorConfiguredFrom(
+  runtime: Pick<RuntimeStatus, "editor_command_configured"> | null | undefined,
+): boolean {
+  return runtime?.editor_command_configured === true;
+}
+
+export function isHostEditorConfigured(): boolean {
+  return hostEditor;
+}
+
+export function setHostEditorConfigured(next: boolean): void {
+  hostEditor = next;
+}
+
 export function useCodePaneEnabled(): boolean {
   return useSyncExternalStore(subscribe, isCodePaneEnabled, isCodePaneEnabled);
 }

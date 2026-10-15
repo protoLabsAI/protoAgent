@@ -1034,6 +1034,14 @@ function scenarioFor(prompt) {
       ],
       answer: "Read the generated rows.",
     };
+  if (t.includes("READBIG"))
+    // A read_file with NO offset — its path link carries no line, so the pane opens at the top.
+    return {
+      name: "read_file",
+      input: { project: "app", path: "src/big.ts" },
+      output: "export const row1 = 1; // generated row 1",
+      answer: "Read the whole file.",
+    };
   if (t.includes("READFILE"))
     // A plain read_file result — its path renders as a link (pane by default, ⌘-click editor).
     return {

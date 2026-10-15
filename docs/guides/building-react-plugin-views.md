@@ -514,8 +514,9 @@ parent.postMessage({ type: "protoagent:code:open", project: "app", path: "src/se
 
 Omit `open_in` and the operator's preference decides (code pane, else their editor, else the path is
 copied). For a details panel with explicit **View** and **Open in editor** actions, send
-`open_in: "pane"` and `open_in: "editor"` — each falls back to the other, then to a copy, with a
-toast that says why. Read `code_pane.enabled` from `GET /api/runtime/status` (via `kit.apiFetch`)
+`open_in: "pane"` and `open_in: "editor"` — each falls back to the other (an editor means the
+console's editor link, else the agent's `filesystem.editor_command` when the console is on the same
+machine), then to a copy, with a toast that says why. Read `code_pane.enabled` from `GET /api/runtime/status` (via `kit.apiFetch`)
 if you want to hide **View** while the pane toolset is off; the editor preference isn't exposed, so
 always offer **Open in editor**. Full contract:
 [view bridge ▸ Show code](/reference/plugin-view-bridge#show-code).

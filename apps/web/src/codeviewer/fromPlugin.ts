@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { editorLabel, makeEditorLinker, joinProjectPath, type EditorId } from "../lib/editorLinks";
 import { getEditorPref, getOpenFilesIn, type OpenFilesIn } from "../lib/editorPref";
 import { queryClient } from "../lib/queryClient";
-import { isCodePaneEnabled } from "./enabled";
+import { isCodePaneEnabled, isHostEditorConfigured } from "./enabled";
 import { openCode } from "./open";
 import type { CodeRef } from "./store";
 
@@ -17,7 +17,9 @@ import type { CodeRef } from "./store";
 // more and routed by the operator's preferences:
 //   1. the code pane (ADR 0112) when that toolset is on — through its fenced /api/fs/file,
 //      which also refuses secret-like paths, so nothing here widens what can be shown;
-//   2. otherwise the external editor link (Settings ▸ Chat ▸ Open files in), when there is one;
+//   2. otherwise the external editor link (Settings ▸ Chat ▸ Open files in), when there is one —
+//      or, failing that, the HOST's `filesystem.editor_command` (POST /api/fs/open-in-editor,
+//      which only answers a console on the server's own machine);
 //   3. otherwise the path is copied, so the operator can still get there.
 // A page may instead name the destination with `open_in` — the same two actions a chat file
 // link offers (click = pane, ⌘/Ctrl-click = editor; see makeFileLinker): "pane" prefers the code
@@ -69,12 +71,17 @@ export type RouteDeps = {
   editor: EditorId;
   /** `{project: absolute root}` for editor links (GET /api/fs/roots), or null. */
   roots: () => Promise<Record<string, string> | null>;
+  /** `/api/runtime/status` `editor_command_configured` — worth trying the host editor. */
+  hostEditor: boolean;
+  /** POST /api/fs/open-in-editor; false when the server refused (not local, launch failed…). */
+  openHost: (t: PluginCodeTarget) => Promise<boolean>;
   open: (ref: CodeRef) => void;
   navigate: (href: string) => void;
   copy: (text: string) => Promise<boolean>;
 };
 
-export type RouteOutcome = "pane" | "editor" | "copied" | "none";
+/** `editor` = the console's editor link; `host-editor` = the server's `editor_command`. */
+export type RouteOutcome = "pane" | "editor" | "host-editor" | "copied" | "none";
 
 async function editorHref(t: PluginCodeTarget, deps: RouteDeps): Promise<string | null> {
   if (deps.editor === "off") return null;
@@ -102,6 +109,7 @@ export async function routePluginCodeOpen(t: PluginCodeTarget, deps: RouteDeps):
     deps.navigate(href);
     return "editor";
   }
+  if (deps.hostEditor && (await deps.openHost(t).catch(() => false))) return "host-editor";
   // An editor-first route with no usable editor link still has the pane to fall back on.
   if (deps.paneOn) {
     pane();
@@ -124,7 +132,7 @@ export function codeOpenNotice(
   if (!t.openIn) {
     return outcome === "copied" ? { title: "Path copied", message: `${label} — no code pane or editor is set up.` } : null;
   }
-  if (outcome === t.openIn) return null;
+  if (outcome === t.openIn || (t.openIn === "editor" && outcome === "host-editor")) return null;
   const editor = ctx.editor === "off" ? "an external editor" : editorLabel(ctx.editor);
   if (t.openIn === "editor") {
     const why = ctx.editor === "off"
@@ -135,6 +143,7 @@ export function codeOpenNotice(
       : { title: "Path copied", message: `${label} — ${why.charAt(0).toLowerCase()}${why.slice(1)}, and the code pane is off.` };
   }
   // Asked for the pane, which is off (the only way a "pane" request lands elsewhere).
+  if (outcome === "host-editor") return { title: "Opened in your editor", message: `The code pane is off. ${PANE_HINT}` };
   return outcome === "editor"
     ? { title: `Opened in ${editor}`, message: `The code pane is off. ${PANE_HINT}` }
     : { title: "Path copied", message: `${label} — the code pane is off and no editor link is available. ${PANE_HINT}` };
@@ -155,6 +164,14 @@ export function defaultRouteDeps(): RouteDeps {
           staleTime: 60_000,
         })
       )?.roots ?? null,
+    hostEditor: isHostEditorConfigured(),
+    openHost: async (t) => {
+      try {
+        return (await api.fsOpenInEditor({ project: t.project, path: t.path, line: t.line })).ok === true;
+      } catch {
+        return false;
+      }
+    },
     open: (ref) => openCode(ref),
     navigate: (href) => {
       // A custom scheme (zed://, vscode://) goes to the OS without unloading the page.

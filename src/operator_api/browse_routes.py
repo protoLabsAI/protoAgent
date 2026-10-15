@@ -30,6 +30,12 @@ argv in ``tools.git_read``. Still read-only. They are an opt-in toolset
 (``filesystem.code_pane``, default off): off, all three answer 404 ``{code: "disabled"}`` —
 checked per request against the live config, so a settings save flips them without a
 restart.
+
+**Open in the host editor** — ``POST /api/fs/open-in-editor`` — runs the host's
+``filesystem.editor_command`` on a fenced project file, through the same helper as the
+agent's ``open_in_editor`` tool (``tools.fs_tools.open_in_host_editor``), refusing
+secret-like names like the pane does. It is a side effect on the SERVER's screen, so it only
+answers a console on the same machine (:func:`_same_machine`).
 """
 
 from __future__ import annotations
@@ -37,7 +43,35 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from fastapi import Request  # module-level so the stringized `request: Request` annotation resolves
+
 log = logging.getLogger("protoagent.server")
+
+_LOOPBACK_CLIENTS = frozenset({"localhost"})
+
+
+def _same_machine(client_host: str | None, origin: str | None) -> bool:
+    """Is this request from a console running on the server's own machine?
+
+    ``POST /api/fs/open-in-editor`` pops a window on the HOST's screen; a console on another
+    machine (LAN/tailnet browser, a fleet hub proxying a remote member, Docker's gateway) would
+    open the editor where nobody is looking. So: the TCP peer must be loopback, AND a browser's
+    ``Origin`` (which the fleet proxy forwards untouched) must be a loopback or desktop-webview
+    origin — a LAN browser reaching a LOCAL member through a hub arrives over loopback, but
+    with its LAN origin. No ``Origin`` = a non-browser caller already on loopback (a script)."""
+    import ipaddress
+
+    from a2a_impl.hosts import CONSOLE_ORIGIN_RE
+
+    host = (client_host or "").strip()
+    try:
+        loopback = host in _LOOPBACK_CLIENTS or ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        loopback = False
+    if not loopback:
+        return False
+    return origin is None or bool(CONSOLE_ORIGIN_RE.match(origin.strip().lower()))
+
 
 # A directory listing is a UI convenience, not a data dump: cap it so a browse of
 # /nix/store or a node_modules can't build a 100k-entry response.
@@ -348,6 +382,57 @@ def register_browse_routes(app) -> None:
             raise _fs_error(400, "git_error", str(exc)) from exc
         except OSError as exc:
             raise _fs_error(400, "unreadable", f"can't read {project}: {exc}") from exc
+
+    # ── open in the host editor ──────────────────────────────────────────────────
+    # EditorOpenError code → HTTP status. Codes are the console's contract ({code, reason}).
+    _EDITOR_STATUS = {
+        "bad_path": 400,
+        "denied": 403,
+        "not_found": 404,
+        "not_a_file": 400,
+        "bad_line": 400,
+        "bad_command": 400,
+        "launch_failed": 502,
+    }
+
+    def _open_in_editor(project: str, path: str, line: int | None) -> str:
+        from runtime.state import STATE
+        from tools.fs_tools import EditorOpenError, host_editor_name, live_project_registry, open_in_host_editor
+
+        cfg = getattr(STATE, "graph_config", None)
+        editor = host_editor_name(cfg)
+        if not editor:
+            raise _fs_error(404, "disabled", "no host editor is configured (filesystem.editor_command)")
+        command = str(getattr(cfg, "filesystem_editor_command", "") or "").strip()
+        try:
+            open_in_host_editor(live_project_registry(cfg), command, project, path, line, deny_secrets=True)
+        except EditorOpenError as exc:
+            raise _fs_error(_EDITOR_STATUS.get(exc.code, 400), exc.code, str(exc)) from exc
+        return editor
+
+    @app.post("/api/fs/open-in-editor")
+    async def _api_fs_open_in_editor(request: Request, body: dict | None = None):
+        """Open ``{project, path, line?}`` in the HOST's ``filesystem.editor_command`` → ``{ok, editor}``.
+
+        The console's "Open in editor" fallback when its own editor link (Settings ▸ Chat ▸
+        Open files in) has none. Same fence, argv and detached launch as the agent's
+        ``open_in_editor`` tool; secret-like names are 403 ``denied`` (checked before
+        existence, like ``/api/fs/file``). 404 ``disabled`` with no editor command; 403
+        ``not_local`` unless the console is on this machine; 502 ``launch_failed`` when the
+        editor CLI is missing or exits non-zero. ``/api/runtime/status``
+        ``editor_command_configured`` says whether to try."""
+        import asyncio
+
+        b = body if isinstance(body, dict) else {}
+        if not _same_machine(request.client.host if request.client else None, request.headers.get("origin")):
+            raise _fs_error(403, "not_local", "the host editor only opens for a console on the same machine")
+        project, path, line = b.get("project"), b.get("path"), b.get("line")
+        if not isinstance(project, str) or not project.strip() or not isinstance(path, str) or not path.strip():
+            raise _fs_error(400, "bad_request", "project and path are required strings")
+        if line is not None and (isinstance(line, bool) or not isinstance(line, int) or line < 1):
+            raise _fs_error(400, "bad_line", "line must be a positive integer")
+        editor = await asyncio.to_thread(_open_in_editor, project, path, line)
+        return {"ok": True, "editor": editor}
 
     def _browse(path: str, *, files: bool, hidden: bool) -> dict:
         """Resolve + validate + list, entirely inside the worker thread. Raises the
