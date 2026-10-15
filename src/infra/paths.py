@@ -24,6 +24,7 @@ import os
 import sys
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -386,6 +387,9 @@ def _instances_dir() -> Path:
     return instance_paths().instances_dir
 
 
+_INSTANCE_UID_LOCK_TIMEOUT_S = 2.0
+
+
 def instance_uid() -> str:
     """A stable, opaque uid for THIS data root (``<root>/.instance-uid``, created on
     first read). The console keys its per-origin client state against it: when a
@@ -398,13 +402,33 @@ def instance_uid() -> str:
     try:
         f = instance_paths().instance_uid_file
         if f.exists():
-            got = f.read_text().strip()
+            got = f.read_text(encoding="utf-8").strip()
             if got:
                 return got
+        # Keep the sidecar inode: deleting a lock while another process has it
+        # open would split creation into two independent locks. Reuse the native
+        # POSIX/Windows primitive; unsupported locking fails closed (empty uid).
+        from infra.install_lock import _try_os_lock
+
         f.parent.mkdir(parents=True, exist_ok=True)
-        fresh = uuid.uuid4().hex[:16]
-        f.write_text(fresh)
-        return fresh
+        lock_path = f.with_name(f.name + ".lock")
+        with os.fdopen(os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600), "r+b") as lock:
+            deadline = time.monotonic() + _INSTANCE_UID_LOCK_TIMEOUT_S
+            while not _try_os_lock(lock.fileno()):
+                if time.monotonic() >= deadline:
+                    return ""
+                time.sleep(0.01)
+            # Another creator may have published while we waited. Complete bytes
+            # are installed atomically, including when repairing an empty file.
+            if f.exists():
+                got = f.read_text(encoding="utf-8").strip()
+                if got:
+                    return got
+            fresh = uuid.uuid4().hex[:16]
+            atomic_write(f, fresh)
+            return fresh
+        # Closing the descriptor releases the OS lock even after an exception or
+        # process exit. A killed creator can leave a temp file, never a partial uid.
     except Exception:  # noqa: BLE001 — a status field, never worth failing for
         return ""
 

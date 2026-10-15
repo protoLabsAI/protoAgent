@@ -1,5 +1,24 @@
 [
   {
+    "version": "v0.204.0",
+    "date": "2026-10-14",
+    "changes": [
+      "Stop pending chat requests and recover in the same conversation (#4205).",
+      "Gateway calls keep each conversation on a warm replica (#4210).",
+      "Keep the console usable when browser storage is full (#3703).",
+      "A full browser-storage quota no longer crashes the console (#3708).",
+      "Recover from failed pairing credential saves (#3703).",
+      "Recalled memories include deletion handles (#4075).",
+      "Calculator work is bounded (#4181).",
+      "Snapshot import bounds its upload read (#4181).",
+      "Preserve runtime configuration and recovered turn details (#4181).",
+      "Keep failed runtime operations contained (#4181).",
+      "Stable instance identity during simultaneous startup (#4197).",
+      "Provider quota recovery (#4205).",
+      "Reject local paths in untrusted multimodal tool results (#4181)."
+    ]
+  },
+  {
     "version": "v0.203.0",
     "date": "2026-10-13",
     "changes": [

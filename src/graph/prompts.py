@@ -1,25 +1,9 @@
-"""System prompt composer for protoAgent.
+"""Stable prompt composition: persona, roles, projects, collaboration and rules.
 
-Composes the system prompt from, in order:
-
-1. Agent identity (``SOUL.md`` in the workspace, falls back to a
-   template-generic placeholder).
-2. Skill methodology (``skills/<slug>/SKILL.md`` — loaded per skill
-   if the consumer passes a ``skill`` hint; the template ships no
-   skill docs by default).
-3. Subagent delegation rules (built from ``SUBAGENT_REGISTRY``).
-4. Dynamic context injected by ``KnowledgeMiddleware`` when the agent
-   ships a knowledge store.
-5. Operator guidelines (the template ships neutral defaults — override
-   in your fork to encode domain behavior like "verify, don't trust"
-   or "always end with a PASS/WARN/FAIL verdict").
-
-The model answers naturally; its reasoning streams natively (the gateway's
-``reasoning_content``), so there is no ``<scratch_pad>``/``<output>`` text protocol.
-
-When forking, the main thing to edit is the operator guidelines block
-— that's where you encode how the agent behaves in its specific
-domain.
+Skills are loaded on demand; memory, the skills index and operational state ride
+the ephemeral projection, not this cached prefix. The ``context`` parameter is a
+legacy seam, unused by the runtime. Parts label the actual composed text for the
+prompt viewer. See docs/explanation/prompt-contracts.md for ordering and budgets.
 """
 
 from pathlib import Path
@@ -48,11 +32,10 @@ CAPABILITY_GROUPS: dict[str, frozenset[str]] = {
 
 
 def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
-    """Build the operating model section (ADR 0079, #3190), including only
-    paragraphs whose capabilities are actually bound.
+    """Capability-specific operating rules; None retains the legacy full set.
 
-    When ``bound_tools`` is None (legacy callers), the full section is emitted
-    unconditionally — the pre-#3190 behavior.
+    Background progress/yield policy has one home in Guidelines. This section
+    explains the durable primitives without repeating their invocation schemas.
     """
     has_goal = bound_tools is None or bool(bound_tools & _GOAL_TOOLS)
     has_tasks = bound_tools is None or bool(bound_tools & _TASK_TOOLS)
@@ -60,148 +43,54 @@ def _build_operating_model(bound_tools: frozenset[str] | None = None) -> str:
     has_watch = bound_tools is None or bool(bound_tools & _WATCH_TOOLS)
     has_wait = bound_tools is None or bool(bound_tools & _WAIT_TOOLS)
     has_any = has_goal or has_tasks or has_schedule or has_watch
-
     if not has_any and not has_wait:
         return ""
 
     lines = ["# Operating model", ""]
-
-    lines.append(
-        "You operate as a long-horizon autonomous agent, not a one-shot responder. You hold objectives\n"
-        "across turns and drive them to done — observing your own state, planning, acting, and correcting."
-    )
-
     if has_any:
-        ws_items = []
-        if has_goal:
-            ws_items.append("your **active goal + its plan**")
-        if has_tasks:
-            ws_items.append("your **open tasks**")
-        if has_watch:
-            ws_items.append("your **active watches**")
-        if has_schedule:
-            ws_items.append("your **pending schedules**")
-        lines.append("")
+        lines.extend([
+            "Drive standing objectives across turns, using your live commitments:",
+            "- **Observe** — read `<working_state>` and why this turn started.",
+            "- **Orient** — revise the plan when circumstances change.",
+            "- **Decide** — choose the next concrete step and its dependencies.",
+            "- **Act** — do the step.",
+            "",
+        ])
+    def available(name: str) -> bool:
+        return bound_tools is None or name in bound_tools
+
+    if has_goal:
+        actions = [text for name, text in (
+            ("set_goal", "`set_goal` establishes an objective."),
+            ("update_goal_plan", "`update_goal_plan` keeps its plan current."),
+            ("abandon_goal", "Use `abandon_goal` when the objective is out of scope."),
+        ) if available(name)]
+        lines.append("- **Goals:** " + " ".join(actions) +
+                     " Only the deterministic verifier decides DONE; continue until it passes or report a blocker.")
+    if has_tasks:
+        actions = [text for name, text in (
+            ("task_create", "decompose work with `task_create`"),
+            ("task_update", "record progress with `task_update`"),
+            ("task_close", "finish with `task_close`"),
+        ) if available(name)]
+        lines.append("- **Tasks:** " + "; ".join(actions) + ".")
+    if has_schedule:
         lines.append(
-            "Your durable working-state is shown to you each turn in a `<working_state>` block:\n"
-            + ", ".join(ws_items)
-            + ". Read it first — it is what you are responsible for."
+            "- **Schedules:** use `schedule_task` for a known future time or cadence. "
+            "Its prompt must stand alone when you resume."
         )
-
-        # OODA loop — adapt references to bound capabilities only
-        lines.append("")
-        lines.append("Run this loop:")
-        lines.append("")
-
-        observe_triggers = ["an operator asked"]
-        if has_schedule:
-            observe_triggers.append("a schedule fired")
-        if has_watch:
-            observe_triggers.append("a watch tripped")
+    if has_watch:
         lines.append(
-            "- **Observe** — read `<working_state>` and why you are awake ("
-            + ", ".join(observe_triggers)
-            + " — stated at the top of the turn). Take in what changed."
+            "- **Watches:** use `create_watch` for an external condition. "
+            "It resumes you when the condition trips."
         )
-
-        orient_parts = []
-        if has_goal:
-            orient_parts.append(
-                "keep your **plan** current with `update_goal_plan` (it is your world-model:\n"
-                "  what's done, what's next, what failed — persisted and fed back to you every turn)"
-            )
-        if has_tasks:
-            orient_parts.append(
-                "break the goal into concrete **tasks** with `task_create`; "
-                "the task board is the goal's backlog"
-                if has_goal
-                else "break work into concrete **tasks** with `task_create`"
-            )
-        if orient_parts:
-            lines.append("- **Orient** — " + ". ".join(orient_parts) + ".")
+    if has_wait:
         lines.append(
-            "- **Decide** — pick the next concrete step. Decide whether to do it now, or, if it depends on\n"
-            "  something that isn't ready, to hand it off (below)."
+            "- **Wait:** `wait(seconds, then=…)` ends this turn and resumes you after "
+            "a short countdown with the supplied next step."
         )
-        act_note = " Update/close tasks as you go." if has_tasks else ""
-        # Delegation is a capability too: name `task` only when it is bound (a subagent
-        # build or an external runtime whose tool plane carries no task tool gets no hint).
-        has_task_tool = bound_tools is None or "task" in bound_tools
-        lines.append(
-            "- **Act** — do the step"
-            + (" (directly or by delegating with `task`)" if has_task_tool else "")
-            + "."
-            + act_note
-        )
-
-        # Primitives block — only include bound groups
-        primitives = []
-        if has_goal:
-            primitives.append(
-                "- **Goal** (`set_goal`) — your standing objective. A deterministic verifier decides DONE, never\n"
-                "  your own say-so; keep working until it passes, or call `abandon_goal` if it's truly out of scope."
-            )
-        if has_tasks:
-            primitives.append(
-                "- **Tasks** (`task_create`/`task_update`/`task_close`) — the goal's backlog. Decompose the goal\n"
-                "  into tasks and drive them down; this is your board (NOT any built-in todo tool)."
-                if has_goal
-                else "- **Tasks** (`task_create`/`task_update`/`task_close`) — your work board. Decompose work\n"
-                "  into tasks and drive them down."
-            )
-        if has_schedule:
-            primitives.append(
-                "- **Schedule** (`schedule_task`) — do something *later* or on a cadence (a follow-up, a recurring\n"
-                "  sweep). The prompt you schedule must be self-contained."
-            )
-        if has_watch:
-            primitives.append(
-                "- **Watch** (`create_watch`) — supervise an external *condition* (a deploy, CI, a metric, a peer's\n"
-                "  PR); when it trips you're brought back to react. Hold as many as you need, in parallel."
-            )
-        if primitives:
-            lines.append("")
-            count = len(primitives)
-            lines.append(
-                f"Compose your primitive{'s' if count > 1 else ''}"
-                + (f" — {'they are' if count > 1 else 'it is'} one system"
-                   + (", not " + str(count) if count > 1 else "") + ":"
-                   if count > 1
-                   else ":")
-            )
-            lines.append("")
-            lines.extend(primitives)
-
-    # Async-handoff rule — adapt to available primitives
-    if has_watch or has_schedule or has_wait:
-        handoff_options = []
-        if has_watch:
-            handoff_options.append("a **watch** on the condition")
-        if has_schedule:
-            handoff_options.append("a **schedule** for a known time")
-        if has_wait:
-            handoff_options.append("`wait` for a short countdown")
-        lines.append("")
-        if len(handoff_options) == 1:
-            options_text = handoff_options[0]
-        else:
-            options_text = " (or ".join(handoff_options) + ")"
-        lines.append(
-            "**Do not spin waiting on async work.** When your next step depends on something in flight — a\n"
-            "build, a delegated peer agent, CI, a review — do NOT burn turns polling it. Set "
-            + options_text
-            + " and END the\nturn. You'll be resumed with context when it's actually ready. "
-            "Persisting means yielding and\ncoming back, not looping."
-        )
-
-    lines.append("")
-    lines.append(
-        "**Self-correct.** If your plan isn't producing progress, change the approach and say so"
-        + (" in the\nplan" if has_goal else "")
-        + ". If you're blocked, record what's blocking you. Don't repeat an action that already failed."
-    )
-
-    return "\n".join(lines).strip()
+    lines.append("\nIf progress stalls, change the approach and record the blocker; don't repeat a failed action unchanged.")
+    return "\n".join(lines)
 
 
 def _read_file(path: str | Path) -> str:
@@ -221,9 +110,9 @@ def build_system_prompt(
 ) -> str:
     """Build the complete system prompt for the lead agent.
 
-    ``context`` is injected verbatim at the end of the prompt (before
-    the response-format block) — ``KnowledgeMiddleware`` is the typical
-    caller, passing in retrieved knowledge-store hits.
+    ``context`` is a legacy static Context section before the operating model.
+    Runtime memory/skills/state use request-time projection instead; callers
+    must not put per-turn content into this cached prefix.
 
     ``projects`` (ADR 0007) — when the fenced filesystem toolset is enabled,
     the list of managed project workspaces ``[{name, path, write}]`` is named in
@@ -233,7 +122,7 @@ def build_system_prompt(
     ``bound_tool_names`` (#3190, ADR 0108 D6) — the set of tool names actually
     bound on this graph build. When provided, capability-specific doctrine
     (operating model, guidelines) is generated only for bound capabilities.
-    None emits everything unconditionally (legacy behavior).
+    None retains potential-capability guidance with a runtime-availability qualifier.
     """
     return "\n\n".join(
         text
@@ -262,7 +151,7 @@ def build_system_prompt_parts(
 
     ``bound_tool_names`` (#3190): when provided, capability-specific sections
     are generated only for tools that are actually bound. None = emit
-    everything (legacy behavior, safe default for callers that don't thread it).
+    potential capabilities with an explicit runtime-availability qualification.
     """
     parts: list[tuple[str, str]] = []
 
@@ -306,12 +195,12 @@ def build_system_prompt_parts(
         )
 
     # 2. Subagent instructions
-    if include_subagents:
-        parts.append(("Subagents", _build_subagent_section()))
+    if include_subagents and (bound_tool_names is None or bound_tool_names & {"task", "task_batch"}):
+        parts.append(("Subagents", _build_subagent_section(bound_tool_names)))
 
     # 2b. Managed project workspaces (ADR 0007 — fenced filesystem toolset).
     if projects:
-        section = _build_projects_section(projects)
+        section = _build_projects_section(projects, bound_tool_names)
         if section:
             parts.append(("Managed projects", section))
 
@@ -321,11 +210,11 @@ def build_system_prompt_parts(
     # cannot address each other, so someone has to run the back-and-forth, and that
     # someone is the orchestrator. A single `@x @y` from the operator is one round each,
     # not a discussion.
-    collab = _build_collaboration_section()
+    collab = _build_collaboration_section() if bound_tool_names is None or "delegate_to" in bound_tool_names else ""
     if collab:
         parts.append(("Collaboration", collab))
 
-    # 3. Dynamic context (typically from KnowledgeMiddleware)
+    # 3. Legacy static context; runtime projection never uses this seam.
     if context:
         parts.append(("Context", f"\n# Context\n\n{context}"))
 
@@ -337,52 +226,45 @@ def build_system_prompt_parts(
     if op_model:
         parts.append(("Operating model", op_model))
 
-    # 4. Operator guidelines — OVERRIDE THIS in your fork
-    _bt = bound_tool_names
+    # 4. Universal response rules and the single background-work policy.
     guideline_lines = [
         "# Guidelines",
         "",
-        "- Prefer direct answers for simple requests; use tools when they add",
-        "  information the user asked for.",
+        "- Honor explicit requests to use a tool. Otherwise answer simple questions directly and use tools when they add needed information.",
+        "- If a tool fails, read the error, retry once with corrected inputs, then report the concrete failure.",
+        "- Answer naturally. Reasoning streams separately; don't narrate deliberation in the answer.",
     ]
-    if _bt is None or "task" in _bt:
-        guideline_lines.extend([
-            "- Delegate to subagents via the `task` tool only for genuinely parallel",
-            "  or specialized work.",
-        ])
-    guideline_lines.extend([
-        "- If a tool fails, read the error, try once with corrected inputs, then",
-        "  surface the failure to the user with the concrete error string.",
-    ])
-    if _bt is None or "wait" in _bt:
-        guideline_lines.extend([
-            "- When you're waiting for something to finish — a ship/build/job to",
-            "  complete, a cooldown, an ETA a tool just reported (\"arriving in 37s\") —",
-            "  do NOT call a status tool in a loop to wait it out; that burns the whole",
-            "  turn. Call `wait(seconds, then=…)` to yield and be re-triggered when it's",
-            "  ready (it ends the turn and resumes you with `then`).",
-        ])
-    guideline_lines.extend([
-        "- Answer directly and naturally. Your reasoning is streamed separately (native",
-        "  reasoning), so think freely — don't narrate your deliberation in the answer.",
-    ])
+    async_tools = {"task", "task_batch", "delegate_to", "wait", "schedule_task", "create_watch"}
+    if bound_tool_names is None or bound_tool_names & async_tools:
+        guideline_lines.append(
+            "- **Do not spin on async work.** Continue independent work while background jobs run. "
+            "When no independent step can progress, END your turn and resume when notified. "
+            "If completion is not automatically delivered, arrange a supported wake-up before yielding. "
+            "Do not poll, re-check or spawn duplicates to wait for a result. "
+            "For fan-out, synthesize once all required results arrive."
+        )
+    if bound_tool_names is None:
+        guideline_lines.append("- Capability guidance describes potential features; use only tools exposed by your runtime.")
     parts.append(("Guidelines", "\n".join(guideline_lines)))
 
     return parts
 
 
-def _build_projects_section(projects) -> str:
-    """Render the managed-project workspaces the fs tools are fenced to."""
+def _build_projects_section(projects, bound_tool_names: frozenset[str] | None = None) -> str:
+    """Render roots and only the filesystem operations reachable by this lead."""
+    ordered = ("list_projects", "read_file", "list_dir", "find_files", "search_files",
+               "write_file", "edit_file", "delete_file")
+    available = [name for name in ordered if bound_tool_names is None or name in bound_tool_names]
+    if not available:
+        return ""
     lines = [
-        "# Managed projects",
-        "",
-        "You operate on these project workspaces via the filesystem tools "
-        "(`list_projects`, `read_file`, `list_dir`, `find_files`, `search_files`, "
-        "and — in read-write projects — `write_file`/`edit_file`, plus `delete_file`, "
-        "which always asks first and is off in no-delete projects). All paths are "
-        "fenced to these roots; you cannot read or write outside them.",
-        "",
+        "# Managed projects", "",
+        "Available filesystem tools: " + ", ".join(f"`{name}`" for name in available) + ". "
+        "Paths are fenced to these roots. Project permissions still apply; read-only roots cannot be modified.",
     ]
+    if "delete_file" in available:
+        lines.append("`delete_file` always asks first and is unavailable in no-delete projects.")
+    lines.append("")
     rendered = 0
     for p in projects:
         if not isinstance(p, dict):
@@ -419,83 +301,43 @@ def _build_collaboration_section() -> str:
         return ""
     return (
         "# Working with delegates\n\n"
-        "When the operator asks two or more participants to **work together** / collaborate "
-        "/ reach agreement on something (e.g. \"have proto and reviewer sort out X\"), YOU "
-        "moderate it — that is orchestration, and it is your job:\n"
-        "- Delegates of type `acp` and `model` are subordinates: they answer you and cannot "
-        "address each other. So run the discussion yourself — `delegate_to` one, relay its "
-        "points to the next (`delegate_to` again with that context), carry objections back, "
-        "and continue round by round until they converge or clearly won't.\n"
-        "- Give each participant a ROLE when the task is code or artifacts (one drafts, one "
-        "reviews) rather than having both edit in parallel — two coders in one workspace "
-        "collide.\n"
-        "- Decide when it's settled and say so, with the outcome and who held which "
-        "position. Don't loop indefinitely — a handful of rounds, then report even a "
-        "disagreement.\n"
-        "- Prefer `background=True` for anything that will take more than a couple of quick "
-        "exchanges, and synthesize when the replies land.\n"
-        "- A user message that still opens with one or more configured `@name` targets reached "
-        "you only because every direct address found that stopped local fleet member "
-        "unreachable. Honor the direct address: call `delegate_to` for each named target now. "
-        "That tool can ask the operator to start the member and retry. Do not answer in the "
-        "named participant's place.\n"
-        "A bare `@x @y <task>` typed by the OPERATOR is one message to each, in turn — a "
-        "quick parallel consult, not a discussion. If they need to iterate, that's the "
-        "moderation loop above, and the operator hands it to you as an ordinary request."
+        "When asked to have participants work together, moderate the discussion via `delegate_to`. "
+        "ACP/model delegates are subordinates: they answer you and cannot address each other. "
+        "Relay proposals and objections between them. Assign distinct roles (one drafts, one reviews) "
+        "to avoid concurrent edits in a shared workspace. After a handful of rounds, report the "
+        "outcome and any unresolved disagreement. Prefer `background=True` for long exchanges.\n"
+        "A bare operator `@x @y <task>` is one message to each, not an iterative discussion. "
+        "If an @addressed message reaches you because every direct address found its stopped "
+        "fleet member unreachable, call `delegate_to` for each named target now; it can ask "
+        "the operator to start the member and retry. Do not answer in the named participant's place."
     )
 
-def _build_subagent_section() -> str:
-    """Build the subagent delegation instructions.
 
-    The background-delegation guidance is unconditional (not gated on a runtime
-    flag) so this prompt stays a turn-stable cache prefix shared by the live graph,
-    the cache warmer, and the native loop. The ``task`` tool always accepts
-    ``run_in_background``; it degrades to synchronous execution if the background
-    manager is disabled (ADR 0050)."""
+def _build_subagent_section(bound_tools: frozenset[str] | None = None) -> str:
+    """Lead-visible roles; detailed arguments live in task/task_batch schemas."""
+    has_task = bound_tools is None or "task" in bound_tools
+    has_batch = bound_tools is None or "task_batch" in bound_tools
+    invocation = "`task`" if has_task else "`task_batch`"
     lines = [
         "# Subagent Delegation",
         "",
-        "You can delegate to specialized subagents with the `task` tool. Each has focused",
-        "tools and a domain-specific prompt. **Match the work to the subagent whose",
-        "description fits, and prefer delegating specialized or long-running work to it over",
-        "grinding it out inline in your own turn.** The roster (use the names verbatim as",
-        "`subagent_type`):",
+        f"Use {invocation} for specialized or long-running work; answer simple requests directly. "
+        "Choose the best matching role and use its name verbatim as `subagent_type`:",
         "",
     ]
-
     for name, config in SUBAGENT_REGISTRY.items():
-        if not config.lead_visible:
-            continue
-        lines.append(f"- **{name}**: {config.description}")
-        if config.tools:
-            lines.append(f"  Tools: {', '.join(config.tools)}")
-        lines.append("")
-
-    lines.extend(
-        [
-            "**Rules:**",
-            "- Pick the most specialized subagent whose description matches the task. Don't do",
-            "  domain work a subagent is purpose-built for (deep research, strategy/planning,",
-            "  multi-step gathering) inline — delegate it.",
-            "- For simple, quick requests, answer directly without delegation.",
-            "- Run independent delegations concurrently — one `task` call each, or `task_batch`",
-            "  (bounded automatically by the configured concurrency cap).",
-            "- Subagents cannot spawn further subagents.",
-            "",
-            "**Background delegation (`run_in_background=true` on `task`):** default to this for",
-            "any long, independent, or tool/quota-heavy delegation — deep research, a strategic",
-            "audit, anything that will take many turns or lots of web/tool calls. It returns",
-            "immediately with a job id and the result is delivered back to you automatically on a",
-            "later turn, so the conversation stays live instead of freezing on a multi-minute",
-            "delegation. Use foreground (the default) only when you need the result to finish your",
-            "current reply. This is a general discipline for ANY background delegation (the",
-            "`task` subagent tool AND, e.g., a fleet `delegate_to`): once you background the",
-            "work, END your turn — do NOT try to wait/poll for it or spawn a duplicate. Each",
-            "result is delivered back to you automatically on a later turn; synthesize the",
-            "replies when they arrive (on a fan-out, wait for ALL of them first).",
-        ]
-    )
-
+        if config.lead_visible:
+            lines.append(f"- **{name}**: {config.description}")
+    lines.extend([
+        "",
+        ("Run independent delegations concurrently with `task_batch`. " if has_batch else
+         "Run independent delegations with parallel `task` calls. ") +
+        "Subagents cannot spawn further subagents.",
+        "Use `run_in_background=true` for long independent work; results arrive automatically "
+        "on a later turn. Use foreground when you need the result to finish this reply. "
+        "Without a background manager, requests run in the foreground. "
+        "Follow the async-work rule in Guidelines once a job is confirmed running in the background.",
+    ])
     return "\n".join(lines)
 
 

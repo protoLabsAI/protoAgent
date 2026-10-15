@@ -1,5 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
+import { errMsg } from "../lib/format";
+import { stopLocalTurns } from "./LocalTurnControls";
 
 import { Badge } from "@protolabsai/ui/primitives";
 import { Menu, MenuItem, MenuSeparator } from "@protolabsai/ui/menu";
@@ -19,6 +21,8 @@ import { bareModel, composerModelSections, groupByLane, lanesFromOptions, modelP
 // provider. Rows are plain model names grouped under a provider heading, because
 // "anthropic-oauth:claude-sonnet-5" is slot syntax, not something to read in a menu.
 export function ComposerModelSelect() {
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState("");
   const schema = useQuery(settingsSchemaQuery());
   const runtime = useQuery(runtimeStatusQuery());
   const { sessions, currentSessionId } = useChatState();
@@ -71,8 +75,18 @@ export function ComposerModelSelect() {
     return (
       <MenuItem
         key={model}
-        onSelect={() => {
-          chatStore.setSessionModel(currentSessionId, isDefault ? "" : model);
+        disabled={switching}
+        onSelect={async () => {
+          setSwitching(true);
+          setSwitchError("");
+          try {
+            await stopLocalTurns(currentSessionId);
+            chatStore.setSessionModel(currentSessionId, isDefault ? "" : model);
+          } catch (e) {
+            setSwitchError(errMsg(e));
+          } finally {
+            setSwitching(false);
+          }
         }}
       >
         {bareModel(model, knownLanes)}
@@ -91,10 +105,12 @@ export function ComposerModelSelect() {
   const degraded = !!schema.data && !field?.options?.length;
 
   return (
+    <>
+    {switchError ? <span role="alert">{switchError}</span> : null}
     <Menu
       className="composer-model-menu"
       trigger={
-        <button /* ds-audit-ignore hand-rolled-control — composite row/trigger, protoContent#551 */ type="button" className="composer-model-select" aria-label="Model for this chat">
+        <button /* ds-audit-ignore hand-rolled-control — composite row/trigger, protoContent#551 */ type="button" className="composer-model-select" disabled={switching} aria-label="Model for this chat">
           {bareModel(effectiveModel, knownLanes)}
         </button>
       }
@@ -128,5 +144,6 @@ export function ComposerModelSelect() {
         </Fragment>
       ))}
     </Menu>
+    </>
   );
 }
