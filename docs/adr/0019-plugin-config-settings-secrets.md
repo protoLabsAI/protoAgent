@@ -139,3 +139,14 @@ Settings, the CLI, and `PATCH /api/config`.
 - **A typed dataclass field per plugin (generated).** Rejected — can't generate
   dataclass fields for unknown plugins at import time; the `plugin_config` dict is
   the honest shape for open extension.
+
+## Configuration failure contract (#4204, October 2026)
+
+Active plugin sections and their secrets overlays must be mappings. Absent or
+null sections use manifest defaults; false, zero, lists, and other scalar values
+are rejected rather than interpreted as absence. Explicit empty values within a
+valid section retain their existing meaning. Invalid active schema discovery
+rejects the load: running plugins with missing policy is not a safe fallback.
+Disabled plugins remain excluded by discovery. Missing optional files remain
+allowed; present malformed or unreadable files reject the load with diagnostics
+that omit secret values.

@@ -178,9 +178,7 @@ the corresponding items in §7.
    config into ours. (D7, now grounded in #839 rather than the abstract delegate ref.)
 
 6. **Open follow-ups still genuinely undecided** (carried to implementation): the
-   D8 env-knob promotion order + env-vs-file precedence; corrupt/unparseable
-   `host-config.yaml` handling (must not crash boot — degrade to App+Agent with a
-   warning); whether `validate_flat` rejects a wrong-layer save at the API boundary
+   D8 env-knob promotion order + env-vs-file precedence; whether `validate_flat` rejects a wrong-layer save at the API boundary
    (defense-in-depth, recommended yes); and the one-time treatment of existing
    eager model-copy blocks (`manager._overlay_model`) when new-agent creation flips
    to inherit-from-host.
@@ -643,3 +641,12 @@ the Host layer stays empty until an operator opts in.
 14. **Defense-in-depth at the API boundary** — should `validate_flat` reject saving
     a leaf-only key against the Host layer (and vice-versa) in addition to the
     `_HOST_KEYS` read-time filter? Recommend yes (trivial given `_BY_KEY[k].scope`).
+
+## Configuration failure contract (#4204, October 2026)
+
+An absent host file contributes no settings. A present unreadable file, malformed
+YAML, or non-mapping document rejects configuration loading; it must not silently
+drop inherited policy. This supersedes the original best-effort host fallback.
+Agent configuration and the secrets overlay follow the same rule. Empty or
+comment-only documents remain valid empty mappings. Diagnostics identify the
+file and location without quoting configuration values.

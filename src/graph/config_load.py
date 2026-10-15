@@ -29,16 +29,40 @@ log = logging.getLogger("protoagent.config")
 SECRETS_FILENAME = "secrets.yaml"
 
 
-def _load_secrets_doc(config_dir: Path) -> dict:
-    """Load the untracked secrets overlay sitting next to the config YAML."""
-    secrets_path = config_dir / SECRETS_FILENAME
-    if not secrets_path.exists():
+class ConfigLoadError(ValueError):
+    """Configuration cannot be applied; messages contain locations, never values."""
+
+
+def _mapping(value, location: str) -> dict:
+    # Null/comment-only sections are an established spelling of an empty mapping.
+    if value is None:
         return {}
+    if not isinstance(value, dict):
+        raise ConfigLoadError(f"{location}: expected a mapping, got {type(value).__name__}")
+    return value
+
+
+def _read_mapping(path: Path) -> tuple[dict, bool]:
+    """Missing optional files are absent; present but invalid files are rejected."""
     try:
-        with open(secrets_path, encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except (OSError, yaml.YAMLError):
-        return {}
+        with path.open(encoding="utf-8-sig") as stream:
+            value = yaml.safe_load(stream)
+    except FileNotFoundError:
+        if not path.is_symlink():
+            return {}, False
+        raise ConfigLoadError(f"{path}: unreadable configuration file") from None
+    except (OSError, UnicodeError):
+        raise ConfigLoadError(f"{path}: unreadable configuration file") from None
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        line = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+        raise ConfigLoadError(f"{path}: malformed YAML{line}") from None
+    return _mapping(value, str(path)), True
+
+
+def _load_secrets_doc(config_dir: Path) -> dict:
+    """Read the optional overlay, rejecting present-but-invalid secrets files."""
+    return _read_mapping(config_dir / SECRETS_FILENAME)[0]
 
 
 # ``model.name`` and ``model.provider`` are ONE decision, not two independent fields —
@@ -90,14 +114,11 @@ def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
     file and no host layer) — ``from_yaml``'s defaults short-circuit."""
     import graph.config as _cfg  # call-time: tests patch graph.config._load_host_layer
 
-    host_layer = _cfg._load_host_layer()  # {} when absent/unreadable — never crashes boot
-    if not p.exists() and not host_layer:
+    host_layer = _cfg._load_host_layer()
+    agent_data, agent_present = _read_mapping(p)
+    secrets = _load_secrets_doc(p.parent)
+    if not agent_present and not host_layer and not secrets:
         return {}, {}, False
-
-    agent_data: dict = {}
-    if p.exists():
-        with open(p, encoding="utf-8") as f:
-            agent_data = yaml.safe_load(f) or {}
 
     # Host is the base; the agent leaf overlays it (agent wins). No host layer ⇒
     # merged is exactly the agent doc — the pre-cascade input, unchanged.
@@ -129,7 +150,7 @@ def _read_config_docs(p: Path) -> tuple[dict, dict, bool]:
     else:
         merged = agent_data
 
-    return merged, _load_secrets_doc(p.parent), True
+    return merged, secrets, True
 
 
 def load_config_docs(path: str | Path) -> tuple[dict, dict]:
@@ -170,7 +191,8 @@ def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
 
     For every plugin that claims a top-level section, merge: manifest defaults ⊕
     the (secret-stripped) YAML section ⊕ the secrets overlay for its secret keys.
-    Best-effort — never breaks config load. Returns ``{section: resolved_dict}``.
+    Invalid active configuration or schema discovery rejects the load. Missing
+    optional sections use manifest defaults. Returns ``{section: resolved_dict}``.
 
     Plugins live at ``instance_paths().plugins_dir`` — the instance tier's own
     plugins root (a sibling of ``config/``, honoring ``PROTOAGENT_PLUGINS_DIR`` and
@@ -183,25 +205,27 @@ def _resolve_plugin_config(data: dict, secrets: dict, config_dir: Path) -> dict:
 
         from graph.plugins.pconfig import discover_plugin_config, plugin_roots_from
 
-        plugins = data.get("plugins") or {}
+        plugins = _mapping(data.get("plugins"), f"configuration in {config_dir}: plugins")
+        for key in ("enabled", "disabled"):
+            value = plugins.get(key)
+            if value is not None and (not isinstance(value, list) or not all(isinstance(v, str) for v in value)):
+                raise ConfigLoadError(f"configuration in {config_dir}: plugins.{key}: expected a list of strings")
         roots = plugin_roots_from(instance_paths().plugins_dir, str(plugins.get("dir") or ""))
         schemas = discover_plugin_config(
             roots,
             set(plugins.get("enabled") or []),
             set(plugins.get("disabled") or []),
+            strict=True,
         )
-    except Exception as e:  # noqa: BLE001 — plugin config is best-effort, but say so
-        log.warning(
-            "[plugins] config resolution failed — plugin config unavailable this load "
-            "(plugins behave as if unconfigured): %s",
-            e,
-        )
-        return {}
+    except ConfigLoadError:
+        raise
+    except Exception:
+        raise ConfigLoadError(f"{config_dir}: active plugin configuration schema discovery failed") from None
 
     out: dict = {}
     for sch in schemas:
-        section_yaml = data.get(sch.section) or {}
-        sec_overlay = secrets.get(sch.section) or {}
+        section_yaml = _mapping(data.get(sch.section), f"configuration in {config_dir}: {sch.section}")
+        sec_overlay = _mapping(secrets.get(sch.section), f"{config_dir}/secrets.yaml: {sch.section}")
         resolved = dict(sch.defaults)
         resolved.update({k: v for k, v in section_yaml.items() if k not in sch.secrets})
         for k in sch.secrets:
@@ -555,27 +579,16 @@ def _warn_shadowed_host_keys(host_layer: dict, agent_data: dict) -> None:
 
 
 def _load_host_layer() -> dict:
-    """The Host layer (ADR 0047): ``host-config.yaml`` filtered to host-scoped keys.
+    """Read optional host settings; reject corruption instead of dropping policy."""
+    from infra.paths import host_config_path
 
-    Returns ``{}`` when the file is absent, unreadable, or malformed — the cascade
-    then collapses to App defaults + the agent leaf. Best-effort: a corrupt host
-    file must never crash boot."""
-    try:
-        from infra.paths import host_config_path
-
-        hp = host_config_path()
-    except Exception:  # noqa: BLE001 — never let host-path resolution break config load
-        return {}
-    if not hp.exists():
-        return {}
-    try:
-        from infra.paths import read_text_utf8
-
-        raw = yaml.safe_load(read_text_utf8(hp)) or {}
-    except (OSError, yaml.YAMLError) as exc:
-        log.warning("host-config.yaml at %s is unreadable (%s); ignoring the Host layer", hp, exc)
-        return {}
-    if not isinstance(raw, dict):
-        log.warning("host-config.yaml at %s is not a mapping; ignoring the Host layer", hp)
-        return {}
+    hp = host_config_path()
+    raw, _ = _read_mapping(hp)
+    for field in _host_scoped_fields():
+        node = raw
+        parts = field.key.split(".")[:-1]
+        for offset, part in enumerate(parts):
+            if part not in node:
+                break
+            node = _mapping(node[part], f"{hp}: {'.'.join(parts[:offset + 1])}")
     return _filter_to_host_keys(raw)
