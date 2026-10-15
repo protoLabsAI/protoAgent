@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from unittest.mock import patch
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from evals import judge, verify
@@ -75,10 +75,8 @@ async def experiment(source, model, repeat, probe, outcomes):
                     if rubric:
                         # Grader calls are deliberately outside the agent probe and
                         # excluded from task input/cache/latency comparisons.
-                        response = await asyncio.wait_for(grader.ainvoke([
-                            SystemMessage(content=judge._GRADER_SYSTEM),
-                            HumanMessage(content=judge._build_prompt(answer, rubric["criteria"]))]), 60)
-                        verdict = judge._parse(text_of(response), rubric["criteria"])
+                        verdict = await asyncio.wait_for(
+                            judge.ascore_rubric(answer, rubric["criteria"], grader=grader), 60)
                         score = verdict.score
                         passed = passed and not verdict.error and score >= rubric["threshold"]
                     outcomes.append({"scenario": probe.scenario, "passed": bool(passed),

@@ -98,6 +98,24 @@ def _parse(raw: str, criteria: list[str]) -> RubricScore:
     return RubricScore(score=score, met=met, reasons="\n".join(reasons))
 
 
+async def ascore_rubric(output: str, criteria: list[str], *, grader) -> RubricScore:
+    """Grade with a caller-configured async model, without reloading instance config.
+
+    The caller owns timeouts and failure reporting; model exceptions propagate.
+    This keeps isolated evaluations on their selected provider connection.
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage
+    from graph.message_blocks import text_of
+
+    if not criteria:
+        return RubricScore(score=1.0)
+    response = await grader.ainvoke([
+        SystemMessage(content=_GRADER_SYSTEM),
+        HumanMessage(content=_build_prompt(output, criteria)),
+    ])
+    return _parse(text_of(response), criteria)
+
+
 def score_rubric(output: str, criteria: list[str], *, model: str | None = None) -> RubricScore:
     """Grade ``output`` against ``criteria``; returns a RubricScore (0..1)."""
     if not criteria:
