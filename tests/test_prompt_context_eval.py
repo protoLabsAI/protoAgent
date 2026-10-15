@@ -113,6 +113,32 @@ async def test_probe_incognito_and_error_privacy():
 
 
 @pytest.mark.platform_sensitive
+def test_failed_live_run_retains_completed_quality_outcomes(monkeypatch, tmp_path):
+    import json
+
+    from evals import prompt_context
+    from graph.config import LangGraphConfig
+
+    monkeypatch.setattr(LangGraphConfig, "from_yaml", lambda _: object())
+
+    async def partial(config, model, repeat, probe, outcomes):
+        outcomes.append({"scenario": "completed", "passed": True})
+        probe.scenario = "failed"
+        raise ValueError("PRIVATE PROVIDER ERROR")
+
+    monkeypatch.setattr(prompt_context, "_live", partial)
+    output = tmp_path / "report.json"
+    assert prompt_context.main(["--config", str(tmp_path / "config.yaml"), "--model", "fixture", "--output", str(output)]) == 1
+    report = json.loads(output.read_text())
+    assert report["quality"] == [
+        {"scenario": "completed", "passed": True},
+        {"scenario": "failed", "passed": False, "incomplete": True},
+    ]
+    assert report["failure_type"] == "ValueError"
+    assert "PRIVATE" not in output.read_text()
+
+
+@pytest.mark.platform_sensitive
 @pytest.mark.asyncio
 @pytest.mark.parametrize("profile", ["minimal", "full", "projects_delegates", "catalog", "background", "incognito"])
 async def test_real_graph_request_profiles_and_reload(monkeypatch, tmp_path, profile):

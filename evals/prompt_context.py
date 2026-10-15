@@ -1,9 +1,11 @@
-"""Content-free request/cache measurements for isolated prompt experiments.
+"""Request/cache metadata measurements for isolated prompt experiments.
 
 Mount ``RequestProbe`` after provider shaping in an isolated graph's middleware
 stack. It observes the effective LangChain request, NOT the provider's serialized
-HTTP body or billing tokenizer. Reports contain lengths/hashes, never prompt text,
-schema descriptions, arguments or credentials. Incognito calls are not recorded.
+HTTP body or billing tokenizer. Reports omit raw prompt text, schema descriptions,
+arguments and credentials. Their unkeyed deterministic hashes can confirm guesses:
+treat reports as sensitive metadata and publish only synthetic fixture measurements.
+Incognito calls are not recorded.
 The caller owns the probe and decides where to save its report.
 """
 
@@ -134,7 +136,7 @@ class RequestProbe(AgentMiddleware):
         }
 
 
-async def _live(config, model: str, repeat: int, probe=None) -> dict:
+async def _live(config, model: str, repeat: int, probe=None, outcomes=None) -> dict:
     """Run synthetic turns in a caller-isolated process using a configured model."""
     from unittest.mock import patch
     from pathlib import Path
@@ -157,7 +159,7 @@ async def _live(config, model: str, repeat: int, probe=None) -> dict:
     })
     probe = probe if probe is not None else RequestProbe()
     shaping = agent.provider_shape_middleware
-    outcomes = []
+    outcomes = outcomes if outcomes is not None else []
     with patch.object(agent, "provider_shape_middleware", lambda c: [*shaping(c), probe]):
         graph = agent.create_agent_graph(cfg, checkpointer=MemorySaver())
         sections = [{"label": label, "chars": len(text)} for label, text in graph.system_prompt_parts]
@@ -250,15 +252,16 @@ def main(argv=None) -> int:
             soul.parent.mkdir()
             soul.write_text("# Identity\nI am an assistant running synthetic context and cache evaluations.\n")
             probe = RequestProbe()
+            outcomes = []
 
             async def run():
-                return await asyncio.wait_for(_live(config, args.model, max(1, args.repeat), probe), args.timeout)
+                return await asyncio.wait_for(_live(config, args.model, max(1, args.repeat), probe, outcomes), args.timeout)
 
             try:
                 report = asyncio.run(run())
             except Exception as exc:
                 report = {**probe.report(), "model_target": args.model, "failure_type": type(exc).__name__,
-                          "quality": [{"scenario": probe.scenario, "passed": False}]}
+                          "quality": [*outcomes, {"scenario": probe.scenario, "passed": False, "incomplete": True}]}
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(report, indent=2) + "\n")
             print(f"Recorded {len(report['rows'])} model calls to {args.output}")

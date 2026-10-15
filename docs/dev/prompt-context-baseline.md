@@ -32,7 +32,10 @@ cache controls, and response usage. This is **not raw provider HTTP serializatio
 Schema sizes use compact JSON in the existing order; text/argument attribution uses
 `graph.message_blocks` so mirrored tool-use arguments are counted once. The content
 fingerprint is a separate shape measurement, not another additive token count.
-Reports contain no prompts, schema descriptions, argument values or credentials.
+Reports omit raw prompts, schema descriptions, argument values and credentials.
+Their hashes are unkeyed and deterministic: someone can confirm guesses about
+low-entropy content by hashing candidate values. Treat reports as sensitive metadata,
+not anonymized data; publish only synthetic fixture measurements.
 Incognito calls produce no probe rows.
 
 `cache_read_ratio = cache_read_tokens / input_tokens`, using LangChain's normalized
@@ -49,7 +52,7 @@ Three experiments per alias, each with three identical-input repetitions and six
 other scenarios. Each process uses its own temporary roots. The initial graph has
 no knowledge store/skills index; core, filesystem and delegation tools are exposed.
 The two projection scenarios add a synthetic plain knowledge store. These workloads
-do not represent a plugin-heavy live instance. Content-free raw reports are local
+do not represent a plugin-heavy live instance. Metadata-only raw reports are local
 ignored `evals/results/prompt-baseline-final-{fast,smart}-{1,2,3}.json` artifacts.
 
 | Model | Calls | Input tokens | Cache-read tokens | Read / input | Quality checks |
