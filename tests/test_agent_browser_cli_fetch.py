@@ -527,6 +527,79 @@ def test_the_download_button_fetches_in_the_background_and_the_banner_moves_on(m
     assert reg.setup_gap_actions[preflight.CHROME_GAP]["step"] == "install-chrome"  # …and Chrome is next
 
 
+@pytest.mark.parametrize("step", ["download-cli", "install-chrome"])
+def test_setup_refresh_serializes_probe_and_banner_publication(monkeypatch, step):
+    _cli_env(monkeypatch, which=None if step == "download-cli" else "/installed/ab", chrome="fail")
+    refresh_contended = threading.Event()
+
+    class ObservedLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            if not self.lock.acquire(blocking=False):
+                refresh_contended.set()
+                self.lock.acquire()
+            return self
+
+        def __exit__(self, *args):
+            self.lock.release()
+
+    # Observe actual contention, not merely that the second thread was scheduled.
+    monkeypatch.setattr(_PKG, "threading", types.SimpleNamespace(Lock=ObservedLock))
+    reg = _registry()
+    _PKG.register(reg)
+    callbacks = []
+    method = "download_cli" if step == "download-cli" else "install_chrome"
+    monkeypatch.setattr(setup_steps, method, lambda cfg, refresh: callbacks.append(refresh))
+    reg.setup_steps[step]()
+    refresh = callbacks[0]
+    old_probe_started = threading.Event()
+    release_old_probe = threading.Event()
+    new_probe_started = threading.Event()
+    errors = []
+
+    def probe(cfg, **kwargs):
+        if not old_probe_started.is_set():
+            old_probe_started.set()
+            assert release_old_probe.wait(5)
+            return preflight.Probe(binary="agent-browser",
+                                   cli_path="" if step == "download-cli" else "/installed/ab",
+                                   chrome="missing")
+        new_probe_started.set()
+        return preflight.Probe(binary="agent-browser", cli_path="/installed/ab", chrome="ok")
+
+    def run():
+        try:
+            refresh()
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(preflight, "probe", probe)
+    old = threading.Thread(target=run)
+    new = threading.Thread(target=run)
+    old.start()
+    try:
+        assert old_probe_started.wait(5)
+        new.start()
+        assert refresh_contended.wait(5)
+        # Completion refresh must wait for the old probe AND its publication.
+        # Without serialization it publishes success here, then the old missing
+        # result resurrects the banner when released below.
+        assert not new_probe_started.is_set()
+    finally:
+        release_old_probe.set()
+        old.join(5)
+        if new.ident is not None:
+            new.join(5)
+    assert not old.is_alive() and not new.is_alive()
+    assert not errors
+    assert new_probe_started.is_set()
+    gap = preflight.CLI_GAP if step == "download-cli" else preflight.CHROME_GAP
+    assert gap not in reg.setup_gaps
+    assert reg.setup_gaps == {}
+
+
 def test_the_download_button_is_a_no_op_when_a_cli_is_on_path(monkeypatch):
     _cli_env(monkeypatch, which="/opt/ab")
     calls = []
