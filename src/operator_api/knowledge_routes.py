@@ -321,9 +321,11 @@ def register_knowledge_routes(app) -> None:
         if not editable:
             return JSONResponse({"detail": f"{origin} skills are read-only"}, status_code=403)
         body = body or {}
-        name = str(body.get("name", cur.get("name", ""))).strip()
-        description = str(body.get("description", "")).strip()
-        prompt = str(body.get("prompt_template", body.get("body", ""))).strip()
+        fields = (body.get("name", cur.get("name", "")), body.get("description", ""),
+                  body.get("prompt_template", body.get("body", "")))
+        if any(not isinstance(value, str) for value in fields):
+            return JSONResponse({"detail": "name, description, and body must be strings"}, status_code=400)
+        name, description, prompt = (value.strip() for value in fields)
         if not name or not description or not prompt:
             return JSONResponse({"detail": "name, description, and body are required"}, status_code=400)
         new_slug, old_slug = slugify(name), slugify(cur.get("name", ""))

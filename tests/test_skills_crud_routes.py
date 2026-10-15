@@ -9,6 +9,8 @@ care about, and a real index is cheaper than faking both halves.
 
 from types import SimpleNamespace
 
+import pytest
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -217,3 +219,19 @@ def test_forget_not_layered_hints(monkeypatch, tmp_path):
     c, _idx, _root = _client(monkeypatch, tmp_path)
     r = c.post("/api/playbooks/1/forget").json()
     assert r["enabled"] is True and r["forgotten"] is False and "layered" in r["error"]
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize('field', ['name', 'description', 'prompt_template'])
+def test_edit_rejects_explicit_null_before_mutating(monkeypatch, tmp_path, field):
+    client, idx, root = _client(monkeypatch, tmp_path)
+    body = {'name': 'Keep Me', 'description': 'old', 'prompt_template': 'old body'}
+    sid = client.post('/api/playbooks', json=body).json()['id']
+    before = idx.all_skills()
+    path = root / 'keep-me' / 'SKILL.md'
+    original = path.read_bytes()
+    response = client.put(f'/api/playbooks/{sid}', json={**body, field: None})
+    assert response.status_code == 400
+    assert idx.all_skills() == before
+    assert path.read_bytes() == original
+    assert not (root / '.history').exists()
