@@ -59,7 +59,12 @@ operator workloads and a stronger independent quality review.
 
 Median projected text was 2,313 characters for both `newest` and `relevant`, and
 zero for `off`; these full-question queries did not produce a smaller relevance
-projection. The FTS fallback is covered separately with matching short queries in
+projection. Their projected-content hashes were identical, as were stable-system
+and schema hashes across all three policies. Thus the small quality/call-count
+difference between newest and relevant here is sampling variance, not evidence
+that a different selected context helped. The search converts a full question to
+literal AND terms; zero matches invoke the documented newest fallback.
+The FTS fallback is covered separately with matching short queries in
 `test_digest_gating.py`. The observed digest layer is not its configured maximum.
 
 Cache writes were unreported. Read/input ratios were 87.68%, 88.40%, and 94.04%.
