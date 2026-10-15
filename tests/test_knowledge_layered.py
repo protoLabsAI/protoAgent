@@ -352,3 +352,81 @@ def test_snapshot_seed_discovers_domains_on_a_layered_store(tmp_path):
     assert seed.counts == {"reference": 1}
     assert "How the deploy pipeline works" in seed.docs["reference"]
     assert set(seed.docs) == {"reference"}  # no hot, no playbook, no private/commons phantoms
+
+
+class _SearchRows:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+
+    def search(self, query, k, **filters):
+        self.calls.append((query, k, filters))
+        return self.rows[:k]
+
+
+def test_search_preserves_same_tier_records_and_provenance():
+    rows = [
+        {"id": 1, "content": "same", "namespace": "a", "source": "one"},
+        {"id": 2, "content": "same", "namespace": "b", "source": "one"},
+        {"id": 3, "content": "same", "namespace": "a", "source": "two"},
+        {"id": 4, "content": "same", "namespace": "a", "source": "one"},
+    ]
+    for tier in ("private", "commons"):
+        private = _SearchRows(rows if tier == "private" else [])
+        commons = _SearchRows(rows if tier == "commons" else [])
+        hits = LayeredKnowledgeStore(private, commons).search("same", k=10)
+        assert hits == [{**row, "tier": tier} for row in rows]
+        assert all("tier" not in row for row in rows)  # backend rows stay untouched
+
+
+def test_cross_tier_equivalence_requires_matching_provenance():
+    original = {"id": 1, "content": "same", "domain": "reference", "namespace": "a",
+                "source": "one", "source_type": "file", "heading": "title",
+                "finding_type": "fact", "epoch": "2026", "memory_kind": "standing",
+                "subject": "operator", "expires_at": "2027-01-01", "delivery_policy": "retrieval"}
+    for field in ("domain", "namespace", "source", "source_type", "heading", "finding_type",
+                  "epoch", "memory_kind", "subject", "expires_at", "delivery_policy"):
+        other = {**original, "id": 2, field: "different"}
+        hits = LayeredKnowledgeStore(_SearchRows([original]), _SearchRows([other])).search("same")
+        assert len(hits) == 2, field
+        assert {hit["tier"] for hit in hits} == {"private", "commons"}
+
+
+def test_cross_tier_pairs_are_one_to_one_and_rrf_prefers_shared_evidence():
+    private = _SearchRows([
+        {"id": 1, "content": "private first"},
+        {"id": 2, "content": "shared", "review_state": "pending"},
+        {"id": 3, "content": "shared", "review_state": "pending"},
+    ])
+    commons = _SearchRows([
+        {"id": 7, "content": "commons first"},
+        {"id": 8, "content": "shared", "review_state": "confirmed"},
+    ])
+    store = LayeredKnowledgeStore(private, commons)
+    hits = store.search("query", k=10)
+    assert [(h["tier"], h["id"]) for h in hits] == [
+        ("private", 2), ("commons", 7), ("private", 1), ("private", 3)]
+    assert hits[0]["review_state"] == "pending"
+    assert store.search("query", k=2) == hits[:2]
+
+
+def test_layered_search_passes_all_filters_to_both_tiers():
+    private, commons = _SearchRows([]), _SearchRows([])
+    filters = dict(domain="reference", namespace=["a", "b"], include_invalidated=True,
+                   epoch="2026", memory_kind="standing", review_state="confirmed",
+                   delivery_policy="retrieval", deliverable=True, prefix=True)
+    assert LayeredKnowledgeStore(private, commons).search("needle", k=9, **filters) == []
+    assert private.calls == commons.calls == [("needle", 9, filters)]
+
+
+def test_promoted_search_returns_one_editable_record(tmp_path):
+    private, commons = _stores(tmp_path)
+    store = LayeredKnowledgeStore(private, commons)
+    cid = private.add_chunk("kestrel launch checklist", domain="reference", namespace="flight",
+                            source="runbook", source_type="file", review_state="pending")
+    assert store.promote(cid) is not None
+    hits = store.search("kestrel", namespace="flight", domain="reference")
+    assert len(hits) == 1
+    assert (hits[0]["id"], hits[0]["tier"], hits[0]["source"]) == (cid, "private", "runbook")
+    assert len(store.list_chunks()) == 2
+    assert store.search("kestrel", namespace="other") == []
