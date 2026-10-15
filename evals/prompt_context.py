@@ -227,12 +227,10 @@ async def _live(config, model: str, repeat: int, probe=None, outcomes=None) -> d
 def main(argv=None) -> int:
     import argparse
     import asyncio
-    import os
-    import tempfile
     from pathlib import Path
 
+    from evals.isolation import isolated_instance, write_report
     from graph.config import LangGraphConfig
-    from infra.paths import reset_instance_paths
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path, help="read-only source of configured model connections")
@@ -243,36 +241,22 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     config = LangGraphConfig.from_yaml(args.config)
     # CLI-only isolation: no server, background worker or production store is opened.
-    previous = {k: os.environ.get(k) for k in ("PROTOAGENT_BOX_ROOT", "PROTOAGENT_HOME")}
-    try:
-        with tempfile.TemporaryDirectory(prefix="pa-prompt-baseline-") as root:
-            os.environ.update(PROTOAGENT_BOX_ROOT=root, PROTOAGENT_HOME=root)
-            reset_instance_paths()
-            soul = Path(root) / "config" / "SOUL.md"
-            soul.parent.mkdir()
-            soul.write_text("# Identity\nI am an assistant running synthetic context and cache evaluations.\n")
-            probe = RequestProbe()
-            outcomes = []
+    with isolated_instance("pa-prompt-baseline-",
+                           "# Identity\nI am an assistant running synthetic context and cache evaluations.\n"):
+        probe = RequestProbe()
+        outcomes = []
 
-            async def run():
-                return await asyncio.wait_for(_live(config, args.model, max(1, args.repeat), probe, outcomes), args.timeout)
+        async def run():
+            return await asyncio.wait_for(_live(config, args.model, max(1, args.repeat), probe, outcomes), args.timeout)
 
-            try:
-                report = asyncio.run(run())
-            except Exception as exc:
-                report = {**probe.report(), "model_target": args.model, "failure_type": type(exc).__name__,
-                          "quality": [*outcomes, {"scenario": probe.scenario, "passed": False, "incomplete": True}]}
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(json.dumps(report, indent=2) + "\n")
-            print(f"Recorded {len(report['rows'])} model calls to {args.output}")
-            return 0 if all(x["passed"] for x in report["quality"]) else 1
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-        reset_instance_paths()
+        try:
+            report = asyncio.run(run())
+        except Exception as exc:
+            report = {**probe.report(), "model_target": args.model, "failure_type": type(exc).__name__,
+                      "quality": [*outcomes, {"scenario": probe.scenario, "passed": False, "incomplete": True}]}
+        write_report(args.output, report)
+        print(f"Recorded {len(report['rows'])} model calls to {args.output}")
+        return 0 if all(x["passed"] for x in report["quality"]) else 1
 
 
 if __name__ == "__main__":
