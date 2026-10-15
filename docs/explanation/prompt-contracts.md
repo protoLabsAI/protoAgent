@@ -27,9 +27,9 @@ the equivalence, so the labels annotate the real prompt). Section order:
 | # | Label | Source | Present when |
 |---|-------|--------|--------------|
 | 1 | `SOUL` | `instance_paths().soul_path` → `{workspace}/SOUL.md` → repo default | always (placeholder if none) |
-| 2 | `Subagents` | `_build_subagent_section()` over `SUBAGENT_REGISTRY` | `include_subagents=True`; lists only `lead_visible` entries |
-| 3 | `Managed projects` | `_build_projects_section(projects)` | `projects` non-empty (ADR 0007 fenced fs toolset) |
-| 4 | `Collaboration` | `_build_collaboration_section()` | a delegate registry has names (#3042) |
+| 2 | `Subagents` | `_build_subagent_section()` over `SUBAGENT_REGISTRY` | `include_subagents=True` and `task` or `task_batch` reachable; lists only `lead_visible` entries |
+| 3 | `Managed projects` | `_build_projects_section(projects)` | `projects` non-empty and at least one listed filesystem operation reachable |
+| 4 | `Collaboration` | `_build_collaboration_section()` | a delegate registry has names and `delegate_to` is reachable (#3042) |
 | 5 | `Context` | the `context` argument under a `# Context` heading | legacy callers only — no runtime caller passes it since ADR 0108 D2 (context is a projected message) |
 | 6 | `Operating model` | `_build_operating_model(bound_tool_names)` | at least one autonomous primitive is bound (goal / tasks / schedule / watch / wait) |
 | 7 | `Guidelines` | inline, fork-override point | always; the async-work rule only when an async capability is bound |
@@ -45,7 +45,8 @@ bound at the model API, never rendered into prose.
 - `bound_tool_names` — the capability map `graph/prompts.py::CAPABILITY_GROUPS`
   (goal / tasks / schedule / watch / wait → tool names) decides which operating-model
   paragraphs appear; the shared async-work guideline is gated on delegation, schedule, watch or wait capabilities.
-  `None` means "emit everything" (legacy callers).
+  Each tool is checked individually, including partial groups. `None` retains legacy
+  potential-capability guidance with an explicit runtime-availability qualification.
 - `include_subagents` — whether the roster section exists at all.
 - `SubagentConfig.lead_visible` — a workflow-internal subagent (`antagonist`,
   `verifier`, `synthesizer`, `codebase-mapper`, `review-finder`, `review-synthesizer`,
@@ -55,6 +56,10 @@ bound at the model API, never rendered into prose.
   three-entry template fixture; the ceiling below guards the template's static composition.
 - `config/SOUL.md` — the persona; the only part an operator is expected to edit.
 - `projects` and a configured delegate registry add their sections.
+
+The graph passes its final lead-visible tool catalog, including discoverable deferred
+tools and excluding held subagent-only tools. Loading deferred schemas on a later
+model call does not regenerate this prefix. Configuration changes rebuild it.
 
 ## 2. Subagent — `build_subagent_prompt()`
 
@@ -101,7 +106,7 @@ set, and names none when the set is not yet known. `projects` is threaded throug
 plane does carry the filesystem tools.
 
 Callers that cannot know their tool set may still pass `bound_tool_names=None` and
-receive the full doctrine — honest only when every capability is really reachable;
+receive legacy potential-capability guidance qualified by actual runtime availability;
 prefer a `bound_tool_names_factory` resolved at the first real turn.
 
 ## 4. Provider-transformed — `ProviderShapeMiddleware`
@@ -148,10 +153,10 @@ billing).
 
 | Contract / section | Chars | ≈ tokens |
 |--------------------|------:|---------:|
-| Lead · `Subagents` (3 lead-visible entries) | 1,637 | 409 |
-| Lead · `Operating model` (all capabilities) | 1,107 | 276 |
+| Lead · `Subagents` (3 lead-visible entries) | 1,612 | 403 |
+| Lead · `Operating model` (all capabilities) | 1,099 | 274 |
 | Lead · `Guidelines` (all capabilities) | 718 | 179 |
-| **Lead · doctrine total (ex-SOUL)** | **3,462** | **865** |
+| **Lead · doctrine total (ex-SOUL)** | **3,429** | **857** |
 | Lead · minimal (no subagents, no autonomous tools) | 340 | 85 |
 | Subagent · smallest (`self-improve`) | 1,091 | 272 |
 | Subagent · largest lead-visible (`researcher`) | 3,317 | 829 |

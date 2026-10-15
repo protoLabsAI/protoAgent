@@ -156,6 +156,18 @@ def _isolate_goal_verifier_registry(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_subagent_registry():
+    """Plugin wiring must not grow a later test's prompt roster on an xdist worker."""
+    from copy import deepcopy
+    from graph.subagents.config import SUBAGENT_REGISTRY
+
+    original = deepcopy(SUBAGENT_REGISTRY)
+    yield
+    SUBAGENT_REGISTRY.clear()
+    SUBAGENT_REGISTRY.update(original)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_plugin_service_registry(monkeypatch):
     """The same snapshot/restore for the plugin-service table (ADR 0116): plugin wiring
     rebinds it with ``set_plugin_services``, so a test that wires plugins (or sets fakes)
