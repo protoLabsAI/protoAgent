@@ -48,7 +48,7 @@ import { useSteerQueue } from "./useSteerQueue";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
 import { registerChatEscapeHandler, resolveEscapeAction } from "./escapeStop";
-import { registerSlashDispatcher } from "./slashDispatch";
+import { prefixDraft, registerSlashDispatcher } from "./slashDispatch";
 import { isTaskCanceled, isTaskFailed } from "./taskState";
 import { resolveComposerUp } from "./queuedRecall";
 import { isDuplicateRiskActive, nextDuplicateRisk, type DuplicateRisk } from "./duplicateRisk";
@@ -445,8 +445,10 @@ export function ChatSessionSlot({
       // this file already do: `completeCommand` swaps only the `/name` token under the caret
       // and keeps the surrounding text, and the participant prefill (#3049) fills only an
       // empty composer. Idempotent, so picking the same row twice doesn't stutter the token.
+      // A prose prefill (a plugin view's `protoagent:chat:compose`) gets a blank line before
+      // the operator's existing text instead of running into it — see `prefixDraft`.
       prefillDraft: (text: string) => {
-        setDraft((d) => (d.startsWith(text) ? d : text + d));
+        setDraft((d) => prefixDraft(d, text));
         textareaRef.current?.focus();
       },
     });

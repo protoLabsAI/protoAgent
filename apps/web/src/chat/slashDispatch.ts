@@ -180,3 +180,14 @@ export function prefillChatDraft(text: string): boolean {
   dispatcher.prefillDraft(text);
   return true;
 }
+
+/** The draft after a prefill of `text` — the pure body of `SlashDispatchTarget.prefillDraft`.
+ *  Prefix, never replace, and idempotent (a draft that already leads with `text` is left
+ *  alone). A `/token ` ends in its own separator; prose that doesn't (a plugin view's
+ *  `protoagent:chat:compose`) is set off from what the operator already typed by a blank line
+ *  rather than run into its first word. */
+export function prefixDraft(draft: string, text: string): string {
+  if (draft.startsWith(text)) return draft;
+  if (!draft || /\s$/.test(text)) return text + draft;
+  return `${text}\n\n${draft}`;
+}

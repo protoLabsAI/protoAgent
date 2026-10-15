@@ -22,6 +22,7 @@ import { useUI } from "../state/uiStore";
 import { postToPluginView, resetPluginViewInbox, takePluginViewMessages } from "../lib/pluginViewInbox";
 import { consoleTheme, PL_TOKEN_VARS, PluginView, pluginIdFromView, pluginMenuType } from "./PluginView";
 import { routePluginCodeOpen } from "../codeviewer/fromPlugin";
+import { registerSlashDispatcher } from "../chat/slashDispatch";
 
 // The code-open router is exercised on its own (codeviewer/fromPlugin.test.ts); here only the
 // bridge's gate — which messages reach it — is under test.
@@ -746,5 +747,66 @@ describe("PluginView — protoagent:code:open", () => {
     await post(frame.contentWindow, "https://foreign.example", MSG);
     await post(frame.contentWindow, window.location.origin, { ...MSG, path: "../../etc/passwd" });
     expect(routePluginCodeOpen).not.toHaveBeenCalled();
+  });
+});
+
+// `protoagent:chat:compose` — the view DRAFTS a chat message (never sends). Same gate as the
+// other messages: THIS iframe, at its page's origin. The seam is the real one: a registered
+// visible slot with a session receives the prefill synchronously.
+describe("PluginView — protoagent:chat:compose", () => {
+  let container: HTMLElement;
+  let root: Root;
+  let off: () => void;
+  let prefill: ReturnType<typeof vi.fn<(text: string) => void>>;
+  let run: ReturnType<typeof vi.fn<(raw: string) => boolean>>;
+  const view: PluginViewType = { id: "atlas", label: "Atlas", path: "/plugins/atlas/view", key: "plugin:atlas:atlas" };
+  const MSG = { type: "protoagent:chat:compose", text: "What does the Login button do?" };
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200 })));
+    prefill = vi.fn<(text: string) => void>();
+    run = vi.fn<(raw: string) => boolean>(() => true);
+    off = registerSlashDispatcher({ run, sessionId: "s1", surfaceActive: true, prefillDraft: prefill });
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    off();
+    vi.unstubAllGlobals();
+  });
+
+  async function mountFrame() {
+    await act(async () => {
+      root.render(h(PluginView, { view }));
+    });
+    for (let i = 0; i < 10 && !container.querySelector("iframe"); i++) {
+      await act(async () => Promise.resolve());
+    }
+    return container.querySelector("iframe")!;
+  }
+  const post = (source: MessageEventSource | null, origin: string, data: unknown) =>
+    act(async () => {
+      window.dispatchEvent(new MessageEvent("message", { source, origin, data }));
+    });
+
+  it("prefills the visible composer from its own frame — and never sends, even when asked", async () => {
+    const frame = await mountFrame();
+    await post(frame.contentWindow, window.location.origin, { ...MSG, send: true, sessionId: "other", agent: "x" });
+    expect(prefill).toHaveBeenCalledTimes(1);
+    expect(prefill).toHaveBeenCalledWith(MSG.text);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("ignores another window, an opaque or foreign origin, and an over-cap payload", async () => {
+    const frame = await mountFrame();
+    await post(window, window.location.origin, MSG);
+    await post(frame.contentWindow, "null", MSG);
+    await post(frame.contentWindow, "https://foreign.example", MSG);
+    await post(frame.contentWindow, window.location.origin, { ...MSG, text: "x".repeat(4097) });
+    expect(prefill).not.toHaveBeenCalled();
   });
 });
