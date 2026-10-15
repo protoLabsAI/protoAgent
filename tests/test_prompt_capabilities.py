@@ -26,10 +26,11 @@ def test_partial_groups_never_advertise_absent_members(tool):
     parts = dict(build_system_prompt_parts(bound_tool_names=frozenset({tool})))
     text = "\n".join(parts.values())
     for name in set().union(*CAPABILITY_GROUPS.values()):
+        needle = "`wait(" if name == "wait" else f"`{name}`"
         if name == tool:
-            assert f"`{name}" in text
+            assert needle in text
         else:
-            assert f"`{name}" not in text
+            assert needle not in text
 
 
 @pytest.mark.parametrize("bound", [{"task"}, {"task_batch"}, {"task", "task_batch"}])
