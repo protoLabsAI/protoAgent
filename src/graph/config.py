@@ -1818,11 +1818,24 @@ class LangGraphConfig:
             # layer still means "App defaults", and App defaults imply a registry.
             return cls.app_defaults()
 
-        # External secrets-manager hydration (ADR 0080) — before the parse, so the
-        # env fallbacks consulted below (and later, lazily, by create_llm / plugin
-        # requires_env gates) already see manager-sourced values.
+        # Parse the candidate BEFORE hydration can mutate the process environment.
+        # A rejected plugin/policy document must leave live credentials untouched.
+        # Reuse the resolved plugin schemas on the final parse: rediscovery after
+        # hydration could introduce a new rejection after side effects (#4204).
+        from graph.config_load import ConfigLoadError
+
+        try:
+            candidate = cls.from_dict(merged, secrets=secrets, config_dir=p.parent)
+        except ConfigLoadError as exc:
+            raise ConfigLoadError(f"{p}: {exc}") from None
         _hydrate_external_secrets(merged, secrets)
-        return cls.from_dict(merged, secrets=secrets, config_dir=p.parent)
+        # No manager means no changed env defaults and no reason to parse twice.
+        if not candidate.secrets_manager_enabled:
+            return candidate
+        return cls.from_dict(
+            merged, secrets=secrets, config_dir=p.parent,
+            _plugin_config=candidate.plugin_config,
+        )
 
     @classmethod
     def app_defaults(cls) -> "LangGraphConfig":
@@ -1854,6 +1867,7 @@ class LangGraphConfig:
         *,
         secrets: dict | None = None,
         config_dir: Path | str | None = None,
+        _plugin_config: dict | None = None,
     ) -> "LangGraphConfig":
         """Build a config from an already-loaded YAML dict — the parse seam.
 
@@ -1861,7 +1875,10 @@ class LangGraphConfig:
         locates plugin config (ADR 0019). Both optional so callers/tests can parse a
         bare dict. Behavior is identical to the old inline ``from_yaml`` parse.
         """
-        data = data or {}
+        from graph.config_load import _mapping
+
+        data = _mapping(data, "configuration")
+        secrets = _mapping(secrets, "secrets.yaml")
         # A top-level section present but empty/commented-out in YAML parses to
         # None (e.g. a bare `routing:` with every key commented). The many
         # `data.get("x", {}).get(...)` reads below would then return None and
@@ -1869,9 +1886,11 @@ class LangGraphConfig:
         # commenting a whole block out — can't break the loader. (Subsumes the
         # per-section `or {}` guards; top-level config keys are all mappings.)
         data = {k: ({} if v is None else v) for k, v in data.items()}
-        secrets = secrets or {}
+        secrets = {k: _mapping(v, f"secrets.yaml: {k}") for k, v in secrets.items()}
         config_dir = Path(config_dir) if config_dir is not None else Path(".")
 
+        plugin_config = (_resolve_plugin_config(data, secrets, config_dir)
+                         if _plugin_config is None else _plugin_config)
         model = data.get("model", {})
         subagents = data.get("subagents", {})
         middleware = data.get("middleware", {})
@@ -2284,7 +2303,7 @@ class LangGraphConfig:
             security_redact_tool_output=bool(
                 (data.get("security") or {}).get("redact_tool_output", cls.security_redact_tool_output)
             ),
-            plugin_config=_resolve_plugin_config(data, secrets, config_dir),
+            plugin_config=plugin_config,
         )
 
         for name in ("researcher",):

@@ -312,7 +312,7 @@ def register_knowledge_routes(app) -> None:
         if idx is None:
             return {"enabled": False, "id": None}
         root = _user_skills_root()
-        from graph.skills.authoring import classify, remove_skill, slugify, write_skill
+        from graph.skills.authoring import classify, replace_skill, slugify
 
         cur = _find_skill(idx, skill_id, writable_only=True)
         if cur is None:
@@ -321,28 +321,27 @@ def register_knowledge_routes(app) -> None:
         if not editable:
             return JSONResponse({"detail": f"{origin} skills are read-only"}, status_code=403)
         body = body or {}
-        name = str(body.get("name", cur.get("name", ""))).strip()
-        description = str(body.get("description", "")).strip()
-        prompt = str(body.get("prompt_template", body.get("body", ""))).strip()
+        fields = (body.get("name", cur.get("name", "")), body.get("description", ""),
+                  body.get("prompt_template", body.get("body", "")))
+        if any(not isinstance(value, str) for value in fields):
+            return JSONResponse({"detail": "name, description, and body must be strings"}, status_code=400)
+        name, description, prompt = (value.strip() for value in fields)
         if not name or not description or not prompt:
             return JSONResponse({"detail": "name, description, and body are required"}, status_code=400)
         new_slug, old_slug = slugify(name), slugify(cur.get("name", ""))
         if new_slug != old_slug and any(
-            slugify(s.get("name", "")) == new_slug and s.get("id") != skill_id for s in idx.all_skills()
+            s.get("tier") != "commons" and slugify(s.get("name", "")) == new_slug
+            and s.get("id") != skill_id for s in idx.all_skills()
         ):
             return JSONResponse({"detail": f"a skill named “{name}” already exists"}, status_code=409)
         try:
-            artifact = write_skill(
-                root, name, description, prompt,
+            replace_skill(
+                idx, root, cur, name, description, prompt,
                 tools=_as_str_list(body.get("tools") or body.get("tools_used")),
                 user_facing=bool(body.get("user_facing", cur.get("user_facing", False))),
                 slash=str(body.get("slash", cur.get("slash", "") or "")).strip(),
                 user_only=bool(body.get("user_only", cur.get("user_only", False))),
             )
-            idx.delete_skill(skill_id)
-            if new_slug != old_slug:
-                remove_skill(root, cur.get("name", ""))  # renamed → drop the old folder
-            idx.add_skill(artifact, source="disk")
         except Exception as exc:  # noqa: BLE001
             log.exception("[playbooks] update failed")
             return JSONResponse({"detail": f"update failed: {exc}"}, status_code=400)

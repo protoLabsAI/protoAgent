@@ -139,3 +139,27 @@ Settings, the CLI, and `PATCH /api/config`.
 - **A typed dataclass field per plugin (generated).** Rejected — can't generate
   dataclass fields for unknown plugins at import time; the `plugin_config` dict is
   the honest shape for open extension.
+
+## Configuration failure contract (#4204, October 2026)
+
+Active plugin sections and their secrets overlays must be mappings. Absent or
+null sections use manifest defaults; false, zero, lists, and other scalar values
+are rejected rather than interpreted as absence. Explicit empty values within a
+valid section retain their existing meaning. Invalid active schema discovery
+rejects the load: running plugins with missing policy is not a safe fallback.
+Disabled plugins remain excluded by discovery. Missing optional files remain
+allowed; present malformed or unreadable files reject the load with diagnostics
+that omit secret values.
+
+Configuration loading parses the candidate before external-secrets hydration.
+Rejected malformed configuration therefore cannot change process credentials
+before the reload handler retains the last-known-good graph and policy. If a
+secrets manager is enabled, the final parse reuses the already-resolved plugin
+configuration while refreshing environment-derived defaults; discovery does not
+run again after hydration. This guarantee covers configuration rejection, not
+arbitrary failures during subsequent plugin registration or graph construction.
+
+Background secrets refresh and explicit Sync now also validate their raw documents
+before hydration. They cannot apply credentials from a malformed candidate left
+on disk after a rejected reload. Connection testing remains read-only and does
+not apply fetched values to the environment.

@@ -11,6 +11,8 @@ with NO host layer and opt in by pointing it at a temp file.
 """
 
 import logging
+
+import pytest
 import textwrap
 from pathlib import Path
 
@@ -108,14 +110,14 @@ def test_host_cannot_set_a_secret(tmp_path, monkeypatch):
     assert cfg.model_name == "host-model"
 
 
-def test_corrupt_host_file_degrades_without_crashing(tmp_path, monkeypatch):
-    """A malformed host file is ignored (warn), not fatal — cascade collapses to leaf."""
+def test_corrupt_host_file_rejects_configuration(tmp_path, monkeypatch):
+    """A malformed host policy must not silently disappear from the cascade."""
     hp = tmp_path / "host-config.yaml"
     hp.write_text("model:\n  name: [unclosed\n")  # invalid YAML
     monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(hp))
     path = _agent_yaml(tmp_path, "model:\n  name: agent-model\n")
-    cfg = LangGraphConfig.from_yaml(path)  # must not raise
-    assert cfg.model_name == "agent-model"
+    with pytest.raises(ValueError, match="host-config.yaml: malformed YAML"):
+        LangGraphConfig.from_yaml(path)
 
 
 def test_host_only_no_agent_file(tmp_path, monkeypatch):

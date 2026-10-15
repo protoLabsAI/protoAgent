@@ -225,12 +225,16 @@ def test_reviewer_skill_writes_never_report_unconfirmed_index_mutations(tmp_path
     original_delete = idx.delete_skill
     monkeypatch.setattr(idx, "delete_skill", lambda _skill_id: False)
     editors = _by_name(_build_skill_editor_tools())
+    def failed_replace(*args):
+        raise RuntimeError("index replacement failed")
+    monkeypatch.setattr(idx, "replace_skill", failed_replace)
 
     update = editors["update_skill"].invoke(
         {"name": "Deploy", "description": "new", "body": "new body", "reason": "verified"}
     )
     assert update.startswith("Error updating skill")
-    assert "old body" in (home / "skills" / "deploy" / "SKILL.md").read_text()
+    assert not (home / "skills" / "deploy" / "SKILL.md").exists()
+    assert idx.all_skills()[0]["prompt_template"] == "old body"
     delete = editors["delete_skill"].invoke({"name": "Deploy", "reason": "verified"})
     assert delete.startswith("Error:") and "confirm deletion" in delete
     assert len(idx.all_skills()) == 1

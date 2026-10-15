@@ -254,6 +254,70 @@ class SkillsIndex:
             return None
 
     @_locked
+    def replace_skill(self, expected: dict, publish, restore) -> int:
+        """Replace one row and its artifact under the index lock.
+
+        Callbacks publish/restore the filesystem while writers are serialized.
+        Unlike best-effort curation methods, this operation raises on failure and
+        verifies compensation, including a commit that succeeded before raising.
+        Process-crash recovery requires a durable journal and is not provided here.
+        """
+        conn = self._open_conn()
+        skill_id = int(expected["id"])
+        conn.execute("BEGIN IMMEDIATE")
+        snapshot = None
+        published = False
+        try:
+            row = conn.execute("SELECT rowid AS id, * FROM skills_fts WHERE rowid = ?", (skill_id,)).fetchone()
+            if row is None or self._row_to_dict(row) != {k: v for k, v in expected.items() if k != "tier"}:
+                raise ValueError("skill changed since it was read; reload before editing")
+            snapshot = dict(row)
+            published = True  # publication may change disk and then raise
+            artifact = publish()
+            values = {
+                "name": artifact.name, "description": artifact.description,
+                "prompt_template": artifact.prompt_template,
+                "tools_used": " ".join(artifact.tools_used or []),
+                "source_session_id": artifact.source_session_id,
+                "source": "disk", "user_facing": "1" if artifact.user_facing else "0",
+                "slash": artifact.slash_token() if artifact.user_facing else artifact.slash,
+                "user_only": "1" if artifact.user_only else "0",
+            }
+            conn.execute(
+                "UPDATE skills_fts SET " + ", ".join(f"{key} = ?" for key in values) + " WHERE rowid = ?",
+                (*values.values(), skill_id),
+            )
+            conn.commit()
+            return skill_id
+        except Exception as original:
+            failures = []
+            try:
+                conn.rollback()
+                if snapshot is not None:
+                    current = conn.execute("SELECT rowid AS id, * FROM skills_fts WHERE rowid = ?", (skill_id,)).fetchone()
+                    if current is None or dict(current) != snapshot:
+                        columns = [key for key in snapshot if key != "id"]
+                        conn.execute("DELETE FROM skills_fts WHERE rowid = ?", (skill_id,))
+                        conn.execute(
+                            "INSERT INTO skills_fts (rowid, " + ", ".join(columns) + ") VALUES (" +
+                            ", ".join("?" for _ in range(len(columns) + 1)) + ")",
+                            (skill_id, *(snapshot[key] for key in columns)),
+                        )
+                        conn.commit()
+                    restored = conn.execute("SELECT rowid AS id, * FROM skills_fts WHERE rowid = ?", (skill_id,)).fetchone()
+                    if restored is None or dict(restored) != snapshot:
+                        raise RuntimeError("index snapshot verification failed")
+            except Exception as exc:
+                failures.append(f"index recovery unconfirmed: {exc}")
+            if published:
+                try:
+                    restore()
+                except Exception as exc:
+                    failures.append(f"artifact recovery unconfirmed: {exc}")
+            status = "; ".join(failures) if failures else "prior state restored" if published else "no artifact changes"
+            raise RuntimeError(f"{original}; {status}") from original
+
+    @_locked
     def replace_disk_skills(self, artifacts: list[object]) -> None:
         """Reset the ``disk`` source to exactly *artifacts*, leaving ``emitted``
         skills intact. Used to (re)seed human-authored SKILL.md skills on boot
