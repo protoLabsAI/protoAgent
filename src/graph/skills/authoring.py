@@ -245,6 +245,7 @@ def replace_skill(index, root: Path, current: dict, name: str, description: str,
     existed = False
     moved = False
     started = False
+    preexisting_dirs = set()
 
     def publish():
         nonlocal backup, original, existed, moved, started
@@ -256,6 +257,7 @@ def replace_skill(index, root: Path, current: dict, name: str, description: str,
             raise ValueError("destination collides with another skill")
         if new != old and new.parent.exists():
             raise ValueError("destination directory already exists")
+        preexisting_dirs.update(folder for folder in (old.parent, new.parent) if folder.exists())
         existed = old.is_file()
         original = old.read_bytes() if existed else None
         backup = archive_skill(root, current, session_id=session_id, reason=reason)
@@ -280,6 +282,15 @@ def replace_skill(index, root: Path, current: dict, name: str, description: str,
                 new.unlink(missing_ok=True)
             if old.exists() or new.exists():
                 raise RuntimeError("new artifact still exists")
+            for folder in {old.parent, new.parent} - preexisting_dirs:
+                try:
+                    folder.rmdir()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    # Preserve files added independently; remove only empty directories.
+                    if not any(folder.iterdir()):
+                        raise
 
     try:
         index.replace_skill(current, publish, restore)

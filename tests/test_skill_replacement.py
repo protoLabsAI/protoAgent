@@ -179,3 +179,24 @@ def test_index_recovery_error_is_reported(skill):
     assert 'prior state restored' not in str(exc.value)
     assert authoring.skill_path(root, 'Deploy').read_bytes() == content
     idx._conn.conn.rollback()
+
+
+@pytest.mark.parametrize('preexisting_directory', [False, True])
+@pytest.mark.parametrize('rename', [False, True])
+def test_failed_materialization_removes_only_new_empty_directories(skill, preexisting_directory, rename):
+    idx, root, _, _ = skill
+    path = authoring.skill_path(root, 'Deploy')
+    path.unlink()
+    if not preexisting_directory:
+        path.parent.rmdir()
+    idx._conn.execute("UPDATE skills_fts SET source = 'emitted'")
+    idx._conn.commit()
+    before = idx.all_skills()[0]
+    idx._conn = FaultConnection(idx._conn, 'commit_before')
+    with pytest.raises(RuntimeError, match='prior state restored'):
+        authoring.replace_skill(idx, root, before, 'Release' if rename else 'Deploy', 'new', 'new body')
+    assert path.parent.exists() == preexisting_directory
+    assert not (root / 'release').exists()
+    # The failed destination must not block a subsequent legitimate edit.
+    authoring.replace_skill(idx, root, before, 'Release', 'new', 'new body')
+    assert idx.get_skill('Release')['prompt_template'] == 'new body'
