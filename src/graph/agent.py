@@ -1325,24 +1325,19 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
         state: Annotated[Any, InjectedState] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
     ) -> str:
-        """Delegate a single task to a specialized subagent.
+        """Delegate one focused task to a specialized subagent.
 
-        Use this for one focused delegation. To run several independent
-        delegations at once, use ``task_batch`` instead — it runs them
-        concurrently rather than one after another.
+        Use task_batch for independent fan-out.
 
         Args:
-            description: Short description of what this task will accomplish
-            prompt: Detailed instructions for the subagent
-            subagent_type: Which subagent to use — one of the registered roster
-                shown in the system prompt (e.g. researcher, strategist, …)
-            run_in_background: Set True for long-running, independent work (deep
-                research, multi-step gathering) you don't need to block on. The
-                task runs detached as its own turn and returns IMMEDIATELY with a
-                job id; you will be notified of the result automatically on a
-                later turn. When you set this, do NOT poll, re-check, or spawn a
-                duplicate — just continue with other work. Leave False (the
-                default) when you need the result to finish the current turn.
+            description: Short summary of the task.
+            prompt: Self-contained instructions for the subagent.
+            subagent_type: Registered role to use.
+            run_in_background: True for long independent work. With background
+                execution enabled, returns a job id and delivers the result on a
+                later turn. Continue independent work or yield if nothing else can
+                progress; do not poll or spawn a duplicate. False waits for the result
+                in this turn. Without background support, either setting runs foreground.
         """
 
         async def _spawn_bg() -> str:
@@ -1376,7 +1371,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 f"Background agent started: {job_id} ({subagent_type}: {description}). "
                 "It is running detached; you will be notified of the result automatically "
                 "on a later turn. Do NOT poll, re-check, or spawn a duplicate for this — "
-                "continue with other work in the meantime."
+                "Continue independent work; otherwise yield until the result arrives."
             )
 
         # Delegated model-call usage rows, billed to the parent turn's telemetry
@@ -1422,7 +1417,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             return (
                 f"This '{subagent_type}' delegation ran past the {auto_s:.0f}s inline budget, "
                 f"so I moved it to the background as {job_id}. You'll be notified when it "
-                "finishes — continue with other work; do NOT re-spawn it."
+                "finishes. Continue independent work; otherwise yield. Do NOT re-spawn it."
             )
 
         # Foreground delegation: a blocking `await` that would freeze the turn until
@@ -1486,34 +1481,22 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
         state: Annotated[Any, InjectedState] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
     ) -> str:
-        """Delegate several independent tasks to subagents concurrently.
+        """Delegate independent tasks concurrently within the configured concurrency cap.
 
-        Prefer this over multiple sequential ``task`` calls whenever the
-        delegations don't depend on each other (e.g. research three topics,
-        check several sources) — they run in parallel, bounded by the
-        configured concurrency cap, so total latency is roughly the slowest
-        task rather than the sum. Use plain ``task`` for a single delegation
-        or when one task's output feeds the next.
+        Use task for one delegation or for steps that depend on preceding results.
 
         Args:
-            tasks: A list of task specs. Each item is an object with:
-                - ``description`` (str, required): short summary of the task
-                - ``prompt`` (str, required): detailed instructions
-                - ``subagent_type`` (str, optional): defaults to "researcher"
-            run_in_background: Set True to fan the whole batch out DETACHED — every
-                task spawns as its own background agent and this returns IMMEDIATELY
-                with their job ids, instead of blocking until they finish. Use it for a
-                wide fan-out of long / independent / quota-heavy work (research several
-                topics at once) you don't need to wait on; you'll be notified as each
-                finishes. When you set this, do NOT poll, re-check, or re-spawn — just
-                continue. Leave False (the default) when you need the results in this
-                turn. Concurrency is capped either way.
+            tasks: Objects with required description and prompt strings, and optional
+                subagent_type (default researcher). Each prompt must stand alone.
+            run_in_background: True returns job ids and delivers results on later turns
+                when background execution is enabled. Continue independent work or yield
+                if nothing else can progress; do not poll or re-spawn. False waits for
+                all results. Without background support, either setting runs foreground.
 
-        Returns the results concatenated in the same order as ``tasks``, each
-        prefixed with its 1-based index. Individual failures are reported
-        inline and do not abort the batch. With ``run_in_background`` the return is
-        instead the list of started job ids (results arrive later as notifications).
+        Foreground results follow input order with 1-based indices; a failure is
+        reported inline without aborting siblings. Background results arrive as notifications.
         """
+
         if not tasks:
             return "Error: task_batch called with an empty task list."
         if not isinstance(tasks, list):
@@ -1562,7 +1545,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             return (
                 f"Started {started} background agent(s), running detached. You will be "
                 "notified automatically as each finishes — do NOT poll, re-check, or "
-                "re-spawn; continue with other work.\n" + "\n".join(lines)
+                "re-spawn. Continue independent work; otherwise yield.\n" + "\n".join(lines)
             )
 
         sem = asyncio.Semaphore(max_concurrency)
