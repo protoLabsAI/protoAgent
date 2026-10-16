@@ -141,7 +141,7 @@ async def test_anthropic_oauth_astream_reconnects_on_an_sdk_reset(monkeypatch):
 
     client = ao._OAuthChatAnthropic(
         model="claude-opus-5-5",
-        api_key="oauth-via-auth-token",
+        api_key="unused-placeholder",
         oauth_token="tok-abc",
         default_request_timeout=120,
         max_retries=2,
