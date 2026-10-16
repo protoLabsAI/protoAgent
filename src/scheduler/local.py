@@ -211,6 +211,15 @@ def _a2a_turn_failure(payload: object) -> str:
     result = payload.get("result")
     if not isinstance(result, dict):
         return ""
+    # A2A 1.0 SendMessage answers ``{"result": {"task": Task}}`` (a oneof with a bare
+    # ``message``) — the shape the scheduler's own ``A2A-Version: 1.0`` POST gets. Reading
+    # only ``result.status`` (the stored-task / v0.3 shape) missed EVERY failed fire: a
+    # turn whose model stream died mid-turn came back TASK_STATE_FAILED under
+    # ``result.task`` and was recorded as a success. Accept both, like
+    # ``a2a_impl.wire.task_id_from_response``.
+    task = result.get("task")
+    if isinstance(task, dict):
+        result = task
     status = result.get("status")
     if not isinstance(status, dict):
         return ""
