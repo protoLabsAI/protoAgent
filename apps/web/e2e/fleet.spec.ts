@@ -835,6 +835,28 @@ test("Fleet Room: a member working on delegated turns shows busy with who asked,
   await expect(ava.getByTestId("flr-work")).toHaveCount(0);
 });
 
+test("Fleet Room on a token-gated hub: member feeds connect and the busy state shows (#4292)", async ({ page }, testInfo) => {
+  // A REAL bearer gate (`?gated=1`, mock-server.mjs mirrors auth.py): every proxied
+  // /agents/<slug>/api/events must carry a token the HUB minted — a member-minted one 401s.
+  const unauthorized: string[] = [];
+  page.on("response", (r) => {
+    if (r.status() === 401) unauthorized.push(new URL(r.url()).pathname);
+  });
+  await page.setExtraHTTPHeaders({
+    "x-e2e-fleet": `fleet-spec-${testInfo.parallelIndex}`,
+    "x-e2e-delegated": "ava",
+  });
+  await page.addInitScript(() => localStorage.setItem("protoagent.authToken", "e2e-operator-token"));
+  await page.goto("/app/?gated=1", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const ava = page.locator(".flr .flr__member", { hasText: "ava" });
+
+  await expect(ava.locator(".flr__pill--run")).toBeVisible();
+  await expect(ava.getByTestId("flr-work")).toContainText("for main");
+  await expect(ava.locator(".flr__pill--run")).toHaveCount(0, { timeout: 6000 });
+  expect(unauthorized.filter((p) => p.endsWith("/api/events"))).toEqual([]);
+});
+
 async function openFleetRoom(page) {
   // Boot readiness is asynchronous; wait until the workspace has mounted its keybindings.
   await expect(page.locator(".app-shell-main")).toBeVisible();

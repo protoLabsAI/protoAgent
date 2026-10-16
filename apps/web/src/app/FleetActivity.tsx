@@ -381,7 +381,11 @@ function useFleetStreams() {
       opening.current.add(slug);
       let token = "";
       try {
-        token = (await api.sseTokenFor(slug)).token || "";
+        // Minted by the HUB, never the member (#4292): the hub's auth middleware checks
+        // `/agents/<slug>/api/events?token=` against its OWN key before it proxies, then
+        // presents the member's credential itself. A member-minted token 401'd every feed
+        // on a token-gated hub, so the room showed nothing.
+        token = (await api.sseToken()).token || "";
       } catch {
         /* open mode → tokenless */
       }
