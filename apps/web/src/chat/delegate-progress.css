@@ -22,6 +22,11 @@
   gap: var(--pl-space-2);
   align-items: baseline;
 }
+/* Live, the head stays one line — tabular counts can't wrap "9 tool calls" → "10" onto a
+   second row and bounce the card taller. */
+.delegate-progress--live .dp-head {
+  flex-wrap: nowrap;
+}
 .dp-target {
   font-weight: 600;
   color: var(--pl-color-fg);
@@ -48,6 +53,20 @@
   gap: var(--pl-space-1_5);
   align-items: center;
   min-width: 0;
+}
+/* Fixed row geometry: a glyph vs a spinner (and an empty slot) all occupy the same height,
+   so the live tool list — always 1 + RECENT_SHOWN slots — can't change height per frame. */
+.dp-tool {
+  height: 1.5em;
+  line-height: 1.5em;
+}
+.dp-tool--empty {
+  visibility: hidden;
+}
+/* Stands in for the plan entries outside the live window; keeps the count constant. */
+.dp-plan-more {
+  padding-left: var(--pl-space-3);
+  color: var(--pl-color-fg-subtle);
 }
 .dp-plan-entry > span,
 .dp-tool-name {
@@ -88,10 +107,23 @@
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius-pill);
 }
+/* Only rendered while live. A two-line window with the height reserved up front, anchored to
+   the BOTTOM: the tail is built newest-last (DelegateProgressView slices the last chars of
+   the narration), so when it runs past two lines it's the OLDEST line that clips off the top
+   and the newest words the operator wants stay visible. A top-anchored -webkit-line-clamp
+   did the opposite — it kept the first two lines and hid the newest. white-space: normal (not
+   pre-line) so a snapshot's newlines can't add rows — the tail re-wraps within a fixed
+   footprint instead of bouncing the card 1↔4 lines tall. */
 .dp-text {
   margin: 0;
   color: var(--pl-color-fg-subtle);
   font-style: italic;
   overflow-wrap: anywhere;
-  white-space: pre-line;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  line-height: 1.4;
+  height: calc(2 * 1.4em);
+  white-space: normal;
 }
