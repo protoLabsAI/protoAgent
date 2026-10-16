@@ -1,5 +1,33 @@
 [
   {
+    "version": "v0.206.0",
+    "date": "2026-10-16",
+    "changes": [
+      "Plugins can declare a Node runtime requirement, and Node resolution is version-aware (#4238).",
+      "Plugin views can choose where code opens — protoagent:code:open takes open_in: \"pane\" | \"editor\" (#4241).",
+      "\"Open in editor\" falls back to the agent's filesystem.editor_command (#4241).",
+      "Plugin views can draft a chat message for the operator — protoagent:chat:compose (#4243).",
+      "Atlas is listed in the plugin directory (#4249).",
+      "artifact.save_file: a plugin's background job can put a file in the Artifact panel without an agent turn (#4253).",
+      "A2A and /v1 callers receive the files a turn delivers, with absolute links (#4252).",
+      "A background delegate's reply now reveals progressively instead of landing as one block (#4247).",
+      "The Conversation \"jump to latest\" button now has an accent fill, so it reads clearly over message text (#4250).",
+      "The Engineer persona maps architecture with Atlas when it's there (#4242).",
+      "The Brand & Launch persona can record architecture walkthrough videos with Atlas (#4251).",
+      "Background-work strip no longer resizes the transcript (#4246).",
+      "Background delegation progress keeps a fixed footprint while it runs (#4246).",
+      "Skill edits recover from disk and index failures (#4198).",
+      "Invalid configuration is rejected instead of silently dropping policy (#4204).",
+      "Rejected configuration reloads leave live credentials unchanged (#4204).",
+      "Browser résumé uploads on Greenhouse verify, and parallel browser actions no longer cross-contaminate fields (#4237).",
+      "Secrets sync and refresh errors identify the configuration file (#4239).",
+      "A code pane open with no line starts at the top of the file, not its end (#4241).",
+      "Greenhouse résumé uploads no longer intermittently report \"nothing is attached\" (#4244).",
+      "browser_select no longer fails on Greenhouse \"mark all that apply\" questions or the phone Country picker (#4245).",
+      "The managed Node install can no longer be garbage-collected mid-download (#4261)."
+    ]
+  },
+  {
     "version": "v0.205.0",
     "date": "2026-10-15",
     "changes": [
