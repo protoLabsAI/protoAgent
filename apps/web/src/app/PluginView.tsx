@@ -12,6 +12,7 @@ import { onTopic, replaySince } from "../lib/events";
 import { registerKeybinding } from "../ext/keybindingRegistry";
 import { runForwardedCombo } from "../keybindings/useKeybindings";
 import { createPluginEventRelay, parseSubscribe } from "../lib/pluginEventRelay";
+import { takeNavigateCatchUp, trackPluginViewMount, type PluginViewMountTracker } from "../lib/pluginNavigateCatchUp";
 import { onPluginViewMessage, requeuePluginViewContext, takePluginViewMessages } from "../lib/pluginViewInbox";
 import {
   codeOpenNotice,
@@ -300,6 +301,21 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
     };
   }, [src, view.pluginLoaded, view.pluginError, probeAttempt]);
 
+  // "Is this view open?" for the `ui.navigate` handler (#4283): a navigate to a mounted view
+  // leaves it alone, one to an unmounted view arms the catch-up above. Live views only, since
+  // the Configure dialog's embedded copy isn't the surface a navigate opens.
+  // Keyed on `src` too: a re-pointed frame is a new page that hasn't subscribed yet.
+  const mountTracker = useRef<PluginViewMountTracker | null>(null);
+  useEffect(() => {
+    if (embedded || !view.key) return;
+    const tracker = trackPluginViewMount(view.key);
+    mountTracker.current = tracker;
+    return () => {
+      tracker.release();
+      if (mountTracker.current === tracker) mountTracker.current = null;
+    };
+  }, [embedded, view.key, src]);
+
   // Event-bus relay across the sandbox (ADR 0039, extended #1640). The page subscribes via
   // `protoagent:subscribe {patterns, since?, background?}`; the host forwards matching bus
   // events in (`protoagent:event {topic, data, seq}`) and accepts `protoagent:publish
@@ -387,7 +403,13 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         if (!embedded && req.background !== undefined && view.key) {
           setPluginBackground(view.key, req.background);
         }
-        relay.subscribe(req);
+        // A `ui.navigate` that MOUNTED this view (it wasn't open) armed a catch-up (#4283):
+        // answer the page's first subscribe as if it had asked for `since`, so what the
+        // navigating tool published just before the navigate still reaches it. A page that
+        // names its own `since` stays authoritative; the armed one is consumed either way.
+        const catchUp = !embedded && view.key ? takeNavigateCatchUp(view.key) : null;
+        relay.subscribe(req.since === undefined && catchUp !== null ? { ...req, since: catchUp } : req);
+        mountTracker.current?.markSubscribed();
       } else if (m.type === "protoagent:keybindings") {
         // The page declares chords it wants (#1457). Ids are namespaced in the parser —
         // a view can't register or replace a core binding, or collide with another

@@ -83,6 +83,14 @@ window.addEventListener("message", (e) => {
   ring-buffer frames newer than it, oldest→newest, before live delivery resumes. This is what lets a
   remounted view catch up instead of polling. Your `since` is authoritative: the host resets its
   dedupe mark to it, so you will not see the same `seq` twice across a replay.
+- **A `registry.navigate()` that mounts you also catches you up.** "Publish, then navigate" is the
+  usual shape of a tool that drives its view. If the view is already open, the navigate leaves the
+  iframe alone and the event arrives live. If another surface holds its dock, the navigate mounts a
+  fresh page *after* the event crossed the bus. The host answers that page's first `subscribe` as
+  if it had passed a `since`, replaying your plugin's retained events from just before the navigate
+  (never further back than what your previous page was offered, nor more than a few seconds). A page
+  that sends its own `since` still wins.
+  ([#4283](https://github.com/protoLabsAI/protoAgent/issues/4283))
 - **`background: true` keeps you mounted while hidden.** Normally only the *visible* plugin's iframe
   is mounted, so a hidden view receives nothing. Only an explicit boolean changes the mount policy —
   omitting the field leaves it alone.
