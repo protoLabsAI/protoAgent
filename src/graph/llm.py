@@ -68,10 +68,41 @@ class StreamStallTimeout(TimeoutError):
     error."""
 
 
+def _sdk_transport_errors() -> tuple[type[BaseException], ...]:
+    """The transport errors of the ``httpx2`` / ``httpcore2`` fork the provider SDKs use.
+
+    anthropic>=1.8 and openai>=3 moved their HTTP stack from ``httpx``/``httpcore`` to the
+    ``httpx2``/``httpcore2`` packages. Those are a SEPARATE class hierarchy:
+    ``httpx2.ReadError`` is not an ``httpx.TransportError``. So a mid-stream connection
+    reset from either SDK (seen live: ``ConnectionResetError`` → ``httpcore2.ReadError`` →
+    ``httpx2.ReadError`` out of ``anthropic._streaming``) matched nothing below, skipped
+    the #1728 reconnect, and was logged as an "unhandled exception" rather than a provider
+    stream drop. Imported defensively: they arrive transitively with the SDKs, and an
+    install without them must still build an llm."""
+    errors: tuple[type[BaseException], ...] = ()
+    try:  # pragma: no cover - trivial import guard
+        import httpx2
+
+        errors += (httpx2.TransportError,)  # httpx2.ReadError / ConnectError / ReadTimeout / …
+    except ImportError:  # pragma: no cover
+        pass
+    try:  # pragma: no cover - trivial import guard
+        import httpcore2
+
+        errors += (httpcore2.NetworkError, httpcore2.TimeoutException)
+    except ImportError:  # pragma: no cover
+        pass
+    return errors
+
+
+SDK_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = _sdk_transport_errors()
+
+
 RETRYABLE_STREAM_ERRORS: tuple[type[BaseException], ...] = (
     httpx.TransportError,  # httpx.ReadError / ConnectError / ReadTimeout / …
     httpcore.NetworkError,  # httpcore.ReadError / WriteError / ConnectError (raw, unwrapped)
     httpcore.TimeoutException,  # httpcore.ReadTimeout / ConnectTimeout
+    *SDK_TRANSPORT_ERRORS,  # the same three from httpx2 / httpcore2 (the provider SDKs' stack)
     StreamStallTimeout,  # our first-token / inter-chunk idle deadline lapsed (#3699)
     *_STALL_ERRORS,  # provider went silent mid-stream (#2305)
 )
@@ -217,7 +248,13 @@ async def _guard_stream_timeout(
     then every gap after it) and raises :class:`StreamStallTimeout` when a wait lapses. It
     never bounds total wall-clock: every chunk resets the deadline, so a stream that keeps
     producing — a long output — still completes. The underlying stream is closed on the way
-    out so a cancelled read doesn't leak its connection."""
+    out so a cancelled read doesn't leak its connection.
+
+    The deadline runs on the event loop's MONOTONIC clock, which does not advance while the
+    host is asleep (macOS: ``mach_absolute_time``). A laptop that sleeps mid-call therefore
+    never trips this guard however long it sleeps — the frozen process resumes, and the
+    provider's dropped connection surfaces as a transport error instead, which the
+    reconnect loop handles (seen live 2026-10-16: a 17-min "stall" that was a system sleep)."""
     it = stream.__aiter__()
     waiting_for_first = True
     try:

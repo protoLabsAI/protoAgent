@@ -58,6 +58,14 @@ def upstream_unreachable(exc: BaseException | None) -> bool:
     except ImportError:  # pragma: no cover — httpx ships with the openai SDK
         pass
     try:
+        # The provider SDKs' own HTTP stack (anthropic>=1.8, openai>=3): a separate class
+        # hierarchy, so a mid-stream reset they raise is not an `httpx.TransportError`.
+        import httpx2
+
+        transport += (httpx2.TransportError,)
+    except ImportError:  # pragma: no cover
+        pass
+    try:
         import openai
 
         transport += (openai.APIConnectionError,)  # APITimeoutError subclasses it
