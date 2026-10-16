@@ -18,7 +18,6 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 ## Planned
 
-- **The trajectory** — an append-only log of everything the model sees, so resume, fork, search and replay all work from one session record. (#2806)
 
 ## In progress
 
@@ -27,6 +26,8 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 
 ## Shipped
+
+- **Trajectory reference log and read API** — recorded message identities/hashes, paged events, per-call reconstruction with explicit missing-content status, and the `/trajectory` command. Search, full-text capture and derived-view compaction are deferred. (#2806)
 
 - **Federation token follow-ups** — management UI, peer rotation, and fleet integration for ADR 0066 tokens. (v0.160.0)
 - **Multi-window desktop chat** — "Open in New Window" spawns a real second desktop window with its own chat surface. (v0.117.0)

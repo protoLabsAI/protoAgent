@@ -10,18 +10,6 @@
     ]
   },
   {
-    "status": "Planned",
-    "items": [
-      {
-        "title": "The trajectory",
-        "detail": "an append-only log of everything the model sees, so resume, fork, search and replay all work from one session record.",
-        "refs": [
-          "#2806"
-        ]
-      }
-    ]
-  },
-  {
     "status": "In progress",
     "items": [
       {
@@ -39,6 +27,13 @@
   {
     "status": "Shipped",
     "items": [
+      {
+        "title": "Trajectory reference log and read API",
+        "detail": "recorded message identities/hashes, paged events, per-call reconstruction with explicit missing-content status, and the /trajectory command. Search, full-text capture and derived-view compaction are deferred.",
+        "refs": [
+          "#2806"
+        ]
+      },
       {
         "title": "Federation token follow-ups",
         "detail": "management UI, peer rotation, and fleet integration for ADR 0066 tokens.",
