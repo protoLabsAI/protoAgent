@@ -93,6 +93,7 @@ export const KEY_REGISTRY: readonly KeySpec[] = [
   { id: "goals.dismissed", area: "local", pattern: /^protoagent\.goals\.dismissed$/, category: "dismissals", slug: noSlug, evictable: false },
   // ── prefs ──
   { id: "newAgent.showPreviewArchetypes", area: "local", pattern: /^protoagent\.newAgent\.showPreviewArchetypes$/, category: "prefs", slug: noSlug, evictable: false },
+  { id: "chat.bulkCloseHarvest", area: "local", pattern: /^protoagent\.chat\.bulkCloseHarvest$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "keybindings", area: "local", pattern: /^protoagent\.keybindings$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "chat.inputHistory", area: "local", pattern: /^protoagent\.chat\.inputHistory$/, category: "prefs", slug: noSlug, evictable: false },
   { id: "fleet.recent", area: "local", pattern: /^protoagent\.fleet\.recent$/, category: "prefs", slug: noSlug, evictable: false },

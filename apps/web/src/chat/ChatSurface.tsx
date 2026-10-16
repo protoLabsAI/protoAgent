@@ -20,6 +20,7 @@ import { exportChatToFile } from "./exportChat";
 import { continueInZed } from "./continueInZed";
 import { FS_ROOTS_QUERY_KEY } from "./useEditorLinker";
 import { useEditorPref } from "../lib/editorPref";
+import { getBulkCloseHarvest } from "../lib/bulkCloseHarvestPref";
 import { brandName } from "../lib/brand";
 import { queryClient } from "../lib/queryClient";
 import { isCodePaneEnabled } from "../codeviewer/enabled";
@@ -195,12 +196,16 @@ export function ChatSurface({
   }
 
   // Kick off a bulk close (Close others/left/right). `ids` is the already-resolved target list
-  // (sessionsToClose, anchor excluded). Split it: plain tabs close immediately, auto-harvesting
-  // each unless it's incognito (#4053, matching the delete dialog's default); goal-driving tabs,
-  // whose Stop-vs-Detach choice can't be defaulted safely, are queued through the SAME single-tab
-  // confirm one at a time. The pendingClose effect initialises the promoted tab's switches.
+  // (sessionsToClose, anchor excluded). Split it: plain tabs close immediately; goal-driving
+  // tabs, whose Stop-vs-Detach choice can't be defaulted safely, are queued through the SAME
+  // single-tab confirm one at a time. The pendingClose effect initialises the promoted tab's
+  // switches. Bulk close saves NOTHING by default (NO_MEMORY_CHANGE) — it's a cleanup gesture,
+  // like Shift+click quick-delete — unless the operator opts in via Settings ▸ Chat ▸ "Save
+  // summaries when closing tabs in bulk"; even then an incognito tab is never harvested
+  // (defaultMemoryChoice enforces that). The pref is read here at call time, no hook needed.
   function startBulkClose(ids: string[]) {
     if (ids.length === 0) return;
+    const harvest = getBulkCloseHarvest();
     const activeGoalIds = new Set(
       goalSessions.filter((g) => g.status === "active").map((g) => g.session_id),
     );
@@ -208,7 +213,7 @@ export function ChatSurface({
     for (const id of ids) {
       if (activeGoalIds.has(id)) continue;
       const session = chat.sessions.find((s) => s.id === id);
-      void closeSession(id, defaultMemoryChoice(session?.incognito));
+      void closeSession(id, harvest ? defaultMemoryChoice(session?.incognito) : NO_MEMORY_CHANGE);
     }
     setStopGoalOnClose(false);
     setPendingClose(goals[0] ?? null);
