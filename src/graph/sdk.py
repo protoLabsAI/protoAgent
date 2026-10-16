@@ -24,6 +24,7 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from events import ACTIVITY_CONTEXT
 from runtime.state import STATE
@@ -300,6 +301,57 @@ def attach_file(ref: Any, *, name: str = "", mime: str = "") -> bool:
     from infra.media import attach_file as _attach
 
     return _attach(ref, name=name, mime=mime)
+
+
+# ── the agent's own console URL (#4256) ─────────────────────────────────────────────────
+
+# The hub's per-member tenant path (``{hub}/agents/<workspace id>``) — what the fleet supervisor
+# injects as a spawned member's ``A2A_PUBLIC_URL`` so its CARD is dial-able through the hub.
+_HUB_TENANT_PATH = re.compile(r"/agents/[^/]+$")
+
+
+def console_url() -> str | None:
+    """The base URL THIS agent's console is served on (no trailing slash), or ``None`` when
+    it can't be known — so a plugin that drives its own console (records it, screenshots it,
+    links into it) never guesses ``:7870``, which on a multi-agent machine is another agent::
+
+        base = sdk.console_url()            # e.g. "http://127.0.0.1:7953"
+        if base is None:
+            return "pass the console URL explicitly"
+        page.goto(f"{base}/app/")
+
+    The SAME derivation as the A2A card and the absolute ``/media`` links (``infra.media``):
+
+    1. ``A2A_PUBLIC_URL`` when set (whitespace and trailing slash trimmed) — a deployed agent's
+       public address;
+    2. else the bound host/port of the server running in this process — the wildcards
+       (``0.0.0.0`` / ``::``) and ``localhost`` become ``127.0.0.1``; any other bind (a LAN
+       interface, ``::1``) keeps its address, IPv6 bracketed, since that's what reaches it;
+    3. else ``None`` — no server is serving in this process (a script, a test, the testkit).
+
+    **Fleet members.** A member spawned by a fleet hub inherits an ``A2A_PUBLIC_URL`` of
+    ``{hub}/agents/<id>``: the tenant path the hub proxies the member's A2A and API through.
+    That is not a console base — the hub serves a member's console at ``{hub}/app/agent/<slug>/``,
+    and an SPA loaded under ``/agents/<id>/app/`` would send its absolute ``/api`` calls to
+    the hub's own agent. So on a hub-spawned member, a public URL of that shape is skipped and
+    this returns the member's own bound console (its loopback port, on the same box as the
+    hub and any local recorder). A member given an explicit ``A2A_PUBLIC_URL`` of any other
+    shape keeps it.
+
+    Guard with ``getattr(sdk, "console_url", None)`` on cores older than this seam."""
+    from infra.media import configured_public_url, bound_base_url, console_base_url
+
+    public = configured_public_url()
+    if public and _HUB_TENANT_PATH.search(urlsplit(public).path or ""):
+        try:
+            from graph.workspaces.manager import is_workspace_member
+
+            member = is_workspace_member()
+        except Exception:  # noqa: BLE001 — no workspace record readable: not a member
+            member = False
+        if member:
+            return bound_base_url() or None
+    return console_base_url() or None
 
 
 # ── model in-flight priority (the plugin↔limiter channel, ADR 0115 D6) ──────────────────

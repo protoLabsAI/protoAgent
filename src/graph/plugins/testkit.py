@@ -193,11 +193,14 @@ def _default_stubs() -> dict:
         # Knobs/make_knob_tools are CALLED at register() time, so they're real stand-ins (not
         # raise-when-called); the rest (run_subagent / subagent_types / config / complete) stay
         # raise-unpatched placeholders — patch them in a test that exercises the model seam.
-        # attach_file is a record-only False (no armed turn host-free), never raise-unpatched.
+        # attach_file is a record-only False (no armed turn host-free), never raise-unpatched;
+        # console_url is None — host-free no server is serving, which is what the real seam
+        # returns outside one (#4256). Patch it to exercise a plugin's own-console path.
         "graph.sdk": {
             "Knobs": _StubKnobs,
             "make_knob_tools": _make_knob_tools,
             "attach_file": _make_attach_file_stub(),
+            "console_url": lambda: None,
         },
         "graph.config": {"LangGraphConfig": type("LangGraphConfig", (), {})},
         "graph.config_io": {"secrets_yaml_path": lambda: Path("config/secrets.yaml")},

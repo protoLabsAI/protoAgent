@@ -1480,6 +1480,7 @@ def _main():
     from operator_api.pairing_routes import set_bind_host
 
     set_bind_host(args.host)
+    STATE.bind_host = args.host
     # The open-mode Host allowlist (#3668, and the fleet proxy's remote gate #3662) admits a
     # named bind. Set before uvicorn serves the first request.
     set_trusted_bind_host(args.host)

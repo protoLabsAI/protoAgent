@@ -29,6 +29,8 @@ the module's own.
 
 **Delivering a file with the answer (#4252)** — [`attach_file()`](#sdk-attach-file)
 
+**The agent's own console URL (#4256)** — [`console_url()`](#sdk-console-url)
+
 **Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)** — [`llm_lanes()`](#sdk-llm-lanes), [`llm_priority()`](#sdk-llm-priority)
 
 **Knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge")** — [`knowledge_add()`](#sdk-knowledge-add), [`knowledge_purge()`](#sdk-knowledge-purge), [`knowledge_search()`](#sdk-knowledge-search)
@@ -257,6 +259,43 @@ Returns True when attached — in any A2A or `/v1` turn, console streams include
 (a no-op) outside an armed turn (e.g. a background job), for a non-media or unsigned
 URL, or past 16 files in one turn. Guard with `getattr(sdk, "attach_file", None)` on
 cores older than this seam.
+
+## The agent's own console URL (#4256)
+
+### `sdk.console_url` {#sdk-console-url}
+
+```python
+sdk.console_url() -> str | None
+```
+
+The base URL THIS agent's console is served on (no trailing slash), or `None` when
+it can't be known — so a plugin that drives its own console (records it, screenshots it,
+links into it) never guesses `:7870`, which on a multi-agent machine is another agent::
+
+    base = sdk.console_url()            # e.g. "http://127.0.0.1:7953"
+    if base is None:
+        return "pass the console URL explicitly"
+    page.goto(f"{base}/app/")
+
+The SAME derivation as the A2A card and the absolute `/media` links (`infra.media`):
+
+1. `A2A_PUBLIC_URL` when set (whitespace and trailing slash trimmed) — a deployed agent's
+   public address;
+2. else the bound host/port of the server running in this process — the wildcards
+   (`0.0.0.0` / `::`) and `localhost` become `127.0.0.1`; any other bind (a LAN
+   interface, `::1`) keeps its address, IPv6 bracketed, since that's what reaches it;
+3. else `None` — no server is serving in this process (a script, a test, the testkit).
+
+**Fleet members.** A member spawned by a fleet hub inherits an `A2A_PUBLIC_URL` of
+`{hub}/agents/<id>`: the tenant path the hub proxies the member's A2A and API through.
+That is not a console base — the hub serves a member's console at `{hub}/app/agent/<slug>/`,
+and an SPA loaded under `/agents/<id>/app/` would send its absolute `/api` calls to
+the hub's own agent. So on a hub-spawned member, a public URL of that shape is skipped and
+this returns the member's own bound console (its loopback port, on the same box as the
+hub and any local recorder). A member given an explicit `A2A_PUBLIC_URL` of any other
+shape keeps it.
+
+Guard with `getattr(sdk, "console_url", None)` on cores older than this seam.
 
 ## Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)
 
