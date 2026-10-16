@@ -988,15 +988,19 @@ def _publish_delegated_lifecycle(context_id: str, task_id: str, frame: dict) -> 
         return
     phase = frame.get("phase")
     if phase == "turn_started" and not frame.get("resumed"):
-        data = {
-            "session_id": context_id,
-            "task_id": task_id,
-            "origin": "a2a",
-            "trigger": str(frame.get("trigger") or ""),
-            "caller": _one_line(frame.get("caller"), _DELEGATED_CALLER_LIMIT),
-            "summary": "" if frame.get("private") else _one_line(frame.get("stimulus"), _DELEGATED_SUMMARY_LIMIT),
-        }
-        _event_bus.publish("turn.started", data)
+        _event_bus.publish(
+            "turn.started",
+            {
+                "session_id": context_id,
+                "task_id": task_id,
+                "origin": "a2a",
+                "trigger": str(frame.get("trigger") or ""),
+                "caller": _one_line(frame.get("caller"), _DELEGATED_CALLER_LIMIT),
+                "summary": ""
+                if frame.get("private")
+                else _one_line(frame.get("stimulus"), _DELEGATED_SUMMARY_LIMIT),
+            },
+        )
     elif phase == "turn_ended" and frame.get("state") != "input_required":
         state = str(frame.get("state") or "")
         _event_bus.publish(

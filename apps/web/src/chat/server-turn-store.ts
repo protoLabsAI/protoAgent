@@ -117,6 +117,7 @@ export function serverResultLabel(origin: string): string | null {
   if (o.startsWith("watch-") || o === "watch") return "Watch trigger";
   if (o === "inbox") return "Inbox message";
   if (o === "webhook") return "Webhook trigger";
+  if (o === "a2a") return "Delegated task";
   return "Autonomous run";
 }
 

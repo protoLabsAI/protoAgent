@@ -338,6 +338,11 @@ function useFleetStreams() {
     .sort()
     .join(",");
 
+  // Names follow every roster poll (a rename keeps the running set — and `sig` — unchanged).
+  useEffect(() => {
+    nameBySlug.current = new Map((data?.agents ?? []).map((a) => [slugOf(a), a.name]));
+  }, [data]);
+
   useEffect(() => {
     nameBySlug.current = new Map(agents.map((a) => [slugOf(a), a.name]));
     const want = new Set(agents.filter((a) => a.running).map(slugOf));

@@ -58,7 +58,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | `turn.finished` | `ok`, `origin`, `session_id`, `state`, `task_id`, `trigger` | `src/background/manager.py`, `src/scheduler/local.py` +1 |
 | `turn.input_required` | `context_id`, `prompt`, `task_id` | `src/server/a2a.py` |
 | `turn.resumed` | `context_id`, `task_id` | `src/server/a2a.py` |
-| `turn.started` | `origin`, `session_id`, `trigger` | `src/background/manager.py`, `src/scheduler/local.py` +1 |
+| `turn.started` | `caller`, `origin`, `session_id`, `summary`, `task_id`, `trigger` | `src/background/manager.py`, `src/scheduler/local.py` +1 |
 | `turn.usage` | `context_id`, `cost_usd`, `duration_ms`, `input_tokens`, `model`, `output_tokens`, `soul_rev`, `state`, `task_id` | `src/server/turn_telemetry.py` |
 | `ui.navigate` | `plugin`, `view` | `src/graph/plugins/registry.py` |
 | `watch.changed` | `id` | `src/graph/watches/store.py` |
