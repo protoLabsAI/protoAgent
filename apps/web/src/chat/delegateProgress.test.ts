@@ -317,6 +317,19 @@ describe("DelegateProgressView keeps a fixed footprint while live", () => {
     expect(text(long.querySelector(".dp-text")).length).toBeGreaterThan(0);
   });
 
+  it("renders the NEWEST narration (the tail's end), never a stale head", async () => {
+    // The tail is built newest-last, and the two-line clamp is bottom-anchored, so when the
+    // narration runs well past two lines it's the OLDEST words that clip — the fresh tail the
+    // operator is watching stays in the text, not an earlier slice.
+    const narration = `STALE-HEAD ${"middle ".repeat(80)}FRESH-TAIL`;
+    const el = await mount(
+      createElement(DelegateProgressView, { progress: liveProgress(1, narration), live: true }),
+    );
+    const shown = text(el.querySelector(".dp-text"));
+    expect(shown.endsWith("FRESH-TAIL")).toBe(true);
+    expect(shown.includes("STALE-HEAD")).toBe(false);
+  });
+
   it("caps a long plan to a constant count as the in-progress entry advances", async () => {
     const planWith = (active: number): DelegatePlanEntry[] =>
       Array.from({ length: 9 }, (_, i) => ({

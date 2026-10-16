@@ -107,20 +107,23 @@
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius-pill);
 }
-/* Only rendered while live. Clamped to exactly two lines with the height reserved up front,
-   and white-space: normal (not pre-line) so a snapshot's newlines can't add rows — the tail
-   re-wraps within a fixed footprint instead of bouncing the card 1↔4 lines tall. */
+/* Only rendered while live. A two-line window with the height reserved up front, anchored to
+   the BOTTOM: the tail is built newest-last (DelegateProgressView slices the last chars of
+   the narration), so when it runs past two lines it's the OLDEST line that clips off the top
+   and the newest words the operator wants stay visible. A top-anchored -webkit-line-clamp
+   did the opposite — it kept the first two lines and hid the newest. white-space: normal (not
+   pre-line) so a snapshot's newlines can't add rows — the tail re-wraps within a fixed
+   footprint instead of bouncing the card 1↔4 lines tall. */
 .dp-text {
   margin: 0;
   color: var(--pl-color-fg-subtle);
   font-style: italic;
   overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   overflow: hidden;
   line-height: 1.4;
-  min-height: calc(2 * 1.4em);
+  height: calc(2 * 1.4em);
   white-space: normal;
 }
