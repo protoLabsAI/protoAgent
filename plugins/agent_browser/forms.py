@@ -542,8 +542,15 @@ function abFlagCountryName(node){
   // countries); the code is mapped to an English name with Intl.DisplayNames, and nothing is
   // returned when that is unsupported or yields no real name.
   if(!node || !node.querySelectorAll) return '';
+  // Prefer `node` itself, then the first flag NOT inside a country list / dropdown: a list rendered
+  // before the selected flag would otherwise name the FIRST country in the list, not the commit.
+  var listSel = '.iti__country-list, .iti__dropdown-content, [role="listbox"]';
   var all = [node].concat(Array.prototype.slice.call(node.querySelectorAll('[class*="iti__flag"]')));
   for(var i=0;i<all.length;i++){
+    if(i > 0 && all[i].closest){
+      var lst = all[i].closest(listSel);
+      if(lst && lst !== node && node.contains(lst)) continue;
+    }
     var cl = all[i].classList;
     if(!cl || !cl.contains('iti__flag')) continue;
     for(var j=0;j<cl.length;j++){
@@ -1393,6 +1400,19 @@ async function abCombo(el, want){
   var label = abFieldLabel(input || el);
   var typable = input && /^(input|textarea)$/i.test(input.tagName || '');
   var filtered = false;                 // have we already typed `want` into the input?
+  // MULTI-select: the chips committed BEFORE we touch anything. Clicking an option that is already
+  // a chip TOGGLES it off on a react-select that keeps selected options in its menu
+  // (hideSelectedOptions=false) — and if the widget commits in a later macrotask, a read-back that
+  // still sees the old chip would report a false success after the removal. So an option that is
+  // already a chip is NEVER clicked: it is reported as already selected, and a fresh pick only
+  // verifies when its chip was absent before the click and present after.
+  var preChips = (control && control.querySelector) ? abMultiValues(control) : [];
+  function abPreHad(text){
+    for(var pi=0; pi<preChips.length; pi++){ if(abNorm(preChips[pi]) === abNorm(text)) return true; }
+    return false;
+  }
+  if(abPreHad(want))
+    return {ok:true, kind:'combobox', label:label, chosen:abClean(want), committed:abClean(want), already:true};
   // Open the menu OURSELVES — but if it is ALREADY open on entry, skip straight to the scan so we
   // never toggle it closed (r2). Escalate: abOpenCombo (pointer sequence / ArrowDown), then — for a
   // TYPE-TO-SEARCH combobox whose listbox renders ONLY after input — type the filter to make it
@@ -1428,6 +1448,12 @@ async function abCombo(el, want){
   if(!texts.length) return {ok:false, reason:'no-option', kind:'combobox', label:label, options:[]};
   if(m.error) return {ok:false, reason:m.error, kind:'combobox', label:label, options:texts.slice(0,10)};
   var chosen = texts[m.index];
+  if(abPreHad(chosen)){
+    // already a chip — leave it selected: drop our filter text and close the menu we opened.
+    if(typable){ abSetNativeValue(input, ''); abFire(input, 'input'); }
+    try { input.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', code:'Escape', keyCode:27, bubbles:true, cancelable:true})); } catch(e){}
+    return {ok:true, kind:'combobox', label:label, chosen:chosen, committed:chosen, already:true};
+  }
   abClickOption(opts[m.index]);                                        // COMMIT by click, not Enter
   // Read-back: a phone-country picker renders only the "+1" dial code, stashing the NAME in a
   // title on a child — so match the chosen option (or its country part) against the committed
@@ -1440,7 +1466,9 @@ async function abCombo(el, want){
     // A MULTI-select's read-back is a LIST of chips: the chosen option committed when it is one
     // of them (exact, normalized) — never a substring of the joined "A, B" string.
     var mvs = (control && control.querySelector) ? abMultiValues(control) : [];
-    for(var mi=0; mi<mvs.length; mi++){ if(abNorm(mvs[mi]) === abNorm(chosen)) return true; }
+    if(!abPreHad(chosen)){
+      for(var mi=0; mi<mvs.length; mi++){ if(abNorm(mvs[mi]) === abNorm(chosen)) return true; }
+    }
     return abIdentityMatch(chosen, cs) || (!!cv && abNorm(chosen) === abNorm(cv));
   }
   await abWaitFor(function(){ return abComboOk() ? [1] : []; }, 2000);
@@ -1634,6 +1662,8 @@ def render_select(output: str, field: str, option_text: str) -> str:
     label = data.get("label") or field
     if data.get("ok"):
         chosen = data.get("chosen") or option_text
+        if data.get("already"):
+            return f'Selected "{chosen}" in {label} (it was already selected; left as is)'
         return f'Selected "{chosen}" in {label}'
     reason = data.get("reason")
     if reason == "not-open":

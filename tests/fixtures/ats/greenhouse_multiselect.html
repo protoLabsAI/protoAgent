@@ -28,6 +28,11 @@
       open; already-selected options are hidden (react-select's hideSelectedOptions default for
       multi), and a commit closes the menu (closeMenuOnSelect default).
     * Clicking a chip's remove button removes that chip.
+    * TEST HOOKS on `.select__container` (set by a test via browser_eval) model OTHER react-select
+      configurations: `data-keep-selected` keeps selected options in the menu
+      (hideSelectedOptions=false), where clicking an already-selected option DESELECTS it;
+      `data-async-commit` applies each commit in a later macrotask (setTimeout 0), so a read-back
+      taken right after the click still sees the old chips.
 
   TO REFRESH: open the live form, read a "mark all that apply" question's DOM in devtools, update
   the render below (keep `select__control`, `select__multi-value`, `select__multi-value__label`,
@@ -144,7 +149,8 @@ var OPTIONS = [
     menu.appendChild(list);
     var q = input.value.toLowerCase();
     OPTIONS.filter(function (t) {
-      return selected.indexOf(t) < 0 && (!q || t.toLowerCase().indexOf(q) >= 0);
+      var keep = container.hasAttribute("data-keep-selected");
+      return (keep || selected.indexOf(t) < 0) && (!q || t.toLowerCase().indexOf(q) >= 0);
     }).forEach(function (text, i) {
       var opt = document.createElement("div");
       opt.className = "select__option" + (i === 0 ? " select__option--is-focused" : "");
@@ -162,10 +168,17 @@ var OPTIONS = [
     input.setAttribute("aria-expanded", "false");
   }
   function commit(text) {
-    if (selected.indexOf(text) < 0) selected.push(text);
-    renderChips();
-    input.value = "";
-    closeMenu();
+    function apply() {
+      if (selected.indexOf(text) < 0) selected.push(text);
+      else if (container.hasAttribute("data-keep-selected")) {
+        selected = selected.filter(function (s) { return s !== text; });   // click toggles it OFF
+      }
+      renderChips();
+      input.value = "";
+      closeMenu();
+    }
+    if (container.hasAttribute("data-async-commit")) setTimeout(apply, 0);
+    else apply();
   }
 
   input.addEventListener("input", function () { if (isOpen()) { closeMenu(); openMenu(); } });

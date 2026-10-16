@@ -1213,6 +1213,29 @@ async def test_multiselect_second_option_reads_both_once(browser):
     assert value == "Asian, White", value
 
 
+async def test_multiselect_reselecting_an_existing_chip_never_toggles_it_off(browser):
+    """A react-select that keeps selected options in its menu DESELECTS an option clicked again,
+    and with an async commit a read-back right after the click still sees the old chip — so
+    clicking would report "Selected" while the chip was actually removed. Re-selecting an option
+    that is already a chip must not click it: it stays selected and is reported as such."""
+    await _open(browser, MULTISELECT)
+    hooked = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var c=document.querySelector('.select__container');"
+        "c.setAttribute('data-keep-selected','');c.setAttribute('data-async-commit','');return true;})()"})
+    assert hooked == "true", hooked
+
+    first = await browser["browser_select"].ainvoke({"field": MULTI_FIELD, "option_text": "Asian"})
+    assert first.startswith('Selected "Asian" in'), first
+    second = await browser["browser_select"].ainvoke({"field": MULTI_FIELD, "option_text": "White"})
+    assert second.startswith('Selected "White" in'), second
+
+    again = await browser["browser_select"].ainvoke({"field": MULTI_FIELD, "option_text": "Asian"})
+    assert again.startswith('Selected "Asian" in') and "already selected" in again, again
+    await asyncio.sleep(0.3)                                   # let any (wrong) async commit land
+    value = (await _form(browser))[MULTI_FIELD]["value"]
+    assert value == "Asian, White", value                      # still selected, not toggled off
+
+
 # ── Greenhouse 2026 phone country: the NAME comes from the flag CLASS (iti__us) ───
 # The single-value is `<div class="iti__flag iti__us"></div><span>+1</span>` with no title or
 # aria-label anywhere — the ISO code in the flag class is the only thing naming the country.
@@ -1246,6 +1269,24 @@ async def test_phone_country_flag_class_shared_dial_code_is_a_hard_mismatch(brow
     assert out.startswith("Error:"), out
     assert "does not match" in out
     assert '"Canada"' in out
+
+
+async def test_flag_country_name_skips_a_country_list_before_the_selected_flag(browser):
+    """A country list rendered BEFORE the committed flag inside the single-value must not name
+    the commit: its first flag (Afghanistan) is skipped, the selected flag (United States) wins."""
+    await _open(browser, PHONE_COUNTRY_FLAG)
+    out = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+
+    injected = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var sv=document.querySelector('.select__single-value');"
+        "var ul=document.createElement('ul');ul.className='iti__country-list';ul.setAttribute('role','listbox');"
+        "['af','ca'].forEach(function(cc){var li=document.createElement('li');"
+        "var f=document.createElement('div');f.className='iti__flag iti__'+cc;li.appendChild(f);ul.appendChild(li);});"
+        "sv.insertBefore(ul, sv.firstChild);return true;})()"})
+    assert injected == "true", injected
+
+    assert (await _form_by_id(browser))["country"]["value"] == "United States"
 
 
 async def test_iti_button_change_country_aria_label_reduces_to_the_name(browser):
