@@ -12,7 +12,7 @@ import { onTopic, replaySince } from "../lib/events";
 import { registerKeybinding } from "../ext/keybindingRegistry";
 import { runForwardedCombo } from "../keybindings/useKeybindings";
 import { createPluginEventRelay, parseSubscribe } from "../lib/pluginEventRelay";
-import { takeNavigateCatchUp, trackPluginViewMount } from "../lib/pluginNavigateCatchUp";
+import { takeNavigateCatchUp, trackPluginViewMount, type PluginViewMountTracker } from "../lib/pluginNavigateCatchUp";
 import { onPluginViewMessage, requeuePluginViewContext, takePluginViewMessages } from "../lib/pluginViewInbox";
 import {
   codeOpenNotice,
@@ -304,10 +304,17 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
   // "Is this view open?" for the `ui.navigate` handler (#4283): a navigate to a mounted view
   // leaves it alone, one to an unmounted view arms the catch-up above. Live views only, since
   // the Configure dialog's embedded copy isn't the surface a navigate opens.
+  // Keyed on `src` too: a re-pointed frame is a new page that hasn't subscribed yet.
+  const mountTracker = useRef<PluginViewMountTracker | null>(null);
   useEffect(() => {
     if (embedded || !view.key) return;
-    return trackPluginViewMount(view.key);
-  }, [embedded, view.key]);
+    const tracker = trackPluginViewMount(view.key);
+    mountTracker.current = tracker;
+    return () => {
+      tracker.release();
+      if (mountTracker.current === tracker) mountTracker.current = null;
+    };
+  }, [embedded, view.key, src]);
 
   // Event-bus relay across the sandbox (ADR 0039, extended #1640). The page subscribes via
   // `protoagent:subscribe {patterns, since?, background?}`; the host forwards matching bus
@@ -402,6 +409,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         // names its own `since` stays authoritative; the armed one is consumed either way.
         const catchUp = !embedded && view.key ? takeNavigateCatchUp(view.key) : null;
         relay.subscribe(req.since === undefined && catchUp !== null ? { ...req, since: catchUp } : req);
+        mountTracker.current?.markSubscribed();
       } else if (m.type === "protoagent:keybindings") {
         // The page declares chords it wants (#1457). Ids are namespaced in the parser —
         // a view can't register or replace a core binding, or collide with another

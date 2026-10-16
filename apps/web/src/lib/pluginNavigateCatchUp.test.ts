@@ -4,7 +4,7 @@ import {
   NAVIGATE_CATCH_UP_TTL_MS,
   NAVIGATE_CATCH_UP_WINDOW_MS,
   armNavigateCatchUp,
-  isPluginViewMounted,
+  isPluginViewLive,
   resetNavigateCatchUp,
   takeNavigateCatchUp,
   trackPluginViewMount,
@@ -27,27 +27,49 @@ function bus(frames: Array<{ seq: number; at: number }>, now: number) {
 beforeEach(() => resetNavigateCatchUp());
 
 describe("navigate catch-up (#4283)", () => {
-  it("arms nothing for a view that is already mounted: open views keep their iframe and live relay", () => {
-    const off = trackPluginViewMount(KEY, bus([], 0));
-    expect(isPluginViewMounted(KEY)).toBe(true);
+  it("arms nothing for a view whose page is live (subscribed): it keeps its iframe and relay", () => {
+    const t = trackPluginViewMount(KEY, bus([], 0));
+    t.markSubscribed();
+    expect(isPluginViewLive(KEY)).toBe(true);
     expect(armNavigateCatchUp(KEY, bus([{ seq: 5, at: 0 }], 0))).toBe(false);
     expect(takeNavigateCatchUp(KEY, bus([], 0))).toBeNull();
-    off();
-    expect(isPluginViewMounted(KEY)).toBe(false);
+    t.release();
+    expect(isPluginViewLive(KEY)).toBe(false);
   });
 
-  it("counts overlapping mounts (StrictMode / key change), so one cleanup doesn't mark it closed", () => {
+  it("a mounted page that hasn't subscribed yet still gets the catch-up (nothing reached it live)", () => {
+    trackPluginViewMount(KEY, bus([], 0)); // probing / loading, no subscribe yet
+    expect(isPluginViewLive(KEY)).toBe(false);
+    expect(armNavigateCatchUp(KEY, bus([{ seq: 5, at: 0 }], 0))).toBe(true);
+    expect(takeNavigateCatchUp(KEY, bus([], 0))).toBe(-1);
+  });
+
+  it("a page that unmounts before subscribing leaves the high-water mark alone", () => {
+    const seen = trackPluginViewMount(KEY, bus([{ seq: 3, at: 0 }], 0));
+    seen.markSubscribed();
+    seen.release(); // offered through seq 3
+    trackPluginViewMount(KEY, bus([{ seq: 3, at: 0 }, { seq: 8, at: 1 }], 1)).release(); // never subscribed
+    armNavigateCatchUp(KEY, bus([{ seq: 3, at: 0 }, { seq: 8, at: 1 }], 2));
+    expect(takeNavigateCatchUp(KEY, bus([], 2))).toBe(3); // seq 8 still replays
+  });
+
+  it("counts overlapping live pages (StrictMode / key change), so one release doesn't mark it closed", () => {
     const a = trackPluginViewMount(KEY, bus([], 0));
     const b = trackPluginViewMount(KEY, bus([], 0));
-    a();
-    expect(isPluginViewMounted(KEY)).toBe(true);
-    b();
-    expect(isPluginViewMounted(KEY)).toBe(false);
+    a.markSubscribed();
+    b.markSubscribed();
+    a.release();
+    a.release(); // idempotent
+    expect(isPluginViewLive(KEY)).toBe(true);
+    b.release();
+    expect(isPluginViewLive(KEY)).toBe(false);
   });
 
   it("an unmounted view's catch-up starts after what its previous page was offered", () => {
     // The previous page saw through seq 7 (it unmounted then); the tool published seq 9.
-    trackPluginViewMount(KEY, bus([{ seq: 7, at: 100 }], 100))();
+    const prev = trackPluginViewMount(KEY, bus([{ seq: 7, at: 100 }], 100));
+    prev.markSubscribed();
+    prev.release();
     const now = 200;
     expect(armNavigateCatchUp(KEY, bus([{ seq: 7, at: 100 }, { seq: 9, at: 199 }], now))).toBe(true);
     expect(takeNavigateCatchUp(KEY, bus([], now))).toBe(7);
@@ -68,7 +90,9 @@ describe("navigate catch-up (#4283)", () => {
   });
 
   it("the window wins over an OLDER high-water mark (a view closed long ago gets no backlog)", () => {
-    trackPluginViewMount(KEY, bus([{ seq: 2, at: 0 }], 0))();
+    const prev = trackPluginViewMount(KEY, bus([{ seq: 2, at: 0 }], 0));
+    prev.markSubscribed();
+    prev.release();
     const now = 100_000;
     armNavigateCatchUp(KEY, bus([{ seq: 2, at: 0 }, { seq: 50, at: 1_000 }, { seq: 51, at: now - 1 }], now));
     expect(takeNavigateCatchUp(KEY, bus([], now))).toBe(50);
