@@ -12,6 +12,7 @@ import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
 import { goalsQuery, runtimeStatusQuery } from "../lib/queries";
 import { ConfirmDialog, useToast } from "@protolabsai/ui/overlays";
+import { Kbd } from "@protolabsai/ui/primitives";
 import { chatStore, useChatState } from "./chat-store";
 import "./coreSlashCommands"; // registers /new, /clear, /effort via the slash-command seam (ADR 0061)
 import { ChatMemoryChoices, ClearConversationDialog } from "./ClearConversationDialog";
@@ -281,9 +282,11 @@ export function ChatSurface({
       if (disposition === "confirm-goal") {
         setPendingClose(session.id);
       } else if (disposition === "direct") {
-        // #1373 quick-delete: no confirm, but still auto-harvest a regular chat (#4053) —
-        // incognito chats are never harvested. Never forget without the dialog's opt-in.
-        await closeSession(session.id, defaultMemoryChoice(session.incognito));
+        // #1373 quick-delete: no confirm, no harvest, no forget — the original contract.
+        // Harvesting is a server-side model call that runs before the purge, so auto-harvesting
+        // here (as #4055 did) left the ✕ looking dead for the 10–30s it took. The normal dialog
+        // is where you choose to save a summary; the quick gesture just drops the tab.
+        await closeSession(session.id, NO_MEMORY_CHANGE);
       } else {
         onError("Couldn't verify whether this chat owns an active goal. The tab was kept; try again.");
       }
@@ -502,6 +505,11 @@ export function ChatSurface({
                 onHarvestChange={setHarvestOnDelete}
                 onForgetChange={setForgetOnDelete}
               />
+              {/* Surface the otherwise-undiscoverable quick-delete gesture (#1373). Only on the
+                  non-goal branch: Shift+click on a goal tab still opens this goal dialog. */}
+              <p className="chat-delete-shift-hint">
+                Tip: <Kbd>Shift</Kbd>+click a tab's ✕ to delete instantly — no confirmation, nothing saved.
+              </p>
             </>
           )
         ) : undefined}

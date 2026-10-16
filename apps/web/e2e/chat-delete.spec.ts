@@ -66,6 +66,8 @@ test("the delete dialog harvests an ordinary chat by default; confirming untouch
   const forget = dialog.locator(".chat-delete-forget .pl-switch__input");
   await expect(harvest).toBeChecked();
   await expect(forget).not.toBeChecked();
+  // The dialog surfaces the otherwise-undiscoverable Shift+click quick-delete gesture (#1373).
+  await expect(dialog.locator(".chat-delete-shift-hint")).toContainText("to delete instantly");
 
   const deleted = page.waitForRequest(
     (req) => req.method() === "DELETE" && /\/api\/chat\/sessions\/[^/?]+\?/.test(req.url()),
@@ -172,9 +174,10 @@ test("re-ticking harvest after forget unticks forget", async ({ page }) => {
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
 });
 
-// #4053 + #1373 quick-delete: Shift+click a tab's ✕ deletes with no dialog, but a regular chat
-// is still auto-harvested (harvest=true) — only incognito chats are skipped.
-test("Shift+click quick-delete still harvests a regular chat (harvest=true)", async ({ page }) => {
+// #1373 quick-delete: Shift+click a tab's ✕ deletes with no dialog AND no harvest (harvest=false,
+// forget absent) — the original contract. #4055 briefly made it auto-harvest a regular chat, which
+// left the ✕ dead for the 10–30s the server-side harvest took; that is reverted.
+test("Shift+click quick-delete never harvests a regular chat (harvest=false)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await seedCurrentChat(page);
   await page.locator(".pl-tabbar > .pl-tabbar__add").click();
@@ -185,7 +188,8 @@ test("Shift+click quick-delete still harvests a regular chat (harvest=true)", as
   );
   await page.locator(".pl-tabbar__tab").first().locator(".pl-tabbar__close").click({ modifiers: ["Shift"] });
   const url = new URL((await deleted).url());
-  expect(url.searchParams.get("harvest")).toBe("true");
+  expect(url.searchParams.get("harvest")).toBe("false");
+  expect(url.searchParams.get("forget")).not.toBe("true");
   await expect(page.getByRole("dialog", { name: /Delete this chat/i })).toHaveCount(0); // no confirm
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
 });

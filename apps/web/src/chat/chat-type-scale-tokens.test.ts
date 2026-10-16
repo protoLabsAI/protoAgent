@@ -87,7 +87,8 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     // Then nine fewer when the hand-rolled frame chrome moved onto the DS (ADR 0118, ui 0.67): the
     // source caption → DS Table `source`, the inline head/Open/resume → InlineFrameCard, both
     // bridge notices + buttons → ConfirmChip, and the from-‹title› label → Message `origin` → 11.
-    expect(tokenCount(chatCss)).toBe(34);
+    // chat.css then gained one more: the `.chat-delete-shift-hint` quick-delete tip (#1373, sm).
+    expect(tokenCount(chatCss)).toBe(35);
     expect(tokenCount(promptviewerCss)).toBe(12);
     expect(tokenCount(chatComponentCss)).toBe(11);
     expect(tokenCount(hitlCss)).toBe(7);
