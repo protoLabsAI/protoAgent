@@ -57,6 +57,10 @@ let lastSeq: number | null = loadLastSeq();
 // from before this console connected (or past the horizon) yields only what's retained.
 const RING_MAX = 256;
 const ring: BusFrame[] = [];
+// When each retained frame ARRIVED here (ms since epoch) — kept beside the frame, not on it,
+// so `replaySince` hands out the frames exactly as before. Read by `seqReceivedBefore`: the
+// navigate catch-up (#4283) bounds its replay to what landed just before a `ui.navigate`.
+const receivedAt = new WeakMap<BusFrame, number>();
 let reconnectAttempts = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -96,7 +100,9 @@ function dispatch(raw: string): number | null {
   // Retain BEFORE fanning out, so anything a listener saw live is also replayable —
   // the invariant the bridge's replay-then-live dedupe (#1640) rests on.
   if (seq !== undefined) {
-    ring.push({ topic, data, seq });
+    const retained: BusFrame = { topic, data, seq };
+    receivedAt.set(retained, Date.now());
+    ring.push(retained);
     if (ring.length > RING_MAX) ring.shift();
   }
   // Each listener in its own try (ADR 0114 D1): one throwing subscriber must not starve
@@ -117,6 +123,23 @@ function dispatch(raw: string): number | null {
  *  and still retains. */
 export function replaySince(since: number): BusFrame[] {
   return ring.filter((f) => f.seq > since);
+}
+
+/** The newest bus seq this console has retained (else the persisted reconnect cursor), or
+ *  null before any seq'd frame — a plugin view's high-water mark when it unmounts (#4283). */
+export function latestSeq(): number | null {
+  return ring.length ? ring[ring.length - 1].seq : lastSeq;
+}
+
+/** The highest retained seq that ARRIVED at or before `cutoffMs` (epoch ms), or null when
+ *  every retained frame is newer than that (or none is retained) — so `replaySince` of the
+ *  answer is "only what landed after the cutoff" (#4283). */
+export function seqReceivedBefore(cutoffMs: number): number | null {
+  for (let i = ring.length - 1; i >= 0; i--) {
+    const at = receivedAt.get(ring[i]);
+    if (at !== undefined && at <= cutoffMs) return ring[i].seq;
+  }
+  return null;
 }
 
 /** Build the EventSource URL, appending `?token=` (auth) and `?since=` (replay)

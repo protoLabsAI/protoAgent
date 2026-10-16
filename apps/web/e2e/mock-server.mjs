@@ -225,6 +225,9 @@ async function readRawBody(req) {
 // Git-installed plugins (ADR 0027) — mutable so install/uninstall round-trip in e2e.
 let INSTALLED_PLUGINS = [];
 
+// Open SSE streams that asked to be tapped (`x-e2e-bus-tap: <id>`), by tap id — POST
+// /api/__test__/bus {tap, frames} writes the frames, in order, to that tap's streams (#4283).
+const busTaps = new Map();
 // Bus seq for /api/events frames (#1640) — module-global so it stays monotonic across
 // SSE reconnects, matching the real bus (events/bus.py assigns one counter per process).
 let eventSeq = 0;
@@ -1369,8 +1372,14 @@ const server = createServer(async (req, res) => {
     const goalTimer = goalChanged
       ? setInterval(() => frame("goal.changed", { session_id: goalChanged }), 600)
       : null;
+    // Bus taps (#4283): a stream opened with `x-e2e-bus-tap` can be fed frames ON DEMAND via
+    // POST /api/__test__/bus, so a spec decides exactly when a publish → `ui.navigate` pair
+    // lands. Header-gated: only that spec's streams are tapped, never another worker's.
+    const tap = String(req.headers["x-e2e-bus-tap"] || "");
+    if (tap) busTaps.set(tap, (busTaps.get(tap) ?? new Set()).add(frame));
     req.on("close", () => {
       clearInterval(t);
+      if (tap) busTaps.get(tap)?.delete(frame);
       if (goalTimer) clearInterval(goalTimer);
       goals.forEach(clearTimeout);
       turns.forEach(clearTimeout);
@@ -1839,6 +1848,12 @@ const server = createServer(async (req, res) => {
     // POST/PATCH/DELETE writes → generic ok so the UI doesn't error.
     const body = await readBody(req);
     const fleet = fleetFor(req);
+    if (pathname === "/api/__test__/bus" && req.method === "POST") {
+      // Feed the named tap's streams (see busTaps): `frames` = [{topic, data}], in order.
+      const streams = busTaps.get(String(body.tap || "")) ?? new Set();
+      for (const write of streams) for (const f of body.frames || []) write(f.topic, f.data || {});
+      return sendJson(res, { ok: true, streams: streams.size });
+    }
     if (pathname === "/api/__test__/fleet/reset" && req.method === "POST") {
       // Per-spec hermeticity: restore this scope's fleet to the baseline.
       fleetScopes.set(req.headers["x-e2e-fleet"] || "default", cloneFleet(FLEET));
@@ -2308,13 +2323,20 @@ const server = createServer(async (req, res) => {
       `document.body.setAttribute("data-menu-action",String(m.itemId));}` +
       `else if(m.type==="protoagent:event"&&typeof m.seq==="number"){` +
       `var s=document.body.getAttribute("data-events")||"";` +
-      `document.body.setAttribute("data-events",s?s+","+m.seq:String(m.seq));}});` +
+      `document.body.setAttribute("data-events",s?s+","+m.seq:String(m.seq));` +
+      // The `.show` payloads it received, by id — what the navigate catch-up spec (#4283) asserts.
+      `if(/\\.show$/.test(m.topic)){var w=document.body.getAttribute("data-shows")||"";` +
+      `document.body.setAttribute("data-shows",w?w+","+(m.data&&m.data.id):String(m.data&&m.data.id));}}});` +
       // Like the real plugin-kit: announce readiness so the console (re-)sends the
       // bearer + theme, closing the race where load-time init beats our listener.
       `try{parent&&parent!==window&&parent.postMessage({type:"protoagent:ready"},"*");}catch(_){}` +
       // The recommended #1640 pattern: subscribe with a `since` high-water mark so a
       // freshly (re)mounted page catches up from the host's ring instead of polling.
-      `try{parent&&parent!==window&&parent.postMessage({type:"protoagent:subscribe",patterns:["boardy.#"],since:0},"*");}catch(_){}` +
+      // …except under a bus tap (#4283): there the page subscribes WITHOUT `since`, like a
+      // view that never adopted it, so only the host's navigate catch-up can replay to it.
+      (req.headers["x-e2e-bus-tap"]
+        ? `try{parent&&parent!==window&&parent.postMessage({type:"protoagent:subscribe",patterns:["boardy.#"]},"*");}catch(_){}`
+        : `try{parent&&parent!==window&&parent.postMessage({type:"protoagent:subscribe",patterns:["boardy.#"],since:0},"*");}catch(_){}`) +
       // Context menus (#3030): declare a default set once, then hand the host each
       // right-click — suppressing the browser menu, as a real view does.
       `try{parent&&parent!==window&&parent.postMessage({type:"protoagent:contextmenu:register",` +

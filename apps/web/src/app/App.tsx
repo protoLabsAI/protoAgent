@@ -31,6 +31,7 @@ import { AuthGate } from "./AuthGate";
 import { authRequired, subscribeAuth } from "../lib/auth";
 import { pluginViewIcon } from "../lib/pluginIcon";
 import { isNavigablePluginView } from "../lib/pluginViews";
+import { armNavigateCatchUp } from "../lib/pluginNavigateCatchUp";
 import { TenantGuard } from "./TenantGuard";
 import { SessionHistoryHydrator } from "./SessionHistoryHydrator";
 import { Splash, BootGate } from "@protolabsai/ui/splash";
@@ -470,7 +471,12 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
         const target = d?.view ? own.find((v) => v.key === `plugin:${pid}:${d.view}`) : own[0];
         // Route through openView, not setSurface: it resolves the owning dock AND sets
         // `mobileActive`, so "the AI navigates the UI" works on a phone too.
-        if (target) openView(target.key);
+        if (!target) return;
+        // Already open: openView only focuses it, and the iframe stays mounted. NOT open
+        // (another surface holds its dock): the navigate mounts a fresh page, so arm the
+        // catch-up that hands it what the plugin published just before navigating (#4283).
+        armNavigateCatchUp(target.key);
+        openView(target.key);
       }),
     [],
   );

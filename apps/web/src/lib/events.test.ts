@@ -135,6 +135,25 @@ describe("client ring buffer + seq (#1640 — plugin-bridge replay)", () => {
     expect(replaySince(0).map((f) => f.seq)).toEqual([1, 2, 4]);
   });
 
+  it("knows the newest retained seq and which frames arrived before a cutoff (#4283)", async () => {
+    const { onTopic, latestSeq, seqReceivedBefore } = await loadEvents();
+    onTopic("#", () => {});
+    await vi.waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+    const es = FakeEventSource.instances[0];
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    es.emit({ topic: "a.one", data: {}, seq: 1 });
+    now.mockReturnValue(2_000);
+    es.emit({ topic: "a.two", data: {}, seq: 2 });
+    now.mockReturnValue(3_000);
+    es.emit({ topic: "a.three", data: {}, seq: 3 });
+    now.mockRestore();
+    expect(latestSeq()).toBe(3);
+    expect(seqReceivedBefore(2_500)).toBe(2); // replaySince(2) → only what landed after 2.5s
+    expect(seqReceivedBefore(3_000)).toBe(3);
+    expect(seqReceivedBefore(500)).toBeNull(); // everything retained is newer than the cutoff
+  });
+
   it("caps retention (drop-oldest) so replay is best-effort like the server ring", async () => {
     const { onTopic, replaySince } = await loadEvents();
     onTopic("#", () => {});
