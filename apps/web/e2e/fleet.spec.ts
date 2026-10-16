@@ -810,6 +810,31 @@ test("Fleet Room: a parked member turn shows 'needs approval', then hands back (
   await expect(ava.locator(".flr__pill--attn")).toHaveCount(0);
 });
 
+test("Fleet Room: a member working on delegated turns shows busy with who asked, then idles (#4290)", async ({ page }, testInfo) => {
+  // setExtraHTTPHeaders REPLACES the set — re-carry the fleet scope alongside the gate.
+  await page.setExtraHTTPHeaders({
+    "x-e2e-fleet": `fleet-spec-${testInfo.parallelIndex}`,
+    "x-e2e-delegated": "ava",
+  });
+  await page.goto("/app/", { waitUntil: "load" });
+  await openFleetRoom(page);
+  const room = page.locator(".flr");
+  const ava = room.locator(".flr__member", { hasText: "ava" });
+
+  // Two delegations land at once: busy, naming the caller and the newest ask, "+1 more".
+  await expect(ava.locator(".flr__pill--run")).toBeVisible();
+  const line = ava.getByTestId("flr-work");
+  await expect(line).toContainText("for main");
+  await expect(line).toContainText("Check the release notes");
+  await expect(line).toContainText("+1 more");
+  await expect(room.locator(".flr-feed__event", { hasText: "is working for main" }).first()).toBeVisible();
+
+  // One ends (its turn.usage), then the other (turn.finished alone) — back to idle.
+  await expect(line).not.toContainText("+1 more", { timeout: 6000 });
+  await expect(ava.locator(".flr__pill--run")).toHaveCount(0, { timeout: 6000 });
+  await expect(ava.getByTestId("flr-work")).toHaveCount(0);
+});
+
 async function openFleetRoom(page) {
   // Boot readiness is asynchronous; wait until the workspace has mounted its keybindings.
   await expect(page.locator(".app-shell-main")).toBeVisible();

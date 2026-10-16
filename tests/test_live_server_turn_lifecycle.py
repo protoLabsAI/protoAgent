@@ -133,7 +133,7 @@ async def test_the_executor_fires_turn_ended_on_a_normal_exit_too():
     await ProtoAgentExecutor(stream).execute(_context(), EventQueue())
 
     assert frames[0]["phase"] == "turn_started"
-    assert frames[-1] == {"phase": "turn_ended", "origin": "scheduler"}
+    assert frames[-1] == {"phase": "turn_ended", "origin": "scheduler", "state": "completed"}
 
 
 def test_terminal_hook_forgets_the_turn_even_when_telemetry_raises(monkeypatch):

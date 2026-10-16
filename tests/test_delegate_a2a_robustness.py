@@ -158,6 +158,9 @@ class _QueueClient(_FakeClient):
 def patched(monkeypatch):
     """Allow the url (skip the egress policy) and skip real sleeps."""
     monkeypatch.setattr("security.policy.check_url", lambda *_a, **_k: None)
+    # No ambient identity: the exact-metadata assertions below must not depend on whatever
+    # graph config another test left on the process-global STATE (#4290).
+    monkeypatch.setattr("plugins.delegates.a2a._own_agent_name", lambda: "")
 
     async def _noop(_):
         return None
@@ -528,6 +531,22 @@ def test_dispatch_stamps_a2a_provenance_when_tracing_inactive(patched):
 
     send = next(b for b in bodies if b.get("method") == "SendMessage")
     expected = {"origin": "a2a", "trigger": "delegate_to"}
+    assert send["params"]["metadata"] == expected
+    assert send["params"]["message"]["metadata"] == expected
+
+
+def test_dispatch_names_the_calling_agent_in_its_provenance(patched):
+    """#4290: the receiver announces a delegated turn to its fleet console as working FOR
+    someone — the delegating agent's name rides the provenance at both levels."""
+    patched.setattr(_tracing, "current_trace_context", lambda: None)
+    patched.setattr("plugins.delegates.a2a._own_agent_name", lambda: "hub")
+    patched.setattr("tools.a2a_parse._extract_text", lambda result, *a, **k: "pong" if result else "")
+    bodies = _install_capture_client(patched, send_resp=_Resp({"jsonrpc": "2.0", "result": {"text": "pong"}}))
+
+    assert asyncio.run(A.dispatch(_parse(), "ping")) == "pong"
+
+    send = next(b for b in bodies if b.get("method") == "SendMessage")
+    expected = {"origin": "a2a", "trigger": "delegate_to", "caller": "hub"}
     assert send["params"]["metadata"] == expected
     assert send["params"]["message"]["metadata"] == expected
 

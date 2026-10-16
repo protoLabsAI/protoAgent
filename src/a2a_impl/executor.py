@@ -776,10 +776,21 @@ class ProtoAgentExecutor(AgentExecutor):
                 "origin": _origin,
                 "trigger": _trigger,
                 "attended": _md.get("attended"),
+                # Who asked and what for (#4290): a delegated (`origin: "a2a"`) turn is
+                # announced on the bus so the hub's Fleet Room can show the member busy.
+                # `caller` is the delegating agent's self-reported name — display only;
+                # authorization was settled by the transport before this ran.
+                "caller": _md.get("caller"),
+                "stimulus": _stimulus,
+                "private": bool(_md.get("incognito") or _md.get("hidden")),
             },
         )
 
         started = time.monotonic()
+        # The terminal state `turn_ended` reports (#4290). Every terminal path records its
+        # outcome through `_outcome`, which updates this; a crash that never got that far
+        # reads as the failure it is.
+        ended_state = ["failed"]
         accumulated = ""
         deltas: list[dict] = []
         usage = {
@@ -1001,6 +1012,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 pass
 
         def _outcome(state: str, final_text: str, error: str = "") -> TurnOutcome:
+            ended_state[0] = state
             durations = {k: list(v) for k, v in tool_durations.items()}
             # Knowledge ops attribute to the SAME per-turn durations blob as tool
             # calls (#2676), under `knowledge:{op}` pseudo-tool keys — so the
@@ -1367,7 +1379,11 @@ class ProtoAgentExecutor(AgentExecutor):
                 # crash paths where a terminal update itself raised before the terminal
                 # hook ran, so a host that registered this turn on `turn_started` always
                 # gets to forget it. Idempotent for the host by contract.
-                _notify_progress(context.context_id, context.task_id, {"phase": "turn_ended", "origin": _origin})
+                _notify_progress(
+                    context.context_id,
+                    context.task_id,
+                    {"phase": "turn_ended", "origin": _origin, "state": ended_state[0]},
+                )
             # Every `_outcome` read happens in the except/return paths above, so
             # disarming here can never lose a turn's samples. Also covers the
             # input_required park — the resumed execute() re-arms with the parked files.

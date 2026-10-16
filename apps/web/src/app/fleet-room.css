@@ -128,8 +128,11 @@
 
 /* The member button is a DS ghost Button now (padding/border/hover/focus/radius
  * are the DS's); this keeps only the two-line, left-aligned layout — with
- * align-items:stretch so the meta line can still ellipsis inside the grid cell. */
-.flr__who {
+ * align-items:stretch so the meta line can still ellipsis inside the grid cell.
+ * Scoped under the row so it outranks the DS button's own centering, which loads
+ * later at the same specificity and was centering (and, for a line wider than the
+ * cell, clipping both ends of) the button's content. */
+.flr__member > .flr__who {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -188,6 +191,32 @@
   padding: var(--pl-space-0_5) var(--pl-space-1_5);
   border-radius: var(--pl-radius-pill);
   white-space: nowrap;
+}
+/* What a member is doing for another agent (#4290): "for <caller> · <the ask>". */
+.flr__work {
+  display: flex;
+  max-width: 100%;
+  align-items: baseline;
+  gap: var(--pl-space-1);
+  min-width: 0;
+  font-size: var(--pl-font-size-2xs);
+  color: var(--pl-color-fg-muted);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.flr__work-who {
+  flex: none;
+  color: var(--pl-color-status-warning);
+  font-weight: 600;
+}
+.flr__work-what {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flr__work-more {
+  flex: none;
+  color: var(--pl-color-fg-subtle);
 }
 .flr__pill--run {
   color: var(--pl-color-status-warning);

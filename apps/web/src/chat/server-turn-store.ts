@@ -49,6 +49,7 @@ export function labelForOrigin(origin: string): string {
   if (origin === WAIT_RESUME_ORIGIN) return "picking back up after a wait…";
   if (origin === "background-resume") return "responding to background reports…";
   if (origin === "scheduler") return "running a scheduled task…";
+  if (origin === "a2a") return "working on a task another agent delegated…";
   if (origin.startsWith("watch-") || origin === "watch") return "reacting to a triggered watch…";
   return "responding to a background trigger…";
 }
@@ -116,6 +117,7 @@ export function serverResultLabel(origin: string): string | null {
   if (o.startsWith("watch-") || o === "watch") return "Watch trigger";
   if (o === "inbox") return "Inbox message";
   if (o === "webhook") return "Webhook trigger";
+  if (o === "a2a") return "Delegated task";
   return "Autonomous run";
 }
 

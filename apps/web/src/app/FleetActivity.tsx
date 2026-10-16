@@ -35,8 +35,22 @@ export type FleetEvent = {
   kind: FleetEventKind;
 };
 
+/** A turn another agent DELEGATED to a member over A2A (#4290) — announced on the member's
+ *  bus as `turn.started` with `origin: "a2a"`, keyed by its task id (the same id the
+ *  delegating agent's ledger records, so the two sides join). */
+export type MemberWork = {
+  taskId: string;
+  /** The delegating agent's name ("" when the caller didn't say). */
+  caller: string;
+  /** A one-line clip of the ask ("" when withheld). */
+  summary: string;
+  startedAt: number;
+};
+
 type FleetActivityState = {
   events: FleetEvent[];
+  /** slug → task id → delegated work in flight (also drives the "running" pill). */
+  work: Record<string, Record<string, MemberWork>>;
   /** slug → count of turns currently in flight (drives the roster "running" pill). */
   running: Record<string, number>;
   /** slug → a turn is parked awaiting a human answer (drives "needs approval"). */
@@ -47,6 +61,8 @@ type FleetActivityState = {
   clear: (slug: string) => void;
   markAwaiting: (slug: string) => void;
   clearAwaiting: (slug: string) => void;
+  startWork: (slug: string, w: MemberWork) => void;
+  endWork: (slug: string, taskId: string) => void;
 };
 
 let seq = 0;
@@ -54,6 +70,7 @@ const MAX = 60;
 
 const useFleetActivity = create<FleetActivityState>((set) => ({
   events: [],
+  work: {},
   running: {},
   awaiting: {},
   push: (e) =>
@@ -73,12 +90,27 @@ const useFleetActivity = create<FleetActivityState>((set) => ({
     set((s) => {
       const hadRun = slug in s.running;
       const hadWait = slug in s.awaiting;
-      if (!hadRun && !hadWait) return s;
+      const hadWork = slug in s.work;
+      if (!hadRun && !hadWait && !hadWork) return s;
       const running = { ...s.running };
       const awaiting = { ...s.awaiting };
+      const work = { ...s.work };
       delete running[slug];
       delete awaiting[slug];
-      return { running, awaiting };
+      delete work[slug];
+      return { running, awaiting, work };
+    }),
+  startWork: (slug, w) =>
+    set((s) => ({ work: { ...s.work, [slug]: { ...(s.work[slug] ?? {}), [w.taskId]: w } } })),
+  endWork: (slug, taskId) =>
+    set((s) => {
+      if (!s.work[slug]?.[taskId]) return s;
+      const mine = { ...s.work[slug] };
+      delete mine[taskId];
+      const work = { ...s.work };
+      if (Object.keys(mine).length) work[slug] = mine;
+      else delete work[slug];
+      return { work };
     }),
   markAwaiting: (slug) => set((s) => (s.awaiting[slug] ? s : { awaiting: { ...s.awaiting, [slug]: true as const } })),
   clearAwaiting: (slug) =>
@@ -100,6 +132,8 @@ export const markMemberDone = (slug: string) => useFleetActivity.getState().mark
 export const clearMemberRunning = (slug: string) => useFleetActivity.getState().clear(slug);
 /** Members with a turn in flight — for the roster "running a turn" pill. */
 export const useMemberRunning = (): Record<string, number> => useFleetActivity((s) => s.running);
+/** Delegated work in flight per member (#4290) — for the roster "working for …" line. */
+export const useMemberWork = (): Record<string, Record<string, MemberWork>> => useFleetActivity((s) => s.work);
 /** Members parked on a HITL pause — for the roster "needs approval" pill. */
 export const useMemberAwaiting = (): Record<string, true> => useFleetActivity((s) => s.awaiting);
 
@@ -146,8 +180,18 @@ function mapTopic(topic: string, data: Record<string, unknown>): { text: string;
       if (state === "canceled" || state === "cancelled") return null;
       return { text: "finished a turn", kind: "turn" };
     }
-    case "turn.started":
+    case "turn.started": {
+      // A turn another agent delegated (#4290) says who asked and what for.
+      if (str(data.origin) === "a2a") {
+        const caller = str(data.caller);
+        const summary = str(data.summary);
+        return {
+          text: `${caller ? `is working for ${caller}` : "is working on a delegated task"}${summary ? ` — “${shorten(summary, 70)}”` : ""}`,
+          kind: "turn",
+        };
+      }
       return { text: "is running a turn", kind: "turn" };
+    }
     // A turn parked on a HITL form/approval (ADR 0051) — the actionable row.
     case "turn.input_required": {
       const p = str(data.prompt);
@@ -198,6 +242,82 @@ function mapTopic(topic: string, data: Record<string, unknown>): { text: string;
   }
 }
 
+/** Task ids (`slug:task`) known to be DELEGATED turns (#4290), remembered past their end so
+ *  a late `turn.usage` / park / resume for one never touches the plain in-flight COUNT —
+ *  those turns are tracked by id in `work` instead. Bounded; an evicted id only means a
+ *  very late frame falls back to the count's clamped behaviour. */
+const delegated = new Map<string, MemberWork>();
+const DELEGATED_MAX = 500;
+
+const normState = (v: unknown): string =>
+  (typeof v === "string" ? v : "").replace(/^TASK_STATE_/i, "").toLowerCase().replace(/_/g, "-");
+
+/** Fold one member bus frame into the roster's live state (exported for tests).
+ *
+ *  Two producers, two bookkeeping styles:
+ *  - A DELEGATED turn (`turn.started` with `origin: "a2a"` and a task id) is tracked BY ID
+ *    in `work` and ends on whichever of its terminal `turn.usage` / `turn.finished` lands
+ *    first — idempotent, so the pair can never double-decrement anything. A park moves it
+ *    to "needs approval"; its `turn.resumed` puts the same work back.
+ *  - Everything else keeps the original COUNT: +1 on `turn.started` (autonomous turns), an
+ *    optimistic broadcast mark, or `turn.resumed`; −1 only on the terminal `turn.usage`,
+ *    which fires for BOTH autonomous and direct turns — so each turn is +1/−1 exactly once.
+ *    (turn.finished also fires for autonomous turns but is NOT counted, to avoid a
+ *    double-decrement that would corrupt a concurrently-running member's count.) */
+export function applyMemberFrame(slug: string, topic: string, data: Record<string, unknown>): void {
+  const store = useFleetActivity.getState();
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const tid = str(data.task_id);
+  const key = `${slug}:${tid}`;
+  const known = tid ? delegated.get(key) : undefined;
+
+  if (topic === "turn.started" && str(data.origin) === "a2a" && tid) {
+    const w: MemberWork = { taskId: tid, caller: str(data.caller), summary: str(data.summary), startedAt: Date.now() };
+    delegated.delete(key);
+    delegated.set(key, w);
+    if (delegated.size > DELEGATED_MAX) delegated.delete(delegated.keys().next().value as string);
+    store.startWork(slug, w);
+    return;
+  }
+  if (known) {
+    if (topic === "turn.usage" || topic === "turn.finished") {
+      // The park leg's own spend line: still parked — `turn.input_required` settles it.
+      if (normState(data.state) === "input-required") return;
+      store.endWork(slug, tid);
+      if (topic === "turn.usage") store.clearAwaiting(slug);
+    } else if (topic === "turn.input_required") {
+      store.endWork(slug, tid);
+      store.markAwaiting(slug);
+    } else if (topic === "turn.resumed") {
+      store.clearAwaiting(slug);
+      store.startWork(slug, known);
+    }
+    return;
+  }
+  if (topic === "turn.started") store.markRunning(slug);
+  else if (topic === "turn.usage") {
+    store.markDone(slug);
+    store.clearAwaiting(slug); // the parked turn reached a terminal state
+  } else if (topic === "turn.input_required") {
+    // Parked awaiting a human answer — it's no longer "running", it's blocked on you.
+    store.markDone(slug);
+    store.markAwaiting(slug);
+  } else if (topic === "turn.resumed") {
+    // The parked turn got its answer — hand "needs approval" back to "running".
+    // Balanced in any arrival order: +1 here is always closed by the terminal
+    // turn.usage's −1, and a missed pause/resume still settles at zero (markDone
+    // clamps). See the core publisher in server/a2a.py.
+    store.clearAwaiting(slug);
+    store.markRunning(slug);
+  }
+}
+
+/** Test seam: forget remembered delegated task ids and reset the store. */
+export function resetFleetActivityForTests(): void {
+  delegated.clear();
+  useFleetActivity.setState({ events: [], work: {}, running: {}, awaiting: {} });
+}
+
 /** Open an SSE stream per ONLINE member (/agents/<slug>/api/events, via the hub proxy)
  *  and map its event-bus topics into the feed — this is the fleet-wide "one event log"
  *  (ADR 0039). Streams open/close as members come online/go offline; a stream that errors
@@ -217,6 +337,11 @@ function useFleetStreams() {
     .map(slugOf)
     .sort()
     .join(",");
+
+  // Names follow every roster poll (a rename keeps the running set — and `sig` — unchanged).
+  useEffect(() => {
+    nameBySlug.current = new Map((data?.agents ?? []).map((a) => [slugOf(a), a.name]));
+  }, [data]);
 
   useEffect(() => {
     nameBySlug.current = new Map(agents.map((a) => [slugOf(a), a.name]));
@@ -245,28 +370,7 @@ function useFleetStreams() {
         seen.current.add(key);
         if (seen.current.size > 1500) seen.current.clear();
       }
-      // Live "running" state for the roster pill. Count UP on turn.started (autonomous
-      // turns) or an optimistic broadcast mark; count DOWN only on the terminal turn.usage,
-      // which fires for BOTH autonomous and direct turns — so each turn is +1/−1 exactly
-      // once. (turn.finished also fires for autonomous turns but is NOT counted, to avoid a
-      // double-decrement that would corrupt a concurrently-running member's count.)
-      const store = useFleetActivity.getState();
-      if (frame.topic === "turn.started") store.markRunning(slug);
-      else if (frame.topic === "turn.usage") {
-        store.markDone(slug);
-        store.clearAwaiting(slug); // the parked turn reached a terminal state
-      } else if (frame.topic === "turn.input_required") {
-        // Parked awaiting a human answer — it's no longer "running", it's blocked on you.
-        store.markDone(slug);
-        store.markAwaiting(slug);
-      } else if (frame.topic === "turn.resumed") {
-        // The parked turn got its answer — hand "needs approval" back to "running".
-        // Balanced in any arrival order: +1 here is always closed by the terminal
-        // turn.usage's −1, and a missed pause/resume still settles at zero (markDone
-        // clamps). See the core publisher in server/a2a.py.
-        store.clearAwaiting(slug);
-        store.markRunning(slug);
-      }
+      applyMemberFrame(slug, frame.topic, frame.data ?? {});
       const m = mapTopic(frame.topic, frame.data ?? {});
       if (!m) return;
       pushFleetEvent({ source: nameBySlug.current.get(slug) ?? slug, text: m.text, kind: m.kind });
@@ -314,7 +418,7 @@ function useFleetStreams() {
       // Streams are closing, so terminal turn.usage frames won't arrive to clear in-flight
       // counts — reset them (a reopen re-detects fresh turns via turn.started).
       const st = useFleetActivity.getState();
-      for (const slug of Object.keys(st.running)) st.clear(slug);
+      for (const slug of new Set([...Object.keys(st.running), ...Object.keys(st.work)])) st.clear(slug);
     };
   }, []);
 }

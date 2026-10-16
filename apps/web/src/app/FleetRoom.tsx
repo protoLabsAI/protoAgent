@@ -31,6 +31,8 @@ import {
   pushFleetEvent,
   useMemberAwaiting,
   useMemberRunning,
+  useMemberWork,
+  type MemberWork,
 } from "./FleetActivity";
 import "./fleet-room.css";
 
@@ -48,6 +50,23 @@ function presenceOf(a: FleetAgent): { key: PresenceKey; label: string } {
 }
 
 const clip = (s: string, n = 72): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/** What a member is doing for another agent right now (#4290): the delegated turns in
+ *  flight on it, newest first — who asked and a one-line clip of the ask. Several at once
+ *  (parallel delegations) collapse to the newest plus a count. */
+export function WorkLine({ items }: { items: MemberWork[] }) {
+  if (!items.length) return null;
+  const [w] = [...items].sort((x, y) => y.startedAt - x.startedAt);
+  const more = items.length - 1;
+  const who = w.caller ? `for ${w.caller}` : "delegated task";
+  return (
+    <span className="flr__work" data-testid="flr-work" title={w.summary || undefined}>
+      <span className="flr__work-who">{who}</span>
+      {w.summary && <span className="flr__work-what">{clip(w.summary, 60)}</span>}
+      {more > 0 && <span className="flr__work-more">+{more} more</span>}
+    </span>
+  );
+}
 
 function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (slug: string) => void }) {
   const { data: fleet } = useQuery(fleetQuery());
@@ -85,6 +104,7 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
   const onlineCount = roster.filter((a) => a.running).length;
   const running = useMemberRunning();
   const awaiting = useMemberAwaiting();
+  const work = useMemberWork();
 
   // DM a member = the wired chat, retargeted. Push it on the palette stack so Back/Escape
   // return here. Only running members are reachable.
@@ -280,13 +300,14 @@ function FleetRoom({ ctx, onOpenAgent }: { ctx: PaletteContext; onOpenAgent: (sl
                     <span className="flr__meta">
                       {[a.bundle, a.port ? `:${a.port}` : null, p.label].filter(Boolean).join(" · ")}
                     </span>
+                    {a.running && <WorkLine items={Object.values(work[slug] ?? {})} />}
                   </Button>
                   <div className="flr__actions">
                     {awaiting[slug] && a.running ? (
                       <span className="flr__pill flr__pill--attn" title="A turn is parked awaiting your answer">
                         needs approval
                       </span>
-                    ) : running[slug] && a.running ? (
+                    ) : (running[slug] || work[slug]) && a.running ? (
                       <span className="flr__pill flr__pill--run" title="A turn is in flight">
                         running
                       </span>
