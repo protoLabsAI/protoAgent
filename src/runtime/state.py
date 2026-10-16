@@ -121,6 +121,9 @@ class AppState:
     main_loop: Any = None
     # The port this process actually bound to (populated by _main).
     active_port: int = 7870
+    # The interface it bound (``--host`` / ``network.bind``, populated by _main); "" until
+    # then. ``infra.media.bound_base_url`` normalises it for ``graph.sdk.console_url``.
+    bind_host: str = ""
     # Epoch of the last chat-turn start, for the ADR 0074 ``agent.active`` idle debounce.
     # None ⇒ no turn yet this process (the first turn emits with previous_state="boot").
     last_activity_ts: float | None = None

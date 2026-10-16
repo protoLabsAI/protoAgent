@@ -290,6 +290,25 @@ def resolve_media(name: str) -> tuple[Path, str] | None:
 # ── absolute links + per-turn file attachments (#4252) ──────────────────────────────────
 
 
+def configured_public_url() -> str:
+    """``A2A_PUBLIC_URL`` normalised (whitespace + trailing slash trimmed), or ``""``."""
+    return (os.environ.get("A2A_PUBLIC_URL") or "").strip().rstrip("/")
+
+
+def _bound_port() -> int | None:
+    """``STATE.active_port`` when it's a real port, else ``None``. Note its class default is
+    7870 — set before any socket is bound — so it alone doesn't prove a server is serving."""
+    try:
+        from runtime.state import STATE
+
+        port = getattr(STATE, "active_port", None)
+    except Exception:  # noqa: BLE001 — no server state
+        return None
+    if isinstance(port, int) and not isinstance(port, bool) and port > 0:
+        return port
+    return None
+
+
 def public_base_url() -> str:
     """The agent's externally-reachable base URL (no trailing slash), or ``""``.
 
@@ -299,18 +318,53 @@ def public_base_url() -> str:
     desktop runs, where the client is on the same host. Never the bind host or a request's
     forwarded host — so no internal hostname leaks into a link that wasn't already public in
     the card. ``""`` outside a running server (no port bound yet)."""
-    base = (os.environ.get("A2A_PUBLIC_URL") or "").strip().rstrip("/")
+    base = configured_public_url()
     if base:
         return base
+    port = _bound_port()
+    return f"http://127.0.0.1:{port}" if port else ""
+
+
+# Bind spellings a same-host client reaches as ``127.0.0.1``: the wildcards (a ``0.0.0.0`` /
+# ``::`` bind listens on loopback too — ``::`` dual-stack) and the ``localhost`` name. ``::1``
+# is NOT here: an IPv6-only loopback bind isn't reachable at 127.0.0.1 — it's bracketed.
+_WILDCARD_OR_LOCALHOST = {"", "0.0.0.0", "::", "localhost", "localhost."}
+
+
+def bound_base_url() -> str:
+    """``http://<host>:<port>`` the server running in THIS process is bound to, or ``""``
+    when none is serving (the server's event loop isn't up — ``active_port``'s class default
+    is not a bound port).
+
+    The host is the resolved bind interface (``--host`` / ``network.bind``): the wildcards
+    (``0.0.0.0`` / ``::``) and ``localhost`` normalise to ``127.0.0.1``; any other address is
+    kept as bound — a loopback URL can't reach a server bound only to a LAN interface (or to
+    ``::1``) — with an IPv6 literal bracketed."""
     try:
         from runtime.state import STATE
 
-        port = getattr(STATE, "active_port", None)
-        if isinstance(port, int) and not isinstance(port, bool) and port > 0:
-            return f"http://127.0.0.1:{port}"
-    except Exception:  # noqa: BLE001 — no server state: no base
-        pass
-    return ""
+        if getattr(STATE, "main_loop", None) is None:
+            return ""
+        host = str(getattr(STATE, "bind_host", "") or "")
+    except Exception:  # noqa: BLE001 — no server state: nothing bound
+        return ""
+    port = _bound_port()
+    if not port:
+        return ""
+    host = host.strip().lower().strip("[]")
+    if host in _WILDCARD_OR_LOCALHOST:
+        host = "127.0.0.1"
+    elif ":" in host:
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
+
+
+def console_base_url() -> str:
+    """The URL this agent's console is served on (no trailing slash), or ``""`` — the
+    implementation behind ``graph.sdk.console_url`` (#4256). ``A2A_PUBLIC_URL`` (normalised,
+    the same value the card and absolute ``/media`` links use) when set, else
+    :func:`bound_base_url`. ``graph.sdk`` adds the fleet-member rule on top."""
+    return configured_public_url() or bound_base_url()
 
 
 # A signed, server-relative media link as save_media mints it, not already part of a URL

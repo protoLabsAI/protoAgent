@@ -423,3 +423,13 @@ def test_default_graph_sdk_stub_records_attach_file_and_returns_false(monkeypatc
 
     assert attach_file("/media/x.png?sig=ab", name="x.png") is False
     assert attach_file.calls == [{"ref": "/media/x.png?sig=ab", "name": "x.png", "mime": ""}]
+
+
+def test_default_graph_sdk_stub_console_url_is_none(monkeypatch):
+    # #4256: host-free there is no server serving, so the stub answers what the real seam
+    # does outside one — None (a plugin then asks for the URL instead of guessing :7870).
+    specs = testkit._default_stubs()
+    monkeypatch.setitem(sys.modules, "graph.sdk", testkit._StubModule("graph.sdk", specs["graph.sdk"]))
+    from graph.sdk import console_url
+
+    assert console_url() is None
