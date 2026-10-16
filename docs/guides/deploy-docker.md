@@ -230,6 +230,18 @@ you've enabled origin verification — otherwise the SSE/WebSocket streams it re
 control (Cloudflare Access, an ngrok OAuth policy, or a fronting auth proxy) — the
 `localStorage`-cached token above is *all* the app-level auth there is.
 
+## Node for plugins and `npx` servers
+
+The image doesn't bake Node. Plugins that declare `requires_runtimes: {node: ">=20"}`, the
+`npx`-based MCP servers and the ACP coding agents use the **managed Node runtime**
+(ADR 0085). It downloads on demand, either from the plugin's **Install Node runtime** banner
+button or with `protoagent runtime install-node` inside the container. It lands in
+`<box root>/runtime/node`, which is `/sandbox/runtime/node` in the container, so the same
+`/sandbox` volume that holds your config keeps it across restarts and image upgrades.
+Check where the box root is with `protoagent config explain`. An offline image that
+preinstalls Node at build time (a `WITH_NODE` build arg) is a possible future option; it
+isn't built today.
+
 ## Day-2
 
 | Want to… | Do |

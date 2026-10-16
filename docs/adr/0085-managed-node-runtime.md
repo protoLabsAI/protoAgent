@@ -116,6 +116,67 @@ follow-up.
 - **Not chosen.** We do not vendor the ACP adapters — `npx -y` fetch-on-demand
   keeps us out of owning the Claude/Codex SDK release cadence.
 
+## Amendment 2026-10-15: plugins declare Node; version-aware resolution (#4238) {#amendment-2026-10-15}
+
+**Problem.** Three gaps surfaced once plugins started shipping Node code (the Atlas
+LikeC4 viewer vendors a single-file engine that needs Node 20 or newer):
+
+1. Any `node` on PATH won, whatever its version. The PATH seam only *appended* the
+   managed runtime when no Node resolved, so a user's Node 18 shadowed a working managed
+   Node 24, and a plugin needing Node 20 failed at runtime with no warning.
+2. Plugins couldn't declare a Node requirement. Each one hand-rolled a preflight, only
+   mentioned it in its description, or shipped a private shim.
+3. There was no shared resolver. The nvm / fnm / Volta / asdf / nodenv / Homebrew
+   discovery lived privately in `plugins/coding_agent/acp_client.py`.
+
+**Decision.** This amendment changes four things:
+
+1. **One resolver.** `infra/node_runtime.py` owns discovery (`discovered_node_dirs`, moved
+   from the ACP client, which now imports it), version probing (`node_version(exe)`, which
+   runs `exe --version` with a timeout and caches by path, mtime and size), and
+   `resolve_node(min_version) -> NodeResolution(path, version, source) | None`. The order is
+   the PATH `node` if it satisfies the floor, then discovered installs (newest first), then
+   the managed runtime. It always returns an absolute path.
+2. **SDK.** `sdk.node_executable(min_version=None) -> Path | None` is the plugin-facing
+   seam over `resolve_node`. Plugins spawn the absolute path it returns, never a bare
+   `"node"`.
+3. **Version-aware PATH.** `CORE_NODE_FLOOR = "20"`. When the PATH `node` meets the floor,
+   or its version can't be read, the user's Node still wins and PATH is untouched. When it
+   is older than the floor and a managed install exists, `augment_path_with_managed_node()`
+   prepends the managed bin dir, logs that once, and stays idempotent. With no PATH node it
+   appends, as before. Setting `PROTOAGENT_NODE_SHADOW=0` opts out of the prepend: the old
+   PATH Node stays first, and the below-floor condition is still logged once.
+4. **Manifest + deps gate.** `requires_runtimes: {node: ">=20"}` takes only `node` for now,
+   and the spec is a floor: `>=N`, `>=N.N` or `>=N.N.N`. A bare `20`, a YAML int `20` or
+   `"v20"` means `>=20` and is normalized to it. A malformed spec or an unknown runtime
+   logs a warning and is ignored; it doesn't fail the manifest. On every load, an enabled
+   plugin whose requirement `resolve_node` can't meet gets a `runtime-missing` setup gap
+   with a new closed action kind, `install_node`. That button POSTs the existing
+   `/api/runtime/node/install`. The action is offered only when this platform has a managed
+   build and the pinned version meets the floor. When the install lands, the route runs
+   `loader.refresh_runtime_gaps()`, which re-checks every plugin with an active gap, so the
+   banner clears without a reload. Each re-report carries the plugin's setup-gap generation,
+   so a plugin disabled during the refresh can't get its banner back. Installing from the
+   CLI instead (`protoagent runtime install-node`) runs in another process, so the banner
+   says a restart or plugin reload is needed for the running server to pick it up. The gap is separate from `deps-missing` because that
+   gap's fix is pip, and `deps_missing` must never carry a runtime name.
+
+**Guidance for plugin authors.** Ship a **vendored single-file JS bundle** (esbuild or
+Rollup output committed with the plugin) and run it as `[<absolute node>, bundle.mjs, …]`
+using `sdk.node_executable(...)`. Never run `npx` at runtime and never run a plugin-owned
+`npm install`. Both reach the network at tool-call time, depend on a registry being up, and
+run unreviewed install scripts on the operator's machine.
+
+**Docker.** Keep downloading on demand. In the container the box root is `/sandbox`, so the
+runtime lands in `/sandbox/runtime/node` and the existing `/sandbox` volume keeps it.
+Preinstalling Node at build time through an optional `WITH_NODE` build arg, for offline
+images, is a possible future addition and isn't built yet.
+
+**Consequences.** A stale PATH Node no longer breaks Node-using features when a managed
+runtime is present. Plugins get a declared requirement, a standard banner and a one-click
+fix instead of private shims. The cost is that resolution now runs `node --version` once per
+distinct binary per process. The cache keeps that off the hot path.
+
 ## 6. References
 
 - ADR 0024 / 0025 — CLI coding agents over ACP; the unified delegate registry.

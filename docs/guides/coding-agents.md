@@ -86,8 +86,10 @@ protoagent runtime install-node    # downloads a pinned Node into ~/.protoagent/
 
 It's a box-shared, hash-verified download; the server picks it up on the next start
 (a running server hot-adopts it), and `protoagent runtime list` shows Node status.
-A user Node install always takes precedence, so this only fills the gap. `npx -y`
-still fetches the adapter itself on first launch (then caches it).
+A user Node install takes precedence when it's Node 20 or newer; an older Node on
+PATH is shadowed by the managed one for the processes protoAgent spawns (logged once at
+startup). Set `PROTOAGENT_NODE_SHADOW=0` to keep the old PATH Node first instead; the
+startup log still notes that it's below the floor. `npx -y` still fetches the adapter itself on first launch (then caches it).
 :::
 
 **Claude Code has no native ACP mode.** Drive it through the

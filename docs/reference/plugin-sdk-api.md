@@ -49,6 +49,8 @@ the module's own.
 
 **Managed Python runtime (ADR 0094 — the provisioned child interpreter)** — [`managed_python_exe()`](#sdk-managed-python-exe)
 
+**Node.js runtime (ADR 0085, amended 2026-10-15 — one resolver for every Node consumer)** — [`node_executable()`](#sdk-node-executable)
+
 ## Plugin services (the plugin↔plugin call seam, ADR 0116)
 
 ### `sdk.service` {#sdk-service}
@@ -881,4 +883,41 @@ from graph import sdk
 exe = sdk.managed_python_exe()
 if exe is None and not getattr(sys, "frozen", False):
     exe = Path(sys.executable)  # source run: this process's own interpreter
+```
+
+## Node.js runtime (ADR 0085, amended 2026-10-15 — one resolver for every Node consumer)
+
+### `sdk.node_executable` {#sdk-node-executable}
+
+```python
+sdk.node_executable(min_version: str | None = None) -> Path | None
+```
+
+An ABSOLUTE path to a `node` executable at least `min_version`, or None.
+
+`min_version` is a version floor — `"20"`, `"20.6"`, `"22.11.0"` (a leading
+`>=` is tolerated, so a manifest's `requires_runtimes` value can be passed straight
+through); None accepts any version. The host checks, in order: the `node` on the
+process PATH, the nvm / fnm / Volta / asdf / nodenv / Homebrew installs it can discover
+off PATH (newest first), then the managed runtime (`protoagent runtime install-node`,
+or the console's Install Node runtime button). Each candidate is version-checked by
+running it (cached per binary), and the first that satisfies the floor wins.
+
+Spawn the returned path directly — `[str(node), str(bundle), …]` — rather than a
+bare `"node"`: it is exactly the binary that was checked, so a stale Node earlier on
+PATH can't sneak in at spawn time. Ship a vendored single-file bundle and run it this
+way; never `npx` a package at runtime or run `npm install` from plugin code.
+
+None means nothing satisfies the floor: degrade with an actionable message. Declaring
+`requires_runtimes: {node: ">=20"}` in the manifest makes the host raise the setup
+banner (with a one-click managed install) for you. Never raises — a malformed
+`min_version` is logged and reads as None.
+
+```python
+from graph import sdk
+
+node = sdk.node_executable("20")
+if node is None:
+    return "Needs Node.js 20+: install it from the setup banner, or run `protoagent runtime install-node`."
+subprocess.run([str(node), str(BUNDLE), "--json"], check=True)
 ```

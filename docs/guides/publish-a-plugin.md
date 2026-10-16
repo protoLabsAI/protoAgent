@@ -21,7 +21,7 @@ A plugin is a directory (its own repo) with a manifest + a `register()`. The
 
 ```
 my-plugin/
-  protoagent.plugin.yaml      # manifest (id, name, version, requires_pip, views, …)
+  protoagent.plugin.yaml      # manifest (id, name, version, requires_pip, requires_runtimes, views, …)
   __init__.py                 # def register(registry): … — tools, subagents, etc.
   skills/                     # SKILL.md skills — auto-discovered (data, no code)
     my-skill/SKILL.md
@@ -106,6 +106,40 @@ missing (the banner, the Plugins row, the install dialog, the CLI), and Install 
 hands it to pip. So the Terminal plugin needs nothing on macOS or Linux (it uses the stdlib
 `pty`), and asks for `pywinpty` only on Windows. A spec that can't be parsed is checked by
 its package name, as before, and pip gets the final say on it.
+
+### Node runtime (`requires_runtimes`)
+
+A plugin that runs JavaScript declares the Node version it needs instead of
+hand-rolling a preflight:
+
+```yaml
+requires_runtimes:
+  node: ">=20"          # a floor: >=N, >=N.N or >=N.N.N (a bare 20 or "v20" means >=20); only `node` today
+```
+
+On every load, the host resolves a `node` that satisfies the floor. It checks the PATH
+first, then the nvm / fnm / Volta / asdf / nodenv / Homebrew installs it can find off
+PATH, then the [managed runtime](/adr/0085-managed-node-runtime). If none qualifies, the
+operator gets the standard setup banner ("needs Node.js >=20 (found v18.19.0)") with an
+**Install Node runtime** button. The button provisions the pinned, hash-verified managed
+Node, and the banner clears without a restart. A malformed spec or an unknown runtime
+logs a warning and is ignored; it never stops the plugin from loading.
+
+At call time, spawn the **absolute** path the SDK hands you rather than a bare `"node"`:
+
+```python
+from graph import sdk
+
+node = sdk.node_executable("20")   # Path | None — the binary that was version-checked
+if node is None:
+    return "Needs Node.js 20+: use the Install Node runtime banner, or `protoagent runtime install-node`."
+subprocess.run([str(node), str(Path(__file__).parent / "dist" / "engine.mjs"), *args], check=True)
+```
+
+Ship your JS as a **vendored single-file bundle** (esbuild or Rollup output committed in
+the plugin) and run it that way. Never `npx` a package at runtime and never run
+`npm install` from plugin code. Both hit the network at tool-call time and run
+unreviewed install scripts on the operator's machine.
 
 ### Installing a plugin's deps from the console
 

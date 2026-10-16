@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
 import { Button } from "@protolabsai/ui/primitives";
 import { api } from "../lib/api";
-import { queryKeys } from "../lib/queries";
+import { nodeRuntimeQuery, queryKeys } from "../lib/queries";
+import { errMsg } from "../lib/format";
 import { depsInstallToast, useDepsInstaller } from "../plugins/depsInstall";
 import { useUI } from "../state/uiStore";
 import { readKey, removeKey, writeKey } from "../lib/storage";
@@ -33,6 +34,11 @@ import { readKey, removeKey, writeKey } from "../lib/storage";
 // `install_deps` (the loader's "can't run until its Python packages are installed" gap) POSTs
 // the existing /api/plugins/install-deps with THIS gap's plugin id — the Plugins row's Install
 // deps, reached from the banner (InstallDepsButton below; plugins/depsInstall.tsx).
+//
+// `install_node` (the loader's "needs Node.js >=N" gap for a plugin's `requires_runtimes`,
+// ADR 0085 amended 2026-10-15) POSTs the fixed /api/runtime/node/install — the Node runtime
+// card's own install — and watches runtime status until the server clears the gap
+// (InstallNodeButton below). Nothing from the payload reaches the URL.
 export type SetupGapAction = {
   kind: string;
   target?: string;
@@ -222,6 +228,7 @@ function ctaLabel(action: SetupGapAction, gap: SetupGap): string {
   if (action.kind === "plugin_config") return `Configure ${gap.label}`;
   if (action.kind === "plugin_setup") return "Run setup";
   if (action.kind === "install_deps") return "Install dependencies";
+  if (action.kind === "install_node") return "Install Node runtime";
   return "Open settings";
 }
 
@@ -337,6 +344,71 @@ function InstallDepsButton({ gap, action }: { gap: SetupGap; action: SetupGapAct
 }
 
 /**
+ * An `install_node` CTA: provisions the managed Node runtime (ADR 0085) right from a plugin's
+ * "needs Node.js" banner, through the same host-targeted POST /api/runtime/node/install the
+ * Node runtime card uses. The download takes seconds, so the button tracks the install's
+ * progress off the Node runtime query (which polls while it runs) and arms the runtime-status
+ * watch: when the install lands the server re-checks the plugin's requirement and drops the
+ * gap, and the banner clears itself. A failure is an error toast and the button comes back.
+ */
+function InstallNodeButton({ gap, action }: { gap: SetupGap; action: SetupGapAction }) {
+  const toast = useToast();
+  const queryClient = useQueryClient();
+  const watchSetupStep = useUI((s) => s.watchSetupStep);
+  const [posting, setPosting] = useState(false);
+  const [started, setStarted] = useState(false);
+  const { data } = useQuery({ ...nodeRuntimeQuery(), enabled: started });
+  const label = ctaLabel(action, gap);
+  const state = started ? data?.install.state : undefined;
+
+  const prev = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (prev.current === "running" && state === "done") {
+      setStarted(false);
+      toast({ tone: "success", title: "Node runtime installed", message: data?.node.version ?? undefined });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runtime });
+    } else if (prev.current === "running" && state === "error") {
+      setStarted(false);
+      toast({ tone: "error", title: "Node runtime didn't install", message: data?.install.error ?? "unknown error" });
+    }
+    prev.current = state;
+  }, [state, data?.node.version, data?.install.error, toast, queryClient]);
+
+  const install = useCallback(async () => {
+    setPosting(true);
+    try {
+      const res = await api.installNodeRuntime();
+      // Seed the Node query with the POST's own answer (install state "running"), so a
+      // stale cached "done" from an earlier install can't read as this one finishing.
+      queryClient.setQueryData(queryKeys.nodeRuntime, { node: res.node, install: res.install });
+      prev.current = res.install?.state;
+      setStarted(true);
+      watchSetupStep(gap.plugin, gap.key);
+    } catch (err) {
+      toast({ tone: "error", title: "Couldn't start the Node install", message: errMsg(err) });
+    } finally {
+      setPosting(false);
+    }
+  }, [gap.plugin, gap.key, toast, watchSetupStep, queryClient]);
+
+  const busy = posting || (started && state !== "error" && state !== "done");
+  const pct = started && state === "running" && data?.install.pct ? ` ${data.install.pct}%` : "";
+  return (
+    <Button
+      variant="primary"
+      size="sm"
+      type="button"
+      loading={busy}
+      disabled={busy}
+      onClick={() => void install()}
+      data-testid="setup-gap-install-node"
+    >
+      {busy ? `Installing…${pct}` : label}
+    </Button>
+  );
+}
+
+/**
  * One structured setup gap, rendered as an accessible, actionable, dismissible warning
  * banner. Shared verbatim by the desktop strip and the mobile banner stack (App wires both
  * from the same split), so behavior can't drift between form factors.
@@ -377,6 +449,9 @@ export function SetupGapBanner({ gap, onDismiss }: { gap: SetupGap; onDismiss: (
       }
       if (action.kind === "install_deps") {
         return <InstallDepsButton key={`${action.kind}:${index}`} gap={gap} action={action} />;
+      }
+      if (action.kind === "install_node") {
+        return <InstallNodeButton key={`${action.kind}:${index}`} gap={gap} action={action} />;
       }
       const onClick = handlerFor(action);
       if (!onClick) return null; // unknown/malformed → render no interactive control
