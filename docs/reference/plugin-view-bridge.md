@@ -33,6 +33,7 @@ URL escapes that origin and the handshake silently never completes — which is 
 | `protoagent:contextmenu:open` | page → host | `{ x: number, y: number, items?: MenuItem[] }` |
 | `protoagent:contextmenu:action` | host → page | `{ itemId: string }` |
 | `protoagent:code:open` | page → host | `{ project: string, path: string, line?: number, end_line?: number, note?: string, open_in?: "pane" \| "editor" }` |
+| `protoagent:chat:compose` | page → host | `{ text: string }` — plain text, ≤ 4 KB; **drafts**, never sends |
 
 ## The handshake — `init` / `ready`
 
@@ -210,6 +211,42 @@ editor" unconditionally and let the fallback and toast cover an operator without
 
 A page that renders untrusted content (a sandboxed frame of its own) should forward only targets
 it validated — never a path the untrusted frame supplied.
+
+## Draft a chat message — `protoagent:chat:compose` {#chat-compose}
+
+"Ask the agent about this" from a view. The host puts `text` at the **front of the visible chat
+composer's draft** (anything the operator already typed stays, after a blank line), raises the chat
+surface if it was hidden or its dock collapsed (opening a session if there is none), focuses the
+textarea, and toasts **"Drafted in chat — From ‹view label› (‹plugin id›)"** so the operator sees
+where the text came from. The operator reviews it and presses Enter. It is the same draft seam the
+command palette's skill rows use.
+
+```js
+parent.postMessage({ type: "protoagent:chat:compose",
+  text: "What does the Login button in src/auth/LoginForm.tsx do?" }, hostOrigin);
+```
+
+The contract, and what the host enforces:
+
+- **Draft only — there is no auto-send.** A `send` field is ignored. Gating a send on "a user
+  gesture inside the view" isn't enforceable from the host: transient user activation is a shared,
+  seconds-long window across the frame tree that proves the operator clicked *something* in the
+  view, not that they agreed to send *this* text. The artifact shell's `protoArtifact:send` does
+  post, but only through a host-owned confirm chip; for a view, the composer's own Enter is that
+  confirmation.
+- **Plain text, ≤ 4096 UTF-8 bytes.** Control characters (except tab/newline) are stripped and
+  `\r\n` normalized; blank text is ignored. An over-cap payload is **dropped, not truncated** —
+  the operator never sends a silently clipped prompt.
+- **Always the chat on screen.** There is no session or agent field; anything like one is
+  ignored. A view can't draft into a background tab or another agent.
+- **One per second per view.** Each compose raises chat and takes focus, so a looping view is
+  throttled.
+- **Same trust as every other message:** only from this view's own iframe at its page's origin.
+  If no composer appears (a `slot: "chat"` plugin or a fork surface owns the chat slot), nothing
+  is drafted and the host shows a warning toast instead.
+
+A page that renders untrusted content should build the text itself (e.g. from the element it
+selected), never forward a string an embedded frame supplied.
 
 ## The kit
 

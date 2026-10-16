@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   prefillChatDraft,
+  prefixDraft,
   registerSlashDispatcher,
   runSlashFromOutside,
   slashDispatchTarget,
@@ -215,5 +216,23 @@ describe("prefillChatDraft", () => {
     register({ run, sessionId: "s1", surfaceActive: true, prefillDraft: () => {} });
     prefillChatDraft("/triage ");
     expect(run).not.toHaveBeenCalled();
+  });
+});
+
+// The pure body of the slot's `prefillDraft`: prefix, never replace; idempotent; a `/token `
+// carries its own separator, prose (a plugin view's `protoagent:chat:compose`) gets a blank line.
+describe("prefixDraft", () => {
+  it("fills an empty draft verbatim", () => {
+    expect(prefixDraft("", "Explain this node")).toBe("Explain this node");
+  });
+  it("prefixes a slash token with no extra separator", () => {
+    expect(prefixDraft("my question", "/triage ")).toBe("/triage my question");
+  });
+  it("sets prose off from the operator's draft by a blank line", () => {
+    expect(prefixDraft("my notes", "Explain this node")).toBe("Explain this node\n\nmy notes");
+  });
+  it("is idempotent", () => {
+    const once = prefixDraft("my notes", "Explain this node");
+    expect(prefixDraft(once, "Explain this node")).toBe(once);
   });
 });

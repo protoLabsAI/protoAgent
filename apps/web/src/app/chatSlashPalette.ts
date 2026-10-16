@@ -261,13 +261,14 @@ const HANDOFF_MS = 16;
  *  un-collapses it and this poll waits for the remount. Bounded at
  *  ~`HANDOFF_TRIES * HANDOFF_MS`; a slot that never yields a session (a fork surface owning
  *  the chat slot) drops the action rather than looping forever. */
-function whenSlotSettles(act: () => void, tries = HANDOFF_TRIES): void {
+function whenSlotSettles(act: () => void, onGiveUp?: () => void, tries = HANDOFF_TRIES): void {
   setTimeout(() => {
     if (slashDispatchTarget()?.sessionId) {
       act();
       return;
     }
-    if (tries > 0) whenSlotSettles(act, tries - 1);
+    if (tries > 0) whenSlotSettles(act, onGiveUp, tries - 1);
+    else onGiveUp?.();
   }, HANDOFF_MS);
 }
 
@@ -288,8 +289,12 @@ function whenSlotSettles(act: () => void, tries = HANDOFF_TRIES): void {
  *  desktop launcher mounts this same registry in a shell-less JS context where a direct
  *  store mutation is an inert no-op, and only a serializable NavIntent crosses to the real
  *  window. (The launcher never gets these rows at all, but the rule is the rule, and a row
- *  that quietly bypassed it would be the next launcher bug.) */
-function onChatReady(act: () => void, navigate: Navigate): void {
+ *  that quietly bypassed it would be the next launcher bug.)
+ *
+ *  `onGiveUp` runs when the poll runs out without a slot (a fork surface or a `slot:"chat"`
+ *  plugin owns the chat slot) — for a caller that has to tell the operator nothing landed,
+ *  like a plugin view's `protoagent:chat:compose` (app/pluginChatCompose). */
+export function onChatReady(act: () => void, navigate: Navigate, onGiveUp?: () => void): void {
   const target = slashDispatchTarget();
   if (target?.sessionId && target.surfaceActive) {
     act(); // already looking at a live thread — nothing to wait for
@@ -302,7 +307,7 @@ function onChatReady(act: () => void, navigate: Navigate): void {
   // collapsed there is no seam to ask, and the remounted slot will adopt whatever the store
   // says is current. `createSession` reuses a pristine blank when there is one.
   if (!chatStore.getSnapshot().currentSessionId) chatStore.createSession();
-  whenSlotSettles(act);
+  whenSlotSettles(act, onGiveUp);
 }
 
 /** The one phrase for "this row leaves the send to you" — shared by every skill row, by

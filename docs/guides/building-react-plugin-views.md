@@ -468,6 +468,21 @@ can't shadow a core menu item or collide with another plugin — and the action 
 with **your** id. The console appends its own **Configure…** below your items, so a view
 that suppressed the native menu never leaves the operator with an empty one.
 
+## Ask the agent — draft a chat message
+
+A view can hand the operator a half-written chat message ("Ask the agent about this element"):
+
+```js
+parent.postMessage({ type: "protoagent:chat:compose",
+  text: `Explain ${node.name} (${node.path}:${node.line})` }, location.ancestorOrigins?.[0] ?? "*");
+```
+
+The console prefills the visible chat composer, raises chat if it was hidden, focuses it and
+toasts that the draft came from your view — the **operator sends it**. There is no auto-send
+(a `send` field is ignored), no way to target another session or agent, and the text is plain,
+≤ 4 KB, and rate-limited to one per second. The kit doesn't wrap this message; post it directly.
+Full contract: [`protoagent:chat:compose`](/reference/plugin-view-bridge#chat-compose).
+
 ## Deep-linking your view from chat (#3617)
 
 A tool can leave a **chip** in the transcript that opens your view on a specific thing — the

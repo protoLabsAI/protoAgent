@@ -27,6 +27,8 @@ import {
   type PluginMenuOpen,
 } from "../lib/pluginContextMenu";
 import { pluginViewIcon } from "../lib/pluginIcon";
+import { createPluginChatComposer, defaultComposeDeps } from "./pluginChatCompose";
+import { applyNavIntent } from "./palette/nav";
 import { parseForwardedKey, parsePluginKeybindings } from "../lib/pluginKeybindings";
 import { useUI } from "../state/uiStore";
 import { Tabs } from "@protolabsai/ui/navigation";
@@ -344,6 +346,15 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
       if (key === view.key) flushInbox();
     });
 
+    // `protoagent:chat:compose` — DRAFT a chat message for the operator to review and send
+    // (never a send; see pluginChatCompose.ts). One composer per bridge lifetime, so its
+    // throttle is per view. Provenance rides the toast: the view's label and plugin id.
+    const composeLabel = view.label && pluginId ? `${view.label} (${pluginId})` : view.label || pluginId || "A plugin view";
+    const composeToChat = createPluginChatComposer(
+      composeLabel,
+      defaultComposeDeps(applyNavIntent, (t) => toastRef.current?.(t)),
+    );
+
     const onWindowMessage = (e: MessageEvent) => {
       // Only trust messages from THIS iframe's window.
       if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
@@ -397,7 +408,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
               // Fire back with the id the PAGE knows, not our namespaced one.
               frameRef.current?.contentWindow?.postMessage(
                 { type: "protoagent:keybinding", id: spec.pluginLocalId },
-                "*",
+                origin,
               );
             },
           }),
@@ -434,6 +445,11 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
           const notice = codeOpenNotice(target, outcome, deps);
           if (toast && notice) toast({ tone: "info", ...notice });
         });
+      } else if (m.type === "protoagent:chat:compose") {
+        // "Ask the agent about this" — prefill the visible chat composer and focus it; the
+        // operator sends. Same trust as above (this iframe, its own origin); bounded, plain
+        // text, always the chat on screen, never auto-sent.
+        composeToChat(m);
       } else if (m.type === "protoagent:publish" && typeof m.topic === "string") {
         // Force the plugin's namespace — a page can only publish under its own id.
         const bare = m.topic.replace(/^.*?\./, "");
@@ -474,7 +490,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         useContextMenuStore.getState().close();
       }
     };
-  }, [src, pluginId, bindingPluginId, view.key, embedded, setPluginBackground]);
+  }, [src, pluginId, bindingPluginId, view.key, view.label, embedded, setPluginBackground]);
 
   // Live re-theme (ADR 0026/0042): re-post the FRESH theme to the mounted iframe on any
   // theme/accent change so the view repaints WITHOUT a reload. `handleLoad` covers the first
