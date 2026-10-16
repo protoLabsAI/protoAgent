@@ -1,0 +1,99 @@
+{
+  "tours": [
+    {
+      "id": "overview",
+      "title": "protoAgent in 85 seconds",
+      "slides": [
+        {
+          "view": "index",
+          "focus": "proto_agent",
+          "note": "**protoAgent**: a self-hosted runtime for your own AI agents."
+        },
+        {
+          "view": "index",
+          "focus": "peers",
+          "note": "You use the console. Other agents talk **A2A**. Apps use **/v1**."
+        },
+        {
+          "view": "index",
+          "focus": "plugin_repos",
+          "note": "Models through a **gateway**, tools through **MCP**, features through **plugins**."
+        },
+        {
+          "view": "proto_agent_detail",
+          "via": "proto_agent",
+          "note": "Inside: the **interfaces**, the **agent core**, and **platform services**."
+        },
+        {
+          "view": "proto_agent_core_graph_detail",
+          "via": "proto_agent.core.graph",
+          "note": "The core is a **LangGraph** tool loop: subagents, middleware, checkpoints."
+        },
+        {
+          "view": "proto_agent_platform_detail",
+          "note": "**Plugins**, scheduling, events and tracing, shared by every agent."
+        },
+        {
+          "view": "chat_turn_flow",
+          "note": "Follow one chat turn."
+        },
+        {
+          "view": "index",
+          "note": "One runtime. **Your agents, your plugins, your model.**"
+        }
+      ]
+    },
+    {
+      "id": "plugins",
+      "title": "The plugin ecosystem",
+      "slides": [
+        {
+          "view": "index",
+          "focus": "plugin_repos",
+          "note": "Most of what protoAgent does ships as **plugins**: git repos you install, never a fork."
+        },
+        {
+          "view": "proto_agent_detail",
+          "via": "proto_agent",
+          "focus": "proto_agent.platform",
+          "note": "The plugin machinery lives in **platform services**, beside scheduling and events."
+        },
+        {
+          "view": "proto_agent_platform_plugins_detail",
+          "focus": "proto_agent.platform.plugins.installer",
+          "note": "A plugin installs from a **git URL**, pinned in `plugins.lock`. Installing runs nothing: **enabling is the trust decision**."
+        },
+        {
+          "view": "proto_agent_platform_plugins_detail",
+          "focus": "proto_agent.platform.plugins.loader",
+          "note": "The loader parses the **manifest** and runs the **deps and runtime gate**. Anything missing becomes a **setup-gap** banner with a fix button."
+        },
+        {
+          "view": "plugin_lifecycle",
+          "note": "Follow one plugin from a git URL to the console rail."
+        },
+        {
+          "view": "proto_agent_platform_plugins_registry_detail",
+          "via": "proto_agent.platform.plugins.registry",
+          "note": "`register(registry)` is the one seam. A plugin can add tools, views, skills, subagents, MCP servers, routes, surfaces, services and chat components."
+        },
+        {
+          "view": "proto_agent_platform_plugins_sdk_detail",
+          "note": "Plugin code reaches core through **graph.sdk**: its own store, other plugins' services, files, knowledge, jobs and traces."
+        },
+        {
+          "view": "sdk_tool_call",
+          "note": "Watch a plugin tool use the SDK."
+        },
+        {
+          "view": "proto_agent_interfaces_console_view_bridge_detail",
+          "note": "In the console, a plugin view is a sandboxed **iframe**. The **plugin-kit** speaks a postMessage bridge: theme, events, code links, chat drafts."
+        },
+        {
+          "view": "plugin_repos_detail",
+          "note": "First-party plugins live in their own repos. **Atlas**, the plugin drawing this diagram, is one of them."
+        }
+      ]
+    }
+  ]
+}

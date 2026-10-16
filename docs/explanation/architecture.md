@@ -178,6 +178,7 @@ If you declare a skill on the card but don't teach the LLM about it, A2A callers
 
 ## Related
 
+- [Architecture model](https://github.com/protoLabsAI/protoAgent/tree/main/architecture) — this page as a drill-down [Atlas](https://github.com/protoLabsAI/atlas-plugin) model, linked to the code, with flows and tours of the plugin ecosystem
 - [A2A protocol](/explanation/a2a-protocol) — why the handler looks this way
 - [Model output](/explanation/output-protocol) — native reasoning + the leaked-reasoning guard
 - [Cost & trace](/explanation/cost-and-trace) — why `on_chat_model_end` matters
