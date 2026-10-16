@@ -183,3 +183,94 @@ describe("chat action buttons → DS Button (#551 card 2)", () => {
     expect(chatCss).not.toContain("chat-bgwork-open");
   });
 });
+
+// The first declaration block of a bare-selector rule (no nested braces in these rules).
+function cssBlock(css: string, selector: string): string {
+  const i = css.indexOf(`${selector} {`);
+  if (i < 0) return "";
+  const open = css.indexOf("{", i);
+  const close = css.indexOf("}", open);
+  return css.slice(open + 1, close);
+}
+
+/** The background-work strip reserves its line permanently: the `.chat-bgwork` container
+ *  always renders (one stable node / live region), so a job starting or the last one
+ *  finishing never grows/shrinks the composer row and resizes the transcript. */
+describe("background-work strip reserves its line", () => {
+  // Flip the single job for this session between running and completed, exactly as the
+  // `background.{started,completed}` bus events would.
+  async function start() {
+    await act(async () => {
+      topicHandlers["background.started"]?.({
+        job_id: "bg-x",
+        subagent_type: "delegate",
+        description: "delegate → sonnet: Do it",
+        origin_session: "sess-1",
+      });
+    });
+  }
+  async function finish() {
+    await act(async () => {
+      topicHandlers["background.completed"]?.({
+        job_id: "bg-x",
+        subagent_type: "delegate",
+        description: "delegate → sonnet: Do it",
+        origin_session: "sess-1",
+        status: "completed",
+      });
+    });
+  }
+
+  it("renders an empty .chat-bgwork--idle (no spinner, no View) when nothing is running", async () => {
+    const el = await mount(createElement(BackgroundWorkStrip, { sessionId: "sess-1" }));
+    const idle = el.querySelector<HTMLElement>('[data-testid="chat-bgwork"]');
+    expect(idle).toBeTruthy(); // not null — the line is reserved
+    expect(idle!.classList.contains("chat-bgwork")).toBe(true);
+    expect(idle!.classList.contains("chat-bgwork--idle")).toBe(true);
+    expect(idle!.getAttribute("role")).toBe("status");
+    expect(idle!.querySelector(".pl-spinner")).toBeNull();
+    expect(btnByText(el, "View")).toBeUndefined();
+  });
+
+  it("keeps the SAME .chat-bgwork node across idle → running → idle, toggling only --idle", async () => {
+    const el = await mount(createElement(BackgroundWorkStrip, { sessionId: "sess-1" }));
+    const node = el.querySelector<HTMLElement>(".chat-bgwork")!;
+    expect(node.classList.contains("chat-bgwork--idle")).toBe(true);
+
+    await start();
+    const running = el.querySelector<HTMLElement>(".chat-bgwork")!;
+    expect(running).toBe(node); // same DOM node, only contents/modifier changed
+    expect(running.classList.contains("chat-bgwork--idle")).toBe(false);
+    expect(running.querySelector(".pl-spinner")).toBeTruthy();
+    expect(btnByText(el, "View")).toBeTruthy();
+
+    await finish();
+    const idleAgain = el.querySelector<HTMLElement>(".chat-bgwork")!;
+    expect(idleAgain).toBe(node); // still the same node
+    expect(idleAgain.classList.contains("chat-bgwork--idle")).toBe(true);
+    expect(idleAgain.querySelector(".pl-spinner")).toBeNull();
+    expect(btnByText(el, "View")).toBeUndefined();
+  });
+
+  it("the count is wrapped for tabular figures so its width doesn't jitter", async () => {
+    const el = await mount(createElement(BackgroundWorkStrip, { sessionId: "sess-1" }));
+    await start();
+    const count = el.querySelector<HTMLElement>(".chat-bgwork-count");
+    expect(count).toBeTruthy();
+    expect(count!.textContent).toContain("background job");
+  });
+
+  it("chat.css pins .chat-bgwork to a fixed block size (idle and running pixel-identical)", () => {
+    const block = cssBlock(chatCss, ".chat-bgwork");
+    expect(block).toContain("box-sizing: border-box");
+    expect(block).toMatch(/\bheight:\s*[^;]+;/);
+    expect(block).toMatch(/\bmin-height:\s*[^;]+;/);
+    expect(cssBlock(chatCss, ".chat-bgwork-count")).toContain("font-variant-numeric: tabular-nums");
+  });
+
+  it("chat.css stops the delegation row's DS Buttons from wrapping", () => {
+    const block = cssBlock(chatCss, ".chat-delegation-row > .pl-btn");
+    expect(block).toContain("white-space: nowrap");
+    expect(block).toContain("flex: none");
+  });
+});
