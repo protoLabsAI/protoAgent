@@ -74,3 +74,8 @@ public_paths:
   # (the 2026-08-20 fleet-wide incident). Public CHROME only: the gated data
   # routes stay bearer-gated.
   - "/plugins/artifact/shell.js"
+  # Inline image/video (#4257): a <video>/<img> load carries no Authorization header either.
+  # NOT open data: the route SELF-GATES on a short-lived ticket bound to one artifact version,
+  # minted by the bearer-gated POST /api/plugins/artifact/artifact/{id}/media-ticket (_media.py),
+  # and serves only allowlisted image/video types — no ticket, no bytes (a bare 404).
+  - "/plugins/artifact/media/"

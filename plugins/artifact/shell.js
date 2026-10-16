@@ -88,6 +88,24 @@
     + 'parent.postMessage({type:"protoArtifact:openLink",id:id,url:String(url),nonce:N},"*");'
     + 'setTimeout(function(){if(w[id]){delete w[id];rej(nay("openLink timed out"));}},60000);});}};'
     + '})();<\/script>';
+  // Web-storage guard (#4257): the artifact frame is a no-same-origin sandbox (the security
+  // boundary — it is never granted same-origin), so merely READING window.localStorage /
+  // sessionStorage throws a SecurityError there, and generated code that persists a setting
+  // ("remember the tab") crashed with an uncaught pageerror. Where the getter throws, define a
+  // per-frame in-memory Storage in its place: the artifact works, nothing persists, and no real
+  // storage is reachable. Runs FIRST in every base() frame, before any artifact code.
+  var STOREBOOT = '<script>(function(){'
+    + 'function mem(){var d=Object.create(null);return{'
+    + 'getItem:function(k){k=String(k);return k in d?d[k]:null;},'
+    + 'setItem:function(k,v){d[String(k)]=String(v);},'
+    + 'removeItem:function(k){delete d[String(k)];},'
+    + 'clear:function(){d=Object.create(null);},'
+    + 'key:function(i){var ks=Object.keys(d);return i>=0&&i<ks.length?ks[i]:null;},'
+    + 'get length(){return Object.keys(d).length;}};}'
+    + '["localStorage","sessionStorage"].forEach(function(n){'
+    + 'try{if(window[n])return;}catch(_){}'
+    + 'try{Object.defineProperty(window,n,{configurable:true,enumerable:true,value:mem()});}catch(_){}});'
+    + '})();<\/script>';
   // Design-system surface: link the same-origin DS plugin-kit stylesheet (host-served at
   // /_ds/, min_protoagent_version 0.34.0) into html/react/markdown artifacts so they can use
   // the `.pl-*` component classes + `--pl-*` tokens and match the console. A cross-origin
@@ -218,7 +236,7 @@
       + '<style id="__artbase">'+rootCss
       + 'html,body{margin:0;background:var(--pl-color-bg,'+bg+');color:var(--pl-color-fg,'+fg+')}'
       + '</style>'
-      + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + SHIM + ERRBOOT;
+      + '<script>window.__artKind=' + JSON.stringify(kind||"") + ';<\/script>' + STOREBOOT + SHIM + ERRBOOT;
   }
   // Artifact libs are VENDORED + served same-origin (/plugins/artifact/vendor/…), so
   // react/mermaid renders work fully OFFLINE — no cdnjs dependency. Still pinned with
@@ -839,6 +857,16 @@
     if(ext==="pptx" || String(mime||"").toLowerCase()===PPTX_MIME) return "slides";
     if(ext==="pdf" || String(mime||"").toLowerCase()==="application/pdf") return "pdf";
     if(ext==="docx" || String(mime||"").toLowerCase()===DOCX_MIME) return "docx";
+    // Inline media (#4257) — the mirror of _media.py's allowlist (drift-guarded by a test): the
+    // stored mime wins when it's one of these, else the extension. Literal tables, not globals,
+    // so this function stays self-contained.
+    var mm=String(mime||"").toLowerCase().split(";")[0].trim();
+    var MM={"image/png":"image","image/jpeg":"image","image/webp":"image","image/gif":"image",
+      "image/svg+xml":"image","video/mp4":"video","video/webm":"video"};
+    var ME={png:"image",jpg:"image",jpeg:"image",webp:"image",gif:"image",svg:"image",
+      mp4:"video",m4v:"video",webm:"video"};
+    if(MM.hasOwnProperty(mm)) return MM[mm];
+    if(ME.hasOwnProperty(ext)) return ME[ext];
     if(ext==="xlsx") return "sheets";
     if(ext==="csv"||ext==="tsv") return "table";
     if(ext==="md"||ext==="markdown") return "md";
@@ -948,6 +976,7 @@
         ? String(f.slides.reason||"the file failed the safety checks")
         : "this version was saved before slide previews; re-save the file to render its slides");
     }
+    if((pk==="image"||pk==="video") && !note) return mediaDoc(v, pk);
     var cs=getComputedStyle(document.documentElement);
     function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
     var bg=tok("--pl-color-bg","#0a0a0c"), fg=tok("--pl-color-fg","#ededed"),
@@ -1006,6 +1035,67 @@
       + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div></div>'
       + (note ? '<div class="note" role="status">'+esc(note)+'</div>' : '')
       + '<div class="pvl">'+esc(pvl)+'</div>'+body+'</div>';
+  }
+  // ── inline image / video (#4257) ──────────────────────────────────────────────────────
+  // An image shows as an <img> fit to the panel (click toggles full size, CSS-only); an MP4/WebM
+  // plays in a <video controls>. Same no-same-origin sandbox, under a nonce CSP whose ONLY
+  // network is media/img from this origin. The frame can't carry the bearer, so it asks the shell
+  // ({state:"need"}); the shell mints a short-lived ticket on the gated data router and posts back
+  // a URL on the PUBLIC, Range-aware /plugins/artifact/media route (_media.py) — the browser
+  // streams and seeks instead of downloading the whole file first. Download stays in the toolbar.
+  function mediaDoc(v, pk){
+    var cs=getComputedStyle(document.documentElement);
+    function tok(n,d){ return (cs.getPropertyValue(n)||d).trim(); }
+    var bg=tok("--pl-color-bg","#0a0a0c"), fg=tok("--pl-color-fg","#ededed"),
+        muted=tok("--pl-color-fg-muted","#9aa0aa"), border=tok("--pl-color-border","rgba(255,255,255,.12)");
+    var f=v.file||{}, name=f.filename||"file", mime=f.mime||"application/octet-stream", nonce=cspNonce();
+    var src=location.origin;
+    var csp="default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'unsafe-inline'; img-src "+src+" data:; "
+      + "media-src "+src+"; font-src 'none'; connect-src 'none'; worker-src 'none'; frame-src 'none'; "
+      + "object-src 'none'; base-uri 'none'; form-action 'none'";
+    var el = pk==="video"
+      ? '<div class="stage"><video id="m" controls preload="metadata" playsinline aria-label="'+esc(name).replace(/"/g,"&quot;")+'"></video></div>'
+      : '<input type="checkbox" id="z" class="z" aria-label="View full size">'
+        + '<label for="z" class="stage" title="Click to toggle full size"><img id="m" alt="'+esc(name).replace(/"/g,"&quot;")+'"></label>';
+    return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
+      + '<style>'
+      + 'html,body{margin:0;height:100%;background:'+bg+';color:'+fg+';font-family:var(--pl-font-sans,ui-sans-serif,system-ui,sans-serif)}'
+      + '.wrap{display:flex;flex-direction:column;height:100%;box-sizing:border-box;padding:18px;gap:12px}'
+      + '.nm{font-size:15px;font-weight:600;word-break:break-all}.mt{color:'+muted+';font-size:12px;margin-top:2px}'
+      + '.stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:auto;'
+      + 'border:1px solid '+border+';border-radius:8px;background:rgba(127,127,127,.08)}'
+      + '.stage img{display:block;max-width:100%;max-height:100%;object-fit:contain;cursor:zoom-in}'
+      + '.z{position:absolute;opacity:0;width:1px;height:1px;margin:0}'
+      + '.z:focus-visible+.stage{outline:2px solid var(--pl-color-accent,#9b87f2);outline-offset:2px}'
+      + '.z:checked+.stage{display:block}.z:checked+.stage img{max-width:none;max-height:none;cursor:zoom-out}'
+      + '.stage video{display:block;max-width:100%;max-height:100%;background:#000}'
+      + '.note{font-size:12px;padding:8px 10px;border-radius:6px;border:1px solid '+border+';background:rgba(127,127,127,.1)}'
+      + '</style><div class="wrap"><div class="hd"><div class="nm">'+esc(name)+'</div>'
+      + '<div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div>'
+      + '<div class="note" id="note" role="status" hidden></div>'
+      + el + '</div>'
+      + '<script nonce="'+nonce+'">(' + artMedia.toString() + ')(' + JSON.stringify(pk) + ');<\/script>';
+  }
+  // The in-frame half (injected via toString — no `</` inside): ask for the URL, set it, report.
+  function artMedia(kind){
+    var D=document, W=window, el=D.getElementById("m"), note=D.getElementById("note"), told=false;
+    function post(m){ try{ W.parent.postMessage(m, "*"); }catch(_){} }
+    function fail(reason){
+      note.textContent=(kind==="video" ? "Video" : "Image")+" preview unavailable \u2014 "+reason+". Use Download to open the file.";
+      note.hidden=false;
+      if(!told){ told=true; post({type:"protoArtifact:media", state:"failed", reason:String(reason).slice(0,300)}); }
+    }
+    el.addEventListener("error", function(){ fail("the file couldn't be loaded"); });
+    el.addEventListener(kind==="video" ? "loadedmetadata" : "load", function(){
+      if(!told){ told=true; post({type:"protoArtifact:media", state:"rendered"}); }
+    });
+    W.addEventListener("message", function(e){
+      if(e.source!==W.parent) return;
+      var m=e.data||{};
+      if(m.type==="protoArtifact:media:src" && typeof m.url==="string" && /^https?:[/][/]/.test(m.url)){ el.src=m.url; return; }
+      if(m.type==="protoArtifact:media:error") fail(String(m.reason||"the file couldn't be fetched"));
+    });
+    post({type:"protoArtifact:media", state:"need"});
   }
   // ── .pptx slide previews ──────────────────────────────────────────────────────────────
   // A deck renders as REAL slides — the vendored @aiden0z/pptx-renderer (window.PptxRenderer)
@@ -1599,6 +1689,7 @@
       // A deck's / PDF's frame asks for its bytes once it boots (pptxNeed) — remember which version it is.
       pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)||docxOk(v))
         ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"} : null);
+      mediaReset(a, v, vi);
       frameNav.set(a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks)); $frame.style.display="block";
       renderLinks(); }
   }
@@ -2228,6 +2319,26 @@
     }
   }
 
+  // Inline media, shell side (#4257): the frame asks once it boots; mint a ticket for exactly the
+  // version on screen and post its URL in. A stale answer (the panel moved on) is dropped.
+  var mediaCtx=null;
+  function mediaKindOf(v){ var f=(v&&v.file)||{}, pk=previewKind(f.filename, f.mime); return pk==="image"||pk==="video" ? pk : null; }
+  function mediaReset(a, v, vi){ mediaCtx = a.kind==="file" && mediaKindOf(v) ? {id:a.id, vi:vi} : null; }
+  async function mediaMessage(m){
+    var ctx=mediaCtx; if(!ctx || m.state!=="need") return;
+    try{
+      var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(ctx.id)+"/media-ticket?version="+(ctx.vi+1), {method:"POST"});
+      if(!r.ok) throw new Error("the file couldn't be fetched ("+r.status+")");
+      var d=await r.json(), path=String((d&&d.path)||"");
+      if(path.indexOf("/plugins/artifact/media/")!==0) throw new Error("no media link came back");
+      if(mediaCtx!==ctx) return;
+      $frame.contentWindow.postMessage({type:"protoArtifact:media:src", url:location.origin+window.__base+path}, "*");
+    }catch(err){
+      if(mediaCtx!==ctx) return;
+      try{ $frame.contentWindow.postMessage({type:"protoArtifact:media:error", reason:String((err&&err.message)||err)}, "*"); }catch(_){}
+    }
+  }
+
   // Render-status de-dup (#4076): ONE report per (artifact, version, verdict). A frame can post
   // its verdict more than once (a re-srcdoc of the same version, the hidden-tab eager mount and
   // then the visible mount, a remount after scroll or reload) and each used to re-POST — the
@@ -2262,6 +2373,7 @@
     if(!$frame || e.source!==$frame.contentWindow) return;
     var m=e.data||{};
     if(m.type==="protoArtifact:pptx"||m.type==="protoArtifact:pdf"||m.type==="protoArtifact:docx"){ pptxMessage(m); return; }
+    if(m.type==="protoArtifact:media"){ mediaMessage(m); return; }
     // Embed only: the frame's measured content height → size the frame and relay it to the host.
     if(m.type==="protoArtifact:height"){ if(EMBED) embedHeight(m.height); return; }
     // Render verdict from the sandbox (#1458) → relay to /render-status so the agent's
@@ -2569,6 +2681,7 @@
       lastRendered=key;
       pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)||docxOk(v))
         ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"} : null);
+      mediaReset(a, v, vi);
       // SAME builder as the panel; the embed-only tail (height reporter + sizing CSS) is appended
       // AFTER it, so the frame's own doc — its CSP, vendored libs and SRI — is byte-identical.
       var doc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks);

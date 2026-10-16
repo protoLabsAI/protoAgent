@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
-from . import _config, _render_status, _shell, _store
+from . import _config, _media, _render_status, _shell, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
@@ -61,12 +61,12 @@ def _open_blob(art_id: str, version: int):
     raise HTTPException(404, "blob missing")
 
 
-def _attachment(filename: str) -> str:
+def _attachment(filename: str, disposition: str = "attachment") -> str:
     """A download's Content-Disposition, built the way Starlette's FileResponse builds it."""
     quoted = quote(filename)
     if quoted != filename:
-        return f"attachment; filename*=utf-8''{quoted}"
-    return f'attachment; filename="{filename}"'
+        return f"{disposition}; filename*=utf-8''{quoted}"
+    return f'{disposition}; filename="{filename}"'
 
 
 @functools.cache
@@ -79,22 +79,53 @@ def _open_file_response():
     class OpenFileResponse(Response):
         """Stream ``fh`` from where it is, then close it — however the send ends (a completed
         download, a client that disconnected, an error), so a Windows handle never outlives
-        the send and keeps blocking the blob sweep."""
+        the send and keeps blocking the blob sweep.
 
-        def __init__(self, fh, media_type: str, filename: str) -> None:
+        Honours one HTTP ``Range`` (#4257): a ``bytes=`` range is a 206 with ``Content-Range``
+        streaming just that slice (a <video> seeks without downloading the whole file), an
+        unsatisfiable one a 416, and a multi-range or no header the whole body as a 200. Every
+        response advertises ``Accept-Ranges: bytes``."""
+
+        def __init__(
+            self,
+            fh,
+            media_type: str,
+            filename: str,
+            range_header: str | None = None,
+            disposition: str = "attachment",
+            headers: dict | None = None,
+        ) -> None:
             self.fh = fh
-            self.size = os.fstat(fh.fileno()).st_size
-            self.status_code = 200
+            size = os.fstat(fh.fileno()).st_size
             self.media_type = media_type
             self.background = None
-            self.init_headers({"content-length": str(self.size), "content-disposition": _attachment(filename)})
+            hdrs = {"accept-ranges": "bytes", "content-disposition": _attachment(filename, disposition)}
+            hdrs.update({k.lower(): v for k, v in (headers or {}).items()})
+            rng = _media.parse_range(range_header, size)
+            self.start = 0
+            if rng is False:
+                self.status_code = 416
+                self.size = 0
+                hdrs["content-range"] = f"bytes */{size}"
+            elif rng is None:
+                self.status_code = 200
+                self.size = size
+            else:
+                self.status_code = 206
+                self.start, end = rng
+                self.size = end - self.start + 1
+                hdrs["content-range"] = f"bytes {self.start}-{end}/{size}"
+            hdrs["content-length"] = str(self.size)
+            self.init_headers(hdrs)
 
         async def __call__(self, scope, receive, send) -> None:
             try:
                 await send({"type": "http.response.start", "status": self.status_code, "headers": self.raw_headers})
-                if scope.get("method", "").upper() == "HEAD":
+                if scope.get("method", "").upper() == "HEAD" or self.status_code == 416:
                     await send({"type": "http.response.body", "body": b"", "more_body": False})
                     return
+                if self.start:
+                    await anyio.to_thread.run_sync(self.fh.seek, self.start)
                 left = self.size
                 while True:
                     chunk = await anyio.to_thread.run_sync(self.fh.read, min(_BLOB_CHUNK, left)) if left else b""
@@ -170,7 +201,7 @@ def _build_view_router():
     it MUST live under ``/plugins/`` — a ``/api/plugins/`` page poisons the base to
     ``/api`` and the kit's ``/_ds/`` assets 404 (the bug this split fixes). The page
     fetches its DATA from the gated data router with the handshake token."""
-    from fastapi import APIRouter
+    from fastapi import APIRouter, Header, HTTPException
     from fastapi.responses import FileResponse, HTMLResponse, Response
 
     router = APIRouter()
@@ -178,6 +209,28 @@ def _build_view_router():
     @router.get("/view")
     async def _view():
         return HTMLResponse(_shell._SHELL_HTML)
+
+    # Inline media (#4257): a file artifact's image/video bytes for the panel's <img>/<video>,
+    # which can't carry the bearer. PUBLIC prefix, so it gates ITSELF on a ticket minted by the
+    # gated ``POST /api/plugins/artifact/artifact/{id}/media-ticket`` and bound to this exact
+    # version. Range-aware (seek without downloading the whole file); only allowlisted image/
+    # video types, under nosniff + a sandboxing CSP (_media.SAFE_HEADERS). Unknown/expired
+    # tickets and non-media files are the same 404 — the route reveals nothing without a ticket.
+    @router.api_route("/media/{art_id}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def _media_route(art_id: str, version: int = 0, t: str = "", req_range: str | None = Header(None, alias="range")):
+        if version < 1 or not _media.check(t, art_id, version):
+            return Response(status_code=404)
+        try:
+            fh, meta, name = _open_blob(art_id, version)
+        except HTTPException:
+            return Response(status_code=404)
+        mt = _media.media_type(meta)
+        if mt is None:
+            fh.close()
+            return Response(status_code=404)
+        return _open_file_response()(
+            fh, mt, meta.get("filename") or name, range_header=req_range, disposition="inline", headers=_media.SAFE_HEADERS
+        )
 
     # The shell's module script, same-origin beside the page (its relative ``src``
     # resolves against /plugins/artifact/view). NOT immutable-cached like vendor
@@ -417,16 +470,40 @@ def _build_data_router():
         return {"ok": True, "id": art_id, "version": v}
 
     @router.get("/artifact/{art_id}/blob")
-    async def _blob(art_id: str, version: int = 0):
+    async def _blob(art_id: str, version: int = 0, req_range: str | None = Header(None, alias="range")):
         """Serve a `file` artifact version's stored BYTES for download (ADR 0092 D2). The
         panel's Download button hits this with the operator bearer; ``version`` is 1-based
         (0/absent = latest). Returns the sidecar blob with its stored mime + an attachment
         filename. 404 if the artifact/version/blob is missing or isn't a file artifact.
+        A ``Range`` header gets a 206 slice (``Accept-Ranges: bytes`` on every response).
 
         Streamed from a handle opened before the response starts (``_open_blob``), so an
         eviction in another process can't cut the download short once it's begun."""
         fh, meta, name = _open_blob(art_id, version)
-        return _open_file_response()(fh, meta.get("mime") or "application/octet-stream", meta.get("filename") or name)
+        return _open_file_response()(
+            fh, meta.get("mime") or "application/octet-stream", meta.get("filename") or name, range_header=req_range
+        )
+
+    @router.post("/artifact/{art_id}/media-ticket")
+    async def _media_ticket(art_id: str, version: int = 0) -> dict:
+        """Mint a short-lived ticket for the PUBLIC media route (#4257) — a <video>/<img> can't
+        carry the bearer, so this gated call stands in for it. Bound to one explicit version
+        (0/absent resolves to the latest NOW, so a later save doesn't swap what's playing).
+        404 for an unknown artifact/version, 415 for a file that isn't inline image/video."""
+        store = _store._read_store()
+        art = _store._find(store, art_id)
+        if art is None:
+            raise HTTPException(404, f"unknown artifact {art_id}")
+        vers = art.get("versions") or []
+        if version and not (1 <= version <= len(vers)):
+            raise HTTPException(404, f"no version {version} (have 1..{len(vers)})")
+        n = version or len(vers)
+        if not n or not vers[n - 1].get("blob"):
+            raise HTTPException(404, "not a file artifact / no stored blob")
+        if _media.media_kind(vers[n - 1].get("file") or {}) is None:
+            raise HTTPException(415, "not an inline image/video file")
+        tok = _media.mint(art_id, n)
+        return {"ticket": tok, "version": n, "path": f"/plugins/artifact/media/{quote(art_id)}?version={n}&t={tok}"}
 
     @router.delete("/artifact/{art_id}")
     @_busy_503
