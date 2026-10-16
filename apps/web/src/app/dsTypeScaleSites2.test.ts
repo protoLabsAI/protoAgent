@@ -34,6 +34,7 @@ const BARE_TOKEN = /^var\(--pl-font-size-(?:3xs|2xs|xs|sm|base|lg|xl)\)$/;
 // a new px site sneaks in, the extracted list stops matching and this fails loudly.
 const EXPECTED: Record<string, readonly string[]> = {
   // .flr__empty (13→sm), .flr__name (14→base), .flr__tag (9.5→3xs), .flr__meta (11.5→2xs),
+  // .flr__work (2xs, #4290),
   // .flr__mention-name (13→sm), .flr__mention-meta (11→2xs), .flr__diag-name (14→base),
   // .flr__diag-state (12.5→sm), .flr__diag-note (12→xs), .flr__diag-logs (11.5→2xs),
   // .flr__diag-taskinput (12→xs), .flr__diag-blocktext/.flr__diag-pre (12→xs),
@@ -43,6 +44,7 @@ const EXPECTED: Record<string, readonly string[]> = {
     "var(--pl-font-size-sm)",
     "var(--pl-font-size-base)",
     "var(--pl-font-size-3xs)",
+    "var(--pl-font-size-2xs)",
     "var(--pl-font-size-2xs)",
     "var(--pl-font-size-sm)",
     "var(--pl-font-size-2xs)",

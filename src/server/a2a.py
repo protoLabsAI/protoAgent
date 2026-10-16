@@ -951,6 +951,68 @@ def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
     )
 
 
+# How much of a delegated turn's ask rides its `turn.started` (#4290): a one-line "what is
+# it working on" for the Fleet Room roster, not the task. The full ask stays in the task.
+_DELEGATED_SUMMARY_LIMIT = 140
+# A caller name is the delegating agent's self-reported identity — bound it like one.
+_DELEGATED_CALLER_LIMIT = 64
+
+
+def _one_line(text: object, limit: int) -> str:
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
+def _publish_delegated_lifecycle(context_id: str, task_id: str, frame: dict) -> None:
+    """Bracket an A2A-DELEGATED turn with ``turn.started`` / ``turn.finished`` (#4290).
+
+    A turn another agent handed this one over A2A (``origin: "a2a"``, which protoAgent's
+    delegate client stamps) is held by that caller's stream, so nothing on THIS agent's bus
+    said it was running — only the terminal ``turn.usage`` landed, and the hub's Fleet Room
+    (which reads members' buses) logged "finished a turn" without ever showing the member
+    busy. The executor's ``turn_started`` / ``turn_ended`` frames are exactly the pair the
+    room needs: ``turn_ended`` fires on every exit — completed, failed, canceled, parked,
+    and the crash paths — so a member never stays "busy" past its turn.
+
+    Only ``a2a`` turns: the console streams its own turns (no origin) and server-fired ones
+    already publish their own lifecycle (scheduler, background resume), so either would be
+    doubled. A HITL park splits one task into two ``execute()`` legs; the pair spans them —
+    ``turn.started`` on the first leg only (a resumed leg is ``turn.resumed``'s, published
+    below) and ``turn.finished`` only off a non-park exit (a park is
+    ``turn.input_required``'s) — so a consumer counting starts against finishes stays
+    balanced, and one that treats ``turn.finished`` as "this task is over" is never told a
+    parked task ended. The summary is a one-line clip of the ask, withheld from an incognito/hidden
+    turn; whoever can read this bus is this agent's operator, who can already read the task.
+    """
+    if frame.get("origin") != "a2a":
+        return
+    phase = frame.get("phase")
+    if phase == "turn_started" and not frame.get("resumed"):
+        data = {
+            "session_id": context_id,
+            "task_id": task_id,
+            "origin": "a2a",
+            "trigger": str(frame.get("trigger") or ""),
+            "caller": _one_line(frame.get("caller"), _DELEGATED_CALLER_LIMIT),
+            "summary": "" if frame.get("private") else _one_line(frame.get("stimulus"), _DELEGATED_SUMMARY_LIMIT),
+        }
+        _event_bus.publish("turn.started", data)
+    elif phase == "turn_ended" and frame.get("state") != "input_required":
+        state = str(frame.get("state") or "")
+        _event_bus.publish(
+            "turn.finished",
+            {
+                "session_id": context_id,
+                "task_id": task_id,
+                "origin": "a2a",
+                "state": state,
+                # The scheduler's `turn.finished` vocabulary: False marks a failed turn, None
+                # (a cancel) says nothing about how it went.
+                "ok": True if state == "completed" else False if state == "failed" else None,
+            },
+        )
+
+
 def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
     """Per-frame progress hook (ADR 0051). A HITL pause (``input_required``) is published
     for EVERY context as ``turn.input_required`` so a fleet console can surface "needs your
@@ -959,6 +1021,10 @@ def _a2a_progress(context_id: str, task_id: str, frame: dict) -> None:
     A2A task id on the job row (the handle ``stop_task`` needs); on tool frames it
     republishes ``background.progress`` for the console's live job card.
     Best-effort — never raises into the executor."""
+    try:
+        _publish_delegated_lifecycle(context_id, task_id, frame)
+    except Exception:  # noqa: BLE001 — a lifecycle event must never break the turn
+        log.exception("[a2a] failed to publish delegated turn lifecycle for %s", task_id)
     if frame.get("phase") == "turn_ended":
         # The executor's guaranteed exit signal (#3933): whatever path the turn took out —
         # including a crash before its terminal hook fired — forget its control entry.

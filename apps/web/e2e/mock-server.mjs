@@ -1353,6 +1353,17 @@ const server = createServer(async (req, res) => {
          setTimeout(() => frame("turn.resumed", { task_id: "t-hitl", context_id: "sess-hitl" }), 1800),
          setTimeout(() => frame("turn.usage", { task_id: "t-hitl", context_id: "sess-hitl", state: "completed", input_tokens: 10, output_tokens: 5 }), 3200)]
       : [];
+    // Fleet Room delegated work (#4290), slug-gated like the HITL lifecycle above: the
+    // member named in `x-e2e-delegated` runs two turns another agent DELEGATED over A2A at
+    // once — `turn.started { origin: "a2a" }` for each, then each ends (one via its
+    // turn.usage, the other via turn.finished alone) — so the roster walks busy → idle.
+    const delegatedSlug = req.headers["x-e2e-delegated"];
+    const delegated = delegatedSlug && memberSlug === delegatedSlug
+      ? [setTimeout(() => frame("turn.started", { session_id: "ctx-d1", task_id: "t-d1", origin: "a2a", trigger: "delegate_to", caller: "main", summary: "Summarize the open PRs" }), 300),
+         setTimeout(() => frame("turn.started", { session_id: "ctx-d2", task_id: "t-d2", origin: "a2a", trigger: "delegate_to", caller: "main", summary: "Check the release notes" }), 500),
+         setTimeout(() => frame("turn.usage", { task_id: "t-d1", context_id: "ctx-d1", state: "completed", input_tokens: 10, output_tokens: 5 }), 2600),
+         setTimeout(() => frame("turn.finished", { task_id: "t-d2", session_id: "ctx-d2", origin: "a2a", state: "completed", ok: true }), 3400)]
+      : [];
     // Code pane live updates (ADR 0112): `fs.changed` for the `<project>:<path>` the spec
     // names in `x-e2e-fs-change` (`;<source>` optional, default delegate), repeated so a slow
     // connect can't miss it. Header-gated: only that spec's stream carries it.
@@ -1384,6 +1395,7 @@ const server = createServer(async (req, res) => {
       goals.forEach(clearTimeout);
       turns.forEach(clearTimeout);
       hitl.forEach(clearTimeout);
+      delegated.forEach(clearTimeout);
       if (fsTimer) clearInterval(fsTimer);
     });
     return;

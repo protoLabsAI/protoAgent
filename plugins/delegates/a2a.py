@@ -104,6 +104,16 @@ def _is_loopback_url(url: str) -> bool:
     return host in ("localhost", "::1") or host == "127.0.0.1" or host.startswith("127.")
 
 
+def _own_agent_name() -> str:
+    """This agent's configured identity name, or ``""`` outside a running host."""
+    try:
+        from runtime.state import STATE
+
+        return str(getattr(getattr(STATE, "graph_config", None), "identity_name", "") or "")
+    except Exception:  # noqa: BLE001 — provenance is best-effort, never breaks a dispatch
+        return ""
+
+
 def _fleet_token_available() -> bool:
     """Would ``_a2a_headers`` have presented the fleet service token? (Same lookup, same
     failure mode — it degrades to "no credential" rather than raising.)"""
@@ -923,6 +933,11 @@ class A2aAdapter(Adapter):
         # still decided by the authenticated transport before the executor runs.
         # Stamp both levels because older SDK peers may preserve only one.
         provenance = {"origin": "a2a", "trigger": "delegate_to"}
+        # Who is asking (#4290): the receiver names the delegating agent on the turn it
+        # announces to its fleet console. Display only — never an authorization input.
+        caller = _own_agent_name()
+        if caller:
+            provenance["caller"] = caller
 
         # Fleet tracing: when this dispatch runs inside a traced turn, hand the
         # peer our Langfuse trace context as ``a2a.trace`` metadata — the shape

@@ -40,6 +40,7 @@ from .a2a import (  # noqa: F401 — re-exported
     _hub_proxied_slug,
     _is_loopback_url,
     _note_clamped,
+    _own_agent_name,
     _park_message,
     _peer_usage_row,
     _status_message_text,

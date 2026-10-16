@@ -15,15 +15,17 @@ model {
     agent = container 'Member agent' 'Its own LangGraph tool loop, tools, skills and model' 'LangGraph' {
       link /src/graph/agent.py#L1621 'create_agent_graph'
     }
-    bus = container 'Member event bus' 'turn.usage, turn.input_required, activity; served on /api/events' 'SSE' {
+    bus = container 'Member event bus' 'turn.started/finished for delegated turns, turn.usage, turn.input_required, activity; served on /api/events' 'SSE' {
       link /src/events/bus.py#L66 'EventBus'
       link /src/operator_api/routes.py#L997 'GET /api/events'
       link /src/server/turn_telemetry.py#L83 '_publish_usage (turn.usage)'
+      link /src/server/a2a.py#L966 '_publish_delegated_lifecycle (turn.started / turn.finished)'
       metadata {
         adr '0039'
       }
     }
     a2a_server -> agent 'runs the task as a turn'
+    a2a_server -> bus 'turn.started / turn.finished around a delegated turn'
     agent -> bus 'turn.usage when the turn ends'
   }
 
@@ -122,8 +124,8 @@ model {
           }
         }
         a2a_client = component 'A2A client' 'SendMessage (returnImmediately), then GetTask until terminal' {
-          link /plugins/delegates/a2a.py#L703 'A2aAdapter'
-          link /plugins/delegates/a2a.py#L902 '_dispatch_traced'
+          link /plugins/delegates/a2a.py#L713 'A2aAdapter'
+          link /plugins/delegates/a2a.py#L912 '_dispatch_traced'
           link /plugins/delegates/a2a.py#L47 '_a2a_headers'
         }
         progress = component 'Live progress' 'Follows the task over SubscribeToTask; narration, never the answer' {
@@ -214,9 +216,10 @@ model {
 
   // Console pieces the fleet shows up in
   extend proto_agent.interfaces.console {
-    fleet_room = component 'Fleet Room' 'Member roster with presence, live activity feed, DMs and broadcast' {
-      link /apps/web/src/app/FleetRoom.tsx#L52 'FleetRoom'
-      link /apps/web/src/app/FleetActivity.tsx#L205 'useFleetStreams'
+    fleet_room = component 'Fleet Room' 'Member roster with presence and delegated work, live activity feed, DMs and broadcast' {
+      link /apps/web/src/app/FleetRoom.tsx#L71 'FleetRoom'
+      link /apps/web/src/app/FleetActivity.tsx#L325 'useFleetStreams'
+      link /apps/web/src/app/FleetActivity.tsx#L267 'applyMemberFrame'
       metadata {
         adr '0042'
       }
