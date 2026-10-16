@@ -27,6 +27,14 @@ on:
     # Fast path, best-effort: fires only for PRs whose branch contains this file (see the
     # schedule comment). Kept because when it does fire it turns a PR green in seconds.
     types: [submitted, dismissed]
+  check_run:
+    # The panel opening or concluding a run on a head (#4260). A head with no verdict but a
+    # panel run in flight posts `pending`, so this is what moves it on in seconds: `created`
+    # catches a push whose own run beat the panel to the head (it would have posted failure),
+    # `completed` re-reads once the round ends. Runs from the DEFAULT branch with this file's
+    # write token, so unlike `pull_request_review` it fires for every PR, forks included. Any
+    # other check run is skipped by the job's `if:` before a runner is spent on it.
+    types: [created, completed]
   schedule:
     # Every 10 minutes, and this is the PRIMARY refresh, not a backstop. `pull_request_review`
     # runs the workflow from the PR's OWN BRANCH (unlike `pull_request_target`, which always
@@ -53,6 +61,7 @@ on:
 
 permissions:
   statuses: write
+  checks: read # the panel's check runs on a head: in flight → pending (#4260)
   pull-requests: read
   contents: read
 
@@ -60,7 +69,7 @@ concurrency:
   # Per PR, so a rapid push/review pair cannot post two statuses out of order for one head.
   # Never cancel-in-progress: a cancelled run leaves the status it was about to write missing,
   # which is the exact silence this gate exists to remove.
-  group: review-at-head-${{ github.event.pull_request.number || github.run_id }}
+  group: review-at-head-${{ github.event.pull_request.number || github.event.check_run.head_sha || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -71,6 +80,11 @@ jobs:
     # required-check context would then be ambiguous between a check-run that only says "the
     # job executed" and the status that carries the actual answer. One name, one meaning.
     name: Assert a panel verdict at head
+    # check_run fires for EVERY check run in the repo; only the reviewer app's two matter.
+    if: >-
+      github.event_name != 'check_run' ||
+      (github.event.check_run.app.slug == 'protoreview' &&
+       contains(fromJSON('["QA panel","protoReview"]'), github.event.check_run.name))
     runs-on: ubuntu-latest # workspace-config: allow-hosted-runner public repo — GH-hosted is free
     timeout-minutes: 5
     steps:
@@ -81,6 +95,10 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          # check_run mode: sweep only the open PRs whose head is this run's head.
+          CHECK_RUN_HEAD_SHA: ${{ github.event.check_run.head_sha }}
+          # A run in flight this long with no verdict is stalled → failure, not pending.
+          PANEL_STALL_MINUTES: ${{ vars.PANEL_STALL_MINUTES }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           # Rollout gate for the coverage / standing-block contract (#3334). Left EMPTY (off)

@@ -61,6 +61,16 @@ no plugin checkout. It used to read the LATEST marker, so after a FAIL a re-revi
 the same head turned this check green while ``QA panel`` stayed red. If the rule raises,
 nothing is superseded and the strictest round wins (fail-closed).
 
+**Not reviewed yet is not the same as failed (#4260).** A head with no verdict but with a
+panel run in flight on it — the reviewer app's ``protoReview`` (the review itself, opened and
+concluded by the same panel round) or, before that run opens, its ``QA panel`` gate — posts
+``pending``, not ``failure``. ``pending`` still blocks the merge (a required check is only
+satisfied by success), so this narrows nothing: it only stops a PR that is *being* reviewed
+from reading as one that *failed*. The hole this gate exists for — no verdict and nothing in
+flight — stays ``failure``, and so does a run in flight longer than ``PANEL_STALL_MINUTES``
+("panel run stalled"), because the promotion gate can dangle ``in_progress`` forever when a
+panel exhausts without a verdict, and a pending that never resolves would just hide that.
+
 Stdlib + ``gh`` only, so CI needs no dependency install. Pure decision logic lives in
 ``decide()`` and is covered by ``tests/test_review_at_head.py``; everything above it is I/O.
 """
@@ -74,6 +84,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 # The panel stamps every review body with a machine-readable marker, e.g.
 #   <!-- protoagent-qa-review head=4fec0e53… verdict=PASS promoted=true findings=1 -->
@@ -85,6 +96,30 @@ _MARKER = re.compile(r"<!--\s*protoagent-qa-review\s+(?P<attrs>.*?)-->", re.DOTA
 _ATTR = re.compile(r"(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>\S+)")
 
 REVIEWER_LOGIN = os.environ.get("REVIEWER_LOGIN", "protoreview[bot]")
+# The reviewer app's check runs (pr-reviewer-plugin `dispatch.py`). Matched by app slug as well
+# as name so another app's or a workflow's same-named run cannot speak for the panel.
+REVIEWER_APP_SLUG = os.environ.get("REVIEWER_APP_SLUG", "protoreview")
+# `protoReview` is the review round itself — opened when a panel commits to a head, concluded
+# by that same round — so it is the authoritative "a review is in flight" signal. `QA panel`
+# is the promotion gate: it opens a moment EARLIER (so it covers the window before
+# `protoReview` exists) but can dangle `in_progress` when a panel exhausts with no verdict,
+# so it only speaks when the head has no `protoReview` run at all.
+REVIEW_CHECK_NAME = "protoReview"
+GATE_CHECK_NAME = "QA panel"
+IN_FLIGHT = frozenset({"queued", "in_progress", "waiting", "requested", "pending"})
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# A panel run in flight longer than this is stalled, not reviewing: the status goes back to
+# failure so a wedged reviewer is visible instead of a pending that never resolves.
+PANEL_STALL_MINUTES = _float_env("PANEL_STALL_MINUTES", 90.0)
 STATUS_CONTEXT = os.environ.get("STATUS_CONTEXT", "Review at head")
 SKIP_LABEL = "skip-review-gate"
 
@@ -121,7 +156,7 @@ REQUIRE_COVERAGE_CONTRACT = os.environ.get("REQUIRE_COVERAGE_CONTRACT", "").stri
 class Decision:
     """A commit-status outcome: ``state`` is GitHub's, ``description`` is what a human reads."""
 
-    state: str  # "success" | "failure"
+    state: str  # "success" | "pending" | "failure"
     description: str
 
     @property
@@ -390,24 +425,89 @@ def _contract_failure(attrs: dict[str, str], head_sha: str) -> str | None:
     return None
 
 
+def _parse_time(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _latest_panel_run(check_runs: list[dict], head_sha: str, name: str) -> dict | None:
+    """The newest reviewer-app run called ``name`` on ``head_sha`` (highest id), or None.
+
+    Ids are assigned at creation and only grow, so the highest is the latest run — a re-run
+    replaces what an older one said, whichever finished first.
+    """
+    mine = [
+        run
+        for run in check_runs or []
+        if isinstance(run, dict)
+        and run.get("name") == name
+        and ((run.get("app") or {}).get("slug") == REVIEWER_APP_SLUG)
+        and run.get("head_sha", head_sha) == head_sha
+    ]
+    return max(mine, key=lambda run: _v_review_id(run.get("id")), default=None)
+
+
+def _in_flight_decision(
+    check_runs: list[dict] | None, head_sha: str, now: datetime | None, stall_minutes: float
+) -> Decision | None:
+    """``pending`` while a panel run is reviewing this verdict-less head, ``failure`` once it
+    has stalled, or None when nothing is in flight (the caller then fails as before)."""
+    head = head_sha[:12]
+    run = _latest_panel_run(check_runs or [], head_sha, REVIEW_CHECK_NAME)
+    if run is not None:
+        if run.get("status") not in IN_FLIGHT:
+            return None  # the round ENDED without a verdict for this head — not pending
+    else:
+        run = _latest_panel_run(check_runs or [], head_sha, GATE_CHECK_NAME)
+        if run is None or run.get("status") not in IN_FLIGHT:
+            return None
+    started = _parse_time(run.get("started_at"))
+    now = now or datetime.now(timezone.utc)
+    if started is not None and (now - started).total_seconds() > stall_minutes * 60:
+        minutes = int((now - started).total_seconds() // 60)
+        return Decision(
+            "failure",
+            f"panel run stalled: {run.get('name')} in progress {minutes} min at {head} with no verdict — re-run the panel",
+        )
+    return Decision("pending", f"QA panel reviewing {head}")
+
+
 def decide(
     reviews: list[dict],
     head_sha: str,
     labels: list[str],
     *,
     require_contract: bool = False,
+    check_runs: list[dict] | None = None,
+    now: datetime | None = None,
+    stall_minutes: float | None = None,
 ) -> Decision:
     """Whether this head may merge, given the reviews on it. Pure — the tested seam.
 
     ``require_contract`` is the #3334 rollout gate: when true, a marker MISSING the
     coverage/standing-block attributes fails closed. An attribute that is present is always
     enforced regardless of the flag.
+
+    ``check_runs`` are the head's check runs (the commit check-runs API shape). They only
+    matter for a head with NO verdict: a panel run in flight turns that ``failure`` into
+    ``pending`` until ``stall_minutes`` (default ``PANEL_STALL_MINUTES``) pass. ``now`` is
+    injectable for the stall clock.
     """
     if SKIP_LABEL in labels:
         return Decision("success", f"review gate waived by the {SKIP_LABEL} label")
 
     attrs = verdict_for_head(reviews, head_sha)
     if attrs is None:
+        in_flight = _in_flight_decision(
+            check_runs, head_sha, now, PANEL_STALL_MINUTES if stall_minutes is None else stall_minutes
+        )
+        if in_flight is not None:
+            return in_flight
         reviewed = sorted(
             {
                 a["head"][:12]
@@ -477,6 +577,19 @@ def _reviews(pr: int) -> list[dict]:
     return json.loads(_gh("api", "--paginate", f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews"))
 
 
+def _check_runs(sha: str) -> list[dict]:
+    """Every check run on ``sha`` (all of them, not just the latest per name: latest-wins is
+    decided in ``_latest_panel_run``). One JSON object per line from ``--jq``."""
+    out = _gh(
+        "api",
+        "--paginate",
+        f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs?filter=all&per_page=100",
+        "--jq",
+        ".check_runs[]",
+    )
+    return [json.loads(line) for line in out.splitlines() if line.strip()]
+
+
 def _open_prs() -> list[dict]:
     return json.loads(_gh("pr", "list", "--state", "open", "--limit", "100", "--json", "number,headRefOid,labels"))
 
@@ -501,7 +614,13 @@ def _post_status(sha: str, decision: Decision, pr: int) -> None:
 
 
 def check_pr(pr: int, head_sha: str, labels: list[str], *, dry_run: bool) -> Decision:
-    decision = decide(_reviews(pr), head_sha, labels, require_contract=REQUIRE_COVERAGE_CONTRACT)
+    reviews = _reviews(pr)
+    # Check runs only matter for a verdict-less head, so a reviewed PR never depends on the
+    # extra call (a failure of which would post nothing at all).
+    runs = None
+    if SKIP_LABEL not in labels and verdict_for_head(reviews, head_sha) is None:
+        runs = _check_runs(head_sha)
+    decision = decide(reviews, head_sha, labels, require_contract=REQUIRE_COVERAGE_CONTRACT, check_runs=runs)
     if dry_run:
         print(f"[dry-run] #{pr} {head_sha[:12]} -> {decision.state}: {decision.description}")
     else:
@@ -533,7 +652,13 @@ def main() -> int:
 
     # Sweep mode (scheduled backstop) — webhooks do get dropped here, and a PR whose
     # `pull_request_review` event was missed would otherwise sit with a stale red status.
+    # A `check_run` event (the panel opening or concluding a run, #4260) narrows the sweep to
+    # the PRs at that head: the payload's own PR list is empty for fork PRs and carries no
+    # labels, so the open-PR listing is the one source for both.
+    only_head = os.environ.get("CHECK_RUN_HEAD_SHA", "").strip()
     for row in _open_prs():
+        if only_head and row.get("headRefOid") != only_head:
+            continue
         labels = [lbl["name"] for lbl in row.get("labels") or []]
         try:
             check_pr(row["number"], row["headRefOid"], labels, dry_run=dry_run)
