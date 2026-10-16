@@ -1,0 +1,1 @@
+- Headless setup (and fleet members, which boot headless) now accepts a provider-qualified model such as `anthropic-oauth:claude-sonnet-5-5` or `gateway:<alias>`: the lead is validated on its own connection instead of the legacy default route, so a hub on a Claude subscription can create fleet members again.

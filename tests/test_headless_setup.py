@@ -45,3 +45,22 @@ def test_marker_roundtrip(tmp_path, monkeypatch):
     assert cio.is_setup_complete() is True
     cio.reset_setup()
     assert cio.is_setup_complete() is False
+
+
+# #4262 — a provider-QUALIFIED lead routes by its prefix, not by `model.provider`. Fleet members
+# boot headless, so a hub on `anthropic-oauth:<model>` used to spawn members that exited at boot.
+def test_ok_with_a_native_oauth_qualified_lead(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = LangGraphConfig.from_dict({"model": {"name": "anthropic-oauth:claude-sonnet-5-5"}})
+    assert validate_for_headless(cfg) == (True, "ok")
+
+
+def test_a_qualified_lead_is_validated_on_its_own_connection(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    gw = {"id": "gateway", "type": "openai-compat", "base_url": "https://gw.example/v1"}
+    lead = {"name": "gateway:protolabs/smart"}
+    # Its endpoint is enough — no legacy model.api_key/api_base needed (keyless sends a placeholder).
+    assert validate_for_headless(LangGraphConfig.from_dict({"providers": [gw], "model": lead})) == (True, "ok")
+    # A connection with no endpoint can't serve the lead.
+    ok, reason = validate_for_headless(LangGraphConfig.from_dict({"providers": [dict(gw, base_url="")], "model": lead}))
+    assert not ok and "gateway" in reason
