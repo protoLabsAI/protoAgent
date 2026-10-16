@@ -177,8 +177,8 @@ def _make_attach_file_stub():
     can assert what it tried to attach (``sys.modules["graph.sdk"].attach_file.calls``)."""
     calls: list[dict] = []
 
-    def attach_file(ref, *, name: str = "", mime: str = "") -> bool:
-        calls.append({"ref": ref, "name": name, "mime": mime})
+    def attach_file(ref, *, name: str = "", mime: str = "", ttl_s=None) -> bool:
+        calls.append({"ref": ref, "name": name, "mime": mime, "ttl_s": ttl_s})
         return False
 
     attach_file.calls = calls  # type: ignore[attr-defined]

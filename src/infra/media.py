@@ -22,6 +22,9 @@ per-instance signing key (``media/.signing-key``): the auth middleware
 default-deny holds (no unsigned enumeration; a bearer header still works), the
 key never leaves the server, and URLs survive both restart AND bearer rotation.
 ``media.public: true`` (config) opts the whole store out of the gate explicitly.
+A link handed to a client OUTSIDE this box (an A2A file part, a ``/v1`` reply) is an
+expiring one instead (#4258): ``?exp=<unix>&sig=…`` with the expiry inside the HMAC input,
+``media.remote_link_ttl_s`` (default 7 days; 0 = permanent). Past it the gate answers 403.
 
 Layering: this is an ``infra`` leaf — ``graph/plugins/registry.py`` (save side)
 and ``server/media.py`` + ``a2a_impl/auth.py`` (serve side) both import it; it
@@ -46,6 +49,7 @@ import re
 import secrets as _secrets
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -148,33 +152,103 @@ def _signing_key() -> str:
     return fresh
 
 
-def sign_name(name: str) -> str:
-    """The URL signature for one stored filename (HMAC-SHA256, hex)."""
-    return hmac.new(_signing_key().encode(), name.encode(), hashlib.sha256).hexdigest()
+def sign_name(name: str, exp: int | str | None = None) -> str:
+    """The URL signature for one stored filename (HMAC-SHA256, hex).
+
+    With ``exp`` (unix seconds) the HMAC input is ``"<name>|exp=<exp>"`` — an EXPIRING link
+    (#4258): the expiry is inside the signed bytes, so it can't be stretched without the key.
+    A store name never contains ``|`` (``_NAME_RE``), so the two input spaces can't collide:
+    no permanent signature verifies as an expiring one, or the reverse."""
+    msg = name if exp is None else f"{name}|exp={exp}"
+    return hmac.new(_signing_key().encode(), msg.encode(), hashlib.sha256).hexdigest()
 
 
-def verify_name(name: str, sig: str) -> bool:
-    """Constant-time check of a ``?sig=`` value against a stored filename."""
+def verify_name(name: str, sig: str, exp: str | None = None) -> bool:
+    """Constant-time check of a ``?sig=`` value against a stored filename (and, for an
+    expiring link, its ``?exp=``). Signature only — :func:`check_access` adds the clock."""
     if not name or not sig:
         return False
-    return hmac.compare_digest(sign_name(name), sig)
+    if exp is not None and not _EXP_RE.match(str(exp)):
+        return False
+    return hmac.compare_digest(sign_name(name, exp), sig)
 
 
-def request_allowed(path: str, sig: str) -> bool:
+# The query values a link this store minted can carry: a 64-hex HMAC, and an optional
+# canonical unix-seconds expiry (no sign, no leading zero — exactly one spelling per instant).
+SIG_RE = re.compile(r"^[0-9a-f]{64}$")
+_EXP_RE = re.compile(r"^[1-9][0-9]{0,11}$")
+
+# Default lifetime of a link handed to a client outside this box (``media.remote_link_ttl_s``).
+DEFAULT_REMOTE_LINK_TTL_S = 7 * 86400
+
+
+def is_media_name(name: str) -> bool:
+    """Whether ``name`` is a servable store filename (one plain segment, no dotfile)."""
+    return bool(_NAME_RE.match(name or ""))
+
+
+def is_link_query_value(key: str, value: str) -> bool:
+    """Whether ``value`` is a well-formed ``sig`` / ``exp`` for a media link — shape only,
+    never a verification (the fleet hub uses it on a member's link it can't verify)."""
+    if key == "sig":
+        return bool(SIG_RE.match(value or ""))
+    if key == "exp":
+        return bool(_EXP_RE.match(value or ""))
+    return False
+
+
+def media_url(name: str, *, ttl_s: int = 0, now: float | None = None) -> str:
+    """The signed server-relative link for one stored file: ``/media/<name>?sig=…`` (permanent,
+    the console's inline-``<img>`` shape), or with ``ttl_s > 0`` an expiring
+    ``/media/<name>?exp=<unix>&sig=…`` for a client outside this box (#4258)."""
+    ttl = int(ttl_s or 0)
+    if ttl <= 0:
+        return f"{MEDIA_URL_PREFIX}{name}?sig={sign_name(name)}"
+    exp = str(int(now if now is not None else time.time()) + ttl)
+    return f"{MEDIA_URL_PREFIX}{name}?exp={exp}&sig={sign_name(name, exp)}"
+
+
+def check_access(path: str, sig: str, exp: str = "", *, now: float | None = None) -> str:
     """Auth-middleware hook: may this ``/media/…`` request pass WITHOUT a bearer?
 
-    True when the store is public (explicit opt-in) or the query signature
-    verifies for the requested filename. Anything else falls back to the normal
-    bearer/X-API-Key checks — default-deny holds.
-    """
+    ``"ok"`` when the store is public (explicit opt-in) or the signature verifies (and an
+    expiring link hasn't passed its ``exp``); ``"expired"`` when the signature verifies but
+    the link is past its expiry (the middleware answers 403 with a clear body); ``"deny"``
+    for anything else — which falls back to the normal bearer/X-API-Key checks, so
+    default-deny holds. A link with no ``exp`` is a permanent one (the pre-#4258 shape,
+    still valid)."""
     if not path.startswith(MEDIA_URL_PREFIX):
-        return False
+        return "deny"
     name = path[len(MEDIA_URL_PREFIX) :]
     if not _NAME_RE.match(name):
-        return False  # traversal / dotfile / nested path — never exempt
+        return "deny"  # traversal / dotfile / nested path — never exempt
     if media_public():
-        return True
-    return verify_name(name, sig)
+        return "ok"
+    if not exp:
+        return "ok" if verify_name(name, sig) else "deny"
+    if not verify_name(name, sig, exp):
+        return "deny"
+    return "ok" if int(exp) > (now if now is not None else time.time()) else "expired"
+
+
+def request_allowed(path: str, sig: str, exp: str = "") -> bool:
+    """``check_access(...) == "ok"`` — kept for callers of the pre-expiry seam."""
+    return check_access(path, sig, exp) == "ok"
+
+
+def remote_link_ttl_s() -> int:
+    """Lifetime of the links handed to a client outside this box — an A2A file part, a
+    ``/v1`` reply (``media.remote_link_ttl_s``, default 7 days; 0 = never expire). Read LIVE
+    from the server config; the default outside a server context."""
+    try:
+        from runtime.state import STATE
+
+        cfg = getattr(STATE, "graph_config", None)
+        if cfg is not None:
+            return max(0, int(getattr(cfg, "media_remote_link_ttl_s", DEFAULT_REMOTE_LINK_TTL_S) or 0))
+    except Exception:  # noqa: BLE001 — a policy probe must never break a turn
+        pass
+    return DEFAULT_REMOTE_LINK_TTL_S
 
 
 def _extension_for(mime: str, source: Path | None) -> str:
@@ -260,7 +334,7 @@ def save_media(data: bytes | str | Path, mime: str, meta: dict | None = None) ->
 
     _gc(_live_policy()[1])
 
-    url = f"{MEDIA_URL_PREFIX}{name}?sig={sign_name(name)}"
+    url = media_url(name)
     return MediaRef(id=media_id, url=url, path=dest, mime=sidecar["mime"])
 
 
@@ -367,9 +441,11 @@ def console_base_url() -> str:
     return configured_public_url() or bound_base_url()
 
 
-# A signed, server-relative media link as save_media mints it, not already part of a URL
-# (no scheme/host/path char immediately before the slash).
-_RELATIVE_MEDIA_LINK = re.compile(r"(?<![\w/:.\-])/media/[A-Za-z0-9][A-Za-z0-9._-]*\?sig=[0-9a-f]+")
+# A signed, server-relative media link as this store mints it (permanent or expiring), not
+# already part of a URL (no scheme/host/path char immediately before the slash).
+_RELATIVE_MEDIA_LINK = re.compile(
+    r"(?<![\w/:.\-])/media/(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\?(?:exp=(?P<exp>[0-9]+)&)?sig=(?P<sig>[0-9a-f]+)"
+)
 
 
 def absolute_media_url(url: str, base: str | None = None) -> str:
@@ -383,35 +459,143 @@ def absolute_media_url(url: str, base: str | None = None) -> str:
     return f"{b}{url}" if b else url
 
 
-def absolutize_media_links(text: str, base: str | None = None) -> str:
+def absolutize_media_links(
+    text: str, base: str | None = None, *, ttl_s: int | None = None, links: dict[str, str] | None = None
+) -> str:
     """Every signed server-relative ``/media/…?sig=…`` link in ``text`` made absolute — for a
     reply going to a client with no origin to resolve it against (``/v1``). Not for the
     console's stream: it resolves relative links itself, and through a proxy (the fleet hub)
-    a relative link is the only one that still works."""
+    a relative link is the only one that still works.
+
+    A permanent link whose signature verifies is re-minted as an EXPIRING one (``ttl_s``,
+    default :func:`remote_link_ttl_s`; 0 keeps it permanent) — the reply leaves this box, so
+    it carries the remote-link lifetime, never the console's permanent signature (#4258).
+    ``links`` maps a store filename to the link already minted for it (an attachment), so
+    the text and the ``attachments`` field name the same URL. A link that doesn't verify is
+    only made absolute, never re-signed."""
     b = (public_base_url() if base is None else str(base)).strip().rstrip("/")
     if not text or not b:
         return text
-    return _RELATIVE_MEDIA_LINK.sub(lambda m: b + m.group(0), text)
+    ttl = remote_link_ttl_s() if ttl_s is None else max(0, int(ttl_s))
+    known = links if links is not None else {}
+
+    def _sub(m: re.Match) -> str:
+        name = m.group("name")
+        if m.group("exp") is None and ttl > 0 and verify_name(name, m.group("sig")):
+            if name not in known:
+                known[name] = absolute_media_url(media_url(name, ttl_s=ttl), b)
+            return known[name]
+        return b + m.group(0)
+
+    return _RELATIVE_MEDIA_LINK.sub(_sub, text)
 
 
+# ── per-turn file attachments ─────────────────────────────────────────────────────────────
+#
 # The files a tool attached to the CURRENT turn's answer (``attach_file``), armed per turn by
 # the surface that can deliver them — the A2A executor (as FileParts on the answer artifact)
 # and ``/v1`` (as links + an ``attachments`` field). ``None`` = no turn armed, and an attach
-# is a no-op. A mutable list so a tool's copied context (LangGraph runs sync tools in a
-# copy_context thread) appends to the turn's one list.
-_TURN_FILES: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar("protoagent_turn_files", default=None)
+# is a no-op. One shared, LOCKED holder per turn so a tool's copied context (LangGraph runs
+# sync tools in a copy_context thread; parallel tool calls run concurrently) appends to the
+# turn's one list, and the 16-file cap is a single check-and-append (#4258).
+#
+# Its lifecycle (#4258):
+#   * ``close_turn_files`` / ``end_turn_files`` CLOSE the holder. A background job or delegate
+#     that copied the turn's context and attaches after the answer was built is refused with a
+#     log line — never appended to a list nobody will read again.
+#   * A turn parking at a HITL interrupt stashes its attachments under the conversation key
+#     (``park_turn_files``); the turn that answers the pause re-arms with them
+#     (``begin_turn_files(carry=key)``), re-minting each link so its lifetime starts there.
+#   * Dedupe is by the stored FILE (the same ref attached twice is one attachment, whatever its
+#     link's signature/expiry), and a later attach under the same display ``name`` replaces the
+#     earlier one — an overflow retry that re-runs a tool and saves a fresh copy doesn't
+#     deliver the file twice.
+
 _MAX_TURN_FILES = 16
 
 
-def begin_turn_files() -> contextvars.Token:
+class _TurnFiles:
+    __slots__ = ("lock", "items", "closed")
+
+    def __init__(self, items: list[dict] | None = None) -> None:
+        self.lock = threading.Lock()
+        self.items: list[dict] = list(items or [])
+        self.closed = False
+
+
+_TURN_FILES: contextvars.ContextVar[_TurnFiles | None] = contextvars.ContextVar("protoagent_turn_files", default=None)
+
+# Attachments of turns parked at a HITL interrupt, by conversation key → (parked_at, entries).
+# In-memory and bounded: a restart drops them (the resumed turn then carries none), an old
+# park ages out.
+_PARKED: dict[str, tuple[float, list[dict]]] = {}
+_PARKED_LOCK = threading.Lock()
+_PARKED_MAX = 256
+_PARKED_TTL_S = 7 * 86400
+
+
+def _public(entry: dict) -> dict:
+    return {"url": entry["url"], "mime": entry["mime"], "name": entry["name"]}
+
+
+def _remint(entry: dict) -> dict:
+    return {**entry, "url": absolute_media_url(media_url(entry["file"], ttl_s=entry.get("ttl", 0)))}
+
+
+def begin_turn_files(carry: str = "") -> contextvars.Token:
     """Arm file attachments for the turn running in this context; pass the token to
-    :func:`end_turn_files` when the turn ends."""
-    return _TURN_FILES.set([])
+    :func:`end_turn_files` when the turn ends. ``carry`` names a conversation whose parked
+    turn's attachments (:func:`park_turn_files`) this turn takes over — a HITL resume."""
+    items: list[dict] = []
+    if carry:
+        with _PARKED_LOCK:
+            got = _PARKED.pop(carry, None)
+        if got is not None and time.time() - got[0] <= _PARKED_TTL_S:
+            items = [_remint(e) for e in got[1] if resolve_media(e["file"]) is not None]
+    return _TURN_FILES.set(_TurnFiles(items))
+
+
+def park_turn_files(key: str) -> None:
+    """Stash the armed turn's attachments under ``key`` (the conversation) when the turn parks
+    at a HITL interrupt, merged with any already parked there (a held message re-parks on the
+    same pause) — the turn that answers it re-arms with them."""
+    tf = _TURN_FILES.get()
+    if not key or tf is None:
+        return
+    with tf.lock:
+        mine = [dict(e) for e in tf.items]
+    if not mine:
+        return
+    now = time.time()
+    with _PARKED_LOCK:
+        prev = _PARKED.pop(key, None)
+        merged = list(prev[1]) if prev is not None and now - prev[0] <= _PARKED_TTL_S else []
+        have = {e["file"] for e in merged}
+        merged.extend(e for e in mine if e["file"] not in have)
+        _PARKED[key] = (now, merged[:_MAX_TURN_FILES])
+        while len(_PARKED) > _PARKED_MAX:
+            _PARKED.pop(next(iter(_PARKED)))
+
+
+def close_turn_files() -> list[dict]:
+    """The armed turn's attachments, read ONCE as the answer is built — the holder closes, so
+    any later attach (a background job that copied the turn's context) is refused instead of
+    landing in a list nobody reads again."""
+    tf = _TURN_FILES.get()
+    if tf is None:
+        return []
+    with tf.lock:
+        tf.closed = True
+        return [_public(e) for e in tf.items]
 
 
 def end_turn_files(token: contextvars.Token | None) -> None:
     if token is None:
         return
+    tf = _TURN_FILES.get()
+    if tf is not None:
+        with tf.lock:
+            tf.closed = True
     try:
         _TURN_FILES.reset(token)
     except ValueError:  # reset from another context — the turn's own context drops it anyway
@@ -420,21 +604,40 @@ def end_turn_files(token: contextvars.Token | None) -> None:
 
 def turn_files() -> list[dict]:
     """The armed turn's attachments so far: ``[{url, mime, name}]`` (a copy)."""
-    files = _TURN_FILES.get()
-    return [dict(f) for f in files] if files else []
+    tf = _TURN_FILES.get()
+    if tf is None:
+        return []
+    with tf.lock:
+        return [_public(e) for e in tf.items]
 
 
-def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "") -> bool:
+def _query_value(url: str, key: str) -> str:
+    query = url.partition("?")[2]
+    for pair in query.split("&"):
+        k, _, v = pair.partition("=")
+        if k == key:
+            return v
+    return ""
+
+
+def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: int | None = None) -> bool:
     """Attach a media-store file to the CURRENT turn's answer (#4252). True when attached.
 
     ``ref`` is a :class:`MediaRef` from ``save_media`` or its signed ``/media/…?sig=…`` URL —
     only files the media store serves can be attached, so a tool can't hand a client an
-    arbitrary (internal) URL. The link is made absolute against :func:`public_base_url`.
-    False — and nothing happens — outside an armed turn (a background job), for a non-media
-    URL, or past 16 files a turn. A console turn IS armed (it rides A2A ``message/stream``):
-    the file part lands on the console's task, which ignores it and renders the inline link."""
-    files = _TURN_FILES.get()
-    if files is None:
+    arbitrary (internal) URL. The delivered link is made absolute against
+    :func:`public_base_url` and EXPIRES after ``ttl_s`` seconds (default
+    :func:`remote_link_ttl_s`, ``media.remote_link_ttl_s``; 0 = a permanent link) — it goes
+    to a client outside this box (#4258).
+
+    False — and nothing happens — outside an armed turn (a background job), after the turn's
+    answer was built (a late background/delegated attach), for a non-media, unsigned or
+    expired URL, or past 16 files a turn. Attaching the same file twice is one attachment; a
+    second file under the same ``name`` replaces the first. A console turn IS armed (it rides
+    A2A ``message/stream``): the file part lands on the console's task, which ignores it and
+    renders the inline link."""
+    tf = _TURN_FILES.get()
+    if tf is None:
         return False
     if isinstance(ref, MediaRef):
         url, mime, path_name = ref.url, mime or ref.mime, ref.path.name
@@ -445,17 +648,36 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "") -> bool:
         log.warning("[media] attach_file: %r is not a media-store URL — not attached", url[:200])
         return False
     file_name = rel[len(MEDIA_URL_PREFIX) :]
-    if not media_public() and not verify_name(file_name, url.partition("sig=")[2].split("&", 1)[0]):
-        log.warning("[media] attach_file: %r carries no valid signature — not attached", rel)
+    if check_access(rel, _query_value(url, "sig"), _query_value(url, "exp")) != "ok":
+        log.warning("[media] attach_file: %r carries no valid, unexpired signature — not attached", rel)
         return False
     if not mime:
         found = resolve_media(file_name)
         mime = found[1] if found else (mimetypes.guess_type(file_name)[0] or "application/octet-stream")
-    absolute = absolute_media_url(url)
-    if any(f["url"] == absolute for f in files):
-        return True
-    if len(files) >= _MAX_TURN_FILES:
-        log.warning("[media] attach_file: turn already carries %d files — %r not attached", _MAX_TURN_FILES, rel)
-        return False
-    files.append({"url": absolute, "mime": mime, "name": (name or path_name or file_name).strip()[:255]})
+    ttl = remote_link_ttl_s() if ttl_s is None else max(0, int(ttl_s))
+    entry = {
+        "file": file_name,
+        "url": absolute_media_url(media_url(file_name, ttl_s=ttl)),
+        "mime": mime,
+        "name": (name or path_name or file_name).strip()[:255],
+        "ttl": ttl,
+    }
+    with tf.lock:
+        if tf.closed:
+            log.warning(
+                "[media] attach_file: the turn's answer was already built — %r not attached "
+                "(a background or delegated attach that outlived its turn)",
+                rel,
+            )
+            return False
+        for i, f in enumerate(tf.items):
+            if f["file"] == file_name:
+                return True  # the same file again: one attachment
+            if f["name"] == entry["name"]:
+                tf.items[i] = entry  # a fresh copy under the same name replaces the first
+                return True
+        if len(tf.items) >= _MAX_TURN_FILES:
+            log.warning("[media] attach_file: turn already carries %d files — %r not attached", _MAX_TURN_FILES, rel)
+            return False
+        tf.items.append(entry)
     return True

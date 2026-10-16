@@ -391,22 +391,35 @@ def _text_part(text: str) -> Part:
     return Part(text=text)
 
 
-def _begin_turn_files():
+def _begin_turn_files(carry: str = ""):
     try:
         from infra import media
 
-        return media.begin_turn_files()
+        return media.begin_turn_files(carry=carry)
     except Exception:  # noqa: BLE001 — attachments must never break a turn
         return None
 
 
-def _current_turn_files() -> list[dict]:
+def _close_turn_files() -> list[dict]:
+    """The turn's attachments, read once as the answer is built — closing the turn's list, so
+    a background job that outlives the turn can't attach into it (#4258)."""
     try:
         from infra import media
 
-        return media.turn_files()
+        return media.close_turn_files()
     except Exception:  # noqa: BLE001
         return []
+
+
+def _park_turn_files(context_id: str) -> None:
+    """Carry the turn's attachments across a HITL pause (#4258): the turn that answers it
+    (``begin_turn_files(carry=context_id)``) delivers them with its answer."""
+    try:
+        from infra import media
+
+        media.park_turn_files(str(context_id or ""))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _end_turn_files(token) -> None:
@@ -758,8 +771,10 @@ class ProtoAgentExecutor(AgentExecutor):
         knowledge_token = _begin_knowledge_ops()
         # Files a tool attaches to this answer (#4252, ``graph.sdk.attach_file``): armed for
         # the stream's context like the knowledge ops above, read in ``_finalize`` (FileParts
-        # on the answer artifact), disarmed in the ``finally``.
-        files_token = _begin_turn_files()
+        # on the answer artifact), disarmed in the ``finally``. A turn answering a HITL pause
+        # takes over the files the parked turn attached before it paused (#4258) — one parked
+        # pause per context (#3930), so the context is the key.
+        files_token = _begin_turn_files(carry=str(context.context_id or "") if touches_pause else "")
 
         # Live answer streaming: forward each text delta as an incremental
         # artifact-update (append) frame so the console fills the bubble as the
@@ -901,7 +916,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
             parts = await self._append_structured(parts, context, final_text)
-            parts.extend(_file_parts(_current_turn_files()))
+            parts.extend(_file_parts(_close_turn_files()))
             # Guard on EITHER: cost/worldstate now ride metadata, so a turn with telemetry
             # but no text/context part must still emit the artifact (it would previously
             # have had a cost DataPart keeping `parts` non-empty).
@@ -1220,6 +1235,9 @@ class ProtoAgentExecutor(AgentExecutor):
                     parts = [_text_part(_hitl_prompt(payload))]
                     if isinstance(payload, dict):
                         parts.append(_data_part_proto(payload, HITL_MIME))
+                    # Files attached before the pause ride the turn that answers it (#4258) —
+                    # stashed BEFORE the pause is published, so an answer can't race past it.
+                    _park_turn_files(context.context_id)
                     await updater.requires_input(message=updater.new_agent_message(parts))
                     touches_pause = True  # settled against in the finally (#3930)
                     # The park leg is a real turn with real spend (#2943): every model
@@ -1306,7 +1324,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 _notify_progress(context.context_id, context.task_id, {"phase": "turn_ended", "origin": _origin})
             # Every `_outcome` read happens in the except/return paths above, so
             # disarming here can never lose a turn's samples. Also covers the
-            # input_required park — the resumed execute() re-arms fresh.
+            # input_required park — the resumed execute() re-arms with the parked files.
             _end_knowledge_ops(knowledge_token)
             _end_turn_files(files_token)
             if touches_pause:

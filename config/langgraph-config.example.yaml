@@ -328,9 +328,12 @@ checkpoint:
 # are denied. Both knobs are optional:
 #   public: true opts the WHOLE store out of the auth gate (explicit exposure).
 #   retention_days prunes files older than N days on each save (0 = keep forever).
+#   remote_link_ttl_s is how long a file link handed to an A2A peer / a /v1 client
+#     stays valid (default 604800 = 7 days; 0 = never expire). Console links never expire.
 # media:
 #   public: false
 #   retention_days: 0
+#   remote_link_ttl_s: 604800
 
 # Langfuse deep tracing (ADR 0006's other half, #3017) — the per-turn trace TREE
 # (tool calls, model calls, subagent spans) behind the telemetry row's trace_id, and

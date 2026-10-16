@@ -488,13 +488,23 @@ def _v1_attachments(files: list[dict]) -> list[dict]:
     return [{"url": f["url"], "mime_type": f.get("mime") or "", "name": f.get("name") or ""} for f in files]
 
 
+def _media_file_name(url: str) -> str:
+    """The store filename an absolute ``…/media/<file>?…`` link names (``""`` if none)."""
+    path = str(url or "").split("?", 1)[0]
+    _, sep, name = path.rpartition("/media/")
+    return name if sep else ""
+
+
 def _v1_deliverable(content: str, files: list[dict]) -> str:
     """A ``/v1`` answer with every signed ``/media/…`` link made absolute (a ``/v1`` client has
     no origin to resolve a server-relative one against) and a link line per attached file the
     text doesn't already carry (#4252)."""
     from infra import media as _media
 
-    content = _media.absolutize_media_links(content or "")
+    # Text links to an attached file name the attachment's own (expiring) link, so the content
+    # and the `attachments` field agree; other signed links get the remote-link lifetime too.
+    links = {_media_file_name(f["url"]): f["url"] for f in files if f.get("url")}
+    content = _media.absolutize_media_links(content or "", links=links)
     missing = [f for f in files if f.get("url") and f["url"] not in content]
     if missing:
         links = "\n".join(f"- [{f.get('name') or 'file'}]({f['url']})" for f in missing)
@@ -1499,7 +1509,7 @@ def register_chat_routes(app, ui: str) -> None:
             result = await _run_v1_turn(
                 prompt, session_id, model=model, incognito=incognito, images=images or None, origin="v1"
             )
-            attachments = _media.turn_files()
+            attachments = _media.close_turn_files()
         finally:
             _media.end_turn_files(_files_token)
 

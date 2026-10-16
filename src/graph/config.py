@@ -1608,9 +1608,13 @@ class LangGraphConfig:
     # signature (an inline ``<img>`` can't send a bearer header), so unsigned
     # requests still hit the default-deny gate. ``public`` opts the whole store
     # out of the auth gate (explicit exposure); ``retention_days`` prunes files
-    # older than N days on each save (0 = keep forever). See infra/media.py.
+    # older than N days on each save (0 = keep forever). ``remote_link_ttl_s`` is the
+    # lifetime of the links handed to a client OUTSIDE this box — A2A file parts and /v1
+    # replies (#4258): an expiring signature, default 7 days (0 = never expire). The
+    # console's inline links stay permanent. See infra/media.py.
     media_public: bool = False
     media_retention_days: int = 0
+    media_remote_link_ttl_s: int = 7 * 86400
 
     # Egress allowlist (ADR 0008) — deny-by-default outbound-host allowlist
     # enforced in ``fetch_url`` (the model-chosen-host exfil/SSRF vector). Empty
@@ -2297,6 +2301,12 @@ class LangGraphConfig:
             media_public=bool((data.get("media", {}) or {}).get("public", cls.media_public)),
             media_retention_days=int(
                 (data.get("media", {}) or {}).get("retention_days", cls.media_retention_days) or 0
+            ),
+            media_remote_link_ttl_s=max(
+                0,
+                int(
+                    (data.get("media", {}) or {}).get("remote_link_ttl_s", cls.media_remote_link_ttl_s) or 0
+                ),
             ),
             egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
             security_callback_allowlist=list((data.get("security") or {}).get("callback_allowlist", []) or []),
