@@ -1466,8 +1466,12 @@ async function abCombo(el, want){
     // A MULTI-select's read-back is a LIST of chips: the chosen option committed when it is one
     // of them (exact, normalized) — never a substring of the joined "A, B" string.
     var mvs = (control && control.querySelector) ? abMultiValues(control) : [];
-    if(!abPreHad(chosen)){
+    if(mvs.length){
+      // chips present: the chip list is the whole answer — the joined string / identity fallbacks
+      // below must never stand in for it.
+      if(abPreHad(chosen)) return false;
       for(var mi=0; mi<mvs.length; mi++){ if(abNorm(mvs[mi]) === abNorm(chosen)) return true; }
+      return false;
     }
     return abIdentityMatch(chosen, cs) || (!!cv && abNorm(chosen) === abNorm(cv));
   }
