@@ -1122,7 +1122,7 @@ class LocalScheduler:
                 },
             },
         }
-        ok = False
+        ok: bool | None = False
         task_id = ""
         try:
             async with httpx.AsyncClient(timeout=self._fire_timeout_s) as client:
@@ -1150,6 +1150,7 @@ class LocalScheduler:
             if canceled:
                 # Stopped, not failed: leave the streak and last_ok exactly as they were.
                 log.info("[scheduler] job %s fired but the turn was canceled", job.id)
+                ok = None  # no outcome on turn.finished either — just clear the indicator
                 return True
             self._record_fire_outcome(job, failure=failure)
             if failure:
