@@ -140,6 +140,10 @@ class Delegate:
     manage_git: bool = False
     base_branch: str = "main"
     branch_prefix: str = ""  # empty ⇒ the delegate's name
+    # Open the managed-git PR as a draft (``gh pr create --draft``) so it can't
+    # auto-merge and a human must mark it ready — a draft-only/human-merge lane for the
+    # delegate. Off by default; the PR-create argv is then byte-identical.
+    draft_pr: bool = False
     # acp, unmanaged: append a change summary (stat + capped unified diff) to the reply of
     # a ``delegate_to(project=…)`` dispatch into a git project. Operator opt-out per
     # delegate. ``capture_diff`` is the per-invocation switch the registry sets on its

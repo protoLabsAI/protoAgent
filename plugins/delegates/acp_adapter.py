@@ -157,6 +157,16 @@ class AcpAdapter(Adapter):
                 help="Managed git: branch names are <prefix>/<slug>-<id7>. Empty ⇒ the delegate's name.",
             ),
             FieldSpec(
+                "draft_pr",
+                "Draft PR",
+                "select",
+                options=["false", "true"],
+                default="false",
+                advanced=True,
+                help="Managed git: open the PR as a draft (`gh pr create --draft`) so it can't "
+                "auto-merge and a human must mark it ready — a draft-only/human-merge lane.",
+            ),
+            FieldSpec(
                 "return_diff",
                 "Return diff",
                 "select",
@@ -197,6 +207,7 @@ class AcpAdapter(Adapter):
         d.manage_git = str(raw.get("manage_git", "")).strip().lower() in ("1", "true", "yes")
         d.base_branch = str(raw.get("base_branch") or "main").strip() or "main"
         d.branch_prefix = str(raw.get("branch_prefix", "")).strip()
+        d.draft_pr = str(raw.get("draft_pr", "")).strip().lower() in ("1", "true", "yes")
         d.return_diff = str(raw.get("return_diff", "true")).strip().lower() not in ("0", "false", "no", "off")
         return d
 
@@ -392,7 +403,9 @@ class AcpAdapter(Adapter):
             if prep.error:
                 return f"Error: managed-git setup for {d.name!r} failed: {prep.error}"
             reply = await self._prompt(d, query + harness.edit_only_directive(branch), timeout=timeout)
-            outcome = await harness.finish(workdir, base=d.base_branch, branch=branch, item_id=iid, title=title)
+            outcome = await harness.finish(
+                workdir, base=d.base_branch, branch=branch, item_id=iid, title=title, draft=d.draft_pr
+            )
             notes = "".join(f"\n- note: {n}" for n in prep.notes)
             return f"{reply}\n\n{outcome.render()}{notes}"
         finally:
