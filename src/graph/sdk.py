@@ -83,6 +83,10 @@ def service(name: str) -> Callable | None:
             return "The Artifact plugin is off — enable it to see charts."
         r = show(kind="vega-lite", code=spec_json, title="Sales by weekday")
         return r["message"] + r["ref"]   # the artifact-ref chip tail goes LAST
+
+    Its sibling ``artifact.save_file`` registers a FILE your plugin wrote (inside its
+    :func:`plugin_store`) as a versioned file artifact from background code, with no agent
+    turn — ``save(path, title=…, session_id=…, plugin_id=registry.plugin_id)``.
     """
     from graph.plugin_services import get_service
 

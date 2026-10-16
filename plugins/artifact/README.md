@@ -192,6 +192,16 @@ makes a chart fast to produce. The panel draws it with the vendored `vega` 6.4.0
   from your tool's injected state: on a client that renders text only (`/v1`, `/api/chat`, a relay
   plugin's turn) the reply then says the artifact was saved but can't be displayed, and `ref` is
   empty (#4144).
+- **A file from another plugin's background job.** The `artifact.save_file` service registers a
+  file the calling plugin wrote — a finished video, a report — as a versioned FILE artifact, with
+  no agent turn (#4253): `graph.sdk.service("artifact.save_file")(path, title="", artifact_id="",
+  session_id="", *, plugin_id, roots=())` → `{ok, id, version, message, ref}`. `path` must
+  resolve (symlinks followed) inside the caller's `sdk.plugin_store(plugin_id=…)` or one of the
+  absolute `roots` it names (never `/` or the home directory itself); a relative `path` is taken
+  against the plugin store. Same blob cap (`max_blob_kb` — an oversize file is `ok: false` with a
+  message naming the setting), preview, preflights and version chain as `save_file_artifact`;
+  `artifact_id` adds the next version, `session_id` keeps it while that chat exists. Synchronous:
+  call it from a worker thread or `asyncio.to_thread`.
 
 ```json
 {"title": "Revenue by weekday", "mark": {"type": "bar", "tooltip": true},
