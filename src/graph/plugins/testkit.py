@@ -169,6 +169,22 @@ def _make_knob_tools(
     return made
 
 
+def _make_attach_file_stub():
+    """Stand-in for ``graph.sdk.attach_file`` (#4252): records each call on ``.calls`` and
+    returns False — host-free there is no armed turn to deliver a file to, which is exactly
+    what the real seam returns outside one. A plugin that imports it directly (instead of the
+    ``getattr(sdk, "attach_file", None)`` guard) keeps running under the testkit, and a test
+    can assert what it tried to attach (``sys.modules["graph.sdk"].attach_file.calls``)."""
+    calls: list[dict] = []
+
+    def attach_file(ref, *, name: str = "", mime: str = "") -> bool:
+        calls.append({"ref": ref, "name": name, "mime": mime})
+        return False
+
+    attach_file.calls = calls  # type: ignore[attr-defined]
+    return attach_file
+
+
 # Default host surface, derived from what real plugins import (spacetraders, project_board,
 # notes, …). `extra` lets a plugin add its own; anything already importable is left alone.
 def _default_stubs() -> dict:
@@ -177,7 +193,12 @@ def _default_stubs() -> dict:
         # Knobs/make_knob_tools are CALLED at register() time, so they're real stand-ins (not
         # raise-when-called); the rest (run_subagent / subagent_types / config / complete) stay
         # raise-unpatched placeholders — patch them in a test that exercises the model seam.
-        "graph.sdk": {"Knobs": _StubKnobs, "make_knob_tools": _make_knob_tools},
+        # attach_file is a record-only False (no armed turn host-free), never raise-unpatched.
+        "graph.sdk": {
+            "Knobs": _StubKnobs,
+            "make_knob_tools": _make_knob_tools,
+            "attach_file": _make_attach_file_stub(),
+        },
         "graph.config": {"LangGraphConfig": type("LangGraphConfig", (), {})},
         "graph.config_io": {"secrets_yaml_path": lambda: Path("config/secrets.yaml")},
         "graph.goals": {},

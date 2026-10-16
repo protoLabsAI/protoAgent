@@ -85,8 +85,13 @@ file part after the text, one per file:
 ```
 
 The `url` is the signed media link, made absolute against `A2A_PUBLIC_URL`, the same base the
-card advertises. With `A2A_PUBLIC_URL` unset, the base is the bound loopback port. The signature
-admits the GET without a bearer. A client that reads only text parts sees the answer unchanged.
+card advertises. With `A2A_PUBLIC_URL` unset, the base is the bound loopback port (a
+non-loopback bind logs a startup warning). On a standalone agent the signature admits the GET
+without a bearer. **Fleet members are the exception.** A member's public base is the hub's
+`{hub}/agents/<slug>` prefix, so its links are `{hub}/agents/<slug>/media/…?sig=…`. Those still
+need the hub's bearer: the hub exempts only its own `/media/` paths and can't verify a member's
+signature. A peer fetching a member's file must send the hub token. A client that reads only
+text parts sees the answer unchanged.
 `/v1/chat/completions` has no file part. There, each attached file arrives as an absolute link
 in the content (appended when the text doesn't already carry it) and in an `attachments:
 [{url, mime_type, name}]` field on the message. Every signed `/media/…` link in a `/v1` answer

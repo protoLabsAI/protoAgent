@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from a2a_impl.auth import evaluate_bind_reachability
+from a2a_impl.auth import evaluate_bind_reachability, evaluate_public_url
 
 
 def test_loopback_and_wildcard_binds_are_silent():
@@ -36,3 +36,30 @@ def test_a_hostname_bind_warns_rather_than_guessing():
 def test_whitespace_is_tolerated():
     assert evaluate_bind_reachability("  127.0.0.1  ") is None
     assert evaluate_bind_reachability("  10.0.0.5  ")
+
+
+# ── A2A_PUBLIC_URL guardrail (#4252) ─────────────────────────────────────────────────
+
+
+def test_loopback_bind_without_public_url_is_silent():
+    for host in ("127.0.0.1", "localhost", "::1", "127.0.0.2", ""):
+        assert evaluate_public_url(host, None) is None, host
+
+
+def test_wide_or_interface_bind_without_public_url_warns():
+    for host in ("0.0.0.0", "::", "192.168.1.50", "roxy"):
+        msg = evaluate_public_url(host, "")
+        assert msg and "A2A_PUBLIC_URL" in msg and "loopback" in msg, host
+
+
+def test_public_url_set_silences_the_warning():
+    assert evaluate_public_url("0.0.0.0", "https://agent.example.com") is None
+    assert evaluate_public_url("0.0.0.0", "   ") is not None  # whitespace isn't a URL
+
+
+def test_server_boot_logs_the_public_url_warning():
+    # The boot path calls it with the RESOLVED bind + the env var, and logs a warning.
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "src" / "server" / "__init__.py").read_text()
+    assert 'auth.evaluate_public_url(args.host, os.environ.get("A2A_PUBLIC_URL"))' in src

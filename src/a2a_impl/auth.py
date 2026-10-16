@@ -911,3 +911,29 @@ def evaluate_bind_reachability(host: str) -> str | None:
         "which keeps loopback — and scope REACH at the network layer (Tailscale ACL, "
         "firewall, or not publishing the port) rather than at the bind."
     )
+
+
+def evaluate_public_url(host: str, public_url: str | None) -> str | None:
+    """Warn when the server is reachable off-box but ``A2A_PUBLIC_URL`` is unset (#4252).
+
+    With no public URL the agent card's interface and every absolute ``/media`` link an
+    answer carries (A2A file parts, ``/v1`` attachments) fall back to the bound loopback
+    port — fine for a same-host client, a dead link for a remote peer. A loopback bind
+    stays silent (its clients ARE same-host); a wildcard or interface bind with no public
+    URL gets one warning at startup. Returns the message, or ``None``.
+    """
+    if (public_url or "").strip():
+        return None
+    h = (host or "").strip()
+    if not h or h in _LOOPBACK_HOSTS:
+        return None
+    try:
+        if ipaddress.ip_address(h).is_loopback:
+            return None
+    except ValueError:
+        pass  # a hostname — `localhost` is above; anything else is treated as non-loopback
+    return (
+        f"[a2a] bound to {h} but A2A_PUBLIC_URL is unset — links/agent card will advertise a "
+        "loopback URL remote peers can't use — set A2A_PUBLIC_URL to the address other agents "
+        "and clients reach (e.g. http://roxy:7870)."
+    )

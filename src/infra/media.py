@@ -376,8 +376,9 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "") -> bool:
     ``ref`` is a :class:`MediaRef` from ``save_media`` or its signed ``/media/…?sig=…`` URL —
     only files the media store serves can be attached, so a tool can't hand a client an
     arbitrary (internal) URL. The link is made absolute against :func:`public_base_url`.
-    False — and nothing happens — outside an armed turn (a background job, a console stream
-    that renders the inline link instead), for a non-media URL, or past 16 files a turn."""
+    False — and nothing happens — outside an armed turn (a background job), for a non-media
+    URL, or past 16 files a turn. A console turn IS armed (it rides A2A ``message/stream``):
+    the file part lands on the console's task, which ignores it and renders the inline link."""
     files = _TURN_FILES.get()
     if files is None:
         return False
