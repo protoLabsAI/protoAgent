@@ -8,16 +8,18 @@ import { chatStore, type SessionStatus } from "./chat-store";
  * are mutually exclusive in the dialogs ("just make it gone" is one forget click). */
 export type ChatMemoryChoice = { harvest: boolean; forget: boolean };
 
-/** The default for every delete without a dialog that still auto-harvests (#4053):
+/** The default for a delete without a dialog that still auto-harvests (#4053):
  * harvest unless the chat is incognito; never forget. Incognito chats leave no memory
  * (ADR 0069 D3b), so they are never harvested — the server enforces this too, as a backstop.
- * Every delete path (dialog, clear, bulk close, quick-delete) derives its default here. */
+ * The dialog, clear and bulk-close paths derive their default here. Shift+click quick-delete
+ * does NOT — it uses NO_MEMORY_CHANGE (the original #1373 no-harvest contract). */
 export function defaultMemoryChoice(incognito?: boolean): ChatMemoryChoice {
   return { harvest: !incognito, forget: false };
 }
 
-/** The no-op memory choice for closes that must not touch memory at all — goal-tab
- * detaches/stops keep this (their retirement is a local tab dismissal, not a harvest point). */
+/** The no-op memory choice for closes that must not touch memory at all: goal-tab
+ * detaches/stops keep this (their retirement is a local tab dismissal, not a harvest point),
+ * and so does Shift+click quick-delete (#1373 — no confirm, no harvest, no forget). */
 export const NO_MEMORY_CHANGE: ChatMemoryChoice = { harvest: false, forget: false };
 
 type RetirementDeps = {

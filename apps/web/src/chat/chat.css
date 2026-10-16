@@ -777,6 +777,12 @@
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-muted);
 }
+/* Delete dialog: muted tip surfacing the Shift+click quick-delete gesture (#1373). */
+.chat-delete-shift-hint {
+  margin: var(--pl-space-3) 0 0;
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg-subtle);
+}
 /* The dialog's memory switches: harvest a summary first (on by default for an ordinary chat
    since #4053; absent for incognito), or forget what the chat already saved. They're mutually
    exclusive — ticking one unticks the other. */
