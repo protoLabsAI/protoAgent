@@ -28,6 +28,7 @@ import { hideDanglingMarker } from "./danglingMarker";
 import { Markdown } from "./LazyMarkdown";
 import { openPromptViewer } from "./PromptViewer";
 import { ReasoningCard } from "./ReasoningCard";
+import { useRevealedText } from "./revealText";
 import { ToolCalls } from "./ToolCalls";
 import { WorkBlock, findInlineArtifactRef, inlineArtifactPreview, spotlightToolId } from "./WorkBlock";
 import { foldPlan, toolsForGroup } from "./parts";
@@ -89,6 +90,14 @@ export function ChatMessageView({
   // spinner, no streaming placeholder, and a "waiting for your input" cue instead.
   const paused = message.status === "streaming" && message.paused === true;
   const streaming = message.status === "streaming" && !paused;
+  // A background reply that arrived COMPLETE over the live bus (#4247) replays as a short
+  // client-side reveal so it reads like a stream instead of landing as one block. The hook
+  // returns the full text at once for everything else (history, unmarked, reduced-motion),
+  // so this is inert for normal messages. Called unconditionally, before the early returns
+  // below, to respect the rules of hooks. `revealStreaming` folds the reveal into the same
+  // affordance/footer gating the live stream already uses.
+  const { shown: revealShown, revealing } = useRevealedText(message.id ?? "", message.content);
+  const revealStreaming = streaming || revealing;
   // Per-turn token/cost footer is an opt-out display pref (Settings ▸ Chat, #1372).
   const showChatUsage = useUI((s) => s.showChatUsage);
   // An issued slash command (/goal …) renders as a distinct user bubble (subtle tint /
@@ -147,16 +156,16 @@ export function ChatMessageView({
   // answer instead of stacking on two. User bubbles carry no footer at all: the sent time lives
   // only under the answer. Streaming turns show neither until they settle (no final receipt yet).
   const showUsage =
-    showChatUsage && message.role === "assistant" && !streaming && Boolean(message.usage || message.contextWindow);
+    showChatUsage && message.role === "assistant" && !revealStreaming && Boolean(message.usage || message.contextWindow);
   const sentStamp =
-    !streaming && message.role === "assistant" ? sentTimestamp(message.createdAt) : null;
+    !revealStreaming && message.role === "assistant" ? sentTimestamp(message.createdAt) : null;
   // A turn the operator STOPPED (#4076) says so on replay too — a quiet marker in the same
   // footer row, so a transcript that ends mid-thought reads as stopped, not as finished.
-  const stoppedMark = !streaming && message.role === "assistant" && message.stopped === true;
+  const stoppedMark = !revealStreaming && message.role === "assistant" && message.stopped === true;
   return (
     <Message
       role={message.role}
-      streaming={streaming}
+      streaming={revealStreaming}
       // A user turn a frame's send-to-chat bridge started (ADR 0118 D4): the DS Message `origin`
       // slot renders a small "from ‹title›" line on its own block above the text, so the operator
       // can tell it apart from one they typed. It is still a normal, visible user message; the
@@ -322,6 +331,10 @@ export function ChatMessageView({
           {message.content ? (
             message.role === "user" ? (
               renderUserText(message.content)
+            ) : revealing ? (
+              // Mid-reveal (#4247): show the grown-so-far prefix, hiding any dangling marker
+              // its leading edge lands on — exactly as a live stream does.
+              <Markdown>{hideDanglingMarker(revealShown)}</Markdown>
             ) : (
               <Markdown>{streaming ? hideDanglingMarker(message.content) : message.content}</Markdown>
             )
@@ -380,7 +393,7 @@ export function ChatMessageView({
           {sentStamp ? <SentTimestamp stamp={sentStamp} /> : null}
         </div>
       ) : null}
-      {actions && message.role === "assistant" && !streaming && message.content ? (
+      {actions && message.role === "assistant" && !revealStreaming && message.content ? (
         <MessageActions>
           {actions.onCopy ? (
             <MessageAction
