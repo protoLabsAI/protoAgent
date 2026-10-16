@@ -283,6 +283,8 @@ def _cmd_ls(args: argparse.Namespace) -> int:
 def _cmd_friction(args: argparse.Namespace) -> int:
     """Read (or resolve) every member's friction ledger through the hub. Live only: the
     ledgers are served by running members, so there is nothing to read from fleet.json."""
+    if args.all_hubs and getattr(args, "friction_cmd", None) != "resolve":
+        return _cmd_friction_all(args)
     conn = _open_hub(args)
     if conn is None:
         msg = "fleet friction needs a running hub (the ledgers are read from live members) — start one with `protoagent up`"
@@ -294,6 +296,13 @@ def _cmd_friction(args: argparse.Namespace) -> int:
     hub_url = conn.client.url
     try:
         if getattr(args, "friction_cmd", None) == "resolve":
+            if args.all_hubs:
+                msg = "resolve acts on one hub's fleet — pick it with --hub URL (agent names can repeat across hubs); --all is for reading"
+                if args.as_json:
+                    _emit({"mode": "error", "hub": hub_url, "error": msg})
+                else:
+                    print(f"✗ {msg}", file=sys.stderr)
+                return 1
             if bool(args.agent) == bool(args.all_agents):
                 msg = "name the agents to change with --agent NAME (repeatable), or pass --all-agents — resolving has no default scope"
                 if args.as_json:
@@ -324,6 +333,54 @@ def _cmd_friction(args: argparse.Namespace) -> int:
     else:
         friction_cli.render(data, args, f"protoagent fleet friction · {_hub_label(conn, conn.roster)}")
     return 1 if any(not r["ok"] for r in data["results"]) else 0
+
+
+def _cmd_friction_all(args: argparse.Namespace) -> int:
+    """``fleet friction --all``: read every running hub on this box, not just the one
+    discovery picks. Agents are named ``<hub>:<port>/<agent>`` so two hubs that each run an
+    agent called ``protoagent`` stay distinguishable, and the shared-signal rollup spans
+    all of them. Reading only — ``resolve`` stays per-hub."""
+    import importlib
+
+    if args.offline:
+        msg = "fleet friction --all reads live hubs; --offline has nothing to read"
+        if args.as_json:
+            _emit({"mode": "error", "hub": None, "error": msg})
+        else:
+            print(f"✗ {msg}", file=sys.stderr)
+        return 1
+    discovery = importlib.import_module("deck.discovery")
+    rows = discovery.enumerate_hubs(peers=[])  # this box only; a peer is another machine's fleet
+    roots = discovery.instance_roots()
+    for r in rows:
+        if r.candidate is not None:
+            discovery.probe(r, token=args.token, insecure_http=args.insecure_http, roots=roots)
+    live = [r for r in discovery.reconcile(rows) if r.presence == "running" and r.candidate is not None and r.candidate.trusted]
+
+    results: list[dict] = []
+    skipped: list[dict] = []
+    hubs: list[dict] = []
+    for r in live:
+        label = f"{r.name}:{r.port}"
+        try:
+            conn = deckhub.connect(candidates=[r.candidate], token=args.token, insecure_http=args.insecure_http)
+        except deckhub.HubError as exc:
+            results.append({"name": label, "hub": label, "ok": False, "error": str(exc), "items": []})
+            continue
+        try:
+            data = friction_cli.collect(conn.client, conn.roster, args)
+        finally:
+            conn.client.close()
+        hubs.append({"hub": label, "url": conn.client.url})
+        for res in data["results"]:
+            results.append({**res, "hub": label, "name": f"{label}/{res['name']}"})
+        skipped += [{**sk, "name": f"{label}/{sk['name']}"} for sk in data["skipped"]]
+    merged = {"results": results, "skipped": skipped, "shared": friction_cli.shared_signals(results)}
+    if args.as_json:
+        _emit({"mode": "live", "hubs": hubs, **merged})
+    else:
+        friction_cli.render(merged, args, f"protoagent fleet friction --all · {len(hubs)} hub(s) on this box")
+    return 1 if (not live or any(not x["ok"] for x in results)) else 0
 
 
 # ── up ───────────────────────────────────────────────────────────────────────

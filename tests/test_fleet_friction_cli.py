@@ -221,3 +221,64 @@ def test_resolve_with_nothing_to_resolve_still_emits_json(monkeypatch, capsys):
     _live(monkeypatch, FakeClient())
     assert _run(["friction", "resolve", "deadbeef", "--all-agents", "--json"]) == 1
     assert json.loads(capsys.readouterr().out)["results"] == []
+
+
+# ── --all: every running hub on the box ──────────────────────────────────────
+
+
+def _hubs(monkeypatch, specs):
+    """Stub deck.discovery so ``--all`` sees ``specs`` = [(name, port, client_or_None)]."""
+    import importlib
+
+    disc = importlib.import_module("deck.discovery")
+    rows = [
+        disc.HubRow(name=n, root=None, url=f"http://127.0.0.1:{p}", port=p, presence="running", launcher="", source="heartbeat",
+                    candidate=deckhub.HubCandidate(f"http://127.0.0.1:{p}", "heartbeat", trusted=True))
+        for n, p, _ in specs
+    ]
+    clients = {f"http://127.0.0.1:{p}": c for n, p, c in specs}
+    monkeypatch.setattr(disc, "enumerate_hubs", lambda peers=None: rows)
+    monkeypatch.setattr(disc, "instance_roots", lambda: [])
+    monkeypatch.setattr(disc, "probe", lambda *a, **k: None)
+    monkeypatch.setattr(disc, "reconcile", lambda r: r)
+
+    def connect(*, candidates=None, **kw):
+        c = clients[candidates[0].url]
+        if c is None:
+            raise deckhub.HubUnreachable(candidates[0].url, "no answer")
+        c.url = candidates[0].url
+        return deckhub.Connection(client=c, candidate=candidates[0], card={}, roster=list(c.roster))
+
+    monkeypatch.setattr(deckhub, "connect", connect)
+
+
+def test_all_reads_every_hub_and_keeps_same_named_agents_apart(monkeypatch, capsys):
+    a = FakeClient(roster=[ROSTER[1]], ledgers={"alpha-1": [SHARED]})
+    b = FakeClient(roster=[ROSTER[1]], ledgers={"alpha-1": [dict(SHARED, count=2)]})  # an agent also called `alpha`
+    _hubs(monkeypatch, [("desktop", 7870, a), ("dev", 7871, b)])
+    assert _run(["friction", "--all", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert [r["name"] for r in out["results"]] == ["desktop:7870/alpha", "dev:7871/alpha"]
+    assert [h["hub"] for h in out["hubs"]] == ["desktop:7870", "dev:7871"]
+    assert len(out["shared"]) == 1 and out["shared"][0]["count"] == 6  # the rollup spans hubs
+
+
+def test_all_reports_a_hub_that_will_not_open_and_exits_nonzero(monkeypatch, capsys):
+    ok = FakeClient(roster=[ROSTER[1]], ledgers={"alpha-1": [SHARED]})
+    _hubs(monkeypatch, [("desktop", 7870, None), ("dev", 7871, ok)])
+    assert _run(["friction", "--all", "--json"]) == 1
+    out = json.loads(capsys.readouterr().out)
+    bad = next(r for r in out["results"] if r["name"] == "desktop:7870")
+    assert bad["ok"] is False and "no answer" in bad["error"]
+
+
+def test_all_with_no_running_hub_is_an_error(monkeypatch, capsys):
+    _hubs(monkeypatch, [])
+    assert _run(["friction", "--all", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["results"] == []
+
+
+def test_resolve_refuses_all_hubs(monkeypatch, capsys):
+    _live(monkeypatch, FakeClient())
+    assert _run(["friction", "resolve", "deadbeef", "--agent", "alpha", "--all"]) == 1
+    assert "pick it with --hub" in capsys.readouterr().err
