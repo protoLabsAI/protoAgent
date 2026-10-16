@@ -135,7 +135,9 @@ Each row starts with an 8-character **signal id**, derived from the kind and sum
 the same rough edge has the same id on every agent. Signals that more than one agent hit
 are listed under *Shared across agents*. Members that are stopped, or that couldn't be
 read, are named rather than skipped, so an empty result never hides an agent you didn't
-reach. It needs a running hub.
+reach. It needs a running hub. `--all` reads every running hub on the box (agents are named
+`<hub>:<port>/<agent>`, and the shared-signal rollup spans them) — useful when the desktop app
+and a dev sandbox are both up. `resolve` stays per-hub: pick one with `--hub URL`.
 
 Once a fix has shipped, clear the signal where it was recorded:
 

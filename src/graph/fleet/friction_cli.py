@@ -149,6 +149,23 @@ def _short(err: Exception) -> str:
     return str(err)
 
 
+def shared_signals(results: list[dict]) -> list[dict]:
+    """Signals more than one agent hit, most-widespread first. A signal several agents hit is
+    a harness bug, not one agent's quirk — the whole reason to read the fleet at once. The id
+    is derived from (kind, summary), so it is equal across agents with no extra bookkeeping."""
+    seen: dict[str, dict] = {}
+    for r in results:
+        for i in r["items"]:
+            sid = str(i.get("id") or "")
+            if not sid:
+                continue
+            row = seen.setdefault(sid, {"id": sid, "kind": i.get("kind", ""), "summary": i.get("summary", ""), "agents": [], "count": 0})
+            if r["name"] not in row["agents"]:
+                row["agents"].append(r["name"])
+            row["count"] += int(i.get("count") or 1)
+    return sorted((s for s in seen.values() if len(s["agents"]) > 1), key=lambda s: (len(s["agents"]), s["count"]), reverse=True)
+
+
 def collect(
     client: Any,
     roster: list[dict],
@@ -171,27 +188,14 @@ def collect(
         items = sorted((i for i in items if _keep(i, severity=args.severity, since=since)), key=_rank, reverse=True)
         results.append({"name": name, "slug": slug, "ok": True, "items": items, "total": len(items)})
 
-    # A signal several agents hit is a harness bug, not one agent's quirk — the whole reason
-    # to read the fleet at once. The id is derived from (kind, summary), so it is equal
-    # across agents with no extra bookkeeping.
-    seen: dict[str, dict] = {}
-    for r in results:
-        for i in r["items"]:
-            sid = str(i.get("id") or "")
-            if not sid:
-                continue
-            row = seen.setdefault(sid, {"id": sid, "kind": i.get("kind", ""), "summary": i.get("summary", ""), "agents": [], "count": 0})
-            if r["name"] not in row["agents"]:
-                row["agents"].append(r["name"])
-            row["count"] += int(i.get("count") or 1)
-    shared = sorted((s for s in seen.values() if len(s["agents"]) > 1), key=lambda s: (len(s["agents"]), s["count"]), reverse=True)
+    shared = shared_signals(results)
     return {"results": results, "skipped": skipped, "shared": shared}
 
 
 # ── output ───────────────────────────────────────────────────────────────────
 
 
-def _line(i: dict, raw: bool) -> str:
+def _line(i: dict) -> str:
     sev = str(i.get("severity") or "minor")
     count = int(i.get("count") or 1)
     tail = f" ×{count}" if count > 1 else ""
@@ -213,7 +217,7 @@ def render(data: dict, args: argparse.Namespace, header: str) -> None:
         n = r["total"]
         print(f"  {r['name']} — {n} {'signal' if n == 1 and not args.raw else ('entry' if args.raw and n == 1 else ('entries' if args.raw else 'signals'))}")
         for i in r["items"]:
-            print(_line(i, args.raw))
+            print(_line(i))
             if args.detail and i.get("detail"):
                 for ln in str(i["detail"]).strip().splitlines()[:12]:
                     print(f"        {ln}")
