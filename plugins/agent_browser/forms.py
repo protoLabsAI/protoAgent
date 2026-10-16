@@ -526,7 +526,35 @@ function abStripSelectedCountry(s){
   // The iti v23 a11y live-text reads e.g. "Selected country United States +1" / "Selected
   // country: United States". Drop that leading screen-reader prefix so only the country name
   // (and a trailing dial code, stripped downstream by abCountryPart) survives (#4032 v23 read-back).
-  return abClean(String(s==null?'':s).replace(/^\s*selected\s+country\s*:?\s*/i, ''));
+  // The iti v25 selected-country BUTTON's aria-label reads "Change country, selected United States
+  // (+1)" — the same idea with a different prefix; strip it too so it reduces to the NAME.
+  var t = String(s==null?'':s);
+  t = t.replace(/^\s*change\s+country\s*[,:]?\s*selected\s*:?\s*/i, '');
+  t = t.replace(/^\s*selected\s+country\s*:?\s*/i, '');
+  return abClean(t);
+}
+function abFlagCountryName(node){
+  // The committed country NAME derived from an intl-tel-input flag class — `iti__flag iti__us` —
+  // on `node` or any descendant. Greenhouse's 2026 phone-country react-select renders ONLY that
+  // flag div + "+1" in its single-value (no title / aria-label), so the ISO-3166 alpha-2 code in
+  // the flag class is the one thing that tells the US from Canada. Only a class that is EXACTLY
+  // `iti__` + two letters counts (iti__flag / iti__globe / iti__arrow … are modifiers, not
+  // countries); the code is mapped to an English name with Intl.DisplayNames, and nothing is
+  // returned when that is unsupported or yields no real name.
+  if(!node || !node.querySelectorAll) return '';
+  var all = [node].concat(Array.prototype.slice.call(node.querySelectorAll('[class*="iti__flag"]')));
+  for(var i=0;i<all.length;i++){
+    var cl = all[i].classList;
+    if(!cl || !cl.contains('iti__flag')) continue;
+    for(var j=0;j<cl.length;j++){
+      var m = /^iti__([a-z]{2})$/i.exec(cl[j]);
+      if(!m) continue;
+      var cc = m[1].toUpperCase(), nm = '';
+      try { nm = abClean(new Intl.DisplayNames(['en'], {type:'region'}).of(cc)); } catch(e){ nm = ''; }
+      if(nm && nm.toUpperCase() !== cc && !/^unknown\b/i.test(nm)) return nm;
+    }
+  }
+  return '';
 }
 function abSelectedIdentity(root){
   // Candidate texts of the COMMITTED selection, priority order: title/aria-label on the
@@ -544,12 +572,16 @@ function abSelectedIdentity(root){
   var flag = (root.matches && root.matches(flagSel)) ? root
            : (root.querySelector ? root.querySelector(flagSel) : null);
   if(flag && flag.closest){ var btn = flag.closest('.iti__selected-country'); if(btn) flag = btn; }
-  out = out.concat(abAttrTexts(sv)).concat(abAttrTexts(flag));
+  out = out.concat(abAttrTexts(sv).map(abStripSelectedCountry))
+           .concat(abAttrTexts(flag).map(abStripSelectedCountry));
   // The iti v23 a11y live-text ("Selected country United States +1") — a NAME source carried next
   // to a flag + dial code; strip the screen-reader prefix, leave the dial code to abCountryPart.
   var a11y = (flag && flag.querySelector && flag.querySelector('.iti__a11y-text, [class*="iti__a11y-text"]'))
           || (root.querySelector && root.querySelector('.iti__a11y-text, [class*="iti__a11y-text"]'));
   if(a11y){ var at = abStripSelectedCountry(a11y.textContent); if(at) out.push(at); }
+  // A flag-class-only single-value / selected flag (`iti__flag iti__us`, no title) — the country
+  // NAME derived from its ISO code; after every title/aria-label source, before any visible text.
+  var fcn = abFlagCountryName(sv) || abFlagCountryName(flag); if(fcn) out.push(fcn);
   var hid = root.querySelector && root.querySelector('input[type="hidden"], select');
   if(hid){
     if((hid.tagName || '').toLowerCase() === 'select'){
@@ -581,6 +613,27 @@ function abIdentityMatch(chosen, cands){
   }
   return false;
 }
+var AB_MULTI_SEL = '.select__multi-value, [class*="multiValue"], [class*="multi-value"]';
+function abMultiValues(root){
+  // The committed chips of a react-select MULTI-select, ONE entry per chip. The loose selector
+  // also matches each chip's own children — `.select__multi-value__label` and
+  // `.select__multi-value__remove` carry "multi-value" in their class too — so a naive read
+  // counted every chip twice (container + label) plus an empty entry for the remove button
+  // ("I don't wish to answer, I don't wish to answer, "). Keep only the OUTERMOST match within
+  // `root`, read its __label when present, and drop empty texts.
+  var out = [];
+  if(!root || !root.querySelectorAll) return out;
+  var mv = root.querySelectorAll(AB_MULTI_SEL);
+  for(var i=0;i<mv.length;i++){
+    var n = mv[i];
+    var anc = n.parentElement && n.parentElement.closest ? n.parentElement.closest(AB_MULTI_SEL) : null;
+    if(anc && anc !== root && root.contains(anc)) continue;      // a chip's label / remove child
+    var lab = n.querySelector('.select__multi-value__label, [class*="multi-value__label"], [class*="multiValueLabel"], [class*="MultiValueLabel"]');
+    var t = abClean(lab ? lab.textContent : abTextNoControls(n));
+    if(t) out.push(t);
+  }
+  return out;
+}
 function abComboValue(root){
   var sv = root.querySelector('.select__single-value, [class*="singleValue"], [class*="single-value"]');
   if(sv){
@@ -588,15 +641,13 @@ function abComboValue(root){
     // The visible single-value is only a flag / dial code (a phone-country picker) — recover the
     // committed country NAME from a title/aria-label in the single-value subtree (#4032 bug 2a).
     if(abIsDial(vis)){
-      var name = abBestName(abAttrTexts(sv));
+      var name = abBestName(abAttrTexts(sv).map(abStripSelectedCountry)) || abFlagCountryName(sv);
       if(name) return name;
     }
     return vis;
   }
-  var mv = root.querySelectorAll('.select__multi-value, [class*="multiValue"], [class*="multi-value"]');
-  if(mv && mv.length){
-    return Array.prototype.map.call(mv, function(n){ return abClean(n.textContent); }).join(', ');
-  }
+  var mv = abMultiValues(root);
+  if(mv.length) return mv.join(', ');
   // intl-tel-input v23+: the enumerated field is the `.iti__selected-country` button (role=combobox)
   // whose visible text is ONLY the "+1" dial code. Recover the committed country NAME from its
   // title / aria-label / a11y text (abSelectedIdentity) rather than reporting the bare dial code —
@@ -1386,6 +1437,10 @@ async function abCombo(el, want){
   function abComboOk(){
     var cs = (control && control.querySelector) ? abSelectedIdentity(control) : [];
     var cv = (control && control.querySelector) ? abComboValue(control) : '';
+    // A MULTI-select's read-back is a LIST of chips: the chosen option committed when it is one
+    // of them (exact, normalized) — never a substring of the joined "A, B" string.
+    var mvs = (control && control.querySelector) ? abMultiValues(control) : [];
+    for(var mi=0; mi<mvs.length; mi++){ if(abNorm(mvs[mi]) === abNorm(chosen)) return true; }
     return abIdentityMatch(chosen, cs) || (!!cv && abNorm(chosen) === abNorm(cv));
   }
   await abWaitFor(function(){ return abComboOk() ? [1] : []; }, 2000);

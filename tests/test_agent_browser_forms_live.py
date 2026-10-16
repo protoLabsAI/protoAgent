@@ -38,6 +38,8 @@ ASHBY = (FIXTURES / "ashby.html").as_uri()
 PHONE_COUNTRY = (FIXTURES / "greenhouse_phone_country.html").as_uri()
 PHONE_COUNTRY_ITI = (FIXTURES / "greenhouse_phone_country_iti.html").as_uri()
 RESUME_CHIP = (FIXTURES / "greenhouse_resume_chip.html").as_uri()
+PHONE_COUNTRY_FLAG = (FIXTURES / "greenhouse_phone_country_flag.html").as_uri()
+MULTISELECT = (FIXTURES / "greenhouse_multiselect.html").as_uri()
 
 # Load the plugin the way the host does, so its relative imports resolve (same shape as
 # tests/test_agent_browser_plugin.py).
@@ -1182,13 +1184,99 @@ async def test_ashby_required_resume_upload_and_radio_group(browser):
     assert group["options"] == ["Yes", "No"]
 
 
+# ── react-select MULTI-select: each chip reads back ONCE ─────────────────────────
+# A chip's __label / __remove children also carry "multi-value" in their class, so the loose
+# selector counted every chip twice plus an empty trailing entry — and browser_select reported
+# a mismatch ("I don't wish to answer, I don't wish to answer, ") on a commit that worked.
+
+MULTI_FIELD = "Race (mark all that apply)"
+
+
+async def test_multiselect_select_reads_the_chip_once(browser):
+    await _open(browser, MULTISELECT)
+    out = await browser["browser_select"].ainvoke(
+        {"field": MULTI_FIELD, "option_text": "I don't wish to answer"})
+    assert out.startswith('Selected "I don\'t wish to answer" in'), out
+
+    value = (await _form(browser))[MULTI_FIELD]["value"]
+    assert value == "I don't wish to answer", value      # once — no doubling, no trailing ", "
+
+
+async def test_multiselect_second_option_reads_both_once(browser):
+    await _open(browser, MULTISELECT)
+    first = await browser["browser_select"].ainvoke({"field": MULTI_FIELD, "option_text": "Asian"})
+    assert first.startswith('Selected "Asian" in'), first
+    second = await browser["browser_select"].ainvoke({"field": MULTI_FIELD, "option_text": "White"})
+    assert second.startswith('Selected "White" in'), second   # chosen is AMONG the chips → ok
+
+    value = (await _form(browser))[MULTI_FIELD]["value"]
+    assert value == "Asian, White", value
+
+
+# ── Greenhouse 2026 phone country: the NAME comes from the flag CLASS (iti__us) ───
+# The single-value is `<div class="iti__flag iti__us"></div><span>+1</span>` with no title or
+# aria-label anywhere — the ISO code in the flag class is the only thing naming the country.
+
+
+async def test_phone_country_flag_class_select_reads_back_the_name(browser):
+    await _open(browser, PHONE_COUNTRY_FLAG)
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+    assert 'reads "+1"' not in out
+
+    fields = await _form_by_id(browser)
+    assert fields["country"]["value"] == "United States"
+    assert fields["country"]["label"] == "Country"
+
+
+async def test_phone_country_flag_class_shared_dial_code_is_a_hard_mismatch(browser):
+    """US and Canada are both "+1" — only the flag class tells them apart. Commit Canada, force
+    the NEXT click to keep committing Canada, then choose United States: a hard mismatch that
+    names Canada (from the flag class), never the shared dial code."""
+    await _open(browser, PHONE_COUNTRY_FLAG)
+    first = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "Canada"})
+    assert first.startswith('Selected "Canada'), first
+
+    forced = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){document.querySelector('.select__container')"
+        ".setAttribute('data-force-commit','Canada +1');return true;})()"})
+    assert forced == "true", forced
+
+    out = await browser["browser_select"].ainvoke({"field": "#country", "option_text": "United States"})
+    assert out.startswith("Error:"), out
+    assert "does not match" in out
+    assert '"Canada"' in out
+
+
+async def test_iti_button_change_country_aria_label_reduces_to_the_name(browser):
+    """The iti v25 selected-country button's only name source may be its aria-label, "Change
+    country, selected United States (+1)". With every title / a11y text removed, form_read still
+    reports "United States" — the screen-reader prefix and the dial code are both stripped."""
+    await _open(browser, PHONE_COUNTRY_ITI)
+    out = await browser["browser_select"].ainvoke({"field": "Country", "option_text": "United States"})
+    assert out.startswith('Selected "United States'), out
+
+    stripped = await browser["browser_eval"].ainvoke({"expression":
+        "(function(){var b=document.querySelector('#phone_iti .iti__selected-country');"
+        "b.querySelectorAll('*').forEach(function(n){n.removeAttribute('title');"
+        "n.removeAttribute('aria-label');if(/a11y/.test(n.className))n.textContent='';});"
+        "b.removeAttribute('title');"
+        "b.setAttribute('aria-label','Change country, selected United States (+1)');return true;})()"})
+    assert stripped == "true", stripped
+
+    raw = await browser["browser_form_read"].ainvoke({"scope": ""})
+    rows = [f for f in json.loads(raw) if f.get("kind") == "combobox"]
+    assert rows and rows[0]["value"] == "United States", rows
+
+
 # ── the fixtures stay OFFLINE (so a live run truly needs no network) ─────────────
 
 
 def test_fixtures_are_self_contained_with_no_network_resources():
     comment = re.compile(r"<!--.*?-->", re.S)
     for name in ("greenhouse.html", "ashby.html", "greenhouse_phone_country.html",
-                 "greenhouse_phone_country_iti.html", "greenhouse_resume_chip.html"):
+                 "greenhouse_phone_country_iti.html", "greenhouse_resume_chip.html",
+                 "greenhouse_phone_country_flag.html", "greenhouse_multiselect.html"):
         body = comment.sub("", (FIXTURES / name).read_text(encoding="utf-8")).lower()
         for marker in ("http://", "https://", "<script src", "<link ", "<img ", "url("):
             assert marker not in body, f"{name} references an external/network resource: {marker!r}"
