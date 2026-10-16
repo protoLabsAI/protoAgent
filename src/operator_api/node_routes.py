@@ -26,6 +26,7 @@ log = logging.getLogger("protoagent.server.node")
 # the next GET reports reality either way.
 _install: dict = {"state": "idle", "pct": 0, "message": "", "error": None}
 _lock = threading.Lock()
+_tasks: set[asyncio.Task] = set()  # strong refs to in-flight install tasks
 
 
 def _payload() -> dict:
@@ -101,7 +102,11 @@ def register_node_routes(app) -> None:
                 _install.update(state="running", pct=0, message="starting…", error=None)
         if not already_running:
             # Blocking download+extract off the event loop; progress lands in `_install`.
-            asyncio.create_task(asyncio.to_thread(_run_install, force))
+            # Keep a strong reference: the loop holds tasks only weakly, so a bare
+            # create_task can be garbage-collected mid-install.
+            task = asyncio.create_task(asyncio.to_thread(_run_install, force))
+            _tasks.add(task)
+            task.add_done_callback(_tasks.discard)
         # A second POST while one runs reports the live state rather than starting another download.
         return JSONResponse({"ok": True, **(await asyncio.to_thread(_payload))}, status_code=202)
 
