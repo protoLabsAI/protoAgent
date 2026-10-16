@@ -1540,18 +1540,26 @@
   // identical content still never re-navigates). An assignment produces exactly ONE load; any
   // further load before the next assignment means the document navigated itself, so the nonce is
   // revoked (`nonce()` → null) and the relay refuses its ask/send/openLink from then on.
+  //
+  // And it owns the frame's FULLSCREEN grant (#4286): `set(next, true)` navigates with
+  // allow="fullscreen" so the shell's own video document (mediaDoc) can go fullscreen from its
+  // <video controls>; every other navigation drops the attribute first. Permissions-Policy is
+  // fixed when a navigation starts, so model-generated code never runs under the grant. `*` is
+  // the allowlist because the srcdoc runs on an opaque origin no named origin can match.
   function frameNavigator(frame, replaced){
-    var el=frame, doc=null, inFlight=false, loadedOnce=false, listeners=[], cap=null, loads=0;
+    var el=frame, doc=null, inFlight=false, loadedOnce=false, listeners=[], cap=null, loads=0, fs=false;
     function onLoad(){ inFlight=false; loadedOnce=true; loads+=1; if(loads>1) cap=null; }
     function attach(n){ n.addEventListener("load", onLoad); listeners.forEach(function(fn){ n.addEventListener("load", fn); }); }
     attach(el);
     return {
-      set: function(next){
+      set: function(next, fullscreen){
         if(next===doc) return;
         if(inFlight && !loadedOnce){
           var n=el.cloneNode(false); n.removeAttribute("srcdoc");
           el.replaceWith(n); el=n; attach(n); replaced(n);
         }
+        if(fullscreen){ el.setAttribute("allow", "fullscreen *"); fs=true; }
+        else if(fs){ el.removeAttribute("allow"); fs=false; }
         doc=next; inFlight=true; cap=mintNonce(); loads=0;
         el.srcdoc=String(next).split(NONCE_SLOT).join(cap);
       },
@@ -1693,7 +1701,7 @@
       pptxReset(a.kind==="file" && (slidesOk(v)||pdfOk(v)||docxOk(v))
         ? {id:a.id, vi:vi, v:v, key:key, kind:pdfOk(v) ? "pdf" : docxOk(v) ? "docx" : "pptx"} : null);
       mediaReset(a, v, vi);
-      frameNav.set(a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks)); $frame.style.display="block";
+      frameNav.set(a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks), isVideoFile(a, v)); $frame.style.display="block";
       renderLinks(); }
   }
 
@@ -2325,6 +2333,9 @@
   // Inline media, shell side (#4257): the frame asks once it boots; mint a ticket for exactly the
   // version on screen and post its URL in. A stale answer (the panel moved on) is dropped.
   var mediaCtx=null;
+  // The ONLY navigation granted fullscreen (#4286): a file artifact fileCard renders as mediaDoc's
+  // <video> — shell-authored markup under a nonce CSP, never model code.
+  function isVideoFile(a, v){ return !!a && a.kind==="file" && mediaKindOf(v)==="video"; }
   function mediaKindOf(v){ var f=(v&&v.file)||{}, pk=previewKind(f.filename, f.mime); return pk==="image"||pk==="video" ? pk : null; }
   function mediaReset(a, v, vi){ mediaCtx = a.kind==="file" && mediaKindOf(v) ? {id:a.id, vi:vi} : null; }
   async function mediaMessage(m){
@@ -2688,7 +2699,7 @@
       // SAME builder as the panel; the embed-only tail (height reporter + sizing CSS) is appended
       // AFTER it, so the frame's own doc — its CSP, vendored libs and SRI — is byte-identical.
       var doc = a.kind==="file" ? fileCard(v) : srcdoc(a.kind, v.code, renderingLinks);
-      frameNav.set(doc + embedSuffix(doc, embedFill(a, v))); $frame.style.display="block";
+      frameNav.set(doc + embedSuffix(doc, embedFill(a, v)), isVideoFile(a, v)); $frame.style.display="block";
     }
     return true;
   }

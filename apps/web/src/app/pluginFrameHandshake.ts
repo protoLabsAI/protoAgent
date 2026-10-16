@@ -14,6 +14,16 @@ import { useEffect, type RefObject } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
 
+// The Permissions-Policy a plugin page's frame is granted: clipboard (no sandbox token exists
+// for it) and fullscreen (#4286). Both default to 'self', and in the desktop app the plugin frame
+// is cross-origin to the console (tauri://localhost vs http://127.0.0.1:<port>), so without the
+// explicit grant a <video controls> fullscreen button does nothing and requestFullscreen()
+// rejects. Shared by the plugin-view host and the inline
+// artifact host, which both load plugin pages. Untrusted frames (frame components, the streaming
+// preview) never get this; the artifact shell grants fullscreen to its nested frame only for its
+// own video document.
+export const PLUGIN_FRAME_ALLOW = "clipboard-read; clipboard-write; fullscreen";
+
 // The `--pl-*` custom-property names the design package publishes, derived from its
 // tokens.json exactly the way the DS build generates tokens.css: kebab-case each key
 // path under a `--pl` prefix. The top-level `light` block is the light-MODE override

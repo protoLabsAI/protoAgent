@@ -4,7 +4,7 @@ import { AlertTriangle, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
-import { postInit, scheduleInitReposts, usePluginFrameThemeSync } from "./pluginFrameHandshake";
+import { PLUGIN_FRAME_ALLOW, postInit, scheduleInitReposts, usePluginFrameThemeSync } from "./pluginFrameHandshake";
 import { registerContextMenu } from "../contextMenu/registry";
 import { useContextMenuStore } from "../contextMenu/store";
 import type { MenuEntry } from "../contextMenu/types";
@@ -585,6 +585,14 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
               // capture the mouse. Esc always releases it.
               // allow: clipboard via Permissions-Policy (no sandbox token exists for clipboard)
               // so copy/paste work in plugin UIs.
+              // allow: fullscreen (#4286). Fullscreen is a Permissions-Policy feature whose default
+              // allowlist is 'self', so only a SAME-origin frame inherits it. In the desktop app the
+              // console is tauri://localhost and every plugin frame is http://127.0.0.1:<port>,
+              // cross-origin: a <video controls> fullscreen button did nothing and
+              // requestFullscreen() rejected ("disabled by permissions policy"; Campaign Studio's
+              // video thumbnails). Delegating it here fixes that; the artifact shell re-delegates
+              // to its nested frame only for its own video doc. allowFullScreen is the legacy
+              // attribute (same grant) for engines that still read it.
               // allow-downloads: a sandboxed frame cannot start a download without it, so
               // the artifact panel's Download button (ADR 0092 D2/D3 file artifacts — a
               // plain <a download>.click()) was refused outright: "Not allowed to download
@@ -597,7 +605,8 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
                 src={apiUrl(src)}
                 title={view.label}
                 sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock allow-downloads"
-                allow="clipboard-read; clipboard-write"
+                allow={PLUGIN_FRAME_ALLOW}
+                allowFullScreen
                 onLoad={handleLoad}
                 onError={() => setError(`The plugin page at ${src} didn’t respond.`)}
                 style={{ visibility: loaded ? "visible" : "hidden" }}

@@ -43,6 +43,7 @@ Frame.prototype = {
   set srcdoc(v) { this.assigned.push(v); this.attrs.srcdoc = v; },
   addEventListener: function (t, f) { if (t === "load") this.loads.push(f); },
   cloneNode: function () { var c = new Frame(); c.attrs = Object.assign({}, this.attrs); return c; },
+  setAttribute: function (k, v) { this.attrs[k] = String(v); },
   removeAttribute: function (k) { this.attrs[k] = null; },
   replaceWith: function (n) { this.replacedBy = n; },
   load: function () { this.loads.forEach(function (f) { f(); }); },
@@ -109,6 +110,41 @@ console.log(JSON.stringify({ assigned: first.assigned }));
         )
     )
     assert out["assigned"] == ["A", "A"], "a blanked frame re-renders the same document when it comes back"
+
+
+def test_fullscreen_is_granted_only_to_the_video_navigation(monkeypatch, tmp_path):
+    """#4286: the nested frame gets allow="fullscreen" for the shell's own video document only;
+    the next navigation (model-generated code) drops it before it starts, and a fresh element
+    swapped in mid-flight carries the grant for the newest document, not the abandoned one."""
+    art = _load(monkeypatch, tmp_path)
+    out = _node(
+        _harness(
+            art._SHELL_JS,
+            r"""
+var seen = [];
+nav.set("video", true); seen.push(first.attrs.allow);   // fresh frame, first nav: granted
+nav.set("html");         seen.push(current.attrs.allow); // swapped into a new element: revoked
+current.load();
+nav.set("video2", true); seen.push(current.attrs.allow);
+nav.set("html2", false); seen.push(current.attrs.allow);
+console.log(JSON.stringify({ seen: seen, replacedTo: replacedTo }));
+""",
+        )
+    )
+    assert out["seen"] == ["fullscreen *", None, "fullscreen *", None]
+    assert out["replacedTo"] == [2]
+
+
+def test_only_a_video_file_render_asks_for_fullscreen(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    js = art._SHELL_JS
+    assert 'mediaKindOf(v)==="video"' in _js_function(js, "isVideoFile")
+    for fn in ("render", "renderEmbed"):
+        assert "isVideoFile(a, v))" in _js_function(js, fn), f"{fn} must pass the video grant"
+    # Every other navigation passes no grant (the fallback card, model code).
+    assert "frameNav.set(fileCard(ctx.v, note));" in js
+    # The static frame in shell.html stays without `allow` — the grant is per navigation.
+    assert '<iframe id="frame" sandbox="allow-scripts allow-pointer-lock" referrerpolicy="no-referrer"></iframe>' in art._SHELL_HTML
 
 
 def test_every_srcdoc_swap_goes_through_the_navigator(monkeypatch, tmp_path):
