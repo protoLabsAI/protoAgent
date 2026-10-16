@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/public/readme/hero-code-pane.gif" alt="protoAgent console: a chat tab sends a task to Claude Code, which plans, edits calc.py and test_calc.py, and runs pytest (3 passed) while the Diff pane beside it fills in with the changes" width="800">
+  <img src="docs/public/readme/hero-code-pane.webp" alt="protoAgent console: a chat tab sends a task to Claude Code, which plans, adds a clamp function to calc.py with tests in test_calc.py, and runs pytest (3 passed) while the Diff pane beside it fills in with the changes" width="800">
 </p>
 
 <p align="center"><em>protoAgent hands a coding task to Claude Code. The diff pane fills in as the files change, and the tests pass.</em></p>
@@ -44,7 +44,7 @@ connection testing, and your first chat.
 
 | Your agent drives Claude Code / Codex | An autonomous dev team | A private desktop agent |
 | --- | --- | --- |
-| <a href="docs/public/readme/hero-code-pane.gif"><img src="docs/public/readme/hero-code-pane-poster.png" alt="Claude Code's finished run in a protoAgent chat tab: todo list done, pytest 3 passed, and the Diff pane showing the changes to calc.py and test_calc.py" width="280"></a> | <img src="docs/public/readme/board-builds.gif" alt="Project board: a card in In Review with auto-merge pending moves to Done with its PR link, and a backlog card whose dependencies closed is flagged to promote" width="280"> | <img src="docs/public/readme/install-plugin.gif" alt="Settings, Plugins: the terminal plugin is installed from its git URL, a Terminal icon appears in the rail with no restart, and the shell runs a command" width="280"> |
+| <a href="docs/public/readme/hero-code-pane.webp"><img src="docs/public/readme/hero-code-pane-poster.png" alt="Claude Code's finished run in a protoAgent chat tab: todo list done, pytest 3 passed, and the Diff pane showing the changes to calc.py and test_calc.py" width="280"></a> | <img src="docs/public/readme/board-builds.webp" alt="Project board: a card marked ready from chat builds while the coder's live drawer streams, moves to In Review with auto-merge pending, then lands in Done with its PR link" width="280"> | <img src="docs/public/readme/install-plugin.webp" alt="Settings, Plugins: the terminal plugin is installed from its git URL, a Terminal icon appears in the rail with no restart, and the shell runs a command" width="280"> |
 | `delegate_to` hands a coding task to a CLI coding agent over ACP, streams its work into your chat, and brings the result back. [Spawn CLI coding agents →](./docs/guides/coding-agents.md) | The **Project Manager** archetype runs the pipeline: brief → board card → disposable worktree → pull request → CI gates → merge. [Build with a coding agent →](./docs/guides/build-with-a-coding-agent.md) | Runs on your machine. Plugins installed from any git URL add tools and console views. [Download →](https://agent.protolabs.studio/download) |
 
 ## Repository layout
