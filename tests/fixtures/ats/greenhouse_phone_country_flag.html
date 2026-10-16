@@ -1,0 +1,210 @@
+<!doctype html>
+<!--
+  SAVED ATS FORM FIXTURE — Greenhouse 2026 PHONE-COUNTRY react-select, FLAG-CLASS-ONLY value.
+
+  Models the DOM contract of the phone "Country" picker on the live LaunchDarkly Greenhouse
+  application form:
+      https://job-boards.greenhouse.io/launchdarkly/jobs/8011709003
+  Captured / last modeled: 2026-10-15 (after choosing United States).
+
+  A MINIMAL, self-contained reproduction — no network, no external JS/CSS — exercising the
+  agent_browser in-page form JavaScript (plugins/agent_browser/forms.py) in a real browser.
+  What matters is the DOM contract, NOT a pixel copy.
+
+  How it differs from its siblings (greenhouse_phone_country.html models a title on a child flag
+  span; greenhouse_phone_country_iti.html models the iti v23 button): here the committed
+  `.select__single-value` carries NO title and NO aria-label at all —
+      <div class="select__single-value"><div class="iti__flag iti__us"></div><span>+1</span></div>
+  — so the ONLY thing that names the committed country is the ISO-3166 alpha-2 code in the flag
+  div's class (`iti__us`). "+1" is shared by the US and Canada, so the dial code alone must never
+  confirm the commit; the flag class tells them apart.
+
+    * `fieldset.phone-input` > `.phone-input__country` holds the react-select: a real
+      `<label id="country-label" for="country">Country*</label>`, `.select__control`, the
+      single-value above, and `input#country[role=combobox]` (aria-labelledby="country-label").
+    * `.phone-input__phone` holds the intl-tel-input wrapper: a `button.iti__selected-country`
+      (title = the country name, aria-label = "Change country, selected <name> (+<dial>)") kept in
+      sync with the react-select commit, and `input[type=tel]#phone` labelled "Phone*".
+    * The `.select__menu` (id === the input's aria-controls) is PORTALLED to <body> and exists
+      ONLY while open; options read "Afghanistan +93", "Canada +1", "United States +1",
+      "United Kingdom +44". Open semantics copied from greenhouse_phone_country.html.
+    * `data-force-commit="<option text>"` on `.select__container` is a TEST HOOK: the NEXT option
+      click commits THAT option regardless of which row was clicked (shared-dial-code mismatch).
+
+  TO REFRESH: open the live form, read the phone-country widget's DOM in devtools, update the
+  markup / render below (keep `select__control`, `select__single-value`, `select__menu`,
+  `iti__flag iti__<cc>`), and bump the date. Run: pytest tests/test_agent_browser_forms_live.py.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Greenhouse — Phone country (flag class)</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 640px; margin: 2rem auto; }
+  fieldset { border: none; padding: 0; }
+  .label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  input[type=tel] { width: 100%; padding: .4rem; box-sizing: border-box; font-size: 1rem; }
+  .select-shell { position: relative; }
+  .select__control {
+    border: 1px solid #ccc; border-radius: 4px; padding: .35rem .5rem; min-height: 2.2rem;
+    display: flex; align-items: center; cursor: pointer; background: #fff;
+  }
+  .select__value-container { display: flex; align-items: center; flex: 1; }
+  .select__single-value { display: inline-flex; align-items: center; gap: .35rem; }
+  .iti__flag { width: 1.2rem; height: .9rem; background: #ddd; display: inline-block; }
+  .select__placeholder { color: #999; }
+  .select__input { border: none; outline: none; min-width: 2rem; padding: 0; }
+  .select__menu {
+    position: absolute; left: 0; right: 0; top: 100%; z-index: 10; background: #fff;
+    border: 1px solid #ccc; max-height: 14rem; overflow: auto;
+  }
+  .select__option { padding: .4rem .5rem; cursor: pointer; }
+  .select__option--is-focused { background: #deebff; }
+  .iti { display: flex; gap: .5rem; align-items: center; margin-top: 1rem; }
+  .iti__selected-country { background: none; border: 1px solid #ccc; padding: .3rem; }
+</style>
+</head>
+<body>
+<h1>Apply for this job</h1>
+<form id="application" aria-label="Application">
+  <fieldset class="phone-input">
+    <div class="phone-input__country">
+      <div class="select">
+        <div class="select__container" data-options="country">
+          <label id="country-label" for="country" class="label select__label">Country*</label>
+          <div class="select-shell remix-css-b62m3t-container">
+            <div class="select__control remix-css-13cymwt-control">
+              <div class="select__value-container remix-css-hlgwow">
+                <div class="select__single-value remix-css-1dimb5e-singleValue" style="display:none"></div>
+                <div class="select__placeholder">Select...</div>
+                <div class="select__input-container" data-value="">
+                  <input class="select__input" id="country" role="combobox" aria-labelledby="country-label"
+                         aria-required="true" aria-autocomplete="list" aria-expanded="false"
+                         aria-controls="country_menu" autocomplete="off" value="">
+                </div>
+              </div>
+              <div class="select__indicators"><div class="select__dropdown-indicator">v</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="phone-input__phone">
+      <label for="phone" class="label">Phone*</label>
+      <div class="iti iti--allow-dropdown iti--show-flags iti--inline-dropdown">
+        <div class="iti__country-container">
+          <button type="button" class="iti__selected-country" aria-label="Change country, selected Afghanistan (+93)" title="Afghanistan">
+            <div class="iti__selected-country-primary"><div class="iti__flag iti__af"></div><div class="iti__arrow" aria-hidden="true"></div></div>
+          </button>
+        </div>
+        <input type="tel" id="phone" name="phone" autocomplete="off">
+      </div>
+    </div>
+  </fieldset>
+</form>
+
+<script>
+"use strict";
+
+var OPTIONS = [
+  { text: "Afghanistan +93",    name: "Afghanistan",    cc: "af", dial: "93" },
+  { text: "Canada +1",          name: "Canada",         cc: "ca", dial: "1"  },
+  { text: "United States +1",   name: "United States",  cc: "us", dial: "1"  },
+  { text: "United Kingdom +44", name: "United Kingdom", cc: "gb", dial: "44" }
+];
+
+(function () {
+  var container = document.querySelector(".select__container");
+  var control = container.querySelector(".select__control");
+  var input = container.querySelector("input[role=combobox]");
+  var single = container.querySelector(".select__single-value");
+  var placeholder = container.querySelector(".select__placeholder");
+  var itiBtn = document.querySelector(".iti__selected-country");
+  var itiFlag = itiBtn.querySelector(".iti__flag");
+  var menuId = input.getAttribute("aria-controls");
+  var isFocused = false, openAfterFocus = false;
+
+  function menuEl() { return document.getElementById(menuId); }
+  function isOpen() { return !!menuEl(); }
+  function entryFor(text) {
+    for (var i = 0; i < OPTIONS.length; i++) {
+      if (OPTIONS[i].text.toLowerCase() === String(text).toLowerCase()) return OPTIONS[i];
+    }
+    return null;
+  }
+
+  function openMenu() {
+    if (isOpen()) return;
+    var menu = document.createElement("div");
+    menu.className = "select__menu";
+    menu.id = menuId;
+    var list = document.createElement("div");
+    list.className = "select__menu-list";
+    list.setAttribute("role", "listbox");
+    menu.appendChild(list);
+    OPTIONS.forEach(function (entry, i) {
+      var opt = document.createElement("div");
+      opt.className = "select__option" + (i === 0 ? " select__option--is-focused" : "");
+      opt.setAttribute("role", "option");
+      opt.textContent = entry.text;
+      opt.addEventListener("mousedown", function (e) { e.preventDefault(); commit(entry.text); });
+      list.appendChild(opt);
+    });
+    document.body.appendChild(menu);
+    input.setAttribute("aria-expanded", "true");
+  }
+  function closeMenu() {
+    var m = menuEl();
+    if (m) m.remove();
+    input.setAttribute("aria-expanded", "false");
+  }
+
+  function commit(text) {
+    var forced = container.getAttribute("data-force-commit");
+    var entry = entryFor(forced || text) || entryFor(text);
+    if (!entry) return;
+    // The live 2026 contract: a flag div whose CLASS carries the country code + "+<dial>" —
+    // no title, no aria-label anywhere in the single-value.
+    single.innerHTML = "";
+    var flag = document.createElement("div");
+    flag.className = "iti__flag iti__" + entry.cc;
+    var dial = document.createElement("span");
+    dial.textContent = "+" + entry.dial;
+    single.appendChild(flag);
+    single.appendChild(dial);
+    single.style.display = "";
+    placeholder.style.display = "none";
+    // the sibling intl-tel-input button follows the commit, as on the live form
+    itiBtn.setAttribute("title", entry.name);
+    itiBtn.setAttribute("aria-label", "Change country, selected " + entry.name + " (+" + entry.dial + ")");
+    itiFlag.className = "iti__flag iti__" + entry.cc;
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    closeMenu();
+  }
+
+  input.addEventListener("focus", function () {
+    isFocused = true;
+    if (openAfterFocus) { openAfterFocus = false; openMenu(); }
+  });
+  input.addEventListener("blur", function () { isFocused = false; openAfterFocus = false; closeMenu(); });
+  control.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    if (!isFocused) { openAfterFocus = true; input.focus(); }
+    else if (isOpen()) { closeMenu(); }
+    else { openMenu(); }
+  });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowDown") { e.preventDefault(); if (!isOpen()) openMenu(); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      var m = menuEl();
+      var focused = m && m.querySelector(".select__option--is-focused");
+      if (focused) commit(focused.textContent);
+    }
+  });
+})();
+</script>
+</body>
+</html>

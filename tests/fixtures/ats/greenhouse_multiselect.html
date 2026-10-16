@@ -1,0 +1,209 @@
+<!doctype html>
+<!--
+  SAVED ATS FORM FIXTURE — Greenhouse react-select MULTI-select ("mark all that apply").
+
+  Models the DOM contract of the 2026 voluntary self-identification "mark all that apply"
+  questions on the live LaunchDarkly Greenhouse application form:
+      https://job-boards.greenhouse.io/launchdarkly/jobs/8011709003
+  Captured / last modeled: 2026-10-15.
+
+  A MINIMAL, self-contained reproduction — no network, no external JS/CSS — exercising the
+  agent_browser in-page form JavaScript (plugins/agent_browser/forms.py) in a real browser.
+
+  THE BUG THIS FIXTURE REPRODUCES: each committed chip is react-select's multi-value markup —
+      <div class="select__multi-value css-1p3m7a8-multiValue">
+        <div class="select__multi-value__label css-9jq23d">I don't wish to answer</div>
+        <div role="button" class="select__multi-value__remove css-v7duua"
+             aria-label="Remove I don't wish to answer"><svg ...></svg></div>
+      </div>
+  The chip's LABEL and REMOVE children also carry "multi-value" in their class names, so a loose
+  `[class*="multi-value"]` read counted every chip twice plus an empty trailing entry
+  ("I don't wish to answer, I don't wish to answer, ") and browser_select reported a mismatch on
+  a commit that had worked.
+
+    * `.select__container` > `<label for="race">` + `.select__control` holding
+      `.select__value-container--is-multi` (the chips, then the search input), an
+      `input#race[role=combobox]`, and a dropdown indicator.
+    * The `.select__menu` (id === aria-controls) is PORTALLED to <body> and exists ONLY while
+      open; already-selected options are hidden (react-select's hideSelectedOptions default for
+      multi), and a commit closes the menu (closeMenuOnSelect default).
+    * Clicking a chip's remove button removes that chip.
+    * TEST HOOKS on `.select__container` (set by a test via browser_eval) model OTHER react-select
+      configurations: `data-keep-selected` keeps selected options in the menu
+      (hideSelectedOptions=false), where clicking an already-selected option DESELECTS it;
+      `data-async-commit` applies each commit in a later macrotask (setTimeout 0), so a read-back
+      taken right after the click still sees the old chips.
+
+  TO REFRESH: open the live form, read a "mark all that apply" question's DOM in devtools, update
+  the render below (keep `select__control`, `select__multi-value`, `select__multi-value__label`,
+  `select__multi-value__remove`, `select__menu`), and bump the date.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Greenhouse — Multi-select</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 640px; margin: 2rem auto; }
+  .field { margin: 1rem 0; }
+  label { display: block; font-weight: 600; margin-bottom: .25rem; }
+  .select-shell { position: relative; }
+  .select__control {
+    border: 1px solid #ccc; border-radius: 4px; padding: .35rem .5rem; min-height: 2.2rem;
+    display: flex; align-items: center; cursor: pointer; background: #fff;
+  }
+  .select__value-container { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; flex: 1; }
+  .select__multi-value { display: inline-flex; background: #e6e6e6; border-radius: 2px; }
+  .select__multi-value__label { padding: 2px 6px; font-size: 85%; }
+  .select__multi-value__remove { padding: 0 4px; display: flex; align-items: center; }
+  .select__placeholder { color: #999; }
+  .select__input { border: none; outline: none; min-width: 2rem; padding: 0; }
+  .select__menu {
+    position: absolute; left: 0; right: 0; top: 100%; z-index: 10; background: #fff;
+    border: 1px solid #ccc; max-height: 14rem; overflow: auto;
+  }
+  .select__option { padding: .4rem .5rem; cursor: pointer; }
+  .select__option--is-focused { background: #deebff; }
+</style>
+</head>
+<body>
+<h1>Voluntary Self-Identification</h1>
+<form id="application" aria-label="Application">
+  <div class="field">
+    <div class="select__container" data-options="race">
+      <label id="race-label" for="race" class="label select__label">Race (mark all that apply)*</label>
+      <div class="select-shell remix-css-b62m3t-container">
+        <div class="select__control remix-css-13cymwt-control">
+          <div class="select__value-container select__value-container--is-multi remix-css-hlgwow">
+            <div class="select__placeholder">Select...</div>
+            <div class="select__input-container" data-value="">
+              <input class="select__input" id="race" role="combobox" aria-labelledby="race-label"
+                     aria-autocomplete="list" aria-expanded="false" aria-controls="race_menu"
+                     autocomplete="off" value="">
+            </div>
+          </div>
+          <div class="select__indicators"><div class="select__dropdown-indicator">v</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</form>
+
+<script>
+"use strict";
+
+var OPTIONS = [
+  "American Indian or Alaska Native",
+  "Asian",
+  "Black or African American",
+  "White",
+  "I don't wish to answer"
+];
+
+(function () {
+  var container = document.querySelector(".select__container");
+  var control = container.querySelector(".select__control");
+  var values = container.querySelector(".select__value-container");
+  var inputBox = container.querySelector(".select__input-container");
+  var input = container.querySelector("input[role=combobox]");
+  var placeholder = container.querySelector(".select__placeholder");
+  var menuId = input.getAttribute("aria-controls");
+  var selected = [];
+  var isFocused = false, openAfterFocus = false;
+
+  function menuEl() { return document.getElementById(menuId); }
+  function isOpen() { return !!menuEl(); }
+
+  function renderChips() {
+    values.querySelectorAll(".select__multi-value").forEach(function (n) { n.remove(); });
+    selected.forEach(function (text) {
+      var chip = document.createElement("div");
+      chip.className = "select__multi-value css-1p3m7a8-multiValue";
+      var lab = document.createElement("div");
+      lab.className = "select__multi-value__label css-9jq23d";
+      lab.textContent = text;
+      var rm = document.createElement("div");
+      rm.setAttribute("role", "button");
+      rm.className = "select__multi-value__remove css-v7duua";
+      rm.setAttribute("aria-label", "Remove " + text);
+      rm.innerHTML = '<svg height="14" width="14" viewBox="0 0 20 20" aria-hidden="true"><path d="M2 2L18 18M18 2L2 18"></path></svg>';
+      rm.addEventListener("mousedown", function (e) {
+        e.preventDefault(); e.stopPropagation();
+        selected = selected.filter(function (s) { return s !== text; });
+        renderChips();
+      });
+      chip.appendChild(lab);
+      chip.appendChild(rm);
+      values.insertBefore(chip, inputBox);
+    });
+    placeholder.style.display = selected.length ? "none" : "";
+  }
+
+  function openMenu() {
+    if (isOpen()) return;
+    var menu = document.createElement("div");
+    menu.className = "select__menu";
+    menu.id = menuId;
+    var list = document.createElement("div");
+    list.className = "select__menu-list select__menu-list--is-multi";
+    list.setAttribute("role", "listbox");
+    menu.appendChild(list);
+    var q = input.value.toLowerCase();
+    OPTIONS.filter(function (t) {
+      var keep = container.hasAttribute("data-keep-selected");
+      return (keep || selected.indexOf(t) < 0) && (!q || t.toLowerCase().indexOf(q) >= 0);
+    }).forEach(function (text, i) {
+      var opt = document.createElement("div");
+      opt.className = "select__option" + (i === 0 ? " select__option--is-focused" : "");
+      opt.setAttribute("role", "option");
+      opt.textContent = text;
+      opt.addEventListener("mousedown", function (e) { e.preventDefault(); commit(text); });
+      list.appendChild(opt);
+    });
+    document.body.appendChild(menu);
+    input.setAttribute("aria-expanded", "true");
+  }
+  function closeMenu() {
+    var m = menuEl();
+    if (m) m.remove();
+    input.setAttribute("aria-expanded", "false");
+  }
+  function commit(text) {
+    function apply() {
+      if (selected.indexOf(text) < 0) selected.push(text);
+      else if (container.hasAttribute("data-keep-selected")) {
+        selected = selected.filter(function (s) { return s !== text; });   // click toggles it OFF
+      }
+      renderChips();
+      input.value = "";
+      closeMenu();
+    }
+    if (container.hasAttribute("data-async-commit")) setTimeout(apply, 0);
+    else apply();
+  }
+
+  input.addEventListener("input", function () { if (isOpen()) { closeMenu(); openMenu(); } });
+  input.addEventListener("focus", function () {
+    isFocused = true;
+    if (openAfterFocus) { openAfterFocus = false; openMenu(); }
+  });
+  input.addEventListener("blur", function () { isFocused = false; openAfterFocus = false; closeMenu(); });
+  control.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    if (!isFocused) { openAfterFocus = true; input.focus(); }
+    else if (isOpen()) { closeMenu(); }
+    else { openMenu(); }
+  });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowDown") { e.preventDefault(); if (!isOpen()) openMenu(); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      var m = menuEl();
+      var focused = m && m.querySelector(".select__option--is-focused");
+      if (focused) commit(focused.textContent);
+    }
+  });
+})();
+</script>
+</body>
+</html>
