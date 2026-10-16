@@ -1202,6 +1202,26 @@ class TestA2ATurnFailure:
 
         assert "boom" in _a2a_turn_failure({"error": {"code": -32000, "message": "boom"}})
 
+    def test_the_a2a_1_0_task_envelope_is_read(self):
+        """THE live miss (2026-10-16): the scheduler's ``A2A-Version: 1.0`` SendMessage
+        answers ``{"result": {"task": Task}}``. Reading only ``result.status`` judged a
+        turn whose model stream died mid-turn a success."""
+        from scheduler.local import _a2a_turn_failure
+
+        body = {"result": {"task": _failed_body("ReadError: stream reset")["result"]}}
+        assert "stream reset" in _a2a_turn_failure(body)
+
+    def test_a_completed_task_envelope_is_success(self):
+        from scheduler.local import _a2a_turn_failure
+
+        assert _a2a_turn_failure({"result": {"task": {"status": {"state": "TASK_STATE_COMPLETED"}}}}) == ""
+
+    def test_a_bare_message_reply_is_success(self):
+        """SendMessage's other oneof arm — a direct Message, no task — carries no state."""
+        from scheduler.local import _a2a_turn_failure
+
+        assert _a2a_turn_failure({"result": {"message": {"role": "ROLE_AGENT", "parts": [{"text": "hi"}]}}}) == ""
+
     @pytest.mark.parametrize("body", [None, "", [], {}, {"result": "not-a-dict"}, {"result": {}}])
     def test_unparseable_bodies_count_as_SUCCESS(self, body):
         """This feeds a backoff. Guessing "failed" from an unfamiliar shape would
@@ -1238,6 +1258,48 @@ class TestFireOutcomeTracking:
         row = self._row(s, job.id)
         assert row["consecutive_failures"] == 1
         assert "observability.audit" in row["last_error"]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_task_in_the_1_0_envelope_is_recorded_as_a_failure(self, tmp_path, monkeypatch, caplog):
+        """The wire shape a real fire gets — the regression above passed only because
+        its fixture used the stored-task shape, never what SendMessage returns."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        job = self._job(s)
+        body = {"result": {"task": {"id": "t-1", **_failed_body("ReadError: stream reset")["result"]}}}
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=body)))
+
+        with caplog.at_level("ERROR", logger="scheduler.local"):
+            assert await s._fire(job) is True
+        row = self._row(s, job.id)
+        assert row["consecutive_failures"] == 1
+        assert "stream reset" in row["last_error"]
+        assert row["last_ok"] is None
+        assert "turn FAILED" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_canceled_turn_records_no_outcome(self, tmp_path, monkeypatch):
+        """An operator's Stop is not a failure (no backoff after three Stops) and not a
+        success (a real failure streak isn't reset): the row is left exactly as it was."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        job = self._job(s)
+        failed = {"result": {"task": {"id": "t-1", **_failed_body("boom")["result"]}}}
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=failed)))
+        assert await s._fire(job) is True
+        before = self._row(s, job.id)
+        assert before["consecutive_failures"] == 1
+
+        canceled = {"result": {"task": {"id": "t-2", "status": {"state": "TASK_STATE_CANCELED"}}}}
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=canceled)))
+        for _ in range(3):
+            assert await s._fire(job) is True
+        after = self._row(s, job.id)
+        assert after["consecutive_failures"] == 1
+        assert after["last_error"] == before["last_error"]
+        assert after["last_ok"] is None
 
     @pytest.mark.asyncio
     async def test_success_resets_the_streak(self, tmp_path, monkeypatch):
