@@ -26,7 +26,7 @@ from typing import Any
 from deck import hub as deckhub
 from deck.data import PRESENCE_GLYPH as _PRESENCE_GLYPH
 from deck.data import presence_of  # one definition of the console's presence words (deck.data)
-from graph.fleet import supervisor
+from graph.fleet import friction_cli, supervisor
 
 __all__ = ["presence_of", "run_deck_cli", "run_fleet_cli"]
 
@@ -134,6 +134,7 @@ def _build_parser() -> argparse.ArgumentParser:
     po = sub.add_parser("order", help="persist the roster's display order: every member id, in the order wanted")
     po.add_argument("ids", nargs="+", metavar="ID")
     _common(po, top=False)
+    friction_cli.add_parser(sub, _common)
     return p
 
 
@@ -259,6 +260,54 @@ def _cmd_ls(args: argparse.Namespace) -> int:
         return 0
     _print_rows(rows, "")
     return 0
+
+
+# ── friction ─────────────────────────────────────────────────────────────────
+
+
+def _cmd_friction(args: argparse.Namespace) -> int:
+    """Read (or resolve) every member's friction ledger through the hub. Live only: the
+    ledgers are served by running members, so there is nothing to read from fleet.json."""
+    conn = _open_hub(args)
+    if conn is None:
+        msg = "fleet friction needs a running hub (the ledgers are read from live members) — start one with `protoagent up`"
+        if args.as_json:
+            _emit({"mode": "error", "hub": None, "error": msg})
+        else:
+            print(f"✗ {msg}", file=sys.stderr)
+        return 1
+    hub_url = conn.client.url
+    try:
+        if getattr(args, "friction_cmd", None) == "resolve":
+            if bool(args.agent) == bool(args.all_agents):
+                msg = "name the agents to change with --agent NAME (repeatable), or pass --all-agents — resolving has no default scope"
+                if args.as_json:
+                    _emit({"mode": "error", "hub": hub_url, "error": msg})
+                else:
+                    print(f"✗ {msg}", file=sys.stderr)
+                return 1
+            results = friction_cli.resolve(conn.client, conn.roster, args)
+            verb = "reopened" if args.reopen else "resolved"
+            if not results and not args.as_json:
+                print(f"  (no agent has {'a resolved' if args.reopen else 'an open'} signal {args.id})")
+            for r in results:
+                if r["ok"]:
+                    if not args.as_json:
+                        print(f"  ✓ {r['name']:16} {verb} {r['changed']} {'entry' if r['changed'] == 1 else 'entries'} — {r['summary']}")
+                elif not args.as_json:
+                    print(f"  ✗ {r['name']:16} {r['error']}", file=sys.stderr)
+            if not results:
+                return 1
+            return _finish(args, "live", results, hub_url) if args.as_json else (1 if any(not r["ok"] for r in results) else 0)
+
+        data = friction_cli.collect(conn.client, conn.roster, args)
+    finally:
+        conn.client.close()
+    if args.as_json:
+        _emit({"mode": "live", "hub": hub_url, **data})
+    else:
+        friction_cli.render(data, args, f"protoagent fleet friction · {_hub_label(conn, conn.roster)}")
+    return 1 if any(not r["ok"] for r in data["results"]) else 0
 
 
 # ── up ───────────────────────────────────────────────────────────────────────
@@ -1021,6 +1070,8 @@ def run_fleet_cli(argv: list[str]) -> int:
             return _cmd_order(args)
         if args.cmd == "pair":
             return _cmd_pair(args)
+        if args.cmd == "friction":
+            return _cmd_friction(args)
         return _cmd_ls(args)
     except ValueError as exc:  # a malformed --hub (deck.hub.normalize_url)
         if args.as_json:
