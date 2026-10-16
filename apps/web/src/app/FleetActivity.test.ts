@@ -7,7 +7,14 @@ import { act, createElement as h } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { applyMemberFrame, resetFleetActivityForTests, useMemberRunning, useMemberWork } from "./FleetActivity";
+import {
+  FEED_REPLAY_WINDOW_S,
+  applyMemberFrame,
+  isRecentFrame,
+  resetFleetActivityForTests,
+  useMemberRunning,
+  useMemberWork,
+} from "./FleetActivity";
 import { WorkLine } from "./FleetRoom";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -108,6 +115,27 @@ describe("delegated (A2A) turns", () => {
 
     frame("ava", "turn.usage", { task_id: "t1", state: "completed" });
     expect(snap.work.ava).toBeUndefined();
+  });
+});
+
+describe("a stream that connects late replays the member's retained ring (#4302)", () => {
+  it("a delegated turn that started before the stream connected still shows the member busy", () => {
+    // The replay delivers an older finished turn first, then the in-flight one's start.
+    frame("eng", "turn.started", started("old"));
+    frame("eng", "turn.usage", { task_id: "old", state: "completed" });
+    frame("eng", "turn.started", started("live"));
+    expect(Object.keys(snap.work.eng ?? {})).toEqual(["live"]);
+    // …and live frames after the replay settle it as usual.
+    frame("eng", "turn.finished", { task_id: "live", origin: "a2a", state: "completed" });
+    expect(snap.work.eng).toBeUndefined();
+  });
+
+  it("only recent frames go into the feed; untimestamped frames count as live", () => {
+    const now = 1_800_000_000_000;
+    expect(isRecentFrame(now / 1000 - 5, now)).toBe(true);
+    expect(isRecentFrame(now / 1000 - FEED_REPLAY_WINDOW_S - 1, now)).toBe(false);
+    expect(isRecentFrame(undefined, now)).toBe(true);
+    expect(isRecentFrame("soon", now)).toBe(true);
   });
 });
 
