@@ -482,6 +482,26 @@ async def _run_v1_turn(prompt: str, session_id: str, **kw):
     return await asyncio.shield(turn)
 
 
+def _v1_attachments(files: list[dict]) -> list[dict]:
+    """The ``attachments`` extension field on a ``/v1`` message (#4252): ``[{url, mime_type,
+    name}]``. OpenAI clients ignore an unknown key; one that knows it gets the files typed."""
+    return [{"url": f["url"], "mime_type": f.get("mime") or "", "name": f.get("name") or ""} for f in files]
+
+
+def _v1_deliverable(content: str, files: list[dict]) -> str:
+    """A ``/v1`` answer with every signed ``/media/…`` link made absolute (a ``/v1`` client has
+    no origin to resolve a server-relative one against) and a link line per attached file the
+    text doesn't already carry (#4252)."""
+    from infra import media as _media
+
+    content = _media.absolutize_media_links(content or "")
+    missing = [f for f in files if f.get("url") and f["url"] not in content]
+    if missing:
+        links = "\n".join(f"- [{f.get('name') or 'file'}]({f['url']})" for f in missing)
+        content = f"{content}\n\n{links}" if content else links
+    return content
+
+
 def _v1_invalid_request(message: str, *, param: str | None = None) -> JSONResponse:
     """A 400 in OpenAI's error envelope for a request the endpoint can't run (#3929).
 
@@ -1469,9 +1489,19 @@ def register_chat_routes(app, ui: str) -> None:
         # runs. A2A and /api/chat already expose this; /v1 was the gap.
         incognito = bool(req.get("incognito", False))
 
-        result = await _run_v1_turn(
-            prompt, session_id, model=model, incognito=incognito, images=images or None, origin="v1"
-        )
+        # Files a tool attaches to this answer (#4252, `graph.sdk.attach_file`): armed for the
+        # turn's context — `_run_v1_turn`'s task copies it, sharing the one list — then read
+        # back as absolute links. /v1 has no file part, so they ride the content (+ a field).
+        from infra import media as _media
+
+        _files_token = _media.begin_turn_files()
+        try:
+            result = await _run_v1_turn(
+                prompt, session_id, model=model, incognito=incognito, images=images or None, origin="v1"
+            )
+            attachments = _media.turn_files()
+        finally:
+            _media.end_turn_files(_files_token)
 
         # A turn that raised comes back as an assistant bubble carrying a structured
         # `error` (server.chat.turn_error). Answering 200 with that text as the content
@@ -1485,7 +1515,7 @@ def register_chat_routes(app, ui: str) -> None:
         # Joined parts feed the streaming path only (its historical shape); the
         # non-streaming body is rebuilt below from the LAST assistant message.
         parts = [m["content"] for m in result if m.get("role") == "assistant" and m.get("content")]
-        content = "\n\n".join(parts)
+        content = _v1_deliverable("\n\n".join(parts), attachments)
         created = int(time.time())
         completion_id = f"{agent_name()}-{session_id}"
 
@@ -1512,7 +1542,15 @@ def register_chat_routes(app, ui: str) -> None:
                     "created": created,
                     "model": agent_name(),
                     "choices": [
-                        {"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None}
+                        {
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant",
+                                "content": content,
+                                **({"attachments": _v1_attachments(attachments)} if attachments else {}),
+                            },
+                            "finish_reason": None,
+                        }
                     ],
                 }
                 yield f"data: {json.dumps(chunk)}\n\n"
@@ -1543,7 +1581,10 @@ def register_chat_routes(app, ui: str) -> None:
         # earlier ones are mid-loop narrations between tool calls, and joining
         # them presented a fragment as if it were the completed answer.
         final = next((m for m in reversed(result) if m.get("role") == "assistant" and m.get("content")), None)
-        content = str(final["content"]) if final else ""
+        content = _v1_deliverable(str(final["content"]) if final else "", attachments)
+        message: dict[str, Any] = {"role": "assistant", "content": content}
+        if attachments:
+            message["attachments"] = _v1_attachments(attachments)
         return {
             "id": completion_id,
             "object": "chat.completion",
@@ -1552,7 +1593,7 @@ def register_chat_routes(app, ui: str) -> None:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": content},
+                    "message": message,
                     # "length" when the turn hit a limit mid-execution; "stop"
                     # only for a clean synthesis (docstring above).
                     "finish_reason": await _v1_finish_reason(session_id),

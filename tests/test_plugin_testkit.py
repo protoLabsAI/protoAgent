@@ -412,3 +412,14 @@ def test_fake_registry_emit_namespaces_like_the_real_bus():
     reg.emit("friction")                   # the bare plugin id is a valid topic
 
     assert [t for t, _ in reg.emitted] == ["friction.recorded", "friction.resolved", "friction"]
+
+
+def test_default_graph_sdk_stub_records_attach_file_and_returns_false(monkeypatch):
+    # #4252: a plugin that imports graph.sdk.attach_file directly must keep running host-free —
+    # the stub records the call and returns False (no armed turn), never raise-unpatched.
+    specs = testkit._default_stubs()
+    monkeypatch.setitem(sys.modules, "graph.sdk", testkit._StubModule("graph.sdk", specs["graph.sdk"]))
+    from graph.sdk import attach_file
+
+    assert attach_file("/media/x.png?sig=ab", name="x.png") is False
+    assert attach_file.calls == [{"ref": "/media/x.png?sig=ab", "name": "x.png", "mime": ""}]

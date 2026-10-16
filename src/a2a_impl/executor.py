@@ -391,6 +391,46 @@ def _text_part(text: str) -> Part:
     return Part(text=text)
 
 
+def _begin_turn_files():
+    try:
+        from infra import media
+
+        return media.begin_turn_files()
+    except Exception:  # noqa: BLE001 — attachments must never break a turn
+        return None
+
+
+def _current_turn_files() -> list[dict]:
+    try:
+        from infra import media
+
+        return media.turn_files()
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _end_turn_files(token) -> None:
+    try:
+        from infra import media
+
+        media.end_turn_files(token)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _file_parts(files: list[dict]) -> list[Part]:
+    """The A2A 1.0 file part for each file a tool attached to the answer (#4252): a ``Part``
+    whose content is ``url`` (the absolute signed media link), with ``media_type`` and
+    ``filename`` — on the wire ``{"url", "mediaType", "filename"}`` (the 0.3 ``FilePart``
+    ``{"kind": "file", "file": {"uri", "mimeType", "name"}}``). A client that only reads text
+    parts (the console) skips it; the answer text is unchanged."""
+    return [
+        Part(url=f["url"], media_type=f.get("mime") or "application/octet-stream", filename=f.get("name") or "")
+        for f in files
+        if f.get("url")
+    ]
+
+
 def _data_part_proto(payload: Any, mime_type: str) -> Part:
     """A proto ``Part`` carrying ``payload`` under ``mime_type``.
 
@@ -716,6 +756,10 @@ class ProtoAgentExecutor(AgentExecutor):
         # timings recorded mid-turn land in the armed contextvar and merge into
         # `_outcome` below. Disarmed in the `finally` — after every outcome read.
         knowledge_token = _begin_knowledge_ops()
+        # Files a tool attaches to this answer (#4252, ``graph.sdk.attach_file``): armed for
+        # the stream's context like the knowledge ops above, read in ``_finalize`` (FileParts
+        # on the answer artifact), disarmed in the ``finally``.
+        files_token = _begin_turn_files()
 
         # Live answer streaming: forward each text delta as an incremental
         # artifact-update (append) frame so the console fills the bubble as the
@@ -857,6 +901,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
             parts = await self._append_structured(parts, context, final_text)
+            parts.extend(_file_parts(_current_turn_files()))
             # Guard on EITHER: cost/worldstate now ride metadata, so a turn with telemetry
             # but no text/context part must still emit the artifact (it would previously
             # have had a cost DataPart keeping `parts` non-empty).
@@ -1263,6 +1308,7 @@ class ProtoAgentExecutor(AgentExecutor):
             # disarming here can never lose a turn's samples. Also covers the
             # input_required park — the resumed execute() re-arms fresh.
             _end_knowledge_ops(knowledge_token)
+            _end_turn_files(files_token)
             if touches_pause:
                 hitl_routing.schedule_settle_siblings(
                     context.context_id, context.task_id, getattr(context, "call_context", None)

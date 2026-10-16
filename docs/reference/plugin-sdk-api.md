@@ -27,6 +27,8 @@ the module's own.
 
 **Agent + model access (the plugin↔agent channel, ADR 0043)** — [`complete()`](#sdk-complete), [`config()`](#sdk-config), [`gateway_client()`](#sdk-gateway-client), [`renders_ui()`](#sdk-renders-ui), [`run_subagent()`](#sdk-run-subagent), [`subagent_types()`](#sdk-subagent-types), [`turn_stop_reason()`](#sdk-turn-stop-reason)
 
+**Delivering a file with the answer (#4252)** — [`attach_file()`](#sdk-attach-file)
+
 **Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)** — [`llm_lanes()`](#sdk-llm-lanes), [`llm_priority()`](#sdk-llm-priority)
 
 **Knowledge graph (the plugin↔knowledge channel, ADR 0043 — "shared knowledge")** — [`knowledge_add()`](#sdk-knowledge-add), [`knowledge_purge()`](#sdk-knowledge-purge), [`knowledge_search()`](#sdk-knowledge-search)
@@ -219,6 +221,42 @@ a one-shot classifier/summarizer). Distinct from `run_subagent`, which runs a
 full tool-using subagent. Uses the live config's model through the gateway; pass
 `model_name` to target a different model on the same gateway, `system` for a
 system instruction.
+
+## Delivering a file with the answer (#4252)
+
+### `sdk.attach_file` {#sdk-attach-file}
+
+```python
+sdk.attach_file(ref: Any, *, name: str = '', mime: str = '') -> bool
+```
+
+Attach a file your tool produced to THIS turn's answer, for a client that isn't the
+console. Call it from a tool body after `registry.save_media(...)`::
+
+    ref = registry.save_media(mp4_path, "video/mp4", {"title": title})
+    sdk.attach_file(ref, name="overview.mp4")
+    return f"Rendered [{title}]({ref.url})"   # the console renders the inline link
+
+An **A2A** client then receives the file as a `FilePart` on the answer artifact —
+`{"url": <absolute signed URL>, "mediaType": mime, "filename": name}` (the A2A 1.0
+file part) — and a `/v1` caller gets an absolute link appended to the content plus an
+`attachments: [{url, mime_type, name}]` field on the message. The console (an A2A
+`message/stream` client) gets the same file part stored on its task, but ignores it and
+renders the inline link instead — so keep the link in your return text.
+
+`ref` is the `MediaRef` `save_media` returned, or its signed
+`/media/…?sig=…` URL — only files the media store serves can be attached, never an
+arbitrary URL. The link is made absolute against the agent's public base: `A2A_PUBLIC_URL`
+(set it on any deployed agent), else the bound loopback port — the same address the A2A
+card advertises. `name` defaults to the stored filename; `mime` to the stored type.
+
+The link works without a bearer on a standalone agent. Through a fleet hub
+(`/agents/<slug>/media/…`) it still needs the hub's bearer.
+
+Returns True when attached — in any A2A or `/v1` turn, console streams included; False
+(a no-op) outside an armed turn (e.g. a background job), for a non-media or unsigned
+URL, or past 16 files in one turn. Guard with `getattr(sdk, "attach_file", None)` on
+cores older than this seam.
 
 ## Model in-flight priority (the plugin↔limiter channel, ADR 0115 D6)
 

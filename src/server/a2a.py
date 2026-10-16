@@ -481,9 +481,11 @@ def _a2a_card_url() -> str:
     correct there because the client is on the same host (and the desktop's port
     is dynamic). The ``/a2a`` suffix is the JSON-RPC route.
     """
-    base = (os.environ.get("A2A_PUBLIC_URL") or "").strip().rstrip("/")
-    if not base:
-        base = f"http://127.0.0.1:{STATE.active_port}"
+    # One derivation shared with the absolute media links an answer carries (#4252), so a
+    # file part never names a host the card doesn't.
+    from infra.media import public_base_url
+
+    base = public_base_url() or f"http://127.0.0.1:{STATE.active_port}"
     return f"{base}/a2a"
 
 

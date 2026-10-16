@@ -266,6 +266,42 @@ async def complete(prompt: str, *, system: str | None = None, model_name: str | 
     return content if isinstance(content, str) else str(content)
 
 
+# ── delivering a file with the answer (#4252) ───────────────────────────────────────────
+
+
+def attach_file(ref: Any, *, name: str = "", mime: str = "") -> bool:
+    """Attach a file your tool produced to THIS turn's answer, for a client that isn't the
+    console. Call it from a tool body after ``registry.save_media(...)``::
+
+        ref = registry.save_media(mp4_path, "video/mp4", {"title": title})
+        sdk.attach_file(ref, name="overview.mp4")
+        return f"Rendered [{title}]({ref.url})"   # the console renders the inline link
+
+    An **A2A** client then receives the file as a ``FilePart`` on the answer artifact —
+    ``{"url": <absolute signed URL>, "mediaType": mime, "filename": name}`` (the A2A 1.0
+    file part) — and a ``/v1`` caller gets an absolute link appended to the content plus an
+    ``attachments: [{url, mime_type, name}]`` field on the message. The console (an A2A
+    ``message/stream`` client) gets the same file part stored on its task, but ignores it and
+    renders the inline link instead — so keep the link in your return text.
+
+    ``ref`` is the :class:`~infra.media.MediaRef` ``save_media`` returned, or its signed
+    ``/media/…?sig=…`` URL — only files the media store serves can be attached, never an
+    arbitrary URL. The link is made absolute against the agent's public base: ``A2A_PUBLIC_URL``
+    (set it on any deployed agent), else the bound loopback port — the same address the A2A
+    card advertises. ``name`` defaults to the stored filename; ``mime`` to the stored type.
+
+    The link works without a bearer on a standalone agent. Through a fleet hub
+    (``/agents/<slug>/media/…``) it still needs the hub's bearer.
+
+    Returns True when attached — in any A2A or ``/v1`` turn, console streams included; False
+    (a no-op) outside an armed turn (e.g. a background job), for a non-media or unsigned
+    URL, or past 16 files in one turn. Guard with ``getattr(sdk, "attach_file", None)`` on
+    cores older than this seam."""
+    from infra.media import attach_file as _attach
+
+    return _attach(ref, name=name, mime=mime)
+
+
 # ── model in-flight priority (the plugin↔limiter channel, ADR 0115 D6) ──────────────────
 # The gateway in-flight limiter (graph/llm_limiter.py) serves queued model calls by class —
 # `interactive` (a chat turn an operator is watching) ahead of `default` ahead of `bulk`

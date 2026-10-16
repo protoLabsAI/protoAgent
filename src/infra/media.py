@@ -36,6 +36,7 @@ which means expired files linger only until the next save. Good enough for v1.
 
 from __future__ import annotations
 
+import contextvars
 import hmac
 import hashlib
 import logging
@@ -88,6 +89,13 @@ class MediaRef:
     url: str  # server-relative signed URL — ``/media/<file>?sig=…``
     path: Path  # absolute on-disk location (survives restart)
     mime: str  # content type it will be served with
+
+    def absolute_url(self, base: str | None = None) -> str:
+        """``url`` made absolute against ``base`` (default :func:`public_base_url`) — for a
+        client that isn't the console (an A2A peer, a ``/v1`` caller), which has nothing to
+        resolve a server-relative ``/media/…`` link against (#4252). Unchanged when no base
+        is known."""
+        return absolute_media_url(self.url, base)
 
 
 def media_dir(*, create: bool = False) -> Path:
@@ -277,3 +285,123 @@ def resolve_media(name: str) -> tuple[Path, str] | None:
     if not mime:
         mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
     return f, mime
+
+
+# ── absolute links + per-turn file attachments (#4252) ──────────────────────────────────
+
+
+def public_base_url() -> str:
+    """The agent's externally-reachable base URL (no trailing slash), or ``""``.
+
+    The SAME address the A2A card advertises (``server/a2a.py::_a2a_card_url``): an explicit
+    ``A2A_PUBLIC_URL`` (set for any deployed agent — behind a proxy or in a container the
+    bound port isn't the public address), else the actually-bound loopback port for local and
+    desktop runs, where the client is on the same host. Never the bind host or a request's
+    forwarded host — so no internal hostname leaks into a link that wasn't already public in
+    the card. ``""`` outside a running server (no port bound yet)."""
+    base = (os.environ.get("A2A_PUBLIC_URL") or "").strip().rstrip("/")
+    if base:
+        return base
+    try:
+        from runtime.state import STATE
+
+        port = getattr(STATE, "active_port", None)
+        if isinstance(port, int) and not isinstance(port, bool) and port > 0:
+            return f"http://127.0.0.1:{port}"
+    except Exception:  # noqa: BLE001 — no server state: no base
+        pass
+    return ""
+
+
+# A signed, server-relative media link as save_media mints it, not already part of a URL
+# (no scheme/host/path char immediately before the slash).
+_RELATIVE_MEDIA_LINK = re.compile(r"(?<![\w/:.\-])/media/[A-Za-z0-9][A-Za-z0-9._-]*\?sig=[0-9a-f]+")
+
+
+def absolute_media_url(url: str, base: str | None = None) -> str:
+    """A server-relative ``/media/…`` URL made absolute against ``base`` (default
+    :func:`public_base_url`). An already-absolute URL, or any URL when no base is known, is
+    returned unchanged."""
+    url = str(url or "")
+    if not url.startswith(MEDIA_URL_PREFIX):
+        return url
+    b = (public_base_url() if base is None else str(base)).strip().rstrip("/")
+    return f"{b}{url}" if b else url
+
+
+def absolutize_media_links(text: str, base: str | None = None) -> str:
+    """Every signed server-relative ``/media/…?sig=…`` link in ``text`` made absolute — for a
+    reply going to a client with no origin to resolve it against (``/v1``). Not for the
+    console's stream: it resolves relative links itself, and through a proxy (the fleet hub)
+    a relative link is the only one that still works."""
+    b = (public_base_url() if base is None else str(base)).strip().rstrip("/")
+    if not text or not b:
+        return text
+    return _RELATIVE_MEDIA_LINK.sub(lambda m: b + m.group(0), text)
+
+
+# The files a tool attached to the CURRENT turn's answer (``attach_file``), armed per turn by
+# the surface that can deliver them — the A2A executor (as FileParts on the answer artifact)
+# and ``/v1`` (as links + an ``attachments`` field). ``None`` = no turn armed, and an attach
+# is a no-op. A mutable list so a tool's copied context (LangGraph runs sync tools in a
+# copy_context thread) appends to the turn's one list.
+_TURN_FILES: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar("protoagent_turn_files", default=None)
+_MAX_TURN_FILES = 16
+
+
+def begin_turn_files() -> contextvars.Token:
+    """Arm file attachments for the turn running in this context; pass the token to
+    :func:`end_turn_files` when the turn ends."""
+    return _TURN_FILES.set([])
+
+
+def end_turn_files(token: contextvars.Token | None) -> None:
+    if token is None:
+        return
+    try:
+        _TURN_FILES.reset(token)
+    except ValueError:  # reset from another context — the turn's own context drops it anyway
+        pass
+
+
+def turn_files() -> list[dict]:
+    """The armed turn's attachments so far: ``[{url, mime, name}]`` (a copy)."""
+    files = _TURN_FILES.get()
+    return [dict(f) for f in files] if files else []
+
+
+def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "") -> bool:
+    """Attach a media-store file to the CURRENT turn's answer (#4252). True when attached.
+
+    ``ref`` is a :class:`MediaRef` from ``save_media`` or its signed ``/media/…?sig=…`` URL —
+    only files the media store serves can be attached, so a tool can't hand a client an
+    arbitrary (internal) URL. The link is made absolute against :func:`public_base_url`.
+    False — and nothing happens — outside an armed turn (a background job), for a non-media
+    URL, or past 16 files a turn. A console turn IS armed (it rides A2A ``message/stream``):
+    the file part lands on the console's task, which ignores it and renders the inline link."""
+    files = _TURN_FILES.get()
+    if files is None:
+        return False
+    if isinstance(ref, MediaRef):
+        url, mime, path_name = ref.url, mime or ref.mime, ref.path.name
+    else:
+        url, path_name = str(ref or ""), ""
+    rel = url.split("?", 1)[0]
+    if not rel.startswith(MEDIA_URL_PREFIX) or not _NAME_RE.match(rel[len(MEDIA_URL_PREFIX) :]):
+        log.warning("[media] attach_file: %r is not a media-store URL — not attached", url[:200])
+        return False
+    file_name = rel[len(MEDIA_URL_PREFIX) :]
+    if not media_public() and not verify_name(file_name, url.partition("sig=")[2].split("&", 1)[0]):
+        log.warning("[media] attach_file: %r carries no valid signature — not attached", rel)
+        return False
+    if not mime:
+        found = resolve_media(file_name)
+        mime = found[1] if found else (mimetypes.guess_type(file_name)[0] or "application/octet-stream")
+    absolute = absolute_media_url(url)
+    if any(f["url"] == absolute for f in files):
+        return True
+    if len(files) >= _MAX_TURN_FILES:
+        log.warning("[media] attach_file: turn already carries %d files — %r not attached", _MAX_TURN_FILES, rel)
+        return False
+    files.append({"url": absolute, "mime": mime, "name": (name or path_name or file_name).strip()[:255]})
+    return True

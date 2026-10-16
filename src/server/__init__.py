@@ -1509,6 +1509,11 @@ def _main():
     reach_msg = auth.evaluate_bind_reachability(args.host)
     if reach_msg:
         log.warning("%s", reach_msg)
+    # A non-loopback bind with no A2A_PUBLIC_URL advertises a loopback card URL and loopback
+    # file links (#4252) — unusable to the remote peers that bind exists for. Warn once.
+    public_msg = auth.evaluate_public_url(args.host, os.environ.get("A2A_PUBLIC_URL"))
+    if public_msg:
+        log.warning("%s", public_msg)
 
     # Don't outlive the launcher. When run as a desktop sidecar the Tauri shell
     # sets PROTOAGENT_PARENT_PID; a PyInstaller-frozen onefile runs as a
