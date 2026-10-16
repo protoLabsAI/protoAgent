@@ -79,7 +79,8 @@ def register_node_routes(app) -> None:
 
     @router.get("/api/runtime/node")
     async def _status():  # noqa: ANN202
-        return JSONResponse(_payload())
+        # node_status() probes the filesystem and may spawn `node --version` — off the loop.
+        return JSONResponse(await asyncio.to_thread(_payload))
 
     @router.post("/api/runtime/node/install")
     async def _install_ep(force: bool = False):  # noqa: ANN202, FBT001, FBT002
@@ -87,15 +88,21 @@ def register_node_routes(app) -> None:
 
         if not is_supported():
             return JSONResponse(
-                {"ok": False, "error": "no managed Node build for this platform/architecture", **_payload()},
+                {
+                    "ok": False,
+                    "error": "no managed Node build for this platform/architecture",
+                    **(await asyncio.to_thread(_payload)),
+                },
                 status_code=400,
             )
         with _lock:
-            if _install["state"] == "running":
-                return JSONResponse({"ok": True, **_payload()}, status_code=202)  # already in flight
-            _install.update(state="running", pct=0, message="starting…", error=None)
-        # Blocking download+extract off the event loop; progress lands in `_install`.
-        asyncio.create_task(asyncio.to_thread(_run_install, force))
-        return JSONResponse({"ok": True, **_payload()}, status_code=202)
+            already_running = _install["state"] == "running"
+            if not already_running:
+                _install.update(state="running", pct=0, message="starting…", error=None)
+        if not already_running:
+            # Blocking download+extract off the event loop; progress lands in `_install`.
+            asyncio.create_task(asyncio.to_thread(_run_install, force))
+        # A second POST while one runs reports the live state rather than starting another download.
+        return JSONResponse({"ok": True, **(await asyncio.to_thread(_payload))}, status_code=202)
 
     app.include_router(router)

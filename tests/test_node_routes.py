@@ -42,3 +42,25 @@ def test_install_accepts_and_reports_running(monkeypatch):
     body = r.json()
     assert body["ok"] is True
     assert body["install"]["state"] == "running"
+
+
+def test_second_install_while_running_is_idempotent(monkeypatch):
+    """A POST while an install is already in flight returns 202 with the live state and
+    does NOT spawn a second download (the lock-protected `running` check)."""
+    from operator_api import node_routes
+
+    calls: list[bool] = []
+    monkeypatch.setattr("runtime.node_install.is_supported", lambda: True)
+    monkeypatch.setattr("runtime.node_install.node_status", lambda: {"source": None, "supported": True})
+    monkeypatch.setattr(node_routes, "_run_install", lambda force: calls.append(force))
+    monkeypatch.setitem(node_routes._install, "state", "running")
+    monkeypatch.setitem(node_routes._install, "pct", 42)
+    monkeypatch.setitem(node_routes._install, "message", "downloading… 42%")
+
+    r = _client().post("/api/runtime/node/install")
+    assert r.status_code == 202
+    body = r.json()
+    assert body["ok"] is True
+    assert body["install"]["state"] == "running"
+    assert body["install"]["pct"] == 42  # the in-flight progress, not a reset
+    assert calls == []  # no second download spawned
