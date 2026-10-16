@@ -15,6 +15,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.206.0] - 2026-10-16
+
+### Added
+- **Plugins can declare a Node runtime requirement, and Node resolution is version-aware (#4238).**
+  A manifest can now say `requires_runtimes: {node: ">=20"}`. When no Node on this machine
+  satisfies it, the plugin raises the standard setup banner with an **Install Node runtime**
+  button. The button provisions the managed runtime (ADR 0085), and the banner clears
+  without a restart. Plugins get `sdk.node_executable(min_version)`, which returns an
+  absolute, version-checked `node` from PATH, then the nvm / fnm / Volta / asdf / Homebrew
+  installs the host can find, then the managed runtime. That discovery used to be private
+  to the coding-agent plugin. A Node on PATH older than 20 no longer shadows an installed
+  managed runtime for the processes protoAgent spawns: the managed one now goes first.
+
+- **Plugin views can choose where code opens — `protoagent:code:open` takes `open_in: "pane" | "editor"` (#4241).**
+  A view with explicit **View** / **Open in editor** actions (the chat file-link click / ⌘-click
+  convention) now gets the destination it asked for. Each falls back to the other, then to copying
+  the path, with a toast that says why (including how to turn the Code pane toolset on). Without
+  `open_in`, routing still follows the operator's preference. Pages can read pane availability from the existing
+  `/api/runtime/status` `code_pane.enabled`.
+- **"Open in editor" falls back to the agent's `filesystem.editor_command` (#4241).** When the
+  console has no editor link of its own, the new `POST /api/fs/open-in-editor` opens the file in
+  the host editor (the same fence, argv and launch as `open_in_editor`, plus the code pane's
+  secret-name deny). It only answers a console on the server's own machine, so it never opens a
+  window on a screen nobody is looking at. `/api/runtime/status` reports `editor_command_configured`
+  but never the command itself.
+
+- **Plugin views can draft a chat message for the operator — `protoagent:chat:compose` (#4243).**
+  A console view posts `{ type: "protoagent:chat:compose", text }` and the console prefills the
+  visible chat composer, raises chat if it was hidden, focuses it, and names the view and plugin
+  in a toast — the operator reviews and sends. Draft only (no auto-send), plain text up to 4 KB,
+  always the chat on screen, one per second per view, and the same own-iframe/origin trust as
+  every other bridge message. First user: Atlas's "Ask the agent about this element".
+
+- **Atlas is listed in the plugin directory (#4249).** The Discover catalog and the marketing site now carry
+  [Atlas](https://github.com/protoLabsAI/atlas-plugin) — drill-down LikeC4 architecture diagrams you can
+  explore, present and record, with code links into the code pane and live agent narration.
+
+- **`artifact.save_file`: a plugin's background job can put a file in the Artifact panel without an agent turn (#4253).**
+  The artifact plugin now offers a second plugin service beside `artifact.show`:
+  `sdk.service("artifact.save_file")(path, title="", artifact_id="", session_id="", *, plugin_id, roots=())`
+  → `{ok, id, version, message, ref}`. It applies the same blob cap, preview, preflights and
+  version chain as `save_file_artifact`. The path must resolve inside the caller's
+  `plugin_store` or an absolute root the caller names, and refusals (oversize, outside the store,
+  a busy store) come back as `ok: false` instead of raising. A plugin like Campaign Studio can
+  register its finished video directly, rather than queueing a follow-up turn to ask the agent
+  to do it.
+
+- **A2A and `/v1` callers receive the files a turn delivers, with absolute links (#4252).**
+  A tool that saved a file with `registry.save_media` can now call `graph.sdk.attach_file(ref, name=…)`.
+  The A2A answer artifact then carries an A2A 1.0 file part,
+  `{"url": <absolute signed URL>, "mediaType", "filename"}`. A `/v1/chat/completions` reply gets
+  an absolute link in its content plus an `attachments: [{url, mime_type, name}]` field. Every
+  signed `/media/…` link in a `/v1` answer is made absolute too, since the client has no origin to
+  resolve it against. The base is `A2A_PUBLIC_URL`, falling back to the bound loopback port: the
+  same address the agent card advertises, so no internal host leaks. Only signed media-store URLs
+  can be attached. The console renders the inline link as before. A fleet member's link
+  fetched through the hub still needs the hub's bearer. A non-loopback bind with no
+  `A2A_PUBLIC_URL` now logs a startup warning.
+
+### Changed
+- **A background delegate's reply now reveals progressively instead of landing as one block (#4247).** A room participant's / background delegate's answer arrives over the live bus as one complete frame, so a multi-paragraph reply (often with code) used to pop into the transcript all at once and was hard to follow as it landed. It now replays word by word as a short, purely-presentational client-side reveal — adaptive duration (~0.6–3s), only ever cutting at word boundaries, showing the live-stream affordance and hiding the footer until it finishes. The reveal happens once, only for messages that arrive live: a reply loaded from history, re-rendered after the reveal, or under `prefers-reduced-motion: reduce` renders in full immediately. The stored message is unchanged.
+
+- **The Conversation "jump to latest" button now has an accent fill, so it reads clearly over message text (#4250).** The design system restyled `.pl-convo__jump` (DS card ds-5j6): a solid accent background with an on-accent arrow glyph and popover elevation, plus an explicit keyboard focus ring — replacing the former grey-bordered control that could blend into the thread. The console picks this up by raising `@protolabsai/ui-css` and `@protolabsai/ui` to `^0.68.1` (and their required `@protolabsai/design` peer to `^0.13.0`); the class name is unchanged, so the existing hitl.css rule that hides the button while a form is open still applies. No console source changes.
+
+- **The Engineer persona maps architecture with Atlas when it's there (#4242).** With the
+  Atlas plugin's tools bound, `repo-onboard` uses the repo's own `architecture/` LikeC4 model
+  as the overview, offers (asking first — it writes into the repo, to be committed and
+  reviewed) to write one when there isn't, validates it until clean, and turns the guided
+  tour into an Atlas presenter tour from `architecture/atlas.tours.json`, still one stop per
+  turn with `show_code` on the exact lines. The soul preset now says which picture to use:
+  Atlas for the persistent drill-down map, Mermaid artifacts for one-off flows. Without
+  Atlas, onboarding is unchanged.
+
+- **The Brand & Launch persona can record architecture walkthrough videos with Atlas (#4251).** When a launch needs a "how it works" clip, the `brand-launch` soul preset now maps or reuses the target repo's `architecture/` LikeC4 model. It asks before writing into that repo, authors a tour with a caption on every step, and runs `atlas_validate` until the model is clean. The operator approves the tour script before anything is recorded. Then `atlas_record_script(tour)` produces a shot script for Campaign Studio, recorded as one continuous take. The agent reviews that take before handing it over: a frame sheet with 100% crops of the smallest text, and a final caption on screen for at least 4 s. The persona also states the clip rules for every recording: continuous footage with speed ramps instead of jump cuts, the landing view on camera, and crisp 2K text. The draft-only and operator-approval rules are unchanged. Atlas joins the bundle in brand-launch-archetype v0.3.0.
+
+### Fixed
+- **Background-work strip no longer resizes the transcript (#4246).** The chat's "background work running here" strip now reserves its line permanently above the composer: the `.chat-bgwork` container always renders (empty, at a fixed height, when the chat has no running jobs) instead of unmounting, so a job starting or the last one finishing stops growing/shrinking the composer row and reflowing the conversation under the reader. The delegation row's "Show brief"/"Show work" buttons also stay on one line now instead of wrapping and growing the row at narrow widths.
+
+- **Background delegation progress keeps a fixed footprint while it runs (#4246).** A live
+  `DelegateProgressView` no longer bounces taller/shorter on nearly every frame: the tool list
+  holds a constant 1 + RECENT_SHOWN row slots (missing ones are reserved, aria-hidden empties),
+  the narration tail is always present and CSS-clamped to two lines with a reserved height —
+  anchored to the newest words so the live tail never hides behind an older slice — and a
+  long plan renders a fixed-size window around the in-progress entry plus a "+N more" line. The
+  settled/done view is unchanged.
+
+- **Skill edits recover from disk and index failures (#4198).** Agent and console edits share verified recovery, retain the original index identity and metadata, and preserve companion files when renamed. Failed recovery reports the retained backup instead of claiming success.
+
+- **Invalid configuration is rejected instead of silently dropping policy (#4204).** Host, agent, secrets, and active plugin configuration distinguish missing optional inputs from malformed or unreadable inputs, with diagnostics that do not expose secret values.
+
+- **Rejected configuration reloads leave live credentials unchanged (#4204).** Configuration is validated before secrets hydration, and active plugin resolution is reused after hydration to avoid a second discovery failure.
+
+- **Browser résumé uploads on Greenhouse verify, and parallel browser actions no longer cross-contaminate fields (#4237).** Greenhouse swaps the résumé input *and* its `<label for>` for a filename chip, so `browser_upload` reported "nothing is attached" and `browser_form_read` dropped `#resume` entirely. Upload now captures the field's surviving wrapper before the attach and verifies the chip there. Form read reports the vanished input under its id, with the filename as its value. Separately, the agent's browser tools now hold a per-session lock, so parallel tool calls in one step (for example several `browser_fill`s) run one at a time in arrival order instead of interleaving keystrokes across fields. The operator panel's navigation and stream routes are not covered by this lock.
+
+- **Secrets sync and refresh errors identify the configuration file (#4239).** Semantic validation failures now include the agent filename alongside the existing section diagnostic.
+
+- **A code pane open with no line starts at the top of the file, not its end (#4241).** A
+  line-less open (a plugin's `{project, path}` link, a `read_file` with no offset) made one
+  `scrollTo(0)` before the rows were laid out, and the virtualizer's anchor-preserving scroll fix
+  then carried the view to the last screen. It now settles on row 1 through the same loop a line
+  target uses.
+
+- **Greenhouse résumé uploads no longer intermittently report "nothing is attached" (#4244).** On a cold page Greenhouse removes the file input right away but renders the filename chip a moment later, so `browser_upload` checked once, saw neither, and failed an attach that had worked (6 of 26 live runs). The check now repeats for up to 2.5 seconds while it sees no filename and no chip. A genuinely empty attach still errors.
+
+- **`browser_select` no longer fails on Greenhouse "mark all that apply" questions or the phone Country picker (#4245).** For react-select multi-selects, the read-back counted every chip twice and added an empty trailing entry (`I don't wish to answer, I don't wish to answer, `), so a selection that had worked was reported as a mismatch. Each chip is now read once. A new pick counts as a match only when its chip appears after the click and wasn't there before. Choosing an option that is already selected leaves it selected instead of clicking it, which would turn it off on widgets that toggle. Greenhouse's 2026 phone Country picker shows only a flag and "+1", so it read back as "+1". The country name is now taken from the flag's country code, so it reads back as "United States". A shared dial code still never confirms a country on its own, so US and Canada stay distinct.
+
+- **The managed Node install can no longer be garbage-collected mid-download (#4261).** The install route keeps a reference to its background task, and the Node-requirement changelog entry is filed under its PR (#4240).
+
 ## [0.205.0] - 2026-10-15
 
 ### Changed
