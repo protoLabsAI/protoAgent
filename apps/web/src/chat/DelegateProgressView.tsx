@@ -15,6 +15,9 @@ import { planProgress, toolLine } from "./delegateProgress";
 const RECENT_SHOWN = 4;
 /** Narration tail shown while the delegate works — the last sentence or so. */
 const TEXT_SHOWN = 220;
+/** While live, the plan never changes size: at most this many entries render (a window
+ *  around the in-progress one) with a "+N more" line standing in for the rest. */
+const PLAN_SHOWN = 5;
 
 function PlanGlyph({ status }: { status: string }) {
   if (status === "completed") return <Check size={12} aria-label="done" className="dp-glyph dp-glyph--done" />;
@@ -39,15 +42,34 @@ function Tool({ tool, live, current = false }: { tool: DelegateTool; live: boole
   );
 }
 
-function Plan({ entries }: { entries: DelegatePlanEntry[] }) {
+/** A reserved, aria-hidden row slot so the live tool list keeps a fixed height. */
+function EmptyTool() {
+  return <li className="dp-tool dp-tool--empty" aria-hidden="true" />;
+}
+
+/** The capped window of plan entries shown while live: at most PLAN_SHOWN entries centred
+ *  on the in-progress one (so the count never shifts as statuses advance), plus the count
+ *  of entries left out. Under the cap every entry shows and `more` is 0. */
+function planWindow(entries: DelegatePlanEntry[]): { shown: DelegatePlanEntry[]; more: number } {
+  if (entries.length <= PLAN_SHOWN) return { shown: entries, more: 0 };
+  const active = entries.findIndex((e) => e.status === "in_progress");
+  const pending = active >= 0 ? active : entries.findIndex((e) => e.status !== "completed");
+  const pivot = pending >= 0 ? pending : entries.length - 1;
+  const start = Math.max(0, Math.min(pivot - Math.floor(PLAN_SHOWN / 2), entries.length - PLAN_SHOWN));
+  return { shown: entries.slice(start, start + PLAN_SHOWN), more: entries.length - PLAN_SHOWN };
+}
+
+function Plan({ entries, windowed }: { entries: DelegatePlanEntry[]; windowed: boolean }) {
+  const { shown, more } = windowed ? planWindow(entries) : { shown: entries, more: 0 };
   return (
     <ol className="dp-plan" aria-label="Plan">
-      {entries.map((e, i) => (
+      {shown.map((e, i) => (
         <li key={i} className={`dp-plan-entry dp-plan-entry--${e.status || "pending"}`}>
           <PlanGlyph status={e.status} />
           <span>{e.content}</span>
         </li>
       ))}
+      {more > 0 ? <li className="dp-plan-more">+{more} more</li> : null}
     </ol>
   );
 }
@@ -75,7 +97,12 @@ export function DelegateProgressView({
   const planLabel = planProgress(progress);
   const text = running ? (progress.text ?? "").trim() : "";
   const tail = text.length > TEXT_SHOWN ? `…${text.slice(-TEXT_SHOWN)}` : text;
-  if (!plan.length && !current && !recent.length && !tail) return null;
+  // Settled and empty renders nothing (today's behaviour). While live the view keeps a
+  // fixed footprint, so it stays mounted even before the first tool/plan/word lands.
+  if (!running && !plan.length && !current && !recent.length && !tail) return null;
+  // While live, pad the tool list to a constant 1 + RECENT_SHOWN slots (a current slot —
+  // empty when nothing is running — plus RECENT_SHOWN recent slots) so it can't bounce.
+  const pad = running ? RECENT_SHOWN - recent.length : 0;
   return (
     <div className={`delegate-progress${running ? " delegate-progress--live" : ""}`} aria-live="polite">
       <div className="dp-head">
@@ -88,16 +115,25 @@ export function DelegateProgressView({
         ) : null}
         {!running && !progress.ok ? <span className="dp-failed">did not finish</span> : null}
       </div>
-      {plan.length ? <Plan entries={plan} /> : null}
-      {current || recent.length ? (
+      {plan.length ? <Plan entries={plan} windowed={running} /> : null}
+      {running ? (
         <ul className="dp-tools" aria-label="Tool calls">
-          {current ? <Tool tool={current} live current /> : null}
+          {current ? <Tool tool={current} live current /> : <EmptyTool />}
+          {recent.map((t, i) => (
+            <Tool key={`${t.id ?? t.name}-${i}`} tool={t} live={running} />
+          ))}
+          {Array.from({ length: pad }, (_, i) => (
+            <EmptyTool key={`empty-${i}`} />
+          ))}
+        </ul>
+      ) : recent.length ? (
+        <ul className="dp-tools" aria-label="Tool calls">
           {recent.map((t, i) => (
             <Tool key={`${t.id ?? t.name}-${i}`} tool={t} live={running} />
           ))}
         </ul>
       ) : null}
-      {tail ? <p className="dp-text">{tail}</p> : null}
+      {running ? <p className="dp-text">{tail}</p> : null}
     </div>
   );
 }

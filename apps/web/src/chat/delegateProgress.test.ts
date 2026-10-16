@@ -11,7 +11,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { makeA2ADispatcher, type A2AFrame } from "../lib/api/a2aStream";
 import { delegateProgressFromWire } from "../lib/delegateProgress";
 import { delegationFromFrame } from "../lib/delegation";
-import type { ChatMessage, DelegateProgressEvent, ToolCall } from "../lib/types";
+import type { ChatMessage, DelegatePlanEntry, DelegateProgress, DelegateProgressEvent, ToolCall } from "../lib/types";
 import { DelegateProgressView } from "./DelegateProgressView";
 import { ToolCalls } from "./ToolCalls";
 import { applyDelegateProgress, planProgress, settleDelegateProgress, shortLocation, toolLine } from "./delegateProgress";
@@ -238,8 +238,8 @@ describe("DelegateProgressView", () => {
     const current = el.querySelector(".dp-tool--current")!;
     expect(toolText(current)).toBe("edit Edit · src/calc.py:4");
     expect(current.getAttribute("title")).toBe("/home/me/repo/src/calc.py");
-    // The current tool is not listed twice.
-    expect([...el.querySelectorAll(".dp-tool")].map(toolText)).toEqual([
+    // The current tool is not listed twice (empty reserved slots carry no tool text).
+    expect([...el.querySelectorAll(".dp-tool:not(.dp-tool--empty)")].map(toolText)).toEqual([
       "edit Edit · src/calc.py:4",
       "read Read calc.py",
     ]);
@@ -252,6 +252,96 @@ describe("DelegateProgressView", () => {
     expect(el.querySelector(".delegate-progress--live")).toBeNull();
     expect(el.querySelector(".dp-text")).toBeNull();
     expect(el.querySelector(".dp-tool--current")).toBeNull();
+    // Settled stays compact: no reserved empty slots.
+    expect(el.querySelector(".dp-tool--empty")).toBeNull();
+  });
+});
+
+// ── fixed footprint while live (#4246) ──────────────────────────────────────────
+// The live view holds a constant height so several background jobs in one chat don't make
+// the transcript bounce taller/shorter as they come in and progress.
+
+describe("DelegateProgressView keeps a fixed footprint while live", () => {
+  const liveProgress = (recentCount: number, text?: string, plan?: DelegatePlanEntry[]): DelegateProgress => ({
+    target: "claude-code",
+    plan,
+    // No current tool: the first slot is the reserved empty placeholder, so the count is
+    // driven purely by RECENT_SHOWN + 1 regardless of how many recent tools there are.
+    recentTools: Array.from({ length: recentCount }, (_, i) => ({
+      id: `t${i}`,
+      name: `Tool ${i}`,
+      kind: "read",
+      status: "completed",
+    })),
+    toolCount: recentCount,
+    text,
+    done: false,
+    ok: true,
+  });
+
+  const rowCount = async (recentCount: number): Promise<number> => {
+    const el = await mount(createElement(DelegateProgressView, { progress: liveProgress(recentCount), live: true }));
+    const n = el.querySelectorAll(".dp-tools .dp-tool").length;
+    await act(async () => root?.unmount());
+    host?.remove();
+    root = null;
+    host = null;
+    return n;
+  };
+
+  it("the tool list is a constant 1 + RECENT_SHOWN rows for 0, 2 and 10 recent tools", async () => {
+    const [none, few, many] = [await rowCount(0), await rowCount(2), await rowCount(10)];
+    // One current/placeholder slot + RECENT_SHOWN(4) recent slots = 5, no matter the count.
+    expect(none).toBe(5);
+    expect(few).toBe(5);
+    expect(many).toBe(5);
+    // The empty rows that make up the difference are aria-hidden.
+    const el = await mount(createElement(DelegateProgressView, { progress: liveProgress(0), live: true }));
+    const empties = [...el.querySelectorAll(".dp-tool--empty")];
+    expect(empties).toHaveLength(5);
+    expect(empties.every((li) => li.getAttribute("aria-hidden") === "true")).toBe(true);
+  });
+
+  it("renders .dp-text whether or not there is narration", async () => {
+    const empty = await mount(createElement(DelegateProgressView, { progress: liveProgress(1), live: true }));
+    expect(empty.querySelector(".dp-text")).not.toBeNull();
+    expect(text(empty.querySelector(".dp-text"))).toBe("");
+    await act(async () => root?.unmount());
+    host?.remove();
+    root = null;
+    host = null;
+    const long = await mount(
+      createElement(DelegateProgressView, { progress: liveProgress(1, "z".repeat(400)), live: true }),
+    );
+    expect(long.querySelector(".dp-text")).not.toBeNull();
+    expect(text(long.querySelector(".dp-text")).length).toBeGreaterThan(0);
+  });
+
+  it("caps a long plan to a constant count as the in-progress entry advances", async () => {
+    const planWith = (active: number): DelegatePlanEntry[] =>
+      Array.from({ length: 9 }, (_, i) => ({
+        content: `Step ${i}`,
+        status: i < active ? "completed" : i === active ? "in_progress" : "pending",
+      }));
+    const planEntries = async (active: number): Promise<{ entries: number; more: string }> => {
+      const el = await mount(
+        createElement(DelegateProgressView, { progress: liveProgress(1, undefined, planWith(active)), live: true }),
+      );
+      const entries = el.querySelectorAll(".dp-plan-entry").length;
+      const more = text(el.querySelector(".dp-plan-more"));
+      await act(async () => root?.unmount());
+      host?.remove();
+      root = null;
+      host = null;
+      return { entries, more };
+    };
+    const early = await planEntries(1);
+    const late = await planEntries(7);
+    // A 9-entry plan shows the same capped number of entries + "+N more" at both positions.
+    expect(early.entries).toBe(5);
+    expect(late.entries).toBe(5);
+    expect(early.more).toBe("+4 more");
+    expect(late.more).toBe("+4 more");
   });
 });
 
