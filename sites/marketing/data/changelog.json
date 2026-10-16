@@ -1,5 +1,25 @@
 [
   {
+    "version": "v0.207.0",
+    "date": "2026-10-16",
+    "changes": [
+      "graph.sdk.console_url() — the URL this agent's console is served on (#4267).",
+      "protoagent fleet friction reads every member's friction ledger from one place, and fleet friction resolve clears a signal once it's fixed (#4275).",
+      "protoagent fleet friction --all reads the friction ledgers of every running hub on the box (#4282).",
+      "The delete/clear chat dialog asks one plain-language \"Memory\" question instead of two switches (#4053).",
+      "A fleet member's file links work for remote peers, and links handed to clients expire (#4269).",
+      "Bulk-closing chat tabs no longer writes to memory by default (#4278).",
+      "Shift+click quick-delete of a chat tab is instant again — no harvest (#1373).",
+      "Review at head posts pending while the QA panel is reviewing the head, not failure (#4265).",
+      "The Artifact panel plays video and shows images inline (#4270).",
+      "protoagent fleet no longer picks a dev sandbox over the desktop app's hub (#4275).",
+      "A scheduled turn that fails is recorded as a failed fire again (#4280).",
+      "A dropped model stream reconnects again on the anthropic and openai SDKs (#4281).",
+      "A plugin view that registry.navigate() opens now gets what the plugin published just before (#4284).",
+      "protoAgent's own Atlas architecture model at architecture/ (#4272)."
+    ]
+  },
+  {
     "version": "v0.206.0",
     "date": "2026-10-16",
     "changes": [
