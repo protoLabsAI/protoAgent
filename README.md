@@ -140,6 +140,12 @@ See [Run headless](./docs/guides/headless.md) for setup, API requests, and authe
 
 ## Plugins
 
+<p align="center">
+  <img src="docs/public/readme/atlas-plugins.webp" alt="protoAgent explains its own plugin system: chat on the left narrates while the Atlas architecture view on the right steps through how a plugin is installed, loaded and registered, and the code pane below jumps to the matching lines (manifest parsing, install, register, the SDK service lookup)" width="800">
+</p>
+
+<p align="center"><em>The agent walks through its own plugin system in Atlas, with the code that does each step shown below.</em></p>
+
 Install tools, integrations, skills, and console views from a git URL:
 
 ```bash
