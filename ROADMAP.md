@@ -2,7 +2,12 @@
 
 Where protoAgent is headed, kept honest and light. This is the source of truth for the
 marketing site's `/roadmap` page — `scripts/roadmap.py build` parses it into
-`sites/marketing/data/roadmap.json`. Group items under `## Planned
+`sites/marketing/data/roadmap.json`. Group items under `## Planned`, `## In progress`, or
+`## Shipped`; each bullet is a short **title** — one-line detail with an optional `(#issue)`
+or `(vX.Y.Z)` reference. CI (`roadmap-staleness.yml`, #1945) fails when a Planned or
+In-progress ref points at a closed issue — rotate shipped work into `## Shipped`.
+
+## Planned
 
 - **Remote device improvements** — a first-class phone and tablet experience: the mobile console, pairing a device with a code, and reaching your agent from anywhere without fiddling with tokens.
 - **Settings, reorganized** — one place for every setting: each field reachable from a real panel (not only a shortcut chip), grouped by what you're trying to do, with clearer wording and safer saves.
@@ -11,19 +16,6 @@ marketing site's `/roadmap` page — `scripts/roadmap.py build` parses it into
 ## In progress
 
 - **Ollama & Hugging Face listings** — protoAgent as an Ollama community integration and a Hugging Face "Use this model" local app; the listing PRs are open upstream, awaiting maintainer review.
-
-## Shipped`; each bullet is a short **title** — one-line detail with an optional `(#issue)`
-or `(vX.Y.Z)` reference. CI (`roadmap-staleness.yml`, #1945) fails when a Planned or
-In-progress ref points at a closed issue — rotate shipped work into `## Shipped`.
-
-## Planned
-
-
-## In progress
-
-- **Ollama & Hugging Face listings** — protoAgent as an Ollama community integration and a Hugging Face "Use this model" local app; the listing PRs are open upstream, awaiting maintainer review.
-- **Design-system alignment** — migrating the remaining bespoke console surfaces onto DS primitives as the design system grows (bottom sheet for the mobile session sheet, dense icon buttons — tracked in protoContent).
-
 
 ## Shipped
 
