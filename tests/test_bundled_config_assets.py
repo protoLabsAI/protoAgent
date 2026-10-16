@@ -384,6 +384,14 @@ def test_brand_launch_replaces_social_marketing_and_is_held() -> None:
                    "home paths", "sources", "one checkpoint per phase"):
         assert needle in soul, f"brand-launch persona lost a hard rule: {needle!r}"
 
+    # Architecture walkthroughs (Atlas): the model is the target repo's, so the persona asks
+    # before writing it; the operator approves the tour script before anything is recorded;
+    # the recording goes through Campaign's shot-script flow; the take keeps the clip rules.
+    for needle in ("atlas_record_script", "ask before writing", "atlas_validate",
+                   "approval before recording", "100% crops", "at least 4 seconds",
+                   "never jump-cut"):
+        assert needle in soul, f"brand-launch persona lost an Atlas walkthrough rule: {needle!r}"
+
     assert ids[-1] == "custom", f"'custom' must stay LAST in the archetype list, got {ids}"
 
 
