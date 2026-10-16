@@ -416,8 +416,10 @@ _MAX_OUTPUT_CHARS = 8000  # LLM context budget; callers can ask for a shorter li
 async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
     """Fetch a URL and return its main text content.
 
-    Strips scripts, styles, and HTML markup. Truncates at ``max_chars``
-    so a single fetch can't blow the LLM context budget.
+    Strips scripts, styles, and HTML markup. PDF responses are decoded to
+    their text with pypdf instead of returning the raw byte stream.
+    Truncates at ``max_chars`` so a single fetch can't blow the LLM context
+    budget.
 
     Args:
         url: Absolute http(s) URL to fetch.
@@ -478,7 +480,18 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
     content = resp.content[:_MAX_FETCH_BYTES]
     ctype = (resp.headers.get("content-type") or "").lower()
 
-    if "html" in ctype or content.lstrip().startswith(b"<"):
+    if "application/pdf" in ctype or content.lstrip().startswith(b"%PDF-"):
+        # PDF payloads (NerdNotes, the Necromunda FAQ, …) are a binary stream: decoding
+        # them as text returns the raw `%PDF-1.7` bytes. Extract real text with pypdf,
+        # offloaded like the HTML path since parsing is synchronous and CPU-heavy.
+        text = await asyncio.to_thread(_extract_text_from_pdf, content)
+        # A bytes stream truncated at _MAX_FETCH_BYTES can leave pypdf unable to parse;
+        # surface that as a bare readable error (like the redirect/HTTP guards above),
+        # never the header-wrapped `%PDF` bytes. A valid-but-text-free PDF returns a
+        # note that flows through the normal `[status] url` path below.
+        if text.startswith("Error:"):
+            return text
+    elif "html" in ctype or content.lstrip().startswith(b"<"):
         # BeautifulSoup parsing of up to _MAX_FETCH_BYTES (2MB) is CPU-heavy and synchronous;
         # inline it would block the event loop per fetch. Offload to a thread so concurrent
         # fetches (and the rest of the server) keep making progress.
@@ -579,6 +592,51 @@ def _dominant_content_node(node):
         if any(len(nxt.find_all(t)) != len(node.find_all(t)) for t in ("header", "h1")):
             return node
         node = nxt
+
+
+def _extract_text_from_pdf(content: bytes) -> str:
+    """Extract text from a PDF byte stream with pypdf (a core dependency).
+
+    Page texts are joined with blank lines. This NEVER raises and NEVER
+    returns binary: a stream truncated at ``_MAX_FETCH_BYTES`` leaves pypdf
+    unable to parse the structure, which comes back as a readable
+    ``Error: could not extract text from PDF (…)``. A valid PDF that yields
+    no text — encrypted, or image-only/scanned — returns a clear note rather
+    than an empty body."""
+    import io
+
+    try:
+        from pypdf import PdfReader
+        from pypdf.errors import PyPdfError
+    except ImportError:
+        return "Error: pypdf not installed — cannot extract text from PDF."
+
+    try:
+        reader = PdfReader(io.BytesIO(content))
+    except (PyPdfError, OSError, ValueError, EOFError) as e:
+        return f"Error: could not extract text from PDF ({e})"
+
+    # Restricted-but-not-password PDFs are encrypted with an empty user password;
+    # decrypt("") unlocks them. A truly password-protected PDF stays locked and
+    # simply yields no text below (the note), rather than raising.
+    if reader.is_encrypted:
+        try:
+            reader.decrypt("")
+        except Exception:  # noqa: BLE001 — treat any decrypt failure as "no text"
+            pass
+
+    pages: list[str] = []
+    try:
+        for page in reader.pages:
+            pages.append((page.extract_text() or "").strip())
+    except Exception as e:  # noqa: BLE001 — a mid-parse failure must stay readable
+        if not pages:
+            return f"Error: could not extract text from PDF ({e})"
+
+    text = "\n\n".join(p for p in pages if p).strip()
+    if not text:
+        return "Note: the PDF has no extractable text (it may be encrypted or image-only/scanned)."
+    return text
 
 
 # ── memory tools ─────────────────────────────────────────────────────────────
