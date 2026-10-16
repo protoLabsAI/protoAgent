@@ -1279,6 +1279,29 @@ class TestFireOutcomeTracking:
         assert "turn FAILED" in caplog.text
 
     @pytest.mark.asyncio
+    async def test_a_canceled_turn_records_no_outcome(self, tmp_path, monkeypatch):
+        """An operator's Stop is not a failure (no backoff after three Stops) and not a
+        success (a real failure streak isn't reset): the row is left exactly as it was."""
+        import httpx
+
+        s = _make_scheduler(tmp_path)
+        job = self._job(s)
+        failed = {"result": {"task": {"id": "t-1", **_failed_body("boom")["result"]}}}
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=failed)))
+        assert await s._fire(job) is True
+        before = self._row(s, job.id)
+        assert before["consecutive_failures"] == 1
+
+        canceled = {"result": {"task": {"id": "t-2", "status": {"state": "TASK_STATE_CANCELED"}}}}
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _FakeClient(_FakeResponse(200, payload=canceled)))
+        for _ in range(3):
+            assert await s._fire(job) is True
+        after = self._row(s, job.id)
+        assert after["consecutive_failures"] == 1
+        assert after["last_error"] == before["last_error"]
+        assert after["last_ok"] is None
+
+    @pytest.mark.asyncio
     async def test_success_resets_the_streak(self, tmp_path, monkeypatch):
         """A job that recovers is immediately back on its normal cadence."""
         import httpx

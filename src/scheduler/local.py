@@ -183,7 +183,28 @@ def _now_iso() -> str:
 # The scheduler must not import `server`, so the response is read here rather than
 # through `server.a2a`'s helpers (import contract: scheduler never reaches up into
 # the server bootstrap).
-_A2A_FAILED_STATES = {"TASK_STATE_FAILED", "TASK_STATE_REJECTED", "TASK_STATE_CANCELED", "FAILED", "REJECTED"}
+_A2A_FAILED_STATES = {"TASK_STATE_FAILED", "TASK_STATE_REJECTED", "FAILED", "REJECTED"}
+# A CANCELED turn is neither a success nor a failure: it is almost always the operator
+# pressing Stop (or a restart cutting a turn short). Counting it as a failure would
+# back a job off because someone stopped it three times; counting it as a success
+# would reset a real failure streak. It records no outcome at all.
+_A2A_CANCELED_STATES = {"TASK_STATE_CANCELED", "CANCELED", "CANCELLED"}
+
+
+def _a2a_turn_canceled(payload: object) -> bool:
+    """True when this A2A response reports the turn was CANCELED (see above)."""
+    if not isinstance(payload, dict) or payload.get("error"):
+        return False
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return False
+    task = result.get("task")
+    if isinstance(task, dict):
+        result = task
+    status = result.get("status")
+    if not isinstance(status, dict):
+        return False
+    return str(status.get("state") or "").upper() in _A2A_CANCELED_STATES
 
 # Start backing off only after a job has failed this many times in a row. Two is
 # noise (a restart mid-turn, a gateway blip); three is a pattern.
@@ -1123,8 +1144,13 @@ class LocalScheduler:
                 # The durable task id this fire ran under — stamped on `turn.finished`
                 # below so a console can tell WHICH turn ended (a2a_impl.wire).
                 task_id = task_id_from_response(payload)
+                canceled = _a2a_turn_canceled(payload)
             except Exception:  # noqa: BLE001 — an unreadable body must not fail the fire
-                failure = ""
+                failure, canceled = "", False
+            if canceled:
+                # Stopped, not failed: leave the streak and last_ok exactly as they were.
+                log.info("[scheduler] job %s fired but the turn was canceled", job.id)
+                return True
             self._record_fire_outcome(job, failure=failure)
             if failure:
                 # INFO would bury it: this is the line that was missing while a job
