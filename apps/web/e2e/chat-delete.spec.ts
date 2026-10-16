@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { seedCurrentChat } from "./chat-helpers";
 
@@ -203,4 +203,84 @@ test("Shift+click quick-delete of an incognito chat never harvests (harvest=fals
   const url = new URL((await deleted).url());
   expect(url.searchParams.get("harvest")).toBe("false");
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
+});
+
+// Seed three ordinary (non-incognito) tabs. The first "+" reuses the pristine blank only until
+// a tab holds a message, so each intermediate tab is seeded before the next "+" — and the
+// second seed is scoped to the VISIBLE slot because all session slots stay mounted (hidden
+// ones also carry a composer).
+async function seedThreeTabs(page: Page) {
+  await seedCurrentChat(page, "bulk one"); // only one tab → the unscoped composer is unambiguous
+  await page.locator(".pl-tabbar > .pl-tabbar__add").click(); // tab 2, now the active slot
+  const slot = page.locator(".chat-session-slot:not([hidden])");
+  await slot.getByPlaceholder(/Message protoAgent/i).fill("bulk two");
+  await slot.getByPlaceholder(/Message protoAgent/i).press("Enter");
+  await expect(slot.locator(".pl-message--user").filter({ hasText: "bulk two" })).toBeVisible();
+  await page.locator(".pl-tabbar > .pl-tabbar__add").click(); // tab 3 (pristine, active)
+  await expect(page.locator(".pl-tabbar__tab")).toHaveCount(3);
+}
+
+/** Collect every chat-session DELETE as it is sent (before its response), so a bulk close that
+ *  fires several can be asserted together. */
+function collectSessionDeletes(page: Page): URL[] {
+  const urls: URL[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "DELETE" && /\/api\/chat\/sessions\/[^/?]+\?/.test(req.url())) {
+      urls.push(new URL(req.url()));
+    }
+  });
+  return urls;
+}
+
+// bd-zkxg: the tab context menu's bulk closers (Close others/left/right) save nothing by
+// default — bulk close is a cleanup gesture, like Shift+click quick-delete. With the Settings ▸
+// Chat opt-in off (the default), every closed tab is retired with harvest=false and no forget,
+// and no "Delete this chat?" dialog is paraded past each tab.
+test("Close others saves nothing by default — every delete is harvest=false, no forget, no dialog", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await seedThreeTabs(page);
+
+  const deletes = collectSessionDeletes(page);
+  await page.locator(".pl-tabbar__tab").first().click({ button: "right" });
+  const menu = page.locator(".pl-menu");
+  await expect(menu).toBeVisible();
+  await menu.getByText("Close others", { exact: true }).click();
+
+  // The anchor tab is kept; the other two are retired.
+  await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
+  await expect.poll(() => deletes.length).toBe(2);
+  for (const url of deletes) {
+    expect(url.searchParams.get("harvest")).toBe("false");
+    expect(url.searchParams.get("forget")).not.toBe("true");
+  }
+  // No confirm dialog opens for the bulk-closed ordinary tabs.
+  await expect(page.getByRole("dialog", { name: /Delete this chat/i })).toHaveCount(0);
+});
+
+// bd-zkxg: with the opt-in on, a bulk close of ordinary tabs harvests each one (harvest=true)
+// before purging it — the same default the delete dialog uses for an ordinary chat. The pref is
+// a per-console localStorage flag read at close time, so seeding it before load suffices.
+test("with 'Save summaries when closing tabs in bulk' on, Close others deletes with harvest=true", async ({ page }) => {
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("protoagent.chat.bulkCloseHarvest", "1");
+    } catch {
+      /* storage blocked — the pref just stays off, which this test would then catch */
+    }
+  });
+  await page.goto("/app/", { waitUntil: "load" });
+  await seedThreeTabs(page);
+
+  const deletes = collectSessionDeletes(page);
+  await page.locator(".pl-tabbar__tab").first().click({ button: "right" });
+  const menu = page.locator(".pl-menu");
+  await expect(menu).toBeVisible();
+  await menu.getByText("Close others", { exact: true }).click();
+
+  await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
+  await expect.poll(() => deletes.length).toBe(2);
+  for (const url of deletes) {
+    expect(url.searchParams.get("harvest")).toBe("true");
+    expect(url.searchParams.get("forget")).not.toBe("true");
+  }
 });

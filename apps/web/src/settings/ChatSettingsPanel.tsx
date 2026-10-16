@@ -4,6 +4,7 @@ import { DropdownSelect, Switch } from "@protolabsai/ui/forms";
 import { useCodePaneEnabled } from "../codeviewer/enabled";
 import { EDITOR_OPTIONS, isEditorId } from "../lib/editorLinks";
 import { setExternalEditor, setOpenFilesChoice, useEditorPref, useOpenFilesIn } from "../lib/editorPref";
+import { setBulkCloseHarvest, useBulkCloseHarvest } from "../lib/bulkCloseHarvestPref";
 import { useUI } from "../state/uiStore";
 
 // Settings → Chat: client-side display preferences for the chat transcript. These live in the
@@ -12,6 +13,7 @@ import { useUI } from "../state/uiStore";
 export function ChatSettingsPanel() {
   const showChatUsage = useUI((s) => s.showChatUsage);
   const setShowChatUsage = useUI((s) => s.setShowChatUsage);
+  const bulkCloseHarvest = useBulkCloseHarvest();
   const editor = useEditorPref();
   const openIn = useOpenFilesIn();
   // The code pane is an opt-in toolset (ADR 0112 amendment): while the connected agent has it
@@ -38,6 +40,26 @@ export function ChatSettingsPanel() {
             checked={showChatUsage}
             onCheckedChange={setShowChatUsage}
             label={showChatUsage ? "on" : "off"}
+          />
+        </div>
+        {/* Per-console (lib/bulkCloseHarvestPref.ts): whether the tab menu's Close others/left/
+            right save a summary of each closed chat. Off by default — bulk close is a cleanup
+            gesture, like Shift+click quick-delete — and incognito chats are never saved. */}
+        <div className="setting-row" data-key="chat.bulkCloseHarvest">
+          <div className="setting-meta">
+            <span className="setting-label">Save summaries when closing tabs in bulk</span>
+            <p className="setting-desc">
+              "Close others / left / right" in the tab menu deletes chats without saving anything
+              by default. Turn on to add a searchable summary of each closed chat to the knowledge
+              base (incognito chats are never saved). Slower: each chat is summarized before it
+              closes.
+            </p>
+          </div>
+          <Switch
+            id="chat-bulk-close-harvest"
+            checked={bulkCloseHarvest}
+            onCheckedChange={setBulkCloseHarvest}
+            label={bulkCloseHarvest ? "on" : "off"}
           />
         </div>
         {/* Per-viewer (lib/editorPref.ts), not the per-agent UI store: the editor is a
