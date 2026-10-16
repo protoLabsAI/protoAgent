@@ -92,6 +92,12 @@ instructions in [PROTO.md](./PROTO.md).
 | Run several agents in one console | [Fleet](./docs/guides/fleet.md) |
 | Teach a reusable procedure | [Skills](./docs/guides/skills.md) |
 
+<p align="center">
+  <img src="docs/public/readme/coder-monitor.webp" alt="The Coder monitor beside a chat: a coding agent working a board card shows its run state and elapsed time, the last tool it ran (pytest), its plan with four of five steps checked, a live stream of what it is saying, and an activity feed of its tool calls; the chat turn underneath lists its tokens, time and cost" width="800">
+</p>
+
+<p align="center"><em>Watch a coding agent work: its plan, narration, every tool call, and what each turn cost.</em></p>
+
 Chats, memory, knowledge, and tasks stay on your disk. Model requests go to the
 provider you choose; tools and integrations can make their own network calls.
 Open the command palette with **⌘⇧K** / **Ctrl-Shift-K** to jump to a surface or setting.
