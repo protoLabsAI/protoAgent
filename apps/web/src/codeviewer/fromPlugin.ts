@@ -2,10 +2,10 @@ import { useToast } from "@protolabsai/ui/overlays";
 
 import { FS_ROOTS_QUERY_KEY } from "../chat/useEditorLinker";
 import { api } from "../lib/api";
-import { makeEditorLinker, joinProjectPath, type EditorId } from "../lib/editorLinks";
+import { editorLabel, makeEditorLinker, joinProjectPath, type EditorId } from "../lib/editorLinks";
 import { getEditorPref, getOpenFilesIn, type OpenFilesIn } from "../lib/editorPref";
 import { queryClient } from "../lib/queryClient";
-import { isCodePaneEnabled } from "./enabled";
+import { isCodePaneEnabled, isHostEditorConfigured } from "./enabled";
 import { openCode } from "./open";
 import type { CodeRef } from "./store";
 
@@ -17,8 +17,14 @@ import type { CodeRef } from "./store";
 // more and routed by the operator's preferences:
 //   1. the code pane (ADR 0112) when that toolset is on — through its fenced /api/fs/file,
 //      which also refuses secret-like paths, so nothing here widens what can be shown;
-//   2. otherwise the external editor link (Settings ▸ Chat ▸ Open files in), when there is one;
+//   2. otherwise the external editor link (Settings ▸ Chat ▸ Open files in), when there is one —
+//      or, failing that, the HOST's `filesystem.editor_command` (POST /api/fs/open-in-editor,
+//      which only answers a console on the server's own machine);
 //   3. otherwise the path is copied, so the operator can still get there.
+// A page may instead name the destination with `open_in` — the same two actions a chat file
+// link offers (click = pane, ⌘/Ctrl-click = editor; see makeFileLinker): "pane" prefers the code
+// pane, "editor" the external editor, each falling back to the other and then to a copy. Absent
+// or unknown = the preference routing above, so older pages behave exactly as before.
 
 export type PluginCodeTarget = {
   project: string;
@@ -26,7 +32,11 @@ export type PluginCodeTarget = {
   line?: number;
   endLine?: number;
   note?: string;
+  /** The page's explicit destination (`open_in`); undefined = route by the operator's prefs. */
+  openIn?: PluginCodeDestination;
 };
+
+export type PluginCodeDestination = "pane" | "editor";
 
 const MAX = { project: 200, path: 4096, note: 280 };
 
@@ -46,7 +56,8 @@ export function parsePluginCodeOpen(m: unknown): PluginCodeTarget | null {
   const end = o.end_line ?? o.endLine;
   const endLine = line && posInt(end) && end >= line ? end : undefined;
   const note = typeof o.note === "string" && o.note.trim() ? o.note.trim().slice(0, MAX.note) : undefined;
-  return { project, path, line, endLine, note };
+  const openIn = o.open_in === "pane" || o.open_in === "editor" ? o.open_in : undefined;
+  return { project, path, line, endLine, note, ...(openIn ? { openIn } : {}) };
 }
 
 export function targetLabel(t: PluginCodeTarget): string {
@@ -60,12 +71,17 @@ export type RouteDeps = {
   editor: EditorId;
   /** `{project: absolute root}` for editor links (GET /api/fs/roots), or null. */
   roots: () => Promise<Record<string, string> | null>;
+  /** `/api/runtime/status` `editor_command_configured` — worth trying the host editor. */
+  hostEditor: boolean;
+  /** POST /api/fs/open-in-editor; false when the server refused (not local, launch failed…). */
+  openHost: (t: PluginCodeTarget) => Promise<boolean>;
   open: (ref: CodeRef) => void;
   navigate: (href: string) => void;
   copy: (text: string) => Promise<boolean>;
 };
 
-export type RouteOutcome = "pane" | "editor" | "copied" | "none";
+/** `editor` = the console's editor link; `host-editor` = the server's `editor_command`. */
+export type RouteOutcome = "pane" | "editor" | "host-editor" | "copied" | "none";
 
 async function editorHref(t: PluginCodeTarget, deps: RouteDeps): Promise<string | null> {
   if (deps.editor === "off") return null;
@@ -82,7 +98,9 @@ async function editorHref(t: PluginCodeTarget, deps: RouteDeps): Promise<string 
 export async function routePluginCodeOpen(t: PluginCodeTarget, deps: RouteDeps): Promise<RouteOutcome> {
   const pane = () =>
     deps.open({ project: t.project, path: t.path, line: t.line, endLine: t.endLine, note: t.note, source: "link" });
-  if (deps.paneOn && deps.openIn !== "editor") {
+  // The pane first: an explicit "pane", or no explicit choice and the operator didn't pick the editor.
+  const paneFirst = t.openIn ? t.openIn === "pane" : deps.openIn !== "editor";
+  if (deps.paneOn && paneFirst) {
     pane();
     return "pane";
   }
@@ -91,12 +109,44 @@ export async function routePluginCodeOpen(t: PluginCodeTarget, deps: RouteDeps):
     deps.navigate(href);
     return "editor";
   }
-  // "Open files in: editor" with no usable editor link still has the pane to fall back on.
+  if (deps.hostEditor && (await deps.openHost(t).catch(() => false))) return "host-editor";
+  // An editor-first route with no usable editor link still has the pane to fall back on.
   if (deps.paneOn) {
     pane();
     return "pane";
   }
   return (await deps.copy(targetLabel(t))) ? "copied" : "none";
+}
+
+const PANE_HINT = "Turn on the Code pane in Tools ▸ Filesystem ▸ Shell & filesystem tools to view it here.";
+
+/** The toast for a routed target, or null when it went where it was asked (or, without an
+ *  explicit `open_in`, anywhere but a copy — the pre-`open_in` behaviour). Pure; unit-tested. */
+export function codeOpenNotice(
+  t: PluginCodeTarget,
+  outcome: RouteOutcome,
+  ctx: Pick<RouteDeps, "paneOn" | "editor">,
+): { title: string; message: string } | null {
+  const label = targetLabel(t);
+  if (outcome === "none") return { title: "Code location", message: label };
+  if (!t.openIn) {
+    return outcome === "copied" ? { title: "Path copied", message: `${label} — no code pane or editor is set up.` } : null;
+  }
+  if (outcome === t.openIn || (t.openIn === "editor" && outcome === "host-editor")) return null;
+  const editor = ctx.editor === "off" ? "an external editor" : editorLabel(ctx.editor);
+  if (t.openIn === "editor") {
+    const why = ctx.editor === "off"
+      ? "No external editor is set (Settings ▸ Chat ▸ Open files in)"
+      : `No ${editor} link for this file — it needs a filesystem shared with the agent`;
+    return outcome === "pane"
+      ? { title: "Opened in the code pane", message: `${why}.` }
+      : { title: "Path copied", message: `${label} — ${why.charAt(0).toLowerCase()}${why.slice(1)}, and the code pane is off.` };
+  }
+  // Asked for the pane, which is off (the only way a "pane" request lands elsewhere).
+  if (outcome === "host-editor") return { title: "Opened in your editor", message: `The code pane is off. ${PANE_HINT}` };
+  return outcome === "editor"
+    ? { title: `Opened in ${editor}`, message: `The code pane is off. ${PANE_HINT}` }
+    : { title: "Path copied", message: `${label} — the code pane is off and no editor link is available. ${PANE_HINT}` };
 }
 
 /** The console's deps. The pane opens on the dock the operator keeps it on (placeCodeSurface),
@@ -114,6 +164,14 @@ export function defaultRouteDeps(): RouteDeps {
           staleTime: 60_000,
         })
       )?.roots ?? null,
+    hostEditor: isHostEditorConfigured(),
+    openHost: async (t) => {
+      try {
+        return (await api.fsOpenInEditor({ project: t.project, path: t.path, line: t.line })).ok === true;
+      } catch {
+        return false;
+      }
+    },
     open: (ref) => openCode(ref),
     navigate: (href) => {
       // A custom scheme (zed://, vscode://) goes to the OS without unloading the page.

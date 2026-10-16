@@ -32,7 +32,7 @@ URL escapes that origin and the handshake silently never completes — which is 
 | `protoagent:contextmenu:register` | page → host | `{ items: MenuItem[] }` |
 | `protoagent:contextmenu:open` | page → host | `{ x: number, y: number, items?: MenuItem[] }` |
 | `protoagent:contextmenu:action` | host → page | `{ itemId: string }` |
-| `protoagent:code:open` | page → host | `{ project: string, path: string, line?: number, end_line?: number, note?: string }` |
+| `protoagent:code:open` | page → host | `{ project: string, path: string, line?: number, end_line?: number, note?: string, open_in?: "pane" \| "editor" }` |
 
 ## The handshake — `init` / `ready`
 
@@ -158,7 +158,7 @@ window.addEventListener("message", (e) => {
   clears it). Items support `label`, `icon`, `danger`, `disabled`, and `{ divider: true }`; a
   trailing divider is dropped.
 
-## Show code — `protoagent:code:open`
+## Show code — `protoagent:code:open` {#show-code}
 
 A page asks the console to show a range of a managed project's code — the Artifact panel's
 code-linked diagrams use it. The host accepts it only from the view's own iframe at the page's
@@ -172,6 +172,41 @@ apply the fence and the secret-path deny list, so this can't show anything `show
 parent.postMessage({ type: "protoagent:code:open", project: "app", path: "src/server.ts",
   line: 23, end_line: 29, note: "the bearer check" }, hostOrigin);
 ```
+
+### Choosing the destination — `open_in`
+
+Without `open_in` the operator's preference decides, as above. A page that offers two explicit
+actions — the chat convention, where a file link's click opens the pane and ⌘/Ctrl-click opens the
+editor — names the destination:
+
+| `open_in` | Tries, in order | Toast when it lands elsewhere |
+|---|---|---|
+| *(absent)* | pane (unless Open files in = editor) → editor → host editor → copy | only on a copy |
+| `"pane"` | code pane → external editor → host editor → copy | the pane is off, and how to turn it on (Tools ▸ Filesystem ▸ Shell & filesystem tools ▸ Code pane) |
+| `"editor"` | external editor → host editor → code pane → copy | why there was no editor link (none set in Settings ▸ Chat ▸ Open files in, or no filesystem shared with the agent) |
+
+"External editor" is the console's editor link (Settings ▸ Chat ▸ Open files in: `zed://`,
+`vscode://`, `cursor://`, opened on the operator's machine). "Host editor" is the agent's
+`filesystem.editor_command` (the one `open_in_editor` uses), run by the server through
+`POST /api/fs/open-in-editor` — tried only when `/api/runtime/status`
+`editor_command_configured` is true, and refused (`not_local`) unless the console runs on the
+server's own machine, so it never opens a window on a screen nobody is looking at (a LAN
+browser, a remote fleet member, Docker).
+
+Any other value is ignored (the default routing), so a page can send it unconditionally.
+
+```js
+// "View" and "Open in editor" buttons on the same target
+const show = (open_in) => parent.postMessage({ type: "protoagent:code:open",
+  project: "app", path: "src/server.ts", line: 23, open_in }, hostOrigin);
+```
+
+**Knowing what's available.** Whether the code pane is on is the agent's toolset state, which
+`GET /api/runtime/status` already reports as `code_pane.enabled` — `kit.apiFetch` it to hide or
+relabel a "View" action (it's hot-reloadable; re-read it if your view stays mounted). The same
+status reports `editor_command_configured` (a host editor exists; never the command). The console's
+own editor choice is a per-browser preference and is **not** exposed to pages: offer "Open in
+editor" unconditionally and let the fallback and toast cover an operator without one.
 
 A page that renders untrusted content (a sandboxed frame of its own) should forward only targets
 it validated — never a path the untrusted frame supplied.

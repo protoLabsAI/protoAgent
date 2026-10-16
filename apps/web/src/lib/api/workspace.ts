@@ -114,6 +114,11 @@ export const workspaceApi = {
       body,
     });
   },
+  // Open a fenced file in the HOST's `filesystem.editor_command` (the agent's open_in_editor,
+  // for the console). 403 `not_local` unless this console runs on the server's machine.
+  fsOpenInEditor(body: { project: string; path: string; line?: number }) {
+    return request<{ ok: boolean; editor: string }>("/api/fs/open-in-editor", { method: "POST", body });
+  },
   fsProjects() {
     return request<{ enabled: boolean; projects: FsProject[] }>("/api/settings/filesystem-projects");
   },

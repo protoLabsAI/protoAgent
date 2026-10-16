@@ -66,6 +66,9 @@ export type RuntimeStatus = {
    *  shows the Code surface, the "Open files in ▸ protoAgent" choice and pane-routed file
    *  links only while this is on; absent (a server older than the toggle) reads as off. */
   code_pane?: { enabled: boolean };
+  /** `filesystem.editor_command` names a host editor — the console's last-resort "Open in
+   *  editor" (POST /api/fs/open-in-editor). Never the command itself; absent = false. */
+  editor_command_configured?: boolean;
   storage?: {
     knowledge_bytes?: number | null;
     telemetry_bytes?: number | null;

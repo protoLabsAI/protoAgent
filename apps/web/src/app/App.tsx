@@ -55,7 +55,12 @@ import { KnowledgeStore } from "../knowledge/KnowledgeStore";
 import { MemorySurface } from "../memory/MemorySurface";
 import { CodeChangeWatch } from "../codeviewer/CodeChangeWatch";
 import { CodeSurface } from "../codeviewer/CodeSurface";
-import { codePaneEnabledFrom, setCodePaneEnabled } from "../codeviewer/enabled";
+import {
+  codePaneEnabledFrom,
+  hostEditorConfiguredFrom,
+  setCodePaneEnabled,
+  setHostEditorConfigured,
+} from "../codeviewer/enabled";
 import { CODE_SURFACE_ID } from "../codeviewer/open";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
 import { PluginSettingsDialog } from "../plugins/PluginSettingsDialog";
@@ -358,6 +363,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   // a settings save re-polls the status, so a toggle lights it up / takes it down in place.
   const codePane = codePaneEnabledFrom(runtime);
   useLayoutEffect(() => setCodePaneEnabled(codePane), [codePane]);
+  const hostEditor = hostEditorConfiguredFrom(runtime);
+  useLayoutEffect(() => setHostEditorConfigured(hostEditor), [hostEditor]);
   const coreSurfaces = useMemo(
     () => (codePane ? CORE_SURFACES : CORE_SURFACES.filter((s) => s.id !== CODE_SURFACE_ID)),
     [codePane],

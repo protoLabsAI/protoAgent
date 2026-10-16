@@ -14,10 +14,10 @@ import { runForwardedCombo } from "../keybindings/useKeybindings";
 import { createPluginEventRelay, parseSubscribe } from "../lib/pluginEventRelay";
 import { onPluginViewMessage, requeuePluginViewContext, takePluginViewMessages } from "../lib/pluginViewInbox";
 import {
+  codeOpenNotice,
   defaultRouteDeps,
   parsePluginCodeOpen,
   routePluginCodeOpen,
-  targetLabel,
   useOptionalToast,
 } from "../codeviewer/fromPlugin";
 import {
@@ -428,12 +428,11 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
         // fence or the secret deny list would.
         const target = parsePluginCodeOpen(m);
         if (!target) return;
-        void routePluginCodeOpen(target, defaultRouteDeps()).then((outcome) => {
+        const deps = defaultRouteDeps();
+        void routePluginCodeOpen(target, deps).then((outcome) => {
           const toast = toastRef.current;
-          if (!toast) return;
-          if (outcome === "copied")
-            toast({ tone: "info", title: "Path copied", message: `${targetLabel(target)} — no code pane or editor is set up.` });
-          else if (outcome === "none") toast({ tone: "info", title: "Code location", message: targetLabel(target) });
+          const notice = codeOpenNotice(target, outcome, deps);
+          if (toast && notice) toast({ tone: "info", ...notice });
         });
       } else if (m.type === "protoagent:publish" && typeof m.topic === "string") {
         // Force the plugin's namespace — a page can only publish under its own id.

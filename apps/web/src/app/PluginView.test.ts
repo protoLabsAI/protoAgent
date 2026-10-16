@@ -733,6 +733,12 @@ describe("PluginView — protoagent:code:open", () => {
     });
   });
 
+  it("carries an explicit open_in destination through to the router", async () => {
+    const frame = await mountFrame();
+    await post(frame.contentWindow, window.location.origin, { ...MSG, open_in: "editor" });
+    expect(vi.mocked(routePluginCodeOpen).mock.calls[0][0]).toMatchObject({ openIn: "editor" });
+  });
+
   it("ignores another window, a foreign origin, and a path outside the fence", async () => {
     const frame = await mountFrame();
     await post(window, window.location.origin, MSG); // not the plugin frame (e.g. a nested one posting to top)

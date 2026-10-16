@@ -446,10 +446,10 @@ function useScrollToLine(
       if (virtRef.current) virtRef.current.scrollTo({ top, behavior: "instant" });
       else scroller().scrollTop = top;
     };
-    if (!line) {
-      scrollTo(0);
-      return;
-    }
+    // A line-less open targets row 1 through the SAME settle loop: a one-shot `scrollTo(0)` ran
+    // before pierre laid the rows out, and the Virtualizer's anchor-preserving scroll fix then
+    // carried the view to the file's END (a 3,000-line file opened at its last screen).
+    const target = line && line > 0 ? line : 1;
     let raf = 0;
     let frames = 0;
     let estimated = false;
@@ -474,7 +474,7 @@ function useScrollToLine(
       const sc = scroller();
       const row = body
         .querySelector("diffs-container")
-        ?.shadowRoot?.querySelector<HTMLElement>(`[data-line="${line}"]`);
+        ?.shadowRoot?.querySelector<HTMLElement>(`[data-line="${target}"]`);
       if (row) {
         // The range's first line a third of the way down — context above, room for the range.
         // Re-measure until it holds still: the virtual window re-lays rows out after a jump,
@@ -492,7 +492,7 @@ function useScrollToLine(
       // layout pass moved us off it before the window caught up).
       if (!row && body.querySelector("diffs-container") && (!estimated || frames % 30 === 0)) {
         estimated = true;
-        scrollTo(Math.max(0, ROW_PX * (line - 1) - sc.clientHeight / 3));
+        scrollTo(Math.max(0, ROW_PX * (target - 1) - sc.clientHeight / 3));
       }
       if (++frames < 240) raf = requestAnimationFrame(tick);
       else stop();

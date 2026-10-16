@@ -553,6 +553,76 @@ def _launch_editor(argv: list[str]) -> str | None:
     return None
 
 
+class EditorOpenError(Exception):
+    """Why :func:`open_in_host_editor` refused or failed. ``code`` is a stable key the
+    operator route maps to an HTTP status (``bad_path`` · ``denied`` · ``not_found`` ·
+    ``not_a_file`` · ``bad_line`` · ``bad_command`` · ``launch_failed``); ``str(exc)`` is the
+    human message, without an ``Error:`` prefix."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def host_editor_name(config) -> str:
+    """The editor ``filesystem.editor_command`` names (its argv[0]), or ``""`` when there is
+    none to use — unset, unparseable, or the filesystem primitive off. The ONE predicate the
+    ``open_in_editor`` binding and ``/api/runtime/status`` ``editor_command_configured`` share."""
+    if config is None or not getattr(config, "filesystem_enabled", False):
+        return ""
+    command = str(getattr(config, "filesystem_editor_command", "") or "").strip()
+    try:
+        return (_split_editor_command(command) or [""])[0]
+    except ValueError:
+        return ""
+
+
+def open_in_host_editor(
+    registry: ProjectRegistry,
+    editor_command: str,
+    project: str,
+    path: str,
+    line: int | None = None,
+    *,
+    deny_secrets: bool = False,
+) -> Path:
+    """Open a fenced project file (at ``line``) in the HOST's ``editor_command``.
+
+    Shared by the ``open_in_editor`` tool and the console's ``POST /api/fs/open-in-editor``:
+    the same ``registry.resolve`` fence, file checks and argv construction
+    (:func:`_editor_argv`), launched detached (:func:`_launch_editor`). ``deny_secrets``
+    refuses a secret-like name (``tools.fs_secrets``) BEFORE any existence check, on the
+    requested name and the resolved target, like the code pane's routes. Returns the
+    resolved target; raises :class:`EditorOpenError`."""
+    try:
+        target = registry.resolve(project, path)
+    except ValueError as exc:
+        raise EditorOpenError("bad_path", str(exc)) from exc
+    if deny_secrets:
+        from tools.fs_secrets import is_secret_path
+
+        root = registry.get(project).root
+        reason = is_secret_path(path) or is_secret_path(target.relative_to(root))
+        if reason:
+            raise EditorOpenError("denied", f"secret-like file: {reason}")
+    if not target.exists():
+        raise EditorOpenError("not_found", f"no such file: {path}")
+    if not target.is_file():
+        raise EditorOpenError("not_a_file", f"not a file: {path} (open_in_editor opens files, not directories).")
+    if line is not None and line < 1:
+        raise EditorOpenError("bad_line", f"`line` must be a positive line number (got {line!r} for {path}).")
+    try:
+        argv = _editor_argv(editor_command, target, line)
+    except ValueError as exc:
+        raise EditorOpenError("bad_command", str(exc)) from exc
+    err = _launch_editor(argv)
+    if err:
+        raise EditorOpenError("launch_failed", err.removeprefix("Error: "))
+    where = f"{path}:{line}" if line is not None else path
+    log.info("[fs] open_in_editor %s/%s via %s", project, where, argv[0])
+    return target
+
+
 def _registry_from_config(config, *, create: bool = True, quiet: bool = False) -> ProjectRegistry:
     projects: list[Project] = []
     missing: dict[str, Path] = {}
@@ -1495,24 +1565,10 @@ def build_fs_tools(config) -> list:
             """
             registry = registry_ref.get()
             try:
-                target = registry.resolve(project, path)
-            except ValueError as exc:
+                target = open_in_host_editor(registry, editor_command, project, path, line)
+            except EditorOpenError as exc:
                 return f"Error: {exc}"
-            if not target.exists():
-                return f"Error: no such file: {path}"
-            if not target.is_file():
-                return f"Error: not a file: {path} (open_in_editor opens files, not directories)."
-            if line is not None and line < 1:
-                return f"Error: `line` must be a positive line number (got {line!r} for {path})."
-            try:
-                argv = _editor_argv(editor_command, target, line)
-            except ValueError as exc:
-                return f"Error: {exc}"
-            err = _launch_editor(argv)
-            if err:
-                return err
             where = f"{path}:{line}" if line is not None else path
-            log.info("[fs] open_in_editor %s/%s via %s", project, where, argv[0])
             opened = f"Opened {project}/{where} in {editor_name}."
             handoff = _offer_editor_handoff(
                 state, registry_ref._live_config(), registry, project, target, line, editor_name

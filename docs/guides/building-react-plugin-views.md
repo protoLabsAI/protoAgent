@@ -502,6 +502,25 @@ pieces, none of them core edits:
    The Artifact panel learns which chat tab is active this way (`protoArtifact:context
    {session}`, set by `startArtifactPanelContext()` in `apps/web/src/artifacts/artifactRef.ts`).
 
+## Showing code (`protoagent:code:open`)
+
+A view that points at a file in a managed project (a diagram node, a search hit, a symbol) asks the
+console to show it instead of rendering code itself:
+
+```js
+parent.postMessage({ type: "protoagent:code:open", project: "app", path: "src/server.ts",
+  line: 23, end_line: 29, note: "the bearer check", open_in: "pane" }, location.origin);
+```
+
+Omit `open_in` and the operator's preference decides (code pane, else their editor, else the path is
+copied). For a details panel with explicit **View** and **Open in editor** actions, send
+`open_in: "pane"` and `open_in: "editor"` — each falls back to the other (an editor means the
+console's editor link, else the agent's `filesystem.editor_command` when the console is on the same
+machine), then to a copy, with a toast that says why. Read `code_pane.enabled` from `GET /api/runtime/status` (via `kit.apiFetch`)
+if you want to hide **View** while the pane toolset is off; the editor preference isn't exposed, so
+always offer **Open in editor**. Full contract:
+[view bridge ▸ Show code](/reference/plugin-view-bridge#show-code).
+
 ## Fleet-proxied requests: the 20-second read lane
 
 When your view runs on a fleet **member**, every request rides the hub's reverse

@@ -90,6 +90,21 @@ test("a read_file path link opens the pane at the read's lines", async ({ page }
   await expect.poll(() => lineVisible(page, 34)).toBe(true);
 });
 
+test("a line-less open starts at the TOP of the file, not scrolled to its end", async ({ page }) => {
+  await send(page, "READBIG: the whole thing");
+  const card = page.locator(".pl-toolcard").first();
+  await expect(card).toBeVisible();
+  await expandToolCard(page, card);
+  const link = page.locator("a.tool-editor-link").first();
+  await expect(link).toHaveText("src/big.ts");
+  await link.click();
+  await expect(page.getByTestId("code-pane-path")).toHaveText("src/big.ts");
+  await expect.poll(() => lineVisible(page, 1), { timeout: 10_000 }).toBe(true);
+  await page.waitForTimeout(1500); // past any late re-layout
+  expect(await lineVisible(page, 1)).toBe(true);
+  expect(await paneScrollTop(page)).toBe(0);
+});
+
 test("Diff tab: file list with +/- counts, a hidden secret, and a click opens the line", async ({ page }) => {
   await send(page, "SHOWCODE: diff please");
   await expect(page.getByTestId("code-pane")).toBeVisible();
