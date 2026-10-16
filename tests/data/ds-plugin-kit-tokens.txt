@@ -50,6 +50,7 @@
 --pl-font-size-2xs
 --pl-font-size-3xs
 --pl-font-size-base
+--pl-font-size-display
 --pl-font-size-lg
 --pl-font-size-sm
 --pl-font-size-xl

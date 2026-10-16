@@ -9,9 +9,11 @@ import { describe, expect, it } from "vitest";
 
 import { PL_TOKEN_VARS } from "./PluginView";
 
-// The seven steps the migration cards will move sites onto, and the px value each must carry.
+// The scale steps the migration cards will move sites onto, and the px value each must carry.
 // Keys are the tokens.json `font.size.*` leaves; the derived custom property is
-// `--pl-font-size-<step>` (PluginView's kebab-case flatten of the key path).
+// `--pl-font-size-<step>` (PluginView's kebab-case flatten of the key path). `display` (28px) is
+// the large heading step added in @protolabsai/design 0.13.0 (picked up here with the ds-5j6 DS
+// release); the other seven are the original #3688 scale.
 const TYPE_SCALE: ReadonlyArray<readonly [step: string, px: string]> = [
   ["3xs", "10px"],
   ["2xs", "11px"],
@@ -20,6 +22,7 @@ const TYPE_SCALE: ReadonlyArray<readonly [step: string, px: string]> = [
   ["base", "14px"],
   ["lg", "16px"],
   ["xl", "18px"],
+  ["display", "28px"],
 ];
 
 describe("DS type scale — @protolabsai/design ^0.10.0 ships --pl-font-size-* (#3688)", () => {
@@ -29,7 +32,7 @@ describe("DS type scale — @protolabsai/design ^0.10.0 ships --pl-font-size-* (
     expect(fontSize[step]).toBe(px);
   });
 
-  it("exposes exactly the seven scale steps, no more, no fewer", () => {
+  it("exposes exactly the scale steps it declares, no more, no fewer", () => {
     expect(Object.keys(fontSize).sort()).toEqual(TYPE_SCALE.map(([step]) => step).sort());
   });
 
