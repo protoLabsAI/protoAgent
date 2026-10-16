@@ -106,8 +106,9 @@ def test_launcher_word_and_member_counts(box):
 
 
 def test_probe_tells_unauthorized_from_unreachable_and_reads_a_hub(box, monkeypatch):
-    row = hubs.enumerate_hubs()[0]
-    assert row.name == "protoagent"
+    # by name, not position: discovery now ranks the desktop root's own instance above a
+    # named instance under the home root (#4275), so "first" no longer means "main".
+    row = next(r for r in hubs.enumerate_hubs() if r.name == "protoagent")
 
     def refused(*, candidates, token=None, insecure_http=False):
         raise deckhub.NoHub([candidates[0].url], [candidates[0].url], None, None)

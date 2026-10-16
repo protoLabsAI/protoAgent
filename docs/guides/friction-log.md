@@ -119,6 +119,37 @@ disabled, because there is no single ledger to stamp from the hub. To resolve a 
 open that member's own Friction view. The rollup is cached for 30 seconds, and it only
 lists open friction.
 
+### Across the fleet, from the terminal
+
+The rollup above is read-only and merges rows. For triage you usually want the opposite —
+every entry, with its detail, per agent — so the CLI reads each member's ledger itself:
+
+```bash
+protoagent fleet friction                        # open friction, every running member
+protoagent fleet friction --kind harness --severity major --since 7d -v
+protoagent fleet friction --agent alpha --raw    # one row per recorded entry
+protoagent fleet friction --json                 # for scripts and the triage skill
+```
+
+Each row starts with an 8-character **signal id**, derived from the kind and summary, so
+the same rough edge has the same id on every agent. Signals that more than one agent hit
+are listed under *Shared across agents*. Members that are stopped, or that couldn't be
+read, are named rather than skipped, so an empty result never hides an agent you didn't
+reach. It needs a running hub.
+
+Once a fix has shipped, clear the signal where it was recorded:
+
+```bash
+protoagent fleet friction resolve 3f9a21c0 --agent alpha --agent beta --reason "fixed in #4321"
+protoagent fleet friction resolve 3f9a21c0 --all-agents --reason "…"
+protoagent fleet friction resolve 3f9a21c0 --agent alpha --reopen
+```
+
+Resolving has no default scope: name the agents or pass `--all-agents`. It stamps
+`resolved_at` and your reason on the matching entries, and nothing is deleted. The
+`triaging-fleet-friction` skill runs this whole pass: pull, cluster, check for existing
+issues, draft a filing plan, and resolve after the fix ships.
+
 ## Triage
 
 A workable pass through the backlog:

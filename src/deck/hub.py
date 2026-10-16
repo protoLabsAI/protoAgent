@@ -358,7 +358,9 @@ def discover_hubs(*, explicit_url: str | None = None) -> list[HubCandidate]:
 
     if (own := _pidfile_candidate()) is not None:
         add(own)
-    for root in known_box_roots():
+    roots = known_box_roots()
+    beats: list[HubCandidate] = []
+    for root in roots:
         for hb in read_heartbeats(root):
             try:
                 port = int(hb.get("port") or 0)
@@ -369,7 +371,16 @@ def discover_hubs(*, explicit_url: str | None = None) -> list[HubCandidate]:
             iroot = Path(hb["instance_root"]) if hb.get("instance_root") else None
             if is_member_root(iroot):
                 continue  # a member's heartbeat — its hub is another record (or the default port)
-            add(HubCandidate(_loopback(port), "heartbeat", instance_root=iroot, identity=hb["identity"], pid=hb["pid"]))
+            beats.append(HubCandidate(_loopback(port), "heartbeat", instance_root=iroot, identity=hb["identity"], pid=hb["pid"]))
+    # A box root's own instance (the desktop app, the default `~/.protoagent`) is THE hub for
+    # that root; a NAMED instance beneath it (`~/.protoagent/dev`, a sandbox from
+    # scripts/dev.sh) is an isolated scratch hub on purpose. Box-root scan order is not a
+    # statement about which one the operator means — with the sandbox's root listed first it
+    # won, and `fleet` showed a one-agent sandbox beside a desktop hub with twelve members.
+    # Stable sort: ties keep scan order, so nothing else about the ordering moves.
+    beats.sort(key=lambda c: c.instance_root not in roots)
+    for c in beats:
+        add(c)
     add(HubCandidate(_loopback(DEFAULT_PORT), "default"))
     return out
 
