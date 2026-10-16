@@ -771,7 +771,8 @@
   white-space: nowrap;
 }
 
-/* Delete/clear dialog: the note that compaction may already have archived parts of the chat. */
+/* Delete/clear dialog: the one-line muted note shown in place of the "Save a summary" option
+   for an incognito chat (it is never saved to memory). */
 .chat-memory-note {
   margin: var(--pl-space-3) 0 0;
   font-size: var(--pl-font-size-sm);
@@ -783,11 +784,9 @@
   font-size: var(--pl-font-size-sm);
   color: var(--pl-color-fg-subtle);
 }
-/* The dialog's memory switches: harvest a summary first (on by default for an ordinary chat
-   since #4053; absent for incognito), or forget what the chat already saved. They're mutually
-   exclusive — ticking one unticks the other. */
-.chat-delete-harvest,
-.chat-delete-forget {
+/* Goal-tab close dialog: the opt-in "stop the goal" switch — the only remaining use of this
+   class now the delete dialog's memory switches became a RadioGroup. */
+.chat-delete-harvest {
   display: flex;
   align-items: center;
   gap: var(--pl-space-2);
@@ -796,13 +795,31 @@
   color: var(--pl-color-fg-muted);
   cursor: pointer;
 }
-.chat-delete-harvest input,
-.chat-delete-forget input { accent-color: var(--pl-color-accent); }
+.chat-delete-harvest input { accent-color: var(--pl-color-accent); }
 /* The switch track is a flex item beside its label: without this, a label long enough to
-   wrap squeezes the track down to the knob (the forget switch rendered as a bare dot). */
-.chat-delete-harvest .pl-switch__track,
-.chat-delete-forget .pl-switch__track {
+   wrap squeezes the track down to the knob (the switch rendered as a bare dot). */
+.chat-delete-harvest .pl-switch__track {
   flex-shrink: 0;
+}
+/* Delete/clear dialog: the 3-way "Memory" choice (#4053/#3493) — one RadioGroup over save a
+   summary / save nothing / erase, replacing the old pair of mutually-exclusive switches. */
+.chat-memory-label {
+  margin: var(--pl-space-3) 0 0;
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg-muted);
+}
+.chat-memory-choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+  margin-top: var(--pl-space-2);
+}
+.chat-memory-choice .pl-radio__input { accent-color: var(--pl-color-accent); }
+/* The muted one-line explanation under each option's bold label. */
+.chat-memory-choice-hint {
+  display: block;
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg-muted);
 }
 
 /* Signed-out composer strip (#2513): replaces the PromptInput while the native

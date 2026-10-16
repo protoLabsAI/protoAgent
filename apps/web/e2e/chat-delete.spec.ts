@@ -51,9 +51,10 @@ test("Escape and click-outside cancel the delete confirmation", async ({ page })
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(2);
 });
 
-// #4053: deleting an ordinary chat harvests it by default — the harvest switch opens ON, so
-// confirming untouched reaches the server as `harvest=true`.
-test("the delete dialog harvests an ordinary chat by default; confirming untouched sends harvest=true", async ({ page }) => {
+// #4053: deleting an ordinary chat saves a summary by default — "Save a summary" opens selected,
+// so confirming untouched reaches the server as `harvest=true`. The two harvest/forget switches
+// are now one 3-way memory RadioGroup (no switches survive).
+test("the delete dialog saves a summary by default; confirming untouched sends harvest=true", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await seedCurrentChat(page);
   await page.locator(".pl-tabbar > .pl-tabbar__add").click();
@@ -62,10 +63,12 @@ test("the delete dialog harvests an ordinary chat by default; confirming untouch
   await page.locator(".pl-tabbar__tab").first().locator(".pl-tabbar__close").click();
   const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
   await expect(dialog).toBeVisible();
-  const harvest = dialog.locator(".chat-delete-harvest .pl-switch__input");
-  const forget = dialog.locator(".chat-delete-forget .pl-switch__input");
-  await expect(harvest).toBeChecked();
-  await expect(forget).not.toBeChecked();
+  await expect(dialog).toContainText("will be deleted. This can't be undone.");
+  // The 3-way memory choice replaced the two switches: no switches, "Save a summary" selected.
+  await expect(dialog.locator(".pl-switch__input")).toHaveCount(0);
+  await expect(dialog.getByText("Save a summary")).toBeVisible();
+  await expect(dialog.locator('.chat-memory-choice .pl-radio__input[value="summary"]')).toBeChecked();
+  await expect(dialog.locator('.chat-memory-choice .pl-radio__input[value="erase"]')).not.toBeChecked();
   // The dialog surfaces the otherwise-undiscoverable Shift+click quick-delete gesture (#1373).
   await expect(dialog.locator(".chat-delete-shift-hint")).toContainText("to delete instantly");
 
@@ -80,11 +83,10 @@ test("the delete dialog harvests an ordinary chat by default; confirming untouch
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
 });
 
-// #3493 + #4053: the harvest switch never controlled compaction, which may already have
-// archived part of the chat — so the dialog says so, and "forget what this chat saved" is a
-// second switch. Harvest and forget are mutually exclusive: ticking forget unticks the
-// (default-on) harvest, and the delete must reach the server as forget=true, harvest=false.
-test("the delete dialog says compaction may have archived the chat; forget unticks harvest and reaches the server", async ({ page }) => {
+// #3493: "Erase from memory" removes what the chat already saved (archives + summaries) — its
+// copy says so, the honesty the old compaction paragraph used to carry — and reaches the server
+// as forget=true, harvest=false.
+test("the delete dialog's 'Erase from memory' option reaches the server as forget=true, harvest=false", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await seedCurrentChat(page);
   await page.locator(".pl-tabbar > .pl-tabbar__add").click();
@@ -93,16 +95,11 @@ test("the delete dialog says compaction may have archived the chat; forget untic
   await page.locator(".pl-tabbar__tab").first().locator(".pl-tabbar__close").click();
   const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("Parts of this chat may already be in the knowledge base");
-  await expect(dialog).toContainText("Deleting the chat leaves them there unless you choose to forget them below.");
-  const harvest = dialog.locator(".chat-delete-harvest .pl-switch__input");
-  const forget = dialog.locator(".chat-delete-forget .pl-switch__input");
-  await expect(harvest).toBeChecked(); // on by default (#4053)
-  await expect(forget).not.toBeChecked();
+  await expect(dialog).toContainText("Also removes summaries and archives this chat already saved.");
 
-  await dialog.getByText("Forget what this chat already saved to memory").click();
-  await expect(forget).toBeChecked();
-  await expect(harvest).not.toBeChecked(); // mutual exclusion: forget turned harvest off
+  await dialog.getByText("Erase from memory").click();
+  await expect(dialog.locator('.chat-memory-choice .pl-radio__input[value="erase"]')).toBeChecked();
+  await expect(dialog.locator('.chat-memory-choice .pl-radio__input[value="summary"]')).not.toBeChecked();
   const deleted = page.waitForRequest(
     (req) => req.method() === "DELETE" && /\/api\/chat\/sessions\/[^/?]+\?/.test(req.url()),
   );
@@ -113,10 +110,34 @@ test("the delete dialog says compaction may have archived the chat; forget untic
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
 });
 
-// #4053 incognito: an incognito chat is never harvested — the dialog drops the harvest switch
-// for a "never harvested" note, and the delete reaches the server as harvest=false. The forget
-// switch still shows.
-test("an incognito chat has no harvest switch and deletes with harvest=false", async ({ page }) => {
+// #3493: "Don't save anything" leaves existing archives in place — harvest=false, forget absent.
+test("the delete dialog's 'Don't save anything' option sends harvest=false with no forget", async ({ page }) => {
+  await page.goto("/app/", { waitUntil: "load" });
+  await seedCurrentChat(page);
+  await page.locator(".pl-tabbar > .pl-tabbar__add").click();
+  await expect(page.locator(".pl-tabbar__tab")).toHaveCount(2);
+
+  await page.locator(".pl-tabbar__tab").first().locator(".pl-tabbar__close").click();
+  const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Anything already archived from this chat stays.");
+
+  await dialog.getByText("Don't save anything").click();
+  await expect(dialog.locator('.chat-memory-choice .pl-radio__input[value="none"]')).toBeChecked();
+  const deleted = page.waitForRequest(
+    (req) => req.method() === "DELETE" && /\/api\/chat\/sessions\/[^/?]+\?/.test(req.url()),
+  );
+  await page.getByRole("button", { name: "Delete chat" }).click();
+  const url = new URL((await deleted).url());
+  expect(url.searchParams.get("harvest")).toBe("false");
+  expect(url.searchParams.get("forget")).not.toBe("true"); // forget omitted when off
+  await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
+});
+
+// #4053 incognito: an incognito chat is never saved to memory — the dialog drops the "Save a
+// summary" option for a "never saved" note, preselects "Don't save anything", and the delete
+// reaches the server as harvest=false.
+test("an incognito chat has no 'Save a summary' option and deletes with harvest=false", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await seedCurrentChat(page);
   // Shift+click the "+" opens a NEW incognito chat (#1697), which becomes the active tab.
@@ -130,9 +151,11 @@ test("an incognito chat has no harvest switch and deletes with harvest=false", a
   await incognitoTab.locator(".pl-tabbar__close").click();
   const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator(".chat-delete-harvest")).toHaveCount(0);
-  await expect(dialog).toContainText("Incognito chat — never harvested into the knowledge base");
-  await expect(dialog.locator(".chat-delete-forget .pl-switch__input")).toHaveCount(1); // forget still shows
+  await expect(dialog.getByText("Save a summary")).toHaveCount(0);
+  await expect(dialog.locator('.chat-memory-choice .pl-radio__input[value="summary"]')).toHaveCount(0);
+  await expect(dialog).toContainText("Incognito — never saved to memory.");
+  await expect(dialog.locator('.chat-memory-choice .pl-radio__input[value="none"]')).toBeChecked();
+  await expect(dialog.locator('.chat-memory-choice .pl-radio__input[value="erase"]')).toHaveCount(1); // Erase still shows
 
   const deleted = page.waitForRequest(
     (req) => req.method() === "DELETE" && /\/api\/chat\/sessions\/[^/?]+\?/.test(req.url()),
@@ -140,37 +163,6 @@ test("an incognito chat has no harvest switch and deletes with harvest=false", a
   await page.getByRole("button", { name: "Delete chat" }).click();
   const url = new URL((await deleted).url());
   expect(url.searchParams.get("harvest")).toBe("false");
-  await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
-});
-
-// #4053 mutual exclusion the other way: re-ticking harvest after forget unticks forget, and
-// the delete reaches the server as harvest=true, forget=false.
-test("re-ticking harvest after forget unticks forget", async ({ page }) => {
-  await page.goto("/app/", { waitUntil: "load" });
-  await seedCurrentChat(page);
-  await page.locator(".pl-tabbar > .pl-tabbar__add").click();
-  await expect(page.locator(".pl-tabbar__tab")).toHaveCount(2);
-
-  await page.locator(".pl-tabbar__tab").first().locator(".pl-tabbar__close").click();
-  const dialog = page.getByRole("dialog", { name: "Delete this chat?" });
-  await expect(dialog).toBeVisible();
-  const harvest = dialog.locator(".chat-delete-harvest .pl-switch__input");
-  const forget = dialog.locator(".chat-delete-forget .pl-switch__input");
-
-  await dialog.getByText("Forget what this chat already saved to memory").click();
-  await expect(forget).toBeChecked();
-  await expect(harvest).not.toBeChecked();
-  await dialog.getByText("Harvest into the knowledge base first").click();
-  await expect(harvest).toBeChecked();
-  await expect(forget).not.toBeChecked();
-
-  const deleted = page.waitForRequest(
-    (req) => req.method() === "DELETE" && /\/api\/chat\/sessions\/[^/?]+\?/.test(req.url()),
-  );
-  await page.getByRole("button", { name: "Delete chat" }).click();
-  const url = new URL((await deleted).url());
-  expect(url.searchParams.get("harvest")).toBe("true");
-  expect(url.searchParams.get("forget")).not.toBe("true"); // forget omitted when off
   await expect(page.locator(".pl-tabbar__tab")).toHaveCount(1);
 });
 

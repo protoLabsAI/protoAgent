@@ -70,12 +70,11 @@ export function ChatSurface({
   // startBulkClose — so we never parade a "Delete this chat?" dialog past each tab (the
   // dialog-storm the spec warns against), and exactly one dialog is ever open.
   const [closeQueue, setCloseQueue] = useState<string[]>([]);
-  // #4053: harvest an ordinary chat into the knowledge base on delete by default; the
-  // pendingClose effect (below) re-initialises this from the target tab's incognito flag each
-  // time the dialog opens, so an incognito chat starts OFF (and renders no harvest switch).
-  const [harvestOnDelete, setHarvestOnDelete] = useState(false);
-  // #3493: forget what the chat already wrote to memory (archives, harvested summaries/facts).
-  const [forgetOnDelete, setForgetOnDelete] = useState(false);
+  // The delete dialog's 3-way memory choice (#4053/#3493): save a summary, save nothing, or
+  // erase. The pendingClose effect (below) re-initialises this from the target tab's incognito
+  // flag each time the dialog opens, so an incognito chat starts on "Don't save anything" (and
+  // renders no "Save a summary" option).
+  const [deleteMemory, setDeleteMemory] = useState<ChatMemoryChoice>(() => defaultMemoryChoice(false));
   const [retiringSessionId, setRetiringSessionId] = useState<string | null>(null);
   // Goal tab close: default keeps the goal running (detach); toggle on to STOP it (clear the
   // goal + close its task backlog) instead.
@@ -148,17 +147,16 @@ export function ChatSurface({
     if (chat.sessions.some((s) => s.id === requested)) setPendingClose(requested);
   }, [chat.pendingDeleteRequest, pendingClose, chat.sessions]);
 
-  // Re-initialise the delete dialog's memory switches from the TARGET tab's incognito flag
-  // whenever the dialog opens or promotes the next queued tab (#4053) — harvest ON for an
-  // ordinary chat, OFF for incognito; forget always OFF. Keyed on `pendingClose` alone, reading
+  // Re-initialise the delete dialog's memory choice from the TARGET tab's incognito flag
+  // whenever the dialog opens or promotes the next queued tab (#4053) — "Save a summary" for an
+  // ordinary chat, "Don't save anything" for incognito. Keyed on `pendingClose` alone, reading
   // the incognito flag from the store SNAPSHOT (not reactive `chat.sessions`) so a mid-dialog
-  // sessions update can't re-fire and clobber a tick the operator just made. This is the single
-  // reset point for the switches; the close helpers no longer hard-false them.
+  // sessions update can't re-fire and clobber a pick the operator just made. This is the single
+  // reset point for the choice; the close helpers no longer hard-reset it.
   useEffect(() => {
     if (pendingClose === null) return;
     const incognito = chatStore.getSnapshot().sessions.find((s) => s.id === pendingClose)?.incognito;
-    setHarvestOnDelete(!incognito);
-    setForgetOnDelete(false);
+    setDeleteMemory(defaultMemoryChoice(incognito));
   }, [pendingClose]);
 
   async function closeSession(id: string, memory: ChatMemoryChoice): Promise<boolean> {
@@ -459,11 +457,13 @@ export function ChatSurface({
             setRetiringSessionId(id);
             try {
               if (closingGoal && stopGoalOnClose) await api.clearGoal(id, true);
-              // Goal closes never touch memory. Otherwise send the switch choices — forced to
-              // harvest=false for an incognito chat, which renders no harvest switch (#4053).
+              // Goal closes never touch memory. Otherwise send the chosen memory option — forced
+              // to harvest=false for an incognito chat, which renders no "Save a summary" option (#4053).
               const memory = closingGoal
                 ? NO_MEMORY_CHANGE
-                : { harvest: pendingCloseSession?.incognito ? false : harvestOnDelete, forget: forgetOnDelete };
+                : pendingCloseSession?.incognito
+                  ? { ...deleteMemory, harvest: false }
+                  : deleteMemory;
               if (await closeSession(id, memory)) advanceClose();
             } catch (error) {
               onError(`Couldn't stop and delete this goal chat: ${errMsg(error)}. The tab was kept so you can retry.`);
@@ -492,18 +492,16 @@ export function ChatSurface({
           ) : (
             <>
               <p style={{ margin: 0 }}>
-                {`"${pendingCloseSession.title}" and its history will be removed — this can't be undone from here.`}
+                {`"${pendingCloseSession.title}" will be deleted. This can't be undone.`}
               </p>
-              {/* Harvest defaults ON for an ordinary chat (#4053); incognito chats render no
-                  harvest switch, just the "never harvested" note. The note says what compaction
-                  may already have archived (#3493). Shared with the clear dialog. */}
+              {/* One 3-way memory choice (#4053/#3493): save a summary (default for an ordinary
+                  chat), save nothing, or erase. Incognito chats drop the "Save a summary" option
+                  for a one-line note and default to "Don't save anything". Shared with the clear
+                  dialog. */}
               <ChatMemoryChoices
-                action="Deleting"
+                value={deleteMemory}
+                onChange={setDeleteMemory}
                 incognito={pendingCloseSession.incognito}
-                harvest={harvestOnDelete}
-                forget={forgetOnDelete}
-                onHarvestChange={setHarvestOnDelete}
-                onForgetChange={setForgetOnDelete}
               />
               {/* Surface the otherwise-undiscoverable quick-delete gesture (#1373). Only on the
                   non-goal branch: Shift+click on a goal tab still opens this goal dialog. */}
