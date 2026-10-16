@@ -80,3 +80,18 @@ def test_repo_onboard_renders_readme_manifest_and_a_linked_overview():
                  "`diagramming-code`", "memory_ingest", "Never change code during onboarding"):
         assert must in body, f"repo-onboard no longer says {must!r}"
     assert Path("plugins/artifact/skills/diagramming-code/SKILL.md").is_file()
+
+
+def test_repo_onboard_adopts_atlas_and_degrades_without_it():
+    """Atlas (the engineer-archetype member) is the persistent architecture map: an existing
+    `architecture/` model is the overview, writing one is OFFERED (asked first — it lands in
+    the repo), validated until clean, and the tour presents from atlas.tours.json. Without
+    the Atlas tools the Mermaid overview above stays the whole story."""
+    body = parse_skill_md(ROOT / "skills/repo-onboard/SKILL.md").prompt_template
+    for must in ("atlas_validate", "atlas_describe", "atlas_show", "`architecture/`",
+                 "atlas.tours.json", "present=true", "Want me to write", "`atlas-likec4`",
+                 "committed and reviewed", "Mermaid path is the whole story"):
+        assert must in body, f"repo-onboard no longer says {must!r}"
+    soul = Path("config/soul-presets/engineer.md").read_text(encoding="utf-8")
+    for must in ("Atlas", "atlas_show", "one-off", "open_in_editor", "I ask first"):
+        assert must in soul, f"the engineer persona no longer says {must!r}"
