@@ -102,22 +102,28 @@ def _rank(item: dict) -> tuple:
 # ── reading ──────────────────────────────────────────────────────────────────
 
 
-def _targets(roster: list[dict], names: list[str] | None) -> tuple[list[tuple[str, dict]], list[dict]]:
-    """(readable members as (slug, row), skipped rows as ``{name, reason}``)."""
+def _targets(roster: list[dict], names: list[str] | None) -> tuple[list[tuple[str, dict]], list[dict], list[str]]:
+    """(readable members as (slug, row), skipped rows as ``{name, reason}``, requested names
+    that match no member). The last matters: a mistyped ``--agent`` must read as an error,
+    never as an agent with no friction."""
     wanted = {n.lower() for n in (names or [])}
+    matched: set[str] = set()
     readable: list[tuple[str, dict]] = []
     skipped: list[dict] = []
     for row in roster:
         slug = slug_of(row)
         label = str(row.get("label") or row.get("name") or slug)
-        if wanted and not ({slug.lower(), label.lower(), str(row.get("name") or "").lower()} & wanted):
+        keys = {slug.lower(), label.lower(), str(row.get("name") or "").lower()}
+        if wanted and not (keys & wanted):
             continue
+        matched |= keys & wanted
         pres = presence_of(row)
         if pres in _READABLE:
             readable.append((slug, row))
         else:
             skipped.append({"name": label, "reason": pres})
-    return readable, skipped
+    unmatched = [n for n in (names or []) if n.lower() not in matched]
+    return readable, skipped, unmatched
 
 
 def _fetch(client: Any, slug: str, *, grouped: bool, resolved: bool, kind: str | None, limit: int) -> list[dict]:
@@ -151,8 +157,10 @@ def collect(
     """The read: per-agent rows plus who was skipped/unreachable, and signals shared across
     agents. One member failing never loses the others."""
     since = parse_since(args.since) if args.since else None
-    readable, skipped = _targets(roster, args.agent)
-    results: list[dict] = []
+    readable, skipped, unmatched = _targets(roster, args.agent)
+    results: list[dict] = [
+        {"name": n, "slug": n, "ok": False, "error": "no such member (`protoagent fleet ls` lists them)", "items": []} for n in unmatched
+    ]
     for slug, row in readable:
         name = str(row.get("label") or row.get("name") or slug)
         try:
@@ -228,8 +236,8 @@ def resolve(client: Any, roster: list[dict], args: argparse.Namespace) -> list[d
     agent first — the POST matches the full (kind, summary) exactly, so what is stamped is
     precisely the row that was listed, never a neighbour whose text overlaps."""
     names = args.agent or None
-    readable, _ = _targets(roster, names)
-    out: list[dict] = []
+    readable, _, unmatched = _targets(roster, names)
+    out: list[dict] = [{"name": n, "ok": False, "error": "no such member (`protoagent fleet ls` lists them)"} for n in unmatched]
     for slug, row in readable:
         name = str(row.get("label") or row.get("name") or slug)
         try:

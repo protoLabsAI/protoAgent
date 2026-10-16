@@ -115,10 +115,7 @@ def test_rows_are_ranked_worst_first_per_agent(monkeypatch, capsys):
 
 def test_filters_severity_kind_since_and_agent(monkeypatch, capsys):
     _live(monkeypatch, FakeClient())
-    _run(["friction", "--json", "--severity", "major", "--since", "7d", "--agent", "alpha"])
-    # `--since 7d` is relative to the real clock, so this fixture's dates are all "old" by then;
-    # pin the cutoff with an absolute date instead.
-    capsys.readouterr()
+    # an absolute cutoff: a relative `7d` would move with the real clock
     _run(["friction", "--json", "--severity", "major", "--since", "2026-10-01", "--agent", "alpha"])
     out = json.loads(capsys.readouterr().out)
     assert [r["name"] for r in out["results"]] == ["alpha"]
@@ -211,3 +208,16 @@ def test_resolve_unknown_id_on_a_named_agent_fails_loudly(monkeypatch, capsys):
     _live(monkeypatch, FakeClient())
     assert _run(["friction", "resolve", "deadbeef", "--agent", "alpha", "--json"]) == 1
     assert "no open signal deadbeef" in json.loads(capsys.readouterr().out)["results"][0]["error"]
+
+
+def test_a_mistyped_agent_is_an_error_not_an_empty_result(monkeypatch, capsys):
+    _live(monkeypatch, FakeClient())
+    assert _run(["friction", "--json", "--agent", "alpa"]) == 1
+    row = json.loads(capsys.readouterr().out)["results"][0]
+    assert row["name"] == "alpa" and row["ok"] is False and "no such member" in row["error"]
+
+
+def test_resolve_with_nothing_to_resolve_still_emits_json(monkeypatch, capsys):
+    _live(monkeypatch, FakeClient())
+    assert _run(["friction", "resolve", "deadbeef", "--all-agents", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["results"] == []

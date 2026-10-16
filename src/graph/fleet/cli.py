@@ -311,9 +311,10 @@ def _cmd_friction(args: argparse.Namespace) -> int:
                         print(f"  ✓ {r['name']:16} {verb} {r['changed']} {'entry' if r['changed'] == 1 else 'entries'} — {r['summary']}")
                 elif not args.as_json:
                     print(f"  ✗ {r['name']:16} {r['error']}", file=sys.stderr)
-            if not results:
-                return 1
-            return _finish(args, "live", results, hub_url) if args.as_json else (1 if any(not r["ok"] for r in results) else 0)
+            if args.as_json:
+                code = _finish(args, "live", results, hub_url)  # always emits: a script must get JSON, even an empty list
+                return code or (0 if results else 1)
+            return 1 if (not results or any(not r["ok"] for r in results)) else 0
 
         data = friction_cli.collect(conn.client, conn.roster, args)
     finally:
