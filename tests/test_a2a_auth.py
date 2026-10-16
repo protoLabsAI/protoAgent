@@ -765,6 +765,24 @@ def test_sse_proxied_events_path(monkeypatch):
     assert c.get("/agents/myagent/api/events").status_code == 401
 
 
+def test_proxied_events_need_a_hub_minted_token_not_the_members(monkeypatch):
+    """#4292: the hub checks a proxied stream's ``?token=`` against ITS OWN key before it
+    forwards. A token the member minted (``/agents/<slug>/api/sse-token`` is answered by the
+    member, signed with the member's bearer) can never pass — which is why the Fleet Room
+    mints its per-member stream tokens at the hub (``api.sseToken()``)."""
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="member-secret", api_key="", allowed_origins_raw="")
+    member_minted = auth.generate_sse_token()
+    auth.configure(bearer_token="hub-secret", api_key="", allowed_origins_raw="")
+    hub_minted = auth.generate_sse_token()
+    routes = [Route("/agents/scout/api/events", lambda r: PlainTextResponse("ok"), methods=["GET"])]
+    app = Starlette(routes=routes)
+    app.add_middleware(auth.A2AAuthMiddleware)
+    c = TestClient(app)
+    assert c.get(f"/agents/scout/api/events?token={member_minted}").status_code == 401
+    assert c.get(f"/agents/scout/api/events?token={hub_minted}").status_code == 200
+
+
 # ── 5. guard covers the console + OpenAI-compat APIs (prod-readiness) ──────────
 
 

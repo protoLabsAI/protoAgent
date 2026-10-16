@@ -1129,7 +1129,11 @@ const server = createServer(async (req, res) => {
     // Gated mode only: the ungated default keeps 404ing it so events.spec.ts
     // still covers the events client's tokenless open-mode fallback.
     if (pathname === "/api/sse-token" && req.method === "GET") {
-      return sendJson(res, { token: GATE_SSE_TOKEN });
+      // A PROXIED mint (`/agents/<slug>/api/sse-token`) is answered by the MEMBER, so it carries
+      // the member's signature — which the hub's gate above can never verify (#4292). Model that:
+      // only the hub's own mint opens a stream through the gate.
+      const proxied = url.pathname.startsWith("/agents/");
+      return sendJson(res, { token: proxied ? "e2e-member-minted-sse-token" : GATE_SSE_TOKEN });
     }
   }
 

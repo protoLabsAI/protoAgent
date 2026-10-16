@@ -9,7 +9,7 @@
  */
 import type { NodeRuntimePayload, PythonRuntimePayload, RuntimeStatus } from "../types";
 import { cancelBody, type PairKind } from "../agentPairing";
-import { apiUrl, memberPath, applyAuth } from "./routing";
+import { apiUrl, applyAuth } from "./routing";
 import { request } from "./http";
 import { tauriCore } from "./desktop";
 
@@ -104,17 +104,12 @@ export const runtimeApi = {
   // member), so the token must carry the hub's signature or the stream 401s at
   // the hub for every non-host member on a bearer-gated hub. The hub then
   // forwards with the member's own credential attached, so the member accepts it
-  // downstream (its SSE branch falls through to the bearer check).
+  // downstream (its SSE branch falls through to the bearer check). That holds for
+  // EVERY proxied stream — the Fleet Room's per-member feeds included (#4292): a
+  // token minted BY the member (`/agents/<slug>/api/sse-token`) carries the member's
+  // signature, which the hub can never verify.
   sseToken() {
     return request<{ token: string }>("/api/sse-token", { host: true });
-  },
-  // SSE token for a SPECIFIC fleet member (Fleet Activity streams each member's
-  // /agents/<slug>/api/events). Best-effort: open-mode instances need none, so a
-  // failure resolves to "" and the caller connects tokenless.
-  sseTokenFor(slug: string): Promise<{ token: string }> {
-    return fetch(memberPath(slug, "/api/sse-token"), { headers: applyAuth(new Headers()) })
-      .then((r) => (r.ok ? (r.json() as Promise<{ token: string }>) : { token: "" }))
-      .catch(() => ({ token: "" }));
   },
 
   // Gracefully restart the server process (POST /api/restart) — the server drains and
