@@ -333,9 +333,35 @@ async def forward_to(slug: str, request, path: str):
         _log_refusal(slug, "ambiguous path encoding", request.headers)
         return JSONResponse({"detail": "Bad Request: ambiguous path encoding"}, status_code=400)
 
+    state = getattr(request, "state", None)
+    # A signed fleet media link the hub admitted WITHOUT auth (#4258, a2a_impl/auth.py
+    # ``_is_fleet_media_link``): an anonymous caller must not learn which slugs exist or are up
+    # from it, so every hub-side failure (unknown/stopped slug, unreachable or stalled member)
+    # answers the same 401 an unauthenticated request gets — and an unknown slug is never dialled.
+    if getattr(state, "fleet_media", False):
+        target = _target_for_slug(slug)
+        if target is None:
+            return _anonymous_refusal()
+        resp = await _forward_member(slug, request, path, raw_path, target)
+        if isinstance(resp, JSONResponse) and resp.status_code in (403, 409, 502, 504):
+            return _anonymous_refusal()  # hub-generated (an upstream answer is a stream)
+        return resp
+
     target = _target_for_slug(slug)
     if target is None:
         return JSONResponse({"detail": f"agent {slug!r} is not running"}, status_code=409)
+    return await _forward_member(slug, request, path, raw_path, target)
+
+
+def _anonymous_refusal() -> JSONResponse:
+    """The hub's own 401 for an unauthenticated request — what the fleet-media path answers for
+    any hub-side failure, so it can't be told apart from an unknown path."""
+    from a2a_impl.auth import _credential_error
+
+    return JSONResponse({"detail": _credential_error()}, status_code=401)
+
+
+async def _forward_member(slug: str, request, path: str, raw_path: str, target):
     base, extra = target
     state = getattr(request, "state", None)
     # A remote member carries its own stored bearer in ``extra``; a host/local peer carries

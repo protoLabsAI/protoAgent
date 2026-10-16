@@ -254,15 +254,16 @@ card advertises. `name` defaults to the stored filename; `mime` to the stored ty
 
 The delivered link EXPIRES: `ttl_s` seconds (default `media.remote_link_ttl_s`, 7
 days; `0` = a permanent link). Past it the agent answers 403. The console's inline
-`ref.url` never expires. The link works without a bearer, on a standalone agent and
-through a fleet hub (`/agents/<slug>/media/…`) alike: the member verifies its own
-signature.
+`ref.url` never expires. An expiring link works without a bearer, on a standalone agent
+and through a fleet hub (`/agents/<slug>/media/…`) alike: the member verifies its own
+signature. A permanent one (`ttl_s=0`) through a hub still needs the hub's bearer.
 
 Returns True when attached — in any A2A or `/v1` turn, console streams included; False
 (a no-op) outside an armed turn (e.g. a background job), after the turn's answer was
 built (a late background attach), for a non-media, unsigned or expired URL, or past 16
-files in one turn. Attaching the same file twice is one attachment; a later file under
-the same `name` replaces the earlier one. Files attached before a HITL pause are
+files in one turn. Attaching the same content twice (or a re-run tool's fresh copy of the
+same bytes) is one attachment; a later file under the same `name` replaces the earlier
+one. Files attached before a HITL pause are
 delivered with the answer of the turn that resumes it. Guard with
 `getattr(sdk, "attach_file", None)` on cores older than this seam (`ttl_s` needs a
 core with [#4258](https://github.com/protoLabsAI/protoAgent/issues/4258)).

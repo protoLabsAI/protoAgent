@@ -180,7 +180,8 @@ def register_fleet_routes(app) -> None:
         except (supervisor.FleetError, manager.WorkspaceError) as exc:
             raise HTTPException(400, str(exc))
 
-    @app.api_route("/agents/{slug}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    # HEAD rides the same auth + proxy as GET (#4258: a peer probing a member's media link).
+    @app.api_route("/agents/{slug}/{path:path}", methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def _agent_proxy(slug: str, path: str, request: Request):
         """Reverse-proxy the console to a specific agent BY SLUG (ADR 0042 slug routing).
 

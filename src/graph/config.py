@@ -606,6 +606,13 @@ def note_legacy_registry_floor(where: str) -> None:
     )
 
 
+def _media_ttl(value) -> int:
+    """``media.remote_link_ttl_s`` validated by the media store's own rule (#4258)."""
+    from infra.media import clamp_remote_link_ttl
+
+    return clamp_remote_link_ttl(value)
+
+
 @dataclass
 class LangGraphConfig:
     # Model settings — route through the LiteLLM gateway by default
@@ -1610,7 +1617,8 @@ class LangGraphConfig:
     # out of the auth gate (explicit exposure); ``retention_days`` prunes files
     # older than N days on each save (0 = keep forever). ``remote_link_ttl_s`` is the
     # lifetime of the links handed to a client OUTSIDE this box — A2A file parts and /v1
-    # replies (#4258): an expiring signature, default 7 days (0 = never expire). The
+    # replies (#4258): an expiring signature, default 7 days, at most 365 days (an explicit
+    # 0 = never expire; null/invalid = the default). The
     # console's inline links stay permanent. See infra/media.py.
     media_public: bool = False
     media_retention_days: int = 0
@@ -2302,12 +2310,9 @@ class LangGraphConfig:
             media_retention_days=int(
                 (data.get("media", {}) or {}).get("retention_days", cls.media_retention_days) or 0
             ),
-            media_remote_link_ttl_s=max(
-                0,
-                int(
-                    (data.get("media", {}) or {}).get("remote_link_ttl_s", cls.media_remote_link_ttl_s) or 0
-                ),
-            ),
+            # Validated (#4258): only an explicit 0 means "never expire" — null / junk / negative
+            # is the default (with a warning), and past a year is clamped to a year.
+            media_remote_link_ttl_s=_media_ttl((data.get("media", {}) or {}).get("remote_link_ttl_s")),
             egress_allowed_hosts=list(data.get("egress", {}).get("allowed_hosts", []) or []),
             security_callback_allowlist=list((data.get("security") or {}).get("callback_allowlist", []) or []),
             security_redact_tool_output=bool(

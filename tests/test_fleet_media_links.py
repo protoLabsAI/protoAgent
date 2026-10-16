@@ -102,35 +102,49 @@ def _hub(monkeypatch, member_base: str, *, remote: bool = False) -> TestClient:
     if remote:
         proxy._remote_slugs.add("m")
     auth.set_member_public_resolver(member_public.is_member_public)
+    from operator_api.fleet_routes import register_fleet_routes
+
     app = FastAPI()
-
-    @app.api_route("/agents/{slug}/{path:path}", methods=["GET", "HEAD", "POST"])
-    async def _p(slug: str, path: str, request: Request):
-        return await proxy.forward_to(slug, request, path)
-
+    register_fleet_routes(app)  # the REAL /agents/{slug}/{path} route (methods incl. HEAD)
     auth.install(app, bearer_token="tok", api_key="", allowed_origins_raw="")
     return TestClient(app)
 
 
-def _link(ref, **kw) -> str:
-    return "/agents/m" + media.media_url(ref.path.name, **kw)
+def _link(ref, ttl_s: int = 600, **kw) -> str:
+    """A member's expiring link as the hub sees it (the only kind the hub forwards anonymously)."""
+    return "/agents/m" + media.media_url(ref.path.name, ttl_s=ttl_s, **kw)
+
+
+def _exp() -> str:
+    return str(int(time.time()) + 600)
 
 
 # ── forwarded: the member decides ───────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize("remote", [False, True])
-def test_a_signed_link_is_fetched_through_the_hub_without_its_bearer(monkeypatch, member, remote):
+def test_an_expiring_link_is_fetched_through_the_hub_without_its_bearer(monkeypatch, member, remote):
     base, seen = member
     ref = media.save_media(b"chart-bytes", "image/png")
     hub = _hub(monkeypatch, base, remote=remote)
-    for url in (_link(ref), _link(ref, ttl_s=600)):  # permanent and expiring links
-        proxy._client = None  # the cached client is bound to the previous request's loop
-        r = hub.get(url)
-        assert r.status_code == 200, r.text
-        assert r.content == b"chart-bytes" and r.headers["content-type"] == "image/png"
+    r = hub.get(_link(ref))
+    assert r.status_code == 200, r.text
+    assert r.content == b"chart-bytes" and r.headers["content-type"] == "image/png"
     # The hub lent no credential — not its fleet token, not a remote's stored bearer.
-    assert [h for _, _, h in seen.requests] == [None, None]
+    assert [h for _, _, h in seen.requests] == [None]
+
+
+def test_a_permanent_link_is_never_exempt(monkeypatch, member):
+    """A permanent ``?sig=`` link (console inline links — in text, history, exports, logs) keeps
+    the hub's auth: exempting it would make every link a member ever minted fetchable forever."""
+    base, seen = member
+    ref = media.save_media(b"x", "image/png")
+    hub = _hub(monkeypatch, base)
+    assert hub.get("/agents/m" + ref.url).status_code == 401
+    assert seen.requests == []
+    proxy._client = None
+    # With the hub's bearer it still proxies (the operator's own console path).
+    assert hub.get("/agents/m" + ref.url, headers={"Authorization": "Bearer tok"}).status_code == 200
 
 
 def test_the_callers_bearer_never_rides_to_a_remote_member(monkeypatch, member):
@@ -148,9 +162,10 @@ def test_a_forged_signature_is_forwarded_and_refused_by_the_member(monkeypatch, 
     base, seen = member
     ref = media.save_media(b"x", "image/png")
     hub = _hub(monkeypatch, base, remote=remote)
-    r = hub.get(f"/agents/m/media/{ref.path.name}?sig={SIG}")
+    exp = _exp()
+    r = hub.get(f"/agents/m/media/{ref.path.name}?exp={exp}&sig={SIG}")
     assert r.status_code == 401, r.text
-    assert seen.requests == [(f"/media/{ref.path.name}", f"sig={SIG}", None)]
+    assert seen.requests == [(f"/media/{ref.path.name}", f"exp={exp}&sig={SIG}", None)]
 
 
 def test_an_expired_link_is_a_403_from_the_member(monkeypatch, member):
@@ -159,6 +174,7 @@ def test_an_expired_link_is_a_403_from_the_member(monkeypatch, member):
     hub = _hub(monkeypatch, base)
     r = hub.get(_link(ref, ttl_s=10, now=time.time() - 100))
     assert r.status_code == 403, r.text
+    assert r.json() == {"detail": "Forbidden: this media link has expired — ask the agent for a fresh link"}
     assert "expired" in r.json()["detail"]
     assert len(seen.requests) == 1
 
@@ -170,32 +186,36 @@ def test_an_expired_link_is_a_403_from_the_member(monkeypatch, member):
     "target",
     [
         "/agents/m/media/{name}",  # unsigned
-        "/agents/m/media/{name}?sig=",  # empty signature
-        "/agents/m/media/{name}?sig=abc123",  # short signature
-        "/agents/m/media/{name}?sig=" + "A" * 64,  # not lowercase hex
-        "/agents/m/media/{name}?sig={sig}&sig={sig}",  # duplicated
-        "/agents/m/media/{name}?sig={sig}&token=x",  # an extra parameter
+        "/agents/m/media/{name}?sig={sig}",  # permanent (no exp) — never exempt
+        "/agents/m/media/{name}?exp={exp}",  # no signature
+        "/agents/m/media/{name}?exp={exp}&sig=",  # empty signature
+        "/agents/m/media/{name}?exp={exp}&sig=abc123",  # short signature
+        "/agents/m/media/{name}?exp={exp}&sig=" + "A" * 64,  # not lowercase hex
+        "/agents/m/media/{name}?exp={exp}&sig={sig}&sig={sig}",  # duplicated
+        "/agents/m/media/{name}?exp={exp}&exp={exp}&sig={sig}",  # duplicated expiry
+        "/agents/m/media/{name}?exp={exp}&sig={sig}&token=x",  # an extra parameter
         "/agents/m/media/{name}?sig={sig}&exp=",  # empty expiry
         "/agents/m/media/{name}?exp=01&sig={sig}",  # non-canonical expiry
         "/agents/m/media/{name}?exp=-5&sig={sig}",  # signed expiry
         "/agents/m/media/{name}?exp&sig={sig}",  # a bare key
-        "/agents/m/media/.signing-key?sig={sig}",  # a store internal
-        "/agents/m/media/a/{name}?sig={sig}",  # nested path
-        "/agents/m/media/%61{name}?sig={sig}",  # any percent-encoding in the name
-        "/agents/m/media/{name}%2f?sig={sig}",  # an encoded slash
-        "/agents/m/media/%2e%2e?sig={sig}",  # an encoded dot-dot
-        "/agents/%6d/media/{name}?sig={sig}",  # an encoded slug
-        "/agents/%256d/media/{name}?sig={sig}",  # a double-encoded slug
-        "/agents/m/api/config?sig={sig}",  # not a media path
-        "/agents/m/plugins/x/media/{name}?sig={sig}",  # media below another prefix
-        "/agents/m/media?sig={sig}",  # no file
+        "/agents/m/media/.signing-key?exp={exp}&sig={sig}",  # a store internal
+        "/agents/m/media/a/{name}?exp={exp}&sig={sig}",  # nested path
+        "/agents/m/media/%61{name}?exp={exp}&sig={sig}",  # any percent-encoding in the name
+        "/agents/m/media/{name}%2f?exp={exp}&sig={sig}",  # an encoded slash
+        "/agents/m/media/%2e%2e?exp={exp}&sig={sig}",  # an encoded dot-dot
+        "/agents/%6d/media/{name}?exp={exp}&sig={sig}",  # an encoded slug
+        "/agents/%256d/media/{name}?exp={exp}&sig={sig}",  # a double-encoded slug
+        "/agents/m/api/config?exp={exp}&sig={sig}",  # not a media path
+        "/agents/m/plugins/x/media/{name}?exp={exp}&sig={sig}",  # media below another prefix
+        "/agents/m/media?exp={exp}&sig={sig}",  # no file
     ],
 )
 def test_anything_but_the_exact_signed_shape_takes_the_hubs_auth(monkeypatch, member, target):
     base, seen = member
     ref = media.save_media(b"x", "image/png")
     hub = _hub(monkeypatch, base)
-    r = hub.get(target.format(name=ref.path.name, sig=media.sign_name(ref.path.name)))
+    exp = _exp()
+    r = hub.get(target.format(name=ref.path.name, exp=exp, sig=media.sign_name(ref.path.name, exp)))
     assert r.status_code == 401, (target, r.status_code, r.text)
     # Nothing reached the member's media route (a plugin-namespace path may make the hub's
     # member-public resolver read the member's public-paths list — that's all).
@@ -210,10 +230,54 @@ def test_a_non_get_signed_request_takes_the_hubs_auth(monkeypatch, member):
     assert seen.requests == []
 
 
-def test_head_is_forwarded_like_get(monkeypatch, member):
+def test_head_through_the_real_routes(monkeypatch, member):
+    """HEAD is real on both the hub's ``/agents`` route and the member's ``/media`` route: the
+    same status and headers as GET, no body."""
     base, seen = member
-    ref = media.save_media(b"x", "image/png")
+    ref = media.save_media(b"chart-bytes", "image/png")
     hub = _hub(monkeypatch, base)
     r = hub.head(_link(ref))
-    assert r.status_code != 401, r.status_code
-    assert seen.requests and seen.requests[0][2] is None
+    assert r.status_code == 200 and r.content == b""
+    # The member's file headers (the proxy re-frames the body, so content-length isn't relayed).
+    assert r.headers["content-type"] == "image/png" and r.headers.get("etag")
+    proxy._client = None
+    r = hub.head(_link(ref, ttl_s=10, now=time.time() - 100))
+    assert r.status_code == 403 and r.content == b""
+    assert len(seen.requests) == 2 and all(h is None for _, _, h in seen.requests)
+
+
+@pytest.mark.parametrize("slug", ["nobody", "down"])
+def test_an_unknown_or_unreachable_slug_answers_the_same_401(monkeypatch, member, slug):
+    """No slug probing on the anonymous path: an unknown slug (never dialled) and a registered but
+    unreachable one answer exactly what an unauthenticated request does."""
+    base, _ = member
+    ref = media.save_media(b"x", "image/png")
+    hub = _hub(monkeypatch, base)
+    dialled: list = []
+    real_target = proxy._target_for_slug
+
+    def _target(s):
+        dialled.append(s)
+        if s == "down":
+            return ("http://127.0.0.1:9", {})  # nothing listens on the discard port
+        return real_target(s)
+
+    monkeypatch.setattr(proxy, "_target_for_slug", _target)
+    path = media.media_url(ref.path.name, ttl_s=600)
+    r = hub.get(f"/agents/{slug}{path}")
+    unauth = hub.get(f"/agents/m/media/{ref.path.name}")  # what any unauthenticated request gets
+    assert r.status_code == 401 and r.json() == unauth.json(), r.text
+    assert dialled[0] == slug
+
+
+def test_the_hub_route_keeps_its_methods():
+    from fastapi import FastAPI
+
+    from operator_api.fleet_routes import register_fleet_routes
+
+    app = FastAPI()
+    register_fleet_routes(app)
+    (route,) = [
+        r for r in app.routes if getattr(r, "path", "") == "/agents/{slug}/{path:path}" and hasattr(r, "methods")
+    ]
+    assert {"GET", "HEAD", "POST"} <= route.methods

@@ -91,8 +91,10 @@ A client that reads only text parts sees the answer unchanged.
 
 **Links handed to a client expire** (#4258). `exp` is a unix-seconds expiry inside the signed
 bytes (the HMAC covers `<file>|exp=<exp>`), so it can't be extended without the agent's key.
-The lifetime is `media.remote_link_ttl_s` (default `604800`, 7 days; `0` = never expire), or a
-tool's own `attach_file(ref, ttl_s=…)`. Past it the agent answers `403` with
+The lifetime is `media.remote_link_ttl_s` (default `604800`, 7 days; at most `31536000`, a year;
+an explicit `0` = never expire, while `null` or an invalid value means the default), or a tool's
+own `attach_file(ref, ttl_s=…)`. A never-expiring link from a fleet member still needs the hub's
+token. Past it the agent answers `403` with
 `{"detail": "Forbidden: this media link has expired — ask the agent for a fresh link"}`. Links without `exp` (the
 console's inline links, and any minted before #4258) stay valid permanently.
 
@@ -101,11 +103,17 @@ are `{hub}/agents/<slug>/media/<file>?exp=…&sig=…`. A remote peer fetches th
 token**: the hub forwards exactly that shape to the member without its own auth, and the member
 verifies its own signature (the hub never holds the member's key). The hub forwards it only for a
 `GET`/`HEAD` whose path carries no percent-encoding at all, whose `<file>` is a plain store name,
-and whose query is `sig=<64 hex>` plus at most one `exp=<unix seconds>`. Anything else
-(unsigned, extra parameters, an encoded path) gets the hub's normal auth (`401`). A forged or
-expired link of the right shape reaches the member and is refused there (`401` / `403`). The hub
-lends none of its own credentials to these requests, and forwards none of the caller's to a
-remote member.
+and whose query is exactly `exp=<unix seconds>` and `sig=<64 hex>`. **Only expiring links are
+exempt**: a permanent `?sig=` link (the console's inline links, in history, exports or logs), and
+anything else (unsigned, extra parameters, an encoded path), gets the hub's normal auth (`401`).
+A forged or expired link of the right shape reaches the member and is refused there (`401` /
+`403`). An unknown, stopped or unreachable slug answers the same `401`, so the exempt path can't
+be used to probe the fleet. The hub lends none of its own credentials to these requests, and
+forwards none of the caller's to a remote member.
+
+So that links in a member's answer **text** work through the hub too, a member's terminal A2A
+answer has its signed media links made absolute and expiring (the same lifetime). A standalone
+agent's answer text keeps its permanent relative links, which its console resolves itself.
 
 `/v1/chat/completions` has no file part. There, each attached file arrives as an absolute link
 in the content (appended when the text doesn't already carry it) and in an `attachments:

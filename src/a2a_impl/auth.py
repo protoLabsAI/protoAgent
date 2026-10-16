@@ -251,8 +251,8 @@ def _is_fleet_media_link(request) -> bool:
       from the one the proxy forwards (#3999's rule, applied before the auth decision);
     * ``<file>`` is a servable store name (``infra.media.is_media_name``: no dotfile, no
       nested path);
-    * the query is ``sig=<64 hex>`` plus at most an ``exp=<unix seconds>`` — each once,
-      nothing else.
+    * the query is ``exp=<unix seconds>`` and ``sig=<64 hex>`` — both required (only an
+      EXPIRING link is exempt; a permanent one never is), each once, nothing else.
 
     Shape only: the hub never verifies the member's signature (it doesn't hold the key) —
     the member's own media gate does. Anything else takes the hub's normal auth (401)."""
@@ -279,7 +279,10 @@ def _is_fleet_media_link(request) -> bool:
         if not sep or key not in ("sig", "exp") or key in seen or not is_link_query_value(key, value):
             return False
         seen[key] = value
-    return "sig" in seen
+    # BOTH are required: only an EXPIRING link is ever exempt. A permanent ``?sig=`` link (the
+    # console's inline links — in answer text, history, exports, logs) stays behind the hub's
+    # auth, or every link a member ever minted would be fetchable through the hub forever.
+    return "sig" in seen and "exp" in seen
 
 
 def set_member_public_resolver(fn) -> None:
@@ -664,7 +667,8 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                     request.state.member_public = True
                     return await call_next(request)
 
-        # A fleet member's signed media link (#4258): ``/agents/<slug>/media/<file>?sig=…``.
+        # A fleet member's EXPIRING signed media link (#4258):
+        # ``/agents/<slug>/media/<file>?exp=…&sig=…``.
         # The hub can't verify a member's signature (the key never leaves the member), so a
         # request of EXACTLY that shape is forwarded without hub auth and the MEMBER's own
         # ``/media/`` gate verifies it — an unsigned, forged or expired link is refused there.
@@ -673,6 +677,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         # admit it. Anything not of that exact shape takes the normal auth below.
         if _is_fleet_media_link(request):
             request.state.member_public = True
+            request.state.fleet_media = True  # the proxy answers hub-side failures 401 (no slug probe)
             return await call_next(request)
 
         # Core media store (#1929): ``/media/<file>`` serves tool-generated artifacts

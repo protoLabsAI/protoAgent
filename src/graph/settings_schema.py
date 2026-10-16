@@ -1327,8 +1327,10 @@ FIELDS: list[Field] = [
         "number",
         "Media",
         "How long a file link handed to an A2A peer or /v1 client stays valid (default "
-        "604800 = 7 days; 0 = never expire). The console's own inline links never expire.",
+        "604800 = 7 days, at most 31536000 = a year; 0 = never expire). The console's own "
+        "inline links never expire.",
         minimum=0,
+        maximum=31536000,
     ),
     # ── Identity / operator ──────────────────────────────────────────────────
     # `identity.name` stays in FIELDS so it round-trips through the YAML writer AND so it

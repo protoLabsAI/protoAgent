@@ -391,11 +391,11 @@ def _text_part(text: str) -> Part:
     return Part(text=text)
 
 
-def _begin_turn_files(carry: str = ""):
+def _begin_turn_files(carry: str = "", principal: str = ""):
     try:
         from infra import media
 
-        return media.begin_turn_files(carry=carry)
+        return media.begin_turn_files(carry=carry, principal=principal)
     except Exception:  # noqa: BLE001 — attachments must never break a turn
         return None
 
@@ -411,13 +411,55 @@ def _close_turn_files() -> list[dict]:
         return []
 
 
-def _park_turn_files(context_id: str) -> None:
+def _fleet_member_links(text: str) -> str:
+    """A fleet member's answer text with its signed ``/media`` links made absolute and EXPIRING
+    (#4258): the hub forwards only an expiring signed link to a member without its own auth,
+    so a permanent or relative link in the text would be dead for a remote peer (and for the
+    hub's own console, whose ``<img>`` can't carry the hub's bearer). A standalone agent's text
+    is unchanged — its console resolves the permanent relative links itself."""
+    try:
+        from infra import media
+
+        if text and media.behind_fleet_hub():
+            return media.absolutize_media_links(text)
+    except Exception:  # noqa: BLE001 — a link rewrite must never break a turn
+        logger.debug("[a2a] fleet media link rewrite failed", exc_info=True)
+    return text
+
+
+def _principal(context: Any) -> str:
+    """An opaque fingerprint of the credential this request presented (sha256 of its
+    ``Authorization`` / ``X-API-Key`` header, ``""`` when none) — what a HITL-parked turn's
+    attachments are bound to, so only the same caller's resume takes them (#4258)."""
+    try:
+        headers = getattr(getattr(context, "call_context", None), "state", {}).get("headers") or {}
+        lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+        cred = lowered.get("authorization") or lowered.get("x-api-key") or ""
+    except Exception:  # noqa: BLE001
+        cred = ""
+    if not cred:
+        return ""
+    import hashlib
+
+    return hashlib.sha256(cred.encode()).hexdigest()
+
+
+def _drop_parked_turn_files(context_id: str) -> None:
+    try:
+        from infra import media
+
+        media.drop_parked_turn_files(str(context_id or ""))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _park_turn_files(context_id: str, principal: str = "") -> None:
     """Carry the turn's attachments across a HITL pause (#4258): the turn that answers it
     (``begin_turn_files(carry=context_id)``) delivers them with its answer."""
     try:
         from infra import media
 
-        media.park_turn_files(str(context_id or ""))
+        media.park_turn_files(str(context_id or ""), principal)
     except Exception:  # noqa: BLE001
         pass
 
@@ -774,7 +816,11 @@ class ProtoAgentExecutor(AgentExecutor):
         # on the answer artifact), disarmed in the ``finally``. A turn answering a HITL pause
         # takes over the files the parked turn attached before it paused (#4258) — one parked
         # pause per context (#3930), so the context is the key.
-        files_token = _begin_turn_files(carry=str(context.context_id or "") if touches_pause else "")
+        # Bound to the credential that parked them: another caller naming this context gets none.
+        _turn_principal = _principal(context)
+        files_token = _begin_turn_files(
+            carry=str(context.context_id or "") if touches_pause else "", principal=_turn_principal
+        )
 
         # Live answer streaming: forward each text delta as an incremental
         # artifact-update (append) frame so the console fills the bubble as the
@@ -889,7 +935,7 @@ class ProtoAgentExecutor(AgentExecutor):
             ``append !== false`` mapping would have doubled every streamed
             answer). Naive concat consumers would otherwise see the answer
             twice."""
-            body = final_text
+            body = _fleet_member_links(final_text)
             # Compaction context (#1372): the live prompt size + the configured trigger /
             # token threshold, merged into one context-v1 DataPart. Provider failures
             # degrade to "size only" — never break the turn's finalization.
@@ -1237,7 +1283,7 @@ class ProtoAgentExecutor(AgentExecutor):
                         parts.append(_data_part_proto(payload, HITL_MIME))
                     # Files attached before the pause ride the turn that answers it (#4258) —
                     # stashed BEFORE the pause is published, so an answer can't race past it.
-                    _park_turn_files(context.context_id)
+                    _park_turn_files(context.context_id, _turn_principal)
                     await updater.requires_input(message=updater.new_agent_message(parts))
                     touches_pause = True  # settled against in the finally (#3930)
                     # The park leg is a real turn with real spend (#2943): every model
@@ -1334,6 +1380,7 @@ class ProtoAgentExecutor(AgentExecutor):
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
+        _drop_parked_turn_files(context.context_id)  # a canceled pause delivers nothing (#4258)
         await updater.cancel()
 
 

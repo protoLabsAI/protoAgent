@@ -47,7 +47,6 @@ import mimetypes
 import os
 import re
 import secrets as _secrets
-import shutil
 import tempfile
 import threading
 import time
@@ -178,8 +177,34 @@ def verify_name(name: str, sig: str, exp: str | None = None) -> bool:
 SIG_RE = re.compile(r"^[0-9a-f]{64}$")
 _EXP_RE = re.compile(r"^[1-9][0-9]{0,11}$")
 
-# Default lifetime of a link handed to a client outside this box (``media.remote_link_ttl_s``).
+# Default lifetime of a link handed to a client outside this box (``media.remote_link_ttl_s``),
+# and the longest one allowed — a remote link is never "forever by accident".
 DEFAULT_REMOTE_LINK_TTL_S = 7 * 86400
+MAX_REMOTE_LINK_TTL_S = 365 * 86400
+
+
+def clamp_remote_link_ttl(value) -> int:
+    """A ``media.remote_link_ttl_s`` value made safe: an int in ``[0, MAX_REMOTE_LINK_TTL_S]``.
+    Only an explicit ``0`` means "never expire"; a missing / ``null`` / non-integer / negative
+    value is the DEFAULT (with a warning), never a silent "never", and a value past a year is
+    clamped to a year."""
+    if value is None:
+        return DEFAULT_REMOTE_LINK_TTL_S
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        log.warning("[media] remote_link_ttl_s=%r is not a number — using %ds", value, DEFAULT_REMOTE_LINK_TTL_S)
+        return DEFAULT_REMOTE_LINK_TTL_S
+    try:
+        ttl = int(value)
+    except (TypeError, ValueError):
+        log.warning("[media] remote_link_ttl_s=%r is not a number — using %ds", value, DEFAULT_REMOTE_LINK_TTL_S)
+        return DEFAULT_REMOTE_LINK_TTL_S
+    if ttl < 0:
+        log.warning("[media] remote_link_ttl_s=%r is negative — using %ds", value, DEFAULT_REMOTE_LINK_TTL_S)
+        return DEFAULT_REMOTE_LINK_TTL_S
+    if ttl > MAX_REMOTE_LINK_TTL_S:
+        log.warning("[media] remote_link_ttl_s=%r exceeds a year — clamped to %ds", value, MAX_REMOTE_LINK_TTL_S)
+        return MAX_REMOTE_LINK_TTL_S
+    return ttl
 
 
 def is_media_name(name: str) -> bool:
@@ -245,7 +270,7 @@ def remote_link_ttl_s() -> int:
 
         cfg = getattr(STATE, "graph_config", None)
         if cfg is not None:
-            return max(0, int(getattr(cfg, "media_remote_link_ttl_s", DEFAULT_REMOTE_LINK_TTL_S) or 0))
+            return clamp_remote_link_ttl(getattr(cfg, "media_remote_link_ttl_s", DEFAULT_REMOTE_LINK_TTL_S))
     except Exception:  # noqa: BLE001 — a policy probe must never break a turn
         pass
     return DEFAULT_REMOTE_LINK_TTL_S
@@ -310,11 +335,15 @@ def save_media(data: bytes | str | Path, mime: str, meta: dict | None = None) ->
     # infra.paths.atomic_write, which is text-only).
     fd, tmp = tempfile.mkstemp(dir=str(d), prefix=f".{name}.")
     try:
+        digest = hashlib.sha256()
         if source is not None:
             with os.fdopen(fd, "wb") as out, open(source, "rb") as src:
-                shutil.copyfileobj(src, out)
+                for chunk in iter(lambda: src.read(1 << 20), b""):
+                    digest.update(chunk)
+                    out.write(chunk)
         else:
             with os.fdopen(fd, "wb") as out:
+                digest.update(data)
                 out.write(data)
         os.replace(tmp, dest)
     except BaseException:
@@ -324,7 +353,14 @@ def save_media(data: bytes | str | Path, mime: str, meta: dict | None = None) ->
             pass
         raise
 
-    sidecar = {"mime": mime or "application/octet-stream", "created_at": time.time(), "meta": dict(meta or {})}
+    sidecar = {
+        "mime": mime or "application/octet-stream",
+        "created_at": time.time(),
+        # The content key attachments dedupe on (#4258): a re-run tool's fresh copy of the
+        # same bytes is the same attachment.
+        "sha256": digest.hexdigest(),
+        "meta": dict(meta or {}),
+    }
     try:
         from infra.paths import atomic_write
 
@@ -448,6 +484,22 @@ _RELATIVE_MEDIA_LINK = re.compile(
 )
 
 
+# A fleet member's public base is ``{hub}/agents/<slug>`` (the supervisor sets it).
+_FLEET_BASE_PATH = re.compile(r"^/agents/[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def behind_fleet_hub(base: str | None = None) -> bool:
+    """Whether this agent's public base is a fleet hub's ``/agents/<slug>`` prefix — its links
+    are fetched through the hub, which forwards only EXPIRING signed links (#4258)."""
+    from urllib.parse import urlsplit
+
+    b = (public_base_url() if base is None else str(base)).strip().rstrip("/")
+    try:
+        return bool(b) and bool(_FLEET_BASE_PATH.match(urlsplit(b).path))
+    except ValueError:
+        return False
+
+
 def absolute_media_url(url: str, base: str | None = None) -> str:
     """A server-relative ``/media/…`` URL made absolute against ``base`` (default
     :func:`public_base_url`). An already-absolute URL, or any URL when no base is known, is
@@ -476,7 +528,7 @@ def absolutize_media_links(
     b = (public_base_url() if base is None else str(base)).strip().rstrip("/")
     if not text or not b:
         return text
-    ttl = remote_link_ttl_s() if ttl_s is None else max(0, int(ttl_s))
+    ttl = remote_link_ttl_s() if ttl_s is None else clamp_remote_link_ttl(ttl_s)
     known = links if links is not None else {}
 
     def _sub(m: re.Match) -> str:
@@ -500,16 +552,18 @@ def absolutize_media_links(
 # turn's one list, and the 16-file cap is a single check-and-append (#4258).
 #
 # Its lifecycle (#4258):
-#   * ``close_turn_files`` / ``end_turn_files`` CLOSE the holder. A background job or delegate
-#     that copied the turn's context and attaches after the answer was built is refused with a
-#     log line — never appended to a list nobody will read again.
-#   * A turn parking at a HITL interrupt stashes its attachments under the conversation key
-#     (``park_turn_files``); the turn that answers the pause re-arms with them
-#     (``begin_turn_files(carry=key)``), re-minting each link so its lifetime starts there.
-#   * Dedupe is by the stored FILE (the same ref attached twice is one attachment, whatever its
-#     link's signature/expiry), and a later attach under the same display ``name`` replaces the
-#     earlier one — an overflow retry that re-runs a tool and saves a fresh copy doesn't
-#     deliver the file twice.
+#   * ``close_turn_files`` / ``end_turn_files`` / ``park_turn_files`` CLOSE the holder. A
+#     background job or delegate that copied the turn's context and attaches after that is
+#     refused (False, with a log line) — never appended to a list nobody will read again.
+#   * A turn parking at a HITL interrupt stashes its attachments under (conversation,
+#     principal) — the credential that parked it. Only the turn that answers the pause in that
+#     conversation WITH the same principal re-arms with them (``begin_turn_files(carry=…)``),
+#     re-minting each link so its lifetime starts there. A cancel drops the conversation's
+#     stash; an unanswered one ages out after a day.
+#   * Dedupe is by CONTENT (the sha256 ``save_media`` records): the same ref attached twice,
+#     or a fresh copy of the same bytes a re-run tool saved (an overflow retry), is one
+#     attachment — the latest copy's link wins. A later attach under the same explicit
+#     ``name`` replaces the earlier one too (a re-render whose bytes differ).
 
 _MAX_TURN_FILES = 16
 
@@ -525,13 +579,13 @@ class _TurnFiles:
 
 _TURN_FILES: contextvars.ContextVar[_TurnFiles | None] = contextvars.ContextVar("protoagent_turn_files", default=None)
 
-# Attachments of turns parked at a HITL interrupt, by conversation key → (parked_at, entries).
-# In-memory and bounded: a restart drops them (the resumed turn then carries none), an old
-# park ages out.
-_PARKED: dict[str, tuple[float, list[dict]]] = {}
+# Attachments of turns parked at a HITL interrupt: (conversation, principal) → (parked_at,
+# entries). In-memory and bounded: a restart drops them (the resumed turn then carries none),
+# an unanswered park ages out.
+_PARKED: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 _PARKED_LOCK = threading.Lock()
 _PARKED_MAX = 256
-_PARKED_TTL_S = 7 * 86400
+_PARKED_TTL_S = 86400
 
 
 def _public(entry: dict) -> dict:
@@ -542,39 +596,59 @@ def _remint(entry: dict) -> dict:
     return {**entry, "url": absolute_media_url(media_url(entry["file"], ttl_s=entry.get("ttl", 0)))}
 
 
-def begin_turn_files(carry: str = "") -> contextvars.Token:
+def _sweep_parked(now: float) -> None:
+    """Drop aged-out parks, then the oldest past the bound. Caller holds ``_PARKED_LOCK``."""
+    for k in [k for k, (at, _) in _PARKED.items() if now - at > _PARKED_TTL_S]:
+        _PARKED.pop(k, None)
+    while len(_PARKED) > _PARKED_MAX:
+        _PARKED.pop(next(iter(_PARKED)))
+
+
+def begin_turn_files(carry: str = "", principal: str = "") -> contextvars.Token:
     """Arm file attachments for the turn running in this context; pass the token to
     :func:`end_turn_files` when the turn ends. ``carry`` names a conversation whose parked
-    turn's attachments (:func:`park_turn_files`) this turn takes over — a HITL resume."""
+    turn's attachments (:func:`park_turn_files`) this turn takes over — a HITL resume — and
+    ``principal`` must be the one that parked them (else nothing is carried)."""
     items: list[dict] = []
     if carry:
+        now = time.time()
         with _PARKED_LOCK:
-            got = _PARKED.pop(carry, None)
-        if got is not None and time.time() - got[0] <= _PARKED_TTL_S:
+            _sweep_parked(now)
+            got = _PARKED.pop((carry, principal), None)
+        if got is not None:
             items = [_remint(e) for e in got[1] if resolve_media(e["file"]) is not None]
     return _TURN_FILES.set(_TurnFiles(items))
 
 
-def park_turn_files(key: str) -> None:
-    """Stash the armed turn's attachments under ``key`` (the conversation) when the turn parks
-    at a HITL interrupt, merged with any already parked there (a held message re-parks on the
-    same pause) — the turn that answers it re-arms with them."""
+def park_turn_files(key: str, principal: str = "") -> None:
+    """Stash the armed turn's attachments under ``(key, principal)`` — the conversation and the
+    credential that parked it — when the turn parks at a HITL interrupt, merged with any
+    already parked there (a held message re-parks on the same pause). The holder CLOSES in the
+    same step, so an attach racing the park is refused rather than reported attached and lost."""
     tf = _TURN_FILES.get()
-    if not key or tf is None:
+    if tf is None:
         return
     with tf.lock:
+        tf.closed = True
         mine = [dict(e) for e in tf.items]
-    if not mine:
+    if not key or not mine:
         return
     now = time.time()
     with _PARKED_LOCK:
-        prev = _PARKED.pop(key, None)
-        merged = list(prev[1]) if prev is not None and now - prev[0] <= _PARKED_TTL_S else []
-        have = {e["file"] for e in merged}
-        merged.extend(e for e in mine if e["file"] not in have)
-        _PARKED[key] = (now, merged[:_MAX_TURN_FILES])
-        while len(_PARKED) > _PARKED_MAX:
-            _PARKED.pop(next(iter(_PARKED)))
+        _sweep_parked(now)
+        prev = _PARKED.pop((key, principal), None)
+        merged = list(prev[1]) if prev is not None else []
+        have = {e.get("key") or e["file"] for e in merged}
+        merged.extend(e for e in mine if (e.get("key") or e["file"]) not in have)
+        _PARKED[(key, principal)] = (now, merged[:_MAX_TURN_FILES])
+        _sweep_parked(now)
+
+
+def drop_parked_turn_files(key: str) -> None:
+    """Forget every attachment parked for conversation ``key`` (the task was canceled)."""
+    with _PARKED_LOCK:
+        for k in [k for k in _PARKED if k[0] == key]:
+            _PARKED.pop(k, None)
 
 
 def close_turn_files() -> list[dict]:
@@ -611,6 +685,29 @@ def turn_files() -> list[dict]:
         return [_public(e) for e in tf.items]
 
 
+def _content_key(file_name: str) -> str:
+    """The dedupe key for a stored file: its content sha256 (recorded by ``save_media``, else
+    computed), falling back to the filename when the file can't be read."""
+    import json
+
+    d = media_dir()
+    stem = Path(file_name).stem
+    try:
+        digest = json.loads((d / f".{stem}.json").read_text()).get("sha256")
+        if isinstance(digest, str) and digest:
+            return "sha256:" + digest
+    except (OSError, ValueError):
+        pass
+    try:
+        h = hashlib.sha256()
+        with open(d / file_name, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return "sha256:" + h.hexdigest()
+    except OSError:
+        return "file:" + file_name
+
+
 def _query_value(url: str, key: str) -> str:
     query = url.partition("?")[2]
     for pair in query.split("&"):
@@ -632,8 +729,9 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
 
     False — and nothing happens — outside an armed turn (a background job), after the turn's
     answer was built (a late background/delegated attach), for a non-media, unsigned or
-    expired URL, or past 16 files a turn. Attaching the same file twice is one attachment; a
-    second file under the same ``name`` replaces the first. A console turn IS armed (it rides
+    expired URL, or past 16 files a turn. Attaching the same content twice (the same ref, or a
+    re-run tool's fresh copy of the same bytes) is one attachment; a second file under the same
+    explicit ``name`` replaces the first. A console turn IS armed (it rides
     A2A ``message/stream``): the file part lands on the console's task, which ignores it and
     renders the inline link."""
     tf = _TURN_FILES.get()
@@ -654,12 +752,15 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
     if not mime:
         found = resolve_media(file_name)
         mime = found[1] if found else (mimetypes.guess_type(file_name)[0] or "application/octet-stream")
-    ttl = remote_link_ttl_s() if ttl_s is None else max(0, int(ttl_s))
+    ttl = remote_link_ttl_s() if ttl_s is None else clamp_remote_link_ttl(ttl_s)
+    explicit = (name or "").strip()[:255]
     entry = {
         "file": file_name,
+        "key": _content_key(file_name),
         "url": absolute_media_url(media_url(file_name, ttl_s=ttl)),
         "mime": mime,
-        "name": (name or path_name or file_name).strip()[:255],
+        "name": explicit or path_name or file_name,
+        "named": bool(explicit),
         "ttl": ttl,
     }
     with tf.lock:
@@ -670,12 +771,22 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
                 rel,
             )
             return False
-        for i, f in enumerate(tf.items):
-            if f["file"] == file_name:
-                return True  # the same file again: one attachment
-            if f["name"] == entry["name"]:
-                tf.items[i] = entry  # a fresh copy under the same name replaces the first
-                return True
+        # Every entry this attach supersedes: the same content (same file, or a fresh copy of
+        # the same bytes), or the same explicit name. They collapse into ONE entry, at the
+        # first one's position — never two entries for one file.
+        hits = [
+            i
+            for i, f in enumerate(tf.items)
+            if f["key"] == entry["key"] or (entry["named"] and f.get("named") and f["name"] == entry["name"])
+        ]
+        if hits:
+            first = tf.items[hits[0]]
+            if not entry["named"] and first.get("named"):
+                entry = {**entry, "name": first["name"], "named": True}  # keep the name it was given
+            tf.items[hits[0]] = entry
+            for i in reversed(hits[1:]):
+                del tf.items[i]
+            return True
         if len(tf.items) >= _MAX_TURN_FILES:
             log.warning("[media] attach_file: turn already carries %d files — %r not attached", _MAX_TURN_FILES, rel)
             return False

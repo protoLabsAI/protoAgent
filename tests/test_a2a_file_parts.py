@@ -334,7 +334,11 @@ def test_config_parses_remote_link_ttl():
     assert LangGraphConfig().media_remote_link_ttl_s == 7 * 86400
     assert LangGraphConfig.from_dict({"media": {"remote_link_ttl_s": 60}}).media_remote_link_ttl_s == 60
     assert LangGraphConfig.from_dict({"media": {"remote_link_ttl_s": 0}}).media_remote_link_ttl_s == 0
-    assert LangGraphConfig.from_dict({"media": {"remote_link_ttl_s": -5}}).media_remote_link_ttl_s == 0
+    # Only an explicit 0 means never: null / junk / negative is the DEFAULT, past a year clamps.
+    for bad in (None, -5, "soon", True, [1]):
+        assert LangGraphConfig.from_dict({"media": {"remote_link_ttl_s": bad}}).media_remote_link_ttl_s == 604800, bad
+    assert LangGraphConfig.from_dict({"media": {"remote_link_ttl_s": 10**9}}).media_remote_link_ttl_s == 365 * 86400
+    assert LangGraphConfig.from_dict({"media": {"remote_link_ttl_s": "120"}}).media_remote_link_ttl_s == 120
 
 
 def test_an_expired_link_cannot_be_attached():
@@ -379,6 +383,12 @@ def test_the_gate_serves_a_live_expiring_link_and_403s_an_expired_one(_gate):
     assert _gate.get(f"/media/{name}?exp={exp}&sig={'0' * 64}").status_code == 401
     assert _gate.get(f"/media/{name}").status_code == 401
     assert _gate.get(ref.url).status_code == 200
+    # HEAD is real on the media route: same status and headers, no body.
+    head = _gate.head(media.media_url(name, ttl_s=600))
+    assert head.status_code == 200 and head.content == b"" and head.headers["content-length"] == str(len(b"payload"))
+    head = _gate.head(media.media_url(name, ttl_s=10, now=time.time() - 100))
+    assert head.status_code == 403 and head.content == b""
+    assert _gate.head(f"/media/{name}").status_code == 401
     # A credential still admits a request whose link expired.
     r = _gate.get(
         media.media_url(name, ttl_s=10, now=time.time() - 100), headers={"Authorization": "Bearer secret-token"}
@@ -407,19 +417,102 @@ def test_a_late_attach_after_the_answer_was_built_is_dropped():
     assert background.run(sdk.attach_file, media.save_media(b"c", "image/png")) is False
 
 
-def test_attachments_dedupe_by_file_and_a_same_name_copy_replaces():
+def test_attachments_dedupe_by_content_without_a_name():
+    """A re-run tool's fresh copy of the same bytes (an overflow retry) is the same attachment
+    even with no ``name=`` — the default name is the per-copy filename, so only content can
+    tell them apart. The latest copy's link wins."""
     token = media.begin_turn_files()
     try:
-        ref = media.save_media(b"a", "image/png")
-        assert sdk.attach_file(ref, name="chart.png") is True
-        assert sdk.attach_file(ref.url) is True  # same file, another link shape: one attachment
-        # An overflow retry re-runs the tool: a fresh copy under the same name replaces the first.
-        again = media.save_media(b"a", "image/png")
-        assert sdk.attach_file(again, name="chart.png") is True
+        ref = media.save_media(b"same-bytes", "image/png")
+        assert sdk.attach_file(ref) is True
+        assert sdk.attach_file(ref.url) is True  # same file, another link shape
+        again = media.save_media(b"same-bytes", "image/png")
+        assert again.path.name != ref.path.name
+        assert sdk.attach_file(again) is True
         (f,) = media.turn_files()
-        assert f["name"] == "chart.png" and f"/media/{again.path.name}?" in f["url"]
+        assert f"/media/{again.path.name}?" in f["url"]
+        # Different bytes, no name: a second attachment.
+        assert sdk.attach_file(media.save_media(b"other", "image/png")) is True
+        assert len(media.turn_files()) == 2
     finally:
         media.end_turn_files(token)
+
+
+def test_a_same_name_copy_replaces_and_entries_collapse_to_one():
+    token = media.begin_turn_files()
+    try:
+        first = media.save_media(b"v1", "image/png")
+        assert sdk.attach_file(first, name="chart.png") is True
+        # A re-render with different bytes under the same explicit name replaces it.
+        second = media.save_media(b"v2", "image/png")
+        assert sdk.attach_file(second, name="chart.png") is True
+        (f,) = media.turn_files()
+        assert f["name"] == "chart.png" and f"/media/{second.path.name}?" in f["url"]
+        # An entry matching TWO existing ones (same content as one, same name as another)
+        # collapses them into ONE — never two entries for one file.
+        other = media.save_media(b"v3", "image/png")
+        assert sdk.attach_file(other) is True
+        assert len(media.turn_files()) == 2
+        copy = media.save_media(b"v3", "image/png")
+        assert sdk.attach_file(copy, name="chart.png") is True
+        (f,) = media.turn_files()
+        assert f["name"] == "chart.png" and f"/media/{copy.path.name}?" in f["url"]
+        # An unnamed re-attach of the same content keeps the name it was given.
+        assert sdk.attach_file(media.save_media(b"v3", "image/png")) is True
+        assert media.turn_files()[0]["name"] == "chart.png"
+    finally:
+        media.end_turn_files(token)
+
+
+def test_park_closes_the_turn_and_binds_the_stash_to_its_principal():
+    ctx = "ctx-" + str(time.time_ns())
+    token = media.begin_turn_files()
+    try:
+        assert sdk.attach_file(media.save_media(b"a", "image/png")) is True
+        media.park_turn_files(ctx, "principal-A")
+        # An attach racing the park is refused, never reported attached and lost.
+        assert sdk.attach_file(media.save_media(b"b", "image/png")) is False
+    finally:
+        media.end_turn_files(token)
+    # Another principal naming the same conversation carries nothing — and leaves it parked.
+    token = media.begin_turn_files(carry=ctx, principal="principal-B")
+    try:
+        assert media.turn_files() == []
+    finally:
+        media.end_turn_files(token)
+    token = media.begin_turn_files(carry=ctx, principal="principal-A")
+    try:
+        assert len(media.turn_files()) == 1
+    finally:
+        media.end_turn_files(token)
+    # Taken once: a second resume gets nothing.
+    token = media.begin_turn_files(carry=ctx, principal="principal-A")
+    try:
+        assert media.turn_files() == []
+    finally:
+        media.end_turn_files(token)
+
+
+def test_a_canceled_or_aged_out_park_delivers_nothing(monkeypatch):
+    for how in ("cancel", "age"):
+        ctx = f"ctx-{how}-{time.time_ns()}"
+        token = media.begin_turn_files()
+        try:
+            sdk.attach_file(media.save_media(how.encode(), "image/png"))
+            media.park_turn_files(ctx, "p")
+        finally:
+            media.end_turn_files(token)
+        with monkeypatch.context() as m:
+            if how == "cancel":
+                media.drop_parked_turn_files(ctx)
+            else:
+                real = time.time
+                m.setattr(media.time, "time", lambda: real() + media._PARKED_TTL_S + 1)
+            token = media.begin_turn_files(carry=ctx, principal="p")
+            try:
+                assert media.turn_files() == [], how
+            finally:
+                media.end_turn_files(token)
 
 
 def test_the_cap_holds_under_concurrent_attaches():
@@ -561,7 +654,7 @@ def _real_v1_client(monkeypatch, script):
         """Render a chart and attach it to the answer."""
         ref = media.save_media(b"\x89PNG" + title.encode(), "image/png")
         saved.append(ref)
-        sdk.attach_file(ref, name="chart.png")
+        sdk.attach_file(ref)  # no name= — dedupe must not depend on one
         return f"Rendered ![{title}]({ref.url})"
 
     items = iter(script)
@@ -617,7 +710,7 @@ def test_real_v1_turn_delivers_the_attachment(monkeypatch):
     msg = body["choices"][0]["message"]
     (ref,) = saved
     (att,) = msg["attachments"]
-    assert att["name"] == "chart.png" and att["mime_type"] == "image/png"
+    assert att["name"] == ref.path.name and att["mime_type"] == "image/png"
     assert att["url"].startswith(f"{BASE}/media/{ref.path.name}?exp=") and _access(att["url"]) == "ok"
     assert msg["content"].startswith("Chart is ready.") and msg["content"].count(att["url"]) == 1
     assert media.turn_files() == []  # disarmed after the request
@@ -662,3 +755,89 @@ def test_real_v1_overflow_retry_does_not_duplicate_the_attachment(monkeypatch):
     assert len(saved) == 2, msg  # the tool really ran twice
     (att,) = msg["attachments"]
     assert f"/media/{saved[1].path.name}?" in att["url"]
+
+
+async def _resume_with(c, task, headers, text="yes"):
+    return await c.post(
+        "/a2a",
+        headers={"A2A-Version": "1.0", **headers},
+        json={
+            "jsonrpc": "2.0",
+            "id": "r2",
+            "method": "SendMessage",
+            "params": {
+                "message": {
+                    "messageId": "m2",
+                    "role": "ROLE_USER",
+                    "taskId": task["id"],
+                    "contextId": task["contextId"],
+                    "parts": [{"text": text}],
+                }
+            },
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("same_principal", [True, False])
+async def test_parked_attachments_go_only_to_the_principal_that_parked_them(same_principal):
+    """Bearer and X-API-Key are both accepted (alternatives, #2620) — a resume presented with the
+    OTHER credential is another principal, and the parked files don't follow it."""
+    from a2a_impl import auth
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        if resume:
+            yield ("done", "resumed")
+        else:
+            await asyncio.to_thread(_tool_that_delivers_a_video)
+            yield ("input_required", {"question": "Publish it?"})
+
+    app = build_app(stream, bearer="bear", api_key="key")
+    bearer = {"Authorization": "Bearer bear"}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10, headers=bearer
+        ) as c:
+            task = (await send_msg(c)).json()["result"]["task"]
+            assert (await poll_terminal(c, task["id"]))["status"]["state"] == "TASK_STATE_INPUT_REQUIRED"
+            other = bearer if same_principal else {"Authorization": "", "X-API-Key": "key"}
+            assert (await _resume_with(c, task, other)).status_code == 200
+            for _ in range(60):
+                final = await poll_terminal(c, task["id"])
+                if final["status"]["state"] == "TASK_STATE_COMPLETED":
+                    break
+                await asyncio.sleep(0.03)
+    finally:
+        auth._BEARER[0] = None
+        auth._FEDERATION[0] = None
+        auth._API_KEY[0] = ""
+        auth._ALLOWED_ORIGINS[0] = None
+    assert final["status"]["state"] == "TASK_STATE_COMPLETED"
+    files = [p for art in final["artifacts"] for p in art["parts"] if "url" in p]
+    assert len(files) == (1 if same_principal else 0)
+
+
+@pytest.mark.asyncio
+async def test_a_fleet_members_answer_text_carries_expiring_absolute_links(monkeypatch):
+    """Behind a hub (public base ``{hub}/agents/<slug>``) the text's signed links become absolute
+    and EXPIRING — the only kind the hub forwards anonymously. A standalone agent's text keeps
+    its permanent relative link (its console resolves that itself)."""
+    ref = media.save_media(b"png", "image/png")
+
+    async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
+        yield ("done", f"See ![chart]({ref.url})")
+
+    async def answer_text() -> str:
+        app = build_app(stream)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", timeout=10) as c:
+            task = (await send_msg(c)).json()["result"]["task"]
+            final = await poll_terminal(c, task["id"])
+        return final["artifacts"][0]["parts"][0]["text"]
+
+    assert await answer_text() == f"See ![chart]({ref.url})"  # standalone: unchanged
+    hub = "https://hub.example/agents/vera"
+    monkeypatch.setenv("A2A_PUBLIC_URL", hub)
+    text = await answer_text()
+    (link,) = re.findall(r"\((https://[^)]+)\)", text)
+    assert link.startswith(f"{hub}/media/{ref.path.name}?exp=")
+    assert _access(link.replace("/agents/vera", "", 1)) == "ok"  # what the member's gate sees
