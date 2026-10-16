@@ -74,6 +74,24 @@ Result shape:
 
 The `kind: "task"` discriminator is required — `@a2a-js/sdk` routes by it.
 
+#### File parts in the answer
+
+When a tool delivers a file — it saved it to the media store and called
+`graph.sdk.attach_file(ref)` (#4252) — the terminal answer artifact carries an A2A 1.0
+file part after the text, one per file:
+
+```json
+{"url": "https://agent.example.com/media/3f2a….mp4?sig=…", "mediaType": "video/mp4", "filename": "overview.mp4"}
+```
+
+The `url` is the signed media link, made absolute against `A2A_PUBLIC_URL`, the same base the
+card advertises. With `A2A_PUBLIC_URL` unset, the base is the bound loopback port. The signature
+admits the GET without a bearer. A client that reads only text parts sees the answer unchanged.
+`/v1/chat/completions` has no file part. There, each attached file arrives as an absolute link
+in the content (appended when the text doesn't already carry it) and in an `attachments:
+[{url, mime_type, name}]` field on the message. Every signed `/media/…` link in a `/v1` answer
+is made absolute.
+
 ### `message/stream` — SSE
 
 Same as `message/send` but streams frames as the run progresses. One SSE event per frame. Every frame carries a `kind` discriminator:
