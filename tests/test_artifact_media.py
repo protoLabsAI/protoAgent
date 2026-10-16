@@ -105,6 +105,7 @@ def test_media_route_streams_a_ticketed_video_with_ranges(monkeypatch, tmp_path)
     assert r.headers["content-disposition"].startswith("inline;")
     assert r.headers["x-content-type-options"] == "nosniff"
     assert "sandbox" in r.headers["content-security-policy"]
+    assert r.headers["cache-control"] == "private, no-store"
     r = c.get(body["path"], headers={"Range": "bytes=2048-4095"})  # a seek
     assert r.status_code == 206 and r.content == _VIDEO[2048:4096]
     assert c.head(body["path"]).status_code == 200
@@ -127,6 +128,53 @@ def test_media_route_refuses_without_a_matching_ticket(monkeypatch, tmp_path):
     latest = _ticket(c, aid).json()
     assert latest["version"] == 2  # absent → the latest, pinned at mint time
     assert c.get(latest["path"]).content == _VIDEO[::-1]
+
+
+def test_a_ticket_never_serves_another_version_after_a_cap_trim(monkeypatch, tmp_path):
+    """The version cap trims the oldest version and shifts the indices: a ticket minted for v1
+    must 404, not start serving the bytes that are now at index 1 (the old v2, then v3)."""
+    monkeypatch.setenv("ARTIFACT_MAX_VERSIONS", "2")
+    art = _load(monkeypatch, tmp_path)
+    c = _client(art)
+    aid = _save(art, tmp_path, "clip.mp4", b"one" * 100)
+    _save(art, tmp_path, "clip.mp4", b"two" * 100, artifact_id=aid)
+    v1 = _ticket(c, aid, 1).json()["path"]
+    assert c.get(v1).content == b"one" * 100
+    _save(art, tmp_path, "clip.mp4", b"three" * 100, artifact_id=aid)  # trims "one"; "two" is now index 1
+    assert len(_arts(art)[0]["versions"]) == 2
+    r = c.get(v1)
+    assert r.status_code == 404 and b"two" not in r.content
+    _save(art, tmp_path, "clip.mp4", b"four" * 100, artifact_id=aid)  # "three" is now index 1
+    assert c.get(v1).status_code == 404
+
+
+def test_access_log_redacts_the_ticket(monkeypatch, tmp_path):
+    """The ticket rides the query and uvicorn's access log writes full paths: the plugin's filter
+    on ``uvicorn.access`` rewrites the ticket to ``…`` (once, however often routers are built)."""
+    import logging
+
+    art = _load(monkeypatch, tmp_path)
+    art._build_view_router()
+    art._build_view_router()
+    lg = logging.getLogger("uvicorn.access")
+    mine = [f for f in lg.filters if type(f).__name__ == "TicketRedactFilter"]
+    assert len(mine) == 1
+    path = "/plugins/artifact/media/a-1?version=1&t=SECRETtok-_123"
+    rec = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:5", "GET", path, "1.1", 206),
+        None,
+    )
+    assert mine[0].filter(rec) is True
+    line = rec.getMessage()
+    assert "SECRETtok" not in line and "t=…" in line and "version=1" in line
+    proxied = "/agents/m/plugins/artifact/media/a-1?t=abc&version=2&ticket=x&token=y"
+    assert art._media.redact(proxied) == "/agents/m/plugins/artifact/media/a-1?t=…&version=2&ticket=…&token=…"
+    assert art._media.redact("/api/x?t=keep") == "/api/x?t=keep"  # other routes untouched
 
 
 def test_media_ticket_expires(monkeypatch, tmp_path):
@@ -197,8 +245,8 @@ def test_file_card_routes_media_to_the_media_frame(monkeypatch, tmp_path):
     for directive in (
         "default-src 'none'",
         "script-src 'nonce-",
-        "media-src \"+src+\"",
-        "img-src \"+src+\" data:",
+        'media-src "+src+"',
+        'img-src "+src+" data:',
         "connect-src 'none'",
         "worker-src 'none'",
         "frame-src 'none'",
@@ -209,8 +257,13 @@ def test_file_card_routes_media_to_the_media_frame(monkeypatch, tmp_path):
     assert "allow-same-origin" not in art._SHELL_HTML  # the nested frame stays an opaque sandbox
     ctl = _js_function(js, "artMedia")
     assert "</" not in ctl and "<!" not in ctl  # rides a srcdoc <script>
-    assert 'state:"need"' in ctl and "e.source!==W.parent" in ctl
+    assert 'state:"need", nonce:cap' in ctl and "e.source!==W.parent" in ctl
+    # the per-render capability: the srcdoc carries NONCE_SLOT (frameNavigator swaps in a fresh
+    # value per navigation) and the shell answers only the frame's CURRENT document
+    assert "JSON.stringify(NONCE_SLOT)" in doc
     feed = _js_function(js, "mediaMessage")
+    assert "!capabilityOk(frameNav.nonce(), m)" in feed
+    assert "frameNav.nonce()!==m.nonce" in feed  # re-checked after the async mint
     assert "/media-ticket?version=" in feed and "kit.apiFetch" in feed
     assert 'path.indexOf("/plugins/artifact/media/")!==0' in feed
     assert js.count("mediaReset(a, v, vi);") == 2  # panel + embed renders both arm the feed
@@ -222,10 +275,10 @@ def test_media_frame_builds_in_node(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
     js = _js(art)
     prelude = (
-        'var location={origin:"http://127.0.0.1:7870"};'
+        'var location={origin:"http://127.0.0.1:7870"};var NONCE_SLOT="__slot__";'
         "var document={documentElement:{}};"
         'function getComputedStyle(){return {getPropertyValue:function(){return "";}};}'
-        'var crypto={getRandomValues:function(a){for(var i=0;i<a.length;i++)a[i]=i*7;return a;}};'
+        "var crypto={getRandomValues:function(a){for(var i=0;i<a.length;i++)a[i]=i*7;return a;}};"
         'function btoa(s){return Buffer.from(s,"binary").toString("base64");}'
     )
     fns = "".join(_js_function(js, n) for n in ("esc", "fmtSize", "cspNonce", "artMedia", "mediaDoc"))
@@ -241,6 +294,7 @@ def test_media_frame_builds_in_node(monkeypatch, tmp_path):
     assert "media-src http://127.0.0.1:7870;" in vid
     assert "7.6 MB" in vid and "<video" in vid
     assert vid.count("</script>") == 1
+    assert '("video","__slot__");' in vid  # the slot frameNavigator swaps for a per-render capability
     assert 'alt="p&quot;x.png"' in img and "<video" not in img
 
 

@@ -205,6 +205,7 @@ def _build_view_router():
     from fastapi.responses import FileResponse, HTMLResponse, Response
 
     router = APIRouter()
+    _media.install_log_redaction()  # the media ticket rides the query; keep it out of access logs
 
     @router.get("/view")
     async def _view():
@@ -218,14 +219,17 @@ def _build_view_router():
     # tickets and non-media files are the same 404 — the route reveals nothing without a ticket.
     @router.api_route("/media/{art_id}", methods=["GET", "HEAD"], include_in_schema=False)
     async def _media_route(art_id: str, version: int = 0, t: str = "", req_range: str | None = Header(None, alias="range")):
-        if version < 1 or not _media.check(t, art_id, version):
+        granted = _media.check(t, art_id, version) if version >= 1 else None
+        if granted is None:
             return Response(status_code=404)
         try:
             fh, meta, name = _open_blob(art_id, version)
         except HTTPException:
             return Response(status_code=404)
         mt = _media.media_type(meta)
-        if mt is None:
+        # The version at this index must still hold the MINTED blob: a version-cap trim shifts
+        # indices, and a ticket for v1 must never start serving what is now v1 (an older v2).
+        if mt is None or name != granted:
             fh.close()
             return Response(status_code=404)
         return _open_file_response()(
@@ -502,7 +506,7 @@ def _build_data_router():
             raise HTTPException(404, "not a file artifact / no stored blob")
         if _media.media_kind(vers[n - 1].get("file") or {}) is None:
             raise HTTPException(415, "not an inline image/video file")
-        tok = _media.mint(art_id, n)
+        tok = _media.mint(art_id, n, _store._blob_path(art_id, vers[n - 1]["blob"]).name)
         return {"ticket": tok, "version": n, "path": f"/plugins/artifact/media/{quote(art_id)}?version={n}&t={tok}"}
 
     @router.delete("/artifact/{art_id}")

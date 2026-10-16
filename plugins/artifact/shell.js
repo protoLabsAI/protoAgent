@@ -1074,10 +1074,13 @@
       + '<div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div>'
       + '<div class="note" id="note" role="status" hidden></div>'
       + el + '</div>'
-      + '<script nonce="'+nonce+'">(' + artMedia.toString() + ')(' + JSON.stringify(pk) + ');<\/script>';
+      + '<script nonce="'+nonce+'">(' + artMedia.toString() + ')(' + JSON.stringify(pk) + ',' + JSON.stringify(NONCE_SLOT) + ');<\/script>';
   }
   // The in-frame half (injected via toString — no `</` inside): ask for the URL, set it, report.
-  function artMedia(kind){
+  // `cap` is NONCE_SLOT in the srcdoc, swapped by frameNavigator for this navigation's fresh
+  // capability; the shell answers a `need` only when it matches the frame's CURRENT document, so
+  // a stale document still in the frame when the panel moves on can't obtain the next ticket.
+  function artMedia(kind, cap){
     var D=document, W=window, el=D.getElementById("m"), note=D.getElementById("note"), told=false;
     function post(m){ try{ W.parent.postMessage(m, "*"); }catch(_){} }
     function fail(reason){
@@ -1095,7 +1098,7 @@
       if(m.type==="protoArtifact:media:src" && typeof m.url==="string" && /^https?:[/][/]/.test(m.url)){ el.src=m.url; return; }
       if(m.type==="protoArtifact:media:error") fail(String(m.reason||"the file couldn't be fetched"));
     });
-    post({type:"protoArtifact:media", state:"need"});
+    post({type:"protoArtifact:media", state:"need", nonce:cap});
   }
   // ── .pptx slide previews ──────────────────────────────────────────────────────────────
   // A deck renders as REAL slides — the vendored @aiden0z/pptx-renderer (window.PptxRenderer)
@@ -2325,13 +2328,13 @@
   function mediaKindOf(v){ var f=(v&&v.file)||{}, pk=previewKind(f.filename, f.mime); return pk==="image"||pk==="video" ? pk : null; }
   function mediaReset(a, v, vi){ mediaCtx = a.kind==="file" && mediaKindOf(v) ? {id:a.id, vi:vi} : null; }
   async function mediaMessage(m){
-    var ctx=mediaCtx; if(!ctx || m.state!=="need") return;
+    var ctx=mediaCtx; if(!ctx || m.state!=="need" || !capabilityOk(frameNav.nonce(), m)) return;
     try{
       var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(ctx.id)+"/media-ticket?version="+(ctx.vi+1), {method:"POST"});
       if(!r.ok) throw new Error("the file couldn't be fetched ("+r.status+")");
       var d=await r.json(), path=String((d&&d.path)||"");
       if(path.indexOf("/plugins/artifact/media/")!==0) throw new Error("no media link came back");
-      if(mediaCtx!==ctx) return;
+      if(mediaCtx!==ctx || frameNav.nonce()!==m.nonce) return;
       $frame.contentWindow.postMessage({type:"protoArtifact:media:src", url:location.origin+window.__base+path}, "*");
     }catch(err){
       if(mediaCtx!==ctx) return;

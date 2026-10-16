@@ -8,8 +8,10 @@ router (bearer-checked like every data route) and points the element at the PUBL
 ``/plugins/artifact/media/{id}`` route with it; that route serves HTTP Range requests, so the
 browser streams and seeks.
 
-A ticket is an unguessable 256-bit token bound to ONE artifact version (``id`` + explicit 1-based
-version, resolved at mint time), valid for ``TTL_S`` after its last use and never past
+A ticket is an unguessable 256-bit token bound to ONE artifact version — its ``id``, explicit
+1-based version AND that version's blob (resolved at mint time; a version-cap trim shifts the
+indices, so a ticket that named only the index would start serving a NEWER version's bytes —
+the route refuses when the version at that index no longer holds the minted blob), valid for ``TTL_S`` after its last use and never past
 ``MAX_AGE_S`` from its mint. In memory only: a restart drops every ticket (the panel re-mints on
 its next render). Only allowlisted image/video types are ever served this way, each under
 ``nosniff`` + a sandboxing CSP, so a ticket URL opened top-level can't run script on this origin.
@@ -17,6 +19,8 @@ its next render). Only allowlisted image/video types are ever served this way, e
 
 from __future__ import annotations
 
+import logging
+import re
 import secrets
 import threading
 import time
@@ -54,7 +58,7 @@ _BY_EXT = {
 SAFE_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
-    "Cache-Control": "private, no-cache",
+    "Cache-Control": "private, no-store",
 }
 
 
@@ -75,42 +79,45 @@ def media_kind(meta: dict) -> str | None:
 
 
 _lock = threading.Lock()
-_tickets: dict[str, tuple[str, int, float, float]] = {}  # token → (art_id, version, minted, last_used)
+# token → (art_id, version, blob file name, minted, last_used)
+_tickets: dict[str, tuple[str, int, str, float, float]] = {}
 
 
-def mint(art_id: str, version: int) -> str:
-    """A fresh ticket for ``art_id`` version ``version`` (1-based, explicit)."""
+def mint(art_id: str, version: int, blob: str) -> str:
+    """A fresh ticket for ``art_id`` version ``version`` (1-based, explicit), whose bytes are the
+    sidecar file ``blob`` (the name ``_store._blob_path`` resolves the version's token to)."""
     tok = secrets.token_urlsafe(32)
     now = time.monotonic()
     with _lock:
         _prune(now)
         while len(_tickets) >= MAX_TICKETS:
             _tickets.pop(next(iter(_tickets)))
-        _tickets[tok] = (art_id, int(version), now, now)
+        _tickets[tok] = (art_id, int(version), str(blob), now, now)
     return tok
 
 
-def check(token: str, art_id: str, version: int) -> bool:
-    """Does ``token`` grant ``art_id`` version ``version``? A hit slides its idle expiry."""
+def check(token: str, art_id: str, version: int) -> str | None:
+    """The blob file name ``token`` grants for ``art_id`` version ``version``, or None. The caller
+    must still confirm the version it resolves holds THAT blob. A hit slides its idle expiry."""
     if not token:
-        return False
+        return None
     now = time.monotonic()
     with _lock:
         t = _tickets.get(token)
         if t is None:
-            return False
-        tid, tver, minted, used = t
+            return None
+        tid, tver, blob, minted, used = t
         if now - used > TTL_S or now - minted > MAX_AGE_S:
             _tickets.pop(token, None)
-            return False
+            return None
         if not (secrets.compare_digest(tid, art_id) and tver == int(version)):
-            return False
-        _tickets[token] = (tid, tver, minted, now)
-    return True
+            return None
+        _tickets[token] = (tid, tver, blob, minted, now)
+    return blob
 
 
 def _prune(now: float) -> None:
-    dead = [k for k, (_, _, m, u) in _tickets.items() if now - u > TTL_S or now - m > MAX_AGE_S]
+    dead = [k for k, (_, _, _, m, u) in _tickets.items() if now - u > TTL_S or now - m > MAX_AGE_S]
     for k in dead:
         _tickets.pop(k, None)
 
@@ -141,3 +148,37 @@ def parse_range(header: str | None, size: int) -> tuple[int, int] | None | bool:
     if start < 0 or start >= size or end < start:
         return False
     return start, min(end, size - 1)
+
+
+# ── access-log redaction ──────────────────────────────────────────────────────
+# The ticket rides the media URL's query, and uvicorn's access log writes every request's full
+# path — so a log reader could replay a live ticket. This filter (installed on the
+# ``uvicorn.access`` logger when the plugin's routers are built) rewrites the ticket value in any
+# media-route path to ``…`` before the record is formatted. Only media-route paths are touched.
+_TICKET_PARAM = re.compile(r"([?&](?:t|ticket|token)=)[^&#\s\"]*")
+_MEDIA_MARK = "/plugins/artifact/media/"
+
+
+def redact(text: str) -> str:
+    """``text`` with every ticket query value in a media-route URL replaced by ``…``."""
+    if _MEDIA_MARK not in text:
+        return text
+    return _TICKET_PARAM.sub(r"\1…", text)
+
+
+class TicketRedactFilter(logging.Filter):
+    """Redacts media tickets from access-log records (args and a pre-formatted msg alike)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple) and any(isinstance(a, str) and _MEDIA_MARK in a for a in record.args):
+            record.args = tuple(redact(a) if isinstance(a, str) else a for a in record.args)
+        if isinstance(record.msg, str) and _MEDIA_MARK in record.msg:
+            record.msg = redact(record.msg)
+        return True
+
+
+def install_log_redaction(logger_name: str = "uvicorn.access") -> None:
+    """Attach ``TicketRedactFilter`` to ``logger_name`` once (idempotent across re-registers)."""
+    lg = logging.getLogger(logger_name)
+    if not any(type(f).__name__ == "TicketRedactFilter" for f in lg.filters):
+        lg.addFilter(TicketRedactFilter())
