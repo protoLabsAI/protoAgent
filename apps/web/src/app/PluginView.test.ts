@@ -361,6 +361,17 @@ describe("PluginView — embedded Configure mode", () => {
     expect(registeredKeybindings().map((binding) => binding.id)).toContain(
       "plugin.boardy.settings.projects.refresh",
     );
+
+    // Firing the chord posts back to the plugin page's OWN origin, never a "*" wildcard.
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    registeredKeybindings()
+      .find((binding) => binding.id === "plugin.boardy.settings.projects.refresh")!
+      .run(new KeyboardEvent("keydown"));
+    expect(post).toHaveBeenCalledWith(
+      { type: "protoagent:keybinding", id: "refresh" },
+      window.location.origin,
+    );
+    post.mockRestore();
   });
 
   it("surfaces the owning plugin's unloaded state instead of mounting a 404 page", async () => {

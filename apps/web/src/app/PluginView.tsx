@@ -408,7 +408,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
               // Fire back with the id the PAGE knows, not our namespaced one.
               frameRef.current?.contentWindow?.postMessage(
                 { type: "protoagent:keybinding", id: spec.pluginLocalId },
-                "*",
+                origin,
               );
             },
           }),
