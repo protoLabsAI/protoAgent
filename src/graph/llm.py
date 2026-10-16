@@ -140,6 +140,13 @@ def _chunk_has_content(item: object) -> bool:
     content — so a stall right after it (the exact ``chunks_received=1`` signature in
     #2305) has shown the user nothing and is safe to replay.
 
+    A tool-call delta counts as content too. On the chat-completions wire it arrives with
+    ``content == ""`` and its arguments in ``tool_call_chunks``; the consumer SUMS chunks, so
+    replaying after one merges a second attempt's call into the first — two calls (one
+    repaired from the partial args), or one call whose args concatenate under a shared id.
+    Reasoning (``reasoning_content`` / ``reasoning``) and a legacy ``function_call`` /
+    ``tool_calls`` in ``additional_kwargs`` count for the same reason.
+
     Deliberately CONSERVATIVE: anything we can't read is treated as content, so an
     unfamiliar chunk shape costs a retry we could have had rather than risking a
     duplicated answer.
@@ -150,9 +157,14 @@ def _chunk_has_content(item: object) -> bool:
         content = getattr(obj, "content", None)
         if content:
             return True
-        # Reasoning rides its own channel and IS rendered, so it counts as seen.
+        if any(getattr(obj, attr, None) for attr in ("tool_call_chunks", "tool_calls", "invalid_tool_calls")):
+            return True
+        # Reasoning rides its own channel and IS rendered, so it counts as seen; a
+        # provider-native tool call there is a call the consumer has started assembling.
         extra = getattr(obj, "additional_kwargs", None)
-        if isinstance(extra, dict) and extra.get("reasoning_content"):
+        if isinstance(extra, dict) and any(
+            extra.get(key) for key in ("reasoning_content", "reasoning", "function_call", "tool_calls")
+        ):
             return True
         if content == "" or content == []:
             return False  # a shape we understand, and it's empty

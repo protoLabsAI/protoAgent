@@ -40,10 +40,12 @@ def upstream_status(exc: BaseException | None) -> int | None:
 
 
 def upstream_unreachable(exc: BaseException | None) -> bool:
-    """True when the turn failed because the model gateway could not be REACHED at all —
-    connection refused, DNS failure, a connect/read timeout (#3946). No HTTP status comes
-    back in that case, so :func:`upstream_status` is ``None`` and ``/v1`` used to call it
-    an internal 500; it is a failed proxy hop and belongs with the other 502s.
+    """True when the turn failed on the TRANSPORT to the model upstream — it could not be
+    reached at all (connection refused, DNS failure, a connect/read timeout, #3946), or the
+    connection broke mid-response (a reset while streaming, which the provider SDKs raise
+    as ``httpx2`` transport errors, #4281). No HTTP status comes back in either case, so
+    :func:`upstream_status` is ``None`` and ``/v1`` used to call it an internal 500; it is a
+    failed proxy hop and belongs with the other 502s.
 
     Walks the explicit ``__cause__`` chain only (``raise … from e``): the openai SDK's
     ``APIConnectionError`` wraps the underlying ``httpx`` transport error that way, and a

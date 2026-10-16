@@ -169,3 +169,116 @@ def test_upstream_unreachable_recognizes_the_sdk_transport_error():
     from graph.upstream_errors import upstream_unreachable
 
     assert upstream_unreachable(_live_reset())
+
+
+# ── reconnect must never duplicate a tool call (review of #4281) ───────────────
+# Making httpx2 resets retryable turned the before-any-content reconnect ON for the
+# openai SDK too. On the chat-completions wire a tool-call delta has ``content == ""``;
+# if that counted as "nothing seen", a reset mid-args replayed the request and the
+# consumer — which SUMS chunks — ended up with two calls, or one with concatenated args.
+
+
+def _real_chunk(**message_kwargs):
+    from langchain_core.messages import AIMessageChunk
+    from langchain_core.outputs import ChatGenerationChunk
+
+    return ChatGenerationChunk(message=AIMessageChunk(**message_kwargs))
+
+
+def _openai_tool_delta(args, call_id="call_1"):
+    return _real_chunk(content="", tool_call_chunks=[{"name": "send_email", "args": args, "id": call_id, "index": 0}])
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        # chat-completions tool-call delta: empty content, args in tool_call_chunks
+        {"content": "", "tool_call_chunks": [{"name": "send_email", "args": '{"to":"a@b', "id": "c1", "index": 0}]},
+        # an args-only continuation delta (no name / id)
+        {"content": "", "tool_call_chunks": [{"name": None, "args": '.com"}', "id": None, "index": 0}]},
+        # anthropic tool_use block start
+        {
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "send_email", "input": {}, "index": 0}],
+            "tool_call_chunks": [{"name": "send_email", "args": "", "id": "toolu_1", "index": 0}],
+        },
+        # reasoning on its own channel
+        {"content": "", "additional_kwargs": {"reasoning_content": "thinking…"}},
+        {"content": "", "additional_kwargs": {"reasoning": {"summary": [{"text": "x"}]}}},
+        # legacy provider-native call shapes
+        {"content": "", "additional_kwargs": {"function_call": {"name": "f", "arguments": "{"}}},
+        {"content": "", "additional_kwargs": {"tool_calls": [{"id": "c1", "function": {"name": "f"}}]}},
+    ],
+    ids=[
+        "openai-tool-delta",
+        "args-continuation",
+        "anthropic-tool-use",
+        "reasoning_content",
+        "reasoning",
+        "function_call",
+        "additional_kwargs-tool_calls",
+    ],
+)
+def test_tool_call_and_reasoning_chunks_count_as_seen(kwargs):
+    from graph.llm import _chunk_has_content
+
+    assert _chunk_has_content(_real_chunk(**kwargs))
+
+
+def test_the_role_delta_and_a_usage_only_chunk_are_still_nothing_seen():
+    from graph.llm import _chunk_has_content
+
+    assert not _chunk_has_content(_real_chunk(content=""))
+    assert not _chunk_has_content(
+        _real_chunk(content="", usage_metadata={"input_tokens": 10, "output_tokens": 0, "total_tokens": 10})
+    )
+
+
+async def test_a_reset_after_tool_call_args_started_re_raises_without_a_duplicate_call():
+    calls: list = []
+    out: list = []
+
+    def make():
+        calls.append(1)
+        attempt = len(calls)
+
+        async def gen():
+            if attempt == 1:
+                yield _real_chunk(content="")  # role delta
+                yield _openai_tool_delta('{"to":"a@b')
+                raise _live_reset()
+            yield _openai_tool_delta('{"to":"a@b.com"}', call_id="call_2")  # pragma: no cover
+
+        return gen()
+
+    with pytest.raises(httpx2.ReadError):
+        async for c in _stream_with_reconnect(make, max_retries=2, sleep=_no_sleep):
+            out.append(c)
+
+    assert len(calls) == 1  # no reconnect — the consumer already holds a partial call
+    merged = out[0]
+    for c in out[1:]:
+        merged = merged + c
+    assert len(merged.message.tool_call_chunks) == 1  # exactly the one partial call, never two
+
+
+async def test_a_reset_before_any_chunk_still_reconnects_to_one_clean_call():
+    calls: list = []
+
+    def make():
+        calls.append(1)
+        attempt = len(calls)
+
+        async def gen():
+            yield _real_chunk(content="")  # role delta only — nothing seen
+            if attempt == 1:
+                raise _live_reset()
+            yield _openai_tool_delta('{"to":"a@b.com"}')
+
+        return gen()
+
+    out = [c async for c in _stream_with_reconnect(make, max_retries=2, sleep=_no_sleep)]
+    assert len(calls) == 2
+    merged = out[0]
+    for c in out[1:]:
+        merged = merged + c
+    assert [tc["args"] for tc in merged.message.tool_calls] == [{"to": "a@b.com"}]
