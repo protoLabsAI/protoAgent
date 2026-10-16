@@ -580,7 +580,7 @@ def test_base_theme_css_and_module_failure_preserve_defaults(monkeypatch, tmp_pa
     js = _load(monkeypatch, tmp_path)._SHELL_JS
     module_url = (ROOT / "vendor/pl-design-embed.mjs").as_uri()
     harness = (
-        "var SHIM='', ERRBOOT='', ORIGIN='https://example.test/agent', $frame=null;\n"
+        "var SHIM='', STOREBOOT='', ERRBOOT='', ORIGIN='https://example.test/agent', $frame=null;\n"
         + _js_function(js, "themeTokens")
         + _js_function(js, "bgIsDark")
         + _js_function(js, "base")
