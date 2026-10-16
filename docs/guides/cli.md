@@ -189,6 +189,10 @@ report a fleet of one beside the desktop app's hub (which lives under a differen
 How a hub is found, in order: this instance's `server.pid` (from `protoagent up`), the
 `.instances/<pid>.json` heartbeats every server writes under its box root — scanned
 across every box root this machine uses, including the desktop app's — then `:7870`.
+Among heartbeats, a box root's own instance (the desktop app, a default `~/.protoagent`)
+outranks a **named** instance beneath one (`~/.protoagent/dev`, the `scripts/dev.sh`
+sandbox), so the sandbox never shadows the real fleet. When several hubs are running the
+CLI says so on stderr; `fleet --all` lists them and `--hub URL` picks one.
 How it is opened: `--token` / `PROTOAGENT_HUB_TOKEN`, then the hub's own fleet service
 token (`<instance root>/workspaces/.fleet-token`, ADR [0089](../adr/0089-intra-instance-trust-boundary.md)),
 then `A2A_AUTH_TOKEN`, then no credential. Tokens are never printed.

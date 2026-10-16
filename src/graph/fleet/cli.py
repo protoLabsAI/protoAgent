@@ -184,12 +184,27 @@ def _open_hub(args: argparse.Namespace) -> deckhub.Connection | None:
     if args.offline:
         return None
     try:
-        return deckhub.connect(url=args.hub, token=args.token, insecure_http=args.insecure_http)
+        conn = deckhub.connect(url=args.hub, token=args.token, insecure_http=args.insecure_http)
+        if not args.hub:
+            _note_other_hubs(conn, args)
+        return conn
     except deckhub.NoHub as exc:
         if args.hub or exc.answered:
             raise
         _note(f"offline · {exc} — reading this instance's fleet.json", args)
         return None
+
+
+def _note_other_hubs(conn: deckhub.Connection, args: argparse.Namespace) -> None:
+    """Say so when discovery picked one of several hubs on this box. Silent choice is how a
+    one-agent sandbox got read as "my fleet" beside a desktop hub with twelve members."""
+    try:
+        others = [c for c in deckhub.discover_hubs() if c.source == "heartbeat" and c.url != conn.client.url]
+    except Exception:  # noqa: BLE001 — a note must never break the command
+        return
+    if others:
+        where = ", ".join(f"{c.url.rsplit(':', 1)[-1]}{f' ({c.instance_root.name})' if c.instance_root else ''}" for c in others)
+        _note(f"{len(others)} other hub(s) on this box: :{where} — `fleet --all` lists them; `--hub URL` picks one", args)
 
 
 # ── ls ───────────────────────────────────────────────────────────────────────

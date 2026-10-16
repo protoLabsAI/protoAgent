@@ -738,3 +738,27 @@ def test_remote_pair_posts_url_code_and_optional_name():
     with pytest.raises(hub.HubRequestError) as ei:
         c.remote_pair("http://100.64.0.5:7870", "bad")
     assert ei.value.status == 400 and "invalid or expired" in ei.value.detail
+
+
+def test_discover_hubs_prefers_a_box_roots_own_instance_over_a_named_sandbox(tmp_path, monkeypatch):
+    """The sandbox's box root is scanned first on a dev machine; it must not outrank the
+    desktop app's hub just by scan order (a one-agent scratch hub read as "my fleet")."""
+
+    class _Paths:
+        instance_root = tmp_path / "none"  # no server.pid here → no pidfile candidate
+
+    monkeypatch.setattr(hub, "instance_paths", lambda: _Paths())
+    monkeypatch.setattr(hub, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(hub, "is_protoagent_pid", lambda pid: True)
+    home, desktop = tmp_path / "home", tmp_path / "desktop"
+    for root, pid, port, iroot in (
+        (home, 11, 7871, home / "dev"),  # `scripts/dev.sh`: a NAMED instance under the box root
+        (desktop, 22, 7870, desktop),  # the desktop app: the box root's own instance
+    ):
+        (root / ".instances").mkdir(parents=True)
+        (root / ".instances" / f"{pid}.json").write_text(
+            json.dumps({"pid": pid, "port": port, "identity": "protoagent", "instance_root": str(iroot)})
+        )
+    monkeypatch.setattr(hub, "known_box_roots", lambda: [home, desktop])
+
+    assert [c.url for c in hub.discover_hubs()] == ["http://127.0.0.1:7870", "http://127.0.0.1:7871"]
