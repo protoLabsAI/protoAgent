@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import json
 import logging
@@ -293,13 +294,57 @@ def save_file_artifact(
     p, why = _resolve_file(path, project)
     if p is None:
         return why
-    data = p.read_bytes()
+    prepared = _prepare_file(p)
+    if isinstance(prepared, str):
+        return prepared
+    msg, saved = _save_file(**prepared.fields(), title=title, artifact_id=artifact_id, session_id=_chat_session(state))
+    return msg + _save_nudge(saved[0]) + saved[2] if saved else msg
+
+
+def _too_large(size: int) -> str:
     limit = _config._max_blob_bytes()
-    if len(data) > limit:
-        return (
-            f"File too large ({len(data) // 1024} KB > {limit // 1024} KB). Raise the artifact "
-            f"max_blob_kb setting if you really need to store a file this big."
-        )
+    if size <= limit:
+        return ""
+    return (
+        f"File too large ({size // 1024} KB > {limit // 1024} KB). Raise the artifact "
+        f"max_blob_kb setting (Settings → Artifact → max blob size, or ARTIFACT_MAX_BLOB_KB) "
+        f"if you really need to store a file this big."
+    )
+
+
+@dataclasses.dataclass(frozen=True)
+class _PreparedFile:
+    """Everything a file version stores, built OUTSIDE the store lock (see ``_prepare_file``)."""
+
+    filename: str
+    data: bytes
+    mime: str
+    preview: str
+    thumb: str | None
+    ext: str
+    slides: dict | None
+    pdf: dict | None
+    docx: dict | None
+
+    def fields(self) -> dict:
+        return {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
+
+
+def _prepare_file(p: Path) -> _PreparedFile | str:
+    """Read ``p`` and build everything a file version stores, or the refusal text. Shared by the
+    ``save_file_artifact`` tool and the ``artifact.save_file`` service (#4253), so both get the
+    same blob cap, mime guess, preview, thumbnail and per-type preflights.
+
+    The size is checked on the STAT before reading, so an oversize file is refused without
+    pulling it into memory, and again on the bytes read (the file may have grown since)."""
+    try:
+        if err := _too_large(p.stat().st_size):
+            return err
+        data = p.read_bytes()
+    except OSError as e:
+        return f"Couldn't read {p.name!r}: {e}."
+    if err := _too_large(len(data)):
+        return err
     # The slow part — reading the file, extracting its preview (up to 50 PDF/DOCX pages),
     # thumbnailing — happens BEFORE the store lock: it touches no store state, and the lock is
     # cross-process, so holding it here would stall every other writer in every process (the
@@ -316,9 +361,7 @@ def save_file_artifact(
     # A Word document gets the docx renderer's preflight (zip inflation + image pixel budget).
     docx = _docx.preflight(data) if _docx.is_docx(p.name, mime) else None
     ext = p.suffix.lower().lstrip(".") or "bin"
-    return _save_file(
-        p.name, data, mime, preview, thumb, ext, title, artifact_id, slides, pdf, docx, session_id=_chat_session(state)
-    )
+    return _PreparedFile(p.name, data, mime, preview, thumb, ext, slides, pdf, docx)
 
 
 @_store.serialized
@@ -335,19 +378,21 @@ def _save_file(
     pdf: dict | None = None,
     docx: dict | None = None,
     session_id: str = "",
-) -> str:
-    """save_file_artifact's store read-modify-write. The blob is written INSIDE the lock on
+) -> tuple[str, tuple[str, int, str] | None]:
+    """save_file_artifact's store read-modify-write → ``(msg, None)`` for a refusal, or
+    ``(msg, (art_id, version, ref_tail))`` for a write (the chip tail built inside the lock, from
+    the art this call committed — the caller appends it last). The blob is written INSIDE the lock on
     purpose: the blob sweep runs under it too, so it can never see (and delete) a blob that
     is on disk but not yet referenced by the store."""
     store = _store._read_store()
     art = _store._find(store, artifact_id) if artifact_id else None
     if artifact_id and art is None:
-        return f"No artifact {artifact_id!r} to revise. Use list_artifacts, or omit artifact_id for a new one."
+        return f"No artifact {artifact_id!r} to revise. Use list_artifacts, or omit artifact_id for a new one.", None
     if art is not None and not _store._is_file(art):
         return (
             f"Artifact {artifact_id!r} is a {art['kind']} artifact, not a file — save_file_artifact "
             f"can only revise a file artifact. Omit artifact_id to create a new one."
-        )
+        ), None
 
     art_id = art["id"] if art else _store._new_id()
     blob_name = f"{secrets.token_hex(8)}.{ext}"
@@ -392,8 +437,135 @@ def _save_file(
     kb = len(data) // 1024
     return (
         f"Saved file artifact {art_id} → v{v}: {filename} ({mime}, {kb} KB) — now in the "
-        f"Artifact panel with a preview and a Download button." + _save_nudge(art_id) + _ref.ref_tail(art)
-    )
+        f"Artifact panel with a preview and a Download button."
+    ), (art_id, v, _ref.ref_tail(art))
+
+
+def _service_roots(plugin_id: str, roots: Any) -> tuple[list[Path], str]:
+    """The directories ``artifact.save_file`` may read from for ``plugin_id``: its
+    ``sdk.plugin_store`` plus each EXTRA root the caller names, or ``([], why)``.
+
+    An extra root must be an existing absolute directory, and never a filesystem root or the
+    home directory itself — those would make the containment check meaningless."""
+    out: list[Path] = []
+    pid = (plugin_id or "").strip()
+    if not pid:
+        return [], "plugin_id is required — pass your plugin's id (registry.plugin_id)."
+    try:
+        from graph import sdk
+
+        out.append(sdk.plugin_store(plugin_id=pid).resolve())
+    except ValueError as e:
+        return [], f"Bad plugin_id {pid!r}: {e}"
+    except Exception as e:  # noqa: BLE001 — a host without plugin_store: extra roots only
+        log.debug("[artifact] save_file: no plugin_store for %s (%s)", pid, e)
+    if isinstance(roots, (str, os.PathLike)):
+        roots = [roots]
+    too_broad = {Path.home().resolve()}
+    for r in roots or ():
+        rp = Path(os.path.expanduser(str(r)))
+        if not rp.is_absolute():
+            return [], f"Allowed root {str(r)!r} must be an absolute path."
+        rp = rp.resolve()
+        if rp == Path(rp.anchor) or rp in too_broad:
+            return [], f"Allowed root {str(r)!r} is too broad — name the directory your files live in."
+        if not rp.is_dir():
+            return [], f"Allowed root {str(r)!r} is not a directory."
+        out.append(rp)
+    return out, ""
+
+
+def _contained_file(path: str, roots: list[Path]) -> tuple[Path | None, str]:
+    """``path`` resolved (symlinks followed) to a regular file inside one of ``roots``, or
+    ``(None, why)``. A relative path is taken against the FIRST root (the plugin store)."""
+    raw = (path or "").strip()
+    if not raw:
+        return None, "path is required."
+    if not roots:
+        return None, "No allowed directory to read from (no plugin store and no roots given)."
+    p = Path(os.path.expanduser(raw))
+    if not p.is_absolute():
+        p = roots[0] / p
+    p = p.resolve()
+    if not any(p.is_relative_to(r) for r in roots):
+        return None, (
+            f"{raw!r} is outside this plugin's store and the allowed roots — artifact.save_file "
+            f"only registers files your plugin wrote under them."
+        )
+    if not p.is_file():
+        return None, f"No file at {raw!r}. Write the file first, then pass its path."
+    return p, ""
+
+
+def save_file_service(
+    path: str,
+    title: str = "",
+    artifact_id: str = "",
+    session_id: str = "",
+    *,
+    plugin_id: str,
+    roots: Any = (),
+) -> dict:
+    """The ``artifact.save_file`` plugin service (#4253): register a FILE artifact from plugin
+    code — e.g. a background job's finished video — without an agent turn.
+
+    It is ``save_file_artifact`` for code that isn't a tool call: the same blob cap
+    (``max_blob_kb``), mime guess, preview / thumbnail, per-type preflights (.pptx/.pdf/.docx)
+    and version chain. The file shows up in the Artifact panel like one the agent saved::
+
+        save = sdk.service("artifact.save_file")   # None when the artifact plugin is off
+        if save is not None:
+            r = save(path=str(mp4), title="Overview walkthrough", session_id=job_session,
+                     plugin_id=registry.plugin_id)
+            if not r["ok"]:
+                log.warning("artifact refused: %s", r["message"])
+
+    ``path`` must resolve (symlinks followed) to a regular file INSIDE the calling plugin's
+    ``sdk.plugin_store(plugin_id=plugin_id)`` directory or one of ``roots`` — extra absolute
+    directories the caller names explicitly (e.g. an operator-configured data dir); a relative
+    ``path`` is taken against the plugin store. A filesystem root or the home directory itself
+    is refused as a root. ``plugin_id`` is REQUIRED (keyword-only): the SDK has no ambient
+    plugin identity, so pass ``registry.plugin_id``.
+
+    ``artifact_id`` revises an existing FILE artifact as its next version (a new one when
+    omitted). ``session_id`` is the chat the file belongs to (the one that asked for the work):
+    eviction keeps the artifact while that chat exists (#4138); omitted, it is evictable
+    oldest-first like any other.
+
+    Returns a dict and never raises for a refusal:
+
+    - ``ok`` — False when nothing was saved (``message`` says why — e.g. the file is over the
+      blob cap, which names the ``max_blob_kb`` setting that raises it);
+    - ``id`` / ``version`` — the artifact and the version written (``""`` / ``0`` on a refusal);
+    - ``message`` — a human/model-facing summary line;
+    - ``ref`` — the ``artifact-ref`` chat-chip tail ("" when the host can't lift it). Append it
+      LAST to a tool reply when one is going out; a background job with no turn can ignore it.
+
+    SYNCHRONOUS: it reads the file, extracts its preview, and takes the store's cross-process
+    file lock. Call it from a worker thread or via ``asyncio.to_thread`` — never on an event loop."""
+
+    def refused(msg: str) -> dict:
+        return {"ok": False, "id": "", "version": 0, "message": msg, "ref": ""}
+
+    try:
+        allowed, why = _service_roots(plugin_id, roots)
+        if why:
+            return refused(why)
+        p, why = _contained_file(path, allowed)
+        if p is None:
+            return refused(why)
+        prepared = _prepare_file(p)
+        if isinstance(prepared, str):
+            return refused(prepared)
+        msg, saved = _save_file(**prepared.fields(), title=title, artifact_id=artifact_id, session_id=session_id)
+    except _store.StoreLockTimeout as e:
+        return refused(str(e))
+    except Exception as e:  # noqa: BLE001 — a service reports, it doesn't raise into a job
+        log.warning("[artifact] save_file service failed for %r", path, exc_info=True)
+        return refused(f"Couldn't save {path!r}: {e}")
+    if saved is None:
+        return refused(msg)
+    return {"ok": True, "id": saved[0], "version": saved[1], "message": msg, "ref": saved[2]}
 
 
 # What a locked create/edit hands _then_render: (art_id, reported version, version key). The key

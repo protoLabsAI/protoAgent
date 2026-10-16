@@ -65,6 +65,7 @@ from ._tools import (
     pin_artifact,
     rewrite_artifact,
     save_file_artifact,
+    save_file_service,
     show_artifact,
     show_service,
     update_artifact,
@@ -79,6 +80,7 @@ __all__ = [
     "resolve_for_bundle",
     "show_artifact",
     "show_service",
+    "save_file_service",
     "save_file_artifact",
     "update_artifact",
     "rewrite_artifact",
@@ -124,6 +126,16 @@ def register(registry) -> None:
                 "Create an artifact (any kind, e.g. a vega-lite chart). placement defaults to "
                 "'inline': html/svg/mermaid/react/vega-lite render in the conversation, other kinds "
                 "in the Artifact panel; pass placement='panel' for the panel (ADR 0118)."
+            ),
+        )
+        # `artifact.save_file` (#4253): a plugin's background job registers a FILE it produced
+        # (a finished video, a report) without an agent turn — contained to its plugin store.
+        register_service(
+            "save_file",
+            save_file_service,
+            description=(
+                "Register a file the calling plugin wrote (inside its plugin_store or a named root) "
+                "as a versioned file artifact in the Artifact panel — no agent turn needed."
             ),
         )
     registry.register_skill_dir(
