@@ -81,6 +81,52 @@ views {
     autoLayout LeftRight
   }
 
+  // ── The fleet ──────────────────────────────────────────────────────────────────────
+  view proto_agent_fleet_detail of proto_agent.fleet {
+    title 'Fleet'
+    include proto_agent.fleet, proto_agent.fleet.*
+    include proto_agent.core.graph.agent_core with {
+      title 'Hub agent'
+    }
+    include local_member, remote_member
+    include proto_agent.interfaces.console.fleet_room, proto_agent.interfaces.a2a_impl
+    autoLayout TopBottom
+  }
+
+  view proto_agent_fleet_supervisor_detail of proto_agent.fleet.supervisor {
+    title 'Fleet supervisor'
+    include proto_agent.fleet.supervisor, proto_agent.fleet.supervisor.*
+    include operator, local_member, remote_member
+    include proto_agent.fleet.fleet_token, proto_agent.fleet.proxy, proto_agent.interfaces.console.fleet_room
+    autoLayout LeftRight
+  }
+
+  view proto_agent_fleet_delegation_detail of proto_agent.fleet.delegation {
+    title 'Delegation'
+    include proto_agent.fleet.delegation, proto_agent.fleet.delegation.*
+    include proto_agent.core.graph.agent_core with {
+      title 'Hub agent'
+    }
+    include proto_agent.fleet.ledger, proto_agent.fleet.fleet_token, proto_agent.fleet.proxy
+    include local_member.a2a_server, proto_agent.interfaces.console.delegate_card
+    autoLayout LeftRight
+  }
+
+  view proto_agent_interfaces_a2a_impl_detail of proto_agent.interfaces.a2a_impl {
+    title 'A2A layer'
+    include proto_agent.interfaces.a2a_impl, proto_agent.interfaces.a2a_impl.*
+    include peers, proto_agent.core.graph.agent_core, proto_agent.platform.media, proto_agent.fleet.fleet_token
+    autoLayout LeftRight
+  }
+
+  view local_member_detail of local_member {
+    title 'A fleet member'
+    include local_member, local_member.*
+    include proto_agent.fleet.delegation.a2a_client, proto_agent.fleet.delegation.progress
+    include proto_agent.fleet.proxy, proto_agent.fleet.supervisor.lifecycle, gateway
+    autoLayout LeftRight
+  }
+
   // ── Flows ──────────────────────────────────────────────────────────────────────────
   dynamic view chat_turn_flow {
     title 'Chat turn'
@@ -190,6 +236,57 @@ views {
     }
     proto_agent.platform.media -> proto_agent.interfaces.a2a_impl 'file parts' {
       notes 'The file rides the A2A answer as a file part, so a peer agent gets it too.'
+    }
+  }
+
+  dynamic view fleet_delegation {
+    title 'Fleet delegation'
+    operator -> proto_agent.core.graph.agent_core 'asks the hub' {
+      notes 'You ask the hub agent for something that needs more than one specialist.'
+    }
+    proto_agent.core.graph.agent_core -> proto_agent.fleet.delegation.delegate_to 'delegate_to(…, background=True)' {
+      notes 'Its model decides to delegate, and calls delegate_to once per member.'
+    }
+    proto_agent.fleet.delegation.delegate_to -> proto_agent.fleet.delegation.background 'one job per member' {
+      notes 'Each call becomes a detached background job, so the hub ends its turn instead of waiting.'
+    }
+    proto_agent.fleet.delegation.background -> proto_agent.fleet.delegation.registry 'dispatch(target, query)' {
+      notes 'Every job goes through the delegate registry, the one dispatch funnel.'
+    }
+    proto_agent.fleet.delegation.registry -> proto_agent.fleet.ledger 'record edge' {
+      notes 'The ledger records who handed what to whom, and settles the edge when the reply lands.'
+    }
+    proto_agent.fleet.delegation.registry -> proto_agent.fleet.delegation.a2a_client 'A2A adapter' {
+      notes 'A fleet member is an a2a delegate, so the A2A client takes it from here.'
+    }
+    parallel {
+      proto_agent.fleet.delegation.a2a_client -> local_member 'SendMessage (fleet token)' {
+        notes 'A local member is dialled on its own loopback port with the fleet token.'
+      }
+      proto_agent.fleet.delegation.a2a_client -> proto_agent.fleet.proxy 'SendMessage /agents/<slug>/a2a' {
+        notes 'At the same time, a remote member is reached through the hub proxy.'
+      }
+    }
+    proto_agent.fleet.proxy -> remote_member 'paired bearer' {
+      notes 'The proxy swaps the fleet token for the paired token, which never leaves the hub.'
+    }
+    local_member -> gateway 'its own turn: tools + model' {
+      notes 'Each member runs the task as its own turn, with its own tools and model.'
+    }
+    local_member -> proto_agent.fleet.delegation.a2a_client 'SubscribeToTask frames' {
+      notes "The hub follows each task live: the member's narration and tools, never its answer early."
+    }
+    local_member -> proto_agent.interfaces.console.fleet_room 'turn.usage via the proxy' {
+      notes "When the member's turn ends, the Fleet Room's feed shows it finished."
+    }
+    proto_agent.fleet.delegation.a2a_client <- local_member 'completed task' {
+      notes 'GetTask returns the finished task, and its reply becomes the job result.'
+    }
+    proto_agent.fleet.delegation.background -> proto_agent.core.graph.agent_core 'reply resumes the hub' {
+      notes 'Each finished job wakes the hub session with its reply.'
+    }
+    proto_agent.core.graph.agent_core -> operator 'synthesised answer' {
+      notes 'Once every reply is in, the hub combines them into one answer for you.'
     }
   }
 }

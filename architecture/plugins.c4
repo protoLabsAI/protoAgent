@@ -97,7 +97,7 @@ model {
       }
     }
     store = database 'Plugin store' 'Per-plugin writable dir under the instance root' {
-      link /src/graph/sdk.py#L1305 'plugin_store'
+      link /src/graph/sdk.py#L1313 'plugin_store'
     }
     sdk = component 'Plugin SDK' 'graph.sdk: the stable surface plugin code calls' {
       link /src/graph/sdk.py 'graph/sdk.py'
@@ -162,7 +162,7 @@ model {
     }
     commands = component 'Keybindings and menus' 'Chords and context-menu items over the view bridge' {
       link /src/graph/plugins/manifest.py#L753 '_parse_commands'
-      link /docs/reference/plugin-view-bridge.md#L92 'Bridge: keybindings'
+      link /docs/reference/plugin-view-bridge.md#L100 'Bridge: keybindings'
       metadata {
         adr '0061'
       }
@@ -172,13 +172,13 @@ model {
   // ── The plugin SDK: the most-used graph.sdk entry points ───────────────────────────
   extend proto_agent.platform.plugins.sdk {
     plugin_store = component 'plugin_store()' "The plugin's own writable directory" {
-      link /src/graph/sdk.py#L1305 'plugin_store'
+      link /src/graph/sdk.py#L1313 'plugin_store'
     }
     service = component 'service()' 'Call another plugin without importing it' {
       link /src/graph/sdk.py#L69 'service'
     }
     console_url = component 'console_url()' "This agent's own console base URL" {
-      link /src/graph/sdk.py#L313 'console_url'
+      link /src/graph/sdk.py#L321 'console_url'
     }
     attach_file = component 'attach_file()' "Attach a media file to this turn's answer" {
       link /src/graph/sdk.py#L273 'attach_file'
@@ -187,17 +187,17 @@ model {
       link /src/graph/sdk.py#L173 'run_subagent'
     }
     knowledge = component 'knowledge_add / search' 'Write and query the knowledge store' {
-      link /src/graph/sdk.py#L492 'knowledge_add'
-      link /src/graph/sdk.py#L473 'knowledge_search'
+      link /src/graph/sdk.py#L500 'knowledge_add'
+      link /src/graph/sdk.py#L481 'knowledge_search'
     }
     record_metric = component 'record_metric()' 'Small numeric series per plugin' {
-      link /src/graph/sdk.py#L1387 'record_metric'
+      link /src/graph/sdk.py#L1395 'record_metric'
     }
     schedule_recurring = component 'schedule_recurring()' 'Plugin-owned cron jobs' {
-      link /src/graph/sdk.py#L1161 'schedule_recurring'
+      link /src/graph/sdk.py#L1169 'schedule_recurring'
     }
     trace_run = component 'trace_run()' 'A traced span for non-turn work' {
-      link /src/graph/sdk.py#L1581 'trace_run'
+      link /src/graph/sdk.py#L1589 'trace_run'
     }
   }
 
@@ -209,13 +209,13 @@ model {
         adr ['0026', '0039']
       }
       view_host = component 'PluginView host' 'Sandboxed iframe of the plugin page' {
-        link /apps/web/src/app/PluginView.tsx#L74 'PluginView'
+        link /apps/web/src/app/PluginView.tsx#L75 'PluginView'
       }
       handshake = component 'Init and theme handshake' 'protoagent:init with bearer + theme; live re-theme' {
         link /apps/web/src/app/pluginFrameHandshake.ts#L92 'postInit'
       }
       kit = component 'plugin-kit' 'Same-origin /_ds kit: handshake, tokens, apiFetch' {
-        link /docs/reference/plugin-view-bridge.md#L251 'The kit'
+        link /docs/reference/plugin-view-bridge.md#L259 'The kit'
         link /apps/web/scripts/copy-plugin-kit.mjs#L22 'Served from /_ds'
       }
       event_relay = component 'Event relay' 'subscribe / event / publish across the sandbox' {
@@ -231,7 +231,7 @@ model {
         link /apps/web/src/lib/pluginContextMenu.ts#L99 'parsePluginMenuRegistration'
       }
       code_open = component 'code:open' 'Show a file in the code pane' {
-        link /apps/web/src/app/PluginView.tsx#L435 'code:open handler'
+        link /apps/web/src/app/PluginView.tsx#L457 'code:open handler'
       }
       chat_compose = component 'chat:compose' 'Draft a chat message for the operator' {
         link /apps/web/src/app/pluginChatCompose.ts#L82 'createPluginChatComposer'

@@ -94,6 +94,52 @@
           "note": "First-party plugins live in their own repos. **Atlas**, the plugin drawing this diagram, is one of them."
         }
       ]
+    },
+    {
+      "id": "fleet",
+      "title": "The fleet at work, under the hood",
+      "slides": [
+        {
+          "view": "index",
+          "focus": "local_member",
+          "note": "A protoAgent can run a **fleet**: a hub agent plus members, spawned on this box or **paired** from another machine."
+        },
+        {
+          "view": "proto_agent_detail",
+          "via": "proto_agent",
+          "focus": "proto_agent.fleet",
+          "note": "Inside the hub, the **Fleet** subsystem spawns, pairs, proxies and delegates."
+        },
+        {
+          "view": "proto_agent_fleet_detail",
+          "focus": "proto_agent.fleet.supervisor",
+          "note": "The **supervisor** starts each local member as its own process, with its own workspace, port and model."
+        },
+        {
+          "view": "proto_agent_fleet_supervisor_detail",
+          "focus": "proto_agent.fleet.supervisor.remotes",
+          "note": "A remote member is **paired** with a one-time code, which gets the hub a revocable token of its own."
+        },
+        {
+          "view": "proto_agent_fleet_detail",
+          "focus": "proto_agent.fleet.proxy",
+          "note": "Everything reaches a member through `/agents/<slug>/…`. The **proxy** swaps the loopback **fleet token** for the paired token at the hop."
+        },
+        {
+          "view": "proto_agent_fleet_delegation_detail",
+          "focus": "proto_agent.fleet.delegation.registry",
+          "note": "**delegate_to** is the one tool. Every dispatch goes through the registry, and the **ledger** records each one."
+        },
+        {
+          "view": "proto_agent_interfaces_a2a_impl_detail",
+          "focus": "proto_agent.interfaces.a2a_impl.executor",
+          "note": "Every member speaks **A2A**: an auth gate, a JSON-RPC handler, a durable task store, and an executor that streams the turn."
+        },
+        {
+          "view": "fleet_delegation",
+          "note": "Follow one delegation from your question to the hub's answer."
+        }
+      ]
     }
   ]
 }

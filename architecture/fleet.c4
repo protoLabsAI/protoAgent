@@ -1,0 +1,252 @@
+// The fleet: a hub protoAgent that spawns, pairs, proxies and delegates to other protoAgents
+// (its members) over A2A, plus the A2A layer every member speaks. Extends elements declared in
+// model.c4 (extend needs full FQNs). A member runs the same runtime as the hub, so the member
+// elements link to the same code: they show the member's side of a delegation.
+model {
+  local_member = system 'Local member' 'A protoAgent the hub spawned on this box: own workspace, port and model' {
+    link /src/graph/fleet/supervisor.py#L207 'supervisor.start'
+    metadata {
+      adr ['0042', '0089']
+    }
+    a2a_server = container 'Member A2A server' 'The same A2A layer as the hub; runs each delegated task as a turn' 'a2a-sdk' {
+      link /src/a2a_impl/executor.py#L591 'ProtoAgentExecutor'
+      link /src/server/__init__.py#L1334 'DefaultRequestHandler wiring'
+    }
+    agent = container 'Member agent' 'Its own LangGraph tool loop, tools, skills and model' 'LangGraph' {
+      link /src/graph/agent.py#L1621 'create_agent_graph'
+    }
+    bus = container 'Member event bus' 'turn.usage, turn.input_required, activity; served on /api/events' 'SSE' {
+      link /src/events/bus.py#L66 'EventBus'
+      link /src/operator_api/routes.py#L997 'GET /api/events'
+      link /src/server/turn_telemetry.py#L83 '_publish_usage (turn.usage)'
+      metadata {
+        adr '0039'
+      }
+    }
+    a2a_server -> agent 'runs the task as a turn'
+    agent -> bus 'turn.usage when the turn ends'
+  }
+
+  remote_member = system 'Remote member' 'A paired protoAgent on another machine (LAN or tailnet)' {
+    link /src/graph/fleet/supervisor.py#L1046 'pair_remote'
+    link /docs/adr/0113-agent-pairing-for-remote-fleet-members.md 'ADR 0113'
+    metadata {
+      adr '0113'
+    }
+  }
+
+  extend proto_agent {
+    fleet = subsystem 'Fleet' 'Spawn, pair, proxy and delegate to other protoAgents over A2A' {
+      link /docs/adr/0042-fleet-supervisor-unified-console.md 'ADR 0042'
+      metadata {
+        adr ['0042', '0113', '0025', '0105']
+      }
+
+      supervisor = container 'Fleet supervisor' 'Member processes, remotes, discovery, the roster' 'Python' {
+        link /src/graph/fleet/supervisor.py#L1339 'status'
+        metadata {
+          adr ['0042', '0113']
+        }
+        lifecycle = component 'Member lifecycle' 'Spawns local members detached, each with the fleet token in its env' {
+          link /src/graph/fleet/supervisor.py#L207 'start'
+          link /src/graph/fleet/supervisor.py#L330 'stop'
+          metadata {
+            adr ['0042', '0089']
+          }
+        }
+        remotes = component 'Remotes and pairing' 'Redeems a pairing code for a revocable per-hub token (remotes.json)' {
+          link /src/graph/fleet/supervisor.py#L1046 'pair_remote'
+          link /src/graph/fleet/supervisor.py#L642 'add_remote'
+          link /src/graph/fleet/supervisor.py#L1313 '_remote_a2a (advertised via the proxy)'
+          metadata {
+            adr '0113'
+          }
+        }
+        discovery = component 'Discovery' 'Finds protoAgents on loopback, the tailnet and mDNS' {
+          link /src/graph/fleet/discovery.py#L364 'discover'
+        }
+        fleet_api = component 'Fleet API' '/api/fleet: roster, start/stop, pair, order' {
+          link /src/operator_api/fleet_routes.py#L32 'GET /api/fleet'
+          link /src/operator_api/fleet_routes.py#L73 'POST /api/fleet/remotes/pair'
+        }
+        fleet_cli = component 'Fleet CLI' 'protoagent fleet: ls, up/down, pair, and friction across members' {
+          link /src/graph/fleet/cli.py#L1112 'run_fleet_cli'
+          link /src/graph/fleet/friction_cli.py#L169 'friction collect'
+        }
+        fleet_api -> lifecycle 'start / stop'
+        fleet_api -> remotes 'pair / remove'
+        fleet_api -> discovery 'discover'
+        fleet_cli -> fleet_api 'hub HTTP'
+      }
+
+      proxy = container 'Fleet proxy' '/agents/<slug>/… to any member; swaps credentials at the hop' 'httpx, SSE, WebSocket' {
+        link /src/graph/fleet/proxy.py#L324 'forward_to'
+        link /src/graph/fleet/proxy.py#L364 '_forward_member (credential swap)'
+        link /src/operator_api/fleet_routes.py#L184 'route /agents/{slug}/{path}'
+        metadata {
+          adr ['0042', '0089', '0113']
+        }
+      }
+
+      fleet_token = container 'Fleet service token' 'Loopback-only credential; members accept it as operator' 'Python' {
+        link /src/graph/fleet/service_token.py#L87 'resolve_service_token'
+        link /src/a2a_impl/auth.py#L463 'set_fleet_token'
+        link /docs/adr/0089-intra-instance-trust-boundary.md 'ADR 0089'
+        metadata {
+          adr '0089'
+        }
+      }
+
+      delegation = container 'Delegation' 'The delegates plugin: one tool over A2A, ACP and model endpoints' 'Python plugin' {
+        link /plugins/delegates/__init__.py#L34 '_build_delegate_to'
+        link /docs/adr/0025-unified-delegate-registry-and-panel.md 'ADR 0025'
+        metadata {
+          adr ['0025', '0105', '0050']
+        }
+        delegate_to = component 'delegate_to tool' 'Hands a self-contained query to a named delegate' {
+          link /plugins/delegates/__init__.py#L38 'delegate_to'
+        }
+        background = component 'Background fan-out' 'background=True: one detached job per delegate, the reply resumes the hub' {
+          link /plugins/delegates/__init__.py#L458 '_spawn_background_delegation'
+          link /src/background/manager.py#L209 'spawn_work'
+          link /src/background/manager.py#L579 'resume_origin'
+          metadata {
+            adr ['0050', '0070']
+          }
+        }
+        registry = component 'Delegate registry' 'Own plus fleet-shared delegates; the one dispatch funnel' {
+          link /plugins/delegates/registry.py#L74 'dispatch'
+          link /plugins/delegates/store.py#L205 'merged_delegates'
+          metadata {
+            adr ['0025', '0105']
+          }
+        }
+        a2a_client = component 'A2A client' 'SendMessage (returnImmediately), then GetTask until terminal' {
+          link /plugins/delegates/a2a.py#L703 'A2aAdapter'
+          link /plugins/delegates/a2a.py#L902 '_dispatch_traced'
+          link /plugins/delegates/a2a.py#L47 '_a2a_headers'
+        }
+        progress = component 'Live progress' 'Follows the task over SubscribeToTask; narration, never the answer' {
+          link /plugins/delegates/a2a_progress.py#L194 'observe'
+          link /src/graph/delegate_progress.py#L146 'DelegateProgress'
+          metadata {
+            adr '0051'
+          }
+        }
+        delegate_to -> registry 'dispatch (foreground)'
+        delegate_to -> background 'background=True'
+        background -> registry 'dispatch per job'
+        registry -> a2a_client 'type a2a'
+        a2a_client -> progress 'task id'
+      }
+
+      ledger = database 'Delegation ledger' 'Who handed what work to whom, and how it went (ledger.db)' 'SQLite' {
+        link /src/graph/ledger.py#L135 'ledger.dispatch'
+        link /src/observability/ledger_store.py#L78 'LedgerStore'
+        link /src/server/stores.py#L531 '_build_ledger_store'
+      }
+
+      orgchart = container 'Org chart' 'Live delegation graph: crawled roster plus ledger work' 'Plugin view' {
+        link /plugins/orgchart/topology.py#L452 '_build'
+        link /plugins/orgchart/topology.py#L304 '_ledger_edges'
+        metadata {
+          adr '0105'
+        }
+      }
+
+      supervisor.lifecycle -> fleet_token 'injects PROTOAGENT_FLEET_TOKEN'
+      proxy -> supervisor 'resolve slug: port or remote'
+      proxy -> fleet_token 'presents to local members'
+      delegation.a2a_client -> fleet_token 'loopback bearer'
+      delegation.a2a_client -> proxy 'SendMessage /agents/<slug>/a2a'
+      delegation.registry -> ledger 'record, then settle'
+      orgchart -> delegation.registry 'effective roster'
+      orgchart -> ledger 'work on each edge'
+      orgchart -> supervisor.remotes 'fleet remotes'
+    }
+  }
+
+  // The A2A layer: what a peer or the hub's own delegation client talks to.
+  extend proto_agent.interfaces.a2a_impl {
+    auth = component 'Auth middleware' 'Default-deny: operator, federation, device and fleet-token tiers' {
+      link /src/a2a_impl/auth.py#L628 'A2AAuthMiddleware'
+      link /src/a2a_impl/auth.py#L245 '_is_fleet_media_link'
+      metadata {
+        adr ['0087', '0089']
+      }
+    }
+    handler = component 'JSON-RPC handler' 'SendMessage, SendStreamingMessage, GetTask, SubscribeToTask; v0.3 compat' {
+      link /src/a2a_impl/v03_compat.py#L69 'create_a2a_jsonrpc_routes'
+      link /src/server/__init__.py#L1334 'DefaultRequestHandler'
+      metadata {
+        adr ['0014', '0051']
+      }
+    }
+    executor = component 'Executor' 'Runs a task as a turn; streams status, tool-call and artifact frames' {
+      link /src/a2a_impl/executor.py#L591 'ProtoAgentExecutor'
+      link /src/a2a_impl/executor.py#L677 'execute'
+      metadata {
+        adr '0051'
+      }
+    }
+    task_store = database 'Task store' 'Durable tasks, so GetTask and late collection survive a restart' 'SQLite' {
+      link /src/a2a_impl/stores.py#L423 'ReasoningCoalescingTaskStore'
+      link /src/a2a_impl/stores.py#L488 'build_a2a_stores'
+    }
+    push = component 'Push notifications' 'Webhook on task updates; SSRF-checked at set and send' {
+      link /src/a2a_impl/stores.py#L204 'ValidatingPushNotificationSender'
+      link /src/a2a_impl/stores.py#L176 'ValidatingPushNotificationConfigStore'
+    }
+    parked = component 'Parked-task router' 'One input-required task per context; answers resume it' {
+      link /src/a2a_impl/hitl_routing.py#L180 'ParkedTaskRouter'
+    }
+    file_parts = component 'File parts' 'Turn files as A2A file parts; expiring links behind a hub' {
+      link /src/a2a_impl/executor.py#L476 '_file_parts'
+      link /src/a2a_impl/executor.py#L414 '_fleet_member_links'
+    }
+    auth -> handler 'authenticated calls'
+    parked -> handler 'routes HITL answers'
+    handler -> executor 'execute(context, queue)'
+    handler -> task_store 'persist task'
+    handler -> push 'on update'
+    executor -> file_parts 'final artifact'
+  }
+
+  // Console pieces the fleet shows up in
+  extend proto_agent.interfaces.console {
+    fleet_room = component 'Fleet Room' 'Member roster with presence, live activity feed, DMs and broadcast' {
+      link /apps/web/src/app/FleetRoom.tsx#L52 'FleetRoom'
+      link /apps/web/src/app/FleetActivity.tsx#L205 'useFleetStreams'
+      metadata {
+        adr '0042'
+      }
+    }
+    delegate_card = component 'Delegation card' "A running delegation's plan, current tool and narration" {
+      link /apps/web/src/chat/DelegateProgressView.tsx#L79 'DelegateProgressView'
+    }
+  }
+
+  // Hub ↔ fleet
+  proto_agent.core.graph.agent_core -> proto_agent.fleet.delegation.delegate_to 'calls delegate_to'
+  proto_agent.core.graph.subagents -> proto_agent.fleet.ledger 'task() edges'
+  proto_agent.fleet.delegation.background -> proto_agent.interfaces.a2a_impl.handler 'resume the hub session'
+  proto_agent.fleet.delegation.a2a_client -> local_member.a2a_server 'SendMessage (loopback)'
+  proto_agent.fleet.delegation.progress -> local_member.a2a_server 'SubscribeToTask'
+  proto_agent.fleet.delegation.progress -> proto_agent.interfaces.console.delegate_card 'plan, tools, narration'
+  proto_agent.fleet.supervisor.lifecycle -> local_member 'spawns'
+  proto_agent.fleet.supervisor.remotes -> remote_member 'pairs'
+  proto_agent.fleet.supervisor.discovery -> remote_member 'finds'
+  proto_agent.fleet.proxy -> local_member 'console, A2A, events'
+  proto_agent.fleet.proxy -> remote_member 'paired bearer only'
+  proto_agent.fleet.orgchart -> local_member 'crawls card and delegates'
+  proto_agent.interfaces.console.fleet_room -> proto_agent.fleet.supervisor.fleet_api 'GET /api/fleet'
+  proto_agent.interfaces.console.fleet_room -> proto_agent.fleet.proxy 'member events, DMs'
+  proto_agent.interfaces.a2a_impl.auth -> proto_agent.fleet.fleet_token 'accepts as operator'
+  proto_agent.interfaces.a2a_impl.executor -> proto_agent.core.graph.agent_core 'runs the turn'
+  proto_agent.interfaces.a2a_impl.executor -> proto_agent.platform.events 'progress hook'
+  proto_agent.platform.media -> proto_agent.interfaces.a2a_impl.file_parts 'turn files'
+  peers -> proto_agent.interfaces.a2a_impl.handler 'A2A JSON-RPC'
+  operator -> proto_agent.fleet.supervisor.fleet_cli 'protoagent fleet'
+  local_member.agent -> gateway 'completions'
+  remote_member -> gateway 'its own model'
+}

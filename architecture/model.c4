@@ -23,7 +23,7 @@ model {
       console = container 'Console' 'React operator console' 'TypeScript, React' {
         link /apps/web/src/main.tsx 'Entry'
         app_shell = component 'App shell and rail' 'Rail icons for every enabled plugin view' {
-          link /apps/web/src/app/App.tsx#L453 'Plugin views in the rail'
+          link /apps/web/src/app/App.tsx#L454 'Plugin views in the rail'
           metadata {
             adr '0026'
           }
@@ -78,7 +78,7 @@ model {
       }
       a2a_impl = container 'A2A impl' 'A2A executor, auth, wire format' 'a2a-sdk' {
         link /src/a2a_impl/executor.py 'Executor'
-        link /src/a2a_impl/executor.py#L421 '_file_parts'
+        link /src/a2a_impl/executor.py#L476 '_file_parts'
       }
     }
 
@@ -130,8 +130,8 @@ model {
         }
       }
       media = container 'Media store' 'Signed files a turn attaches to its answer' 'Python' {
-        link /src/infra/media.py#L209 'save_media'
-        link /src/infra/media.py#L427 'attach_file'
+        link /src/infra/media.py#L308 'save_media'
+        link /src/infra/media.py#L720 'attach_file'
       }
       observability = container 'Observability' 'Tracing, metrics, audit' 'Python' {
         link /src/observability/tracing.py 'Tracing'
@@ -148,7 +148,6 @@ model {
   proto_agent.interfaces.server -> proto_agent.interfaces.operator_api 'mounts'
   proto_agent.interfaces.operator_api -> proto_agent.core.graph 'config and state'
   proto_agent.interfaces.operator_api -> proto_agent.core.knowledge 'browse and ingest'
-  proto_agent.interfaces.a2a_impl -> proto_agent.core.graph 'executes tasks'
   proto_agent.core.graph -> proto_agent.core.tools 'tool calls'
   proto_agent.core.graph -> proto_agent.core.knowledge 'retrieval'
   proto_agent.core.graph -> proto_agent.platform.state 'checkpoints'
@@ -156,7 +155,6 @@ model {
   proto_agent.core.graph -> proto_agent.platform.events 'publishes'
   proto_agent.platform.scheduler -> proto_agent.interfaces.a2a_impl 'fires jobs as turns'
   proto_agent.platform.scheduler -> proto_agent.platform.state 'jobs'
-  proto_agent.platform.media -> proto_agent.interfaces.a2a_impl 'turn files as file parts'
 
   // Component relationships
   proto_agent.interfaces.server.chat -> proto_agent.core.graph.agent_core 'astream'
