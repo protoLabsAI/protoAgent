@@ -364,11 +364,17 @@ delegates:
     manage_git: true       # framework-owned git lifecycle
     base_branch: main      # branches cut from origin/<base>; PRs target it
     # branch_prefix: wt-1  # optional; defaults to the delegate name
+    # draft_pr: true       # optional; open the PR as a draft (human marks it ready)
 ```
 
 The PR step needs `gh` on PATH and a `GH_TOKEN`/`GITHUB_TOKEN` (the same container env as
 above). Without them the branch is still pushed and verified — the reply just reports the
 PR step's failure instead of a URL.
+
+`draft_pr: true` opens that PR as a draft (`gh pr create --draft`), so it can't be
+auto-merged and a human must mark it ready — a way to hold a managed delegate to a
+draft-only, human-merge lane without relying on prompt instruction. It defaults to `false`,
+and the PR-create command is byte-identical when it's off.
 
 ## How it works
 

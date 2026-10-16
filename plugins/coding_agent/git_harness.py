@@ -384,10 +384,16 @@ class GitOutcome:
         return "\n".join(lines)
 
 
-async def finish(workdir: str, *, base: str, branch: str, item_id: str, title: str) -> GitOutcome:
+async def finish(
+    workdir: str, *, base: str, branch: str, item_id: str, title: str, draft: bool = False
+) -> GitOutcome:
     """The framework-owned tail of a managed run. Every step degrades gracefully —
     a commit survives a failed push, a push survives a failed PR create — and errors
-    accumulate in the result instead of raising."""
+    accumulate in the result instead of raising.
+
+    ``draft`` (off by default) opens the PR as a draft (``gh pr create --draft``) so it
+    can't auto-merge and a human must mark it ready — a draft-only, human-merge lane for
+    the delegate. Default is byte-identical to the historical behavior."""
     out = GitOutcome(branch=branch, item_id=item_id, base=base)
     env = await _identity_env(workdir)
 
@@ -519,7 +525,7 @@ async def finish(workdir: str, *, base: str, branch: str, item_id: str, title: s
             return out
 
     if out.pushed:
-        await _open_pr(workdir, out, title=title)
+        await _open_pr(workdir, out, title=title, draft=draft)
     return out
 
 
@@ -594,9 +600,12 @@ async def preflight_pr(workdir: str, item_id: str) -> str:
     return await _pr_url_by_item(workdir, item_id, state="open")
 
 
-async def _open_pr(workdir: str, out: GitOutcome, *, title: str) -> None:
+async def _open_pr(workdir: str, out: GitOutcome, *, title: str, draft: bool = False) -> None:
     """Create-or-reuse the PR for ``out.branch``. Idempotency layers: 0-commits-ahead
-    skip → open-PR pre-check → create → "already exists" recovery."""
+    skip → open-PR pre-check → create → "already exists" recovery.
+
+    ``draft`` appends ``--draft`` to ``gh pr create`` so the delegate can be held to a
+    draft-only/human-merge lane. Off by default — the argv is then byte-identical."""
     ahead = await _count(workdir, f"origin/{out.base}..origin/{out.branch}")
     if ahead == 0:
         out.pr_state = "skipped-no-commits"
@@ -606,8 +615,11 @@ async def _open_pr(workdir: str, out: GitOutcome, *, title: str) -> None:
         out.pr_url, out.pr_state = existing, "existing"
         return
     body = f"Automated change for item `{out.item_id}` (branch `{out.branch}`).\n\nPublished by the managed-git harness (ADR 0076)."
+    create_args = ["pr", "create", "--head", out.branch, "--base", out.base, "--title", title, "--body", body]
+    if draft:
+        create_args.append("--draft")
     rc, stdout, stderr = await run_gh(
-        ["pr", "create", "--head", out.branch, "--base", out.base, "--title", title, "--body", body],
+        create_args,
         cwd=workdir,
         timeout=60,
     )
