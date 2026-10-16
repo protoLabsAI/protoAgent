@@ -17,6 +17,7 @@
 // against the durable task via `tasks/get` and settles it. A live view that can strand a
 // bubble is worse than no live view, so this failure mode is covered by construction.
 
+import { markForReveal } from "../chat/revealText";
 import { liveMessageId } from "../chat/server-turn-store";
 import { placeServerTurnSteers } from "../chat/steerPlacement";
 import { delegationFromFrame } from "../lib/delegation";
@@ -195,6 +196,11 @@ export function applyProgressFrame(messages: ChatMessage[], frame: ProgressFrame
   if (frame.kind === "room") {
     const id = `background-room-${frame.id}`;
     if (messages.some((message) => message.id === id)) return messages;
+    // A complete reply landed on the live bus: let its bubble reveal progressively on mount
+    // (#4247). Only on the fresh append — a duplicate frame hit the dedupe return above, so
+    // it never re-marks. The mark lives in a module registry, not on the message, so it is
+    // consumed once and never persisted (a reload renders the full text at once).
+    markForReveal(id);
     return [
       ...messages,
       {
