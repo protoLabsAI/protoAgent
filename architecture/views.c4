@@ -1,0 +1,195 @@
+views {
+  view index {
+    title 'System context'
+    include *
+    autoLayout LeftRight
+  }
+
+  view proto_agent_detail of proto_agent {
+    title 'protoAgent subsystems'
+    include *
+    autoLayout LeftRight
+  }
+
+  view proto_agent_interfaces_detail of proto_agent.interfaces {
+    title 'Interfaces'
+    include *
+    autoLayout LeftRight
+  }
+
+  view proto_agent_core_detail of proto_agent.core {
+    title 'Agent core'
+    include *
+    autoLayout LeftRight
+  }
+
+  view proto_agent_platform_detail of proto_agent.platform {
+    title 'Platform services'
+    include *
+    autoLayout LeftRight
+  }
+
+  view proto_agent_interfaces_console_detail of proto_agent.interfaces.console {
+    title 'Console'
+    include *
+    autoLayout LeftRight
+  }
+
+  view proto_agent_interfaces_server_detail of proto_agent.interfaces.server {
+    title 'Server components'
+    include *
+  }
+
+  view proto_agent_core_graph_detail of proto_agent.core.graph {
+    title 'Agent graph components'
+    include *
+  }
+
+  // ── The plugin ecosystem ───────────────────────────────────────────────────────────
+  view proto_agent_platform_plugins_detail of proto_agent.platform.plugins {
+    title 'Plugin ecosystem'
+    include proto_agent.platform.plugins, proto_agent.platform.plugins.*
+    include proto_agent.platform.events, plugin_repos
+    autoLayout LeftRight
+  }
+
+  view proto_agent_platform_plugins_registry_detail of proto_agent.platform.plugins.registry {
+    title 'What a plugin contributes'
+    include proto_agent.platform.plugins.registry, proto_agent.platform.plugins.registry.*
+    include proto_agent.core.graph.agent_core
+    autoLayout LeftRight
+  }
+
+  view proto_agent_platform_plugins_sdk_detail of proto_agent.platform.plugins.sdk {
+    title 'Plugin SDK'
+    include proto_agent.platform.plugins.sdk, proto_agent.platform.plugins.sdk.*
+    include proto_agent.platform.plugins.store, proto_agent.platform.media
+    autoLayout LeftRight
+  }
+
+  view proto_agent_interfaces_console_view_bridge_detail of proto_agent.interfaces.console.view_bridge {
+    title 'Console to plugin view bridge'
+    include proto_agent.interfaces.console.view_bridge, proto_agent.interfaces.console.view_bridge.*
+    include proto_agent.platform.plugins.registry.console_views, proto_agent.platform.events
+    include proto_agent.interfaces.console.code_pane
+    autoLayout LeftRight
+  }
+
+  view plugin_repos_detail of plugin_repos {
+    title 'First-party plugin repos'
+    include *
+    autoLayout LeftRight
+  }
+
+  // ── Flows ──────────────────────────────────────────────────────────────────────────
+  dynamic view chat_turn_flow {
+    title 'Chat turn'
+    operator -> proto_agent.interfaces.console 'sends message' {
+      notes 'You send a message in the console.'
+    }
+    proto_agent.interfaces.console -> proto_agent.interfaces.server.chat 'POST /a2a' {
+      notes 'The console posts it to the server.'
+    }
+    proto_agent.interfaces.server.chat -> proto_agent.core.graph.agent_core 'astream_events' {
+      notes 'The server hands the turn to the agent graph.'
+    }
+    proto_agent.core.graph.agent_core -> proto_agent.core.graph.llm_client 'model call' {
+      notes 'The agent asks its LLM client for the next step…'
+    }
+    proto_agent.core.graph.llm_client -> gateway 'completion' {
+      notes '…which calls your model through the gateway.'
+    }
+    proto_agent.core.graph.agent_core -> proto_agent.core.tools 'tool call' {
+      notes 'If the model asks for a tool, the agent runs it…'
+    }
+    proto_agent.core.graph.agent_core <- proto_agent.core.tools 'result' {
+      notes '…and feeds the result back to the model.'
+    }
+    proto_agent.core.graph.agent_core -> proto_agent.core.graph.checkpointer 'persist' {
+      notes 'Every step is checkpointed.'
+    }
+    proto_agent.core.graph.agent_core -> proto_agent.interfaces.server.turn_stream 'events' {
+      notes 'The final answer returns to the server…'
+    }
+    proto_agent.interfaces.server.turn_stream -> proto_agent.interfaces.console 'SSE' {
+      notes '…streaming live to your console.'
+    }
+  }
+
+  dynamic view plugin_lifecycle {
+    title 'Install to console'
+    operator -> proto_agent.interfaces.console.app_shell 'install from git URL' {
+      notes 'You paste a plugin repo URL into the console plugin settings.'
+    }
+    proto_agent.interfaces.console.app_shell -> proto_agent.interfaces.operator_api 'POST /api/plugins/install' {
+      notes 'The console calls the operator API; a source you have not trusted yet needs a one-time this-runs-code ack.'
+    }
+    proto_agent.interfaces.operator_api -> proto_agent.platform.plugins.installer 'install(url, ref)' {
+      notes 'The installer refuses any source outside the allowlist.'
+    }
+    proto_agent.platform.plugins.installer -> plugin_repos 'git clone at ref' {
+      notes 'It clones the repo at a ref and pins the exact commit in plugins.lock.'
+    }
+    proto_agent.platform.plugins.installer -> proto_agent.platform.plugins.manifest 'read manifest' {
+      notes 'The installer itself runs no plugin code: install alone is not enable.'
+    }
+    proto_agent.interfaces.operator_api -> proto_agent.interfaces.server.agent_init 'enable + hot reload' {
+      notes 'Enabling is the trust decision: the id joins plugins.enabled and the agent reloads live.'
+    }
+    proto_agent.interfaces.server.agent_init -> proto_agent.platform.plugins.loader 'load_plugins()' {
+      notes 'The loader discovers every enabled plugin.'
+    }
+    proto_agent.platform.plugins.loader -> proto_agent.platform.plugins.manifest 'parse' {
+      notes 'It parses each protoagent.plugin.yaml.'
+    }
+    proto_agent.platform.plugins.loader -> proto_agent.platform.plugins.deps_gate 'requires_pip, requires_runtimes' {
+      notes 'It checks Python deps, a Node runtime and the host version; a gap becomes a banner with a one-click fix.'
+    }
+    proto_agent.platform.plugins.loader -> proto_agent.platform.plugins.registry 'register(registry)' {
+      notes "Then it calls the plugin's register() with a fresh registry."
+    }
+    proto_agent.platform.plugins.registry -> proto_agent.core.graph.agent_core 'tools bound' {
+      notes 'Its tools are bound into the agent graph.'
+    }
+    proto_agent.platform.plugins.registry -> proto_agent.interfaces.server.plugin_wiring 'router mounted' {
+      notes 'Its routers are mounted and its background surfaces start.'
+    }
+    proto_agent.platform.plugins.registry -> proto_agent.interfaces.server.agent_init 'skill dirs' {
+      notes 'Its skills join the skills index.'
+    }
+    proto_agent.platform.plugins.registry -> proto_agent.interfaces.console.app_shell 'view in the rail' {
+      notes 'And its view appears in the console rail.'
+    }
+  }
+
+  dynamic view sdk_tool_call {
+    title 'A plugin tool runs'
+    proto_agent.core.graph.agent_core -> proto_agent.platform.plugins.registry.tools 'call plugin tool' {
+      notes 'The model picks a plugin tool, and the agent runs it like any other.'
+    }
+    proto_agent.platform.plugins.registry.tools -> proto_agent.platform.plugins.sdk.plugin_store 'plugin_store(plugin_id)' {
+      notes 'The tool asks the SDK for its own directory.'
+    }
+    proto_agent.platform.plugins.sdk.plugin_store -> proto_agent.platform.plugins.store 'write files' {
+      notes 'It lives under the instance root, so each agent gets its own copy.'
+    }
+    proto_agent.platform.plugins.registry.tools -> proto_agent.platform.plugins.sdk.service 'service("artifact.show")' {
+      notes 'To use another plugin, it calls a service by name instead of importing it.'
+    }
+    proto_agent.platform.plugins.sdk.service -> proto_agent.platform.plugins.registry.services 'resolve provider' {
+      notes 'The SDK finds the callable the provider registered.'
+    }
+    proto_agent.platform.plugins.registry.services -> proto_agent.interfaces.console.artifact_panel 'artifact-ref' {
+      notes 'The artifact service stores a version, and the console opens it in the Artifact panel.'
+    }
+    proto_agent.platform.plugins.registry.tools -> proto_agent.platform.plugins.sdk.attach_file 'attach_file(ref)' {
+      notes "A tool can also attach a file to this turn's answer."
+    }
+    proto_agent.platform.plugins.sdk.attach_file -> proto_agent.platform.media 'record on turn' {
+      notes 'The media store records it against the running turn.'
+    }
+    proto_agent.platform.media -> proto_agent.interfaces.a2a_impl 'file parts' {
+      notes 'The file rides the A2A answer as a file part, so a peer agent gets it too.'
+    }
+  }
+}

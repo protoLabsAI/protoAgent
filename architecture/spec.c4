@@ -1,0 +1,9 @@
+specification {
+  element actor { style { shape person } }
+  element system
+  element subsystem { style { color secondary } }
+  element container
+  element component
+  element database { style { shape cylinder } }
+  tag external
+}

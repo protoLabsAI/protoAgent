@@ -1,0 +1,289 @@
+// The plugin ecosystem and the plugin SDK: how a plugin gets installed, trusted, loaded and
+// registered; what it can contribute; the SDK it calls; and the console bridge its view
+// talks over. Extends elements declared in model.c4 (extend needs full FQNs).
+model {
+  plugin_repos = system 'First-party plugin repos' 'protoLabsAI plugins, installed by git URL' {
+    #external
+    link /config/plugin-directory.yaml#L46 'Plugin directory'
+    atlas = system 'Atlas' 'Architecture diagrams, tours, live narration' {
+      #external
+      link https://github.com/protoLabsAI/atlas-plugin 'Repo'
+      link /config/plugin-directory.yaml#L189 'Directory row'
+    }
+    terminal = system 'Terminal' 'A real PTY as a console view' {
+      #external
+      link https://github.com/protoLabsAI/terminal-plugin 'Repo'
+      link /config/plugin-directory.yaml#L63 'Directory row'
+    }
+    project_board = system 'Project board' 'Kanban board for agent work' {
+      #external
+      link https://github.com/protoLabsAI/projectBoard-plugin 'Repo'
+      link /config/plugin-directory.yaml#L70 'Directory row'
+    }
+    github = system 'GitHub' 'Issues, PRs and reviews as tools' {
+      #external
+      link https://github.com/protoLabsAI/github-plugin 'Repo'
+      link /config/plugin-directory.yaml#L128 'Directory row'
+    }
+    discord = system 'Discord' 'A chat surface on Discord' {
+      #external
+      link https://github.com/protoLabsAI/discord-plugin 'Repo'
+      link /config/plugin-directory.yaml#L47 'Directory row'
+    }
+    campaign = system 'Brand and Launch (Campaign)' 'Archetype bundle: launch plans, recordings, copy' {
+      #external
+      link https://github.com/protoLabsAI/brand-launch-archetype 'Repo'
+      link /config/plugin-directory.yaml#L450 'Directory row'
+      metadata {
+        adr ['0040', '0049']
+      }
+    }
+  }
+
+  extend proto_agent.platform.plugins {
+    manifest = component 'Manifest' 'protoagent.plugin.yaml: id, views, config, requires_*' {
+      link /src/graph/plugins/manifest.py#L28 'PluginManifest'
+      link /src/graph/plugins/manifest.py#L1418 'load_manifest'
+      link /docs/reference/plugin-manifest.md 'Reference'
+      metadata {
+        adr '0001'
+      }
+    }
+    registry = component 'Plugin registry' 'The seam register(registry) writes into' {
+      link /src/graph/plugins/registry.py#L83 'PluginRegistry'
+      link /docs/reference/plugin-registry-api.md 'Reference'
+      metadata {
+        adr ['0001', '0018']
+      }
+    }
+    loader = component 'Loader' 'Discovers, gates and loads enabled plugins' {
+      link /src/graph/plugins/loader.py#L899 'load_plugins'
+      link /src/graph/plugins/loader.py#L117 'discover_plugins'
+      link /src/graph/plugins/loader.py#L1079 'register(registry)'
+      metadata {
+        adr '0001'
+      }
+    }
+    installer = component 'Installer and trust' 'Git-URL installs pinned in plugins.lock; install is not enable' {
+      link /src/graph/plugins/installer.py#L1003 'install'
+      link /src/graph/plugins/installer.py#L255 'lock_path (plugins.lock)'
+      link /src/graph/plugins/trust.py#L90 'source_trusted'
+      link /plugins.lock 'plugins.lock'
+      metadata {
+        adr ['0027', '0071']
+      }
+    }
+    deps_gate = component 'Deps and runtime gate' 'requires_pip wheels, requires_runtimes (Node), min host version' {
+      link /src/graph/plugins/loader.py#L650 '_report_deps_gap'
+      link /src/graph/plugins/loader.py#L747 '_runtime_gap'
+      link /src/graph/plugins/manifest.py#L1089 '_parse_requires_pip'
+      link /src/graph/plugins/manifest.py#L1160 '_parse_requires_runtimes'
+      link /src/infra/node_runtime.py#L61 'Managed Node runtime'
+      metadata {
+        adr '0085'
+      }
+    }
+    setup_gaps = component 'Setup gaps' 'Console banners with one-click fix actions' {
+      link /src/graph/plugins/setup_gaps.py#L201 'report'
+      link /src/graph/plugins/setup_gaps.py#L296 'run_step'
+      link /src/operator_api/plugin_routes.py#L413 'POST /api/plugin-setup'
+    }
+    bundles = component 'Bundles and archetypes' 'One repo installs a set of plugins plus an agent persona' {
+      link /src/graph/plugins/bundles.py#L209 '_install_bundle'
+      link /src/graph/plugins/bundles.py#L38 'load_bundle'
+      link /config/archetype-catalog.json 'Archetype catalog'
+      metadata {
+        adr ['0040', '0049']
+      }
+    }
+    store = database 'Plugin store' 'Per-plugin writable dir under the instance root' {
+      link /src/graph/sdk.py#L1305 'plugin_store'
+    }
+    sdk = component 'Plugin SDK' 'graph.sdk: the stable surface plugin code calls' {
+      link /src/graph/sdk.py 'graph/sdk.py'
+      link /docs/reference/plugin-sdk-api.md 'Reference'
+    }
+
+    installer -> manifest 'reads for review'
+    bundles -> installer 'installs each member'
+    loader -> installer 'finds installed copies'
+    loader -> manifest 'parses'
+    loader -> deps_gate 'checks deps and runtimes'
+    deps_gate -> setup_gaps 'reports what is missing'
+    loader -> registry 'register(registry)'
+    registry -> setup_gaps 'report_setup_gap'
+    sdk -> store 'plugin_store()'
+  }
+
+  // ── What a plugin contributes: everything register(registry) can add ───────────────
+  extend proto_agent.platform.plugins.registry {
+    tools = component 'Tools' 'LangChain tools bound into the agent' {
+      link /src/graph/plugins/registry.py#L294 'register_tool'
+    }
+    console_views = component 'Console views' 'Iframe pages in the rail; the four rules' {
+      link /src/graph/plugins/manifest.py#L386 '_parse_views'
+      link /docs/guides/building-react-plugin-views.md#L17 'The four rules'
+      metadata {
+        adr '0026'
+      }
+    }
+    skills = component 'Skills' 'SKILL.md dirs added to the skills index' {
+      link /src/graph/plugins/registry.py#L535 'register_skill_dir'
+    }
+    subagents = component 'Subagents' 'Extra task() delegate types' {
+      link /src/graph/plugins/registry.py#L813 'register_subagent'
+      metadata {
+        adr '0018'
+      }
+    }
+    mcp_servers = component 'MCP servers' 'Managed MCP servers the plugin ships' {
+      link /src/graph/plugins/registry.py#L797 'register_mcp_server'
+    }
+    routes = component 'Routes' 'FastAPI routers under /api/plugins/<id>' {
+      link /src/graph/plugins/registry.py#L742 'register_router'
+      metadata {
+        adr '0018'
+      }
+    }
+    surfaces = component 'Surfaces' 'Background loops with start and stop' {
+      link /src/graph/plugins/registry.py#L770 'register_surface'
+      metadata {
+        adr '0018'
+      }
+    }
+    services = component 'Services' 'Callables other plugins reach via sdk.service' {
+      link /src/graph/plugins/registry.py#L452 'register_service'
+    }
+    components = component 'Chat components' 'Validated component kinds a reply can carry' {
+      link /src/graph/plugins/registry.py#L346 'register_component'
+      metadata {
+        adr '0118'
+      }
+    }
+    commands = component 'Keybindings and menus' 'Chords and context-menu items over the view bridge' {
+      link /src/graph/plugins/manifest.py#L753 '_parse_commands'
+      link /docs/reference/plugin-view-bridge.md#L92 'Bridge: keybindings'
+      metadata {
+        adr '0061'
+      }
+    }
+  }
+
+  // ── The plugin SDK: the most-used graph.sdk entry points ───────────────────────────
+  extend proto_agent.platform.plugins.sdk {
+    plugin_store = component 'plugin_store()' "The plugin's own writable directory" {
+      link /src/graph/sdk.py#L1305 'plugin_store'
+    }
+    service = component 'service()' 'Call another plugin without importing it' {
+      link /src/graph/sdk.py#L69 'service'
+    }
+    console_url = component 'console_url()' "This agent's own console base URL" {
+      link /src/graph/sdk.py#L313 'console_url'
+    }
+    attach_file = component 'attach_file()' "Attach a media file to this turn's answer" {
+      link /src/graph/sdk.py#L273 'attach_file'
+    }
+    run_subagent = component 'run_subagent()' 'Run a subagent from plugin code' {
+      link /src/graph/sdk.py#L173 'run_subagent'
+    }
+    knowledge = component 'knowledge_add / search' 'Write and query the knowledge store' {
+      link /src/graph/sdk.py#L492 'knowledge_add'
+      link /src/graph/sdk.py#L473 'knowledge_search'
+    }
+    record_metric = component 'record_metric()' 'Small numeric series per plugin' {
+      link /src/graph/sdk.py#L1387 'record_metric'
+    }
+    schedule_recurring = component 'schedule_recurring()' 'Plugin-owned cron jobs' {
+      link /src/graph/sdk.py#L1161 'schedule_recurring'
+    }
+    trace_run = component 'trace_run()' 'A traced span for non-turn work' {
+      link /src/graph/sdk.py#L1581 'trace_run'
+    }
+  }
+
+  // ── The console side of a plugin view: the postMessage bridge ──────────────────────
+  extend proto_agent.interfaces.console {
+    view_bridge = component 'Plugin view bridge' 'postMessage protocol between console and plugin iframe' {
+      link /docs/reference/plugin-view-bridge.md 'Wire protocol'
+      metadata {
+        adr ['0026', '0039']
+      }
+      view_host = component 'PluginView host' 'Sandboxed iframe of the plugin page' {
+        link /apps/web/src/app/PluginView.tsx#L74 'PluginView'
+      }
+      handshake = component 'Init and theme handshake' 'protoagent:init with bearer + theme; live re-theme' {
+        link /apps/web/src/app/pluginFrameHandshake.ts#L92 'postInit'
+      }
+      kit = component 'plugin-kit' 'Same-origin /_ds kit: handshake, tokens, apiFetch' {
+        link /docs/reference/plugin-view-bridge.md#L251 'The kit'
+        link /apps/web/scripts/copy-plugin-kit.mjs#L22 'Served from /_ds'
+      }
+      event_relay = component 'Event relay' 'subscribe / event / publish across the sandbox' {
+        link /apps/web/src/lib/pluginEventRelay.ts#L52 'createPluginEventRelay'
+        metadata {
+          adr '0039'
+        }
+      }
+      keybindings = component 'Keybindings' 'keybindings, keydown forwarding' {
+        link /apps/web/src/lib/pluginKeybindings.ts#L41 'parsePluginKeybindings'
+      }
+      context_menu = component 'Context menus' 'contextmenu:register / open / action' {
+        link /apps/web/src/lib/pluginContextMenu.ts#L99 'parsePluginMenuRegistration'
+      }
+      code_open = component 'code:open' 'Show a file in the code pane' {
+        link /apps/web/src/app/PluginView.tsx#L435 'code:open handler'
+      }
+      chat_compose = component 'chat:compose' 'Draft a chat message for the operator' {
+        link /apps/web/src/app/pluginChatCompose.ts#L82 'createPluginChatComposer'
+      }
+
+      view_host -> handshake 'on load'
+      handshake -> kit 'protoagent:init'
+      kit -> view_host 'protoagent:ready'
+      kit -> event_relay 'subscribe / publish'
+      kit -> keybindings 'keybindings / keydown'
+      kit -> context_menu 'contextmenu:register'
+      kit -> code_open 'protoagent:code:open'
+      kit -> chat_compose 'protoagent:chat:compose'
+    }
+  }
+
+  // ── Ecosystem wiring to the rest of protoAgent ─────────────────────────────────────
+  proto_agent.platform.plugins.installer -> plugin_repos 'git clone at a ref'
+  proto_agent.platform.plugins.bundles -> plugin_repos 'bundle repo lists members'
+  proto_agent.platform.plugins.registry -> proto_agent.platform.events 'emit / on'
+  proto_agent.interfaces.operator_api -> proto_agent.platform.plugins.installer 'install / enable'
+  proto_agent.interfaces.operator_api -> proto_agent.platform.plugins.setup_gaps 'run a fix step'
+  proto_agent.interfaces.server.agent_init -> proto_agent.platform.plugins.loader 'load_plugins()'
+
+  // contributions → where they land
+  proto_agent.platform.plugins.registry.tools -> proto_agent.core.graph.agent_core 'bound into the tool loop'
+  proto_agent.interfaces.server.plugin_wiring -> proto_agent.platform.plugins.registry.routes 'mounts routers'
+  proto_agent.interfaces.server.plugin_wiring -> proto_agent.platform.plugins.registry.surfaces 'starts and stops'
+  proto_agent.interfaces.server.agent_init -> proto_agent.platform.plugins.registry.skills 'indexes skill dirs'
+  proto_agent.platform.plugins.registry.subagents -> proto_agent.core.graph.subagents 'new task() types'
+  proto_agent.platform.plugins.registry.mcp_servers -> proto_agent.core.tools 'MCP tools'
+  proto_agent.interfaces.console.app_shell -> proto_agent.platform.plugins.registry.console_views 'rail icon + iframe'
+  proto_agent.interfaces.console.chat_frames -> proto_agent.platform.plugins.registry.components 'renders'
+  proto_agent.platform.plugins.registry.commands -> proto_agent.interfaces.console.view_bridge.keybindings 'declared chords'
+  proto_agent.platform.plugins.registry.commands -> proto_agent.interfaces.console.view_bridge.context_menu 'declared items'
+  proto_agent.platform.plugins.registry.console_views -> proto_agent.interfaces.console.view_bridge.kit 'page loads /_ds/plugin-kit.js'
+  proto_agent.platform.plugins.registry.console_views -> proto_agent.platform.plugins.registry.routes 'served by'
+
+  // the SDK → what it reaches
+  proto_agent.platform.plugins.sdk.plugin_store -> proto_agent.platform.plugins.store 'its own dir'
+  proto_agent.platform.plugins.sdk.service -> proto_agent.platform.plugins.registry.services 'looks up'
+  proto_agent.platform.plugins.sdk.attach_file -> proto_agent.platform.media 'records on the turn'
+  proto_agent.platform.plugins.sdk.knowledge -> proto_agent.core.knowledge 'add / search'
+  proto_agent.platform.plugins.sdk.run_subagent -> proto_agent.core.graph.subagents 'runs'
+  proto_agent.platform.plugins.sdk.schedule_recurring -> proto_agent.platform.scheduler 'cron job'
+  proto_agent.platform.plugins.sdk.trace_run -> proto_agent.platform.observability 'span'
+  proto_agent.platform.plugins.sdk.record_metric -> proto_agent.platform.observability 'metric series'
+  proto_agent.platform.plugins.sdk.console_url -> proto_agent.interfaces.console 'base URL'
+
+  // the bridge → the rest of the console and the bus
+  proto_agent.interfaces.console.app_shell -> proto_agent.interfaces.console.view_bridge.view_host 'mounts'
+  proto_agent.interfaces.console.view_bridge.event_relay -> proto_agent.platform.events 'relays via /api/events'
+  proto_agent.interfaces.console.view_bridge.code_open -> proto_agent.interfaces.console.code_pane 'opens the file'
+  proto_agent.platform.plugins.registry.services -> proto_agent.interfaces.console.artifact_panel 'artifact-ref'
+}
