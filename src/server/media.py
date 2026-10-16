@@ -16,11 +16,12 @@ from __future__ import annotations
 
 
 def register_media_routes(app) -> None:
-    """Mount ``GET /media/{name}`` on the FastAPI app."""
+    """Mount ``GET``/``HEAD /media/{name}`` on the FastAPI app."""
     from fastapi import HTTPException
     from fastapi.responses import FileResponse
 
-    @app.get("/media/{name}", include_in_schema=False)
+    # HEAD answers the same headers with no body, behind the same auth (#4258).
+    @app.api_route("/media/{name}", methods=["GET", "HEAD"], include_in_schema=False)
     async def _serve_media(name: str) -> FileResponse:
         from infra.media import resolve_media
 

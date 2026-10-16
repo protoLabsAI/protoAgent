@@ -422,7 +422,7 @@ def test_default_graph_sdk_stub_records_attach_file_and_returns_false(monkeypatc
     from graph.sdk import attach_file
 
     assert attach_file("/media/x.png?sig=ab", name="x.png") is False
-    assert attach_file.calls == [{"ref": "/media/x.png?sig=ab", "name": "x.png", "mime": ""}]
+    assert attach_file.calls == [{"ref": "/media/x.png?sig=ab", "name": "x.png", "mime": "", "ttl_s": None}]
 
 
 def test_default_graph_sdk_stub_console_url_is_none(monkeypatch):

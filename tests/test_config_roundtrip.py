@@ -228,6 +228,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "max_tokens": 32768,
     "media_public": False,
     "media_retention_days": 0,
+    "media_remote_link_ttl_s": 604800,
     "mcp_call_timeout_seconds": 300.0,
     "mcp_max_result_chars": 50_000,
     "mcp_denylist": [],

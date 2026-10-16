@@ -237,6 +237,54 @@ _MEMBER_PUBLIC: list = [None]
 _AGENTS_RE = re.compile(r"^/agents/([^/]+)(/.+)$")
 
 
+# A fleet member's signed media link, as the hub receives it (#4258). The slug and file name
+# are single plain segments; the query is checked separately (``_is_fleet_media_link``).
+_FLEET_MEDIA_RE = re.compile(r"^/agents/([A-Za-z0-9][A-Za-z0-9_-]*)/media/([^/]+)$")
+
+
+def _is_fleet_media_link(request) -> bool:
+    """Whether ``request`` is EXACTLY a member's signed media fetch the hub may forward
+    without its own auth (#4258): a GET/HEAD of ``/agents/<slug>/media/<file>`` where
+
+    * the path arrived with NO percent-encoding at all (raw bytes == decoded path) — so no
+      ``%2e%2e``, ``%2f`` or double-encoded slug can make the path the hub matched differ
+      from the one the proxy forwards (#3999's rule, applied before the auth decision);
+    * ``<file>`` is a servable store name (``infra.media.is_media_name``: no dotfile, no
+      nested path);
+    * the query is ``exp=<unix seconds>`` and ``sig=<64 hex>`` — both required (only an
+      EXPIRING link is exempt; a permanent one never is), each once, nothing else.
+
+    Shape only: the hub never verifies the member's signature (it doesn't hold the key) —
+    the member's own media gate does. Anything else takes the hub's normal auth (401)."""
+    if request.method not in ("GET", "HEAD"):
+        return False
+    scope = getattr(request, "scope", {}) or {}
+    path = scope.get("path") or ""
+    m = _FLEET_MEDIA_RE.match(path)
+    if not m:
+        return False
+    raw = scope.get("raw_path")
+    if not isinstance(raw, (bytes, bytearray)) or raw.decode("latin-1") != path:
+        return False
+    try:
+        from infra.media import is_link_query_value, is_media_name
+    except Exception:  # noqa: BLE001 — no media module: never exempt
+        return False
+    if not is_media_name(m.group(2)):
+        return False
+    query = (scope.get("query_string") or b"").decode("latin-1")
+    seen: dict[str, str] = {}
+    for pair in query.split("&") if query else ():
+        key, sep, value = pair.partition("=")
+        if not sep or key not in ("sig", "exp") or key in seen or not is_link_query_value(key, value):
+            return False
+        seen[key] = value
+    # BOTH are required: only an EXPIRING link is ever exempt. A permanent ``?sig=`` link (the
+    # console's inline links — in answer text, history, exports, logs) stays behind the hub's
+    # auth, or every link a member ever minted would be fetchable through the hub forever.
+    return "sig" in seen and "exp" in seen
+
+
 def set_member_public_resolver(fn) -> None:
     """Install the async ``(slug, rest) -> bool`` member-public resolver (None = off)."""
     _MEMBER_PUBLIC[0] = fn
@@ -619,19 +667,38 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                     request.state.member_public = True
                     return await call_next(request)
 
+        # A fleet member's EXPIRING signed media link (#4258):
+        # ``/agents/<slug>/media/<file>?exp=…&sig=…``.
+        # The hub can't verify a member's signature (the key never leaves the member), so a
+        # request of EXACTLY that shape is forwarded without hub auth and the MEMBER's own
+        # ``/media/`` gate verifies it — an unsigned, forged or expired link is refused there.
+        # ``member_public`` makes the proxy forward it with NO credential of the hub's (or the
+        # caller's, to a remote), so the member's signature check is the only thing that can
+        # admit it. Anything not of that exact shape takes the normal auth below.
+        if _is_fleet_media_link(request):
+            request.state.member_public = True
+            request.state.fleet_media = True  # the proxy answers hub-side failures 401 (no slug probe)
+            return await call_next(request)
+
         # Core media store (#1929): ``/media/<file>`` serves tool-generated artifacts
         # that the console chat renders as inline ``<img>`` tags — a plain browser
         # fetch that cannot carry an Authorization header. Each saved URL carries a
         # per-file HMAC signature minted at save time (``infra/media.py``); a request
         # passes iff the signature verifies (or the store is explicitly opted public
-        # via ``media.public``). Anything else falls through to the normal bearer /
-        # X-API-Key checks below — default-deny holds.
+        # via ``media.public``). An expiring link (``?exp=``, #4258) past its expiry is
+        # answered 403 unless a credential admits the request anyway. Anything else
+        # falls through to the normal bearer / X-API-Key checks below — default-deny holds.
+        media_expired = False
         if path.startswith("/media/"):
             try:
-                from infra.media import request_allowed as _media_allowed
+                from infra.media import check_access as _media_access
 
-                if _media_allowed(path, request.query_params.get("sig", "")):
+                verdict = _media_access(
+                    path, request.query_params.get("sig", ""), request.query_params.get("exp", "")
+                )
+                if verdict == "ok":
                     return await call_next(request)
+                media_expired = verdict == "expired"
             except Exception:  # noqa: BLE001 — a check failure fails CLOSED to normal auth
                 logger.exception("[a2a] media access check failed for %s", path)
 
@@ -662,6 +729,11 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         if _API_KEY[0] or _BEARER[0]:
             tier = _classify_request(request)
             if tier is None:
+                if media_expired:
+                    return JSONResponse(
+                        {"detail": "Forbidden: this media link has expired — ask the agent for a fresh link"},
+                        status_code=403,
+                    )
                 return _unauthorized(_credential_error())
 
         # R1 path ceiling (ADR 0066): a federation credential is denied the /api operator

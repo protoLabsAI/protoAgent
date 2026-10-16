@@ -1320,6 +1320,18 @@ FIELDS: list[Field] = [
         "Auto-prune generated media files older than this on each new save (0 = keep forever).",
         minimum=0,
     ),
+    Field(
+        "media.remote_link_ttl_s",
+        "media_remote_link_ttl_s",
+        "Remote file-link lifetime (seconds)",
+        "number",
+        "Media",
+        "How long a file link handed to an A2A peer or /v1 client stays valid (default "
+        "604800 = 7 days, at most 31536000 = a year; 0 = never expire). The console's own "
+        "inline links never expire.",
+        minimum=0,
+        maximum=31536000,
+    ),
     # ── Identity / operator ──────────────────────────────────────────────────
     # `identity.name` stays in FIELDS so it round-trips through the YAML writer AND so it
     # validates/cascades on save, but it's ui_hidden: the dedicated Identity panel (Agent ▸
