@@ -15,6 +15,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.207.0] - 2026-10-16
+
+### Added
+- **`graph.sdk.console_url()` — the URL this agent's console is served on (#4267).** Plugins that drive their own console (Atlas's recorder, Campaign's shot scripts) no longer guess `:7870`: it returns `A2A_PUBLIC_URL` (the same base the A2A card and absolute `/media` links use), else the running server's bound host/port, else `None`. A hub-spawned fleet member returns its own bound console rather than the hub's `/agents/<id>` tenant path. Guard with `getattr(sdk, "console_url", None)` on older cores.
+
+- **`protoagent fleet friction` reads every member's friction ledger from one place, and `fleet friction resolve` clears a signal once it's fixed (#4275).** Each agent keeps its own ledger, and the console's fleet rollup merges open rows but drops per-entry detail, resolved history and the tool payload — so triaging the fleet meant opening each member's view. The new verb reads every running member (and the hub itself) through the hub's proxy, with `--kind`, `--severity`, `--since 7d`, `--agent`, `--resolved`, `--raw`, `-v` and `--json`; ranks worst-first; surfaces signals more than one agent hit; and names members it couldn't read instead of silently skipping them. `resolve <id>` has no default scope — name agents with `--agent` or pass `--all-agents` — and takes `--reason` and `--reopen`. A new `triaging-fleet-friction` skill in the friction plugin drives the pass: pull, cluster, check for existing issues, draft a filing plan, resolve after the fix ships. Live hub only.
+
+- **`protoagent fleet friction --all` reads the friction ledgers of every running hub on the box (#4282).** Follow-up to `fleet friction` (#4275): with a desktop hub and a `scripts/dev.sh` sandbox both up, discovery reads one, so the other's agents were invisible to triage. `--all` opens each running hub, names agents `<hub>:<port>/<agent>` so two hubs that each run an agent with the same name stay distinguishable, spans the shared-signal rollup across all of them, and reports a hub that won't open instead of skipping it. Reading only: `resolve` stays per-hub (`--hub URL`), and refuses `--all`. Also drops an unused parameter from the row formatter.
+
+### Changed
+- **The delete/clear chat dialog asks one plain-language "Memory" question instead of two switches (#4053).** The "Delete this chat?" and "Clear this conversation?" dialogs replace the mutually-exclusive Harvest/Forget switches and the compaction paragraph with a single 3-way choice: **Save a summary** (adds a searchable summary — the default for an ordinary chat), **Don't save anything** (anything already archived from this chat stays), or **Erase from memory** (also removes summaries and archives this chat already saved). The exclusion is now structural — a radio group, not cross-wired switches — and the honesty about existing archives (#3493) lives in the option copy. An incognito chat drops the "Save a summary" option for a "never saved to memory" note and is never harvested. The server API (`?harvest=&forget=`) is unchanged.
+
+- **A fleet member's file links work for remote peers, and links handed to clients expire (#4269).**
+  The hub forwards a member's expiring signed link (`/agents/<slug>/media/<file>?exp=…&sig=…`) without
+  its own auth. This applies only to that exact shape: a GET or HEAD with no percent-encoding, a plain
+  store name, and only `exp` + `sig` in the query. The member verifies its own signature. Permanent
+  links stay behind the hub's auth, and unknown or unreachable slugs answer the same 401. Links in A2A
+  file parts, `/v1` replies, and a fleet member's answer text now expire (`media.remote_link_ttl_s`,
+  default 7 days, at most a year; an explicit `0` = permanent; expired → 403). Attachments now survive
+  a HITL pause, bound to the caller that parked them. A late background attach is dropped rather than
+  lost silently. Attachments are deduplicated by content, and the 16-file cap is atomic (#4258).
+
+- **Bulk-closing chat tabs no longer writes to memory by default (#4278).** The tab context menu's "Close others / left / right" used to harvest every non-goal tab — a server-side summary call per tab, run before its checkpoint purge — so closing ten tabs fired ten summary calls and wrote ten unasked-for summaries into the knowledge base while the tabs hung. Bulk close is a cleanup gesture, like Shift+click quick-delete (#4273), so it now saves nothing by default. A new per-console switch, **Settings ▸ Chat ▸ "Save summaries when closing tabs in bulk"** (off by default), opts back in; even then incognito chats are never harvested, and goal-owning tabs still queue through the Stop-vs-Detach dialog unchanged.
+
+### Fixed
+- **Shift+click quick-delete of a chat tab is instant again — no harvest (#1373).** PR #4055 made the quick-delete gesture auto-harvest a regular chat, a server-side model call that ran before the checkpoint purge, so the ✕ looked dead for the 10–30s it took and operators reported "Shift+click delete no longer works". Quick-delete now drops the tab immediately with no confirm, no harvest and no forget (the original contract) — the normal "Delete this chat?" dialog is where you choose to save a summary, and that dialog now shows a tip pointing at the Shift+click shortcut.
+
+- **Review at head posts `pending` while the QA panel is reviewing the head, not `failure` (#4265).** A head with no verdict but a reviewer-app run in flight reads as being reviewed; no verdict and nothing in flight still fails, and a run stalled past `PANEL_STALL_MINUTES` (default 90) fails as stalled.
+
+- **The Artifact panel plays video and shows images inline (#4270).** An MP4/WebM file artifact plays in a `<video controls>` that streams and seeks over HTTP Range (a short-lived, version-bound media ticket stands in for the bearer), and a PNG/JPEG/WebP/GIF/SVG shows as a fit-to-panel image (click for full size), instead of a "download to open" note. Artifact frames that touch `localStorage` no longer throw a sandbox SecurityError.
+
+- **`protoagent fleet` no longer picks a dev sandbox over the desktop app's hub (#4275).** Hub discovery walked box roots in scan order, so on a machine running `scripts/dev.sh` the sandbox's `~/.protoagent/dev` hub (one agent, no members) was opened first and read as "my fleet" while the desktop app's hub held twelve. A box root's own instance now outranks a named instance beneath it, and when several hubs are running the CLI says so (`N other hub(s) on this box — fleet --all lists them; --hub URL picks one`).
+
+- **A scheduled turn that fails is recorded as a failed fire again (#4280).** The scheduler's outcome reader (#3376) looked for the task state at `result.status`, but an A2A 1.0 `SendMessage` answers `{"result": {"task": …}}` — so every failed scheduled turn (seen live: a model stream that died mid-turn after its tool calls) was stamped `last_ok` with zero failures, no `last_error`, no `turn FAILED` log line, and no backoff. The reader now unwraps the task envelope; completed and bare-message replies still count as success.
+  A canceled turn (an operator's Stop, or a restart cutting a turn short) now records no outcome: it neither backs the job off nor resets a real failure streak.
+
+- **A dropped model stream reconnects again on the anthropic and openai SDKs (#4281).** Both SDKs now speak HTTP through `httpx2`/`httpcore2`, whose errors are a separate class hierarchy from `httpx`/`httpcore` — so a mid-stream connection reset (`httpx2.ReadError`) skipped the before-any-content reconnect, failed the turn as an "unhandled exception" with a full traceback instead of the clean "provider closed the stream" message, and reached `/v1` callers as a 500 instead of a 502. Those errors are now retryable and classified like their `httpx` counterparts.
+
+- **A plugin view that `registry.navigate()` opens now gets what the plugin published just before (#4284).** When another surface held its dock (Atlas's `atlas_show` right after `show_code`), the navigate mounted a fresh view after the event had passed, so the show was lost. The console now replays that plugin's events from just before the navigate to the freshly mounted page. A view that is already open keeps its iframe.
+
+### Docs
+- **protoAgent's own Atlas architecture model at `architecture/` (#4272).** A LikeC4 model of the runtime that goes deep on the plugin ecosystem and the plugin SDK. It has drill-down views linked to the defining code lines, the `plugin_lifecycle` and `sdk_tool_call` flows with narration notes, and `overview` and `plugins` tours. Open it in the Atlas plugin.
+
 ## [0.206.0] - 2026-10-16
 
 ### Added
