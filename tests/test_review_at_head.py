@@ -16,6 +16,7 @@ import importlib.util
 import json
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -621,3 +622,180 @@ def test_a_timed_out_reviews_read_posts_no_status_and_still_exits_zero(monkeypat
     # Fail closed: the read failed, so no verdict was decided and no status was written.
     assert len(calls) == 1 and "statuses" not in " ".join(calls[0])
     assert "timed out" in capsys.readouterr().err
+
+
+# ── a head being reviewed is pending, not failed (#4260) ─────────────────────────────────
+#
+# Run shapes copied from the live check-runs API on this repo's PRs (#4255/#4261/#4264): the
+# reviewer app opens `QA panel` (the promotion gate) first and `protoReview` (the round itself)
+# a moment later; the verdict review lands as `protoReview` concludes.
+
+NOW = datetime(2026, 10, 16, 6, 30, tzinfo=timezone.utc)
+
+
+def run(name, status="in_progress", *, id, started=NOW - timedelta(minutes=5), head=MERGED, slug="protoreview"):
+    return {
+        "id": id,
+        "name": name,
+        "head_sha": head,
+        "status": status,
+        "conclusion": None if status != "completed" else "success",
+        "started_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "app": {"slug": slug},
+    }
+
+
+def decide_at(reviews, runs, labels=(), **kw):
+    return rah.decide(reviews, MERGED, list(labels), check_runs=runs, now=NOW, **kw)
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress"])
+def test_a_QA_panel_run_in_flight_with_no_verdict_is_pending(status):
+    decision = decide_at([], [run("QA panel", status, id=1)])
+    assert decision.state == "pending"
+    assert not decision.ok  # pending is not success: the required check still blocks the merge
+    assert decision.description == f"QA panel reviewing {MERGED[:12]}"
+
+
+def test_the_issue_case_a_push_after_a_verdict_is_pending_while_the_panel_re_reviews():
+    # The screenshot in #4260: a verdict for the OLD head, the panel re-reviewing the new one.
+    decision = decide_at([review(REVIEWED)], [run("QA panel", id=1), run("protoReview", id=2)])
+    assert decision.state == "pending"
+
+
+def test_no_verdict_and_nothing_in_flight_still_fails_the_real_hole():
+    decision = decide_at([review(REVIEWED)], [run("QA panel", "completed", id=1)])
+    assert decision.state == "failure"
+    assert REVIEWED[:12] in decision.description
+    assert decide_at([], []).state == "failure"
+    assert rah.decide([], MERGED, []).state == "failure"  # no check runs passed at all
+
+
+@pytest.mark.parametrize("verdict", ["PASS", "WARN"])
+def test_any_verdict_at_head_is_success_even_while_a_run_is_in_flight(verdict):
+    # `QA panel` stays in_progress after the verdict until promotion (observed on #4264).
+    decision = decide_at([review(MERGED, verdict)], [run("QA panel", id=1), run("protoReview", "completed", id=2)])
+    assert decision.state == "success"
+
+
+def test_a_blocking_verdict_is_not_softened_to_pending_by_a_run_in_flight():
+    decision = decide_at([review(MERGED, "FAIL")], [run("protoReview", id=2)])
+    assert decision.state == "failure"
+
+
+def test_a_run_in_flight_past_the_stall_threshold_fails_as_stalled():
+    stuck = run("QA panel", id=1, started=NOW - timedelta(minutes=91))
+    decision = decide_at([], [stuck])
+    assert decision.state == "failure"
+    assert "panel run stalled" in decision.description
+    assert len(decision.description) <= 140
+    # Just inside the default threshold is still pending.
+    assert decide_at([], [run("QA panel", id=1, started=NOW - timedelta(minutes=89))]).state == "pending"
+
+
+def test_the_stall_threshold_is_configurable():
+    r = run("protoReview", id=1, started=NOW - timedelta(minutes=20))
+    assert decide_at([], [r], stall_minutes=15).state == "failure"
+    assert decide_at([], [r], stall_minutes=30).state == "pending"
+
+
+def test_stall_minutes_env_parses_and_rejects_nonsense(monkeypatch):
+    monkeypatch.setenv("PANEL_STALL_MINUTES", "45")
+    assert rah._float_env("PANEL_STALL_MINUTES", 90.0) == 45.0
+    for bad in ("", "soon", "0", "-5"):
+        monkeypatch.setenv("PANEL_STALL_MINUTES", bad)
+        assert rah._float_env("PANEL_STALL_MINUTES", 90.0) == 90.0
+
+
+def test_the_LATEST_run_of_a_name_wins_whichever_finished_first():
+    # A re-run (higher id) in flight over an older completed run → pending …
+    assert decide_at([], [run("QA panel", "completed", id=1), run("QA panel", id=5)]).state == "pending"
+    # … and a completed re-run over an older dangling in-flight run → not pending.
+    assert decide_at([], [run("QA panel", id=1), run("QA panel", "completed", id=5)]).state == "failure"
+    # Latest is by id, not list order.
+    assert decide_at([], [run("QA panel", id=5), run("QA panel", "completed", id=1)]).state == "pending"
+
+
+def test_the_stall_clock_reads_the_latest_run_not_an_old_one():
+    old = run("QA panel", id=1, started=NOW - timedelta(hours=5))
+    fresh = run("QA panel", id=2, started=NOW - timedelta(minutes=2))
+    assert decide_at([], [old, fresh]).state == "pending"
+
+
+def test_a_concluded_protoReview_round_with_no_verdict_fails_even_if_the_gate_dangles():
+    # An exhausted panel concludes `protoReview` but leaves `QA panel` in_progress forever
+    # (pr-reviewer-plugin dispatch.py, #95). The round is over and there is no verdict.
+    runs = [run("QA panel", id=1), run("protoReview", "completed", id=2)]
+    assert decide_at([], runs).state == "failure"
+
+
+def test_a_protoReview_re_review_in_flight_is_pending_over_an_older_concluded_one():
+    runs = [run("protoReview", "completed", id=2), run("protoReview", id=7), run("QA panel", "completed", id=1)]
+    assert decide_at([], runs).state == "pending"
+
+
+def test_runs_from_another_app_or_another_head_do_not_count():
+    assert decide_at([], [run("QA panel", id=1, slug="github-actions")]).state == "failure"
+    assert decide_at([], [run("protoReview", id=1, slug="someone-else")]).state == "failure"
+    assert decide_at([], [run("QA panel", id=1, head=REVIEWED)]).state == "failure"
+    assert decide_at([], [run("Python tests", id=1)]).state == "failure"
+
+
+def test_the_skip_label_still_waives_a_head_with_a_run_in_flight():
+    decision = decide_at([], [run("QA panel", id=1)], labels=[rah.SKIP_LABEL])
+    assert decision.state == "success"
+    assert rah.SKIP_LABEL in decision.description
+
+
+def test_check_pr_fetches_check_runs_only_for_a_verdict_less_head(monkeypatch):
+    calls: list[tuple] = []
+    posted: list = []
+    monkeypatch.setattr(rah, "_post_status", lambda sha, d, pr: posted.append(d))
+
+    def fake_gh(*args):
+        calls.append(args)
+        if "check-runs" in args[2]:
+            return "\n".join(json.dumps(r) for r in [run("QA panel", id=1, started=datetime.now(timezone.utc))]) + "\n"
+        return json.dumps(reviews)
+
+    monkeypatch.setattr(rah, "_gh", fake_gh)
+
+    reviews = [review(MERGED)]
+    assert rah.check_pr(1, MERGED, [], dry_run=False).state == "success"
+    assert not any("check-runs" in c[2] for c in calls)
+
+    calls.clear()
+    reviews = [review(REVIEWED)]
+    assert rah.check_pr(1, MERGED, [], dry_run=False).state == "pending"
+    assert any(f"commits/{MERGED}/check-runs" in c[2] for c in calls)
+    assert [d.state for d in posted] == ["success", "pending"]
+
+
+def test_a_check_run_event_sweeps_only_the_prs_at_that_head(monkeypatch):
+    seen: list[int] = []
+    monkeypatch.setattr(
+        rah,
+        "_open_prs",
+        lambda: [
+            {"number": 1, "headRefOid": MERGED, "labels": []},
+            {"number": 2, "headRefOid": REVIEWED, "labels": [{"name": "x"}]},
+        ],
+    )
+    monkeypatch.setattr(rah, "check_pr", lambda pr, head, labels, *, dry_run: seen.append(pr))
+    monkeypatch.delenv("PR_NUMBER", raising=False)
+    monkeypatch.setenv("CHECK_RUN_HEAD_SHA", MERGED)
+    assert rah.main() == 0
+    assert seen == [1]
+
+    seen.clear()
+    monkeypatch.setenv("CHECK_RUN_HEAD_SHA", "")  # schedule: every open PR
+    assert rah.main() == 0
+    assert seen == [1, 2]
+
+
+def test_the_workflow_wires_the_check_run_fast_path():
+    wf = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "review-at-head.yml").read_text()
+    assert "check_run:" in wf and "types: [created, completed]" in wf
+    assert "checks: read" in wf
+    assert "CHECK_RUN_HEAD_SHA: ${{ github.event.check_run.head_sha }}" in wf
+    assert "github.event.check_run.app.slug == 'protoreview'" in wf
