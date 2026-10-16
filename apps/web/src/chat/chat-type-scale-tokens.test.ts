@@ -88,7 +88,10 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     // source caption → DS Table `source`, the inline head/Open/resume → InlineFrameCard, both
     // bridge notices + buttons → ConfirmChip, and the from-‹title› label → Message `origin` → 11.
     // chat.css then gained one more: the `.chat-delete-shift-hint` quick-delete tip (#1373, sm).
-    expect(tokenCount(chatCss)).toBe(35);
+    // Then two more when the delete/clear dialog's harvest/forget switches became one memory
+    // RadioGroup (#4053/#3493): the `.chat-memory-label` caption (sm) and the per-option
+    // `.chat-memory-choice-hint` explanation (sm) → 37.
+    expect(tokenCount(chatCss)).toBe(37);
     expect(tokenCount(promptviewerCss)).toBe(12);
     expect(tokenCount(chatComponentCss)).toBe(11);
     expect(tokenCount(hitlCss)).toBe(7);

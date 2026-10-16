@@ -73,21 +73,21 @@ A conversation that continues can produce a new summary later.
 ## Delete a chat and its saved memory {#delete-a-chat}
 
 Use the chat's delete action, or run `/clear` to empty it while keeping its tab.
-The confirmation dialog offers these choices:
+The confirmation dialog asks one **Memory** question with three choices:
 
-- **Harvest into the knowledge base first** saves a searchable summary and
-  extracted facts before deleting the chat. It is **on by default** for ordinary
-  chats. Turn it off if you do not want a new summary saved. Incognito chats
-  are never harvested and do not show this switch.
-- **Forget what this chat already saved to memory** removes its archived
-  transcripts and harvested summaries and facts. Selecting it turns harvest off;
-  selecting harvest turns forget off.
+- **Save a summary** adds a searchable summary and extracted facts to the
+  knowledge base before deleting the chat. It is the **default** for ordinary
+  chats. Incognito chats are never saved to memory and do not show this option.
+- **Don't save anything** deletes the chat without a new summary. Anything this
+  chat already archived to the knowledge base stays.
+- **Erase from memory** also removes the summaries and archives this chat
+  already saved.
 
 Deleting or clearing also removes the chat's session summary and attachments.
-Turning harvest off by itself leaves previously saved facts in the knowledge
-store; select forget to remove the conversation-derived material too.
+**Don't save anything** leaves previously saved facts in the knowledge store;
+choose **Erase from memory** to remove the conversation-derived material too.
 
-The forget option does not remove notes you explicitly asked the agent to
+**Erase from memory** does not remove notes you explicitly asked the agent to
 remember, hot memory, background-job reports, or older facts without recorded
 chat provenance. Search **Knowledge → Store** and **Memory → Hot memory** for
 those and delete them individually. It also does not erase a delegate's copy

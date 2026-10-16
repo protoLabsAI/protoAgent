@@ -1,84 +1,111 @@
 import { useEffect, useState } from "react";
-import { Switch } from "@protolabsai/ui/forms";
+import { Radio, RadioGroup } from "@protolabsai/ui/forms";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
 
-import type { ChatMemoryChoice } from "./sessionRetirement";
+import { defaultMemoryChoice, type ChatMemoryChoice } from "./sessionRetirement";
 
-// What deleting or clearing a chat can do to memory: the harvest / forget switches and the
-// note that keeps them honest (#3493). Shared by the "Delete this chat?" dialog in ChatSurface
+// What deleting or clearing a chat does to memory, as ONE plain-language choice. The two
+// mutually-exclusive harvest/forget switches (#4053/#3493) were really a single 3-way pick, so
+// they are now a radio group: "Save a summary" (harvest), "Don't save anything" (neither), or
+// "Erase from memory" (forget). The radio makes the exclusion structural — you can't pick two —
+// and each option carries its own one-line explanation, so the old compaction paragraph and its
+// jargon ("harvest", "compaction") are gone: #3493's honesty requirement lives in the "Don't
+// save anything … already archived from this chat stays" / "Erase … also removes … archives
+// this chat already saved" copy instead. Shared by the "Delete this chat?" dialog in ChatSurface
 // and the "Clear this conversation?" dialog below, so the two can't drift apart.
 //
-// Harvest defaults ON for an ordinary chat (#4053): the operator's "keep this out of memory"
-// decision is incognito (ADR 0069 D3b), so an ordinary delete auto-harvests unless they turn
-// it off. The harvest switch only ADDS a summary — it never controlled compaction, which
-// archives a long chat's earlier messages on its own (auto-compaction, /compact) — so the
-// note says that, and the forget switch is the one that removes those archives along with the
-// summaries and facts harvested from this chat. Harvest and forget are mutually exclusive:
-// ticking one unticks the other, so "just make it gone" (forget, no harvest) is one click.
-//
-// For an incognito chat the harvest switch is absent entirely (it is never harvested, here or
-// on the server) and a short note stands in its place; forget still shows.
+// Defaults: "Save a summary" for an ordinary chat (the #4053 default-on harvest), "Don't save
+// anything" for an incognito chat. An incognito chat is never saved to memory (ADR 0069 D3b),
+// so the "Save a summary" option is not rendered and a one-line note stands above the other two;
+// harvest is forced false for it, here and on the server.
+export type ChatMemoryValue = "summary" | "none" | "erase";
+
+function toValue(choice: ChatMemoryChoice): ChatMemoryValue {
+  if (choice.forget) return "erase";
+  if (choice.harvest) return "summary";
+  return "none";
+}
+
+function toChoice(value: ChatMemoryValue): ChatMemoryChoice {
+  switch (value) {
+    case "summary":
+      return { harvest: true, forget: false };
+    case "erase":
+      return { harvest: false, forget: true };
+    default:
+      return { harvest: false, forget: false };
+  }
+}
+
+function hint(text: string) {
+  return <span className="chat-memory-choice-hint">{text}</span>;
+}
+
 export function ChatMemoryChoices({
-  action,
+  value,
+  onChange,
   incognito,
-  harvest,
-  forget,
-  onHarvestChange,
-  onForgetChange,
 }: {
-  action: "Deleting" | "Clearing";
+  // The current memory choice, mapped to/from the radio value inside this component.
+  value: ChatMemoryChoice;
+  onChange: (choice: ChatMemoryChoice) => void;
+  // Whether the target chat is incognito — drops the "Save a summary" option (#4053, ADR 0069 D3b).
   incognito?: boolean;
-  harvest: boolean;
-  forget: boolean;
-  onHarvestChange: (checked: boolean) => void;
-  onForgetChange: (checked: boolean) => void;
 }) {
   return (
     <>
-      <p className="chat-memory-note">
-        {`Parts of this chat may already be in the knowledge base: when a long chat fills the context window, or you run /compact, its earlier messages are archived there. ${action} the chat leaves them there unless you choose to forget them below.`}
-      </p>
+      <p className="chat-memory-label">Memory</p>
       {incognito ? (
-        // No harvest switch for an incognito chat — it is never harvested (ADR 0069 D3b),
-        // and harvest is always sent false. The word "harvested" is fine here because the
-        // harvest switch itself is absent (the e2e /Harvest/ locator targets that switch).
-        <p className="chat-memory-note chat-delete-incognito-note">
-          Incognito chat — never harvested into the knowledge base.
-        </p>
-      ) : (
-        // Harvest defaults ON (#4053); ticking it unticks forget. Exclusion is enforced here
-        // (not in each owner) so both dialogs behave identically and can't drift.
-        <Switch
-          className="chat-delete-harvest"
-          checked={harvest}
-          onCheckedChange={(checked) => {
-            onHarvestChange(checked);
-            if (checked) onForgetChange(false);
-          }}
-          label="Harvest into the knowledge base first (adds a searchable summary)"
+        // No "Save a summary" option for an incognito chat — it is never saved to memory, here or
+        // on the server. A one-line note stands above the remaining two options.
+        <p className="chat-memory-note chat-delete-incognito-note">Incognito — never saved to memory.</p>
+      ) : null}
+      <RadioGroup
+        className="chat-memory-choice"
+        value={toValue(value)}
+        onValueChange={(v) => onChange(toChoice(v as ChatMemoryValue))}
+      >
+        {incognito ? null : (
+          <Radio
+            value="summary"
+            label={
+              <>
+                <strong>Save a summary</strong>
+                {hint("Adds a searchable summary to the knowledge base.")}
+              </>
+            }
+          />
+        )}
+        <Radio
+          value="none"
+          label={
+            <>
+              <strong>Don't save anything</strong>
+              {hint("Anything already archived from this chat stays.")}
+            </>
+          }
         />
-      )}
-      {/* Forget removes what the chat already wrote to memory; ticking it unticks harvest. */}
-      <Switch
-        className="chat-delete-forget"
-        checked={forget}
-        onCheckedChange={(checked) => {
-          onForgetChange(checked);
-          if (checked) onHarvestChange(false);
-        }}
-        label="Forget what this chat already saved to memory (its archived transcripts, summaries and facts)"
-      />
+        <Radio
+          value="erase"
+          label={
+            <>
+              <strong>Erase from memory</strong>
+              {hint("Also removes summaries and archives this chat already saved.")}
+            </>
+          }
+        />
+      </RadioGroup>
     </>
   );
 }
 
 // The "Clear this conversation?" confirm for the ⌘K chat.clear keybinding and the /clear
 // slash command (#2996). Clearing wipes the WHOLE conversation, so — like tab-close — it's
-// gated behind a confirm with the same opt-in memory switches as delete. On confirm it
-// reports those choices; the caller (ChatSurface) awaits the non-retiring server clear before
-// wiping local messages, keeping the tab open. Its own small component (rather than inline in
-// the giant ChatSurface) so the confirm / cancel / memory wiring is unit-testable in the
-// console's `.test.ts`-only harness.
+// gated behind a confirm with the same 3-way memory choice as delete. On confirm it reports the
+// selected choice; the caller (ChatSurface) awaits the non-retiring server clear before wiping
+// local messages, keeping the tab open. Its own small component (rather than inline in the giant
+// ChatSurface) so the confirm / cancel / memory wiring is unit-testable in the console's
+// `.test.ts`-only harness.
 export function ClearConversationDialog({
   open,
   incognito,
@@ -86,22 +113,18 @@ export function ClearConversationDialog({
   onCancel,
 }: {
   open: boolean;
-  // Whether the target chat is incognito — gates the harvest default and switch (#4053).
+  // Whether the target chat is incognito — gates the default choice and the "Save a summary" option.
   incognito?: boolean;
-  // Fired on confirm with the memory choices — the caller performs the actual wipe.
+  // Fired on confirm with the memory choice — the caller performs the actual wipe.
   onConfirm: (memory: ChatMemoryChoice) => void;
   onCancel: () => void;
 }) {
-  // Harvest defaults ON for an ordinary chat, OFF (and switchless) for an incognito one (#4053).
-  const [harvest, setHarvest] = useState(false);
-  const [forget, setForget] = useState(false);
-  // Re-initialise both switches whenever the dialog (re)opens, from THIS chat's incognito flag,
-  // so a prior tick never carries into the next clear — mirrors ChatSurface's reset points.
+  // "Save a summary" for an ordinary chat, "Don't save anything" for an incognito one (#4053).
+  const [memory, setMemory] = useState<ChatMemoryChoice>(() => defaultMemoryChoice(incognito));
+  // Re-initialise the choice whenever the dialog (re)opens, from THIS chat's incognito flag, so a
+  // prior pick never carries into the next clear — mirrors ChatSurface's reset points.
   useEffect(() => {
-    if (open) {
-      setHarvest(!incognito);
-      setForget(false);
-    }
+    if (open) setMemory(defaultMemoryChoice(incognito));
   }, [open, incognito]);
   return (
     <ConfirmDialog
@@ -109,19 +132,12 @@ export function ClearConversationDialog({
       title="Clear this conversation?"
       confirmLabel="Clear conversation"
       destructive
-      // An incognito chat is never harvested, whatever the (absent) switch would read.
-      onConfirm={() => onConfirm({ harvest: incognito ? false : harvest, forget })}
+      // An incognito chat is never harvested, whatever the (absent) summary option would read.
+      onConfirm={() => onConfirm(incognito ? { ...memory, harvest: false } : memory)}
       onClose={onCancel}
     >
-      <p style={{ margin: 0 }}>Clear this conversation? This cannot be undone.</p>
-      <ChatMemoryChoices
-        action="Clearing"
-        incognito={incognito}
-        harvest={harvest}
-        forget={forget}
-        onHarvestChange={setHarvest}
-        onForgetChange={setForget}
-      />
+      <p style={{ margin: 0 }}>This conversation will be cleared. This can't be undone.</p>
+      <ChatMemoryChoices value={memory} onChange={setMemory} incognito={incognito} />
     </ConfirmDialog>
   );
 }

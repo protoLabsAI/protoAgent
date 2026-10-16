@@ -24,14 +24,14 @@ test("mod+K asks before clearing, then wipes only on confirm (#2949, #2996)", as
   const userMsg = page.locator(".pl-message--user");
   await expect(userMsg).toHaveCount(1);
 
-  // ⌘K no longer wipes on the keypress (#2996) — it opens a confirm dialog with a Harvest
-  // opt-in, and the conversation stays intact until the operator confirms.
+  // ⌘K no longer wipes on the keypress (#2996) — it opens a confirm dialog with a memory
+  // choice, and the conversation stays intact until the operator confirms.
   await page.getByPlaceholder(/Message protoAgent/i).focus(); // focus inside the chat scope
   await page.keyboard.press("ControlOrMeta+k");
   const dialog = page.getByRole("dialog").filter({ hasText: "Clear this conversation?" });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("This cannot be undone.");
-  await expect(dialog.getByText(/Harvest/i)).toBeVisible(); // the opt-in checkbox
+  await expect(dialog).toContainText("This can't be undone.");
+  await expect(dialog.getByText("Save a summary")).toBeVisible(); // the default memory option
   await expect(userMsg).toHaveCount(1); // still there — the dialog is merely open
 
   // Dismissing SHALL NOT delete the conversation.
