@@ -994,14 +994,29 @@
   font-size: var(--pl-font-size-sm);
   border-left: 2px solid var(--pl-color-border);
 }
+/* The row's DS Buttons ("Show brief"/"Hide brief", "Show work · N") keep their size and a
+   single line — without this they wrap ("Show / brief" stacked) at narrow widths and grow
+   the row. The summary ellipsizes instead (it is the flexible 1 1 auto child). */
+.chat-delegation-row > .pl-btn {
+  flex: none;
+  white-space: nowrap;
+}
 
 /* Background work still running for THIS chat — beside the roster, above the composer, so
-   "is anything still going on here?" is answerable without opening a panel. */
+   "is anything still going on here?" is answerable without opening a panel. The strip's line
+   is reserved PERMANENTLY: the container always renders (empty + `--idle` when nothing runs),
+   with a fixed block size so a job starting or the last one finishing can't grow/shrink the
+   composer row and resize the transcript under the reader (the slot is grid minmax(0,1fr)
+   auto). The height is the running row's height — the DS sm "View" Button (~31px) plus the
+   bottom padding — so the idle and running states are pixel-identical. */
 .chat-bgwork {
   display: flex;
   align-items: center;
   gap: var(--pl-space-2);
   min-width: 0;
+  box-sizing: border-box;
+  height: 2.375rem;
+  min-height: 2.375rem;
   padding: 0 var(--pl-space-0_5) var(--pl-space-1_5);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
@@ -1015,6 +1030,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The leading count ("2 background jobs running") — tabular figures so its width doesn't
+   jitter as the number of jobs changes. */
+.chat-bgwork-count {
+  font-variant-numeric: tabular-nums;
 }
 
 /* One activity cue per server-fired turn: its label rides the message's own spinner. */
