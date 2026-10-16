@@ -335,6 +335,24 @@
     }
   },
   {
+    "id": "atlas",
+    "name": "Atlas",
+    "category": "Engineering",
+    "official": true,
+    "tagline": "Drill-down architecture diagrams you can explore and present — a LikeC4 model of your project as a console view, with code links into the code pane, guided tours, live agent narration, and recordable walkthroughs. Needs Node.js 20+.",
+    "adds": [
+      "tool",
+      "view",
+      "skill"
+    ],
+    "bundled": false,
+    "install": "https://github.com/protoLabsAI/atlas-plugin",
+    "links": {
+      "source": "https://github.com/protoLabsAI/atlas-plugin",
+      "docs": "https://github.com/protoLabsAI/atlas-plugin#readme"
+    }
+  },
+  {
     "id": "social",
     "name": "Social Studio",
     "category": "Marketing",
