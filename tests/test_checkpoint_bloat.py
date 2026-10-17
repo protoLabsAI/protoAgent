@@ -399,3 +399,118 @@ def test_runtime_status_banners_the_checkpoint_warning(monkeypatch):
     monkeypatch.setattr(STATE, "checkpoint_path", "/tmp/whatever.db", raising=False)
     status = asyncio.run(console_handlers._operator_runtime_status())
     assert "CKPT-BIG" in status["warnings"] and "FLEET-CKPT-BIG" in status["warnings"]
+
+
+# ── #4306 review follow-ups ───────────────────────────────────────────────────
+
+
+def test_a_real_task_subagent_namespace_is_bounded_on_write(tmp_path):
+    """A ``task()``-style subagent (a graph streamed from inside a tool, no checkpointer of
+    its own) checkpoints into ``tools:<task_id>`` with ``metadata.parents`` on every row.
+    Root-counting there would never trim it (review M1); it is plain newest-N."""
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.tools import tool
+
+    class _Fake(GenericFakeChatModel):
+        def bind_tools(self, tools, **kw):
+            return self
+
+    @tool
+    def noop() -> str:
+        "noop"
+        return "ok"
+
+    @tool
+    async def task(prompt: str) -> str:
+        "delegate"
+        steps = [AIMessage(content="", tool_calls=[{"name": "noop", "args": {}, "id": f"c{i}"}]) for i in range(6)]
+        child = create_agent(model=_Fake(messages=iter([*steps, AIMessage(content="child done")])), tools=[noop])
+        res = {}
+        async for st in child.astream({"messages": [{"role": "user", "content": prompt}]}, stream_mode="values"):
+            res = st
+        return res["messages"][-1].content
+
+    db = str(tmp_path / "c.db")
+    saver = build_sqlite_checkpointer(db)
+    parent = iter(
+        [AIMessage(content="", tool_calls=[{"name": "task", "args": {"prompt": "go"}, "id": "t1"}]), AIMessage(content="done")]
+    )
+    app = create_agent(model=_Fake(messages=parent), tools=[task], checkpointer=saver)
+    cfg = {"configurable": {"thread_id": "a2a:chat-1"}}
+    out = asyncio.run(app.ainvoke({"messages": [{"role": "user", "content": "hi"}]}, cfg))
+    assert out["messages"][-1].content == "done"
+    conn = sqlite3.connect(db)
+    per_ns = dict(conn.execute("SELECT checkpoint_ns, COUNT(*) FROM checkpoints GROUP BY checkpoint_ns"))
+    conn.close()
+    sub = [ns for ns in per_ns if ns]
+    assert sub, per_ns  # the subagent really did checkpoint into its own namespace
+    assert all(per_ns[ns] <= saver.keep_per_thread for ns in sub), per_ns
+    assert per_ns[""] == saver.keep_per_thread
+    assert asyncio.run(app.aget_state(cfg)).values["messages"][-1].content == "done"
+
+
+def test_write_path_trim_never_cuts_a_turn_that_sorts_below_older_ids(tmp_path):
+    """Clock went backwards across a restart: the new row's time-ordered id sorts below the
+    old ones. The write-path trim must skip, not delete the turn it just wrote (m3)."""
+    db = str(tmp_path / "c.db")
+    build_sqlite_checkpointer(db)
+    conn = sqlite3.connect(db)
+    for i in (5, 6, 7):
+        _insert(conn, "a2a:t", _uuid6(i))
+    _insert(conn, "a2a:t", _uuid6(1))  # just written, but "older"
+    conn.commit()
+    assert trim_group(conn, "a2a:t", "", 2, written_id=_uuid6(1)) == 0
+    assert trim_group(conn, "a2a:t", "", 2, written_id=_uuid6(7)) == 2  # normal case still trims
+    conn.close()
+
+
+def test_a_lone_surrogate_in_a_media_string_does_not_brick_the_thread(tmp_path):
+    """m2: hashing/storing must not raise on a string the stock saver can serialize."""
+    db = str(tmp_path / "c.db")
+    saver = build_sqlite_checkpointer(db)
+    weird = "data:image/png;base64," + _png(3) + "\udc80"
+    g = StateGraph(MessagesState)
+    g.add_node(
+        "n",
+        lambda s: {"messages": [ToolMessage(content=[{"type": "image_url", "image_url": {"url": weird}}], tool_call_id="x")]},
+    )
+    g.add_edge(START, "n")
+    g.add_edge("n", END)
+    app = g.compile(checkpointer=saver)
+    cfg = {"configurable": {"thread_id": "a2a:s"}}
+    asyncio.run(app.ainvoke({"messages": [HumanMessage(content="hi")]}, cfg))
+    got = asyncio.run(app.aget_state(cfg)).values["messages"][-1].content[0]["image_url"]["url"]
+    assert got == weird
+
+
+def test_offload_failure_falls_back_to_inline_storage(tmp_path, monkeypatch):
+    from graph import checkpoint_media
+
+    def _boom(*a, **k):
+        raise RuntimeError("offload broke")
+
+    monkeypatch.setattr(checkpoint_media, "offload_channel_values", _boom)
+    monkeypatch.setattr(checkpoint_media, "offload_value", _boom)
+    db = str(tmp_path / "c.db")
+    _, state = _run_turns(db, 1)
+    assert state.values["messages"][-2].content[1]["image_url"]["url"] == "data:image/png;base64," + _png(0)
+    assert _rows(db, "checkpoint_blobs", "a2a:visual") == 0
+
+
+def test_compact_keeps_a_payload_a_live_agent_just_stored(tmp_path):
+    """m1: ``compact --apply`` runs beside a live agent; a payload committed just before its
+    row must survive it (a short grace, never zero)."""
+    import time
+
+    db = str(tmp_path / "c.db")
+    _run_turns(db, 1)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO checkpoint_blobs (thread_id, hash, data, created) VALUES ('a2a:visual', ?, x'00', ?)",
+        ("d" * 64, time.time()),
+    )
+    conn.commit()
+    conn.close()
+    assert compact(db)["blobs_deleted"] == 0
+    assert _rows(db, "checkpoint_blobs", "a2a:visual") == 2

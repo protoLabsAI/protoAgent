@@ -30,20 +30,29 @@ An audit of the 32 local DBs and the remote fleet found:
   its result set, so each sweep freed exactly **one page**. Every `auto_vacuum=INCREMENTAL`
   DB therefore stayed at 90–99% freelist: for example, 3.1 GB holding 6 MB of rows, or
   1.5 GB holding 36 MB.
-- **A latent hazard in the sweep's keep-N.** `task()` subagents inherit the parent's
-  checkpointer and write into the parent's `(thread_id, checkpoint_ns)`, tagged with a
-  non-empty `metadata.parents`. A newest-N-by-id cap can delete the parent's resumable
-  checkpoint while a delegation is in flight.
+- **Rows tagged with `metadata.parents` in the thread's own namespace.** brandLaunch's
+  `a2a:reshoot-2k` held such rows in namespace `''`, interleaved with the parent's own
+  checkpoints. A newest-N-by-id cap can let them push out the parent's resumable
+  checkpoint.
+  - A `task()` subagent streamed from inside a tool checkpoints into its own
+    namespace, `tools:<task_id>` (plus `|1`, `|2`… per `task_batch` child), and
+    *every* row there carries `parents`.
 
 ## Decision
 
 1. **Retention on write.** After every `put`, `ThreadedSqliteSaver` trims that
-   `(thread_id, checkpoint_ns)`:
-   - It keeps the newest `keep_per_thread` *root* checkpoints (`background_keep` for
-     `a2a:background:*`), plus every row newer than the oldest of them.
-   - It deletes older rows and their writes.
-   - "Root" means `metadata.parents` is empty. Subagent rows never count toward the
-     cap and are never cut from in front of their parent.
+   `(thread_id, checkpoint_ns)` and deletes older rows with their writes. The cap is
+   `keep_per_thread` (`background_keep` for `a2a:background:*`).
+   - **In the thread's own namespace (`''`)** only *root* rows count toward the cap,
+     and every row newer than the oldest kept root survives. "Root" means
+     `metadata.parents` is empty, so `parents`-tagged rows never push out the parent's
+     resumable checkpoint.
+   - **In a sub-namespace** (a subagent's own graph), plain newest-N applies, the same
+     cap as the old sweep. Root-counting there would never trim, because every row
+     carries `parents` (#4306 review).
+   - **If the row just written isn't the newest by id**, the trim skips. That happens
+     when the clock went backwards across a restart, so LangGraph's time-ordered id
+     sorts it below older rows. The trim logs a warning instead of cutting the new turn.
    - The trim streams newest-first and stops at the cutoff, so it reads only a few
      rows' metadata. That matters because `metadata` sits after the blob in the record.
    - The periodic sweep uses the same `trim_group` rule, on the `(thread, ns)` groups
@@ -61,7 +70,10 @@ An audit of the 32 local DBs and the remote fleet found:
    - Blobs follow their thread: `delete_thread` (including the chat-delete cascade), the
      age TTL, and a sweep GC (`gc_blobs`) for payloads that no surviving row references.
    - The GC skips payloads younger than 10 minutes, which covers the gap between a
-     payload's commit and its row's.
+     payload's commit and its row's. `compact --apply` uses a 60-second grace.
+   - The GC takes the write lock per thread, never across the whole DB.
+   - Offload **fails open**: any error stores that checkpoint inline instead of
+     failing the write.
    - **Accepted residual:** a turn that re-adds an already-unreferenced, older image
      during a sweep can lose that payload. The block then reads back as the text
      placeholder.
@@ -101,9 +113,13 @@ An audit of the 32 local DBs and the remote fleet found:
   by a stock `SqliteSaver`. Use `graph.checkpointer.ThreadedSqliteSaver`;
   `scripts/context_audit.py` now does. Copying rows between threads by raw SQL would
   dangle references, which degrade to text blocks. Nothing in core does this.
-- **Rollback is safe.** Older versions of protoAgent ignore the `checkpoint_blobs`
-  table, but would read references verbatim in threads written by this version.
-  Downgrading an agent mid-thread shows those images as reference strings until
-  the thread ages out.
+- **Rolling back is NOT clean for threads that hold images.** An older core ignores
+  the `checkpoint_blobs` table, but reads each reference *verbatim*. For example, an
+  `image_url.url` of `protoagent-ckblob:sha256:…` would be sent to the model, and the
+  provider will likely reject it, failing every turn on that thread.
+  - Before downgrading, delete (or let age out) the threads that hold images.
+  - Alternatively, run the new core once with `checkpoint.offload_media: false` and
+    start a new turn: that rewrites the latest checkpoint inline, but only for images
+    still in state.
 - **Retention on write costs something per write:** one indexed `SELECT` over a few
   rows, plus one `DELETE` when the thread is over its cap.

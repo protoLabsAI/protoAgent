@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import threading
 from collections import OrderedDict
 from typing import Any, Callable
 
@@ -71,18 +72,26 @@ class _HashCache:
         self._budget = budget_chars
         self._held = 0
         self._d: OrderedDict[int, tuple[str, str]] = OrderedDict()
+        # put / put_writes run on worker threads outside the saver lock (#4306 review m2).
+        self._lock = threading.Lock()
 
     def digest(self, s: str) -> str:
-        hit = self._d.get(id(s))
-        if hit is not None and hit[0] is s:
-            self._d.move_to_end(id(s))
-            return hit[1]
-        h = hashlib.sha256(s.encode("utf-8")).hexdigest()
-        self._d[id(s)] = (s, h)
-        self._held += len(s)
-        while self._held > self._budget and self._d:
-            _, (old, _h) = self._d.popitem(last=False)
-            self._held -= len(old)
+        with self._lock:
+            hit = self._d.get(id(s))
+            if hit is not None and hit[0] is s:
+                self._d.move_to_end(id(s))
+                return hit[1]
+        # surrogatepass: a lone surrogate must hash, not raise (#4306 review m2).
+        h = hashlib.sha256(s.encode("utf-8", "surrogatepass")).hexdigest()
+        with self._lock:
+            prev = self._d.pop(id(s), None)
+            if prev is not None:
+                self._held -= len(prev[0])
+            self._d[id(s)] = (s, h)
+            self._held += len(s)
+            while self._held > self._budget and self._d:
+                _, (old, _h) = self._d.popitem(last=False)
+                self._held -= len(old)
         return h
 
 
@@ -217,7 +226,7 @@ def rehydrate_value(value: Any, payloads: dict[str, str]) -> Any:
                 return s
             return data
 
-        nb, changed = _map_block(block, restore)
+        nb, changed = _map_block(block, restore, _PROSE_KEYS)
         if missing:
             return {"type": "text", "text": UNAVAILABLE_TEXT}, True
         return nb, changed

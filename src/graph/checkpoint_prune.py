@@ -115,22 +115,48 @@ def _is_root(metadata_json: str | None) -> bool:
         return True
 
 
-def trim_group(conn: sqlite3.Connection, thread_id: str, checkpoint_ns: str, keep: int) -> int:
-    """Keep the newest ``keep`` ROOT checkpoints of one (thread, ns) and every row newer
-    than the oldest of them (an in-flight subagent's); delete older rows and their writes.
+def trim_group(
+    conn: sqlite3.Connection, thread_id: str, checkpoint_ns: str, keep: int, *, written_id: str | None = None
+) -> int:
+    """Keep the newest ``keep`` checkpoints of one (thread, ns); delete older rows and
+    their writes. Runs on the caller's connection and transaction; returns checkpoints
+    deleted.
+
+    * In the thread's own namespace (``''``) only ROOT rows count toward ``keep``, and
+      every row newer than the oldest kept root survives: rows tagged with
+      ``metadata.parents`` (seen in ``''`` on live fleet DBs) are never the parent's
+      resumable state and must not push it out.
+    * A sub-namespace (``tools:<task_id>``, where a ``task()`` subagent's graph
+      checkpoints; ``…|1`` per ``task_batch`` child) is its own graph: plain newest-N,
+      every row counts — its rows ALL carry ``parents``, so root-counting would never
+      trim them (#4306 review M1).
+    * ``written_id`` (the write path): if the row just written is not the newest by id —
+      the clock went backwards across a restart, so LangGraph's time-ordered ids sort it
+      below older rows — skip the trim rather than cut the new turn (#4306 review m3).
 
     Streams newest-first and stops at the cutoff, so it reads only a handful of rows'
     metadata however long the thread already is (``metadata`` sits after the checkpoint
-    blob in the row, so reading it walks the blob's overflow pages). Runs on the caller's
-    connection and transaction; returns checkpoints deleted."""
+    blob in the row, so reading it walks the blob's overflow pages)."""
     keep = max(1, keep)
-    roots, cutoff = 0, None
+    root_aware = checkpoint_ns == ""
+    roots, cutoff, first = 0, None, True
     for cid, md in conn.execute(
         "SELECT checkpoint_id, CAST(metadata AS TEXT) FROM checkpoints"
         " WHERE thread_id=? AND checkpoint_ns=? ORDER BY checkpoint_id DESC",
         (thread_id, checkpoint_ns),
     ):
-        if _is_root(md):
+        if first:
+            first = False
+            if written_id is not None and cid != written_id:
+                _log.warning(
+                    "[checkpoint-prune] %s: the checkpoint just written (%s) sorts below an existing one (%s) "
+                    "— clock skew? Skipping the write-path trim so the new turn isn't cut.",
+                    thread_id,
+                    written_id,
+                    cid,
+                )
+                return 0
+        if not root_aware or _is_root(md):
             roots += 1
             if roots == keep:
                 cutoff = cid
@@ -178,9 +204,11 @@ def gc_blobs(db_path: str, *, grace_s: float = BLOB_GC_GRACE_S, now: float | Non
     try:
         if not _has_blob_table(conn):
             return 0
-        conn.execute("BEGIN IMMEDIATE")
         threads = [r[0] for r in conn.execute("SELECT DISTINCT thread_id FROM checkpoint_blobs")]
         for tid in threads:
+            # One short write transaction per thread (#4306 review m4): the scan + delete
+            # are atomic for that thread, but the lock is never held across the whole DB.
+            conn.execute("BEGIN IMMEDIATE")
             live: set[bytes] = set()
             for (blob,) in conn.execute("SELECT checkpoint FROM checkpoints WHERE thread_id=?", (tid,)):
                 live.update(REF_BYTES_RE.findall(bytes(blob or b"")))
@@ -194,8 +222,8 @@ def gc_blobs(db_path: str, *, grace_s: float = BLOB_GC_GRACE_S, now: float | Non
             ]
             dead = [(tid, h) for h in have if h.encode() not in live]
             conn.executemany("DELETE FROM checkpoint_blobs WHERE thread_id=? AND hash=?", dead)
+            conn.commit()
             removed += len(dead)
-        conn.commit()
         return removed
     finally:
         conn.close()
@@ -416,7 +444,7 @@ def plan_compaction(db_path: str, *, keep_per_thread: int = 2, background_keep: 
                 " WHERE thread_id=? AND checkpoint_ns=? ORDER BY checkpoint_id DESC",
                 (tid, ns),
             ):
-                if _is_root(md):
+                if ns != "" or _is_root(md):
                     roots += 1
                     if roots == k:
                         cutoff = cid
@@ -454,6 +482,11 @@ def plan_compaction(db_path: str, *, keep_per_thread: int = 2, background_keep: 
     }
 
 
+#: ``compact``'s blob grace: shorter than the sweep's (an operator asked to reclaim now)
+#: but never zero while an agent may be writing.
+COMPACT_BLOB_GRACE_S = 60.0
+
+
 def compact(db_path: str, *, keep_per_thread: int = 2, background_keep: int = 1) -> dict:
     """Apply the plan: root-aware per-thread cap (no age TTL), drop unreferenced
     offloaded media, then :func:`reclaim` (WAL truncate + drained incremental vacuum).
@@ -462,6 +495,8 @@ def compact(db_path: str, *, keep_per_thread: int = 2, background_keep: int = 1)
     short transactions, and an incremental (not full) vacuum — but the vacuum step
     rewrites the pages it moves through the WAL, so prefer a quiet moment."""
     res = prune_checkpoints(db_path, keep_per_thread=keep_per_thread, background_keep=background_keep)
-    res["blobs_deleted"] = gc_blobs(db_path, grace_s=0)
+    # A short grace even here: a live agent may have just committed a payload whose row
+    # hasn't landed yet (#4306 review m1).
+    res["blobs_deleted"] = gc_blobs(db_path, grace_s=COMPACT_BLOB_GRACE_S)
     res.update(reclaim(db_path))
     return res

@@ -107,7 +107,7 @@ class ThreadedSqliteSaver(SqliteSaver):
                 have.update(r[0] for r in cur.execute(q, (thread_id, *chunk)))
             cur.executemany(
                 "INSERT OR IGNORE INTO checkpoint_blobs (thread_id, hash, data, created) VALUES (?, ?, ?, ?)",
-                [(thread_id, h, blobs[h].encode("utf-8"), time.time()) for h in hashes if h not in have],
+                [(thread_id, h, blobs[h].encode("utf-8", "surrogatepass"), time.time()) for h in hashes if h not in have],
             )
 
     def put(self, config, checkpoint, metadata, new_versions):
@@ -117,7 +117,11 @@ class ThreadedSqliteSaver(SqliteSaver):
 
             blobs: dict[str, str] = {}
             cv = checkpoint.get("channel_values") or {}
-            new_cv = offload_channel_values(cv, blobs)
+            try:
+                new_cv = offload_channel_values(cv, blobs)
+            except Exception:  # noqa: BLE001 — fail OPEN: store inline, never brick the thread
+                log.warning("[checkpointer] media offload failed for %s; storing inline", thread_id, exc_info=True)
+                new_cv, blobs = cv, {}
             if new_cv is not cv:
                 checkpoint = {**checkpoint, "channel_values": new_cv}
             # Payloads land BEFORE the row that references them: a crash in between
@@ -126,7 +130,9 @@ class ThreadedSqliteSaver(SqliteSaver):
         out = super().put(config, checkpoint, metadata, new_versions)
         if self.prune_on_write:
             try:
-                self._trim(thread_id, str(config["configurable"].get("checkpoint_ns", "")))
+                self._trim(
+                    thread_id, str(config["configurable"].get("checkpoint_ns", "")), written_id=checkpoint["id"]
+                )
             except sqlite3.Error:
                 log.warning("[checkpointer] retention-on-write trim failed for %s", thread_id, exc_info=True)
         return out
@@ -136,20 +142,24 @@ class ThreadedSqliteSaver(SqliteSaver):
             from graph.checkpoint_media import offload_value
 
             blobs: dict[str, str] = {}
-            mapped = [(ch, offload_value(v, blobs)) for ch, v in writes]
+            try:
+                mapped = [(ch, offload_value(v, blobs)) for ch, v in writes]
+            except Exception:  # noqa: BLE001 — fail OPEN, as in put()
+                log.warning("[checkpointer] media offload failed for pending writes; storing inline", exc_info=True)
+                blobs = {}
             if blobs:
                 self._store_blobs(str(config["configurable"]["thread_id"]), blobs)
                 writes = mapped
         return super().put_writes(config, writes, task_id, task_path)
 
-    def _trim(self, thread_id: str, checkpoint_ns: str) -> int:
+    def _trim(self, thread_id: str, checkpoint_ns: str, written_id: str | None = None) -> int:
         """Retention on write: ``graph.checkpoint_prune.trim_group`` on this saver's
         connection, under its lock."""
         from graph.checkpoint_prune import trim_group
 
         keep = self.background_keep if thread_id.startswith(_BACKGROUND_PREFIX) else self.keep_per_thread
         with self.cursor() as cur:
-            return trim_group(cur.connection, thread_id, checkpoint_ns, keep)
+            return trim_group(cur.connection, thread_id, checkpoint_ns, keep, written_id=written_id)
 
     # ── read path ─────────────────────────────────────────────────────────────
     def _rehydrate(self, tup):
@@ -172,7 +182,7 @@ class ThreadedSqliteSaver(SqliteSaver):
             for k in range(0, len(hashes), 500):
                 chunk = hashes[k : k + 500]
                 q = f"SELECT hash, data FROM checkpoint_blobs WHERE thread_id=? AND hash IN ({','.join('?' * len(chunk))})"
-                payloads.update((h, bytes(d).decode("utf-8")) for h, d in cur.execute(q, (thread_id, *chunk)))
+                payloads.update((h, bytes(d).decode("utf-8", "surrogatepass")) for h, d in cur.execute(q, (thread_id, *chunk)))
         new_cv = {k: rehydrate_value(v, payloads) for k, v in cv.items()}
         writes = [(t, ch, rehydrate_value(v, payloads)) for t, ch, v in (tup.pending_writes or ())]
         return tup._replace(checkpoint={**tup.checkpoint, "channel_values": new_cv}, pending_writes=writes)
