@@ -633,7 +633,7 @@ to one-shots.
 
 One-shots created in chat resume that session. Cron jobs run in Activity and
 report back to the originating chat. Write self-contained prompts for recurring
-work. Returns `"Scheduled job <id> next at <iso>."`, an existing job notice for
+work. Returns `"Scheduled job <id> next at <iso>."`, a best-effort existing-job notice for
 an identical active schedule, or `"Error: …"` for invalid input.
 
 See [Schedule future work](/guides/scheduler) for console management, operator
