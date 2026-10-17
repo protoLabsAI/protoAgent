@@ -110,7 +110,16 @@ class ThreadedSqliteSaver(SqliteSaver):
             return self._put_locked(config, checkpoint, metadata, new_versions)
 
     def _put_locked(self, config, checkpoint, metadata, new_versions):
-        out = super().put(config, checkpoint, metadata, new_versions)
+        opened_here = not self.conn.in_transaction
+        try:
+            out = super().put(config, checkpoint, metadata, new_versions)
+        except BaseException:
+            # The serializer may have opened BEGIN IMMEDIATE (payloads) before the row
+            # failed to serialize; left open it would hold the DB's write lock until some
+            # later commit. Roll back only a transaction this put opened.
+            if opened_here and self.conn.in_transaction:
+                self.conn.rollback()
+            raise
         if self.prune_on_write:
             thread_id = str(config["configurable"]["thread_id"])
             try:

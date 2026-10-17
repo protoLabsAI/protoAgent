@@ -9,6 +9,8 @@ import base64
 import hashlib
 import sqlite3
 
+import pytest
+
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -308,3 +310,54 @@ def test_media_table_setup_never_raises(tmp_path, caplog):
 
 def test_serde_is_a_jsonplus_serializer():
     assert issubclass(ProtoagentSerde, JsonPlusSerializer)
+
+
+def test_a_failed_legacy_migration_keeps_the_media_table_and_reads_degrade(tmp_path, monkeypatch):
+    from graph import checkpoint_serde
+
+    db = str(tmp_path / "c.db")
+    conn = sqlite3.connect(db, check_same_thread=False)
+    conn.execute("CREATE TABLE checkpoint_blobs (thread_id TEXT, hash TEXT, data BLOB, created REAL)")
+    conn.commit()
+    real_has = checkpoint_serde._has_table
+    calls = []
+
+    def _flaky(c, name):  # the in-transaction re-check blows up mid-migration
+        calls.append(name)
+        if len(calls) > 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real_has(c, name)
+
+    monkeypatch.setattr(checkpoint_serde, "_has_table", _flaky)
+    checkpoint_serde.ensure_media_table(conn)  # logs, no raise
+    monkeypatch.setattr(checkpoint_serde, "_has_table", real_has)
+    assert real_has(conn, "checkpoint_media")  # NOT rolled back with the migration
+    assert not conn.in_transaction
+    conn.execute("DROP TABLE checkpoint_media")
+    conn.commit()
+    assert checkpoint_serde.fetch_media(conn, {"a" * 64}) == {}  # missing table → placeholder, not a crash
+    conn.close()
+
+
+def test_a_put_that_fails_to_serialize_releases_the_write_lock(tmp_path, monkeypatch):
+    from graph import checkpoint_serde
+
+    db = str(tmp_path / "c.db")
+    saver = build_sqlite_checkpointer(db)
+    real = checkpoint_serde.JsonPlusSerializer.dumps_typed
+
+    def _boom(self, obj):
+        msgs = (obj.get("channel_values") or {}).get("messages") if isinstance(obj, dict) else None
+        if msgs and any(isinstance(m, ToolMessage) for m in msgs):  # a put whose payloads were just stored
+            raise TypeError("unserializable")
+        return real(self, obj)
+
+    monkeypatch.setattr(checkpoint_serde.JsonPlusSerializer, "dumps_typed", _boom)
+    app = _app(saver, [3])
+    with pytest.raises(TypeError):
+        app.invoke({"messages": [HumanMessage(content="x")]}, {"configurable": {"thread_id": "a2a:f"}})
+    assert not saver.conn.in_transaction
+    other = sqlite3.connect(db, timeout=0.5)
+    other.execute("BEGIN IMMEDIATE")  # would raise "database is locked" if the put left it held
+    other.rollback()
+    other.close()

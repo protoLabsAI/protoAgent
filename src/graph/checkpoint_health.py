@@ -61,7 +61,8 @@ def db_stats(db_path: str, *, top: int = 3, now: float | None = None) -> dict:
         try:
             sizes: dict[str, list[int]] = {}
             for tid, b, n in conn.execute(
-                "SELECT thread_id, SUM(length(checkpoint)) + SUM(length(metadata)), COUNT(*) FROM checkpoints"
+                "SELECT thread_id, COALESCE(SUM(length(checkpoint)), 0) + COALESCE(SUM(length(metadata)), 0),"
+                " COUNT(*) FROM checkpoints"
                 " GROUP BY thread_id"
             ):
                 sizes[tid] = [int(b or 0), int(n)]

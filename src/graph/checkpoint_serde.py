@@ -70,9 +70,14 @@ def ensure_media_table(conn: sqlite3.Connection) -> None:
     try:
         if conn.in_transaction:
             conn.commit()
+        # The table on its own, committed first: a failed legacy migration below must not
+        # roll it back with it (reads would then fail on a missing table).
+        conn.execute(MEDIA_TABLE_DDL)
+        conn.commit()
+        if not _has_table(conn, "checkpoint_blobs"):
+            return
         conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute(MEDIA_TABLE_DDL)
             if _has_table(conn, "checkpoint_blobs"):
                 conn.execute(
                     "INSERT OR IGNORE INTO checkpoint_media (hash, data, created)"
@@ -117,12 +122,18 @@ def store_media(conn: sqlite3.Connection, blobs: dict[str, str]) -> None:
 
 
 def fetch_media(conn: sqlite3.Connection, hashes: set[str]) -> dict[str, str]:
+    """The stored payloads for ``hashes``. Never raises: on a read failure (the table
+    missing after a failed setup, a locked DB) the blocks read back as the text
+    placeholder rather than failing the whole checkpoint read."""
     out: dict[str, str] = {}
     hs = sorted(hashes)
-    for k in range(0, len(hs), 500):
-        chunk = hs[k : k + 500]
-        q = f"SELECT hash, data FROM checkpoint_media WHERE hash IN ({','.join('?' * len(chunk))})"
-        out.update((h, bytes(d).decode("utf-8", "surrogatepass")) for h, d in conn.execute(q, chunk))
+    try:
+        for k in range(0, len(hs), 500):
+            chunk = hs[k : k + 500]
+            q = f"SELECT hash, data FROM checkpoint_media WHERE hash IN ({','.join('?' * len(chunk))})"
+            out.update((h, bytes(d).decode("utf-8", "surrogatepass")) for h, d in conn.execute(q, chunk))
+    except sqlite3.Error:
+        log.error("[checkpoint-serde] could not read checkpoint media; images read as placeholders", exc_info=True)
     return out
 
 
