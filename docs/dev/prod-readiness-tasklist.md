@@ -1,5 +1,9 @@
 # Prod-readiness task list
 
+> Historical work record; not a current execution queue. Before resuming an unchecked
+> item, verify the current implementation and the linked issue or PR. Completed
+> entries are retained as evidence, not instructions to repeat the work.
+
 **Created:** 2026-06-09 · **Source:** full-app tech-debt audit (backend + frontend + cross-cutting) + DS migration + fork-cleanliness audit. **Triaged 1×1:** 2026-06-09.
 
 Status legend: `[ ]` open · `[~]` in progress · `[x]` done · `[-]` won't-fix/defer.

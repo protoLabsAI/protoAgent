@@ -5,6 +5,14 @@
 - Builds on: [ADR 0006](./0006-observability-and-the-self-improving-flywheel.md). The queue-depth and wait-time signals extend its Prometheus and telemetry surfaces. [ADR 0106](./0106-provider-registry.md) is why a lane is keyed by the connection's resolved endpoint and model, not by a single legacy `model.api_base`. [ADR 0025](./0025-unified-delegate-registry-and-panel.md) covers ACP delegates, which are separate processes that this limiter cannot see (D7).
 - Refs: protoLabsAI/pr-reviewer-plugin#209 (throughput comment); board analysis bd-mpak §1–2, §4 card 5.
 
+
+**Implementation status (2026-10-16):** The limiter is implemented in `src/graph/llm_limiter.py` and wired into
+`src/graph/llm.py`. It remains disabled by default. See the
+[operator guide](../guides/model-concurrency.md) for configuration and metrics.
+
+The decision status above is retained; implementation does not establish formal
+acceptance. Context and sequencing below record the original proposal.
+
 ## Context
 
 **Nothing in protoAgent limits how many model calls are in flight at once.** `graph/` contains no `Semaphore` or `BoundedSemaphore` (searched at write time). The only concurrency caps are local to one fan-out:
