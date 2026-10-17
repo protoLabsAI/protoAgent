@@ -483,12 +483,12 @@ def test_aged_lookup_and_prune_are_single_queries_not_n_plus_1(tmp_path, monkeyp
     statements.clear()
     res = prune_checkpoints(db, keep_per_thread=2, max_age_seconds=30 * 86400, now=now, background_keep=1)
     selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
-    # One aged-thread scan + the blob-table probe + ONE grouped over-cap query — never a
+    # One aged-thread scan + ONE grouped over-cap query — never a
     # query per thread. Only the (thread, ns) groups over their cap then get a bounded,
     # root-aware trim each (ADR 0120); with retention on write that is ~none in steady
     # state. Here: 8 live x 2 namespaces + 8 background threads are over.
     trims = [s for s in selects if "ORDER BY checkpoint_id DESC" in s]
-    assert len(selects) - len(trims) == 3, selects
+    assert len(selects) - len(trims) == 2, selects
     assert len(trims) == 8 * 2 + 8, trims
     assert res == {"threads_deleted": 8, "checkpoints_deleted": 8 * (2 + 2 + 3)}
     for t in range(8):

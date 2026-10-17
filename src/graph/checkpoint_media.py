@@ -12,8 +12,9 @@ This module moves those payloads out of the per-checkpoint row:
   / ``data:`` string for a short reference (``protoagent-ckblob:sha256:<hex>``),
   returning the payloads it lifted. It never mutates its input: changed messages are
   ``model_copy``'d, untouched ones are passed through by identity.
-* The saver stores each payload ONCE per thread in ``checkpoint_blobs``
-  (content-addressed, so the same screenshot in 300 checkpoints costs one row).
+* The serializer (``graph.checkpoint_serde``) stores each payload ONCE per DB in
+  ``checkpoint_media`` (content-addressed, so the same screenshot in 300 checkpoints —
+  or in two chats — costs one row).
 * :func:`rehydrate_value` restores the exact strings on read, so the graph, the
   model and the console see byte-identical messages. A reference whose payload is
   gone degrades to a text block instead of a broken image.
@@ -41,15 +42,6 @@ _REF_RE = re.compile(r"^protoagent-ckblob:sha256:([0-9a-f]{64})$")
 REF_BYTES_RE = re.compile(rb"protoagent-ckblob:sha256:([0-9a-f]{64})")
 
 _B64_CHARS = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=-_")
-
-BLOB_TABLE_DDL = (
-    "CREATE TABLE IF NOT EXISTS checkpoint_blobs ("
-    " thread_id TEXT NOT NULL,"
-    " hash TEXT NOT NULL,"
-    " data BLOB NOT NULL,"
-    " created REAL NOT NULL DEFAULT 0,"
-    " PRIMARY KEY (thread_id, hash))"
-)
 
 UNAVAILABLE_TEXT = "[image no longer available: its checkpoint payload was removed]"
 

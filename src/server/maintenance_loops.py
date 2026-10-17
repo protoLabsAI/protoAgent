@@ -158,12 +158,12 @@ async def _checkpoint_prune_loop() -> None:
                     background_keep=cfg.checkpoint_background_keep,
                 )
                 # Offloaded media no surviving row references (ADR 0120).
-                from graph.checkpoint_prune import gc_blobs
+                from graph.checkpoint_prune import gc_media
 
-                blobs_gone = await asyncio.to_thread(gc_blobs, path)
-                if blobs_gone:
-                    log.info("[checkpoint-prune] removed %d unreferenced media payload(s)", blobs_gone)
-                if res["threads_deleted"] or res["checkpoints_deleted"] or blobs_gone:
+                media_gone = await asyncio.to_thread(gc_media, path)
+                if media_gone:
+                    log.info("[checkpoint-prune] removed %d unreferenced media payload(s)", media_gone)
+                if res["threads_deleted"] or res["checkpoints_deleted"] or media_gone:
                     log.info(
                         "[checkpoint-prune] removed %d idle thread(s), %d old checkpoint(s)",
                         res["threads_deleted"],

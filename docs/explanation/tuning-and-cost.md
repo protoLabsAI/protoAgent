@@ -118,7 +118,7 @@ whole state, so a screenshot-heavy review once wrote 87 GB in five hours between
 sweeps. Two write-path bounds now handle that ([ADR 0120](/adr/0120-checkpoint-growth-bounds-and-alerts)):
 
 - `prune_on_write` applies the cap after each checkpoint write.
-- `offload_media` stores each image once per session instead of in every checkpoint.
+- `offload_media` stores each image once per history DB instead of in every checkpoint.
 
 When the DB or one session passes `alert_db_mb` / `alert_thread_mb`, the console
 banners it. To reclaim an already-bloated DB, run `protoagent checkpoint compact`, which

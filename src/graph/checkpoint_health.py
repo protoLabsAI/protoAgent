@@ -7,7 +7,8 @@ console already banners (``GET /api/runtime/status`` ``warnings[]``):
 
 * :func:`db_size_warning` — this instance: the DB file (+ WAL) over
   ``checkpoint.alert_db_mb``, or any single thread holding more than
-  ``checkpoint.alert_thread_mb`` (rows + offloaded media), named with its size.
+  ``checkpoint.alert_thread_mb`` (checkpoint rows + pending writes; offloaded media
+  is shared per DB, so it counts in the file size), named with its size.
 * :func:`fleet_size_warning` — the hub: each local fleet member's DB file over the
   same threshold, by ``stat`` only (the hub never opens a member's live DB).
 
@@ -47,8 +48,9 @@ def file_bytes(db_path: str) -> int:
 
 def db_stats(db_path: str, *, top: int = 3, now: float | None = None) -> dict:
     """``{"file_bytes", "threads": [(thread_id, bytes, checkpoints), ...]}`` — the
-    biggest threads first, counting checkpoint rows, pending writes and offloaded
-    media. Cached ``_TTL_S`` per path. Never raises (an unreadable DB → no threads)."""
+    biggest threads first, counting checkpoint rows (blob + metadata, as
+    ``plan_compaction`` does) and pending writes (offloaded media is per DB, in the
+    file size). Cached ``_TTL_S`` per path. Never raises (an unreadable DB → no threads)."""
     t = now if now is not None else time.monotonic()
     hit = _cache.get(db_path)
     if hit is not None and t - hit[0] < _TTL_S:
@@ -59,25 +61,23 @@ def db_stats(db_path: str, *, top: int = 3, now: float | None = None) -> dict:
         try:
             sizes: dict[str, list[int]] = {}
             for tid, b, n in conn.execute(
-                "SELECT thread_id, SUM(length(checkpoint)), COUNT(*) FROM checkpoints GROUP BY thread_id"
+                "SELECT thread_id, COALESCE(SUM(length(checkpoint)), 0) + COALESCE(SUM(length(metadata)), 0),"
+                " COUNT(*) FROM checkpoints"
+                " GROUP BY thread_id"
             ):
                 sizes[tid] = [int(b or 0), int(n)]
             for tid, b in conn.execute("SELECT thread_id, SUM(length(value)) FROM writes GROUP BY thread_id"):
                 sizes.setdefault(tid, [0, 0])[0] += int(b or 0)
-            has_blobs = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoint_blobs'"
-            ).fetchone()
-            if has_blobs:
-                for tid, b in conn.execute(
-                    "SELECT thread_id, SUM(length(data)) FROM checkpoint_blobs GROUP BY thread_id"
-                ):
-                    sizes.setdefault(tid, [0, 0])[0] += int(b or 0)
+            # Offloaded media is shared per DB (``checkpoint_media``), so it counts toward
+            # the file size, not toward any one thread.
         finally:
             conn.close()
         ranked = sorted(sizes.items(), key=lambda kv: kv[1][0], reverse=True)[:top]
         stats["threads"] = [(tid, b, n) for tid, (b, n) in ranked]
     except sqlite3.Error:
-        pass
+        # Not cached: a transient lock must not read as "no threads" for a whole TTL.
+        return stats
+    # One entry per DB this process reports on — its own (the fleet check is stat-only).
     _cache[db_path] = (t, stats)
     return stats
 

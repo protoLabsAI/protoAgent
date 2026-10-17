@@ -169,64 +169,93 @@ def trim_group(
     return cur.rowcount
 
 
-def _has_blob_table(conn: sqlite3.Connection) -> bool:
+def _has_media_table(conn: sqlite3.Connection) -> bool:
     """The media-offload table (ADR 0120) exists only once a current saver opened the DB."""
     return (
-        conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoint_blobs'").fetchone()
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoint_media'").fetchone()
         is not None
     )
 
 
-#: The blob GC leaves payloads younger than this alone: the saver commits a payload just
-#: BEFORE the row that references it, and a sweep landing in that gap must not take it.
-BLOB_GC_GRACE_S = 600.0
+#: The media GC leaves payloads younger than this alone: the serializer commits a payload
+#: just BEFORE the row that references it, and a sweep landing in that gap must not take it.
+MEDIA_GC_GRACE_S = 600.0
 
 
-def gc_blobs(db_path: str, *, grace_s: float = BLOB_GC_GRACE_S, now: float | None = None) -> int:
-    """Delete offloaded media payloads no surviving checkpoint or write references.
+def _scan_refs(conn: sqlite3.Connection) -> set[bytes]:
+    """Every media reference in checkpoint + write rows."""
+    from graph.checkpoint_media import REF_BYTES_RE
 
-    Per thread: its remaining rows (few, and small once media is offloaded) are scanned
-    for references; a thread with no rows left references nothing. Payloads stored in
-    the last ``grace_s`` are kept (see ``BLOB_GC_GRACE_S``). Returns blobs removed. The
-    scan + delete are one write transaction, so a row committed mid-scan waits for it.
+    found: set[bytes] = set()
+    for (blob,) in conn.execute("SELECT checkpoint FROM checkpoints"):
+        found.update(REF_BYTES_RE.findall(bytes(blob or b"")))
+    for (blob,) in conn.execute("SELECT value FROM writes"):
+        found.update(REF_BYTES_RE.findall(bytes(blob or b"")))
+    return found
 
-    Residual case, accepted: a turn that re-adds an image whose payload was already
-    unreferenced (and older than the grace) while a sweep runs can lose it; that block
-    then reads back as a text placeholder, never a broken image."""
+
+def gc_media(
+    db_path: str,
+    *,
+    grace_s: float = MEDIA_GC_GRACE_S,
+    only: set[str] | None = None,
+    now: float | None = None,
+) -> int:
+    """Delete offloaded media payloads that no checkpoint or write row references.
+
+    Media is content-addressed per DB (a serializer has no thread context), so liveness
+    is a reference scan over every row:
+
+    1. Unlocked: scan, and take the payloads older than ``grace_s`` that nothing
+       references as candidates (``only`` narrows them, e.g. to the payloads of a chat
+       just deleted). No candidates — the steady state — means no write lock at all.
+    2. ``BEGIN IMMEDIATE``: rescan EVERY row and delete the candidates still
+       unreferenced. (A rowid-mark partial rescan missed rows that reused a deleted
+       max rowid — #4313 review m1. Rows are bounded by retention on write, so the
+       full rescan is cheap.)
+
+    Writers re-check payload existence inside their own write transaction
+    (``graph.checkpoint_serde.store_media``), so a row re-using a payload either sees
+    this GC's delete and re-inserts it, or commits first and is seen here. Returns
+    payloads removed."""
     import time as _time
 
     cutoff = (now if now is not None else _time.time()) - grace_s
-    from graph.checkpoint_media import REF_BYTES_RE
-
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA busy_timeout=5000")
-    removed = 0
     try:
-        if not _has_blob_table(conn):
+        if not _has_media_table(conn):
             return 0
-        threads = [r[0] for r in conn.execute("SELECT DISTINCT thread_id FROM checkpoint_blobs")]
-        for tid in threads:
-            # One short write transaction per thread (#4306 review m4): the scan + delete
-            # are atomic for that thread, but the lock is never held across the whole DB.
-            conn.execute("BEGIN IMMEDIATE")
-            live: set[bytes] = set()
-            for (blob,) in conn.execute("SELECT checkpoint FROM checkpoints WHERE thread_id=?", (tid,)):
-                live.update(REF_BYTES_RE.findall(bytes(blob or b"")))
-            for (blob,) in conn.execute("SELECT value FROM writes WHERE thread_id=?", (tid,)):
-                live.update(REF_BYTES_RE.findall(bytes(blob or b"")))
-            have = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT hash FROM checkpoint_blobs WHERE thread_id=? AND created < ?", (tid, cutoff)
-                )
-            ]
-            dead = [(tid, h) for h in have if h.encode() not in live]
-            conn.executemany("DELETE FROM checkpoint_blobs WHERE thread_id=? AND hash=?", dead)
-            conn.commit()
-            removed += len(dead)
-        return removed
+        live = _scan_refs(conn)
+        cands = [
+            h
+            for (h,) in conn.execute("SELECT hash FROM checkpoint_media WHERE created < ?", (cutoff,))
+            if h.encode() not in live and (only is None or h in only)
+        ]
+        if not cands:
+            return 0
+        conn.execute("BEGIN IMMEDIATE")
+        live = _scan_refs(conn)
+        dead = [(h,) for h in cands if h.encode() not in live]
+        conn.executemany("DELETE FROM checkpoint_media WHERE hash=?", dead)
+        conn.commit()
+        return len(dead)
     finally:
         conn.close()
+
+
+def _refs_of(conn: sqlite3.Connection, where: str, args: tuple) -> set[str]:
+    """Media hashes referenced by the rows ``where`` selects (before they're deleted)."""
+    from graph.checkpoint_media import REF_BYTES_RE
+
+    out: set[str] = set()
+    if not _has_media_table(conn):
+        return out
+    for (blob,) in conn.execute(f"SELECT checkpoint FROM checkpoints WHERE {where}", args):
+        out.update(h.decode() for h in REF_BYTES_RE.findall(bytes(blob or b"")))
+    for (blob,) in conn.execute(f"SELECT value FROM writes WHERE {where}", args):
+        out.update(h.decode() for h in REF_BYTES_RE.findall(bytes(blob or b"")))
+    return out
 
 
 def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int:
@@ -246,21 +275,25 @@ def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int
             goal, aside = thread_id + _GOAL_ITER_SUFFIX, thread_id + _ASIDE_SUFFIX
             where = "thread_id=? OR substr(thread_id, 1, ?) = ? OR substr(thread_id, 1, ?) = ?"
             args = (thread_id, len(goal), goal, len(aside), aside)
-            n = conn.execute(f"SELECT COUNT(*) FROM checkpoints WHERE {where}", args).fetchone()[0]
-            conn.execute(f"DELETE FROM checkpoints WHERE {where}", args)
-            conn.execute(f"DELETE FROM writes WHERE {where}", args)
-            if _has_blob_table(conn):
-                conn.execute(f"DELETE FROM checkpoint_blobs WHERE {where}", args)
         else:
-            n = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchone()[0]
-            conn.execute("DELETE FROM checkpoints WHERE thread_id=?", (thread_id,))
-            conn.execute("DELETE FROM writes WHERE thread_id=?", (thread_id,))
-            if _has_blob_table(conn):
-                conn.execute("DELETE FROM checkpoint_blobs WHERE thread_id=?", (thread_id,))
+            where, args = "thread_id=?", (thread_id,)
+        refs = _refs_of(conn, where, args)
+        n = conn.execute(f"SELECT COUNT(*) FROM checkpoints WHERE {where}", args).fetchone()[0]
+        conn.execute(f"DELETE FROM checkpoints WHERE {where}", args)
+        conn.execute(f"DELETE FROM writes WHERE {where}", args)
         conn.commit()
-        return n
     finally:
         conn.close()
+    if refs:
+        # The chat's images go with it now, not at the next sweep — those no other chat
+        # still references (media is shared per DB). Best-effort: the rows are already
+        # gone, so a failure here must not fail the delete; the sweep's GC catches up
+        # (#4313 review m2).
+        try:
+            gc_media(db_path, grace_s=0, only=refs)
+        except sqlite3.Error:
+            _log.warning("[checkpoint-prune] media GC after deleting %s failed; the sweep will retry", thread_id, exc_info=True)
+    return n
 
 
 def prune_checkpoints(
@@ -298,8 +331,6 @@ def prune_checkpoints(
             aged = [(tid,) for tid, ts in _newest_stamps(conn).items() if ts is not None and ts < cutoff]
             conn.executemany("DELETE FROM checkpoints WHERE thread_id=?", aged)
             conn.executemany("DELETE FROM writes WHERE thread_id=?", aged)
-            if _has_blob_table(conn):
-                conn.executemany("DELETE FROM checkpoint_blobs WHERE thread_id=?", aged)
             conn.commit()
             threads_deleted = len(aged)
 
@@ -482,9 +513,9 @@ def plan_compaction(db_path: str, *, keep_per_thread: int = 2, background_keep: 
     }
 
 
-#: ``compact``'s blob grace: shorter than the sweep's (an operator asked to reclaim now)
+#: ``compact``'s media grace: shorter than the sweep's (an operator asked to reclaim now)
 #: but never zero while an agent may be writing.
-COMPACT_BLOB_GRACE_S = 60.0
+COMPACT_MEDIA_GRACE_S = 60.0
 
 
 def compact(db_path: str, *, keep_per_thread: int = 2, background_keep: int = 1) -> dict:
@@ -497,6 +528,6 @@ def compact(db_path: str, *, keep_per_thread: int = 2, background_keep: int = 1)
     res = prune_checkpoints(db_path, keep_per_thread=keep_per_thread, background_keep=background_keep)
     # A short grace even here: a live agent may have just committed a payload whose row
     # hasn't landed yet (#4306 review m1).
-    res["blobs_deleted"] = gc_blobs(db_path, grace_s=COMPACT_BLOB_GRACE_S)
+    res["media_deleted"] = gc_media(db_path, grace_s=COMPACT_MEDIA_GRACE_S)
     res.update(reclaim(db_path))
     return res
