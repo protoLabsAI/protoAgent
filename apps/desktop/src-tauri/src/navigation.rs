@@ -51,7 +51,10 @@ pub(crate) fn open_chat_window<R: Runtime>(
         .resizable(true)
         // Offset rather than centered: a second window landing exactly on the first looks
         // like nothing happened — the same "did that work?" the no-op menu item produced.
-        .position(60.0 + f64::from(id % 5) * 28.0, 60.0 + f64::from(id % 5) * 28.0)
+        .position(
+            60.0 + f64::from(id % 5) * 28.0,
+            60.0 + f64::from(id % 5) * 28.0,
+        )
         // Hand drag-and-drop to the WEB CONTENT (#3197). Tauri's drag-drop handler is on by
         // default, and on macOS wry implements it by overriding the webview's
         // NSDraggingDestination methods and returning "accepted" WITHOUT calling super — so
@@ -122,12 +125,15 @@ fn is_own_origin(target: &str, port: u16) -> bool {
 /// `…/app/agent/roxy-1a2b/` and `…#/agent/roxy-1a2b/` both yield `agent/roxy-1a2b/`, so a
 /// link to a specific agent opens a window already pointed at it.
 fn own_origin_path(target: &str) -> Option<String> {
-    let rest = target.split_once('#').map(|(_, frag)| frag).unwrap_or_else(|| {
-        target
-            .split_once("/app/")
-            .map(|(_, path)| path)
-            .unwrap_or("")
-    });
+    let rest = target
+        .split_once('#')
+        .map(|(_, frag)| frag)
+        .unwrap_or_else(|| {
+            target
+                .split_once("/app/")
+                .map(|(_, path)| path)
+                .unwrap_or("")
+        });
     let rest = rest.trim_start_matches('/').trim();
     if rest.is_empty() || rest.starts_with("index.html") {
         None
@@ -142,6 +148,12 @@ fn own_origin_path(target: &str) -> Option<String> {
 enum NewWindow {
     /// Ours — open a real managed window, optionally already at this in-app route.
     Managed(Option<String>),
+    /// A chat image/file on OUR server (`/media/<file>?sig=…`, or a fleet member's
+    /// `/agents/<slug>/media/…`) — the image's "open in new tab" (#4312). Not a console page,
+    /// so never a second app window: it opens in the system browser, behind a short-lived link
+    /// the shell mints first (`media_open_link`). Carries the target's origin and the path
+    /// prefix in front of `/media/` (empty, or `/agents/<slug>`).
+    Media { origin: String, prefix: String },
     /// The wider web — hand it to the system browser.
     External,
     /// An editor deep link (`zed://file/…`, `vscode://file/…`, `cursor://file/…`) from a
@@ -151,9 +163,72 @@ enum NewWindow {
     Ignore,
 }
 
+/// Split a same-port loopback target into `(origin, path)` — the path without its query or
+/// fragment. None for anything else (including the `tauri://` asset scheme).
+fn split_loopback(target: &str, port: u16) -> Option<(String, String)> {
+    for host in ["127.0.0.1", "localhost"] {
+        let origin = format!("http://{host}:{port}");
+        if let Some(rest) = target.strip_prefix(&origin) {
+            if !(rest.is_empty() || rest.starts_with(['/', '?', '#'])) {
+                return None; // `:78700` — a port-prefix collision, not ours
+            }
+            let path = rest.split(['?', '#']).next().unwrap_or("").to_string();
+            return Some((origin, path));
+        }
+    }
+    None
+}
+
+/// Is this own-origin target a CONSOLE page (a second chat window), rather than something else
+/// the sidecar serves — a chat image, a plugin asset, an API document? Before #4312 every
+/// own-origin URL was a console page, so an image's "open in new tab" (its `src` is
+/// `http://127.0.0.1:<sidecar>/media/<file>?sig=…` in the desktop) opened an empty second app
+/// window instead of the image. The console lives at the asset scheme, the bare root, `/app`
+/// and `/index.html`; anything else on the sidecar is a server resource.
+fn is_console_route(target: &str, port: u16) -> bool {
+    if target.starts_with("tauri://") || target.starts_with("http://tauri.localhost") {
+        return true;
+    }
+    match split_loopback(target, port) {
+        Some((_, path)) => {
+            path.is_empty()
+                || path == "/"
+                || path == "/app"
+                || path.starts_with("/app/")
+                || path.starts_with("/index.html")
+        }
+        None => false,
+    }
+}
+
+/// `(origin, prefix)` when an own-origin target is a media-store link: `/media/<file>` or a
+/// fleet member's `/agents/<slug>/media/<file>`, `<file>` one plain segment.
+fn media_target(target: &str, port: u16) -> Option<(String, String)> {
+    let (origin, path) = split_loopback(target, port)?;
+    let idx = path.rfind("/media/")?;
+    let (prefix, file) = (&path[..idx], &path[idx + "/media/".len()..]);
+    if file.is_empty() || file.contains('/') || file.starts_with('.') {
+        return None;
+    }
+    let prefix_ok = prefix.is_empty()
+        || prefix
+            .strip_prefix("/agents/")
+            .is_some_and(|slug| !slug.is_empty() && !slug.contains('/'));
+    prefix_ok.then(|| (origin, prefix.to_string()))
+}
+
 fn route_new_window(target: &str, port: u16) -> NewWindow {
     if is_own_origin(target, port) {
-        NewWindow::Managed(own_origin_path(target))
+        if is_console_route(target, port) {
+            NewWindow::Managed(own_origin_path(target))
+        } else if let Some((origin, prefix)) = media_target(target, port) {
+            NewWindow::Media { origin, prefix }
+        } else {
+            // Some other resource the sidecar serves (a plugin asset, an API document): the
+            // system browser shows it like the web console's new tab does — never a second
+            // app window booting the console at a path it doesn't route.
+            NewWindow::External
+        }
     } else if target.starts_with("http://") || target.starts_with("https://") {
         NewWindow::External
     } else if is_editor_link(target) {
@@ -191,6 +266,7 @@ pub(crate) fn serve_new_window<R: Runtime>(
                 log::error!("desktop: failed to open external link {target}: {e}");
             }
         }
+        NewWindow::Media { origin, prefix } => open_media_link(app, origin, prefix, target),
         NewWindow::Editor => open_editor_link(app, target),
         NewWindow::Ignore => {}
     }
@@ -319,6 +395,70 @@ fn is_workspace_file(p: &std::path::Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("code-workspace"))
 }
 
+/// Open a chat image in the system browser behind a SHORT-LIVED link (#4312).
+///
+/// The console's media link is signed for good (`?sig=` with no expiry — the inline `<img>`
+/// can't carry a bearer), and the system browser would keep it in its history. So the shell —
+/// which holds the operator bearer, unlike the browser — asks the server that served it for a
+/// 15-minute link (`POST <prefix>/api/media/open-link`, bearer-authed) and opens that. The
+/// bearer is only ever a header on that loopback call, never part of a URL.
+///
+/// If the mint fails (an older sidecar or member without the route, a transient error) the
+/// original link opens instead: it already works without a bearer, it names just this one file,
+/// and the operator asked to see it — failing the click would be worse than that link.
+fn open_media_link<R: Runtime>(app: &AppHandle<R>, origin: String, prefix: String, target: &str) {
+    let app = app.clone();
+    let target = target.to_string();
+    let token = crate::resolve_auth_token(&app);
+    tauri::async_runtime::spawn(async move {
+        let minted = mint_media_open_link(&origin, &prefix, &target, token).await;
+        let url = match minted {
+            Ok(u) => u,
+            Err(e) => {
+                log::warn!(
+                    "desktop: no short-lived media link ({e}) — opening the chat's own link"
+                );
+                target
+            }
+        };
+        if let Err(e) = app.opener().open_url(&url, None::<&str>) {
+            log::error!("desktop: failed to open media link: {e}");
+        }
+    });
+}
+
+async fn mint_media_open_link(
+    origin: &str,
+    prefix: &str,
+    target: &str,
+    token: Option<String>,
+) -> Result<String, String> {
+    let endpoint = format!("{origin}{prefix}/api/media/open-link");
+    let mut req = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?
+        .post(&endpoint)
+        .json(&serde_json::json!({ "url": target }));
+    if let Some(t) = token.filter(|t| !t.is_empty()) {
+        req = req.header("Authorization", format!("Bearer {t}"));
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status().as_u16()));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let rel = body.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    minted_media_url(origin, prefix, rel).ok_or_else(|| "malformed reply".to_string())
+}
+
+/// The absolute link to open from the server's reply: only a `/media/…` path is accepted, so a
+/// reply can't redirect the open anywhere but the same server's media store.
+fn minted_media_url(origin: &str, prefix: &str, rel: &str) -> Option<String> {
+    (rel.starts_with("/media/") && !rel.contains("//") && !rel.contains('\\'))
+        .then(|| format!("{origin}{prefix}{rel}"))
+}
+
 fn open_editor_link<R: Runtime>(app: &AppHandle<R>, target: &str) {
     if editor_link_file(target).is_none() {
         log::warn!("desktop: refused editor link (not an existing file): {target}");
@@ -346,9 +486,106 @@ pub(crate) fn serve_navigation<R: Runtime>(app: &AppHandle<R>, target: &str) -> 
 #[cfg(test)]
 mod new_window_tests {
     use super::{
-        editor_link_file, is_editor_link, is_own_origin, own_origin_path, percent_decode,
-        route_new_window, NewWindow,
+        editor_link_file, is_editor_link, is_own_origin, minted_media_url, own_origin_path,
+        percent_decode, route_new_window, NewWindow,
     };
+
+    // ── #4312: an image's "open in new tab" is the browser, not a second app window ──
+    #[test]
+    fn a_chat_image_on_our_server_is_media_not_a_window() {
+        // The exact shape the DS image button opens in the desktop: `apiUrl()` absolutized
+        // the chat's `/media/…?sig=…` against the sidecar — our own origin.
+        assert_eq!(
+            route_new_window("http://127.0.0.1:7870/media/ab12.png?sig=deadbeef", 7870),
+            NewWindow::Media {
+                origin: "http://127.0.0.1:7870".into(),
+                prefix: String::new()
+            },
+        );
+        // A fleet member's image, through the hub's proxy.
+        assert_eq!(
+            route_new_window(
+                "http://localhost:7870/agents/roxy-1a2b/media/x.webp?exp=1&sig=f",
+                7870
+            ),
+            NewWindow::Media {
+                origin: "http://localhost:7870".into(),
+                prefix: "/agents/roxy-1a2b".into()
+            },
+        );
+    }
+
+    #[test]
+    fn other_sidecar_resources_go_to_the_browser() {
+        for target in [
+            "http://127.0.0.1:7870/plugins/atlas/report.html",
+            "http://127.0.0.1:7870/api/openapi.json",
+            "http://127.0.0.1:7870/media/", // no file
+            "http://127.0.0.1:7870/media/a/b.png",
+            "http://127.0.0.1:7870/media/.signing-key",
+            "http://127.0.0.1:7870/x/media/f.png", // not a fleet prefix
+        ] {
+            assert_eq!(
+                route_new_window(target, 7870),
+                NewWindow::External,
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
+    fn console_routes_still_open_a_managed_window() {
+        for (target, route) in [
+            ("http://127.0.0.1:7870", None),
+            ("http://127.0.0.1:7870/", None),
+            ("http://127.0.0.1:7870/app", None),
+            (
+                "http://127.0.0.1:7870/app/agent/roxy-1a2b/",
+                Some("agent/roxy-1a2b/"),
+            ),
+            (
+                "http://127.0.0.1:7870/index.html?__apiPort=7870#/agent/ava-9f/",
+                Some("agent/ava-9f/"),
+            ),
+            ("tauri://localhost/media/not-a-sidecar-path.png", None),
+        ] {
+            assert_eq!(
+                route_new_window(target, 7870),
+                NewWindow::Managed(route.map(String::from)),
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_minted_link_can_only_point_back_at_the_media_store() {
+        assert_eq!(
+            minted_media_url("http://127.0.0.1:7870", "", "/media/a.png?exp=9&sig=f").as_deref(),
+            Some("http://127.0.0.1:7870/media/a.png?exp=9&sig=f"),
+        );
+        assert_eq!(
+            minted_media_url(
+                "http://127.0.0.1:7870",
+                "/agents/r",
+                "/media/a.png?exp=9&sig=f"
+            )
+            .as_deref(),
+            Some("http://127.0.0.1:7870/agents/r/media/a.png?exp=9&sig=f"),
+        );
+        for bad in [
+            "",
+            "https://evil.test/media/a.png",
+            "//evil.test/media/a",
+            "/api/x",
+            "/media//evil",
+        ] {
+            assert_eq!(
+                minted_media_url("http://127.0.0.1:7870", "", bad),
+                None,
+                "{bad}"
+            );
+        }
+    }
 
     /// `<scheme>://file/<abs>` the way the console builds it: each byte outside the
     /// unreserved set (and `/`, `:`) percent-encoded, a Windows drive given a leading `/`.
@@ -444,8 +681,12 @@ mod new_window_tests {
         ] {
             assert_eq!(editor_link_file(bad), None, "{bad} must be refused");
         }
-        assert!(super::is_local_disk_path(std::path::Path::new(r"C:\x\y.rs")));
-        assert!(!super::is_local_disk_path(std::path::Path::new(r"\\srv\share\y.rs")));
+        assert!(super::is_local_disk_path(std::path::Path::new(
+            r"C:\x\y.rs"
+        )));
+        assert!(!super::is_local_disk_path(std::path::Path::new(
+            r"\\srv\share\y.rs"
+        )));
     }
 
     #[test]
@@ -564,7 +805,10 @@ mod new_window_tests {
     #[test]
     fn own_origin_matches_loopback_on_the_sidecar_port() {
         assert!(is_own_origin("http://127.0.0.1:7870/app/", 7870));
-        assert!(is_own_origin("http://localhost:7870/app/agent/roxy-1a2b/", 7870));
+        assert!(is_own_origin(
+            "http://localhost:7870/app/agent/roxy-1a2b/",
+            7870
+        ));
         assert!(is_own_origin("http://127.0.0.1:7870", 7870));
     }
 
@@ -578,7 +822,10 @@ mod new_window_tests {
 
     #[test]
     fn external_links_are_not_own_origin() {
-        assert!(!is_own_origin("https://github.com/protoLabsAI/protoAgent", 7870));
+        assert!(!is_own_origin(
+            "https://github.com/protoLabsAI/protoAgent",
+            7870
+        ));
         assert!(!is_own_origin("https://127.0.0.1.evil.test/app/", 7870));
     }
 
@@ -604,7 +851,10 @@ mod new_window_tests {
     #[test]
     fn the_bare_app_root_yields_no_route() {
         assert_eq!(own_origin_path("http://127.0.0.1:7870/app/"), None);
-        assert_eq!(own_origin_path("tauri://localhost/index.html?__apiPort=7870"), None);
+        assert_eq!(
+            own_origin_path("tauri://localhost/index.html?__apiPort=7870"),
+            None
+        );
         assert_eq!(own_origin_path("http://127.0.0.1:7870"), None);
     }
 }

@@ -240,7 +240,7 @@ fn auth_token<R: Runtime>(app: AppHandle<R>) -> Option<String> {
 /// The sidecar's operator token, resolved the way the server itself resolves it. Quiet:
 /// the webview-facing `auth_token` command logs, but the shell's own server-to-server
 /// callers (see `maybe_signal_wake`) would only add noise on a timer.
-fn resolve_auth_token<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+pub(crate) fn resolve_auth_token<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
     // Env wins, mirroring the server's own precedence (a2a_impl/auth.py `configure`).
     if let Ok(t) = std::env::var("A2A_AUTH_TOKEN") {
         let t = t.trim().to_string();
