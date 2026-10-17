@@ -1,5 +1,25 @@
 [
   {
+    "version": "v0.208.0",
+    "date": "2026-10-17",
+    "changes": [
+      "Managed-git delegates can open draft PRs (#4293).",
+      "Offloaded checkpoint images now read back through any LangGraph saver (#4313).",
+      "Fullscreen works inside console plugin views — a video's fullscreen button in the desktop app, and the Artifact panel's inline video (#4288).",
+      "Fleet Room shows a member busy while it works on a turn another agent delegated to it over A2A — who asked and what for, parallel delegations at once (#4291).",
+      "fetch_url reads PDFs instead of dumping %PDF bytes (#4294).",
+      "The Fleet Room shows member activity on a hub with an auth token — its per-member feeds no longer 401 (#4297).",
+      "Fleet Room shows a member running even if its delegated turn started before the room opened — each member stream replays recent events on connect (#4304).",
+      "Headless setup accepts a provider-qualified model such as anthropic-oauth:<model>, so fleet members boot again on a Claude-subscription hub (#4305).",
+      "A long, image-heavy turn can no longer fill the disk with checkpoints (#4306).",
+      "A chat image's \"Open in new tab\" opens your browser in the desktop app (#4312).",
+      "The Atlas architecture model now covers the fleet (#4289).",
+      "The README shows the Coder monitor (#4303).",
+      "Task guides are shorter and old plans are clearly archived (#4307).",
+      "Automation guides are shorter and match current behavior (#4311)."
+    ]
+  },
+  {
     "version": "v0.207.0",
     "date": "2026-10-16",
     "changes": [

@@ -15,6 +15,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.208.0] - 2026-10-17
+
+### Added
+- **Managed-git delegates can open draft PRs (#4293).** An `acp` delegate entry now takes an optional `draft_pr` boolean (default `false`); with managed git on, the harness appends `--draft` to `gh pr create`, holding the delegate to a draft-only/human-merge lane instead of relying on prompt instruction. Default behaviour is unchanged.
+
+### Changed
+- **Offloaded checkpoint images now read back through any LangGraph saver (#4313).** Media
+  offload moved from protoAgent's saver into its serializer, so a stock `SqliteSaver`,
+  LangGraph Studio or a script handed `graph.checkpoint_serde.protoagent_serde(conn)` sees
+  byte-identical messages, images included. Images are stored once per history DB
+  (`checkpoint_media`, shared across chats), existing per-session rows migrate on start, a
+  deleted chat's own images go with it immediately, and the history size alert no longer
+  caches a failed read. ([ADR 0120, amendment 1](docs/adr/0120-checkpoint-growth-bounds-and-alerts.md))
+
+### Fixed
+- **Fullscreen works inside console plugin views — a video's fullscreen button in the desktop app, and the Artifact panel's inline video (#4288).** Plugin-view frames now carry the `fullscreen` permission (in the desktop app they are cross-origin to the console, so the browser's same-origin default never reached them). The artifact shell grants it to its sandboxed frame only while that frame shows the shell's own video, never to model-generated code.
+
+- **Fleet Room shows a member busy while it works on a turn another agent delegated to it over A2A — who asked and what for, parallel delegations at once (#4291).**
+
+- **`fetch_url` reads PDFs instead of dumping `%PDF` bytes (#4294).** When a response is `application/pdf` (or the body starts with `%PDF-` under another content-type), `fetch_url` now extracts the document text with pypdf — offloaded to a worker thread like the HTML path — and returns it under the usual `[status] <url>` header. A truncated or corrupt PDF comes back as a readable `Error:` instead of raising or leaking binary, and an encrypted or image-only PDF returns a clear note that it has no extractable text.
+
+- **The Fleet Room shows member activity on a hub with an auth token — its per-member feeds no longer 401 (#4297).**
+
+- **Fleet Room shows a member running even if its delegated turn started before the room opened — each member stream replays recent events on connect (#4304).**
+
+- **Headless setup accepts a provider-qualified model such as `anthropic-oauth:<model>`, so fleet members boot again on a Claude-subscription hub (#4305).**
+
+- **A long, image-heavy turn can no longer fill the disk with checkpoints (#4306).** One
+  visual-review turn re-serialized ~490 screenshots into every super-step and wrote 87 GB
+  between two 6-hourly prune sweeps. Checkpoints are now trimmed on every write (root-aware,
+  so an in-flight subagent can't cost the parent its resumable checkpoint), large images in
+  messages are stored once per session instead of in every checkpoint, the post-prune
+  reclaim actually returns freed pages (it was freeing one page per sweep), chat delete also
+  removes leaked `/btw` aside threads, and the console banners a history DB or session that
+  passes `checkpoint.alert_db_mb` / `alert_thread_mb` (for fleet members on the hub too). A
+  bloated DB is reclaimed with `protoagent checkpoint compact`, a dry run until `--apply`.
+  ([ADR 0120](docs/adr/0120-checkpoint-growth-bounds-and-alerts.md))
+
+- **A chat image's "Open in new tab" opens your browser in the desktop app (#4312).** The button opened a second, empty protoAgent window. It now opens the image in your default browser, behind a 15-minute link, so your browser history never keeps a permanent one. In the web console it still opens a browser tab.
+
+### Docs
+- **The Atlas architecture model now covers the fleet (#4289).** `architecture/fleet.c4` adds the
+  fleet supervisor, the `/agents/<slug>` proxy, the fleet token, delegation (`delegate_to`, background
+  fan-out, the registry, the A2A client, live progress), the delegation ledger, the org chart, the A2A
+  layer's parts, and local and remote members. There's also a `fleet_delegation` flow that sends to a
+  local and a remote member in parallel, and a `fleet` tour.
+
+- **The README shows the Coder monitor (#4303).** A screenshot under "What you can do" shows a coding agent's
+  plan, narration, tool calls and per-turn cost while it works a board card.
+
+- **Task guides are shorter and old plans are clearly archived (#4307).**
+  Consolidated repeated CLI, plugin, and knowledge instructions, corrected stale
+  setup guidance, and preserved links to historical plans and contributor procedures.
+
+- **Automation guides are shorter and match current behavior (#4311).**
+  Clarifies goals, watches, schedules, and workflows; corrects obsolete workflow
+  routes and settings, and documents schedule expiry and workflow approval gates.
+
 ## [0.207.0] - 2026-10-16
 
 ### Added
