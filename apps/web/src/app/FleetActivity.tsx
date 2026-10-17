@@ -318,6 +318,16 @@ export function resetFleetActivityForTests(): void {
   useFleetActivity.setState({ events: [], work: {}, running: {}, awaiting: {} });
 }
 
+/** How old (seconds) a replayed frame may be and still be shown in the feed. */
+export const FEED_REPLAY_WINDOW_S = 120;
+
+/** True when a bus frame's server timestamp (`ts`, epoch seconds) is recent enough to show
+ *  in the feed. Frames without a timestamp are treated as live. */
+export function isRecentFrame(ts: unknown, nowMs: number, windowS: number = FEED_REPLAY_WINDOW_S): boolean {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return true;
+  return nowMs / 1000 - ts <= windowS;
+}
+
 /** Open an SSE stream per ONLINE member (/agents/<slug>/api/events, via the hub proxy)
  *  and map its event-bus topics into the feed — this is the fleet-wide "one event log"
  *  (ADR 0039). Streams open/close as members come online/go offline; a stream that errors
@@ -357,7 +367,7 @@ function useFleetStreams() {
     }
 
     const handle = (slug: string, raw: string) => {
-      let frame: { topic?: string; data?: Record<string, unknown>; seq?: number };
+      let frame: { topic?: string; data?: Record<string, unknown>; seq?: number; ts?: number };
       try {
         frame = JSON.parse(raw || "{}");
       } catch {
@@ -370,7 +380,11 @@ function useFleetStreams() {
         seen.current.add(key);
         if (seen.current.size > 1500) seen.current.clear();
       }
+      // Every frame — live or replayed from the member's retained ring — drives state, so a
+      // turn that started BEFORE this stream connected still shows the member running (#4302).
       applyMemberFrame(slug, frame.topic, frame.data ?? {});
+      // …but only recent frames reach the feed: a replay must not dump old history into it.
+      if (!isRecentFrame(frame.ts, Date.now())) return;
       const m = mapTopic(frame.topic, frame.data ?? {});
       if (!m) return;
       pushFleetEvent({ source: nameBySlug.current.get(slug) ?? slug, text: m.text, kind: m.kind });
@@ -393,7 +407,13 @@ function useFleetStreams() {
       // Bail if we were torn down (or the member went offline) while awaiting the token.
       if (disposed.current || !wantRef.current.has(slug) || streams.current.has(slug) || typeof EventSource === "undefined")
         return;
-      const es = new EventSource(buildEventsUrl(memberPath(slug, "/api/events"), token, null));
+      // `since=0` replays the member's retained event ring before going live: the room only
+      // streams while it's open, and the streams connect asynchronously, so a delegated turn
+      // that started a moment before (or long before) its stream connected would otherwise
+      // never show the member RUNNING (#4302). The ring is ordered and a turn's terminal frame
+      // always follows its start, so replay settles to the true in-flight state; `seen`
+      // dedupes frames already applied by an earlier connection.
+      const es = new EventSource(buildEventsUrl(memberPath(slug, "/api/events"), token, 0));
       es.onmessage = (e) => handle(slug, (e as MessageEvent).data);
       es.onerror = () => {
         es.close();
