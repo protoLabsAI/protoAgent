@@ -1,1 +1,0 @@
-- The Fleet Room now shows a member as running even when its delegated turn started before the room opened (or a moment before its member stream connected): each member stream replays the member's retained events on connect, so in-flight work is hydrated; only recent events appear in the activity feed.
