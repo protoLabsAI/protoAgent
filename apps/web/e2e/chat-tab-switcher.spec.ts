@@ -82,7 +82,7 @@ test("collapsed: every switcher row shows its session status dot", async ({ page
   await expect(rows.nth(1).locator(".session-dot")).toBeVisible();
 });
 
-test("collapsed: keyboard switches the session; Escape returns focus to the accessible trigger", async ({ page }) => {
+test("collapsed: keyboard selection and Escape return focus to the accessible trigger", async ({ page }) => {
   await twoChats(page);
   await collapseTabBar(page);
 
@@ -110,14 +110,7 @@ test("collapsed: keyboard switches the session; Escape returns focus to the acce
   await expect(page.locator(".pl-tabbar__tab--active .pl-tabbar__label")).toHaveText("alpha session");
   await expect(menu).toBeHidden();
   await expect(switcher).toHaveAttribute("aria-expanded", "false");
-  // The DS Menu hands focus back to its trigger on close (#620) — but a session SWITCH then
-  // deliberately pulls focus into the newly-visible session's composer (ChatSessionSlot.tsx
-  // autofocuses on becoming visible: "switching tabs lands focus in the composer"). That app
-  // behavior wins, so after a switch the composer, not the trigger, holds focus. This is
-  // intentional, not a regression.
-  await expect(
-    page.locator(".chat-session-slot:not([hidden])").getByPlaceholder(/Message protoAgent/i),
-  ).toBeFocused();
+  await expect(switcher).toBeFocused();
 
   // The pure #620 focus-return check: open and Escape with NO session change, so nothing else
   // claims focus and the Menu alone is responsible for returning it to the trigger.
