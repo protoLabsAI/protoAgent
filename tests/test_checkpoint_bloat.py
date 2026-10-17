@@ -26,7 +26,7 @@ from graph.checkpoint_media import MIN_OFFLOAD_CHARS, REF_PREFIX, UNAVAILABLE_TE
 from graph.checkpoint_prune import (
     compact,
     delete_thread,
-    gc_blobs,
+    gc_media,
     plan_compaction,
     prune_checkpoints,
     reclaim,
@@ -70,6 +70,14 @@ def _rows(db, table, thread_id):
     conn = sqlite3.connect(db)
     try:
         return conn.execute(f"SELECT COUNT(*) FROM {table} WHERE thread_id=?", (thread_id,)).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _media(db):
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM checkpoint_media").fetchone()[0]
     finally:
         conn.close()
 
@@ -124,11 +132,14 @@ def test_checkpoint_rows_do_not_carry_images(tmp_path):
     assert _max_checkpoint_bytes(on, "a2a:visual") < image_bytes // 4
 
 
-def test_the_same_image_is_stored_once_per_thread(tmp_path):
-    """Content-addressed: one screenshot re-read in many turns costs one blob row."""
+def test_the_same_image_is_stored_once_per_db(tmp_path):
+    """Content-addressed per DB: one screenshot re-read in many turns — or seen by two
+    chats — costs one media row."""
     db = str(tmp_path / "c.db")
     _run_turns(db, 5, seeds=[7, 7, 7, 8, 8])
-    assert _rows(db, "checkpoint_blobs", "a2a:visual") == 2
+    assert _media(db) == 2
+    _run_turns(db, 2, seeds=[7, 8], thread="a2a:other")
+    assert _media(db) == 2
 
 
 def test_offload_never_mutates_the_live_state():
@@ -161,8 +172,8 @@ def test_retention_on_write_bounds_a_long_turn_without_the_sweep(tmp_path):
     assert _rows(db, "checkpoints", "a2a:visual") == saver.keep_per_thread == 2
     assert len(state.values["messages"]) == 10 * 4
     # Only images some surviving row still references are worth keeping; the GC agrees.
-    gc_blobs(db, grace_s=0)
-    assert _rows(db, "checkpoint_blobs", "a2a:visual") == 10
+    gc_media(db, grace_s=0)
+    assert _media(db) == 10
 
 
 def test_configure_saver_applies_live_settings(tmp_path):
@@ -229,32 +240,40 @@ def test_trim_keeps_the_parent_root_while_a_subagent_writes_into_its_thread(tmp_
 # ── deletion + GC ─────────────────────────────────────────────────────────────
 
 
-def test_chat_delete_takes_the_threads_media_too(tmp_path):
+def test_chat_delete_takes_the_threads_media_but_not_what_another_chat_shares(tmp_path):
     db = str(tmp_path / "c.db")
-    _run_turns(db, 2, thread="a2a:s1")
-    _run_turns(db, 1, thread="a2a:s2")
+    _run_turns(db, 2, thread="a2a:s1")  # images 0, 1
+    _run_turns(db, 1, thread="a2a:s2")  # image 0 — shared with s1
+    assert _media(db) == 2
     assert delete_thread(db, "a2a:s1", cascade=True) > 0
-    assert _rows(db, "checkpoint_blobs", "a2a:s1") == 0
-    assert _rows(db, "checkpoint_blobs", "a2a:s2") == 1
+    assert _media(db) == 1  # image 1 went with s1 immediately; image 0 is still s2's
+    saver = build_sqlite_checkpointer(db)
+    st = saver.get_tuple({"configurable": {"thread_id": "a2a:s2"}})
+    assert st.checkpoint["channel_values"]["messages"][-2].content[1]["image_url"]["url"].endswith(_png(0))
 
 
 def test_cascade_takes_aside_media_and_spares_a_prefix_sharing_chat(tmp_path):
     db = str(tmp_path / "c.db")
-    for tid in ("a2a:s1", "a2a:s1::aside-9f", "a2a:s1:goal-iter-2", "a2a:s10", "a2a:s10::aside-9f"):
-        _run_turns(db, 1, thread=tid)
+    gone = ("a2a:s1", "a2a:s1::aside-9f", "a2a:s1:goal-iter-2")
+    kept = ("a2a:s10", "a2a:s10::aside-9f")
+    for seed, tid in enumerate(gone + kept):
+        _run_turns(db, 1, seeds=[100 + seed], thread=tid)
+    assert _media(db) == 5
     delete_thread(db, "a2a:s1", cascade=True)
-    for tid in ("a2a:s1", "a2a:s1::aside-9f", "a2a:s1:goal-iter-2"):
-        assert (_rows(db, "checkpoints", tid), _rows(db, "writes", tid), _rows(db, "checkpoint_blobs", tid)) == (0, 0, 0)
-    for tid in ("a2a:s10", "a2a:s10::aside-9f"):
-        assert _rows(db, "checkpoints", tid) and _rows(db, "writes", tid) and _rows(db, "checkpoint_blobs", tid) == 1
+    for tid in gone:
+        assert (_rows(db, "checkpoints", tid), _rows(db, "writes", tid)) == (0, 0)
+    for tid in kept:
+        assert _rows(db, "checkpoints", tid) and _rows(db, "writes", tid)
+    assert _media(db) == 2  # exactly the two prefix-sharing chats' images survive
 
 
 def test_saver_delete_thread_takes_media(tmp_path):
     db = str(tmp_path / "c.db")
     saver, _ = _run_turns(db, 2)
-    saver.delete_thread("a2a:visual")
+    saver.delete_thread("a2a:visual")  # LangGraph's own delete: rows only
     assert _rows(db, "checkpoints", "a2a:visual") == 0
-    assert _rows(db, "checkpoint_blobs", "a2a:visual") == 0
+    assert gc_media(db, grace_s=0) == 2  # the sweep's GC frees what nothing references
+    assert _media(db) == 0
 
 
 def test_gc_drops_media_no_row_references(tmp_path):
@@ -263,15 +282,13 @@ def test_gc_drops_media_no_row_references(tmp_path):
     conn = sqlite3.connect(db)
     import time
 
-    for tid, h in (("a2a:visual", "f" * 64), ("a2a:gone", "e" * 64)):
-        conn.execute(
-            "INSERT INTO checkpoint_blobs (thread_id, hash, data, created) VALUES (?, ?, x'00', ?)", (tid, h, time.time())
-        )
+    for h in ("f" * 64, "e" * 64):
+        conn.execute("INSERT INTO checkpoint_media (hash, data, created) VALUES (?, x'00', ?)", (h, time.time()))
     conn.commit()
     conn.close()
-    assert gc_blobs(db) == 0  # inside the grace window: a put may be about to reference them
-    assert gc_blobs(db, grace_s=0) == 2
-    assert _rows(db, "checkpoint_blobs", "a2a:visual") == 2  # the two real images stay
+    assert gc_media(db) == 0  # inside the grace window: a put may be about to reference them
+    assert gc_media(db, grace_s=0) == 2
+    assert _media(db) == 2  # the two real images stay
 
 
 # ── reclaim ───────────────────────────────────────────────────────────────────
@@ -485,17 +502,16 @@ def test_a_lone_surrogate_in_a_media_string_does_not_brick_the_thread(tmp_path):
 
 
 def test_offload_failure_falls_back_to_inline_storage(tmp_path, monkeypatch):
-    from graph import checkpoint_media
+    from graph import checkpoint_serde
 
     def _boom(*a, **k):
         raise RuntimeError("offload broke")
 
-    monkeypatch.setattr(checkpoint_media, "offload_channel_values", _boom)
-    monkeypatch.setattr(checkpoint_media, "offload_value", _boom)
+    monkeypatch.setattr(checkpoint_serde, "_offload_obj", _boom)
     db = str(tmp_path / "c.db")
     _, state = _run_turns(db, 1)
     assert state.values["messages"][-2].content[1]["image_url"]["url"] == "data:image/png;base64," + _png(0)
-    assert _rows(db, "checkpoint_blobs", "a2a:visual") == 0
+    assert _media(db) == 0
 
 
 def test_compact_keeps_a_payload_a_live_agent_just_stored(tmp_path):
@@ -506,11 +522,22 @@ def test_compact_keeps_a_payload_a_live_agent_just_stored(tmp_path):
     db = str(tmp_path / "c.db")
     _run_turns(db, 1)
     conn = sqlite3.connect(db)
-    conn.execute(
-        "INSERT INTO checkpoint_blobs (thread_id, hash, data, created) VALUES ('a2a:visual', ?, x'00', ?)",
-        ("d" * 64, time.time()),
-    )
+    conn.execute("INSERT INTO checkpoint_media (hash, data, created) VALUES (?, x'00', ?)", ("d" * 64, time.time()))
     conn.commit()
     conn.close()
     assert compact(db)["blobs_deleted"] == 0
-    assert _rows(db, "checkpoint_blobs", "a2a:visual") == 2
+    assert _media(db) == 2
+
+
+def test_a_failed_stats_read_is_not_cached(tmp_path, monkeypatch):
+    db = str(tmp_path / "c.db")
+    _run_turns(db, 1)
+    real = sqlite3.connect
+
+    def _locked(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(sqlite3, "connect", _locked)
+    assert checkpoint_health.db_stats(db)["threads"] == []
+    monkeypatch.setattr(sqlite3, "connect", real)
+    assert checkpoint_health.db_stats(db)["threads"][0][0] == "a2a:visual"  # not the cached failure

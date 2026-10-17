@@ -75,60 +75,31 @@ class ThreadedSqliteSaver(SqliteSaver):
       keeps its newest ``keep_per_thread`` *root* checkpoints (``background_keep``
       for ``a2a:background:*``) plus anything newer than the oldest of them (an
       in-flight subagent's rows). Older rows and their writes are deleted.
-    * **Media offload** — large base64 / data-URI payloads in message content blocks
-      are stored once per thread in ``checkpoint_blobs`` and referenced from the
-      checkpoint, then restored on read (``graph.checkpoint_media``).
+    * **Media offload** — done by its serializer (``graph.checkpoint_serde``): large
+      base64 / data-URI payloads in message content blocks are stored once per DB in
+      ``checkpoint_media`` and restored on read, so a stock ``SqliteSaver`` with the
+      same serde reads byte-identical messages.
     """
 
     keep_per_thread: int = 2
     background_keep: int = 1
     prune_on_write: bool = True
-    offload_media: bool = True
 
-    def setup(self) -> None:
-        first = not self.is_setup
-        super().setup()
-        if first:
-            from graph.checkpoint_media import BLOB_TABLE_DDL
+    @property
+    def offload_media(self) -> bool:
+        """Media offload lives in the serializer (``graph.checkpoint_serde``); this is
+        its switch. Reads restore offloaded media either way."""
+        return bool(getattr(self.serde, "offload", False))
 
-            self.conn.execute(BLOB_TABLE_DDL)
-            self.conn.commit()
-
-    # ── write path ────────────────────────────────────────────────────────────
-    def _store_blobs(self, thread_id: str, blobs: dict[str, str]) -> None:
-        if not blobs:
-            return
-        hashes = list(blobs)
-        with self.cursor() as cur:
-            have: set[str] = set()
-            for k in range(0, len(hashes), 500):
-                chunk = hashes[k : k + 500]
-                q = f"SELECT hash FROM checkpoint_blobs WHERE thread_id=? AND hash IN ({','.join('?' * len(chunk))})"
-                have.update(r[0] for r in cur.execute(q, (thread_id, *chunk)))
-            cur.executemany(
-                "INSERT OR IGNORE INTO checkpoint_blobs (thread_id, hash, data, created) VALUES (?, ?, ?, ?)",
-                [(thread_id, h, blobs[h].encode("utf-8", "surrogatepass"), time.time()) for h in hashes if h not in have],
-            )
+    @offload_media.setter
+    def offload_media(self, value: bool) -> None:
+        if hasattr(self.serde, "offload"):
+            self.serde.offload = bool(value)
 
     def put(self, config, checkpoint, metadata, new_versions):
-        thread_id = str(config["configurable"]["thread_id"])
-        if self.offload_media:
-            from graph.checkpoint_media import offload_channel_values
-
-            blobs: dict[str, str] = {}
-            cv = checkpoint.get("channel_values") or {}
-            try:
-                new_cv = offload_channel_values(cv, blobs)
-            except Exception:  # noqa: BLE001 — fail OPEN: store inline, never brick the thread
-                log.warning("[checkpointer] media offload failed for %s; storing inline", thread_id, exc_info=True)
-                new_cv, blobs = cv, {}
-            if new_cv is not cv:
-                checkpoint = {**checkpoint, "channel_values": new_cv}
-            # Payloads land BEFORE the row that references them: a crash in between
-            # leaves an unreferenced blob (GC'd later), never a dangling reference.
-            self._store_blobs(thread_id, blobs)
         out = super().put(config, checkpoint, metadata, new_versions)
         if self.prune_on_write:
+            thread_id = str(config["configurable"]["thread_id"])
             try:
                 self._trim(
                     thread_id, str(config["configurable"].get("checkpoint_ns", "")), written_id=checkpoint["id"]
@@ -136,21 +107,6 @@ class ThreadedSqliteSaver(SqliteSaver):
             except sqlite3.Error:
                 log.warning("[checkpointer] retention-on-write trim failed for %s", thread_id, exc_info=True)
         return out
-
-    def put_writes(self, config, writes, task_id, task_path=""):
-        if self.offload_media:
-            from graph.checkpoint_media import offload_value
-
-            blobs: dict[str, str] = {}
-            try:
-                mapped = [(ch, offload_value(v, blobs)) for ch, v in writes]
-            except Exception:  # noqa: BLE001 — fail OPEN, as in put()
-                log.warning("[checkpointer] media offload failed for pending writes; storing inline", exc_info=True)
-                blobs = {}
-            if blobs:
-                self._store_blobs(str(config["configurable"]["thread_id"]), blobs)
-                writes = mapped
-        return super().put_writes(config, writes, task_id, task_path)
 
     def _trim(self, thread_id: str, checkpoint_ns: str, written_id: str | None = None) -> int:
         """Retention on write: ``graph.checkpoint_prune.trim_group`` on this saver's
@@ -160,47 +116,6 @@ class ThreadedSqliteSaver(SqliteSaver):
         keep = self.background_keep if thread_id.startswith(_BACKGROUND_PREFIX) else self.keep_per_thread
         with self.cursor() as cur:
             return trim_group(cur.connection, thread_id, checkpoint_ns, keep, written_id=written_id)
-
-    # ── read path ─────────────────────────────────────────────────────────────
-    def _rehydrate(self, tup):
-        if tup is None:
-            return None
-        from graph.checkpoint_media import refs_in_value, rehydrate_value
-
-        cv = (tup.checkpoint or {}).get("channel_values") or {}
-        found: set[str] = set()
-        for v in cv.values():
-            refs_in_value(v, found)
-        for _t, _ch, v in tup.pending_writes or ():
-            refs_in_value(v, found)
-        if not found:
-            return tup
-        thread_id = str(tup.config["configurable"]["thread_id"])
-        hashes = sorted(found)
-        payloads: dict[str, str] = {}
-        with self.cursor(transaction=False) as cur:
-            for k in range(0, len(hashes), 500):
-                chunk = hashes[k : k + 500]
-                q = f"SELECT hash, data FROM checkpoint_blobs WHERE thread_id=? AND hash IN ({','.join('?' * len(chunk))})"
-                payloads.update((h, bytes(d).decode("utf-8", "surrogatepass")) for h, d in cur.execute(q, (thread_id, *chunk)))
-        new_cv = {k: rehydrate_value(v, payloads) for k, v in cv.items()}
-        writes = [(t, ch, rehydrate_value(v, payloads)) for t, ch, v in (tup.pending_writes or ())]
-        return tup._replace(checkpoint={**tup.checkpoint, "channel_values": new_cv}, pending_writes=writes)
-
-    def get_tuple(self, config):
-        return self._rehydrate(super().get_tuple(config))
-
-    def list(self, config, *, filter=None, before=None, limit=None):
-        # Materialize first: the base generator holds the saver lock while it yields,
-        # and rehydrating takes it again.
-        rows = [*super().list(config, filter=filter, before=before, limit=limit)]
-        for tup in rows:
-            yield self._rehydrate(tup)
-
-    def delete_thread(self, thread_id: str) -> None:
-        super().delete_thread(thread_id)
-        with self.cursor() as cur:
-            cur.execute("DELETE FROM checkpoint_blobs WHERE thread_id = ?", (str(thread_id),))
 
     # ── async delegation ──────────────────────────────────────────────────────
     async def aget_tuple(self, config):
@@ -239,7 +154,9 @@ def build_sqlite_checkpointer(db_path: str) -> ThreadedSqliteSaver:
     # NONE DB is migrated at boot by graph/checkpoint_migrate.py.
     conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
     conn.execute("PRAGMA journal_mode=WAL")
-    saver = ThreadedSqliteSaver(conn)
+    from graph.checkpoint_serde import protoagent_serde
+
+    saver = ThreadedSqliteSaver(conn, serde=protoagent_serde(conn))
     saver.setup()  # create the checkpoint tables if absent (idempotent)
     return saver
 

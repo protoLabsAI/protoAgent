@@ -1236,7 +1236,7 @@ class LangGraphConfig:
     # ``keep_per_thread`` / ``background_keep`` after every checkpoint write (root-aware:
     # an in-flight subagent's rows and the parent's resumable checkpoint survive).
     # ``offload_media`` stores large base64 / data-URI payloads in message content once
-    # per thread (``checkpoint_blobs``) instead of inside every checkpoint row; reads
+    # per DB (``checkpoint_media``, via the saver's serializer) instead of inside every checkpoint row; reads
     # restore them, so the model sees identical messages.
     checkpoint_prune_on_write: bool = True
     checkpoint_offload_media: bool = True

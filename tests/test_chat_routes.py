@@ -1846,8 +1846,16 @@ def test_delete_session_cascade_removes_aside_threads_with_writes_and_media(monk
         finally:
             conn.close()
 
+    def _media():
+        conn = sqlite3.connect(ck)
+        try:
+            return conn.execute("SELECT COUNT(*) FROM checkpoint_media").fetchone()[0]
+        finally:
+            conn.close()
+
     for tid in threads:
-        assert _n("checkpoints", tid) and _n("writes", tid) and _n("checkpoint_blobs", tid) == 2, tid
+        assert _n("checkpoints", tid) and _n("writes", tid), tid
+    assert _media() == 2 * len(threads)  # each thread: its own message image + pending-write image
 
     monkeypatch.setattr(rs.STATE, "checkpoint_path", ck, raising=False)
     monkeypatch.setattr(rs.STATE, "checkpointer", saver, raising=False)
@@ -1856,6 +1864,7 @@ def test_delete_session_cascade_removes_aside_threads_with_writes_and_media(monk
     assert c.delete("/api/chat/sessions/X").json()["deleted"] is True
 
     for tid in gone:
-        assert (_n("checkpoints", tid), _n("writes", tid), _n("checkpoint_blobs", tid)) == (0, 0, 0), tid
+        assert (_n("checkpoints", tid), _n("writes", tid)) == (0, 0), tid
     for tid in kept:
-        assert (_n("checkpoints", tid) > 0, _n("writes", tid) > 0, _n("checkpoint_blobs", tid)) == (True, True, 2), tid
+        assert _n("checkpoints", tid) > 0 and _n("writes", tid) > 0, tid
+    assert _media() == 2 * len(kept)  # the deleted chat's images went with it, nobody else's

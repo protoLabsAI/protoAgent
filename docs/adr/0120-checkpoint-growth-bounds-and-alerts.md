@@ -1,6 +1,6 @@
 # ADR 0120 — Bound checkpoint growth on the write path, and alert on it
 
-- Status: Proposed
+- Status: Accepted (amended — see Amendment 1)
 - Supersedes nothing; tightens the retention contract around the periodic sweep in
   `graph/checkpoint_prune.py` (#3973, #4173).
 
@@ -61,7 +61,7 @@ An audit of the 32 local DBs and the remote fleet found:
 2. **Media offload.** Before a checkpoint or a pending write is serialized:
    - Strings of at least 32 KiB in message content blocks that are base64 or a
      `data:…;base64,` URI are replaced with `protoagent-ckblob:sha256:<hex>`.
-   - The payload is stored **once per thread** in a new `checkpoint_blobs(thread_id,
+   - The payload is stored **once per thread** (Amendment 1: once per DB, `checkpoint_media`) in a new `checkpoint_blobs(thread_id,
      hash, data)` table. Payloads are written before the row that references them.
    - Reads (`get_tuple`, `list`) restore the exact strings, so the graph, the model and
      the console see byte-identical messages.
@@ -123,3 +123,54 @@ An audit of the 32 local DBs and the remote fleet found:
     still in state.
 - **Retention on write costs something per write:** one indexed `SELECT` over a few
   rows, plus one `DELETE` when the thread is over its cap.
+
+## Amendment 1 — offload in the serializer, media per DB
+
+#4306 shipped the offload inside `ThreadedSqliteSaver`, which had a cost: only that
+saver could read offloaded rows back. A stock `SqliteSaver`, LangGraph Studio or a
+script saw `protoagent-ckblob:` references where the images had been. The offload now
+lives in a LangGraph serializer:
+
+```python
+from langgraph.checkpoint.sqlite import SqliteSaver
+from graph.checkpoint_serde import protoagent_serde
+
+saver = SqliteSaver(conn, serde=protoagent_serde(conn))  # byte-identical messages
+```
+
+- **`ProtoagentSerde` subclasses `JsonPlusSerializer`.**
+  - `dumps_typed` lifts the payloads out, then serializes the slimmed object.
+  - `loads_typed` deserializes, then restores the payloads. Rows without a reference
+    skip the lookup: the check is on the raw bytes, with no walk.
+  - LangGraph's `with_allowlist` still works: `with_msgpack_allowlist` `copy.copy`s
+    the serializer, connection included.
+  - `ThreadedSqliteSaver` keeps only retention on write and is built with this serde.
+    `checkpoint.offload_media` switches the serde's offload; reads always restore.
+- **Media is content-addressed per DB**, in `checkpoint_media(hash, data, created)`.
+  A serializer has no thread context, and the same screenshot in two chats is now one
+  row.
+- **The serde never commits.** Inside any saver, the payload `INSERT` executes on the
+  same connection before the row's `INSERT`, and the saver's own commit covers both,
+  so a row never commits without its payloads. An earlier draft did commit, and it
+  raced other threads' commits on the shared connection.
+- **Liveness is a reference scan.** `gc_media` runs in two phases, so the write lock
+  covers only the rows written since phase 1:
+  1. Unlocked, it scans every checkpoint and write row, and takes as candidates the
+     payloads older than the 10-minute grace that nothing references.
+  2. Under `BEGIN IMMEDIATE`, it rescans only rows with a rowid above phase 1's mark
+     (new rows, plus `INSERT OR REPLACE`s, which take a new rowid). Then it deletes
+     the candidates that are still unreferenced.
+- **Chat delete frees media immediately.** The chat's referenced hashes are collected
+  before its rows go, then GC'd at once (grace 0, limited to those hashes). Media
+  another chat still references stays. LangGraph's own `delete_thread` deletes rows
+  only, and the sweep's GC frees whatever it leaves.
+- **Migration.** Opening a DB folds #4306's per-thread `checkpoint_blobs` into
+  `checkpoint_media`: one row per hash, keeping the newest `created`. Then it drops
+  the old table, in one transaction, idempotently. References in old rows keep
+  resolving, because the reference format is unchanged.
+- **Per-thread size alerts** count checkpoint rows (blob + metadata) and pending
+  writes. Offloaded media is shared per DB, so it counts in the file-size alert, not
+  toward any one thread.
+- **The residual is unchanged:** a turn that re-uses an already-unreferenced, older
+  payload while a GC runs can lose it, and the block then reads back as the text
+  placeholder.
