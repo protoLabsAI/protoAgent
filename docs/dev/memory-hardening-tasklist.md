@@ -1,5 +1,9 @@
 # Memory-hardening tasklist (ADR 0069)
 
+> Historical work record; not a current execution queue. Before resuming an unchecked
+> item, verify the current implementation and the linked issue or PR. Completed
+> entries are retained as evidence, not instructions to repeat the work.
+
 Execution plan for the memory delivery-layer rework — attributed digest,
 provenance, trust tiers. Derived from the 2026-07-01 due-diligence pass
 (cross-thread recollection investigation + external survey of product/framework

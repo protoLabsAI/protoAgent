@@ -1,12 +1,9 @@
 # Operate the model in-flight limiter
 
-Nothing in protoAgent bounds how many chat-model calls a process has in flight at
-once, so a burst of fan-outs all hit the gateway together, all time out together, and
-all retry together — the #209 amplification. The **in-flight limiter** ([ADR 0115](../adr/0115-gateway-inflight-limiter.md))
-puts extra callers into a bounded, priority-ordered local queue per lane instead of
-letting them send requests that are bound to time out. It is **off by default**
-(`model.max_inflight: 0`, zero overhead beyond one branch); this guide is how you turn
-it on, size it, and read what it's doing.
+The in-flight limiter caps concurrent chat-model calls and queues extra callers.
+It is disabled by default (`model.max_inflight: 0`). Enable it when concurrent
+work overloads a model endpoint, then check queue wait and timeout metrics.
+The [design record](../adr/0115-gateway-inflight-limiter.md) explains the mechanism.
 
 A **lane** is one `(resolved base_url, model id)` pair — the same key your
 [LiteLLM gateway](../explanation/litellm-gateway.md) connections resolve to, plus
@@ -35,7 +32,7 @@ but only the gateway sees every process and every coder at once. Embeddings (the
 
 ## Turn it on when the fleet retries in sync
 
-The signal that you need this is the #209 symptom: under load, a member's log fills with
+Under load, a member's log may fill with
 **synchronized `openai._base_client Retrying request` bursts** and request timeouts,
 recurring every couple of minutes across the fleet, with no review or turn finishing.
 The gateway is accepting connections but not answering in time, so nobody queues —
@@ -123,7 +120,7 @@ reduce concurrent load on this lane
 ```
 
 It is deliberately **not retried** — retrying a queue timeout just rejoins the queue and
-reproduces the #209 amplification locally — and, because acquisition sits outside the
+adds more work to the same overloaded queue — and, because acquisition sits outside the
 stall guard, it is never mislabelled a `StreamStallTimeout`. When you see one, pick the
 fix the message points at:
 
@@ -175,8 +172,7 @@ agent process (pr-reviewer's panels, say) reads the same payload with no round-t
 
 ## Tell local queuing from a slow gateway
 
-The whole point of the metrics is to separate two failure modes the #209 wave used to
-blur together:
+Use the metrics to distinguish two failure modes:
 
 - **`local_queue`** — `saturated: true`, or `wait_p90_s_5m` above your threshold, **with
   slots full**. The gate is slow because *this process is queuing on purpose*. This is
@@ -189,19 +185,16 @@ blur together:
 Retries plus a full lane is expected back-pressure. Retries with slots to spare is the
 gateway, not you.
 
-## Roll it out — Vera first, then PM
+## Roll out gradually {#roll-it-out-—-vera-first-then-pm}
 
-Follow ADR 0115's order; don't flip the whole fleet at once:
-
-1. **Ship with `max_inflight: 0`.** No behaviour change; the snapshot reports
-   `enabled: false`.
-2. **Enable on Vera** with a limit below the gateway's real parallel capacity — for
-   example `6` with `inflight_interactive_reserve: 1`. Watch `llm_queue_wait_seconds` and
-   the SDK retry counts for about a week: wait time should be bounded and the
-   synchronized retry bursts should mostly stop.
-3. **Enable on the PM instance**, sized so the per-process totals across Vera + PM stay
-   within the gateway's capacity.
-4. A non-zero default is left to a later ADR amendment, once the metrics support it.
+1. Enable the limiter on one instance with a limit below the endpoint's measured
+   capacity. The `6` above is an example, not a recommended capacity for every model.
+2. Observe queue depth, wait time, timeout counts, and interactive responsiveness
+   through a representative workload.
+3. Add other instances only after sizing their combined limits within the shared
+   endpoint's capacity. Keep gateway-side limits for callers outside this process.
+4. If queuing makes latency worse without reducing overload, adjust the limit or
+   reduce fan-out. Set `max_inflight: 0` to disable the limiter.
 
 ## Related
 

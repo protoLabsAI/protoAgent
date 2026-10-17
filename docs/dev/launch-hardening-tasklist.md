@@ -1,5 +1,9 @@
 # Launch-hardening tasklist
 
+> Historical work record; not a current execution queue. Before resuming an unchecked
+> item, verify the current implementation and the linked issue or PR. Completed
+> entries are retained as evidence, not instructions to repeat the work.
+
 Pre-launch security/correctness hardening, derived from the antagonistic multi-agent
 review of 2026-06-28 (13 finder dimensions → every finding double-verified by an
 independent reachability skeptic + impact skeptic; 30 findings survived, 0 refuted,

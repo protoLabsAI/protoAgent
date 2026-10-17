@@ -12,11 +12,9 @@ the API contract still holds.
 
 The store is path-aware and degradation-aware:
 
-- Honors ``KNOWLEDGE_DB_PATH`` env var → constructor argument →
-  config default ``/sandbox/knowledge/agent.db``.
-- If the configured path is unwritable (running locally outside the
-  container, no /sandbox), falls back to ``~/.protoagent/knowledge/agent.db``
-  so a fresh ``python -m server`` works without sudo.
+- Uses ``KNOWLEDGE_DB_PATH`` first, then an explicit non-``/sandbox`` constructor
+  path. The legacy ``/sandbox`` default resolves to the instance-private
+  ``<instance_root>/knowledge/agent.db``; an unwritable explicit path raises.
 - All write operations swallow ``sqlite3.DatabaseError`` (covers
   OperationalError, IntegrityError, and corruption variants) and log;
   the store never crashes the agent loop on a corrupt or read-only DB.

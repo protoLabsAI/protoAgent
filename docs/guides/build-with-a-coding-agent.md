@@ -1,272 +1,69 @@
 # Build out your protoAgent with a coding agent
 
-**What you'll do:** stand up a project-manager (PM) agent that owns your repo's
-board, wire a CLI coding agent under it, and ship your first feature through the
-pipeline — brief → board card → disposable worktree → pull request → gates →
-merge — without holding the keyboard yourself.
+Create a Project Manager (PM) agent, connect it to a coding delegate, and ship a
+small feature through a board, pull request, review, and CI.
 
 ## Before you start
 
-Three host binaries have to exist *before* you create the agent — the Configure
-step can't install them, and two of them gate the create outright:
+You need a running protoAgent, a local repository, and CI checks that can reject
+an incorrect change. Install these tools on the machine running the agent:
 
-- **A CLI coding agent**, installed and signed in: `proto`, Claude Code, opencode,
-  or Codex. The [coding agents guide](/guides/coding-agents) lists the ACP adapter
-  for each. It becomes the `acp` delegate the board dispatches to (step 2) — and
-  the Configure step **refuses to create the PM until one is picked**.
-- **`br`** — the [beads-rust](https://github.com/Dicklesworthstone/beads_rust) CLI
-  the board is built on: `cargo install beads_rust`. It is *not* the Homebrew
-  `bd`; the board checks `br` (or whatever `BR_BIN` names) at register time and
-  on every loop tick and reports *"beads CLI 'br' not found on PATH — install
-  beads-rust (`cargo install beads_rust`), not the homebrew `bd`, and restart (or
-  set BR_BIN); the board is paused until then"* when it's missing.
-- **`git` and `gh`**, authenticated for the target repo — the loop pushes
-  branches with `git` and opens (and, with `auto_merge`, merges) PRs with
-  `gh pr create`. Run `gh auth login` on the host; the GitHub rail resolves auth
-  in this order: the plugin's `token` secret (a *Settings ▸ GitHub* field,
-  github-plugin ≥ 0.6.0) wins; otherwise `gh`'s own precedence applies —
-  `GH_TOKEN`, then `GITHUB_TOKEN`, then the `gh auth login` keyring.
+- An authenticated coding CLI and its ACP adapter; see [Coding agents](/guides/coding-agents).
+- The `br` beads-rust CLI used by the project board.
+- `git` and `gh`, authenticated for the target repository (`gh auth login`).
 
-All three must be on the PATH *of the protoAgent process*. The desktop build
-hands its bundled server your **login-shell PATH**, so Homebrew, cargo, nvm, and
-Volta installs resolve out of the box; a `launchd` autostart, a systemd unit, or
-an unusual shell setup only sees the minimal system PATH — there, register the
-coder with an **absolute** `command` path and put `~/.cargo/bin` on the
-service's PATH ([details](/guides/coding-agents#configure-an-acp-delegate)).
+All binaries must be on the server process's PATH. For a service with a restricted
+PATH, use absolute command paths and include the directory containing `br`.
+The desktop server inherits the login-shell PATH.
 
-**What the console shows when one is missing.** The coder dropdown in the
-Configure step reads *No coding (acp) delegates configured*, and the create is
-refused until you register one. A missing `br` shows up on the **Board** view:
-the setup card's *Underlying error* line while the board is unbound, a red
-*Could not load the board* callout once it is — either way the exact `br`
-message above, never a blank panel. An unauthenticated `gh` fails at the first
-`gh pr create` — the error lands in the feature's attempt history, and the card
-blocks once its retry budget is spent. Core ≥ 0.146 (#2977) adds the seam that
-lifts all three into the operator **warning banner** (the same `warnings[]`
-that carries the capability-contract notice): a plugin calls
-`registry.report_setup_gap(key, message)` and the banner reads
-*"Project Board: beads CLI 'br' not found on PATH …"* until the gap clears — live,
-no restart. The releases the archetype pins (projectBoard ≥ 0.42.0, github-plugin
-≥ 0.6.0) both report through it — the board's *setup preflight* keys `br` /
-`gh` / `coder` / `repo`, and **pauses the loop** on `br` / `coder` / `repo`
-with the reason instead of ticking into errors, resuming by itself once the
-gap clears; the GitHub rail's status probe keys `gh` / `auth`. On a core older
-than 0.146 the seam is a no-op and the Board view is where the message lands.
+## 1. Register and test a coder {#_2-wire-a-coder}
 
-You also need:
+1. On the host, open **Settings → Delegates** and add an **acp** coding delegate.
+   Use the adapter command documented for your CLI; Claude Code and Codex need
+   their ACP adapters.
+2. Set the working directory to the target checkout and choose the permission
+   policy. Use **Test** to verify the command starts and speaks ACP.
+3. Keep the delegate's name for the PM's Configure step below.
 
-- A running protoAgent fork ([fork the template](/guides/fork-the-template)) and
-  a repository you want it to grow — usually that same fork.
-- CI on the target repo that can genuinely fail. The pipeline's safety is its
-  gates (step 5); a repo with no failing checks has no gates.
+You can also ask the host agent to propose a delegate. Its `propose_delegate`
+tool probes the entry and asks for approval before registration. See
+[Delegate setup](/guides/delegates#let-the-agent-propose-one-propose-delegate).
 
-The shape you're building:
+The board owns each feature's worktree, branch, commit, push, and PR. Its coder
+edits files and runs tests. For delegation outside the board, see
+[Managed git](/guides/coding-agents#managed-git-the-framework-owns-branch-commit-push-pr-adr-0076).
 
-```
-you (operator)
- └─ project-manager agent      reads the repo, curates briefs — file tools read-only
-     └─ project board           features: spec, acceptance criteria, files, state
-         └─ coder delegates     ACP coding agents, one disposable worktree each
-             └─ pull requests   the gates decide the merge, not anyone's confidence
-```
+## 2. Create the PM {#_1-stand-up-the-pm}
 
-You describe outcomes. The PM turns them into board features. The board's loop
-dispatches each feature to a coding agent in a disposable git worktree, opens the
-PR, and walks it through review. Code reaches the repo through exactly one door.
+Open **Settings → Fleet → New agent** and choose **Project Manager** under
+**Advanced**. Review the bundle, then fill in Configure:
 
-## 1. Stand up the PM
+| Field | Value |
+| --- | --- |
+| Repo this board manages | Absolute path to the checkout (required) |
+| Coder delegate | The tested ACP delegate (required) |
+| GitHub repo (`owner/name`) | The target GitHub repository |
+| Start the build loop now | Leave off until setup is verified |
+| Merge a PR yourself once review + CI are green | Enabled by default; disable to require a human merge |
 
-Pick **Project Manager** in the new-agent picker (under the *Advanced* toggle —
-it needs a repo and a coder, so it isn't a one-click archetype). The picker
-installs the [project-manager-archetype](https://github.com/protoLabsAI/project-manager-archetype)
-bundle — the project board, a GitHub rail with write on, a browser for
-verification, the review gate's workflow runner, and the friction ledger — seeds
-the `project-manager` soul preset, and then **asks** for the five things the
-bundle can't guess, as a Configure step (archetype ≥ v0.5.0):
+Creation requires both the repo and coder. If the coder list is empty, return to
+step 1. A fleet-shared delegate remains shared; an agent-scoped delegate is copied
+into the member with its credentials. Later host edits do not update that copy.
+The repo input registers a managed project; once projects are configured, they
+form the filesystem boundary. See [Bundle Configure contracts](/guides/bundles#the-manifest).
 
-| Configure field | What it sets | Required |
-|---|---|---|
-| Repo this board manages | `project_board.repo` — absolute path to the git checkout | **yes** |
-| Coder delegate | `project_board.coder` — a dropdown of the host's registered **`acp`** delegates (a2a peers and model endpoints are filtered out — they can't take a build) | **yes** |
-| GitHub repo (`owner/name`) | `github.default_repo` — where issues and PRs go | no |
-| Start the build loop now | `project_board.loop_enabled` — ships **off** until the two above are real | no |
-| Merge a PR yourself once review + CI are green | `project_board.auto_merge` — ships **on**; off means a human merges every PR (step 3) | no |
+Open the new PM's console. Confirm that:
 
-**The two required fields are a hard gate** (core ≥ 0.146, #2977). A create
-with either blank is refused — `400`, naming the field — and the half-made
-workspace is removed so a retry doesn't collide. The Setup Wizard's install onto
-the host itself refuses the same way, at *activate*: the plugins stay installed
-and re-running Configure with the answer activates them. There is no "create it
-anyway and fix it in Settings": a PM that boots green with no coder is exactly
-the failure this guards against.
+- Runtime status has no unresolved setup or missing-capability warnings.
+- The **Board** view names the expected repo and loads without a `br` error.
+  The plugin initializes a board on first use if needed.
+- **Settings → Capabilities → Tools** includes `github_create_issue`.
+- The selected delegate tests successfully from the PM.
 
-If the coder dropdown says *No coding (acp) delegates configured*, that's
-honest: coding delegates are host-installed binaries, and the wizard can't
-conjure one. Register one first (step 2 — Settings ▸ Delegates, or a
-`propose_delegate` from any running agent), then come back and pick it.
-
-**What the create does with your answers** (core ≥ 0.146, #2977) — nothing
-here is written by hand any more:
-
-- The picked coder is **copied into the member's own delegate registry** — its
-  entry *and* its secrets — because a member resolves delegates from its own
-  config ([ADR 0025](/adr/0025-unified-delegate-registry-and-panel)), not the
-  host's. Before #2977 only the name travelled, and the first dispatch failed
-  *not found*. It's a one-time **snapshot**: a later host edit (a rotated key,
-  a new `command`) doesn't propagate — re-edit the member's delegate. A picked
-  name the host doesn't actually have refuses the create too.
-- The repo path becomes a **managed project**: an
-  [ADR 0095](/adr/0095-managed-projects-registry) `projects:` entry (name = the
-  checkout's directory, `github: owner/name` parsed from its `origin` remote,
-  read-only unless `onboarding.write_default` says otherwise) that the PM's
-  file tools, the GitHub rail's repo picker, and the board all read. When you
-  haven't configured `onboarding:` at all *and* a GitHub remote was found, it
-  also enables onboarding scoped to **exactly that repo** — rooted at the
-  checkout's parent with `allow: [github.com/<owner>/<name>]` — so
-  `onboard_project` resolves the typed repo and nothing wider is clonable until
-  you widen the allowlist (no remote → registered only, onboarding untouched).
-  If the agent later needs a local folder *outside* that root (a sibling
-  checkout you point it at), it doesn't refuse: you get an in-chat approval
-  card for that one folder — **Allow read-only / Allow read-write / Deny** —
-  and the root stays the boundary for everything else
-  ([`onboarding.approve_outside_root`](/reference/configuration#onboarding)).
-  The same card appears on an agent with no onboarding root at all, so a stock
-  install can still be pointed at a checkout you already have — approving
-  registers only that folder.
-  The canonical wording, including the fence consequence — once `projects:` is
-  non-empty it *is* the filesystem fence — is in the
-  [bundles guide](/guides/bundles#the-manifest). This rides a `project: true`
-  flag on the bundle's repo input — archetype ≥ v0.6.0 sets it (v0.5.0 predates
-  the flag: there, the board still binds through `project_board.repo`, but the
-  file tools and the GitHub picker only see the repo if you add the `projects:`
-  entry yourself — [reference](/reference/configuration#projects)).
-
-The CLI answers the same Configure step with `--input` (core ≥ 0.146, #2977):
-
-```bash
-python -m server workspace new pm \
-  --bundle https://github.com/protoLabsAI/project-manager-archetype \
-  --input project_board.repo=/Users/you/dev/my-agent \
-  --input project_board.coder=claude-code \
-  --input github.default_repo=you/my-agent \
-  --soul config/soul-presets/project-manager.md
-```
-
-Each `--input KEY=VALUE` answers one of the bundle's `config_inputs` prompts —
-the required ones included, so a create that skips `project_board.repo` or
-`project_board.coder` is refused with the same message as the picker
-(*"the bundle needs these Configure answers before the agent can work: …"*),
-and a malformed `--input` (no `=`) is a usage error. The `type: delegate` answer
-is copied from the **host** config, because the CLI runs inside the host — but
-the CLI does **not** carry the host model over, so set the member's `model` (or
-run it with `--from`) before it can chat. `--soul FILE` writes the persona the
-picker would have seeded; **without it the workspace has no persona** — a PM
-with the bundle's tools and a blank `SOUL.md` — and the CLI never records the
-archetype's capability contract either way. The API is the third door, with the
-exact body the picker sends:
-
-```bash
-curl -s -X POST localhost:7870/api/fleet -H 'content-type: application/json' -d '{
-  "name": "pm",
-  "bundle": "https://github.com/protoLabsAI/project-manager-archetype",
-  "soul": "<contents of config/soul-presets/project-manager.md>",
-  "requires_tools": ["github_create_issue"],
-  "config_inputs": {
-    "project_board.repo":  "/Users/you/dev/my-agent",
-    "project_board.coder": "claude-code",
-    "github.default_repo": "you/my-agent",
-    "project_board.loop_enabled": false,
-    "project_board.auto_merge":   true
-  }
-}'
-```
-
-For reference, this is what those answers (plus the bundle's seeded defaults)
-leave in the member's `langgraph-config.yaml` — editable any time in Settings:
-
-```yaml
-project_board:
-  coder: claude-code         # the acp delegate the loop dispatches (step 2)
-  repo: /Users/you/dev/my-agent   # the checkout this PM owns
-  base_branch: main
-  loop_enabled: false        # the background puller: ready → worktree → coder → PR — flip once the coder probes green
-  max_concurrent: 1          # raise once the repo parallelizes cleanly
-  local_gate_cmd: "auto"     # the pre-PR gate — see step 5
-  auto_merge: true           # the loop merges a reviewed, green PR itself — see step 3
-github:
-  write: true                # seeded by the bundle — the PM files issues and reviews PRs
-  default_repo: you/my-agent
-delegates:
-  - { name: claude-code, type: acp, command: /opt/homebrew/bin/claude-agent-acp, workdir: /Users/you/dev/my-agent }   # copied from the host
-projects:
-  - { name: my-agent, path: /Users/you/dev/my-agent, github: you/my-agent, write: false }   # registered from the repo input
-onboarding: { enabled: true, root: /Users/you/dev, allow: ["github.com/you/my-agent"] }   # seeded only when you had no onboarding: section AND a GitHub remote was found
-```
-
-One PM, one repo. An agent that sits above several PMs is the Portfolio Manager —
-a different archetype, over A2A ([portfolio](/guides/portfolio)).
-
-**What a clean first boot looks like.** Operator status shows no warnings. A
-*capability contract* banner means the archetype declared a tool — for the PM,
-`github_create_issue` — that didn't bind; the one way to get it today is
-`github.write: false`, which the bundle seeds true. The banner fires on **both
-doors**: a fleet member records the contract on its `workspace.yaml` at create,
-and a PM the Setup Wizard installs onto the host itself records it in the host's
-`config/archetype-contract.yaml` (next to the setup marker, gitignored like it) — so either way, a quiet
-status means the tool bound. To double-check, look for `github_create_issue`
-under Settings ▸ Capabilities ▸ Tools. The **Board** view shows a setup card
-naming the bound repo, not a beads error; if the repo has never had a board,
-the plugin runs `br init` there on first use.
-
-> **Why the PM can't edit files.** Its file tools are read-only by design — a PM
-> that can edit files can ship unreviewed changes around every gate below, so the
-> archetype removes the capability instead of asking the model to resist it. The
-> preset also names the tell: when the PM wants to edit a file, the feature was
-> under-specified. Fix the brief, not the file.
-
-## 2. Wire a coder
-
-Each coder is an **`acp` delegate** — a CLI coding agent driven over the Agent
-Client Protocol ([ADR 0024](/adr/0024-spawn-cli-coding-agents-acp)) through the
-delegate registry ([ADR 0025](/adr/0025-unified-delegate-registry-and-panel)).
-Declare one per binary you want available:
-
-```yaml
-delegates:
-  - { name: proto,       type: acp, command: proto,       args: ["--acp"], workdir: ~/dev/my-agent, permissions: allowlist }
-  - { name: claude-code, type: acp, command: claude-code, args: [],        workdir: ~/dev/my-agent, permissions: allowlist }
-  - { name: opencode,    type: acp, command: opencode,    args: ["acp"],   workdir: ~/dev/my-agent, permissions: allowlist }
-```
-
-Two ways to get one onto the host. **Settings ▸ Delegates** registers it by hand.
-Or ask any running agent — the PM itself, once it exists, or the host agent
-before that: *"register Claude Code as our coder"* — its `propose_delegate`
-tool validates and probes the entry, then **parks for your approval** with the
-command path front and center; nothing registers without you (core ≥ 0.145,
-[delegates guide](/guides/delegates#let-the-agent-propose-one-propose-delegate)).
-
-On the **command path**: the desktop build passes its server your login-shell
-PATH, so a bare `claude-agent-acp` / `npx` resolves there. An *absolute* path
-(`/opt/homebrew/bin/claude-agent-acp`) is the safe fallback for every other
-launch — a `launchd` autostart, a Linux service, a shell whose PATH the desktop
-shim didn't capture — and it passes the probe either way
-([coding agents ▸ PATH](/guides/coding-agents#configure-an-acp-delegate)).
-Remember the Configure step copies this entry into the new member verbatim, so
-fix the path on the host *before* you create the PM.
-
-Before going further, open the delegates panel and hit **Test** on the delegate
-you named in `project_board.coder` — it must probe green. The
-[coding agents guide](/guides/coding-agents) covers what this guide won't repeat:
-adapters for agents without native ACP (Claude Code via `claude-agent-acp`, Codex
-via `codex-acp`), permission postures, and containerized setups.
-
-One board-specific rule to internalize now: **the loop owns git.** Per feature it
-cuts a disposable worktree off `origin/<base_branch>`, scopes the dispatch to it,
-then commits, pushes, and opens the PR itself. The coder is told to edit files
-and run tests — nothing else. (For coders you drive *directly* with
-`delegate_to`, outside the board, `manage_git: true` gives you the same
-framework-owned lifecycle —
-[Managed git](/guides/coding-agents#managed-git-the-framework-owns-branch-commit-push-pr-adr-0076).)
+The PM's file tools are read-only; implementation goes through the coder and PR
+gates. To create a PM from a terminal, see [Fleet workspace options](/guides/fleet#workspaces-—-a-named-isolated-agent)
+and supply the bundle's required inputs. Workspace creation also needs an explicit
+persona and model setup; the app performs those steps for you.
 
 ## 3. Ship your first feature
 

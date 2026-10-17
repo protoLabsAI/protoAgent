@@ -1,6 +1,7 @@
 # Fork the template
 
-Same checklist as `TEMPLATE.md` in the repo, kept in sync. Use this when you've forked before and don't need the tutorial walkthrough — just the list.
+This is the canonical fork checklist; `TEMPLATE.md` points here. For a full
+walkthrough, see [Customize and deploy](/guides/customize-and-deploy).
 
 > **Re-sync is the design goal.** Everything below customizes via **config,
 > SOUL.md, plugins, and env** — *not* by editing core files. The fewer tracked

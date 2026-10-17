@@ -16,6 +16,14 @@ from the published docs site** (`srcExclude: ["dev/**"]` in
 | `HANDOFF.md` (repo root, **gitignored**) | Live local scratchpad for the *current* session. | Just you, this machine |
 | `~/.claude/.../memory/` | The agent's cross-session memory (private, auto-loaded). | The agent |
 
+## Historical work
+
+`archive/` holds completed or superseded plans. Public plan URLs remain short
+pointers to current guides and these records. Dated handoffs and task lists are
+snapshots: an unchecked box is not evidence that work remains. Before resuming,
+check the implementation and the owning issue; record completed work in the snapshot.
+Put current procedures in guides, contracts in reference, and decisions in ADRs.
+
 ## Conventions
 
 - **Handoffs:** `docs/dev/handoffs/YYYY-MM-DD-<slug>.md`. At the end of a work
