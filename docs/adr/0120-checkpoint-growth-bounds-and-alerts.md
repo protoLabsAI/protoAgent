@@ -78,8 +78,8 @@ An audit of the 32 local DBs and the remote fleet found:
 
    The per-thread breakdown is a `length()` aggregate (a header read, not a blob read),
    cached for a minute. `storage.checkpoint_bytes` is unchanged.
-5. **One-time reclaim.** `protoagent checkpoint compact [--workspace <id> | --db
-   <path>] [--keep N] [--apply]` is a **dry run by default**:
+5. **One-time reclaim.** `protoagent checkpoint compact` is a **dry run by default**.
+   Point it at a DB with `--workspace <id>` or `--db <path>`; `--keep N` sets the cap:
    - Without `--apply`, it lists what the root-aware cap would delete, the bytes freed,
      and the expected file size, using SELECT-only queries that are safe on a live DB.
    - `--apply` trims, GCs blobs and reclaims.

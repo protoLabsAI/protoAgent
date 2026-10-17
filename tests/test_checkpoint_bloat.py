@@ -238,6 +238,17 @@ def test_chat_delete_takes_the_threads_media_too(tmp_path):
     assert _rows(db, "checkpoint_blobs", "a2a:s2") == 1
 
 
+def test_cascade_takes_aside_media_and_spares_a_prefix_sharing_chat(tmp_path):
+    db = str(tmp_path / "c.db")
+    for tid in ("a2a:s1", "a2a:s1::aside-9f", "a2a:s1:goal-iter-2", "a2a:s10", "a2a:s10::aside-9f"):
+        _run_turns(db, 1, thread=tid)
+    delete_thread(db, "a2a:s1", cascade=True)
+    for tid in ("a2a:s1", "a2a:s1::aside-9f", "a2a:s1:goal-iter-2"):
+        assert (_rows(db, "checkpoints", tid), _rows(db, "writes", tid), _rows(db, "checkpoint_blobs", tid)) == (0, 0, 0)
+    for tid in ("a2a:s10", "a2a:s10::aside-9f"):
+        assert _rows(db, "checkpoints", tid) and _rows(db, "writes", tid) and _rows(db, "checkpoint_blobs", tid) == 1
+
+
 def test_saver_delete_thread_takes_media(tmp_path):
     db = str(tmp_path / "c.db")
     saver, _ = _run_turns(db, 2)
