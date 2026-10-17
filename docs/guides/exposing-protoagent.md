@@ -13,7 +13,7 @@ at the reverse proxy. Keep the console private. For private remote access, use
 | --- | --- |
 | `/.well-known/agent-card.json` | Allow discovery; review the identity and skills it publishes |
 | `/a2a` | Allow authenticated A2A calls |
-| `/health` | Optionally allow liveness checks |
+| `/healthz`, `/metrics` | Keep readiness and monitoring private |
 | `/v1/*` | Block unless intentionally providing an authenticated OpenAI-compatible API |
 | `/app`, `/api/*`, all other paths | Block; keep operator access private |
 
@@ -27,7 +27,7 @@ and plugin installation.
    interface — never `0.0.0.0` on a public IP. A reverse proxy or tunnel is the only
    thing that reaches it from outside.
 2. **Put a reverse proxy / tunnel in front** (Cloudflare Tunnel, nginx, Caddy, …) and
-   have it forward **only** `/.well-known/agent-card.json`, `/a2a`, and optionally `/health` to the agent.
+   have it forward **only** `/.well-known/agent-card.json` and `/a2a` to the agent.
    **404 everything else** — a catch-all so `/app`, `/api`, `/v1` (unless you deliberately
    want it), and any future route are invisible from the public hostname.
 3. **Require a bearer token.** Set `A2A_AUTH_TOKEN` to a strong secret. protoAgent then
@@ -58,9 +58,6 @@ ingress:
     service: http://agent:7870
   - hostname: agent.example.com
     path: '^/a2a$'
-    service: http://agent:7870
-  - hostname: agent.example.com
-    path: '^/health$'
     service: http://agent:7870
   # Lockdown: everything else on this host 404s — /app + /api never reach the agent.
   - hostname: agent.example.com
@@ -143,7 +140,7 @@ With Caddy running on the same host as the agent, use
 
 ```
 agent.example.com {
-    @public path /a2a /.well-known/agent-card.json /health
+    @public path /a2a /.well-known/agent-card.json
     handle @public {
         reverse_proxy 127.0.0.1:7870
     }
@@ -173,7 +170,7 @@ the app's auth are independent layers, and you want both.
 
 Before sharing the URL, verify the public card advertises the correct origin,
 the unauthenticated A2A call returns `401`, and a token-authenticated call works.
-Check that `/app`, `/api/config`, `/metrics`, `/v1/models`, and an unknown path
+Check that `/app`, `/api/config`, `/healthz`, `/metrics`, `/v1/models`, and an unknown path
 return `404` through the public proxy. Repeat after changing proxy rules. Confirm
 that the underlying agent port cannot bypass the proxy from the public network.
 
