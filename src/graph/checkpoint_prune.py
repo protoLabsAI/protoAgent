@@ -31,6 +31,11 @@ _log = logging.getLogger("protoagent.checkpoint_prune")
 # Thread-id prefix of background (A2A) runs, which get ``background_keep``.
 _BACKGROUND_PREFIX = "a2a:background:"
 
+# Sub-thread suffixes a chat owns, removed with it by ``delete_thread(cascade=True)``:
+# goal-mode iterations (``server/chat.py``) and ephemeral asides (``graph/aside_op.py``).
+_GOAL_ITER_SUFFIX = ":goal-iter-"
+_ASIDE_SUFFIX = "::aside-"
+
 # 100ns intervals between the UUID (Gregorian, 1582-10-15) and Unix epochs.
 _GREGORIAN_OFFSET = 0x01B21DD213814000
 
@@ -99,8 +104,10 @@ def thread_has_checkpoints_before(db_path: str, thread_id: str, before: float | 
 def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int:
     """Delete all checkpoints + writes for a thread. Returns checkpoints removed.
 
-    When ``cascade`` is True, also deletes any sub-threads whose id starts with
-    ``thread_id`` followed by ``:goal-iter-`` (goal-mode iteration checkpoints)."""
+    When ``cascade`` is True, also deletes the sub-threads a chat owns: ids that start
+    with ``thread_id`` followed by ``:goal-iter-`` (goal-mode iteration checkpoints) or
+    ``::aside-`` (a ``/btw`` aside whose own post-answer cleanup failed — ``aside_op``
+    deletes it best-effort, and a miss used to outlive the deleted chat)."""
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA busy_timeout=5000")
     try:
@@ -108,9 +115,9 @@ def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int
             # An exact, case-sensitive prefix match (#3973) — not LIKE, whose ``%`` / ``_``
             # wildcards and ASCII case-folding made deleting ``a_b`` also take
             # ``aXb:goal-iter-*`` and ``chat-1`` take ``CHAT-1:goal-iter-*``.
-            prefix = thread_id + ":goal-iter-"
-            where = "thread_id=? OR substr(thread_id, 1, ?) = ?"
-            args = (thread_id, len(prefix), prefix)
+            goal, aside = thread_id + _GOAL_ITER_SUFFIX, thread_id + _ASIDE_SUFFIX
+            where = "thread_id=? OR substr(thread_id, 1, ?) = ? OR substr(thread_id, 1, ?) = ?"
+            args = (thread_id, len(goal), goal, len(aside), aside)
             n = conn.execute(f"SELECT COUNT(*) FROM checkpoints WHERE {where}", args).fetchone()[0]
             conn.execute(f"DELETE FROM checkpoints WHERE {where}", args)
             conn.execute(f"DELETE FROM writes WHERE {where}", args)

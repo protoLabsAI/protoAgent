@@ -200,6 +200,39 @@ def test_delete_thread_cascade_removes_subthreads(tmp_path):
     assert _count(db, "writes", "a2a:Y") == 1
 
 
+def test_delete_thread_cascade_removes_leaked_aside_subthreads(tmp_path):
+    """A ``/btw`` aside thread (``<tid>::aside-<hex>``) whose own cleanup failed is
+    removed with its chat — before this it outlived the delete (found in a live run of
+    DELETE /api/chat/sessions on an isolated instance). Look-alike ids stay."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("a2a:X",), turns=1)
+    kept = ("a2a:Xaside-1", "a2a:X:aside-1", "a2a:Y::aside-1", "A2A:X::aside-1")
+    conn = sqlite3.connect(db)
+    for i, tid in enumerate(("a2a:X::aside-0a1b2c",) + kept):
+        cid = f"00000000-0000-6000-8000-0000000000{i:02d}"
+        conn.execute(
+            "INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (tid, "", cid, None, "", b"{}", b"{}"),
+        )
+        conn.execute(
+            "INSERT INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (tid, "", cid, "", 0, "", "", b""),
+        )
+    conn.commit()
+    conn.close()
+
+    delete_thread(db, "a2a:X", cascade=True)
+
+    assert _count(db, "checkpoints", "a2a:X") == 0
+    assert _count(db, "checkpoints", "a2a:X::aside-0a1b2c") == 0
+    assert _count(db, "writes", "a2a:X::aside-0a1b2c") == 0
+    for tid in kept:
+        assert _count(db, "checkpoints", tid) == 1, tid
+        assert _count(db, "writes", tid) == 1, tid
+
+
 # ── reclaim() tests ─────────────────────────────────────────────────────────
 
 
