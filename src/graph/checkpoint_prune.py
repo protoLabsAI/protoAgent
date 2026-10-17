@@ -101,6 +101,106 @@ def thread_has_checkpoints_before(db_path: str, thread_id: str, before: float | 
     return False
 
 
+def _is_root(metadata_json: str | None) -> bool:
+    """A checkpoint the thread's OWN graph wrote. ``task()`` subagents inherit the
+    parent's checkpointer and write into the same ``(thread_id, checkpoint_ns)``, tagged
+    with a non-empty ``metadata.parents``; those rows are never what a resume needs."""
+    import json
+
+    if not metadata_json:
+        return True
+    try:
+        return not (json.loads(metadata_json) or {}).get("parents")
+    except (ValueError, TypeError, AttributeError):
+        return True
+
+
+def trim_group(conn: sqlite3.Connection, thread_id: str, checkpoint_ns: str, keep: int) -> int:
+    """Keep the newest ``keep`` ROOT checkpoints of one (thread, ns) and every row newer
+    than the oldest of them (an in-flight subagent's); delete older rows and their writes.
+
+    Streams newest-first and stops at the cutoff, so it reads only a handful of rows'
+    metadata however long the thread already is (``metadata`` sits after the checkpoint
+    blob in the row, so reading it walks the blob's overflow pages). Runs on the caller's
+    connection and transaction; returns checkpoints deleted."""
+    keep = max(1, keep)
+    roots, cutoff = 0, None
+    for cid, md in conn.execute(
+        "SELECT checkpoint_id, CAST(metadata AS TEXT) FROM checkpoints"
+        " WHERE thread_id=? AND checkpoint_ns=? ORDER BY checkpoint_id DESC",
+        (thread_id, checkpoint_ns),
+    ):
+        if _is_root(md):
+            roots += 1
+            if roots == keep:
+                cutoff = cid
+                break
+    if cutoff is None:
+        return 0
+    args = (thread_id, checkpoint_ns, cutoff)
+    conn.execute("DELETE FROM writes WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id<?", args)
+    cur = conn.execute("DELETE FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id<?", args)
+    return cur.rowcount
+
+
+def _has_blob_table(conn: sqlite3.Connection) -> bool:
+    """The media-offload table (ADR 0120) exists only once a current saver opened the DB."""
+    return (
+        conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoint_blobs'").fetchone()
+        is not None
+    )
+
+
+#: The blob GC leaves payloads younger than this alone: the saver commits a payload just
+#: BEFORE the row that references it, and a sweep landing in that gap must not take it.
+BLOB_GC_GRACE_S = 600.0
+
+
+def gc_blobs(db_path: str, *, grace_s: float = BLOB_GC_GRACE_S, now: float | None = None) -> int:
+    """Delete offloaded media payloads no surviving checkpoint or write references.
+
+    Per thread: its remaining rows (few, and small once media is offloaded) are scanned
+    for references; a thread with no rows left references nothing. Payloads stored in
+    the last ``grace_s`` are kept (see ``BLOB_GC_GRACE_S``). Returns blobs removed. The
+    scan + delete are one write transaction, so a row committed mid-scan waits for it.
+
+    Residual case, accepted: a turn that re-adds an image whose payload was already
+    unreferenced (and older than the grace) while a sweep runs can lose it; that block
+    then reads back as a text placeholder, never a broken image."""
+    import time as _time
+
+    cutoff = (now if now is not None else _time.time()) - grace_s
+    from graph.checkpoint_media import REF_BYTES_RE
+
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.execute("PRAGMA busy_timeout=5000")
+    removed = 0
+    try:
+        if not _has_blob_table(conn):
+            return 0
+        conn.execute("BEGIN IMMEDIATE")
+        threads = [r[0] for r in conn.execute("SELECT DISTINCT thread_id FROM checkpoint_blobs")]
+        for tid in threads:
+            live: set[bytes] = set()
+            for (blob,) in conn.execute("SELECT checkpoint FROM checkpoints WHERE thread_id=?", (tid,)):
+                live.update(REF_BYTES_RE.findall(bytes(blob or b"")))
+            for (blob,) in conn.execute("SELECT value FROM writes WHERE thread_id=?", (tid,)):
+                live.update(REF_BYTES_RE.findall(bytes(blob or b"")))
+            have = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT hash FROM checkpoint_blobs WHERE thread_id=? AND created < ?", (tid, cutoff)
+                )
+            ]
+            dead = [(tid, h) for h in have if h.encode() not in live]
+            conn.executemany("DELETE FROM checkpoint_blobs WHERE thread_id=? AND hash=?", dead)
+            removed += len(dead)
+        conn.commit()
+        return removed
+    finally:
+        conn.close()
+
+
 def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int:
     """Delete all checkpoints + writes for a thread. Returns checkpoints removed.
 
@@ -121,10 +221,14 @@ def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int
             n = conn.execute(f"SELECT COUNT(*) FROM checkpoints WHERE {where}", args).fetchone()[0]
             conn.execute(f"DELETE FROM checkpoints WHERE {where}", args)
             conn.execute(f"DELETE FROM writes WHERE {where}", args)
+            if _has_blob_table(conn):
+                conn.execute(f"DELETE FROM checkpoint_blobs WHERE {where}", args)
         else:
             n = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id=?", (thread_id,)).fetchone()[0]
             conn.execute("DELETE FROM checkpoints WHERE thread_id=?", (thread_id,))
             conn.execute("DELETE FROM writes WHERE thread_id=?", (thread_id,))
+            if _has_blob_table(conn):
+                conn.execute("DELETE FROM checkpoint_blobs WHERE thread_id=?", (thread_id,))
         conn.commit()
         return n
     finally:
@@ -166,27 +270,28 @@ def prune_checkpoints(
             aged = [(tid,) for tid, ts in _newest_stamps(conn).items() if ts is not None and ts < cutoff]
             conn.executemany("DELETE FROM checkpoints WHERE thread_id=?", aged)
             conn.executemany("DELETE FROM writes WHERE thread_id=?", aged)
+            if _has_blob_table(conn):
+                conn.executemany("DELETE FROM checkpoint_blobs WHERE thread_id=?", aged)
             conn.commit()
             threads_deleted = len(aged)
 
-        # 2. Per-thread cap — keep the latest N checkpoints per namespace, found in ONE
-        #    windowed query (#3973 — was a query per thread and per namespace). Its own
-        #    transaction: it deletes only the ids it listed, so a turn written meanwhile
-        #    is never among them.
-        #    Background threads get a tighter cap (resume-from-latest only).
+        # 2. Per-thread cap — keep the latest N ROOT checkpoints per namespace (ADR 0120:
+        #    a ``task()`` subagent writes into its parent's thread, so a plain newest-N
+        #    could delete the parent's resumable checkpoint mid-delegation). ONE grouped
+        #    query finds the namespaces over the cap (#3973 — not a query per thread);
+        #    only those are trimmed, newest-first, reading just the rows down to the
+        #    cutoff. Background threads get a tighter cap (resume-from-latest only).
         keep = max(1, keep_per_thread)
         bg_keep = keep if background_keep is None else max(1, background_keep)
-        stale = conn.execute(
-            "SELECT thread_id, checkpoint_ns, checkpoint_id FROM ("
-            "  SELECT thread_id, checkpoint_ns, checkpoint_id, ROW_NUMBER() OVER ("
-            "    PARTITION BY thread_id, checkpoint_ns ORDER BY checkpoint_id DESC) AS rn"
-            "  FROM checkpoints)"
-            " WHERE rn > CASE WHEN substr(thread_id, 1, ?) = ? THEN ? ELSE ? END",
+        over = conn.execute(
+            "SELECT thread_id, checkpoint_ns FROM checkpoints GROUP BY thread_id, checkpoint_ns"
+            " HAVING COUNT(*) > CASE WHEN substr(thread_id, 1, ?) = ? THEN ? ELSE ? END",
             (len(_BACKGROUND_PREFIX), _BACKGROUND_PREFIX, bg_keep, keep),
         ).fetchall()
-        conn.executemany("DELETE FROM checkpoints WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=?", stale)
-        conn.executemany("DELETE FROM writes WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id=?", stale)
-        checkpoints_deleted = len(stale)
+        for tid, ns in over:
+            checkpoints_deleted += trim_group(
+                conn, tid, ns, bg_keep if tid.startswith(_BACKGROUND_PREFIX) else keep
+            )
 
         conn.commit()
     finally:
@@ -247,7 +352,11 @@ def reclaim(db_path: str, *, full_vacuum: bool = False) -> dict[str, int]:
         page_count_before = conn.execute("PRAGMA page_count").fetchone()[0]
 
         if av_mode == 2:  # INCREMENTAL
-            conn.execute("PRAGMA incremental_vacuum")
+            # The pragma frees ONE page per step of its result set: an undrained
+            # ``execute`` handed back a single page per sweep (brandLaunch's log read
+            # ``pages=1`` after deleting 1,988 checkpoints), leaving INCREMENTAL DBs at
+            # 90-99% freelist. ``fetchall`` runs it to completion.
+            conn.execute("PRAGMA incremental_vacuum").fetchall()
         elif full_vacuum:
             # The mode change only takes effect through the VACUUM that follows it —
             # together they migrate the DB, so later reclaims shrink it incrementally.
@@ -271,3 +380,88 @@ def reclaim(db_path: str, *, full_vacuum: bool = False) -> dict[str, int]:
     finally:
         conn.close()
     return result
+
+
+def plan_compaction(db_path: str, *, keep_per_thread: int = 2, background_keep: int = 1, top: int = 10) -> dict:
+    """What :func:`compact` would remove — READ-ONLY (SELECTs only; safe on a live DB).
+
+    Per (thread, ns) over the cap: the same root-aware cutoff :func:`trim_group` uses,
+    then ``length()`` sums of the rows below it (header reads, not blob reads). Returns
+    ``{"file_bytes", "page_size", "page_count", "freelist_pages", "auto_vacuum",
+    "checkpoints_to_delete", "bytes_to_delete", "threads": [...top...],
+    "expected_file_bytes"}``. ``expected_file_bytes`` assumes ``reclaim`` can return
+    the space (auto_vacuum=INCREMENTAL); a NONE DB needs ``protoagent checkpoint
+    migrate`` with the agent stopped."""
+    from graph.checkpoint_health import file_bytes
+
+    keep = max(1, keep_per_thread)
+    bg_keep = max(1, background_keep)
+    conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+        freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
+        auto_vacuum = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+        over = conn.execute(
+            "SELECT thread_id, checkpoint_ns, COUNT(*) FROM checkpoints GROUP BY thread_id, checkpoint_ns"
+            " HAVING COUNT(*) > CASE WHEN substr(thread_id, 1, ?) = ? THEN ? ELSE ? END",
+            (len(_BACKGROUND_PREFIX), _BACKGROUND_PREFIX, bg_keep, keep),
+        ).fetchall()
+        threads = []
+        for tid, ns, total in over:
+            k = bg_keep if tid.startswith(_BACKGROUND_PREFIX) else keep
+            roots, cutoff = 0, None
+            for cid, md in conn.execute(
+                "SELECT checkpoint_id, CAST(metadata AS TEXT) FROM checkpoints"
+                " WHERE thread_id=? AND checkpoint_ns=? ORDER BY checkpoint_id DESC",
+                (tid, ns),
+            ):
+                if _is_root(md):
+                    roots += 1
+                    if roots == k:
+                        cutoff = cid
+                        break
+            if cutoff is None:
+                continue
+            args = (tid, ns, cutoff)
+            n, b = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(length(checkpoint)) + SUM(length(metadata)), 0) FROM checkpoints"
+                " WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id<?",
+                args,
+            ).fetchone()
+            wb = conn.execute(
+                "SELECT COALESCE(SUM(length(value)), 0) FROM writes"
+                " WHERE thread_id=? AND checkpoint_ns=? AND checkpoint_id<?",
+                args,
+            ).fetchone()[0]
+            if n:
+                threads.append({"thread_id": tid, "ns": ns, "checkpoints": total, "delete": n, "bytes": b + wb})
+    finally:
+        conn.close()
+    threads.sort(key=lambda t: t["bytes"], reverse=True)
+    to_delete = sum(t["bytes"] for t in threads)
+    size = file_bytes(db_path)
+    return {
+        "file_bytes": size,
+        "page_size": page_size,
+        "page_count": page_count,
+        "freelist_pages": freelist,
+        "auto_vacuum": auto_vacuum,
+        "checkpoints_to_delete": sum(t["delete"] for t in threads),
+        "bytes_to_delete": to_delete,
+        "threads": threads[:top],
+        "expected_file_bytes": max(0, size - to_delete - freelist * page_size),
+    }
+
+
+def compact(db_path: str, *, keep_per_thread: int = 2, background_keep: int = 1) -> dict:
+    """Apply the plan: root-aware per-thread cap (no age TTL), drop unreferenced
+    offloaded media, then :func:`reclaim` (WAL truncate + drained incremental vacuum).
+
+    Safe alongside a running agent — the same deletes the periodic sweep makes, in
+    short transactions, and an incremental (not full) vacuum — but the vacuum step
+    rewrites the pages it moves through the WAL, so prefer a quiet moment."""
+    res = prune_checkpoints(db_path, keep_per_thread=keep_per_thread, background_keep=background_keep)
+    res["blobs_deleted"] = gc_blobs(db_path, grace_s=0)
+    res.update(reclaim(db_path))
+    return res

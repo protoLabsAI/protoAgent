@@ -113,6 +113,17 @@ the sweep keeps the latest `keep_per_thread` per session and drops whole session
 idle past `max_age_days` (age decoded from the checkpoint's UUIDv6). The DB runs
 in WAL mode so the sweep coexists with live writes.
 
+The sweep alone can't bound one long turn. Every super-step re-serializes the
+whole state, so a screenshot-heavy review once wrote 87 GB in five hours between
+sweeps. Two write-path bounds now handle that ([ADR 0120](/adr/0120-checkpoint-growth-bounds-and-alerts)):
+
+- `prune_on_write` applies the cap after each checkpoint write.
+- `offload_media` stores each image once per session instead of in every checkpoint.
+
+When the DB or one session passes `alert_db_mb` / `alert_thread_mb`, the console
+banners it. To reclaim an already-bloated DB, run `protoagent checkpoint compact`, which
+is a dry run until you add `--apply`.
+
 **Harvest to knowledge** (`harvest_enabled`, on): when the pruner ages a session
 out, it's first summarized into the knowledge base (`domain: conversation`, by
 the cheap aux model) and *then* its raw checkpoints are dropped. So past

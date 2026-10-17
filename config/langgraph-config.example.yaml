@@ -320,6 +320,13 @@ checkpoint:
   # the disk. The first start after upgrading migrates it once (a few seconds per
   # bloated DB) when it's worth it and the disk has room. false = leave it alone.
   # vacuum_legacy_on_start: true
+  # Write-path growth bounds (ADR 0120): apply keep_per_thread after every checkpoint
+  # write, and store large images in messages once per session instead of in every
+  # checkpoint. Alerts banner the console when the DB (or one session) passes a size.
+  # prune_on_write: true
+  # offload_media: true
+  # alert_db_mb: 5120        # 0 = no alert
+  # alert_thread_mb: 1024    # 0 = no alert
 
 # Media output store (#1929) — binary artifacts (images/audio/video) plugin
 # tools persist via registry.save_media() and the core /media/<file> route

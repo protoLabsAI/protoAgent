@@ -1230,6 +1230,21 @@ class LangGraphConfig:
     # before anything opens it, when the freelist is large enough to matter and the disk
     # has room (graph/checkpoint_migrate.py). Without it such a DB never shrinks.
     checkpoint_vacuum_legacy_on_start: bool = True
+    # Write-path growth bounds (ADR 0120). The 6-hourly prune above can't keep up with
+    # one long turn: every super-step re-serializes the whole state, images included
+    # (brandLaunch wrote 87 GB in five hours between sweeps). ``prune_on_write`` applies
+    # ``keep_per_thread`` / ``background_keep`` after every checkpoint write (root-aware:
+    # an in-flight subagent's rows and the parent's resumable checkpoint survive).
+    # ``offload_media`` stores large base64 / data-URI payloads in message content once
+    # per thread (``checkpoint_blobs``) instead of inside every checkpoint row; reads
+    # restore them, so the model sees identical messages.
+    checkpoint_prune_on_write: bool = True
+    checkpoint_offload_media: bool = True
+    # Size alerts (ADR 0120) — runtime-status banner (and the hub's, for local fleet
+    # members) when the DB file passes ``alert_db_mb`` or one thread passes
+    # ``alert_thread_mb``. 0 = off.
+    checkpoint_alert_db_mb: int = 5120
+    checkpoint_alert_thread_mb: int = 1024
     # Semantic facts (ADR 0021): on retirement, also extract durable facts from
     # the conversation (aux model) and consolidate them into the store as
     # finding_type="fact". Rides the harvest pass; needs harvest enabled.
@@ -2115,6 +2130,14 @@ class LangGraphConfig:
             checkpoint_vacuum=data.get("checkpoint", {}).get("vacuum", cls.checkpoint_vacuum),
             checkpoint_vacuum_legacy_on_start=data.get("checkpoint", {}).get(
                 "vacuum_legacy_on_start", cls.checkpoint_vacuum_legacy_on_start
+            ),
+            checkpoint_prune_on_write=data.get("checkpoint", {}).get(
+                "prune_on_write", cls.checkpoint_prune_on_write
+            ),
+            checkpoint_offload_media=data.get("checkpoint", {}).get("offload_media", cls.checkpoint_offload_media),
+            checkpoint_alert_db_mb=data.get("checkpoint", {}).get("alert_db_mb", cls.checkpoint_alert_db_mb),
+            checkpoint_alert_thread_mb=data.get("checkpoint", {}).get(
+                "alert_thread_mb", cls.checkpoint_alert_thread_mb
             ),
             knowledge_facts=data.get("knowledge", {}).get("facts", cls.knowledge_facts),
             workflow_dir=data.get("workflows", {}).get("dir", cls.workflow_dir),

@@ -66,7 +66,7 @@ def _build_checkpointer(config):
 
         return MemorySaver()
     try:
-        from graph.checkpointer import build_sqlite_checkpointer
+        from graph.checkpointer import build_sqlite_checkpointer, configure_saver
 
         path = _resolve_checkpoint_db(config.checkpoint_db_path)
         if getattr(config, "checkpoint_vacuum_legacy_on_start", True):
@@ -77,6 +77,7 @@ def _build_checkpointer(config):
 
             migrate_legacy_auto_vacuum(path)
         saver = build_sqlite_checkpointer(path)
+        configure_saver(saver, config)
         STATE.checkpoint_path = path
         log.info("[checkpointer] persistent chat history at %s", path)
         return saver
