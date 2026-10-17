@@ -290,3 +290,68 @@ def test_gate_public_opt_in_admits_unsigned(_bearer_guard, monkeypatch):
     assert c.get("/media/f.png").status_code == 200
     # Internals never become public — falls through to bearer, which is absent.
     assert c.get("/media/.signing-key").status_code == 401
+
+
+# ── the desktop's "open in new tab" link (#4309) ─────────────────────────────
+
+
+def test_open_link_reminted_short_lived_from_a_console_link():
+    ref = media.save_media(b"png", "image/png")
+    now = 1_800_000_000
+    link = media.open_link(ref.url, now=now)
+    name = ref.path.name
+    exp = str(now + media.OPEN_LINK_TTL_S)
+    assert link == f"/media/{name}?exp={exp}&sig={media.sign_name(name, exp)}"
+    # It verifies until its expiry, then the gate answers expired — never a permanent link.
+    assert media.check_access(f"/media/{name}", media.sign_name(name, exp), exp, now=now + 1) == "ok"
+    assert media.check_access(f"/media/{name}", media.sign_name(name, exp), exp, now=now + 901) == "expired"
+
+
+def test_open_link_accepts_absolute_and_fleet_prefixed_links():
+    ref = media.save_media(b"png", "image/png")
+    for url in (f"http://127.0.0.1:7870{ref.url}", f"http://127.0.0.1:7870/agents/roxy-1a2b{ref.url}"):
+        assert media.open_link(url) is not None, url
+
+
+def test_open_link_refuses_unsigned_forged_absent_and_expired():
+    ref = media.save_media(b"png", "image/png")
+    name = ref.path.name
+    assert media.open_link(f"/media/{name}") is None  # no signature: can't conjure a link
+    assert media.open_link(f"/media/{name}?sig=bogus") is None
+    assert media.open_link(f"/media/missing.png?sig={media.sign_name('missing.png')}") is None
+    assert media.open_link(f"/media/.signing-key?sig={media.sign_name('.signing-key')}") is None
+    assert media.open_link("/api/x?sig=f") is None
+    assert media.open_link("") is None
+    exp = "1000"
+    assert media.open_link(f"/media/{name}?exp={exp}&sig={media.sign_name(name, exp)}", now=2000) is None
+
+
+def test_open_link_route_returns_the_short_lived_link():
+    ref = media.save_media(b"png", "image/png")
+    c = _route_client()
+    r = c.post("/api/media/open-link", json={"url": ref.url})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["expires_in"] == media.OPEN_LINK_TTL_S
+    assert body["url"].startswith(f"/media/{ref.path.name}?exp=")
+    # The minted link serves the file.
+    assert c.get(body["url"]).content == b"png"
+    assert c.post("/api/media/open-link", json={"url": f"/media/{ref.path.name}"}).status_code == 404
+    assert c.post("/api/media/open-link", json={}).status_code == 404
+
+
+def test_open_link_route_is_behind_the_bearer_gate(_bearer_guard):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from server.media import register_media_routes
+
+    ref = media.save_media(b"png", "image/png")
+    app = FastAPI()
+    register_media_routes(app)
+    app.add_middleware(_bearer_guard.A2AAuthMiddleware)
+    c = TestClient(app)
+    # A signed media link alone does not unlock the minting route — only the bearer does.
+    assert c.post("/api/media/open-link", json={"url": ref.url}).status_code == 401
+    ok = c.post("/api/media/open-link", json={"url": ref.url}, headers={"Authorization": "Bearer secret-token"})
+    assert ok.status_code == 200

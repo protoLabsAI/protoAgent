@@ -256,6 +256,41 @@ def check_access(path: str, sig: str, exp: str = "", *, now: float | None = None
     return "ok" if int(exp) > (now if now is not None else time.time()) else "expired"
 
 
+# Lifetime of a link minted to open one file OUTSIDE the console — the desktop shell's "open in
+# new tab", which hands it to the system browser. Long enough to load and look; short enough
+# that the browser's history never keeps a working link (the console's own is permanent).
+OPEN_LINK_TTL_S = 15 * 60
+
+
+def open_link(url: str, *, now: float | None = None) -> str | None:
+    """A short-lived ``/media/<name>?exp=…&sig=…`` for the store file a console media link
+    names — the link the desktop shell opens in the system browser instead of the console's
+    permanent one. ``url`` may be relative or absolute; only its ``/media/<name>`` path and
+    ``sig``/``exp`` are read. None unless it names a servable, EXISTING store file and carries
+    a valid, unexpired signature: the caller is already bearer-authed, but it can only re-mint
+    a link it was handed, never conjure one for an arbitrary name."""
+    from urllib.parse import parse_qs, urlsplit
+
+    try:
+        parts = urlsplit(str(url or ""))
+    except ValueError:
+        return None
+    path = parts.path
+    idx = path.rfind(MEDIA_URL_PREFIX)
+    if idx < 0:
+        return None
+    rel = path[idx:]
+    name = rel[len(MEDIA_URL_PREFIX) :]
+    if not _NAME_RE.match(name) or resolve_media(name) is None:
+        return None
+    q = parse_qs(parts.query)
+    sig = (q.get("sig") or [""])[0]
+    exp = (q.get("exp") or [""])[0]
+    if check_access(rel, sig, exp, now=now) != "ok":
+        return None
+    return media_url(name, ttl_s=OPEN_LINK_TTL_S, now=now)
+
+
 def request_allowed(path: str, sig: str, exp: str = "") -> bool:
     """``check_access(...) == "ok"`` — kept for callers of the pre-expiry seam."""
     return check_access(path, sig, exp) == "ok"
