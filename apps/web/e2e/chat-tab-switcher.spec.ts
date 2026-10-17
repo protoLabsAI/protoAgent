@@ -77,6 +77,59 @@ test("collapsed: every switcher row shows its session status dot", async ({ page
   await expect(rows.nth(1).locator(".session-dot")).toBeVisible();
 });
 
+test("collapsed: keyboard selection and Escape restore focus to the accessible trigger", async ({ page }) => {
+  await twoChats(page);
+  await collapseTabBar(page);
+
+  const switcher = page.locator(".pl-tabbar__switcher");
+  const menu = page.getByRole("menu");
+  const alpha = page.getByRole("menuitemradio", { name: "alpha session" });
+  const beta = page.getByRole("menuitemradio", { name: "beta session" });
+  await expect(switcher).toHaveAccessibleName(/\S/);
+  await expect(switcher).toHaveAttribute("aria-haspopup", "menu");
+  await expect(switcher).toHaveAttribute("aria-expanded", "false");
+
+  await switcher.focus();
+  await switcher.press("Enter");
+  await expect(menu).toBeVisible();
+  await expect(switcher).toHaveAttribute("aria-expanded", "true");
+  await expect(alpha).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(beta).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(alpha).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  await expect(page.locator(".pl-tabbar__switcher-label")).toHaveText("alpha session");
+  await expect(page.locator(".pl-tabbar__tab--active .pl-tabbar__label")).toHaveText("alpha session");
+  await expect(menu).toBeHidden();
+  await expect(switcher).toHaveAttribute("aria-expanded", "false");
+  await expect(switcher).toBeFocused();
+
+  await page.keyboard.press("ArrowDown");
+  await expect(menu).toBeVisible();
+  await expect(switcher).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(menu).toBeHidden();
+  await expect(switcher).toHaveAttribute("aria-expanded", "false");
+  await expect(switcher).toBeFocused();
+});
+
+test("collapsed: the visible add button creates and activates a third session", async ({ page }) => {
+  await twoChats(page);
+  await collapseTabBar(page);
+
+  const add = page.locator(".pl-tabbar__add:visible");
+  await expect(add).toBeVisible();
+  await add.click();
+  await expect(page.locator(".pl-tabbar__switcher-label")).toHaveText("New chat");
+  await expect(page.locator(".pl-tabbar__tab--active .pl-tabbar__label")).toHaveText("New chat");
+
+  await page.locator(".pl-tabbar__switcher").click();
+  await expect(page.getByRole("menuitemradio")).toHaveCount(3);
+  await expect(page.getByRole("menuitemradio", { name: "New chat", exact: true })).toHaveAttribute("aria-checked", "true");
+});
+
 test("wide: the full tab strip renders a tab per session", async ({ page }) => {
   await twoChats(page);
   // At the default 1200px desktop width the strip is wide: a visible tab per session, no
