@@ -26,15 +26,26 @@ fires. Goal mode is available by default; its tuning lives in **Settings → Beh
 
 ## How it works
 
-1. You set a goal for a session (`/goal …`). Nothing else changes — the next message runs normally.
-2. When the agent produces a final answer (no more tool calls), the controller runs the goal's **verifier**.
-3. **Met** → the goal is marked `achieved` and the run ends.
-4. **Not met** → the agent records its running plan with the `update_goal_plan` tool, then the controller re-invokes it on the same thread (history preserved) with a continuation prompt that includes the verifier's reason + evidence and the current plan.
-5. This repeats until met, the **iteration budget** (`goal.max_iterations`) is spent (`exhausted`), the verifier returns the **same evidence too many times** (`goal.no_progress_limit` → `unachievable`), or the agent itself calls the `abandon_goal` tool with a reason (`unachievable`).
+After a turn, the verifier decides whether to finish or continue. Continuations
+include its reason and evidence plus the saved plan. Each session has one goal.
 
-The loop wraps graph invocation in `server/goal_loop.py`, shared by both turn drivers (the A2A streaming path in `server/chat.py` and the non-streaming chat path in `server/turn_sync.py`); the graph itself is unchanged.
+| Result | Status or next action |
+| --- | --- |
+| Verifier passes | `achieved` |
+| Iteration budget spent | `exhausted` |
+| Unchanged progress reaches the no-progress limit | `unachievable` |
+| Agent calls `abandon_goal` | `unachievable`, unless the verifier finds it already achieved |
+| Pending watch or scheduled job targets this session | Pause automatic continuation; remain `active` |
+| Per-turn model-round cap reached | Verify the turn, then pause if still unmet; remain `active` |
 
-**Yield instead of spin (ADR 0079).** If the agent's next step waits on async or delegated work — a build, a peer agent, CI, a review — it doesn't have to burn iterations polling. It hands off to a [watch](/guides/watches) or a [schedule](/guides/scheduler) and ends the turn; the drive **pauses** (the goal stays `active`, iterations untouched) and **resumes automatically** when the trigger fires (`⏸ goal paused — handed off to a watch/schedule`). This is what lets a long, delegated goal span time instead of exhausting its budget waiting. Goals, tasks, watches, and schedules compose into one OODA loop over the agent's durable working-state — see [ADR 0079](/adr/0079-autonomous-operating-model).
+No-progress detection compares verifier reason/evidence for concrete checks; LLM
+checks instead compare the saved plan, since evaluator wording can vary.
+
+A watch or scheduled reaction must target the goal's session to resume that
+work. A paused goal also resumes on the next message. A round-cap pause needs a
+new message or trigger; it does not immediately start another capped turn.
+See [goal configuration](/reference/configuration#goal) for the separate
+iteration, no-progress, and per-turn limits.
 
 ## Setting a goal
 
@@ -60,21 +71,18 @@ Send a control message through any channel (A2A, the React console chat, OpenAI-
 - **Status:** `/goal`
 - **Clear:** `/goal clear` (aliases: `stop`, `off`, `cancel`, `reset`, `none`)
 
-In the React console, typing `/` in the chat composer opens a command
-autocomplete (served from `GET /api/chat/commands`) so `/goal` is discoverable;
-↑/↓ to pick, Enter/Tab to insert.
-
-Programmatic status/clear is also available: `GET /api/goals/{session_id}` and `DELETE /api/goals/{session_id}`.
+Type `/` in the chat composer to discover goal commands.
 
 ## Manage from the console
 
-The React console's **Goals** surface (right sidebar, in the Work hub) lists every session's goal — its condition, status (`active` / `achieved` / `exhausted` / `unachievable`), the verifier type, the **iteration count**, and the latest verifier reason. When a goal finishes, the console shows a **toast** (`goal.achieved` → success, `goal.failed` → error), driven by the bus events below.
+Open **Goals** to inspect each session's condition, status, iteration count, and
+last verifier result. Select a row for its saved plan, completion contract,
+evidence, and iteration timeline.
 
-**Create** — the panel's **New goal** action (and the Work overview's *+ Goal* quick-add) open a guided wizard: the condition, a type-aware verifier picker, and an optional completion contract (ADR 0073). A goal created here **opens a dedicated, focused chat tab and drives in it**, so the whole loop streams live; a goal set in chat with `/goal` stays in that chat. Command/test/ci/data verifiers are allowed here — the trust gate that refuses them from a raw `/goal` chat message doesn't apply to the authenticated, operator-tier `/api/goals` path (ADR 0066).
-
-**Inspect** — click a row to open the **detail drawer**: the agent's live **plan** (`.plan.md`, rendered as markdown), the completion-contract read-back, the last verifier reason/evidence, and a per-iteration **timeline** (ADR 0079).
-
-**Steer** — from the drawer, give an active goal more room (**Add iterations**) or **Restart** a terminal one (re-arm + resume). Closing a goal's chat tab prompts you: keep it **running in the background** (detach), or **stop** it — which clears the goal and closes the tasks it filed (its session-scoped backlog, ADR 0079).
+Use **Add iterations** to extend an active goal or **Restart** to re-arm a
+finished one. When closing its chat tab, choose whether to keep it running in
+the background or stop it. Stopping from that prompt also closes the tasks
+filed in that session's backlog.
 
 Backed by:
 
@@ -87,40 +95,40 @@ Backed by:
 | `POST` | `/api/goals/{session_id}/resume` | Keep an active goal running headlessly (detach on tab close) |
 | `DELETE` | `/api/goals/{session_id}` | Clear (stop) one (`{cleared, tasks_closed}`); `?close_tasks=true` also closes its task backlog |
 
-> The `plugin`-verifier-only **safe set** (`GoalController.set_goal_safe`, ADR 0028 D3 — reached by the agent's `set_goal` tool, not importable as `sdk.set_goal_safe`) is a separate, programmatic path for agents/plugins — distinct from the operator `/api/goals` route above. A plugin drives goals through [`sdk.start_goal_loop`](/reference/plugin-sdk-api#sdk-start-goal-loop).
+The agent's `set_goal` tool accepts registered plugin verifiers only. Plugins
+can drive a goal loop through
+[`sdk.start_goal_loop`](/reference/plugin-sdk-api#sdk-start-goal-loop).
 
 ## Reacting to a goal
 
-A terminal goal is a **trigger**, not just a checkbox. Every finish publishes one of two events on the [event bus](/guides/plugins#event-bus) (ADR 0039):
+Plugins can subscribe to `goal.achieved` or `goal.failed` on the
+[event bus](/guides/plugins#event-bus). The failed event covers `exhausted` and
+`unachievable`; both events carry
+`{session_id, condition, status, reason, evidence}`.
 
-| Topic | When | Payload |
-|---|---|---|
-| `goal.achieved` | verifier passed | `{session_id, condition, status, reason, evidence, mode}` |
-| `goal.failed` | `exhausted` / `unachievable` | same shape |
-
-Two ways to react:
-
-- **No code (any plugin / the console).** Subscribe to the topic — `registry.on("goal.achieved", …)` in a plugin, or `protoagent:subscribe` from a sandboxed view. The built-in console toast is exactly this. Because it's the bus, **nobody imports the goal system** to listen.
-- **Plugin code (richer).** `register_goal_hook(on_achieved=…, on_failed=…)` hands your plugin the terminal `GoalState` to run arbitrary logic — set the next goal (phase progression), **prompt the agent with a follow-up turn** (`sdk.run_in_session`, below), stop a background engine, alert. This is how a plugin drives an autonomous loop: *a terminal goal fires the hook → set the next goal, or prompt the agent.* (To watch an external metric on a cadence, use a **watch** instead — ADR 0067.)
+For the full terminal goal state, use
+`registry.register_goal_hook(on_achieved=…, on_failed=…)`.
 
 ### Goal fires → run a follow-up agent turn
 
-To have the agent *act* when a goal fires — not just record a status — call `sdk.run_in_session(session_id, prompt)` from a hook. It enqueues the prompt as a **one-shot agent turn in the goal's own session** (that session's memory + full tools), runs it on the normal scheduler fire path, and returns immediately — so it's safe to call from a hook without blocking:
+A hook can enqueue a one-shot turn in the completed goal's session:
 
 ```python
 from graph import sdk
 
 def register(registry):
-    async def on_achieved(goal):                # terminal GoalState
+    async def on_achieved(goal):
         sdk.run_in_session(
             goal.session_id,
-            f"The goal '{goal.condition}' just completed. Evidence: {goal.last_evidence}. "
-            f"Summarize the outcome and start the follow-up work.",
+            f"Summarize the completed goal: {goal.condition}. "
+            f"Evidence: {goal.last_evidence}",
         )
     registry.register_goal_hook(on_achieved=on_achieved)
 ```
 
-Pass `job_id=` to make the re-arm idempotent, or `delay_seconds=` to defer the turn. This is the *reaction* half of the self-improving loop: a recurring cadence **drives** the work (`sdk.start_goal_loop` arms one against a watch-verified target — ADR 0067/#2060); a hook + `run_in_session` **reacts** when it lands.
+`run_in_session` returns without waiting for the turn. Its `job_id` makes
+scheduling idempotent; `delay_seconds` defers it. See the
+[SDK reference](/reference/plugin-sdk-api#sdk-run-in-session) for the contract.
 
 ## Verifier types
 
@@ -133,7 +141,7 @@ Set via `verifier.type` in the JSON spec:
 | `ci` | `pr` **or** `branch` | `gh pr checks <pr>` is all-green, or the latest run on `branch` concluded `success` |
 | `data` | `path` + (`contains` **or** `expr`), `workspace_relative?` | the file contains the substring, or `expr` (evaluated over parsed JSON as `data`) is truthy; the Goal/Watch forms and accepted chat specs set `workspace_relative` automatically |
 | `plugin` | `check` (`<plugin-id>:<name>`) + `args?` | the plugin-registered verifier returns met — see [Plugins ▸ Goal & watch verifiers](/guides/plugins#goal-and-watch-verifiers) for `register_goal_verifier` and the `(spec, ctx)` contract (incl. `ctx.invoker`, the polling goal/watch's identity) |
-| `llm` | — (uses `condition`) | a strict evaluator judges the transcript shows the goal demonstrably done (fuzzy fallback) |
+| `llm` | — (uses `condition`) | a model judges the latest answer and recent tool summary against the condition |
 
 `data` `expr` runs in a restricted namespace — the parsed document is `data`, with only read-only builtins (`len`, `any`, `all`, `sum`, …). `__import__`, `open`, `eval`, etc. are unavailable.
 
@@ -159,6 +167,13 @@ See the [`goal` config block](/reference/configuration#goal). Defaults: machiner
 
 ## Security
 
-`command` / `test` / `ci` verifiers execute on the server host with the agent's privileges. **Setting a goal is an operator action** — only accept goal specs from trusted callers. If you expose `/goal` to untrusted input, restrict it to `data` / `llm` verifiers or gate goal-setting behind auth.
+Command, test, CI, and `data` expression verifiers are operator-only: use the
+Goals panel or authenticated API. Chat accepts `llm`, registered `plugin`
+checks, and `data` substring checks; the agent's tool is restricted further to
+plugin checks. See [Security and trust](/explanation/security-and-trust).
 
-> **Use a workspace-relative `data`-verifier path when the goal is agent-completed over untrusted `/goal`.** A path such as `report.md` resolves under the same per-instance managed workspace used by the default `read_file`/`write_file` tools. Absolute paths and traversal (`../x`, including Windows-style forms) are refused on the untrusted chat channel. The forms mark their relative paths with `workspace_relative: true`; direct authenticated operator API specs retain the legacy server-CWD-relative default when that flag is omitted, plus absolute-path support for intentionally checking files outside the managed workspace.
+For chat-created data checks, use a workspace-relative path such as `report.md`.
+Absolute paths and traversal are refused. The forms mark relative paths with
+`workspace_relative: true`. Authenticated API specs without that flag retain
+server-CWD-relative paths and support absolute paths for intentional checks
+outside the managed workspace.

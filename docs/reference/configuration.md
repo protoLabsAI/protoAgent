@@ -685,9 +685,9 @@ The machinery is wired when `enabled`, but **no goal is active until one is set*
 goal:
   enabled: true            # machinery available; no goal active until set
   max_iterations: 8        # continuation budget per goal
-  no_progress_limit: 3     # identical verifier evidence N times -> unachievable
-  eval_model: ""           # blank = main model (llm verifier / fuzzy goals)
-  verify_timeout: 120      # seconds for command/test/ci verifiers
+  no_progress_limit: 3     # consecutive unchanged progress -> unachievable
+  eval_model: ""           # blank = routing.aux_model, then main model
+  verify_timeout: 120      # default seconds for command/test verifiers
   max_rounds_per_turn: 50  # model rounds per goal-driven turn; 0 = unlimited
 ```
 
@@ -695,49 +695,33 @@ goal:
 |---|---|---|
 | `enabled` | `true` | Wire goal mode. No goal runs until set. |
 | `max_iterations` | `8` | Max continuation turns before a goal is `exhausted`. |
-| `no_progress_limit` | `3` | Same verifier reason+evidence this many times in a row → `unachievable`. |
-| `eval_model` | `""` | Model for the `llm` verifier (blank = main model). |
-| `verify_timeout` | `120` | Wall-clock seconds for `command`/`test`/`ci` verifiers. |
-| `max_rounds_per_turn` | `50` | Model rounds one **goal-driven** turn (the kickoff or any continuation) may run. At the cap the turn ends with a hand-back and the goal drive **pauses**: the goal stays active, the verifier still judges that turn (a met goal finishes), a `round_cap` event lands on the goal's timeline, and the reply ends with `⏸ goal paused — round cap reached …`. The next message (or a watch/schedule fire) drives it again, so each re-drive costs at most one capped turn. `0` = unlimited — no goal-specific cap (`model.round_hard_cap` still applies if set). With both set, a goal turn stops at the **smaller**; non-goal turns see only `model.round_hard_cap`. Hot-applies on save (no restart). |
+| `no_progress_limit` | `3` | Consecutive unchanged progress checks before `unachievable`. Concrete verifiers compare reason/evidence; LLM goals compare the saved plan. |
+| `eval_model` | `""` | Model for the `llm` verifier; blank uses `routing.aux_model`, then the main model. |
+| `verify_timeout` | `120` | Default wall-clock seconds for `command`/`test` verifiers; their `timeout` spec overrides it. CI checks use the GitHub CLI runner's separate timeout. |
+| `max_rounds_per_turn` | `50` | Model rounds per goal-driven turn. At the cap, verify then pause if unmet; the goal stays active until a new message or trigger resumes it. `0` disables this cap. The smaller of this and `model.round_hard_cap` applies. Hot-applies on save. |
 
-**Setting a goal** — `/goal <text>` (fuzzy, `llm`-verified) or a JSON spec:
-```
-/goal {"condition": "unit tests pass", "verifier": {"type": "test", "command": "python -m pytest -q"}}
-```
-`/goal` shows status; `/goal clear` (aliases: `stop`, `off`, `cancel`, `reset`, `none`) clears it.
-
-**Verifier types** (`verifier.type`): `command` (exit 0 = met), `test` (command + surfaces the runner summary), `ci` (`gh pr checks <pr>` or latest run on `branch`), `data` (a file `contains` substring, or an `expr` over parsed JSON as `data`), `llm` (transcript judgment — fuzzy fallback).
-
-> **Security:** `command`/`test`/`ci` verifiers execute on the server host. Setting a goal is an **operator** action — only accept goal specs from trusted input. See [Goal mode](/guides/goal-mode).
+Use [Goal mode](/guides/goal-mode) for creation, management, and
+[verifier types](/guides/goal-mode#verifier-types). Chat `/goal` accepts LLM,
+plugin, and workspace-relative data substring checks. Command, test, CI, and
+data expression checks require the operator panel or API.
 
 ## `watches`
 
-**Watches** (ADR 0067, `graph/watches/`) are standing tripwires — a condition polled on a
-cadence, out-of-band, that resumes the agent when it trips. See [Watches](/guides/watches).
+Settings for [watches](/guides/watches), which poll external conditions and can
+schedule a reaction turn.
 
 ```yaml
 watches:
-  enabled: true            # bind the watch TOOLS for the agent
-  interval: 30             # global poll cadence, seconds (min 5)
-  keep_terminal_h: 24      # retire met/expired watches after this long (0 = never)
+  enabled: true
+  interval: 30
+  keep_terminal_h: 24
 ```
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `true` | Bind the `create_watch` / `list_watches` / `update_watch` / `clear_watch` tools. |
-| `interval` | `30` | Seconds between out-of-band ticks. Clamped to a 5s floor. A watch's own `interval_s` overrides it as a *floor* (a watch is skipped until its own interval has elapsed), so raising this slows every watch but lowering it never speeds up a watch that asked to be slower. Re-read every tick — a change applies without a restart. |
-| `keep_terminal_h` | `24` | Hours a **met**/**expired** watch stays listed before the tick deletes it. `0` keeps them forever. The default matches the Overview card's "met today" pulse, so a trip is visible for exactly as long as the console reports it. Only terminal watches age out — an `active` watch is never pruned, however old. |
-
-Three things this flag deliberately does **not** do, because the distinction matters when you
-toggle it on a running agent:
-
-- It is a **tool-availability flag only**. Turning it off never deletes or mutates stored watch
-  state, and the background watch **poller is untouched** — existing watches keep polling and
-  keep firing their `on_met` hooks. You are removing the agent's ability to *create and manage*
-  watches, not the watches themselves.
-- Watches are independent of `goal.enabled`: they observe external conditions;
-  goals drive a bounded work loop.
-- Watches default on. Set `watches.enabled: false` to disable them.
+| `enabled` | `true` | Bind `create_watch`, `list_watches`, `update_watch`, and `clear_watch` for the agent. Disabling does not stop the poller or alter stored watches. Independent of `goal.enabled`. |
+| `interval` | `30` | Global polling cadence in seconds, clamped to at least 5. A watch's `interval_s` adds a further floor. Re-read every tick. |
+| `keep_terminal_h` | `24` | Hours to retain `met`/`expired` records. `0` keeps them indefinitely. Active watches never age out. |
 
 ## `knowledge`
 
@@ -854,20 +838,25 @@ background:
 
 ## `workflows`
 
-Declarative multi-step recipes over subagents ([ADR 0002](../adr/0002-reusable-subagent-workflows.md)) — the `run_workflow` / `save_workflow` tools.
+Storage for [reusable workflows](/guides/workflows). Enable the bundled
+`workflows` plugin through `plugins.enabled`; `workflows.enabled` is obsolete
+and is not read by the configuration parser.
 
 ```yaml
 workflows:
-  enabled: true
-  dir: /sandbox/workflows   # writable recipe root
+  dir: /sandbox/workflows
 ```
 
 | Key | Default | What |
 |---|---|---|
-| `enabled` | `true` | Expose `run_workflow` / `save_workflow` and load `*.yaml` recipes. |
-| `dir` | `/sandbox/workflows` | Writable recipe root (legacy `/sandbox` default resolves beneath the instance root). Bundled recipes also load from `workflows/`. |
+| `dir` | `/sandbox/workflows` | Writable recipe root. The legacy `/sandbox` default resolves to `<instance_root>/workflows`; an explicit non-`/sandbox` path is used as supplied. |
 
-The workflows **plugin**'s own settings live in their own section, `workflow_runs` (not `workflows`, which is this built-in one): `workflow_runs.max_runs` (default `200`) is how many finished runs `.runs/` keeps.
+Bundled recipes load from `plugins/workflows/recipes/`; enabled plugins can
+contribute more directories. Writable recipes override same-named recipes.
+Saved run records live in `.runs/` beneath the writable root.
+
+The plugin's separate `workflow_runs.max_runs` setting defaults to `200` finished
+runs. Running and paused records are not pruned by that history limit.
 
 ## `plugins`
 

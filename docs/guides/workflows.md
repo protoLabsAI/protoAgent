@@ -1,168 +1,147 @@
 # Reusable workflows
 
-A **workflow** is a reusable, multi-step recipe over your subagents: research →
-extract angles → write a brief, each step feeding the next, some running in
-parallel. Define it once as YAML, run it many times with different inputs. See
-[ADR 0002](/adr/0002-reusable-subagent-workflows) for the design.
-
-::: tip Workflows is an opt-in plugin
-As of [ADR 0043](/adr/0043-plugin-consumption-sdk-workflows-extraction), workflows ship as
-the `plugins/workflows` plugin — the engine, the `run_workflow`/`save_workflow` tools, the
-`/api/plugins/workflows` API, and the **Studio** console surface all come from it, and only
-load when the plugin is enabled. Turn it on by adding `workflows` to `plugins.enabled`.
-The plugin taps core through the consumption SDK (`graph.sdk.run_subagent`).
-:::
+A workflow runs a saved recipe of subagent steps, passing outputs between them.
+Use one for a repeatable process such as research → review → write a brief.
 
 ## Run one (the short path)
 
-1. Drop a `*.yaml` recipe in the workflows folder ([Anatomy](#anatomy) has the shape,
-   [Where recipes live](#where-recipes-live) the path).
-2. [Run it](#running-one) — ask the agent to, or call `run_workflow` with your inputs.
-3. Watch the steps stream as tool cards; the final `output` comes back as the result.
+1. Enable the bundled `workflows` plugin: add `workflows` to `plugins.enabled`
+   without removing other entries, then reload configuration.
+2. Open **Workflows**, choose a recipe, and fill in its inputs. The recipe's
+   subagents must be [configured and available](/guides/subagents).
+3. Run it and follow the step timeline. Inspect the final output and any failed
+   or timed-out steps before relying on the result.
+4. If it pauses for approval, review the pending step and prior outputs in
+   **Pending Gates**, then approve, edit, or reject that step.
 
-The rest of this page is the recipe format, the step types, and how workflows differ
-from skills.
+The plugin supplies the tools, API, and console surface. `workflows.enabled`
+is not an enable switch; use `plugins.enabled`.
 
 ## Skills vs Workflows
 
-These get conflated — the console lists the skill index ("Skills") next to
-"Workflows" — but they're two different altitudes (ADR 0009):
-
-| | **Skill** ([`SKILL.md`](/guides/skills)) | **Workflow** (`*.yaml`) |
-| --- | --- | --- |
-| What | methodology — *how/when* to approach a task | a DAG of subagent steps with dependencies |
-| How it runs | **retrieved** by relevance + **injected into context**; the model reads it and decides whether/how to follow | **executed** by the engine — fixed steps, deterministic |
-| In control | the model (advisory) | the engine (orchestrated) |
-| Trigger | automatic (semantic retrieval mid-turn) | explicit (run by name) |
-
-Rule of thumb: a **skill advises**, a **workflow runs**. Reach for a skill when the
-model should *know how* to do something; a workflow when you need *the same steps,
-the same way, every time*.
+A [skill](/guides/skills) supplies instructions the model can follow. A workflow
+executes a declared sequence and dependencies. Choose a skill for guidance; use
+a workflow when the steps must be repeatable. Subagent answers remain
+model-generated, even when the step ordering is fixed.
 
 ## Anatomy
 
 ```yaml
-name: research-and-brief            # unique slug (the lookup key)
+name: research-and-brief
 description: Research a topic and write a cited brief.
 inputs:
   - name: topic
     required: true
-  - name: depth
-    default: deep
 steps:
   - id: gather
-    subagent: researcher            # a key from SUBAGENT_REGISTRY
-    prompt: "Research {{ inputs.topic }} ({{ inputs.depth }}). Find 3–5 sources."
-  - id: angles
     subagent: researcher
-    depends_on: [gather]
-    prompt: "From this research, list the 3 key angles:\n{{ steps.gather.output }}"
+    prompt: "Research {{ inputs.topic }}. Find 3–5 sources."
   - id: brief
     subagent: researcher
-    depends_on: [gather, angles]
-    prompt: "Write a cited brief on {{ inputs.topic }}.\n{{ steps.gather.output }}\n{{ steps.angles.output }}"
-output: "{{ steps.brief.output }}"  # optional; default = last step's output
+    depends_on: [gather]
+    prompt: "Write a cited brief from this research: {{ steps.gather.output }}"
+output: "{{ steps.brief.output }}"
 ```
 
-- **Templating** substitutes `inputs.<name>` and `steps.<id>.output` (double
-  curly braces). References are validated against the declared inputs + step ids.
-- **`depends_on`** forms a DAG. Steps whose dependencies are ready run **in
-  parallel** (bounded by `subagents.max_concurrency`), so latency ≈ the critical
-  path. A step failure is recorded inline so independent branches still finish.
+- Templates substitute `inputs.<name>` and `steps.<id>.output`. References must
+  name declared inputs and steps.
+- `depends_on` sets ordering. Ready steps can run in parallel. The recipe's
+  optional `max_concurrency` (1–16) overrides the default from
+  `subagents.max_concurrency`.
+- `output` defaults to the last declared step's output.
+- A step error becomes inline output; other steps can continue, including
+  dependents that receive that error. A completed final step does not prove
+  that every earlier step succeeded.
+- Optional `gate: human` pauses **before** dispatching that step. Approving runs
+  it; editing runs it with the replacement prompt. Rejecting records an error
+  for the step and continues the remaining graph; it does not cancel the run.
 
 ## Where recipes live
 
-- **Bundled examples**: the repo's `workflows/` dir (ships with
-  `research-and-brief.yaml` and `deep-research.yaml`).
-- **Your recipes**: `workflows.dir` in `config/langgraph-config.yaml` (default
-  `/sandbox/workflows`, falling back to `~/.protoagent/workflows` for local dev).
-  Drop a `*.yaml` recipe there; it's loaded on the next start/reload.
+Bundled recipes live in `plugins/workflows/recipes/`. Enabled plugins can add
+recipe directories. Your saved recipes live under `<instance_root>/workflows/`,
+or an explicit non-`/sandbox` `workflows.dir` override. A saved recipe wins over
+another recipe with the same name.
+
+The registry reads `*.yaml` and `*.yml`. Reload configuration after editing files
+by hand; recipes saved through the console or tool are available immediately.
+See [workflow configuration](/reference/configuration#workflows) for storage and
+run-history retention.
 
 ## Running one
 
-The lead agent has a **`run_workflow(name, inputs)`** tool:
+Ask the agent to run a named recipe, for example:
 
-- "run the research-and-brief workflow on quantum error correction" →
-  `run_workflow("research-and-brief", {"topic": "quantum error correction"})`.
-- An empty name lists the available workflows and their inputs.
+> Run research-and-brief on quantum error correction.
 
-Workflows only delegate to **configured subagents** (each with its own tool
-allowlist and turn cap), and subagents don't get `run_workflow` — so there's no
-recursion and the blast radius is exactly the subagent system's.
+The tool is `run_workflow(name, inputs)`; an empty name lists available recipes
+and inputs. Steps use configured subagents with their tool allowlists and turn
+limits. Subagents do not receive `run_workflow`.
 
 ### As a slash command
 
-Every registered workflow is also runnable straight from the chat composer as
-**`/<workflow-name>`** — it autocompletes (the server lists workflows in
-`GET /api/chat/commands`) and short-circuits the turn, returning the workflow's
-output instead of a normal model reply. Arguments map to the recipe's inputs:
+Type `/` in chat to find a recipe, then supply free text for its first required
+input or use named arguments:
 
-- `` /research-and-brief quantum error correction `` — free text fills the first
-  required input (`topic`).
-- `` /research-and-brief topic="quantum error correction" depth=shallow `` —
-  explicit `key=value` tokens (quotes respected) set named inputs.
+```text
+/research-and-brief quantum error correction
+/research-and-brief topic="quantum error correction"
+```
 
-Missing a required input returns a `⚠️`-prefixed error naming it.
-
-Each step streams its own tool card (e.g. `research-and-brief · gather` →
-`· angles` → `· brief`) so a multi-step workflow shows live progress instead of
-one opaque card.
+Missing required inputs return an error. Steps stream tool cards, and the final
+output replaces a normal model reply. A gated run returns its run id and resume
+instructions instead.
 
 ## From the operator console
 
-The React console has a **Workflows** surface (the rail icon next to Subagents).
-It lists every registered recipe, shows the selected recipe's step DAG and its
-inputs, and runs it with a one-click form — the same path the agent's
-`run_workflow` tool takes. The result panel shows the final output plus a
-collapsible per-step breakdown, and flags any steps that failed (failures are
-recorded inline so the rest of the DAG still runs). It's backed by
-`GET /api/workflows` and `POST /api/workflows/{name}/run`.
+**Workflows** lists recipes, inputs, and their step graph. Use **New workflow**
+to author a recipe or edit an existing one. Saving validates its dependencies,
+subagents, and templates. Run history records outputs and per-step progress;
+**Pending Gates** shows runs awaiting a decision. Resuming keeps completed step
+outputs instead of running them again.
 
-**Author one from the console** — the surface's **＋** opens a builder: name +
-inputs + steps (id, a subagent picker, prompt, and `depends_on` checkboxes for
-ordering/parallelism) + output. Saving validates the recipe against the live
-subagent registry + DAG and writes it to the workflows dir (immediately
-runnable) — `POST /api/workflows`; `DELETE /api/workflows/{name}` removes it.
-Same `WorkflowRegistry.save` path the agent's `save_workflow` tool uses.
+All routes below are beneath `/api/plugins/workflows`:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/list` | Recipe summaries |
+| `GET` | `/{name}/recipe` | Full editable recipe |
+| `POST` | `/validate`, `/save` | Validate or save a recipe document |
+| `DELETE` | `/{name}` | Remove the writable copy of a recipe |
+| `POST` | `/{name}/start` | Start in the background; body `{inputs}`; returns `run_id` |
+| `POST` | `/{name}/run` | Run synchronously and return the result |
+| `GET` | `/runs/all`, `/runs/{run_id}` | Run history or a full run record |
+| `GET` | `/runs` | Paused runs awaiting approval |
+| `POST` | `/runs/{run_id}/resume` | Resume with `action: approve`, `edit`, or `reject` |
+
+For an edited resume, supply `edits: {prompt: "replacement prompt"}`. The console
+also sends `background: true` and polls the run record. Deleting a saved override
+can reveal the bundled recipe again.
 
 ## Deep research with adversarial review
 
-`deep-research.yaml` is the heavyweight, decision-grade counterpart to a single
-`researcher` call. It's a six-stage DAG ([ADR 0011](/adr/0011-deep-research-workflow))
-that builds in the *opposing* context a lone researcher can't give itself:
+The bundled `deep-research` recipe uses this sequence:
 
-```
-research ∥ dissent  →  gap_fill  →  antagonist ∥ verify  →  synthesize
+```text
+research ∥ dissent → gap_fill → antagonist ∥ verify → synthesize
 ```
 
-- **research ∥ dissent** — a mainstream gather and a deliberately contrarian
-  pass run in parallel, so the critical angle is sourced *at gather time*.
-- **gap_fill** — finds and fills 1-3 genuine gaps against the original question.
-- **antagonist ∥ verify** — a red-team [`antagonist`](/guides/subagents) (steelmans
-  the opposing case, attacks weak claims, hunts disconfirming evidence) and an
-  independent [`verifier`](/guides/subagents) (labels material claims
-  supported/unsupported/uncertain) run in parallel.
-- **synthesize** — a [`synthesizer`](/guides/subagents) writes the balanced
-  report: it *addresses* the opposition in a "Counterpoints & caveats" section,
-  drops unverified claims, and only earns `Confidence: high` if the opposition
-  was genuinely answered.
-
-Run it on a genuinely deep question — `` /deep-research is X the right
-architecture `` or `run_workflow("deep-research", {"topic": "…", "depth": "deep"})`.
-It's more subagent calls (and latency) than the single researcher, so gate it to
-asks that warrant it; use the plain `researcher` for quick inline lookups.
+It gathers opposing sources, fills gaps, challenges and verifies claims, then
+writes a report addressing counterpoints and uncertainty. Run it with
+`/deep-research <question>` or
+`run_workflow("deep-research", {"topic": "…", "depth": "deep"})`.
+It uses more subagent calls than a single researcher; reserve it for questions
+that need that review. See [ADR 0011](/adr/0011-deep-research-workflow) for its design.
 
 ## The agent can author them (closed loop)
 
-The lead agent also has **`save_workflow(name, description, steps, inputs?, output?)`**.
-Once it's worked out a multi-step process ad-hoc (via `task` / `task_batch`), it
-can capture it as a reusable recipe — *"save that as a workflow called
-competitor-scan"* — which is validated, written to `workflows.dir`, and
-immediately runnable via `run_workflow`. This is the multi-step analogue of a
-single-subagent skill (`SKILL.md`).
+Ask “save that process as a workflow called competitor-scan.” The agent uses
+`save_workflow(name, description, steps, inputs?, output?)` to validate and save
+a recipe. Saving the same name replaces its writable copy. Review the recipe
+and add human gates where a step needs an operator decision.
 
 ## Related
 
-- [ADR 0002 — Reusable Subagent Workflows](/adr/0002-reusable-subagent-workflows)
 - [Configure subagents](/guides/subagents)
-- [Starter tools](/reference/starter-tools) — the core tool set `run_workflow`, `task` and `task_batch` are bound alongside, and where each of them actually comes from
+- [Schedule future work](/guides/scheduler)
+- [Workflow design](/adr/0002-reusable-subagent-workflows)
