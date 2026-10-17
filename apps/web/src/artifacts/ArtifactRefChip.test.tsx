@@ -164,6 +164,9 @@ describe("ArtifactRefChip", () => {
     // The embed URL names the artifact + version (S5 ?embed=<id>&v=<n>).
     expect(f!.getAttribute("src")).toContain("embed=a-1");
     expect(f!.getAttribute("src")).toContain("v=2");
+    // An inline video answer can go fullscreen (#4286): same Permissions-Policy as the plugin view.
+    expect(f!.getAttribute("allow")).toBe("clipboard-read; clipboard-write; fullscreen");
+    expect(f!.hasAttribute("allowfullscreen")).toBe(true);
     // The height hint seeds the initial size before the frame measures.
     expect(f!.style.height).toBe("300px");
     // A too-tall report clamps to the 1200 ceiling — taller content scrolls inside the frame.

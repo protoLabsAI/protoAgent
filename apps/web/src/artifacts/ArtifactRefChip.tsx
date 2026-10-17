@@ -14,7 +14,7 @@ import {
   type SyntheticEvent,
 } from "react";
 
-import { postInit, scheduleInitReposts, usePluginFrameThemeSync } from "../app/pluginFrameHandshake";
+import { PLUGIN_FRAME_ALLOW, postInit, scheduleInitReposts, usePluginFrameThemeSync } from "../app/pluginFrameHandshake";
 import { api, apiUrl } from "../lib/api";
 import { onTopic } from "../lib/events";
 import {
@@ -524,7 +524,8 @@ function InlineArtifactHost({
           // sandbox/allow mirror PluginView's plugin frame: same-origin so the DS kit + the gated
           // history poll work, allow-pointer-lock (a sandbox token, not a permissions-policy feature)
           // so a nested canvas/3D answer can capture the mouse. The NESTED artifact frame the shell
-          // builds keeps its own stricter sandbox.
+          // builds keeps its own stricter sandbox. allow: same as the plugin view, fullscreen included
+          // (#4286), so an inline video answer's fullscreen button works.
           <div className="frame-guard" data-active={guard.active ? "true" : undefined}>
             <iframe
               ref={frameRef}
@@ -532,7 +533,8 @@ function InlineArtifactHost({
               src={apiUrl(src)}
               title={name}
               sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock"
-              allow="clipboard-read; clipboard-write"
+              allow={PLUGIN_FRAME_ALLOW}
+              allowFullScreen
               style={{ height: shownHeight }}
               onLoad={handleLoad}
             />

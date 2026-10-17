@@ -168,6 +168,45 @@ describe("PluginView — the tab strip attaches to the panel only in a column", 
   });
 });
 
+describe("PluginView — the frame's permissions (#4286)", () => {
+  let container: HTMLElement;
+  let root: Root;
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200 })));
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it("delegates fullscreen (and keeps clipboard) without widening the sandbox", async () => {
+    await act(async () => {
+      root.render(h(PluginView, { view: { id: "main", label: "Boardy", path: "/api/plugins/boardy/main", key: "plugin:boardy:main" } }));
+    });
+    for (let i = 0; i < 10 && !container.querySelector("iframe"); i++) {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    }
+    const frame = container.querySelector("iframe")!;
+    expect(frame).toBeTruthy();
+    const allow = (frame.getAttribute("allow") ?? "").split(";").map((s) => s.trim());
+    // Without `fullscreen` a <video controls> fullscreen button does nothing and
+    // requestFullscreen() rejects inside the plugin page.
+    expect(allow).toEqual(["clipboard-read", "clipboard-write", "fullscreen"]);
+    expect(frame.hasAttribute("allowfullscreen")).toBe(true);
+    expect(frame.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-pointer-lock allow-downloads",
+    );
+  });
+});
+
 describe("PluginView — the protoagent:theme re-post carries updated values", () => {
   let container: HTMLElement;
   let root: Root;

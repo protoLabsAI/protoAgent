@@ -23,6 +23,9 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 # `macos-private-api` enables the transparent launcher window (paired with
 # app.macOSPrivateApi in tauri.conf.json) — used for the frosted/rounded launcher.
+# It ALSO turns on `wry/fullscreen`, which sets WKPreferences `fullScreenEnabled` — without it
+# WKWebView refuses element fullscreen (a plugin view's <video> fullscreen button, #4286). Don't
+# drop this feature without enabling `wry/fullscreen` another way.
 tauri = { version = "2.11.2", features = ["tray-icon", "image-png", "devtools", "macos-private-api"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2.3.2"
