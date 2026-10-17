@@ -68,14 +68,18 @@ def _last_context_tokens(db: Path, session_id: str) -> int | None:
 
     try:
         con = sqlite3.connect(db)
+    except sqlite3.Error:
+        return None
+    try:
         row = con.execute(
             "SELECT context_tokens FROM turns WHERE session_id = ? ORDER BY ended_at DESC LIMIT 1",
             (session_id,),
         ).fetchone()
-        con.close()
         return int(row[0]) if row and row[0] else None
     except sqlite3.Error:
         return None
+    finally:
+        con.close()
 
 
 def main() -> int:
