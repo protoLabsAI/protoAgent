@@ -149,7 +149,7 @@ enum NewWindow {
     /// Ours — open a real managed window, optionally already at this in-app route.
     Managed(Option<String>),
     /// A chat image/file on OUR server (`/media/<file>?sig=…`, or a fleet member's
-    /// `/agents/<slug>/media/…`) — the image's "open in new tab" (#4309). Not a console page,
+    /// `/agents/<slug>/media/…`) — the image's "open in new tab" (#4312). Not a console page,
     /// so never a second app window: it opens in the system browser, behind a short-lived link
     /// the shell mints first (`media_open_link`). Carries the target's origin and the path
     /// prefix in front of `/media/` (empty, or `/agents/<slug>`).
@@ -395,7 +395,7 @@ fn is_workspace_file(p: &std::path::Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("code-workspace"))
 }
 
-/// Open a chat image in the system browser behind a SHORT-LIVED link (#4309).
+/// Open a chat image in the system browser behind a SHORT-LIVED link (#4312).
 ///
 /// The console's media link is signed for good (`?sig=` with no expiry — the inline `<img>`
 /// can't carry a bearer), and the system browser would keep it in its history. So the shell —

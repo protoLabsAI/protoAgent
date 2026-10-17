@@ -32,7 +32,7 @@ def register_media_routes(app) -> None:
         path, mime = got
         return FileResponse(str(path), media_type=mime)
 
-    # The desktop shell's "open in new tab" for a chat image (#4309): the shell hands the file
+    # The desktop shell's "open in new tab" for a chat image (#4312): the shell hands the file
     # to the SYSTEM BROWSER, which has no bearer — so it swaps the console's permanent link for
     # a short-lived one first. Under ``/api/``, so the default-deny gate requires the operator
     # bearer; the body must already carry a valid signed link (``infra.media.open_link``).
