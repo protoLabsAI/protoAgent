@@ -1,4 +1,4 @@
-# Deploy in Docker (config-as-code: seed + UI override)
+# Deploy in Docker {#deploy-in-docker-config-as-code-seed-ui-override}
 
 Run the published image, or bake a config seed into your own image while keeping
 console edits in a persistent data volume. You need Docker and access to a model
@@ -30,21 +30,22 @@ curl -fsSL https://raw.githubusercontent.com/protoLabsAI/protoAgent/main/scripts
 ```
 
 [`scripts/install.sh`](https://github.com/protoLabsAI/protoAgent/blob/main/scripts/install.sh)
-is versioned in the repo (so it tracks the agent) and:
+pulls the published image, creates a `protoagent-sandbox` volume, publishes
+`127.0.0.1:7870`, and starts the console. With a terminal it prompts for model
+setup; without one, finish in the browser at `/app`.
 
-1. **Checks prerequisites** — Docker (+ a running daemon) and curl.
-2. **Pulls** `ghcr.io/protolabsai/protoagent:latest`.
-3. **Runs** it — published to **loopback** (`127.0.0.1:7870`), a named data
-   volume (`protoagent-sandbox`), `--restart unless-stopped`, and `PROTOAGENT_UI=console`
-   so the console serves at `/app`.
-4. **Runs a CLI wizard** that drives the **same `/api/config/*` endpoints as the
-   browser setup wizard** — provider gateway URL, API key (silent), model
-   (fetched + validated live), and agent name — without a separate config format.
-5. **Prints** where the agent is running.
+Re-running replaces the container and preserves the selected volume. Re-supply
+any image, bind, port, volume, and token overrides on each run; the script does
+not recover them from the old container.
 
-It's **idempotent**: re-running pulls the latest image, keeps the data volume,
-and offers to re-run the wizard. Over a **plain SSH session with no TTY** it
-starts the container and points you at `/app` to finish setup in a browser.
+**Token-protected installations:** the installer's HTTP helpers currently omit
+the bearer header ([tracked in #4315](https://github.com/protoLabsAI/protoAgent/issues/4315)),
+so its setup-status probe returns `401` and eventually reports
+“did not come up in time,” even if the container started. The wizard cannot
+configure a protected instance either. Use the Compose example above for a
+protected deployment. If the installer already started it, inspect `docker logs
+protoagent` and finish setup through `/app` with your token. Do not remove the
+token to make the probe pass.
 
 **Overrides** (all optional env vars):
 
@@ -164,71 +165,30 @@ To **repair a running instance** whose live SOUL is already a stale placeholder 
 
 ## Binding & auth
 
-protoAgent refuses to bind `0.0.0.0` with an **open** operator API (`/api/*`, `/v1/*` include plugin-install + config rewrite). Pick one:
+The server listens on `0.0.0.0` **inside the container**. The example's
+`127.0.0.1:7870:7870` mapping separately limits the **host** port to loopback.
+Set `A2A_AUTH_TOKEN` for the API and console; the example requires it. Remote
+clients send `Authorization: Bearer <token>`.
 
-- set `A2A_AUTH_TOKEN` and send it as `Authorization: Bearer <token>` (recommended);
-- bind `127.0.0.1` (single-host);
-- or, only behind a trusted network boundary, `PROTOAGENT_ALLOW_OPEN=1`.
-
-An open instance (no token) also only answers requests addressed to a host name it
-recognizes: IP literals, `localhost`, `*.ts.net` and the names in `PROTOAGENT_TRUSTED_HOSTS`
-(see [Environment variables](/reference/environment-variables)). Browsing the bundled
-compose's `127.0.0.1` publish works as-is. If other containers call an open agent by its
-service name (`http://agent:7870`), add that name: `PROTOAGENT_TRUSTED_HOSTS=agent`.
-In open mode, `POST`s to `/a2a` and `/v1/*` must also send `Content-Type: application/json`
-(every protoAgent and OpenAI-compatible client already does). A browser page on another origin
-can't change state there either. See
-[Security & trust](/explanation/security-and-trust#an-instance-with-no-token).
+Without a token, a non-loopback server bind is refused unless
+`PROTOAGENT_ALLOW_OPEN=1` explicitly opts into open mode. Use that override only
+with an enforced network boundary. Open instances also check host names and
+request origins; see [Security & trust](/explanation/security-and-trust#an-instance-with-no-token)
+and [trusted hosts](/reference/environment-variables).
 
 ### Where the operator token lives
 
-Set `A2A_AUTH_TOKEN` in the server environment, or `auth.token` in the live
-config. Restart after changing an environment-sourced token; clients must then
-use the new token.
-
-The browser console stores the token in `localStorage` after sign-in. A script
-running on that origin can read it, so use a trusted origin and rotate the token
-if the workstation is compromised. For public access, put an authentication proxy
-in front of the console; see [Expose to the world](/guides/exposing-protoagent).
+Set `A2A_AUTH_TOKEN` in the environment or `auth.token` in the live configuration.
+Restart after changing an environment-sourced token and update clients. The
+console caches the token in browser `localStorage`; use a trusted origin.
 
 ## Expose it with a tunnel (ngrok / Cloudflare)
 
-To reach the agent on a **public hostname** without opening a router port, front it with a
-tunnel. The tunnel terminates TLS and forwards to the container's published port; protoAgent
-itself can stay bound to `127.0.0.1`. Two non-negotiables when you do this:
-
-- **Keep `A2A_AUTH_TOKEN` set.** A tunnel makes the *whole* operator API
-  (`/api/*` plugin-install + config rewrite, `/v1/*`, `/a2a`) internet-reachable — the bearer
-  gate is the only thing fencing it. (For LAN/tailnet-only access, prefer
-  [Tailscale](/guides/phone-access#tailscale-reach-it-from-anywhere) — no public surface at all.)
-- **Set [`A2A_PUBLIC_URL`](/reference/environment-variables#a2a-agent-card-endpoint)** to the
-  tunnel hostname, so the agent card advertises the address peers actually use (not the bound
-  loopback port).
-
-**ngrok** — ephemeral hostname, good for a quick share or a phone demo:
-
-```bash
-ngrok http 7870
-# → Forwarding https://abc123.ngrok-free.app -> http://localhost:7870
-export A2A_PUBLIC_URL=https://abc123.ngrok-free.app
-```
-
-**Cloudflare Tunnel** (`cloudflared`) — a stable hostname mapped to your domain, no inbound
-ports:
-
-```bash
-# quick, throwaway URL:
-cloudflared tunnel --url http://localhost:7870
-# or a named tunnel routed to agent.example.com, then:
-export A2A_PUBLIC_URL=https://agent.example.com
-```
-
-Because the console authenticates over the tunnel too, add the tunnel origin to
-[`A2A_ALLOWED_ORIGINS`](/reference/environment-variables#streaming-origin-verification) if
-you've enabled origin verification — otherwise the SSE/WebSocket streams it relies on get a
-`403`. For a second factor in front of the bearer token, layer the tunnel's own access
-control (Cloudflare Access, an ngrok OAuth policy, or a fronting auth proxy) — the
-`localStorage`-cached token above is *all* the app-level auth there is.
+For private console access, use [phone access](/guides/phone-access). For a public
+A2A endpoint, follow [Expose to the world](/guides/exposing-protoagent): terminate
+TLS, forward an exact route allowlist, require a token, and set `A2A_PUBLIC_URL`
+in the container's environment. A tunnel forwarding the entire port also
+publishes the operator API; a public A2A hostname should not do that.
 
 ## Node for plugins and `npx` servers
 
@@ -238,24 +198,22 @@ The image doesn't bake Node. Plugins that declare `requires_runtimes: {node: ">=
 button or with `protoagent runtime install-node` inside the container. It lands in
 `<box root>/runtime/node`, which is `/sandbox/runtime/node` in the container, so the same
 `/sandbox` volume that holds your config keeps it across restarts and image upgrades.
-Check where the box root is with `protoagent config explain`. An offline image that
-preinstalls Node at build time (a `WITH_NODE` build arg) is a possible future option; it
-isn't built today.
+Check where the box root is with `protoagent config explain`.
 
 ## Day-2
 
 | Want to… | Do |
 | --- | --- |
 | Change a setting | Edit it in the console — it persists on the `/sandbox` volume. |
-| Roll out a new image | `docker compose pull && docker compose up -d` — live config (your edits) is preserved. |
+| Update the seed image (`build: .`) | `docker compose build --pull && docker compose up -d` — rebuilds your image against the current base. |
+| Update a prebuilt image (`image:` only) | `docker compose pull && docker compose up -d` — pulls the configured tag. |
 | Re-seed from an updated seed | Set `PROTOAGENT_SEED_MERGE=1` and roll normally — image-owned keys re-apply, operator edits stay. Without it, change the live setting explicitly; removing the sandbox volume also deletes chats, stores, and credentials. |
-| Inspect the effective config | `GET /api/config` (or `/healthz` for `setup_complete`). |
+| Inspect paths and settings | `docker compose exec agent protoagent config explain`; use authenticated `GET /api/config` for the live config. |
+| Check readiness | `/healthz` returns `200` after setup and graph initialization; inspect logs if it remains `503`. |
+| Back up or restore | Follow [Docker backups](/guides/backup-and-restore#docker-backups) before upgrading. |
 
 ## Reference
 
-- `PROTOAGENT_SEED_CONFIG` — file to seed the live config from on first boot (config-as-code).
-- `PROTOAGENT_SEED_MERGE` — `1` to **re-apply** that seed's image-owned keys on *every* boot instead of only the first. See [Merge-on-boot](#merge-on-boot-keeping-a-declarative-seed-live). Unset (the default) keeps seed-once.
-- `PROTOAGENT_SEED_SOUL` — file to seed the live `SOUL.md` persona from (persona-as-code); also heals a lingering starter placeholder. Falls back to the bundled `config/SOUL.md`.
-- `PROTOAGENT_HOME` — the instance root; the bundled entrypoint sets `/sandbox`, with config and setup marker under `/sandbox/config/`.
-- `PROTOAGENT_HEADLESS_SETUP` — validate the seed + auto-complete setup (no wizard).
-- `PROTOAGENT_UI` — `console` serves `/app`; the published image defaults to `none`, so the example compose file explicitly selects `console`.
+See [environment variables](/reference/environment-variables) for seed, path,
+setup, and UI options, and [shutdown behavior](/guides/deploy#shutdown-semantics)
+before choosing an automatic update policy.

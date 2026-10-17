@@ -79,10 +79,11 @@ network disconnects, reconnect before continuing the task.
 
 ## Use a public URL {#going-further-a-public-url}
 
-For access without joining a LAN or tailnet, follow
-[Expose to the world](/guides/exposing-protoagent). Keep authentication enabled
-and set the public address advertised to other agents. Public exposure also
-makes the operator routes reachable, including configuration and plugin installation.
+The [public A2A proxy guide](/guides/exposing-protoagent) deliberately hides the
+console and cannot be used for phone access as written. Prefer the private
+connection above. If a public console hostname is required, use a separate
+identity-protected hostname covering both the console and its backend routes,
+with the application token still enabled.
 
 ## See also
 

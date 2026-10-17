@@ -1,159 +1,95 @@
 # Deploy via GHCR
 
-The template ships an autonomous release pipeline. Wire it up once and every merge to `main` produces a fresh container image Watchtower can pick up.
+Publish your fork's container image, then deploy it using the
+[Docker guide](/guides/deploy-docker). You need GitHub Actions enabled on the fork
+and permission to publish its GHCR package. The published image targets `linux/amd64`.
 
 ## Wire it up (once)
 
-1. Fork the template and enable GitHub Actions on your fork.
-2. Merge something to `main` — `docker-publish.yml` needs no opt-in, so this alone
-   builds and pushes an image to your GHCR.
-3. Point your host at that image (Docker / Compose below), and optionally add
-   **Watchtower** so it pulls new tags on its own.
-4. Want **versioned releases** (tags, changelog, release notes) on top of the
-   rolling image? Set `RELEASE_ENABLED=true` — the release workflows gate on it.
+Run these from your fork's checkout, replacing the image name with your lowercase
+owner and package name:
 
-The rest of this page is what each workflow does, the image tags you get, and the
-host-side setup.
+```bash
+gh variable set IMAGE_NAME --body your-owner/your-agent
+gh variable set DOCKER_PUBLISH_ENABLED --body true
+gh workflow run docker-publish.yml
+```
+
+The canonical repository publishes automatically; **forks must opt in** with
+`DOCKER_PUBLISH_ENABLED=true`. Both image workflows read the `IMAGE_NAME`
+repository variable; without it they default to `protolabsai/protoagent`.
 
 ## What the pipeline does
 
 | Trigger | Workflow | Result |
-|---|---|---|
-| Push to `main` | `docker-publish.yml` | `ghcr.io/<owner>/<image>:latest` + `sha-<short>` |
-| Manual (`workflow_dispatch`) | `prepare-release.yml` | Opens a `prepare-release/vX.Y.Z` bump PR (**no auto-merge, no tag** — a human merges it, then pushes the tag) |
-| `vX.Y.Z` tag pushed | `release.yml` | Pushes semver Docker tags, creates GitHub release, posts Discord embed |
+| --- | --- | --- |
+| Push to `main` or manual dispatch | `docker-publish.yml` | `latest` and `sha-<short>` images |
+| Manual release preparation | `prepare-release.yml` | Version/changelog PR; no automatic merge or tag |
+| `vX.Y.Z` tag or manual release dispatch | `release.yml` | `X.Y.Z` and `X.Y` images, GitHub release |
 
-Rolling `latest` is handled only by `docker-publish.yml`. Stable semver tags are handled only by `release.yml`. The two workflows never collide. The release cadence is **manual** (fleet policy): you dispatch `prepare-release.yml`, merge the bump PR, then push the tag.
+Release preparation and publication separately require `RELEASE_ENABLED=true`.
+The [Releasing runbook](/guides/releasing) owns that procedure and its secrets.
 
-## 1. Un-freeze the release pipeline
+<span id="_1-un-freeze-the-release-pipeline"></span>
+<span id="_2-point-the-image-name-at-your-repo"></span>
+<span id="_3-grant-gh-pat-access"></span>
+<span id="_4-optional-discord-release-embeds"></span>
+<span id="_7-cut-a-release"></span>
 
-The release workflows are **opt-in via a repo variable** — there is no
-`github.repository ==` guard to swap. Set it on your fork:
+## Versioned releases
 
-```bash
-gh variable set RELEASE_ENABLED --body true
+Enable `RELEASE_ENABLED` when you want versioned releases in addition to rolling
+images. Follow [Releasing](/guides/releasing) to configure `GH_PAT`, prepare and
+merge the release PR, and push its tag. That guide also covers optional Discord
+notifications. Ordinary merges do not create versioned releases.
+
+## Verify the first push {#_5-verify-the-first-push}
+
+Check **Actions → Publish Docker image** and your account's **Packages** for:
+
+```text
+ghcr.io/your-owner/your-agent:latest
+ghcr.io/your-owner/your-agent:sha-<short>
 ```
 
-`prepare-release.yml` and `release.yml` gate on `if: vars.RELEASE_ENABLED == 'true'`. `docker-publish.yml` has no guard — it runs on any push to `main` in any clone.
+Use the [Docker deployment example](/guides/deploy-docker) with your image name.
+Console assets are already bundled: set `PROTOAGENT_UI=console` to serve `/app`;
+the image defaults to `none`. A frontend rebuild is not required to change tiers.
 
-## 2. Point the image name at your repo
+## Choose an update policy {#_6-point-watchtower-at-latest}
 
-In `release.yml` and `docker-publish.yml`, update `IMAGE_NAME`:
+`latest` follows successful main-branch builds. Use a commit tag, full version
+or digest when you need to control deployment timing. Record the running image
+and [back up its data](/guides/backup-and-restore#docker-backups) before upgrading.
+See [Docker day-2 operations](/guides/deploy-docker#day-2) for pull versus rebuild.
 
-```yaml
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: protolabsai/my-agent   # ← lowercase; GHCR is case-sensitive
-```
-
-## 3. Grant `GH_PAT` access
-
-`prepare-release.yml` needs a PAT (not the default `GITHUB_TOKEN`) to push the release branch so its CI checks fire — branches/tags pushed with the default `GITHUB_TOKEN` do not trigger downstream workflows, by GitHub's design.
-
-Create a fine-grained PAT with `contents: write` on the repo, then add it as a secret named `GH_PAT` in **Settings → Secrets → Actions**.
-
-## 4. (Optional) Discord release embeds
-
-`release.yml` delegates to the shared [`protoLabsAI/release-tools`](https://github.com/protoLabsAI/release-tools) Action, which reads two CI secrets:
-
-- `GATEWAY_API_KEY` — bearer token for the protoLabs LLM gateway; the Action rewrites raw commits into themed notes.
-- `DISCORD_RELEASE_WEBHOOK` — Discord channel webhook URL. Without it, set `post-discord: false` (notes generate but aren't posted).
-
-The embed footer/repo link can be customized via the Action's `footer` and `repo` inputs — see the [release-tools README](https://github.com/protoLabsAI/release-tools#inputs).
-
-## 5. Verify the first push
-
-Merge any PR to `main` (or push a trivial commit). `docker-publish.yml` should produce:
-
-```
-ghcr.io/<owner>/<image>:latest
-ghcr.io/<owner>/<image>:sha-<short>
-```
-
-Check **Actions** on the repo and **Packages** on the org for the image.
-
-## 6. Point Watchtower at `latest`
-
-On your deploy host (or wherever your compose / IaC lives):
-
-```yaml
-services:
-  my-agent:
-    image: ghcr.io/protolabsai/my-agent:latest
-    restart: unless-stopped
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-    environment:
-      AGENT_NAME: my-agent
-      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
-      # REQUIRED for a port published beyond loopback: the server refuses a
-      # token-less non-loopback bind (set PROTOAGENT_ALLOW_OPEN=1 instead only
-      # if a firewall/network policy fences the port).
-      A2A_AUTH_TOKEN: ${A2A_AUTH_TOKEN}
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
-    ports:
-      - "7870:7870"
-    volumes:
-      - data:/sandbox
-
-  watchtower:
-    image: containrrr/watchtower
-    command: --interval 60 --label-enable
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-
-volumes:
-  data:
-```
-
-Watchtower polls `latest` every 60 seconds and recreates the container when the image hash changes.
-
-> **UI tier (ADR 0010):** the image defaults to **`--ui none`** — API + A2A +
-> `/metrics`, no console, core deps only (the lean server stack). For the React
-> console in the image, build with **`--build-arg UI=console`**; it then runs
-> `console`. Setup is headless in `none` — drop a config +
-> `OPENAI_API_KEY`, the graph compiles on boot (or run `--setup`); `GET /healthz`
-> reports readiness. See [Sandboxing & egress](/guides/sandboxing) and the
-> [env-vars reference](/reference/environment-variables#deployment-ui-tier-adr-0010).
-
-## 7. Cut a release
-
-From the Actions tab, run `prepare-release.yml` manually and pick `patch` / `minor` / `major`. It opens a `chore: release vX.Y.Z` bump PR (version + rolled-up CHANGELOG) — **no auto-merge, no auto-tag**. A human merges it once CI is green, then pushes the `vX.Y.Z` tag, which triggers `release.yml` → stable semver Docker tags → GitHub release → Discord post (if configured). See [Releasing](/guides/releasing) for the full flow.
-
-Releases are **manual / on-demand** — merging a PR does **not** cut a release. See the [Releasing runbook](/guides/releasing) for the changelog protocol + the branch ruleset.
+An automatic image updater such as Watchtower also restarts the agent during
+active work. Use one only if that interruption is acceptable. An older image
+alone is not a complete rollback: keep the matching pre-upgrade data backup.
 
 ## Operations
 
 ### Backup & restore
 
-Persist the whole instance root at `/sandbox`, including config, credentials,
-conversations, schedules, and plugin stores. Mounting only `audit/` and
-`knowledge/` loses the remaining state when a container is replaced.
-
-Follow [Docker backups](/guides/backup-and-restore#docker-backups) to archive the
-named volume from the Docker host and restore into a separate volume. Stop the
-agent before copying its SQLite files. `/sandbox` is a path **inside the
-container**, not a directory the host can archive directly unless you explicitly
-bind-mounted it.
+Persist the entire `/sandbox` volume. Follow
+[Docker backups](/guides/backup-and-restore#docker-backups) to stop the agent,
+archive the volume, and restore into a separate volume. `/sandbox` is inside the
+container; it is not a host directory unless you bind-mounted one there.
 
 ### Shutdown semantics
 
-On `SIGTERM` (`docker stop`, `systemctl stop`) or `SIGINT` (Ctrl-C) the server
-runs its FastAPI shutdown hooks — spinning down fleet members, stopping the
-scheduler, and withdrawing mDNS — then uvicorn drains in-flight connections.
-The graceful drain is **bounded to 5s** (`timeout_graceful_shutdown=5`) so the
-long-lived SSE streams the console holds (chat, runtime status) don't block
-shutdown forever; past that they're force-closed.
+On `SIGTERM` or `SIGINT`, uvicorn stops accepting connections and allows up to
+**five seconds** for in-flight requests to drain, then cancels remaining request
+tasks. Application shutdown hooks subsequently stop services such as fleet
+members and the scheduler. Long-lived streams can be disconnected.
 
-A turn **in progress** when the signal arrives is cancelled and its work is lost.
-This is acceptable by design: the A2A task store is durable, so a client that
-reconnects reconciles the interrupted task via `tasks/get` and can resubmit. If
-your turns routinely run longer than the drain window and you want them to finish,
-raise the container's stop grace period (Compose `stop_grace_period`, or
-`docker stop -t <seconds>`) — it defaults to 10s before `SIGKILL`.
+Increasing Docker's stop timeout gives shutdown hooks more time before
+`SIGKILL`; it **does not extend the server's five-second request drain**. Let
+important turns finish before updating. After an interrupted turn, inspect the
+durable task and any tool side effects before resubmitting; shutdown is not a
+transaction rollback or a promise that work resumes automatically.
 
 ## Related
 
-- [Fork the template](/guides/fork-the-template) — the earlier steps that set up the rest
-- [Environment variables reference](/reference/environment-variables) — runtime env
+- [Fork the template](/guides/fork-the-template)
+- [Environment variables](/reference/environment-variables)

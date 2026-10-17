@@ -1,261 +1,216 @@
 # Wire Langfuse + Prometheus
 
-The template has three independent observability layers: Langfuse traces, Prometheus metrics, and a JSONL audit log. This guide lights up all three.
+Use local telemetry for turn history, Langfuse for distributed traces,
+Prometheus for monitoring, and the audit log for tool-call details. Start with a
+configured agent and choose the signals you need; these layers work independently.
 
 ## Langfuse (distributed traces)
 
-There are two ways in, and the environment always wins.
-
-**From config — the one that reaches a desktop-launched agent.** Turn it on in
-**Settings ▸ Tracing ▸ Send traces to Langfuse**, then paste the host and the key
-pair. The keys are secrets: the save writes them to the untracked `secrets.yaml`,
-never to `langgraph-config.yaml`. Equivalent YAML:
+In **Settings → Tracing**, enable **Send traces to Langfuse**, enter your host
+and key pair, then restart the agent. This also works in a fleet member's
+window. Keys are saved in untracked `secrets.yaml`. The non-secret config is:
 
 ```yaml
 tracing:
   enabled: true
-  host: https://cloud.langfuse.com   # blank → http://host.docker.internal:3001 (compose only)
-  # public_key / secret_key live in secrets.yaml — the Settings save puts them there
+  host: https://cloud.langfuse.com
 ```
 
-This is the path that reaches a **fleet member started by the desktop app**
-(`protoagent-server --port … --ui none`): nothing in that launch path sets
-`LANGFUSE_*`, so before #3017 tracing could not be enabled there at all. That member
-serves no console of its own — you reach it through the hub at
-`/app/agent/<slug>/`, and **Settings ▸ Tracing** is in that window's Agent group.
-(It is deliberately *not* filed under Box ▸ Telemetry beside the cost rollup: the Box
-group is host-console-only, so a member's window never shows it — which would have
-left tracing exactly as unreachable as the environment variables. The Telemetry
-surface keeps a gear onto the same four fields for the host console.)
-
-**From the environment — containers.** Set these on the running container:
+For containers, supply the complete environment key pair and destination:
 
 ```bash
 LANGFUSE_PUBLIC_KEY=pk_lf_...
 LANGFUSE_SECRET_KEY=sk_lf_...
-LANGFUSE_HOST=https://langfuse.your-domain.com   # or http://host.docker.internal:3001 for local
+LANGFUSE_HOST=https://langfuse.your-domain.com
 ```
 
-A **complete** `LANGFUSE_{PUBLIC,SECRET}_KEY` pair wins outright over the config
-block — including over `tracing.enabled: false`, because a container deploy has no
-config file to flip and silently dropping its tracing would be the regression.
-`tracing.enabled` is the fallback toggle, not a kill switch. **Env keys never follow a
-config host** (#3039): they go to `LANGFUSE_HOST` (or the compose default) and never to a
-`tracing.host` in the config file — the compose file passes `LANGFUSE_HOST=${LANGFUSE_HOST:-}`,
-so leaving it unset used to hand the choice of destination to config. That block is
-one-directional: config-supplied keys still fall back to `LANGFUSE_HOST` when `tracing.host`
-is blank, which is what makes host-in-env + keys-in-Settings work.
+| Credentials selected | Destination | Enablement |
+| --- | --- | --- |
+| Complete environment key pair | `LANGFUSE_HOST`, otherwise `http://host.docker.internal:3001` | Wins even over `tracing.enabled: false` |
+| Config key pair | `tracing.host`, then `LANGFUSE_HOST`, then the same default | Requires `tracing.enabled: true` |
 
-`tracing.init()` runs once the config has loaded (still well before the server
-accepts a request), takes whichever layer answered, and connects. Traces show up
-tagged with `AGENT_NAME`, and the boot log names the layer it used:
-
-```
-[tracing] Langfuse initialized from config -> https://cloud.langfuse.com
-```
-
-Either way the client is built **once, at boot** — changing any of this needs a
-restart, not a reload.
+Environment keys never use the config's host. Specify a reachable destination;
+the default is intended for a local Docker deployment. Changes require a
+restart. Check the boot log for the selected layer and host, then send a test
+turn and look for its trace in that project.
 
 ### What gets traced
 
-- Each A2A task → a root span named `a2a-stream` (the name to filter on in Langfuse — it is set at `server/chat.py::_chat_langgraph_stream_impl` and pinned by `tests/test_tracing.py`)
-- Each LangGraph run → a child span with tool calls + LLM calls nested beneath
-- Each subagent delegation → a nested span under the parent's
-- Each tool call → a `tool:<name>` observation with args + result preview + duration
-- Each ACP coding-agent run → an `acp:<delegate>` agent span with its brief, reply (or `[failed] <reason>`), plan, and one `tool:` span per coder tool call
+- A2A turns use an `a2a-stream` root span, with model calls, tool calls, and
+  subagent work nested beneath it.
+- Tool observations include arguments, a result preview, and duration.
+- ACP coding-agent runs use `acp:<delegate>` spans with the brief, reply or
+  failure, plan, and tool spans.
+
+Traces can contain conversation and tool content. Choose a destination suitable
+for that data; incognito turns suppress content while retaining timing and usage.
 
 ### Coding-agent model calls (Claude Code)
 
-A Claude Code coder (`claude-agent-acp`) calls its model itself, so no gateway or middleware sees those calls. While tracing is on, protoAgent spawns it with Claude Code's native OpenTelemetry tracing (beta), pointed at a **local relay** (`observability/otlp_relay.py`, `127.0.0.1` only) that forwards to your Langfuse project. The coder's own spans then nest under the run's `acp:` span: `claude_code.interaction` per turn, a `claude_code.llm_request` **generation per model call** (model, tokens, cost, time to first token, stop reason), and `claude_code.tool` spans.
+When tracing is enabled, the Claude Code ACP integration sends native model-call
+spans through a loopback OTLP relay to the selected Langfuse project. The relay
+removes account identity attributes, redacts strings, maps token usage, and
+associates spans with the correct turn. The coder receives a relay URL, not
+Langfuse keys. Native prompt/tool-content logging flags are not enabled; the
+agent-level traces described above can still contain content.
 
-The relay does three things before anything reaches Langfuse:
-
-- **Strips account identity.** Claude Code stamps `user.email`, `organization.id` and account ids on every span and offers no switch for the email or org. The relay drops them, and redacts the remaining string attributes.
-- **Maps usage.** Claude Code's token attributes become `gen_ai.usage.*`, so Langfuse shows per-call usage and computes per-call cost. The run's agent-reported turn totals go in the `acp:` span's metadata (`reported_usage`, `reported_cost_usd`), not a second generation, so spend isn't counted twice. If no model-call span arrives for a turn within 45 seconds (an older Claude Code, an export Langfuse rejected), the relay records those totals as one `acp:<delegate>-model` generation instead, so the cost is never silently lost.
-- **Keeps turns apart.** A pooled coder process serves many turns but gets its trace context once, at spawn; the relay moves each later turn's spans into that turn's trace.
-
-The coder process never sees your Langfuse keys, only a per-process relay URL. Prompt and tool content stay off (Claude Code's `OTEL_LOG_*` flags are not set). To turn this off, set `PROTOAGENT_ACP_NATIVE_TRACING=0` in the agent's environment.
+If model-call spans do not arrive within the fallback window, the relay records
+the run's reported totals as a generation. Set `PROTOAGENT_ACP_NATIVE_TRACING=0`
+to disable native coder tracing without disabling the agent's other traces.
 
 ### Cross-agent trace propagation
 
-If the caller stamps its trace context into `params.metadata["a2a.trace"]`:
+A2A callers can include `a2a.trace` in `params.metadata`:
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "method": "message/send",
-  "params": {
-    "message": { "role": "user", "parts": [...] },
-    "metadata": {
-      "a2a.trace": {
-        "traceId": "abc123",
-        "spanId": "def456"
-      }
-    }
+  "a2a.trace": {
+    "traceId": "0123456789abcdef0123456789abcdef",
+    "spanId": "0123456789abcdef"
   }
 }
 ```
 
-...this agent's trace gets `caller_trace_id=abc123` stamped in its metadata. Filter Langfuse by that field to find every agent trace spawned from one dispatch.
+Valid 32-hex trace IDs join the caller's trace; valid 16-hex span IDs select its
+parent span. Invalid trace IDs start fresh traces; invalid span IDs are ignored.
+The caller IDs are also recorded as metadata for correlation.
 
 ### If Langfuse isn't configured
 
-Every tracing helper becomes a no-op. No crashes, no latency. The rest of the agent doesn't care whether tracing is on.
-
-The console says so rather than leaving you to guess: `/api/telemetry/recent` reports `tracing_enabled: false`, and the Telemetry surface's **Trace** column reads `off` on every untraced row instead of a bare `—`. That distinction is the point — an always-blank column reads as "these particular turns weren't traced", which is how a fleet ran a month of turns with tracing dark and nothing in the product said so (#3017).
+The agent continues without external traces. Authenticated
+`GET /api/telemetry/recent` reports `tracing_enabled: false`; the console's Trace
+column shows `off`. Check credentials, destination, and boot logs if tracing was
+intended to be enabled.
 
 ## Prometheus metrics
 
-Scrape `/metrics` on port 7870. Metric names are prefixed with a sanitized `AGENT_NAME`.
-
-```
-my_agent_llm_calls_total{model="claude-opus-4-8",finish_reason="stop"} 42
-my_agent_llm_latency_seconds_bucket{model="claude-opus-4-8",le="5"} 38
-my_agent_llm_tokens_total{model="claude-opus-4-8",direction="input"} 184320
-my_agent_llm_cache_tokens_total{model="claude-opus-4-8",kind="read"} 96000
-my_agent_llm_cost_usd_total{model="claude-opus-4-8"} 0.83
-my_agent_llm_tools_deferred_total 128
-my_agent_compactions_total 3
-my_agent_tool_calls_total{tool_name="web_search",success="True"} 17
-my_agent_active_sessions 3
-```
-
-The LLM series (`*_llm_calls_total`, `*_llm_latency_seconds`, `*_llm_tokens_total`, `*_llm_cache_tokens_total`, `*_llm_cost_usd_total`) are emitted per LLM call from `server/turn_stream.py::_run_turn_stream` (ADR 0006); cache + cost are best-effort and depend on the gateway surfacing prompt-cache token details. Tool series come from `AuditMiddleware`.
-
-Example Prometheus scrape config:
+Scrape `/metrics` on the agent's port. **A token-protected agent also protects
+metrics**, unless `PROTOAGENT_PUBLIC_METRICS=1` explicitly makes them public.
+Keep metrics on the monitoring network. Example
+[Prometheus authorization configuration](https://prometheus.io/docs/prometheus/latest/configuration/configuration/#http_config):
 
 ```yaml
 scrape_configs:
   - job_name: my-agent
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/protoagent-token
     static_configs:
       - targets: ['my-agent:7870']
 ```
 
+Mount the token file in the Prometheus container and make the target resolvable
+from that container. Core metric names use a sanitized `AGENT_NAME` prefix
+(default `protoagent`). Useful series include `*_llm_calls_total`,
+`*_llm_latency_seconds`, `*_llm_tokens_total`, `*_llm_cost_usd_total`,
+`*_tool_calls_total`, and `*_active_sessions`. Inspect `/metrics` for the full
+set and labels. Cost and cache usage depend on the model endpoint's reporting.
+
 ### If prometheus-client isn't installed
 
-`/metrics` returns a note saying metrics are disabled. No other side effects.
+`/metrics` reports that metrics are disabled; the rest of the agent still runs.
 
 ## Local telemetry store
 
-Prometheus is live-scrape-only and Langfuse is opt-in/external — so protoAgent also keeps a **durable, queryable per-turn rollup** of its own (ADR 0006 Slice 2). One row is written per terminal turn leg (completed / failed / canceled / parked) — from either turn driver through the shared writer `server/turn_telemetry.py::record_turn`, plus one per CLI coding-agent run since #3015 — with accumulated token usage (incl. prompt-cache), USD cost, wall-clock duration, and LLM-call + tool-call counts. This is the substrate for "what was expensive/slow over time" and the self-improving flywheel.
+Enabled by default, `<instance_root>/telemetry.db` stores turn outcomes, tokens,
+cost, duration, and model/tool-call counts, including coding-agent runs.
+`telemetry.enabled: false` disables this store; `telemetry.db_path` relocates it.
+History is pruned by `telemetry.retention_days` (default 90).
 
-ON by default (one cheap write per turn). The default SQLite path is `<instance_root>/telemetry.db` (ADR 0065). Disable or relocate via config:
-
-```yaml
-telemetry:
-  enabled: true             # default; false → no store, endpoints return {enabled:false}
-  db_path: /sandbox/telemetry.db
-```
-
-Query it over HTTP (read-only):
+Use the operator token when querying a protected instance:
 
 ```bash
-# Aggregate rollup — totals, success rate, cache-hit ratio, p50/p95 latency, per-model split
-curl localhost:7870/api/telemetry/summary
-curl 'localhost:7870/api/telemetry/summary?since=2026-06-01T00:00:00+00:00'
-
-# Most recent turns (newest first)
-curl 'localhost:7870/api/telemetry/recent?limit=20'
-
-# Insights (advise-only): flagged outlier turns + proven optimization levers
-curl localhost:7870/api/telemetry/insights
+curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
+  http://localhost:7870/api/telemetry/summary
+curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
+  'http://localhost:7870/api/telemetry/recent?limit=20'
+curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
+  http://localhost:7870/api/telemetry/insights
 ```
 
-`summary` returns `{turns, input_tokens, output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens, cost_usd, llm_calls, tool_calls, avg_duration_ms, p50_duration_ms, p95_duration_ms, success_rate, cache_hit_ratio, by_model[]}`. `insights` flags turns ≥ 5× a median baseline and proves the cache lever (`{levers: {cache: {hit_ratio, est_savings_usd}, …}}`) — **advise-only**, no autonomous config changes. Which baseline differs by axis (#3015, #3041). **Latency** is compared against the median for the turn's **own model**, falling back for a model with fewer than 3 sampled rows to the median of its own *kind* — a CLI coding-agent run recorded under `acp:<delegate>` against other coder runs, a gateway turn against gateway turns, never the mixed sample. **Cost** is compared against the model's own median **or** the median across every *priced* turn on the instance: zero-cost coder rows are excluded from every cost median (a structurally-0 median cannot carry a multiplicative threshold), and that second, absolute test claims at most **one row per model** — the model's priciest sampled turn — so it can report "this model is expensive", which a per-model median by construction cannot, without an expensive tier's ordinary turns filling the 20 slots. Each flagged turn's `reasons` names the baseline it beat, so a flag is never ambiguous. The operator console surfaces all of this under **Settings ▸ Overview** (Slices 3–4). History is pruned by `telemetry.retention_days` (default 90; `TelemetryStore.prune` runs on the maintenance loop), and `/api/telemetry/export` downloads it as CSV.
+`summary` includes totals, success rate, latency percentiles, cache-hit ratio,
+and a per-model breakdown. `insights` flags outliers and possible savings; it
+never changes configuration. Its reasons identify the baseline used: latency
+compares like models or kinds of work, while cost compares priced turns.
+`/api/telemetry/export` downloads CSV.
 
-::: tip Plugin metric timeseries are a separate store
-Named numeric series a plugin records (`sdk.record_metric` — treasury, net worth, fleet size, #1632) live in their own always-on per-instance `metrics.db`, **not** in this turn-rollup store: they're functional plugin state (history-dependent watch verifiers read them), so the `telemetry.enabled` toggle never affects them. See [Plugins ▸ consumption SDK](/guides/plugins#consumption-sdk).
-:::
+Plugin numeric series from `sdk.record_metric` live separately in `metrics.db`.
+They remain enabled when turn telemetry is off because watches and other plugin
+features depend on their history. See the
+[consumption SDK](/guides/plugins#consumption-sdk).
 
 ## Fleet trace export (the flywheel Observe)
 
-The local stores above answer *"what did this agent cost?"*. **Fleet trace export** answers a different question — *"what does the agent actually do, turn by turn?"* — by writing one **trajectory** row per terminal turn in OpenAI chat format, so a fleet's real production traces can drive downstream training-data collection (the "Observe" step of the self-improving flywheel, ADR 0006 / #1897).
-
-**Off by default.** Turn it on per instance either way:
+Fleet trace export writes conversation trajectories for downstream analysis or
+training-data collection. It is **off by default**. Enable it per instance in
+**Settings → Telemetry → Fleet trace export**, or in config:
 
 ```yaml
 telemetry:
-  fleet_trace_export: true    # Settings ▸ Telemetry ▸ "Fleet trace export"
+  fleet_trace_export: true
 ```
 
-```bash
-# Env var — overrides the config toggle in BOTH directions:
-PROTOAGENT_FLEET_TRACE_EXPORT=1              # on, default path
-PROTOAGENT_FLEET_TRACE_EXPORT=0              # off (even if the toggle is on)
-PROTOAGENT_FLEET_TRACE_EXPORT=/data/traces   # on, explicit path
-```
+`PROTOAGENT_FLEET_TRACE_EXPORT` overrides the toggle: `1` enables, `0` disables,
+and a directory path enables export at that path. The default is
+`<instance_root>/fleet-traces/fleet-traces-YYYYMMDD.jsonl`.
 
-On the desktop app, use the **Settings ▸ Telemetry** toggle — a GUI app doesn't inherit shell env, so the config toggle is the reachable path.
-
-Each row lands in `<instance>/fleet-traces/fleet-traces-YYYYMMDD.jsonl` (append-only, daily-partitioned, instance-scoped) and carries:
-
-```jsonc
-{
-  "id": "fleet__<trace_id>", "source": "protoagent-fleet", "teacher": "<AGENT_NAME>",
-  "messages": [ /* OpenAI chat format, incl. tool_calls + tool results */ ],
-  "tools":    [ /* the in-context OpenAI tool schemas */ ],
-  "verified": true, "reward": 1.0,          // deterministic terminal-state outcome — never an LLM judge
-  "meta": {
-    "loop_shape": "ooda",                   // "ooda" when the goals subsystem was active, else "react"
-    "orient": "<goal-plan snapshot>",       // the durable world-model artifact, when present
-    "trace_id": "…", "session_id": "…", "model": "…", "cost_usd": 0.01, "duration_ms": 1500
-  }
-}
-```
-
-Writing is best-effort (never affects a turn) and honors the incognito gate — an incognito thread is never exported.
+Each row contains messages, tool calls/results and schemas, terminal outcome,
+trace/session IDs, model, cost, and duration. Writes are best-effort and incognito
+threads are excluded. These files contain raw conversation content.
 
 ### Shipping to a shared dataset (redaction)
 
-Raw dumps stay **on the machine**. To collect them centrally, `scripts/sync_fleet_traces.sh` redacts and forwards on a daily cron:
+The repository's collection scripts are lab deployment helpers; inspect their
+paths and destinations before using them:
 
-- **Hybrid redaction before the corpus** — deterministic regex (API keys / tokens / JWTs / emails / phones) **+** the `openai/privacy-filter` model (names, addresses, account numbers). Irreversible masking; structural fields (roles, tool names, ids, schemas) are untouched; `meta.redacted` is stamped. **Fail-closed** — it won't ship raw if the redactor is unavailable.
-- Dest filenames are namespaced `<instance>__…` so many fleet members can't collide.
+- `scripts/setup_fleet_tracing.sh` schedules transfer of **raw dumps** over SSH
+  to a private collector (`ava` by default). Redaction happens on the collector,
+  so raw data leaves the originating machine.
+- `scripts/sync_fleet_traces.sh` redacts on the collector before copying into the
+  dataset directory. By default it refuses to copy when the redactor is
+  unavailable. `FLEET_REDACT=0` explicitly bypasses that protection.
 
-For a **laptop or desktop rig** off the collection box, `scripts/setup_fleet_tracing.sh` wires a once-daily rsync of that rig's raw dumps to the collection box over your private network (launchd on macOS, cron on Linux); the redaction boundary stays on the receiving box, so the rig needs no model or venv.
+The redactor combines secret patterns with a privacy model; output filenames
+include the instance name. Review both the collected content and destination
+access before allowing a rig to contribute.
 
-::: warning A personal rig's traffic is real data
-Export is per-rig opt-in for a reason: a personal agent's turns contain real content. The redactor masks PII, but decide per rig whether it should contribute at all — the fleet containers are a clear yes; your personal desktop may be a no.
-:::
+The helpers scan a box-style `*/fleet-traces` layout and use their own
+`PROTOAGENT_HOME` convention. Do not assume they discover desktop app data,
+explicit instance roots, or Docker volumes automatically. For collector-side
+extra directories, set `FLEET_TRACES_EXTRA_SOURCES`; confirm discovered paths
+against `protoagent config explain`.
 
 ## Audit log
 
-Every tool call is written to `/sandbox/audit/audit.jsonl`. One line per call:
+Tool calls handled by audit middleware append to
+`<instance_root>/audit/audit.jsonl` (`/sandbox/audit/audit.jsonl` in the bundled
+container). Rows include timestamp, session, tool, arguments, result summary,
+duration, success, and trace ID for correlation with Langfuse.
 
-```json
-{
-  "ts": "2026-04-17T13:23:42.644606+00:00",
-  "session_id": "s-abc",
-  "tool": "web_search",
-  "args": {"query": "protoLabs AI agent"},
-  "result_summary": "2 result(s) for 'protoLabs AI agent':\\n1. ...",
-  "duration_ms": 842,
-  "success": true,
-  "trace_id": "abc123"
-}
-```
-
-Mount `/sandbox/audit/` as a volume if you want the log to persist across container restarts. The trace_id lets you jump from a JSONL line straight into the Langfuse UI for the full run.
+Persist the entire `/sandbox` volume in Docker, including config and stores;
+mounting only the audit directory does not preserve the agent's state. Audit
+arguments and results can contain sensitive content.
 
 ### Forensic replay
 
+Filter failed tool calls from the [Docker example](/guides/deploy-docker):
+
 ```bash
-docker exec my-agent cat /sandbox/audit/audit.jsonl \
-    | jq 'select(.success == false) | {ts, tool, result_summary}'
+docker compose exec -T agent cat /sandbox/audit/audit.jsonl \
+  | jq 'select(.success == false) | {ts, tool, result_summary}'
 ```
+
+This inspects recorded results; it does not re-execute tools.
 
 ## Container logs
 
-The template calls `logging.basicConfig(level=INFO)` at module import, which is above Python's default WARNING threshold. Webhook delivery events, session boundaries, and tool errors all land in `docker logs`.
-
-To go louder for debugging:
-
-```bash
-docker run -e LOG_LEVEL=DEBUG ...
-```
+Logs go to standard error at `INFO` by default. Use `docker compose logs agent`
+or `docker logs <container>` to inspect boot, delivery, and tool errors. Set
+`LOG_LEVEL=DEBUG` for more detail or `LOG_FORMAT=json` for structured collection,
+then recreate the container with the updated environment.
 
 ## Related
 
-- [Explanation: cost and trace](/explanation/cost-and-trace) — why distributed tracing looks this specific way
-- [Environment variables reference](/reference/environment-variables) — every knob
+- [Cost and trace](/explanation/cost-and-trace)
+- [Environment variables](/reference/environment-variables)
+- [Back up and restore](/guides/backup-and-restore)

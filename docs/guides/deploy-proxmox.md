@@ -1,188 +1,143 @@
 # Deploy on Proxmox (reusable LXC template)
 
-Run protoAgent on Proxmox VE as **Docker-in-LXC**, then bake that container into a
-**PVE template** so you can `clone` a fresh, working agent in seconds — for a test
-instance, a per-project agent, or a small fleet.
-
-This uses the repo's own [`scripts/install.sh`](/guides/deploy-docker#one-command-install)
-inside the CT — you keep the GHCR image, the update path, and the `/sandbox` data
-volume. No bare-metal Python install, no building the console from source.
-
-> **Why LXC and not a VM?** For a single lightweight FastAPI agent the container
-> overhead savings are real, and Docker-in-LXC with `nesting` is a well-worn homelab
-> path. A VM + Docker is the Proxmox-official answer for Docker workloads and is a
-> touch more robust across PVE major upgrades — prefer it if you run many Docker
-> workloads or want the strongest isolation. Everything below applies to a VM too;
-> only steps 1–2 differ.
+Create a Debian + Docker template, then start and configure protoAgent separately
+in each clone. This keeps agent data and operator tokens out of the template.
+For a VM deployment, install Docker in the guest and follow
+[Deploy in Docker](/guides/deploy-docker) directly.
 
 ## What you'll end up with
 
-- **CT `<base>`** — a stopped PVE *template*: Debian + Docker + the protoAgent image
-  pulled and its container defined, but **unconfigured** (no model, no secrets).
-- **CT `<clone>`, `<clone+1>`, …** — linked clones off the template. Each boots, Docker
-  auto-starts the agent, and you finish model setup per-clone in the browser.
-
-Linked clones share the template's base disk (copy-on-write), so each test instance
-costs only its own delta — spinning up ten agents doesn't cost ten full disks.
+- A stopped template containing Docker and a pulled protoAgent image, with no
+  agent container, volume, or credentials.
+- Independent clones, each with its own operator token and `/sandbox` volume.
 
 ## Prerequisites
 
-- Proxmox VE 8 or 9, with a Debian 12 (or 13) LXC template downloaded
-  (`pveam update && pveam download local debian-12-standard`).
-- Outbound internet from the CT (to pull the Docker packages + GHCR image).
-- ~16 GB disk and 2–4 GB RAM per instance. No GPU — model calls go out to your
-  gateway (LiteLLM / OpenAI-compatible).
+You need administrative access to a Proxmox node, an available Debian amd64
+container template, outbound internet, and suitable storage and networking.
+The example allocates 2 cores, 4 GB RAM, and 16 GB disk; adjust for your workload.
+
+Docker inside unprivileged LXC depends on the host kernel, storage, and container
+configuration. Check the [Proxmox container documentation](https://pve.proxmox.com/pve-docs/chapter-pct.html)
+for your installed version. Use a VM if Docker cannot run under your host's
+isolation policy; do not disable that policy just to complete this recipe.
 
 ## 1. Create the container
 
-Unprivileged, with `nesting` (Docker needs it) and `keyctl` (Docker's containerd
-keyring). Use **DHCP** so every clone gets its own address without collisions.
+Run the following on the Proxmox node. Choose an unused ID, and replace the
+storage and bridge names if your node uses different ones.
 
 ```bash
-# Pick an unused VMID for the base; the clones will take the next ones.
+pveam update
+pveam available --section system
+# Copy a complete Debian amd64 archive filename from the list:
+TEMPLATE=replace-with-the-listed-debian-archive.tar.zst
+pveam download local "$TEMPLATE"
 BASE=210
-
-pct create $BASE local:vztmpl/debian-12-standard_12.12-1_amd64.tar.zst \
-  --hostname protoagent \
+pct create "$BASE" "local:vztmpl/$TEMPLATE" \
+  --hostname protoagent-base \
   --cores 2 --memory 4096 --swap 512 \
   --rootfs local-lvm:16 \
   --net0 name=eth0,bridge=vmbr0,ip=dhcp \
   --features nesting=1,keyctl=1 \
-  --unprivileged 1 \
-  --ostype debian --onboot 0
-
-pct start $BASE
+  --unprivileged 1 --ostype debian --onboot 0
+pct start "$BASE"
 ```
-
-> **The one Proxmox gotcha is the bind (step 3), not the CT.** Docker-in-unprivileged-LXC
-> "just works" on current kernels with `nesting=1,keyctl=1`. If `dockerd` ever fails to
-> start on an older kernel, install `fuse-overlayfs` in the CT and set
-> `{"storage-driver":"fuse-overlayfs"}` in `/etc/docker/daemon.json`.
 
 ## 2. Install Docker in the CT
 
-```bash
-pct exec $BASE -- bash -c '
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y -qq ca-certificates curl
-  curl -fsSL https://get.docker.com | sh
-'
-pct exec $BASE -- docker info >/dev/null && echo "docker OK"
-```
-
-## 3. Install protoAgent — widen the bind
-
-`127.0.0.1:7870` is loopback **inside the CT** — useless from your LAN. To reach the
-console from your workstation, publish on `0.0.0.0` and set an `A2A_AUTH_TOKEN` (the
-boot gate **requires** the token for any non-loopback bind — see
-[Binding & auth](/guides/deploy-docker#binding-auth)). Generate it once:
+Enter the container with `pct enter "$BASE"`, install Docker using the
+[Docker Debian instructions](https://docs.docker.com/engine/install/debian/),
+then exit back to the node. Verify that Docker can actually start a container:
 
 ```bash
-TOKEN=$(openssl rand -hex 24)
-echo "$TOKEN"      # save this — you need it to sign in to the console
-
-pct exec $BASE -- bash -c "
-  export A2A_AUTH_TOKEN='$TOKEN'
-  export PROTOAGENT_BIND=0.0.0.0
-  export PROTOAGENT_INSTALL_NONINTERACTIVE=1
-  curl -fsSL https://raw.githubusercontent.com/protoLabsAI/protoAgent/main/scripts/install.sh | sh
-"
+pct exec "$BASE" -- docker run --rm hello-world
 ```
 
-`PROTOAGENT_INSTALL_NONINTERACTIVE=1` starts the container without prompting — you'll
-finish the model wizard in the browser (step 4). Prefer config-as-code over the wizard?
-Bake a seed image instead (see [Deploy in Docker](/guides/deploy-docker#the-pattern))
-and `docker run` that image in place of the installer.
+If that fails, inspect the guest's Docker logs and the host's LXC configuration
+before proceeding. A running daemon alone does not establish that nested
+containers work.
 
-> **Expected quirk — a false "did not come up in time."** When `A2A_AUTH_TOKEN` is set,
-> the installer's readiness probe (`GET /api/config/setup-status`) is itself bearer-gated,
-> so the *unauthenticated* probe gets `401` and the installer eventually prints
-> **"protoAgent did not come up in time."** The agent is actually **running and healthy** —
-> only the probe was denied. Confirm with the token:
->
-> ```bash
-> IP=$(pct exec $BASE -- ip -4 -o addr show eth0 | awk '{print $4}' | cut -d/ -f1)
-> curl -s -H "Authorization: Bearer $TOKEN" http://$IP:7870/api/config/setup-status
-> # → {"setup_complete":false,"presets":[...]}   ← healthy, awaiting setup
-> ```
+<span id="_3-install-protoagent-—-widen-the-bind"></span>
+<span id="_4-finish-setup-in-the-browser"></span>
 
-## 4. Finish setup in the browser
+## 3. Prepare the image
 
-Get the CT's IP and open the console:
+Pull the image without running protoAgent. For repeatable clones, use your
+chosen version or digest instead of `latest`.
 
 ```bash
-pct exec $BASE -- ip -4 -o addr show eth0 | awk '{print $4}' | cut -d/ -f1
-# → e.g. 192.168.4.26
+pct exec "$BASE" -- docker pull ghcr.io/protolabsai/protoagent:latest
 ```
 
-Open `http://<ct-ip>:7870/app`. The console prompts for the operator token — paste the
-`A2A_AUTH_TOKEN` from step 3 (it's cached in that browser's `localStorage`; see
-[Where the operator token lives](/guides/deploy-docker#where-the-operator-token-lives)).
-Then run the setup wizard: gateway URL (your LiteLLM / OpenAI-compatible endpoint),
-API key, and model.
+Do not create an agent container, finish setup, sign in to a model provider, or
+install tailnet credentials in the base. Cloning copies guest files, including
+Docker volumes and container environment variables; it does not reset them.
 
-**If this CT will be your template, stop here — don't run the wizard.** Configure the
-clones instead (step 6), so the template stays a clean, credential-free base.
-
-## 5. Convert the base to a PVE template
-
-Stop the CT and template it. The rootfs becomes an immutable base that linked clones
-reference — the same pattern PVE uses for any template CT.
+## 4. Convert the base to a template {#_5-convert-the-base-to-a-pve-template}
 
 ```bash
-pct stop $BASE
-pct template $BASE          # renames the disk to base-<id>-disk-0
+pct shutdown "$BASE"
+pct template "$BASE"
 ```
 
-> Once templated, **never start or modify `<base>`** — linked clones depend on its base
-> disk staying immutable.
+Keep the base unchanged. To refresh it later, clone it to a scratch container,
+update Docker and the pulled image, and convert that clean container into a new
+template.
 
-## 6. Clone a working instance (repeat per test)
+## 5. Clone and configure an instance {#_6-clone-a-working-instance-repeat-per-test}
+
+Create a full clone so it has no runtime dependency on the base disk. Linked
+clones are an alternative on storage that supports them.
 
 ```bash
 CLONE=211
-pct clone $BASE $CLONE --hostname protoagent-test1
-pct start $CLONE
+pct clone "$BASE" "$CLONE" --full 1 --hostname protoagent-test1
+pct start "$CLONE"
 ```
 
-On boot, Docker starts and the protoAgent container auto-restarts
-(`--restart unless-stopped`) against its own fresh `/sandbox` volume — so the clone comes
-up **unconfigured, awaiting setup**. Grab its IP and finish setup in the browser (step 4):
+Generate a **new token per clone** on the node and save the displayed value in
+your credential manager. This command publishes port 7870 on every IPv4 interface
+of the guest: restrict access with your firewall or private network before running it.
 
 ```bash
-pct exec $CLONE -- ip -4 -o addr show eth0 | awk '{print $4}' | cut -d/ -f1
+PROTOAGENT_CLONE_TOKEN=$(openssl rand -hex 24)
+printf '%s\n' "$PROTOAGENT_CLONE_TOKEN"
+pct exec "$CLONE" -- docker run -d --name protoagent \
+  --restart unless-stopped --security-opt no-new-privileges:true \
+  -e PROTOAGENT_UI=console \
+  -e "A2A_AUTH_TOKEN=$PROTOAGENT_CLONE_TOKEN" \
+  -p 0.0.0.0:7870:7870 -v protoagent-sandbox:/sandbox \
+  ghcr.io/protolabsai/protoagent:latest
+pct exec "$CLONE" -- ip -4 -o addr show eth0
 ```
 
-> **The token is shared across clones** (it's baked into the container's env in the base
-> image). Fine for a trusted test fleet. To give one clone its own token, rotate it inside
-> that clone:
->
-> ```bash
-> pct exec $CLONE -- docker rm -f protoagent
-> pct exec $CLONE -- bash -c "A2A_AUTH_TOKEN=$(openssl rand -hex 24) PROTOAGENT_BIND=0.0.0.0 \
->   PROTOAGENT_INSTALL_NONINTERACTIVE=1 \
->   sh -c 'curl -fsSL https://raw.githubusercontent.com/protoLabsAI/protoAgent/main/scripts/install.sh | sh'"
-> ```
->
-> The `protoagent-sandbox` volume (and its config) is preserved across that re-run.
+Open `http://<clone-ip>:7870/app` over your private network, enter the token,
+and finish model setup. `/healthz` should then return `200`. Before setup,
+`/healthz` can return `503`; the authenticated setup-status endpoint distinguishes
+an unconfigured agent from a failed start:
+
+```bash
+curl -H "Authorization: Bearer $PROTOAGENT_CLONE_TOKEN" \
+  "http://<clone-ip>:7870/api/config/setup-status"
+```
+
+Replace `<clone-ip>` before running the command. For a seeded configuration,
+use the [Docker seed pattern](/guides/deploy-docker#the-pattern) with each clone's
+own volume and credentials.
 
 ## Day-2
 
-| Want to… | Do |
+| Task | Procedure |
 | --- | --- |
-| Update an instance | Re-run the installer in the CT (pulls latest image, keeps the volume), or run a `watchtower` container polling `latest`. |
-| Back it up | `vzdump <clone>` — all agent state lives in the `protoagent-sandbox` Docker volume on the CT rootfs, so a CT backup **is** a complete backup. |
-| Reset a test to zero | `docker rm -f protoagent && docker volume rm protoagent-sandbox` in the CT, then re-run the installer — or just destroy the clone and clone again. |
-| Update the template itself | Clone the template to a scratch CT, start it, re-run the installer, stop it, and re-`pct template` a fresh base (templates can't be edited in place). |
+| Update an instance | Back up, pull the chosen image, stop and remove only the `protoagent` container, then repeat its `docker run` command with the same volume and token. Let active turns finish first. |
+| Back up | Follow [Docker backups](/guides/backup-and-restore#docker-backups), or stop the guest before a Proxmox backup. Include any external mounts separately; a rootfs backup does not necessarily include them. |
+| Create a fresh test | Create another clone from the clean template and generate a new token. Retain the old instance until its data is no longer needed. |
 
 ## Reach it from anywhere (optional)
 
-The wide bind above exposes the agent on your **LAN** only. For remote access without
-opening a router port, add Tailscale to the CT (give it `/dev/net/tun` and run
-`tailscale up --ssh`) — see [phone access](/guides/phone-access#tailscale-reach-it-from-anywhere) —
-or front it with a Cloudflare tunnel (keep `A2A_AUTH_TOKEN` set and set `A2A_PUBLIC_URL`;
-see [Expose it with a tunnel](/guides/deploy-docker#expose-it-with-a-tunnel-ngrok-cloudflare)).
-
-> **mDNS/fleet discovery won't cross the Proxmox bridge** onto another subnet — register
-> fleet members by tailnet name or direct IP rather than relying on mDNS.
+A `0.0.0.0` publish is not automatically LAN-only: routing and firewall rules
+control who can reach it. Use [private remote access](/guides/phone-access) for
+the console, or the [public A2A proxy pattern](/guides/exposing-protoagent) for
+external agents. Register fleet peers by reachable address when multicast
+mDNS discovery cannot cross the network boundary.
