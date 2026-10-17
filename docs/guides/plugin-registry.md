@@ -64,6 +64,46 @@ and install any newly required packages. To return to an earlier version, keep
 a [data backup](/guides/backup-and-restore) before updating or record the prior
 release ref and reinstall it explicitly.
 
+## Automatic updates
+
+A git-URL-installed plugin is pinned in `plugins.lock` at the ref you installed
+(a branch, a release tag, or an exact commit). By default updates are **manual**:
+the console **Plugins** panel shows an *Update available* badge when a plugin is
+behind its ref, and the **Update** button pulls the latest code + hot-reloads it
+(`POST /api/plugins/{id}/update`).
+
+To let chosen plugins update themselves in the background, opt them into an
+**auto-update policy** (#1720):
+
+```yaml
+plugins:
+  autoupdate_interval_hours: 6      # sweep cadence; 0 disables the loop entirely
+  update_policy:
+    my-plugin:
+      track: main                   # arms auto-update (the ref itself comes from the lock)
+      when: idle                    # idle (default) | always
+    another-plugin:
+      track: main
+      when: always
+```
+
+Each sweep, for every plugin listed in `update_policy`, the runtime checks whether
+it's behind its locked ref and — if so — pulls + hot-reloads it exactly like the
+**Update** button, then emits `plugin.updated` on the [event bus](/guides/plugins#event-bus).
+The gates:
+
+- **Opt-in only.** A plugin is auto-updated only if it appears in `update_policy`
+  with a non-empty `track`. Everything else stays manual.
+- **Never a pinned commit.** A plugin pinned to an exact SHA is immutable and is
+  skipped; a release-tag pin moves to the newest matching tag, a branch pulls its head.
+- **`when: idle`** (the default) defers a plugin's update while a chat turn is — or
+  was just — in flight. A reload rebuilds tools/routers, which is safe *between*
+  turns but disruptive *during* one. **`when: always`** updates on the next sweep
+  regardless.
+
+The default config has an empty `update_policy`, so nothing auto-updates until you
+add a plugin to it.
+
 ## Remove a plugin
 
 Disable a plugin first if you only want to stop using it. For a downloaded plugin,
