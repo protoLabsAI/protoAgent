@@ -1020,6 +1020,10 @@
           "title": "ADR 0119 — Organize runtime source without renaming imports"
         },
         {
+          "path": "adr/0120-checkpoint-growth-bounds-and-alerts.md",
+          "title": "ADR 0120 — Bound checkpoint growth on the write path, and alert on it"
+        },
+        {
           "path": "adr/index.md",
           "title": "Architecture Decision Records"
         }
