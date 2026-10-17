@@ -118,6 +118,14 @@ async def _checkpoint_prune_loop() -> None:
         cfg = STATE.graph_config
         path = STATE.checkpoint_path
         interval_h = getattr(cfg, "checkpoint_prune_interval_hours", 0) if cfg else 0
+        # Live retention knobs onto the saver's write path (ADR 0120) — a settings change
+        # applies from the next checkpoint write, no restart.
+        try:
+            from graph.checkpointer import configure_saver
+
+            configure_saver(STATE.checkpointer, cfg)
+        except Exception:
+            log.exception("[checkpoint-prune] could not apply retention settings to the saver")
         if path and cfg and interval_h > 0:
             try:
                 max_age = cfg.checkpoint_max_age_days * 86400 if cfg.checkpoint_max_age_days else None
@@ -149,7 +157,13 @@ async def _checkpoint_prune_loop() -> None:
                     max_age_seconds=(None if harvest else max_age),
                     background_keep=cfg.checkpoint_background_keep,
                 )
-                if res["threads_deleted"] or res["checkpoints_deleted"]:
+                # Offloaded media no surviving row references (ADR 0120).
+                from graph.checkpoint_prune import gc_blobs
+
+                blobs_gone = await asyncio.to_thread(gc_blobs, path)
+                if blobs_gone:
+                    log.info("[checkpoint-prune] removed %d unreferenced media payload(s)", blobs_gone)
+                if res["threads_deleted"] or res["checkpoints_deleted"] or blobs_gone:
                     log.info(
                         "[checkpoint-prune] removed %d idle thread(s), %d old checkpoint(s)",
                         res["threads_deleted"],

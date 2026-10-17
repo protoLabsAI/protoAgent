@@ -131,3 +131,4 @@ retired behavior; follow linked guides and references for current procedures.
 | [0117](./0117-subagent-only-tools.md) | Subagent-only tools: a domain's tools live in the subagent that owns it | Proposed |
 | [0118](./0118-interactive-answers-inline-artifacts-and-frame-components.md) | Interactive answers: inline artifacts in chat, streamed previews, a send-to-chat bridge, and frame-rendered plugin components | Accepted |
 | [0119](./0119-source-layout-with-stable-imports.md) | Organize runtime source without renaming imports | Accepted |
+| [0120](./0120-checkpoint-growth-bounds-and-alerts.md) | Bound checkpoint growth on the write path, and alert on it | Proposed |

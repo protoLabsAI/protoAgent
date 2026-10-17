@@ -138,6 +138,21 @@ async def _operator_runtime_status():
             warnings.append(missing_folders)
     except Exception:  # noqa: BLE001 — status must never raise
         pass
+    # Checkpoint DB growth (ADR 0120) — this instance's history DB (file, or one thread)
+    # over the History alert thresholds, and, on a hub, local fleet members' DB files.
+    # Live + self-clearing: it clears once a prune/compact brings the size back under.
+    # Off the loop: a length() aggregate (cached a minute) plus a stat per member.
+    try:
+        from graph.checkpoint_health import db_size_warning, fleet_size_warning
+
+        for ck_warn in (
+            await asyncio.to_thread(db_size_warning, STATE.checkpoint_path, config),
+            await asyncio.to_thread(fleet_size_warning, config),
+        ):
+            if ck_warn:
+                warnings.append(ck_warn)
+    except Exception:  # noqa: BLE001 — status must never raise
+        pass
     # Plugin-reported setup gaps (setup_gaps seam): a plugin that is installed and
     # enabled but can't do its job — no `br` binary, no coder delegate, gh not
     # authenticated — says so HERE, where the operator looks, instead of only in

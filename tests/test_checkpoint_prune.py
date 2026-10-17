@@ -34,7 +34,11 @@ def _count(db, table, thread_id=None):
 
 def _seed(db, threads=("A", "B"), turns=3):
     async def main():
-        app = _graph(build_sqlite_checkpointer(db))
+        saver = build_sqlite_checkpointer(db)
+        # These tests exercise the periodic SWEEP, so the write-path cap (ADR 0120) is
+        # off here; tests/test_checkpoint_bloat.py covers retention on write.
+        saver.prune_on_write = False
+        app = _graph(saver)
         for t in threads:
             for i in range(turns):
                 await app.ainvoke({"messages": [HumanMessage(content=f"{t}{i}")]}, {"configurable": {"thread_id": t}})
@@ -198,6 +202,39 @@ def test_delete_thread_cascade_removes_subthreads(tmp_path):
     # Unrelated thread untouched
     assert _count(db, "checkpoints", "a2a:Y") == 1
     assert _count(db, "writes", "a2a:Y") == 1
+
+
+def test_delete_thread_cascade_removes_leaked_aside_subthreads(tmp_path):
+    """A ``/btw`` aside thread (``<tid>::aside-<hex>``) whose own cleanup failed is
+    removed with its chat — before this it outlived the delete (found in a live run of
+    DELETE /api/chat/sessions on an isolated instance). Look-alike ids stay."""
+    db = str(tmp_path / "c.db")
+    _seed(db, threads=("a2a:X",), turns=1)
+    kept = ("a2a:Xaside-1", "a2a:X:aside-1", "a2a:Y::aside-1", "A2A:X::aside-1")
+    conn = sqlite3.connect(db)
+    for i, tid in enumerate(("a2a:X::aside-0a1b2c",) + kept):
+        cid = f"00000000-0000-6000-8000-0000000000{i:02d}"
+        conn.execute(
+            "INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (tid, "", cid, None, "", b"{}", b"{}"),
+        )
+        conn.execute(
+            "INSERT INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (tid, "", cid, "", 0, "", "", b""),
+        )
+    conn.commit()
+    conn.close()
+
+    delete_thread(db, "a2a:X", cascade=True)
+
+    assert _count(db, "checkpoints", "a2a:X") == 0
+    assert _count(db, "checkpoints", "a2a:X::aside-0a1b2c") == 0
+    assert _count(db, "writes", "a2a:X::aside-0a1b2c") == 0
+    for tid in kept:
+        assert _count(db, "checkpoints", tid) == 1, tid
+        assert _count(db, "writes", tid) == 1, tid
 
 
 # ── reclaim() tests ─────────────────────────────────────────────────────────
@@ -446,7 +483,13 @@ def test_aged_lookup_and_prune_are_single_queries_not_n_plus_1(tmp_path, monkeyp
     statements.clear()
     res = prune_checkpoints(db, keep_per_thread=2, max_age_seconds=30 * 86400, now=now, background_keep=1)
     selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
-    assert len(selects) == 2, selects  # one aged-thread scan + one windowed cap query
+    # One aged-thread scan + the blob-table probe + ONE grouped over-cap query — never a
+    # query per thread. Only the (thread, ns) groups over their cap then get a bounded,
+    # root-aware trim each (ADR 0120); with retention on write that is ~none in steady
+    # state. Here: 8 live x 2 namespaces + 8 background threads are over.
+    trims = [s for s in selects if "ORDER BY checkpoint_id DESC" in s]
+    assert len(selects) - len(trims) == 3, selects
+    assert len(trims) == 8 * 2 + 8, trims
     assert res == {"threads_deleted": 8, "checkpoints_deleted": 8 * (2 + 2 + 3)}
     for t in range(8):
         assert _count(db, "checkpoints", f"old{t}") == 0

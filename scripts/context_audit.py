@@ -44,9 +44,11 @@ def _copy_store(db: Path, tmp: Path) -> Path:
 
 
 def _load_messages(db: Path, thread_id: str) -> list:
-    from langgraph.checkpoint.sqlite import SqliteSaver
+    # The protoAgent saver, not the stock one: it restores offloaded media (ADR 0120),
+    # so image blocks count toward the audit as the model sees them.
+    from graph.checkpointer import ThreadedSqliteSaver
 
-    with SqliteSaver.from_conn_string(str(db)) as saver:
+    with ThreadedSqliteSaver.from_conn_string(str(db)) as saver:
         tup = saver.get_tuple({"configurable": {"thread_id": thread_id}})
         if tup is None:
             return []

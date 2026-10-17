@@ -282,8 +282,53 @@ def _resolve_db(args) -> Path:
     return paths.store("checkpoints.db")
 
 
+def _run_compact(args) -> int:
+    from graph.checkpoint_prune import compact, plan_compaction
+
+    db = _resolve_db(args)
+    if not db.exists():
+        print(f"no checkpoint DB at {db}")
+        return 2
+    plan = plan_compaction(str(db), keep_per_thread=args.keep, background_keep=args.background_keep)
+    plan["db"] = str(db)
+    plan["mode"] = "apply" if args.apply else "dry-run"
+    if args.apply:
+        before = plan["file_bytes"]
+        plan["result"] = compact(str(db), keep_per_thread=args.keep, background_keep=args.background_keep)
+        plan["file_bytes_after"] = _file_bytes(db)
+        plan["file_bytes_before"] = before
+    if args.json:
+        print(json.dumps(plan))
+        return 0
+    print(f"{db}  [{plan['mode']}]")
+    print(
+        f"  file {_human(plan['file_bytes'])} · freelist {_human(plan['freelist_pages'] * plan['page_size'])} · "
+        f"auto_vacuum={'INCREMENTAL' if plan['auto_vacuum'] == 2 else plan['auto_vacuum']}"
+    )
+    print(
+        f"  would delete {plan['checkpoints_to_delete']} checkpoint(s), {_human(plan['bytes_to_delete'])}"
+        f" → expected file ≈ {_human(plan['expected_file_bytes'])}"
+    )
+    for t in plan["threads"]:
+        ns = f" ns={t['ns']!r}" if t["ns"] else ""
+        print(f"    {t['thread_id']}{ns}: {t['delete']}/{t['checkpoints']} rows, {_human(t['bytes'])}")
+    if plan["auto_vacuum"] != 2:
+        print("  note: auto_vacuum is not INCREMENTAL — freed space is reused but the file only shrinks after "
+              "`protoagent checkpoint migrate` with the agent stopped")
+    if args.apply:
+        r = plan["result"]
+        print(
+            f"  applied: {r['checkpoints_deleted']} checkpoint(s), {r['blobs_deleted']} media payload(s) removed; "
+            f"file {_human(plan['file_bytes_before'])} → {_human(plan['file_bytes_after'])}"
+        )
+    else:
+        print("  dry run — nothing changed. Re-run with --apply to reclaim.")
+    return 0
+
+
 def run_checkpoint_cli(argv: list[str]) -> int:
-    """``protoagent checkpoint migrate [--db PATH | --workspace NAME] [--force] [--json]``."""
+    """``protoagent checkpoint migrate [--db PATH | --workspace NAME] [--force] [--json]``;
+    ``protoagent checkpoint compact [--db PATH | --workspace NAME] [--keep N] [--apply] [--json]``."""
     parser = argparse.ArgumentParser(
         prog="protoagent checkpoint",
         description="Maintain this instance's conversation checkpoint DB (checkpoints.db).",
@@ -303,7 +348,28 @@ def run_checkpoint_cli(argv: list[str]) -> int:
     where.add_argument("--workspace", help="a fleet member's DB, under this instance's workspaces/<name>/")
     mig.add_argument("--force", action="store_true", help="migrate even when little space would be freed")
     mig.add_argument("--json", action="store_true", help="print the result as JSON")
+    cmp = sub.add_parser(
+        "compact",
+        help="Reclaim space from a bloated checkpoint DB (DRY RUN unless --apply)",
+        description=(
+            "Trim every session to its newest checkpoints (root-aware: an in-flight subagent's rows and "
+            "the parent's resumable checkpoint survive), drop unreferenced offloaded media, and hand the "
+            "freed pages back to the disk. Without --apply it only reports what it would remove "
+            "(SELECT-only, safe on a live DB). With --apply it is safe alongside a running agent, but "
+            "prefer a quiet moment: the vacuum step rewrites the pages it moves. ADR 0120."
+        ),
+    )
+    cwhere = cmp.add_mutually_exclusive_group()
+    cwhere.add_argument("--db", help="path to a checkpoints.db (default: this instance's)")
+    cwhere.add_argument("--workspace", help="a fleet member's DB, under this instance's workspaces/<name>/")
+    cmp.add_argument("--keep", type=int, default=2, help="root checkpoints kept per session (default 2)")
+    cmp.add_argument("--background-keep", type=int, default=1, help="kept per a2a:background:* thread (default 1)")
+    cmp.add_argument("--apply", action="store_true", help="actually delete + reclaim (default: dry run)")
+    cmp.add_argument("--json", action="store_true", help="print the result as JSON")
     args = parser.parse_args(argv)
+
+    if args.action == "compact":
+        return _run_compact(args)
 
     if not logging.getLogger().handlers:
         logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)

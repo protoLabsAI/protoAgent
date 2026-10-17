@@ -1794,3 +1794,68 @@ async def test_a_queued_delete_cancelled_while_waiting_leaves_no_lock_behind(mon
             pass
         assert cr._DELETE_LOCKS["s1"][1] == 1
     assert cr._DELETE_LOCKS == {}
+
+
+def test_delete_session_cascade_removes_aside_threads_with_writes_and_media(monkeypatch, tmp_path):
+    """Chat delete, end to end through the REAL retirement (ADR 0120 / #4306): the chat's
+    thread, its ``::aside-<id>`` and ``:goal-iter-`` sub-threads lose their checkpoints,
+    pending writes AND offloaded media — and a different chat whose id merely starts
+    with the same characters (``X2`` vs ``X``) keeps all three."""
+    import base64
+    import hashlib
+
+    import runtime.state as rs
+    from langchain_core.messages import HumanMessage, ToolMessage
+    from langgraph.graph import END, START, MessagesState, StateGraph
+
+    from graph.checkpointer import build_sqlite_checkpointer
+
+    ck = str(tmp_path / "checkpoints.db")
+    saver = build_sqlite_checkpointer(ck)
+
+    def _img(tid: str) -> ToolMessage:
+        raw = hashlib.sha256(tid.encode()).digest() * 4096
+        url = "data:image/png;base64," + base64.b64encode(raw).decode()
+        return ToolMessage(content=[{"type": "image_url", "image_url": {"url": url}}], tool_call_id="c1")
+
+    g = StateGraph(MessagesState)
+    g.add_node("tool", lambda s: {"messages": [_img(s["messages"][0].content)]})
+    g.add_edge(START, "tool")
+    g.add_edge("tool", END)
+    app = g.compile(checkpointer=saver)
+
+    gone = ("a2a:X", "a2a:X::aside-0a1b2c", "a2a:X:goal-iter-1")
+    kept = ("a2a:X2", "a2a:X2::aside-0a1b2c", "a2a:Xother", "chat:X2")
+    threads = gone + kept
+
+    async def _seed():
+        for tid in threads:
+            await app.ainvoke({"messages": [HumanMessage(content=tid)]}, {"configurable": {"thread_id": tid}})
+            # A pending write on the latest checkpoint, as an interrupted turn leaves.
+            latest = await saver.aget_tuple({"configurable": {"thread_id": tid}})
+            await saver.aput_writes(latest.config, [("messages", [_img(tid + "-w")])], task_id="t-pending")
+
+    import asyncio
+
+    asyncio.run(_seed())
+
+    def _n(table, tid):
+        conn = sqlite3.connect(ck)
+        try:
+            return conn.execute(f"SELECT COUNT(*) FROM {table} WHERE thread_id=?", (tid,)).fetchone()[0]
+        finally:
+            conn.close()
+
+    for tid in threads:
+        assert _n("checkpoints", tid) and _n("writes", tid) and _n("checkpoint_blobs", tid) == 2, tid
+
+    monkeypatch.setattr(rs.STATE, "checkpoint_path", ck, raising=False)
+    monkeypatch.setattr(rs.STATE, "checkpointer", saver, raising=False)
+    monkeypatch.setattr(rs.STATE, "graph_config", None, raising=False)  # no harvest
+    c = _client(monkeypatch)
+    assert c.delete("/api/chat/sessions/X").json()["deleted"] is True
+
+    for tid in gone:
+        assert (_n("checkpoints", tid), _n("writes", tid), _n("checkpoint_blobs", tid)) == (0, 0, 0), tid
+    for tid in kept:
+        assert (_n("checkpoints", tid) > 0, _n("writes", tid) > 0, _n("checkpoint_blobs", tid)) == (True, True, 2), tid

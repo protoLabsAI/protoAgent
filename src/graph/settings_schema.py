@@ -967,6 +967,45 @@ FIELDS: list[Field] = [
         restart=True,
     ),
     Field(
+        "checkpoint.prune_on_write",
+        "checkpoint_prune_on_write",
+        "History: prune on every write",
+        "bool",
+        "Knowledge",
+        "Apply 'keep N per session' after every checkpoint write, not only on the periodic sweep, so one long "
+        "turn can't grow a session without bound. Keeps the latest checkpoints a resume needs (and an "
+        "in-flight subagent's). Off = only the periodic sweep trims.",
+    ),
+    Field(
+        "checkpoint.offload_media",
+        "checkpoint_offload_media",
+        "History: store images once per session",
+        "bool",
+        "Knowledge",
+        "Store large images in messages (screenshots, renders, pasted pictures) once per session instead of "
+        "inside every checkpoint. The agent and the console still see the same images. Off = every "
+        "checkpoint carries a full copy of each image.",
+    ),
+    Field(
+        "checkpoint.alert_db_mb",
+        "checkpoint_alert_db_mb",
+        "History: alert when DB exceeds (MB)",
+        "number",
+        "Knowledge",
+        "Show a warning banner when the history DB (checkpoints.db + WAL) passes this size; on a fleet hub, "
+        "also for each local member's DB. 0 = no alert.",
+        minimum=0,
+    ),
+    Field(
+        "checkpoint.alert_thread_mb",
+        "checkpoint_alert_thread_mb",
+        "History: alert when one session exceeds (MB)",
+        "number",
+        "Knowledge",
+        "Show a warning banner naming any single session whose stored history passes this size. 0 = no alert.",
+        minimum=0,
+    ),
+    Field(
         "knowledge.facts",
         "knowledge_facts",
         "Extract semantic facts",
@@ -1857,6 +1896,10 @@ _KNOWLEDGE_SUBSECTION = {
     "checkpoint.harvest_enabled": "History",
     "checkpoint.vacuum": "History",
     "checkpoint.vacuum_legacy_on_start": "History",
+    "checkpoint.prune_on_write": "History",
+    "checkpoint.offload_media": "History",
+    "checkpoint.alert_db_mb": "History",
+    "checkpoint.alert_thread_mb": "History",
 }
 for _f in FIELDS:
     if _f.key in _KNOWLEDGE_SUBSECTION:
