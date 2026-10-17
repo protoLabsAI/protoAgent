@@ -37,13 +37,15 @@ first — see Auth.)
 
 ### Headless setup
 
-No wizard needed. Locate the instance with `protoagent config explain` and provision
-`<instance_root>/config/langgraph-config.yaml` plus `secrets.yaml` and mark setup complete in one shot, then serve:
+Locate the instance with `protoagent config explain` and provision
+`<instance_root>/config/langgraph-config.yaml` plus credentials in the same directory's `secrets.yaml`, then validate and serve:
 
 ```bash
-python -m server --setup     # validate the live config + mark setup, then exit
-python -m server --ui none   # serve
+protoagent serve --setup    # validate the live config + mark setup, then exit
+protoagent serve --ui none  # serve
 ```
+
+In a source checkout, replace `protoagent serve` with `uv run python -m server`.
 
 ### Sign in to a Claude or ChatGPT subscription, headless
 
@@ -67,8 +69,8 @@ curl -sX POST http://localhost:7870/api/config/oauth/complete \
 #   device flows poll /api/config/oauth/poll instead
 ```
 
-The credential lands in protoAgent's **own** store, which is refreshed on use — so it
-survives without anyone tending it.
+The credential lands in protoAgent's own store and is refreshed on use. Logins
+can still expire or be revoked; monitor credential status for unattended jobs.
 
 Prefer this to `CLAUDE_CODE_OAUTH_TOKEN`. That variable is a bootstrap/override: it is
 never refreshed and cannot be inspected, so it reads healthy right up until it 401s.
@@ -83,9 +85,8 @@ for a failed job to be the first signal:
 | `borrowed` | a vendor CLI's login; alive only while that person keeps using the CLI |
 | `static` | an env token: never refreshed, never inspectable |
 
-Refresh happens *on use*, so an agent idle longer than the refresh token's lifetime can
-still wake up signed out. Give a low-traffic agent something to do — a scheduled
-heartbeat turn — more often than that TTL.
+An idle agent may need to sign in again if its refresh credential expires. See
+[Model connections](/guides/model-connections) for connection and login management.
 
 ## Drive it via the OpenAI API
 

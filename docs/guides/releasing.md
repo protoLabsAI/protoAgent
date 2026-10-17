@@ -1,223 +1,146 @@
 # Releasing
 
-protoAgent releases are **manual and on-demand** — you pick the bump level and
-run one workflow when a batch of work is ready. Merges to `main` do **not** cut
-releases on their own.
+Prepare a version/changelog PR, merge it through review, then tag its **merged
+commit**. Releases are manual; ordinary merges publish a rolling Docker image
+but do not create a versioned release.
+
+Prerequisites: `RELEASE_ENABLED=true`, the secrets below, and permission to merge
+and push tags. Forks also need their own image name and package publication
+configuration; see [Deploy via GHCR](/guides/deploy).
 
 ## The flow at a glance
 
-```
-feature PR (adds a CHANGELOG [Unreleased] entry)  ──▶  merge to main
-                                                          │
-run "Prepare Release" (workflow_dispatch, pick bump) ◀────┘
-   │  bumps pyproject.toml + rolls CHANGELOG.md
-   │  opens chore: release vX.Y.Z PR   (does NOT merge or tag)
-   ▼
-you merge the PR (CI green)  ──▶  you push tag vX.Y.Z  ──┬──▶  release.yml (on: push tag):
-                                                        │       • builds + pushes the semver Docker tags
-                                                        │       • creates the GitHub Release (notes minus chore/docs)
-                                                        │       • posts notes to Discord (release-tools)
-                                                        │
-                                                        └──▶  publish.yml (on: push tag):
-                                                                • builds the console + wheel
-                                                                • publishes to PyPI (Trusted Publishing / OIDC)
-
-                     desktop binaries do NOT ride the tag — dispatch desktop-build.yml (see above)
-```
-
-The two tag-triggered workflows run **independently and in parallel**; neither waits
-on the other. That's deliberate — `publish.yml` used to trigger on `release: published`
-(the event `release.yml` produces), and when that derivative event silently failed to
-fire, PyPI sat five releases behind while Docker and the GitHub Releases looked fine.
-Nothing alerts on a trigger that simply doesn't happen.
-
-`latest` Docker tag is pushed on every `main` merge by `docker-publish.yml` —
-independent of releases.
+| Action | Result |
+| --- | --- |
+| Dispatch `prepare-release.yml` | Version, lockfile, and changelog PR |
+| Merge that PR and push `vX.Y.Z` at its merge commit | Independent `release.yml` and `publish.yml` runs: semver Docker images, GitHub release, PyPI wheel |
+| Dispatch `desktop-build.yml` with that tag | Desktop artifacts; signed updater bundles enable `latest.json` and promotion to Latest |
 
 ### Desktop
 
-Desktop builds are **manual** — `desktop-build.yml` runs on `workflow_dispatch` only,
-**not** on tag pushes. The macOS (10×) and Windows (2×) legs are the repo's only paid
-CI, and building the full matrix on every tag (dozens/month) was the dominant cost, so
-desktop drops are on-demand. A normal `git push` of a tag still ships the Docker image
-and a GitHub Release (via `release.yml`); only the desktop binaries wait for a dispatch.
-
-To cut a desktop release, dispatch `desktop-build.yml` with the **tag** input set to the
-release tag (`vX.Y.Z`):
+Desktop builds run on manual dispatch, not tag pushes:
 
 ```sh
 gh workflow run desktop-build.yml -f tag=vX.Y.Z
 ```
 
-That builds the three-platform matrix and attaches the artifacts to that GitHub Release:
-the macOS `.dmg` (signed + notarized — requires the full Apple secret set, the leg fails
-otherwise), the Linux `.AppImage` + `.deb`, and the Windows NSIS `-setup.exe` (both
-unsigned). When the org updater signing key is present, the legs also attach signed
-updater bundles and a fan-in job uploads `latest.json` (the manifest the in-app updater
-polls) and promotes the release to **Latest**. See `apps/desktop/README.md` §§ Platforms
-& CI / Updates.
+Wait for the GitHub release to exist before dispatching. The build attaches
+macOS, Linux, and Windows artifacts to it. macOS requires signing/notarization
+credentials; updater bundles require the updater signing key. Without a tag,
+the workflow builds CI artifacts only. See
+[desktop build and update configuration](https://github.com/protoLabsAI/protoAgent/blob/main/apps/desktop/README.md#platforms--ci)
+for platform requirements and runner overrides.
 
-> **Dispatching without a tag** (from a branch) is a **test build**: bundles upload as
-> workflow artifacts only — no release, no `latest.json`, no `Latest` change.
+**Latest means the last promoted desktop release, not the newest tag.**
+`release.yml` creates a non-Latest release. The desktop fan-in promotes it only
+after uploading `latest.json`, which the in-app updater needs.
 
-> **One failed platform withholds the whole publish — and there is a door.** The fan-in
-> normally requires every leg, because a partial `latest.json` skews versions across
-> platforms. The cost showed up on 2026-08-28: macOS and Windows built and signed, a Linux
-> packaging failure withheld the manifest, and *nobody* updated. If a leg fails and the fix
-> is not minutes away, re-dispatch with `-f allow_partial=true`: the manifest ships for the
-> platforms that built and the release is promoted, so their users update. Users on the
-> failed platform keep their current version (their updater sees no entry for them) and
-> must download a fresh install from the previous release until a follow-up ships — the
-> public download page is deliberately NOT refreshed on a partial. Prefer fixing forward;
-> reach for this when the alternative is nobody updating at all.
-
-> **`Latest` tracks the last desktop release, not the newest tag.** `release.yml` creates
-> every release `--latest=false`; a release is promoted to `Latest` only when its desktop
-> build's fan-in has uploaded `latest.json`, so the in-app updater never 404s on a release
-> that has no manifest. Tags you never build desktop for stay non-Latest (their Docker
-> image and notes are still published).
-
-> **Runner cost.** Every other workflow runs on Namespace; the desktop matrix is
-> the only GitHub-hosted usage (macOS bills at 10×, Windows 2×). To move a leg onto
-> a Namespace profile once the org provisions one, set the repo variable
-> `DESKTOP_MACOS_RUNNER` / `DESKTOP_WINDOWS_RUNNER` / `DESKTOP_LINUX_RUNNER` to the
-> profile name — no workflow edit. Leave `DESKTOP_LINUX_RUNNER` unset unless the
-> profile's base image is glibc ≤ 2.35 (Ubuntu 22.04), or the AppImage's portability
-> floor rises. Defaults keep the current hosted runners.
+If one platform fails, the default fan-in withholds the manifest. Fix and rerun
+when possible. For an intentional partial release, dispatch with
+`-f tag=vX.Y.Z -f allow_partial=true`. The manifest then covers available signed
+bundles; users on missing platforms stay on their previous version. The public
+download page is not refreshed for a partial release.
 
 ## Cutting a release
 
-1. **Actions → Prepare Release → Run workflow.** Choose the **bump**: `patch`
-   (default) · `minor` · `major`. Use `dry_run` to preview the version +
-   changelog/​pyproject diff without opening a PR.
-2. The workflow bumps the version, rolls the changelog, and opens
-   `chore: release vX.Y.Z`. It **does not merge or tag** — that's deliberate
-   (fleet policy: auto-merge fired on stale SHAs and broke stacked PRs).
-3. **Merge the release PR** once CI passes (squash).
-4. **Push the tag** on the merged release commit — this is what triggers the
-   release:
-   ```sh
-   git checkout main && git pull
-   git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z
-   ```
-   That one tag push triggers **both** `release.yml` (semver Docker tags, the
-   GitHub Release, the Discord post) and `publish.yml` (the PyPI wheel) — each on
-   `on: push: tags: 'v*.*.*'`, independently.
-5. **Dispatch the desktop build** if this release should reach desktop users:
-   `gh workflow run desktop-build.yml -f tag=vX.Y.Z`. It is *not* tag-triggered
-   (paid CI — see [Desktop](#desktop) above), and until it finishes the release
-   stays **non-Latest**, so the in-app updater keeps offering the previous one.
+1. Dispatch **Prepare Release** with `patch`, `minor`, or `major`. Add
+   `-f dry_run=true` to preview instead of opening a PR:
 
-**Verify after a release** — three channels, three checks:
+   ```sh
+   gh workflow run prepare-release.yml -f bump=patch
+   ```
+
+2. Review the resulting `prepare-release/vX.Y.Z` PR, including the version,
+   lockfile, collated changelog, and marketing entry. Merge once its checks and
+   current-head review are complete. The workflow does not merge or tag for you.
+3. Tag that PR's **merged commit**, even if more work has since reached `main`.
+   From a checkout of this repository, replace the example PR number and tag:
+
+   ```sh
+   RELEASE_PR=1234
+   RELEASE_TAG=vX.Y.Z
+   RELEASE_COMMIT=$(gh pr view "$RELEASE_PR" --json mergeCommit -q .mergeCommit.oid)
+   test -n "$RELEASE_COMMIT" && test "$RELEASE_COMMIT" != null || exit 1
+   git fetch origin main --tags
+   git show "$RELEASE_COMMIT:pyproject.toml"
+   # Confirm its version matches RELEASE_TAG before tagging:
+   git tag -a "$RELEASE_TAG" "$RELEASE_COMMIT" -m "Release $RELEASE_TAG"
+   git push origin "$RELEASE_TAG"
+   ```
+
+4. Wait for **release** and **publish** to succeed. These tag-triggered workflows
+   run independently; success in one does not establish success in the other.
+5. Dispatch the [desktop build](#desktop) if this release should reach desktop
+   users, then verify its artifacts and manifest.
+
+Check each publication channel using the version you released:
 
 ```sh
-gh release view vX.Y.Z --json tagName,isLatest        # GitHub Release (+ Latest after desktop)
-docker manifest inspect ghcr.io/protolabsai/protoagent:X.Y.Z >/dev/null && echo docker-ok
-curl -s https://pypi.org/pypi/protolabs-agent/json | jq -r .info.version   # PyPI
+gh release view vX.Y.Z --json tagName,assets,url
+docker manifest inspect ghcr.io/protolabsai/protoagent:X.Y.Z
+curl -fsS https://pypi.org/pypi/protolabs-agent/X.Y.Z/json | jq -r .info.version
+# The currently promoted desktop release:
+gh api repos/protoLabsAI/protoAgent/releases/latest --jq .tag_name
 ```
 
-> **Don't also dispatch the Release workflow by hand after pushing the tag.**
-> The tag push already triggers it; a manual `workflow_dispatch` is redundant
-> and fails with `422 Release.tag_name already exists` (it leaves a harmless red
-> ✗ in Actions — the `[push]`-triggered run is the real one). The dispatch
-> trigger exists only to *re-run* a release against a tag that already exists.
-
-Don't bump `pyproject.toml` by hand — Prepare Release owns the version. You do
-push the tag by hand (step 4); that tag push is the release trigger.
+Use your fork's repository, image, and PyPI package where applicable. Do not
+manually dispatch `release.yml` as well as pushing the tag: both runs try to
+create the same release. If publication fails, inspect the failed step and
+existing artifacts before retrying. Do not move a published tag to another
+commit. Prepare Release owns version bumps; feature PRs should not bump them.
 
 ## The changelog protocol
 
-We keep a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)-style
-[`CHANGELOG.md`](https://github.com/protoLabsAI/protoAgent/blob/main/CHANGELOG.md).
+Each feature PR adds `changelog.d/<issue-or-pr>.<kind>.md`, with a bold lead-in
+including its issue/PR reference. Follow the
+[fragment format](https://github.com/protoLabsAI/protoAgent/blob/main/changelog.d/README.md);
+do not edit `CHANGELOG.md` directly in feature PRs.
 
-- **In your feature PR**, add a **news fragment** — a new file at
-  `changelog.d/<issue-or-pr>.<kind>.md`, where `<kind>` is `added` / `changed` /
-  `fixed` / `removed` / `deprecated` / `security` / `docs`. Its contents are the
-  markdown bullet(s) exactly as they should read in the release notes. See
-  [`changelog.d/README.md`](https://github.com/protoLabsAI/protoAgent/blob/main/changelog.d/README.md).
+Prepare Release runs `changelog.py collate`, `roll`, and `scaffold`: it consumes
+the fragments, creates the dated release section, and drafts the marketing
+changelog entry. Those changes are reviewed in the release PR. Empty release
+sections are omitted from the marketing changelog.
 
-  **Don't edit `CHANGELOG.md` in a feature PR.** Every PR used to write to the same
-  three lines under `## [Unreleased]`, so two PRs in flight conflicted *by
-  construction* — a 13-PR stack cost ~10 extra CI cycles, none of the conflicts
-  semantic (#2322). A fragment is a new file; there is nothing to 3-way merge.
-- CI **enforces** an entry (#2174): the `Changelog entry` check fails any PR that doesn't
-  add a `changelog.d/` fragment. A direct `CHANGELOG.md` edit does **not** satisfy it —
-  an entry written there is precisely the shared-anchor conflict fragments remove. (You
-  may still touch `CHANGELOG.md`, e.g. a typo in an old released section; it just doesn't
-  substitute for the fragment.) Escape hatches are unchanged: the `skip-changelog` label,
-  a `release/*` head branch, and dependabot.
-- **At release time**, `scripts/changelog.py collate` folds every fragment into
-  `[Unreleased]` — one heading per kind, merging into an existing heading rather than
-  duplicating it — and deletes the fragments. Then `roll <version>` (both run by
-  `prepare-release.yml`) moves that section into a dated `## [X.Y.Z] - YYYY-MM-DD` one
-  and leaves a fresh empty `[Unreleased]`. So `CHANGELOG.md` is only ever edited by the
-  release process.
-- The rolled changelog is committed **inside the release PR**, so it goes
-  through the same `main` ruleset (PR + checks) as any change — nothing is
-  pushed to `main` directly.
-- **The marketing `/changelog`** (`sites/marketing/data/changelog.json`) is
-  scaffolded from each release's section by `changelog.py scaffold`. A release
-  whose PRs added **no** `[Unreleased]` bullets has an empty section, so it's
-  **omitted** from the marketing changelog rather than shown as a bare
-  version+date line — add a bullet in your PR for the release to appear.
+The `Changelog entry` check requires a fragment except for `release/*` or
+`prepare-release/*` branches, Dependabot, or PRs deliberately labeled
+`skip-changelog`.
 
 ### Monthly archives (#2437)
 
-`CHANGELOG.md` is kept small: it holds the header, `[Unreleased]`, and **the current
-month's** releases. Older releases live in dated archive files next to it —
-[`CHANGELOG-THROUGH-2026-07.md`](https://github.com/protoLabsAI/protoAgent/blob/main/CHANGELOG-THROUGH-2026-07.md)
-for everything through July 2026, then one `CHANGELOG-YYYY-MM.md` per completed month.
-The root file links to them under **Older releases**; each archive links back.
+Keep the current month's releases in `CHANGELOG.md` and older releases in dated
+archives linked under **Older releases**. At the first release of a new month,
+archive the completed month in the release PR. For example:
 
-- **Nothing changes for contributors or the release run** — you still add a
-  `changelog.d/` fragment, and `collate`/`roll` still write **only** `CHANGELOG.md`.
-- `scripts/changelog.py notes <version>` reads the archives too, so rebuilding an old
-  desktop release still finds that version's updater notes.
-- **Rollover is a manual pre-release chore, once per month boundary** (like rotating
-  shipped roadmap items). At the first release of a new month, move the just-completed
-  month out of the root:
+```sh
+uv run python scripts/changelog.py archive --before 2026-10-01 --out CHANGELOG-2026-09.md
+```
 
-  ```sh
-  # e.g. cutting the first September release → archive August:
-  python scripts/changelog.py archive --before 2026-09-01 --out CHANGELOG-2026-08.md
-  ```
-
-  `archive` moves sections dated **before** `--before` verbatim (no regeneration from
-  git), is idempotent, and rewrites the root's archive index. Commit the moved root +
-  the new archive file in the release PR. `roll` on the current month is unaffected.
+Commit both the archive and updated root file. The command moves older sections
+verbatim and updates the archive index; `changelog.py notes <version>` also reads
+the archives. Feature contributors continue adding fragments normally.
 
 ## Branch protection
 
-`main` is protected by a repository **ruleset**: every change needs a PR, and
-these checks must pass to merge —
+`main` uses a repository ruleset, not legacy branch protection. Inspect the
+current requirements rather than relying on a copied check list:
 
-| Required check | What it runs |
-|---|---|
-| Verify workspace config | `release-tools`' `verify-workspace-config` |
-| Lint (ruff + import contracts) | `ruff` + the import-layering contract, plus attribution and lockfile sync |
-| Python tests | `pytest` |
-| A2A live smoke (lean tier) | live A2A smoke against the lean tier |
-| Web E2E smoke | Playwright vs. mock backend |
-| build | the desktop/app build |
-| gitleaks (tree) | secret scan over the tree |
+```sh
+gh api repos/:owner/:repo/rulesets --jq '.[] | {id, name, enforcement}'
+# Substitute the main ruleset ID printed above:
+gh api repos/:owner/:repo/rulesets/RULESET_ID --jq .rules
+```
 
-Some jobs run on every PR but are **not** required to merge — treat a failure as
-real, just not blocking:
-
-| Advisory check | What it runs | Why it isn't required |
-|---|---|---|
-| Changelog entry | `scripts/changelog_gate.sh` — the merge-base diff must add a `changelog.d/<issue>.<kind>.md` fragment (#2322). Editing `CHANGELOG.md` directly does *not* satisfy it. Escape hatches: the `skip-changelog` label (apply it and the gate re-runs itself), `release/*` branches, dependabot | Lives in its own `changelog.yml` so labeling can re-trigger it (#2293); the split deliberately carried no protection migration |
-| Fleet integration (multi-instance) | the multi-instance fleet suite | Boots a real hub + members; too slow and too environment-sensitive to block every PR |
-| Windows tests (native) | Stable aggregate over two full-suite Python shards and a conditional desktop Rust lane. A fail-safe diff classifier skips irrelevant native runners for known docs/web/marketing-only PRs; `main` always runs both | Promotion to required is tracked in #2455 |
-
-Direct pushes, force-pushes, and branch deletion are blocked. Approvals are set
-to **0** so the solo/automated flow (you + the release bot) is never blocked on
-a reviewer — the gate is CI, not human review.
+The ruleset requires a PR and status checks, including **Windows tests (native)**
+and **Review at head**. Zero required human approvals does not waive current-head
+panel review. Inspect its findings as well as the status: a WARN can satisfy the
+head check. Follow the
+[repository landing requirements](https://github.com/protoLabsAI/protoAgent/blob/main/PROTO.md#landing-a-pr).
 
 ## Required secrets
 
-| Secret | Used by | Purpose |
-|---|---|---|
-| `GH_PAT` | `prepare-release.yml` | A PAT (not `GITHUB_TOKEN`) so the release-branch push fires the PR's CI checks — the default token can't trigger workflows on its own pushes. (The release tag is pushed by a human, so it triggers `release.yml` normally.) |
-| `GATEWAY_API_KEY` | `release.yml` (release-tools) | Rewrites the commit range into themed release notes via the protoLabs gateway. |
-| `DISCORD_RELEASE_WEBHOOK` | `release.yml` (release-tools) | Posts the release embed to Discord. **Optional** — the step is `continue-on-error`, so releases still succeed without it; set it to enable the Discord post. |
+| Configuration | Purpose |
+| --- | --- |
+| `GH_PAT` secret | Prepare Release checks out/pushes its branch and creates the PR using this token. Grant repository contents and pull-request write permissions so the PR can run downstream CI. |
+| PyPI trusted publisher | Configure the target package for this repository's `publish.yml` and `pypi` environment; publication uses OIDC, not an API-key secret. |
+| Desktop signing secrets | Required for signed desktop publication; see the [desktop README](https://github.com/protoLabsAI/protoAgent/blob/main/apps/desktop/README.md). |
+| `GATEWAY_API_KEY`, `DISCORD_RELEASE_WEBHOOK` secrets | Optional themed release notes and Discord notification. That step is best-effort; Docker/GitHub publication does not depend on it. |

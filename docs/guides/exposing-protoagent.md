@@ -5,39 +5,21 @@ Expose the A2A routes you need, require a bearer token, and block the operator A
 at the reverse proxy. Keep the console private. For private remote access, use
 [phone access over Tailscale](/guides/phone-access) instead.
 
-## The shape of the job
-
-Four moves, in this order — the threat model first, because the mistakes here are
-the expensive kind:
-
-1. **Know what you're exposing** — the surfaces below are not equally safe to publish.
-2. **Publish only the consumer surfaces** (`/a2a`, the agent card), never the operator
-   API or console — [The pattern](#the-pattern).
-3. **Put a real edge in front** — a tunnel or reverse proxy that terminates TLS and
-   forwards only those paths ([Cloudflare Tunnel](#worked-example-cloudflare-tunnel) or
-   [nginx / Caddy](#generic-reverse-proxy-nginx--caddy)).
-4. **Harden what's left** — tokens, rate limits, egress
-   ([Defense in depth](#defense-in-depth-optional-recommended)), then walk the
-   [Checklist](#checklist) before you announce the URL.
+<span id="the-shape-of-the-job"></span>
 
 ## The threat model — know what each surface is
 
-A protoAgent serves several HTTP surfaces at the root, and they are **not** equally safe
-to expose:
+| Surface | Public proxy policy |
+| --- | --- |
+| `/.well-known/agent-card.json` | Allow discovery; review the identity and skills it publishes |
+| `/a2a` | Allow authenticated A2A calls |
+| `/health` | Optionally allow liveness checks |
+| `/v1/*` | Block unless intentionally providing an authenticated OpenAI-compatible API |
+| `/app`, `/api/*`, all other paths | Block; keep operator access private |
 
-| Surface | What it is | Safe to expose publicly? |
-| --- | --- | --- |
-| `/.well-known/agent-card.json` | The A2A agent card — public identity + skills, for discovery | **Yes** — it's designed to be read by anyone |
-| `/a2a` | The A2A JSON-RPC endpoint — send the agent messages/tasks | **Yes, but only token-gated** |
-| `/health` | Liveness probe | Yes (harmless) |
-| `/v1/*` | OpenAI-compatible API — chat/completions against the agent | Only if you *want* an OpenAI-compatible public API, and only token-gated |
-| `/app` | The operator **console** (React UI) | **No** |
-| `/api/*` | The operator API — config, sessions, **code execution**, file access | **Never** |
-
-`/api/*` and the tools behind the console can run code, read files, and change the
-agent's configuration. `/app` is the door to them. Publishing either to the internet is
-equivalent to publishing a remote shell. **The whole game is keeping `/app` and `/api`
-off the public net while letting `/a2a` through.**
+A2A callers can trigger the agent's tools, so a token does not replace tool and
+network restrictions. Operator routes additionally expose configuration, files,
+and plugin installation.
 
 ## The pattern
 
@@ -45,7 +27,7 @@ off the public net while letting `/a2a` through.**
    interface — never `0.0.0.0` on a public IP. A reverse proxy or tunnel is the only
    thing that reaches it from outside.
 2. **Put a reverse proxy / tunnel in front** (Cloudflare Tunnel, nginx, Caddy, …) and
-   have it forward **only** `/.well-known/*`, `/a2a*`, and `/health` to the agent.
+   have it forward **only** `/.well-known/agent-card.json`, `/a2a`, and optionally `/health` to the agent.
    **404 everything else** — a catch-all so `/app`, `/api`, `/v1` (unless you deliberately
    want it), and any future route are invisible from the public hostname.
 3. **Require a bearer token.** Set `A2A_AUTH_TOKEN` to a strong secret. protoAgent then
@@ -54,20 +36,17 @@ off the public net while letting `/a2a` through.**
    needs the token.
 4. **Advertise the real URL.** Set `A2A_PUBLIC_URL` to the public origin
    (`https://agent.example.com`) so the card advertises a reachable interface, not a
-   loopback address. Keep `a2a.require_routable_url: true` in config so the agent
+   loopback address. Set `a2a.require_routable_url: true` in config so the agent
    **refuses to start** if the card would advertise a loopback URL — a boot-time guard
    against a misconfigured proxy silently publishing an undiscoverable or wrong card.
 5. **Keep the operator surface on the private net.** Reach `/app` + `/api` over the
    tailnet/LAN (a separate private bind), never through the public proxy.
 
-That's defense in three layers: the proxy only routes the safe paths, the 404 catch-all
-hides the rest, and the bearer token gates the actions on the paths that *are* routed.
-
 ## Worked example — Cloudflare Tunnel {#worked-example-cloudflare-tunnel}
 
-This is the real setup for `ava.proto-labs.ai` (the fleet's orchestrator). A `cloudflared`
-tunnel fronts the agent; the agent's container is only reachable inside the Docker network
-and over the tailnet, never on a public port.
+Start with a configured agent and a named tunnel for your domain. The example
+assumes `cloudflared` already runs on a Docker network named `ai`; create that
+network and attach the tunnel container before deploying the agent service.
 
 Ingress rules (`cloudflared` `config.yaml`) — order matters, first match wins:
 
@@ -75,14 +54,14 @@ Ingress rules (`cloudflared` `config.yaml`) — order matters, first match wins:
 ingress:
   # Public A2A surface only → the agent container (reached by name on the shared net).
   - hostname: agent.example.com
-    path: /.well-known/.*
-    service: http://ava:7870
+    path: '^/\.well-known/agent-card\.json$'
+    service: http://agent:7870
   - hostname: agent.example.com
-    path: /a2a.*
-    service: http://ava:7870
+    path: '^/a2a$'
+    service: http://agent:7870
   - hostname: agent.example.com
-    path: /health
-    service: http://ava:7870
+    path: '^/health$'
+    service: http://agent:7870
   # Lockdown: everything else on this host 404s — /app + /api never reach the agent.
   - hostname: agent.example.com
     service: http_status:404
@@ -95,21 +74,38 @@ on, token required:
 
 ```yaml
 services:
-  ava:
-    image: ghcr.io/you/ava:latest
+  agent:
+    image: ghcr.io/protolabsai/protoagent:latest
     expose: ["7870"]                  # NOT `ports:` on a public IP — internal only
     environment:
       A2A_PUBLIC_URL: https://agent.example.com
-      A2A_AUTH_TOKEN: ${AVA_A2A_TOKEN:?a public endpoint must not boot without a token}
+      A2A_AUTH_TOKEN: ${A2A_AUTH_TOKEN:?a public endpoint must not boot without a token}
       PROTOAGENT_UI: console          # console served, but only reachable privately
+    volumes: [agent-data:/sandbox]
     networks: [ai]                    # the same external network cloudflared is on
     # (bind the operator console to the tailnet with a separate published port if wanted:
     #  ports: ["100.x.y.z:7876:7870"]  → http://host:7876/app over the tailnet only)
+volumes:
+  agent-data:
+networks:
+  ai:
+    external: true
 ```
 
 Because `cloudflared` shares the `ai` network, it reaches the container as
-`http://ava:7870` — no public port on the host at all. DNS for the hostname points at the
+`http://agent:7870` — no public port on the host at all. DNS for the hostname points at the
 tunnel (`cloudflared tunnel route dns <tunnel> agent.example.com`); the edge terminates TLS.
+
+Validate the [Cloudflare ingress rules](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/configuration-file/)
+before restarting the tunnel:
+
+```bash
+cloudflared tunnel ingress validate
+cloudflared tunnel ingress rule https://agent.example.com/a2a
+cloudflared tunnel ingress rule https://agent.example.com/api/config
+```
+
+The first URL must match the agent service; the second must match the 404 rule.
 
 ### Verify the lockdown
 
@@ -130,7 +126,7 @@ Then an authed call should succeed:
 
 ```
 $ curl -s -X POST https://agent.example.com/a2a \
-    -H "Authorization: Bearer $AVA_A2A_TOKEN" -H 'content-type: application/json' \
+    -H "Authorization: Bearer $A2A_AUTH_TOKEN" -H 'content-type: application/json' \
     -d '{"jsonrpc":"2.0","id":"1","method":"message/send",
          "params":{"message":{"role":"user","messageId":"m1",
          "parts":[{"kind":"text","text":"who are you?"}]}}}'
@@ -141,11 +137,13 @@ the ones that matter.
 
 ## Generic reverse proxy (nginx / Caddy) {#generic-reverse-proxy-nginx--caddy}
 
-Same shape without a tunnel — allowlist the safe paths, default-deny the rest. Caddy:
+With Caddy running on the same host as the agent, use
+[exact path matchers](https://caddyserver.com/docs/caddyfile/matchers#path) and a
+404 fallback:
 
 ```
 agent.example.com {
-    @public path /a2a* /.well-known/* /health
+    @public path /a2a /.well-known/agent-card.json /health
     handle @public {
         reverse_proxy 127.0.0.1:7870
     }
@@ -161,32 +159,23 @@ the app's auth are independent layers, and you want both.
 
 ## Defense in depth (optional, recommended)
 
-The above is the floor. On top of it:
-
-- **Edge WAF / rate limiting.** A proxy like Cloudflare gives you managed rules, bot
-  filtering, and rate limits at the edge for free. Turn on rate limiting on `/a2a` — an
-  agent endpoint is a natural target for abuse.
-- **A strong, rotated token.** `openssl rand -hex 32`. Store it in a secrets manager, not
-  the compose file. Rotate it if it ever lands in a log or a transcript.
-- **Zero-Trust for the operator surface.** If you ever need `/app` reachable off the
-  tailnet, put it behind an identity gate (e.g. Cloudflare Access / an SSO proxy) — never
-  behind just the bearer token. The console is an operator tool; treat it like SSH.
-- **Scope the agent's power.** A public agent should be *least-privilege*: `allow_run:
-  false` (no shell), read-mostly tools, no write credentials it doesn't need. If it
-  delegates, it presents downstream tokens — those are separate secrets, scoped per peer.
-- **Isolate the network.** The container should reach only what it needs (the model
-  gateway, its delegates). Don't give a public-facing agent a route to your whole LAN.
+- Restrict tools and credentials to the work public callers need; use
+  `filesystem.allow_run: false` when shell access is unnecessary. Restrict outbound network
+  access too; see [Sandboxing & egress](/guides/sandboxing).
+- Configure edge rate limits appropriate to your traffic and rotate compromised
+  tokens. Store tokens outside tracked Compose files.
+- If operators need a public console hostname, put that **separate hostname**
+  behind an identity-aware proxy protecting the console and every backend route.
+  Keep the application token enabled. The A2A allowlist above deliberately does
+  not provide browser access.
 
 ## Checklist
 
-- [ ] Agent bound private (loopback/tailnet), **no** public host port.
-- [ ] Proxy/tunnel forwards **only** `/.well-known/*`, `/a2a*`, `/health`.
-- [ ] Per-host **404 catch-all** hides `/app`, `/api`, `/v1`.
-- [ ] `A2A_AUTH_TOKEN` set to a strong secret (from a secrets manager).
-- [ ] `A2A_PUBLIC_URL` = the public origin; `require_routable_url: true`.
-- [ ] Verified from outside: card `200`, `/a2a` no-token `401`, `/app` `404`, `/api` `404`.
-- [ ] Least-privilege tools; `allow_run: false` unless truly needed.
-- [ ] (Recommended) edge rate-limiting; operator console behind identity, not just the token.
+Before sharing the URL, verify the public card advertises the correct origin,
+the unauthenticated A2A call returns `401`, and a token-authenticated call works.
+Check that `/app`, `/api/config`, `/metrics`, `/v1/models`, and an unknown path
+return `404` through the public proxy. Repeat after changing proxy rules. Confirm
+that the underlying agent port cannot bypass the proxy from the public network.
 
 ## See also
 
