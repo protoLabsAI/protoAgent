@@ -359,12 +359,15 @@ export function ChatSurface({
     <section className="panel stage-panel chat-stage" style={active ? undefined : { display: "none" }} aria-hidden={!active} data-kb-scope="chat">
       {/* DS TabBar (#832): a tab per session (status dot · title · close) + "+".
           Double-click a title to rename (TabBar owns the inline EditableText).
-          `responsive` collapses to a DS-native <select> + add in a narrow panel
-          (container query). The status dot rides the `icon` slot — wide-strip only:
-          the collapsed <option> can't host markup, matching the old behavior. */}
-      {/* Suppressed on phones: the `responsive` collapse is a <select>, a desktop idiom that
-          reads as a form control rather than a thread switcher. The chat-first shell puts the
-          session title in its header and opens SessionSheet on tap instead (MobileShell). */}
+          `responsive` collapses in a narrow panel (container query at 26rem) to a quiet
+          ghost trigger that opens a themed DS Menu — radio rows to switch the active
+          session plus a "Manage" section to rename/close (ui@0.68.2, protoContent#609),
+          NOT the earlier native <select>. The status dot (and the incognito eye-off) now
+          ride the `icon` slot on BOTH the collapsed trigger and every radio row, where the
+          old <option> could host no markup — so the dot shows collapsed as well as wide. */}
+      {/* Suppressed on phones: the `responsive` collapse is still a desktop panel idiom (a
+          dropdown switcher inside a narrow column), not the chat-first shell's model. That
+          shell puts the session title in its header and opens SessionSheet on tap (MobileShell). */}
       {mobile ? null : (
       <div
         className={`chat-tabbar-wrap${shiftHeld ? " chat-tabbar-wrap--del chat-tabbar-wrap--incognito" : ""}`}
