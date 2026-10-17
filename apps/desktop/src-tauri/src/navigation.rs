@@ -180,7 +180,7 @@ fn split_loopback(target: &str, port: u16) -> Option<(String, String)> {
 }
 
 /// Is this own-origin target a CONSOLE page (a second chat window), rather than something else
-/// the sidecar serves — a chat image, a plugin asset, an API document? Before #4309 every
+/// the sidecar serves — a chat image, a plugin asset, an API document? Before #4312 every
 /// own-origin URL was a console page, so an image's "open in new tab" (its `src` is
 /// `http://127.0.0.1:<sidecar>/media/<file>?sig=…` in the desktop) opened an empty second app
 /// window instead of the image. The console lives at the asset scheme, the bare root, `/app`
@@ -490,7 +490,7 @@ mod new_window_tests {
         percent_decode, route_new_window, NewWindow,
     };
 
-    // ── #4309: an image's "open in new tab" is the browser, not a second app window ──
+    // ── #4312: an image's "open in new tab" is the browser, not a second app window ──
     #[test]
     fn a_chat_image_on_our_server_is_media_not_a_window() {
         // The exact shape the DS image button opens in the desktop: `apiUrl()` absolutized
