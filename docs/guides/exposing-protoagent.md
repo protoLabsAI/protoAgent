@@ -165,6 +165,10 @@ the app's auth are independent layers, and you want both.
   behind an identity-aware proxy protecting the console and every backend route.
   Keep the application token enabled. The A2A allowlist above deliberately does
   not provide browser access.
+  If an origin allowlist is enabled, include that console's public origin in
+  [`A2A_ALLOWED_ORIGINS`](/reference/environment-variables#streaming-origin-verification).
+  Otherwise protected browser API requests, including streamed A2A calls, can
+  return `403` even with a valid token.
 
 ## Checklist
 
