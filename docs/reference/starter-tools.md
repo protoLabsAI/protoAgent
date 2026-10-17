@@ -95,7 +95,7 @@ Built by default; drop with `middleware.scheduler: false` (or `SCHEDULER_DISABLE
 
 | Tool | What it does |
 |---|---|
-| [`schedule_task(prompt, when, job_id=None, timezone=None)`](#schedule_task) | Persist a future turn — cron expression or ISO datetime. |
+| [`schedule_task(prompt, when, job_id=None, timezone=None, ttl=None, max_fires=None)`](#schedule_task) | Persist a future turn — cron expression or ISO datetime. |
 | [`list_schedules()`](#list_schedules) | This agent's jobs (never another agent's). |
 | [`cancel_schedule(job_id)`](#cancel_schedule) | Cancel one job by id. |
 | [`wait(seconds, then)`](#wait) | End the turn now, resume in `seconds` with `then` as the instruction. **Lead agent only.** |
@@ -614,21 +614,30 @@ audit trail.
 ### `schedule_task` {#schedule_task}
 
 ```python
-async def schedule_task(prompt: str, when: str, job_id: str | None = None, timezone: str | None = None) -> str
+async def schedule_task(
+    prompt: str, when: str, job_id: str | None = None,
+    timezone: str | None = None, ttl: str | None = None,
+    max_fires: int | None = None,
+) -> str
 ```
 
-Persist a future invocation; the agent receives `prompt` as a fresh turn when it fires.
+Persist a future turn. `when` accepts a five-field cron expression or an
+ISO-8601 datetime. `timezone` is an IANA zone for cron; one-shots use their own
+UTC offset. `job_id` is generated if omitted; retain the returned id to cancel.
 
-`when` is either a 5-field cron expression (`"0 9 * * 1-5"` = weekdays at 9am) or an ISO-8601
-datetime (`"2026-05-01T15:00:00"` = once). Backends auto-detect which. `timezone` is an
-optional IANA zone for interpreting `when`. `job_id` defaults to `<agent_name>-<uuid>` — you
-need it later for `cancel_schedule`.
+Cron jobs default to `ttl="7d"`, even if `max_fires` is supplied. Set `ttl` to a
+human duration (`24h`, `2w`) or ISO duration (`P7D`) to change the lifetime;
+`max_fires` caps successful firings. The local backend checks expiry after a
+successful fire, so TTL is not a hard stop at an exact timestamp. Neither applies
+to one-shots.
 
-Returns `"Scheduled job <id> next at <iso>."`, or `"Error: …"` on a malformed `when`.
+One-shots created in chat resume that session. Cron jobs run in Activity and
+report back to the originating chat. Write self-contained prompts for recurring
+work. Returns `"Scheduled job <id> next at <iso>."`, an existing job notice for
+an identical active schedule, or `"Error: …"` for invalid input.
 
-Prompts must be **self-contained**: the agent has no memory of the scheduling moment when the
-task fires, so write a fresh turn ("review last week's pipeline incidents and post a summary"),
-not a back-reference ("do that thing we discussed").
+See [Schedule future work](/guides/scheduler) for console management, operator
+API differences, and missed-fire recovery.
 
 ### `list_schedules` {#list_schedules}
 

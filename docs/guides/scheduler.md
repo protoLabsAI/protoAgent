@@ -1,151 +1,128 @@
 # Schedule future work
 
-Ask the agent to run a task later or on a recurring schedule, for example:
+Ask the agent to run a task later or on a recurring schedule:
 
-> Every Monday at 9am in America/Los_Angeles, summarize the last week's pipeline incidents.
+> Every Monday at 9am in America/Los_Angeles for the next month, summarize the
+> previous week's pipeline incidents.
 
 Open **Schedule** to confirm the saved prompt, timezone, and next fire time.
-The server must be running when the job fires. Results appear in **Activity**.
+The server must be running to execute the job. Recurring runs appear in
+**Activity**; chat-created schedules also report back to their originating chat.
 
 ## Manage from the console
 
-Open **Schedule** to create a job, inspect its full prompt, edit its schedule, or
-cancel it. Use a named timezone when local time matters; an unspecified timezone
-uses UTC. Confirm the next fire time after saving.
+Open **Schedule** to create, inspect, edit, or cancel a job. Use a named timezone
+for recurring local times; the default is UTC. One-shot ISO timestamps use their
+own offset, so include one when specifying local time.
 
-Write a self-contained prompt: a scheduled run does not receive the conversation
-that created it. Include the sources to read, the action to take, and the expected
-output. For example, write “review last week's pipeline incidents and post a
-summary,” rather than “do that thing we discussed.”
+Write a self-contained prompt with the sources, action, and expected output.
+Recurring runs do not inherit the conversation that created them. An agent-tool
+one-shot resumes its originating session; jobs created outside chat normally
+run in Activity.
 
 ## Scheduling tools
 
-When the scheduler is active, three tools land in `get_all_tools()`:
+| Tool | Purpose |
+| --- | --- |
+| [`schedule_task`](/reference/starter-tools#schedule_task) | Save a five-field cron schedule or one-shot ISO-8601 datetime |
+| `list_schedules()` | Inspect this agent's jobs |
+| `cancel_schedule(job_id)` | Remove a job |
 
-| Tool | What it does |
-|---|---|
-| `schedule_task(prompt, when, job_id?)` | Persist a future invocation. `when` is cron (`"0 9 * * *"`) or ISO-8601 (`"2026-05-01T15:00:00"`). |
-| `list_schedules()` | Show all jobs visible to *this* agent. |
-| `cancel_schedule(job_id)` | Remove a job by id. |
+Recurring schedules created by the **agent tool** get a default `ttl` of `7d`.
+Request a longer lifetime for ongoing work. `ttl` accepts values such as `24h`,
+`2w`, or `P7D`; `max_fires` limits successful firings. The seven-day default still
+applies when only `max_fires` is supplied. These expiry settings apply to cron
+jobs, not one-shots. The local backend checks expiry after a successful fire,
+not at the exact TTL timestamp. They are not fields on the console's scheduler REST API,
+and its jobs do not acquire the tool's default TTL.
 
 ## Enabling / disabling
 
-Scheduling is enabled by default. Set `middleware.scheduler: false` to disable
-it durably, or use `SCHEDULER_DISABLED=1` as a process-level override. The scheduling
-tools are unavailable while disabled.
+Scheduling is on by default. Set `middleware.scheduler: false` to disable it,
+or use `SCHEDULER_DISABLED=1` for a process-level override. The tools are
+unavailable while disabled. See [scheduler configuration](/reference/configuration#scheduler).
 
 ## Operator API
 
 | Method | Path | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `GET` | `/api/scheduler/jobs` | List jobs (`{jobs, backend}`) |
 | `POST` | `/api/scheduler/jobs` | Create: `{prompt, schedule, job_id?, timezone?}` |
 | `PUT` | `/api/scheduler/jobs/{id}` | Partial update: `{prompt?, schedule?, timezone?}` |
 | `DELETE` | `/api/scheduler/jobs/{id}` | Cancel |
 
-An omitted field keeps its value. An explicit `timezone: null` or `""` switches
-back to UTC. Invalid schedules or timezones return `400` without changing the job;
-empty prompts, empty schedules, and updates with no fields also return `400`.
+Omitted update fields keep their values. `timezone: null` or `""` resets to UTC.
+Invalid schedules/timezones, empty prompts or schedules, and empty updates return
+`400` without changing the job.
 
 ## Plugin-owned recurring jobs
 
-A plugin arms its own cadence through the [consumption SDK](/guides/plugins#consumption-sdk)
-(#1642) rather than asking the operator to wire a cron job:
+Plugins use [`sdk.schedule_recurring`](/reference/plugin-sdk-api#sdk-schedule-recurring)
+with a stable job id:
 
 ```python
 from graph import sdk
 
 def register(registry):
     sdk.schedule_recurring(
-        "Run the strategist OODA tick.", "0 9 * * *",
-        plugin_id=registry.plugin_id, job_id="strategist-tick",
+        "Review the project's outstanding tasks.", "0 9 * * *",
+        plugin_id=registry.plugin_id, job_id="daily-review",
     )
 ```
 
-- `sdk.schedule_recurring(prompt, cron, *, plugin_id, job_id, session="", timezone=None)`
-  — a **recurring** cron cadence (one-shot turns stay on `sdk.run_in_session`; an ISO
-  datetime is rejected here). Fires into the Activity thread by default; pass `session`
-  to target a chat context. **Idempotent by id** — re-calling with the same `job_id`
-  replaces the pending job, so `register()` can re-arm on every (re)load and a cadence
-  knob change just re-schedules.
-- `sdk.cancel_scheduled(job_id, *, plugin_id)` / `sdk.cancel_plugin_jobs(plugin_id)` —
-  remove one cadence / all of them.
+Calling it again with the same id replaces the pending job. It accepts cron
+only; use `sdk.run_in_session` for a one-shot turn. The default destination is
+Activity; `session` targets a particular chat.
 
-The job id is namespaced **`plugin:<plugin_id>:<job_id>`** — that ownership tag is what
-lets the host clean up: **disabling** a plugin sweeps its `plugin:<id>:*` jobs on the
-reload, and **uninstalling** sweeps them in the same pass that removes the code — no
-orphan job keeps firing prompts about a plugin that's gone. Re-enabling relies on the
-plugin re-arming in `register()` (which is why the idempotent-replace shape matters).
-The `AGENT_NAME` scoping below is untouched — plugin ownership rides on the id *within*
-an instance's jobs.db; it never crosses instances.
+The host namespaces ids as `plugin:<plugin_id>:<job_id>` and removes owned jobs
+on plugin disable/reload or uninstall. Re-enabling depends on the plugin
+re-arming in `register()`. Plugins can also call `sdk.cancel_scheduled` or
+`sdk.cancel_plugin_jobs`; see the SDK reference for their signatures.
 
 ## Multi-agent isolation
 
-Default schedules live in the instance-private
-`<instance_root>/scheduler/agent/jobs.db`. Agent renaming keeps the same store;
-an existing name-keyed store may be adopted on first access.
+Schedules live in `<instance_root>/scheduler/agent/jobs.db`. Renaming an agent
+keeps that store; an older name-keyed store may be adopted on first access.
 
-`SCHEDULER_DB_DIR` selects an explicit parent directory, with jobs stored at
-`<override>/<agent_name>/jobs.db`. Avoid sharing that file between running instances:
-the scheduler owner-lock allows only one process to poll it. Use separate
-instance roots for independent agents; see [Run multiple instances](/guides/multi-instance).
+`SCHEDULER_DB_DIR` overrides the parent directory: jobs then live at
+`<override>/<agent_name>/jobs.db`. Only one process can own the scheduler's
+polling lock. Give independent agents separate roots; see
+[Run multiple instances](/guides/multi-instance).
 
 ## How firing works
 
-The scheduler runs an asyncio polling task on FastAPI's `startup`
-event. Once a second:
-
-1. Read jobs where `next_fire <= now()` and `enabled = 1` (skipping any
-   still firing — a slow turn won't be re-claimed mid-flight).
-2. For each due job: POST to `http://127.0.0.1:<active_port>/a2a` as
-   a `message/send` with the job's prompt as the message text, routed
-   into the durable **Activity thread** (`contextId: system:activity`,
-   `metadata.origin: scheduler`). Bearer + X-API-Key are forwarded
-   automatically.
-3. One-shot ISO jobs are deleted after firing. Cron jobs reschedule
-   forward via `croniter` (advanced the instant they're claimed, so a
-   long turn never double-fires).
-
-Going through HTTP rather than calling into the graph directly buys
-parity with real callers — the audit log, cost-v1 capture, and
-push-notification path all behave identically.
-
-**Where the response lands.** The fired turn runs in the Activity thread
-(ADR 0003), so its output persists and shows up live in the console's
-**Activity** surface (pushed over `/api/events` as an `activity.message`).
+The local backend polls for due jobs once a second and delivers prompts through
+the server's A2A endpoint. It does not claim a job again while that job is firing.
+Cron jobs advance to their next slot when claimed; one-shots are removed after
+successful execution. Failed one-shots remain for retry. Repeated turn failures
+are recorded and backed off rather than disabling the job permanently.
 
 ### Missed-fire recovery
 
-On startup, jobs whose `next_fire` is in the past are inspected:
+On startup:
 
-- **Within the last 24h** — fire on the next tick (so a 5-minute
-  outage doesn't lose an upcoming reminder).
-- **Older than 24h** — cron jobs roll forward to the next slot
-  without firing; one-shot jobs are dropped. Avoids flooding the agent
-  with stale prompts after a long downtime.
+- Jobs overdue by at most 24 hours fire on the next tick.
+- Older cron jobs advance to their next slot without firing; older one-shots
+  are dropped.
+
+Check schedules before reopening a [restored backup](/guides/backup-and-restore):
+a recent missed job can run immediately.
 
 ### Persistence path
 
-Use `protoagent config explain` to find the instance root. In the bundled Docker
-image, the default is `/sandbox/scheduler/agent/jobs.db`; on a normal host install,
-it is `~/.protoagent/default/scheduler/agent/jobs.db`. Mount a volume covering the
-instance root to preserve schedules across container restarts.
+Run `protoagent config explain` to find the active paths. Defaults are
+`~/.protoagent/default/scheduler/agent/jobs.db` on a normal host and
+`/sandbox/scheduler/agent/jobs.db` in the bundled Docker image. Preserve the
+instance volume across container restarts.
 
 ## Adding a case to your eval suite
 
-The default `evals/tasks.json` doesn't include scheduler cases (the
-fire path is async — a single eval run can't easily test that the
-scheduled prompt arrives). For forks that want it, the pattern is:
-
-1. `schedule_task(prompt, "<near-future ISO>")` in setup.
-2. Wait > 1 second.
-3. Assert on the audit log and/or KB state for the *fired* prompt's
-   side effects.
-
-Document the case as `category: "scheduler"` and gate at >= 2/3
-attempts to absorb timing jitter.
+Schedule a near-future one-shot, wait for its fire, and assert the fired prompt's
+side effects in the audit log or store. A normal single-turn evaluation does
+not establish that the later task executed. See [Evals](/guides/evals).
 
 ## References
 
-- [Configuration](/reference/configuration#scheduler) — env vars
-- [Eval your fork](/guides/evals) — for the testing pattern above
+- [Watch an external condition](/guides/watches)
+- [Goal mode](/guides/goal-mode)
+- [Reusable workflows](/guides/workflows)

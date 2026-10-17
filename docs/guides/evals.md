@@ -146,9 +146,13 @@ The case `kind`s that ship:
 - `stream` — like `ask` over SSE, plus asserts the stream surfaced the
   expected event kinds.
 - `goal` — set a goal, trigger the loop, assert the resulting goal state.
-- `workflow` — drive a recipe end-to-end via `POST /api/workflows/{name}/run`
-  and assert on its synthesized output (patterns + rubric). Used to track the
-  subagent workflows (research-and-brief, deep-research).
+- `workflow` — intended to run a recipe and assert on its output (patterns +
+  rubric). **Currently the eval client still calls the retired `/api/workflows`
+  route** ([#4310](https://github.com/protoLabsAI/protoAgent/issues/4310)),
+  so these cases do not reach the bundled plugin. Until the client is
+  updated, exercise recipes directly through
+  `POST /api/plugins/workflows/{name}/run` with the workflows plugin enabled;
+  see [Reusable workflows](/guides/workflows#from-the-operator-console).
 
 ### Negative assertions — `forbidden_patterns` and `forbidden_tools`
 
