@@ -318,7 +318,7 @@ def _run_compact(args) -> int:
     if args.apply:
         r = plan["result"]
         print(
-            f"  applied: {r['checkpoints_deleted']} checkpoint(s), {r['blobs_deleted']} media payload(s) removed; "
+            f"  applied: {r['checkpoints_deleted']} checkpoint(s), {r['media_deleted']} media payload(s) removed; "
             f"file {_human(plan['file_bytes_before'])} → {_human(plan['file_bytes_after'])}"
         )
     else:

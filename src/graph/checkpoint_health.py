@@ -7,7 +7,8 @@ console already banners (``GET /api/runtime/status`` ``warnings[]``):
 
 * :func:`db_size_warning` — this instance: the DB file (+ WAL) over
   ``checkpoint.alert_db_mb``, or any single thread holding more than
-  ``checkpoint.alert_thread_mb`` (rows + offloaded media), named with its size.
+  ``checkpoint.alert_thread_mb`` (checkpoint rows + pending writes; offloaded media
+  is shared per DB, so it counts in the file size), named with its size.
 * :func:`fleet_size_warning` — the hub: each local fleet member's DB file over the
   same threshold, by ``stat`` only (the hub never opens a member's live DB).
 

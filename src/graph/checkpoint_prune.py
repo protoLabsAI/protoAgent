@@ -528,6 +528,6 @@ def compact(db_path: str, *, keep_per_thread: int = 2, background_keep: int = 1)
     res = prune_checkpoints(db_path, keep_per_thread=keep_per_thread, background_keep=background_keep)
     # A short grace even here: a live agent may have just committed a payload whose row
     # hasn't landed yet (#4306 review m1).
-    res["blobs_deleted"] = gc_media(db_path, grace_s=COMPACT_MEDIA_GRACE_S)
+    res["media_deleted"] = gc_media(db_path, grace_s=COMPACT_MEDIA_GRACE_S)
     res.update(reclaim(db_path))
     return res

@@ -525,7 +525,7 @@ def test_compact_keeps_a_payload_a_live_agent_just_stored(tmp_path):
     conn.execute("INSERT INTO checkpoint_media (hash, data, created) VALUES (?, x'00', ?)", ("d" * 64, time.time()))
     conn.commit()
     conn.close()
-    assert compact(db)["blobs_deleted"] == 0
+    assert compact(db)["media_deleted"] == 0
     assert _media(db) == 2
 
 
