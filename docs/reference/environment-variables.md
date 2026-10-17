@@ -182,9 +182,15 @@ The template configures logging at startup (`observability/logging_config.py`) �
 
 | Variable | Default | What |
 |---|---|---|
-| `A2A_ALLOWED_ORIGINS` | (unset — allow all, with WARNING) | Comma-separated list of allowed `Origin` header values for SSE and WebSocket streaming endpoints (`/a2a` streaming methods, `/message:stream`, `/tasks/{id}:subscribe`). Example: `https://app.example.com,https://admin.example.com`. Set to `*` to explicitly disable origin verification without the WARNING log. Origin values are compared case-insensitively. |
+| `A2A_ALLOWED_ORIGINS` | (unset — check disabled, with WARNING) | Comma-separated browser `Origin` allowlist for protected HTTP routes, including streamed A2A calls. Example: `https://app.example.com,https://admin.example.com`. Set to `*` to explicitly disable origin verification without the WARNING log. Origin values are compared case-insensitively. |
 
-When unset, all origins are accepted but a WARNING is logged at startup. When set, requests whose `Origin` header does not match any entry receive a `403 Forbidden` response. A missing `Origin` header is treated as an empty string and will be rejected when verification is enabled.
+When unset, this allowlist check is disabled and a WARNING is logged at startup.
+On requests checked by the HTTP auth middleware, a present `Origin` outside the
+configured allowlist receives `403 Forbidden`; a missing header is allowed so
+server-to-server callers continue to work. Include a public console's origin
+when using a proxy. Open instances also enforce separate
+[host and browser-request checks](/explanation/security-and-trust#an-instance-with-no-token);
+disabling this allowlist does not remove those protections.
 
 ## Push notifications / SSRF guard
 
