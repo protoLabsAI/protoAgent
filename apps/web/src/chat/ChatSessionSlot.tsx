@@ -287,7 +287,10 @@ export function ChatSessionSlot({
   // focus in the composer without a click. (`visible` alone is the active tab, which
   // doesn't change when you switch INTO the chat surface from another rail item.)
   useEffect(() => {
-    if (visible && surfaceActive) textareaRef.current?.focus();
+    // The collapsed TabBar Menu owns focus until it closes and returns to its
+    // trigger. Preserve that keyboard path; wide tabs still focus the composer.
+    const switcherOwnsFocus = document.activeElement?.closest(".pl-tabbar__menu, .pl-tabbar__switcher");
+    if (visible && surfaceActive && !switcherOwnsFocus) textareaRef.current?.focus();
   }, [visible, surfaceActive]);
   // The global "focus composer" keybinding (ADR 0063 — `/`) bumps this nonce; only the
   // VISIBLE + active slot grabs focus (others no-op), same gate as the autofocus above.
@@ -1818,6 +1821,9 @@ export function ChatSessionSlot({
           // field — not just the textarea. Skip when the click is outside the box or
           // on an interactive child (send/stop button, slash item, the field itself).
           const target = e.target as HTMLElement;
+          // DS 0.68.2 portals menus inside their theme scope, which can be inside
+          // this prompt. Let the menu keep focus and handle its own selection.
+          if (target.closest("[role='menu']")) return;
           if (!target.closest(".pl-prompt")) return;
           if (target.closest("button, a, textarea, input, select, label, [role='option']")) return;
           e.preventDefault(); // keep focus from leaving the field

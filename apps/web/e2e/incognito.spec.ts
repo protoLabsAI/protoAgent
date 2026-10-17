@@ -68,7 +68,7 @@ test("the chat-tab context menu offers New incognito chat + a per-tab toggle", a
   await menu.getByText("Turn incognito on", { exact: true }).click();
   await expect(page.locator(".composer-incognito-toggle")).toBeVisible();
   // The tab itself shows the incognito glyph while ON.
-  await expect(page.locator(".session-incognito-icon")).toBeVisible();
+  await expect(tabs.locator(".session-incognito-icon")).toBeVisible();
 
   // Re-open the menu: the entry now offers to turn it off.
   await tabs.first().click({ button: "right" });
@@ -80,5 +80,5 @@ test("the chat-tab context menu offers New incognito chat + a per-tab toggle", a
   await menu.getByText("New incognito chat", { exact: true }).click();
   await expect(tabs).toHaveCount(2);
   await expect(page.locator(".composer-incognito-toggle")).toBeVisible();
-  await expect(page.locator(".session-incognito-icon")).toBeVisible();
+  await expect(tabs.locator(".session-incognito-icon")).toBeVisible();
 });

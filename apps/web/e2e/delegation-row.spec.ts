@@ -114,7 +114,7 @@ test("a background delegation is one row that tracks its job, and the chat shows
   const strip = page.getByTestId("chat-bgwork");
   await expect(strip).toContainText("1 background job running");
   await expect(strip).toContainText("sonnet: Land PR #13 and close #12");
-  await expect(page.locator(".session-dot.processing")).toHaveCount(1); // the tab reads busy too
+  await expect(page.locator(".pl-tabbar__tab .session-dot.processing")).toHaveCount(1); // the tab reads busy too
 
   // It finishes: ✓ on the row, and NO note repeats the result — the delegate's reply arrives
   // as its own message through the drain. The strip stays MOUNTED but goes idle (its line is
@@ -125,7 +125,7 @@ test("a background delegation is one row that tracks its job, and the chat shows
   await expect(strip).toHaveClass(/chat-bgwork--idle/);
   await expect(strip).not.toContainText("background job running");
   await expect(strip.getByRole("button", { name: "View" })).toHaveCount(0);
-  await expect(page.locator(".session-dot.processing")).toHaveCount(0);
+  await expect(page.locator(".pl-tabbar__tab .session-dot.processing")).toHaveCount(0);
   await expect(page.getByText(/PR #13 merged\. PR #12 closed\./)).toHaveCount(0);
   await expect(page.locator(".chat-note, .chat-report")).toHaveCount(0);
 });
