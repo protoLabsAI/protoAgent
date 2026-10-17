@@ -215,12 +215,16 @@ def test_is_the_gateway_configured(case):
     assert acp_gateway_configured(cfg) is bool(key)
 
 
-def test_headless_validation(case):
+def test_headless_validation(case, request):
+    """A qualified lead is validated on ITS connection (#4262), like the probe below: a
+    registered connection needs only its endpoint (keyless runs with a placeholder); an
+    unqualified lead still needs the default route's endpoint + key."""
     from graph.config_io import validate_for_headless
 
     cfg, (base, key) = case
+    lead = _LEAD_CONNECTION_ROUTE.get(request.node.callspec.params["case"])
     ok, reason = validate_for_headless(cfg)
-    assert ok is bool(base and key), reason
+    assert ok is (bool(lead[0]) if lead else bool(base and key)), reason
 
 
 def test_a_native_lead_with_no_gateway_key(case):

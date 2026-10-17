@@ -1945,6 +1945,22 @@ def validate_for_headless(config) -> tuple[bool, str]:
     if is_native_oauth_provider(getattr(config, "model_provider", "")):
         return True, "ok"
 
+    # A provider-QUALIFIED lead (`anthropic-oauth:claude-…`, `gateway:protolabs/smart`) routes
+    # by its prefix, not by `model.provider` (#4262): resolve it exactly as `create_llm` does.
+    # A native subscription lane needs no key here; a registered connection needs its own
+    # endpoint (a keyless one — a local vLLM — runs with a placeholder key, as `create_llm`
+    # sends it). Only an unqualified name falls through to the legacy default route.
+    from graph.llm import resolve_slot_target
+
+    slot_id, entry, ptype, _ = resolve_slot_target(getattr(config, "model_name", ""), config)
+    if slot_id:
+        if is_native_oauth_provider(ptype):
+            return True, "ok"
+        if entry is not None:
+            if not resolve_model_route(config, entry).base_url:
+                return False, f"provider {slot_id!r} has no base_url"
+            return True, "ok"
+
     route = resolve_model_route(config)
     if not route.base_url:
         return False, "model.api_base is not set"
