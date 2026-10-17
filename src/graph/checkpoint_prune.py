@@ -182,16 +182,14 @@ def _has_media_table(conn: sqlite3.Connection) -> bool:
 MEDIA_GC_GRACE_S = 600.0
 
 
-def _scan_refs(conn: sqlite3.Connection, *, after: tuple[int, int] | None = None) -> set[bytes]:
-    """Every media reference in checkpoint + write rows (rows with rowid above ``after``
-    = ``(checkpoints_rowid, writes_rowid)`` only, when given)."""
+def _scan_refs(conn: sqlite3.Connection) -> set[bytes]:
+    """Every media reference in checkpoint + write rows."""
     from graph.checkpoint_media import REF_BYTES_RE
 
     found: set[bytes] = set()
-    ck_after, wr_after = after if after is not None else (-1, -1)
-    for (blob,) in conn.execute("SELECT checkpoint FROM checkpoints WHERE rowid > ?", (ck_after,)):
+    for (blob,) in conn.execute("SELECT checkpoint FROM checkpoints"):
         found.update(REF_BYTES_RE.findall(bytes(blob or b"")))
-    for (blob,) in conn.execute("SELECT value FROM writes WHERE rowid > ?", (wr_after,)):
+    for (blob,) in conn.execute("SELECT value FROM writes"):
         found.update(REF_BYTES_RE.findall(bytes(blob or b"")))
     return found
 
@@ -206,18 +204,20 @@ def gc_media(
     """Delete offloaded media payloads that no checkpoint or write row references.
 
     Media is content-addressed per DB (a serializer has no thread context), so liveness
-    is a reference scan over every row. Two phases keep the write lock short:
+    is a reference scan over every row:
 
-    1. Unlocked: note the tables' max rowids, scan all rows, and take the payloads older
-       than ``grace_s`` that nothing referenced as candidates (``only`` narrows them,
-       e.g. to the payloads of a chat just deleted).
-    2. ``BEGIN IMMEDIATE``: rescan just the rows written since (rowid above the noted
-       max: new rows, and ``INSERT OR REPLACE``s, which take a new rowid) and delete the
-       candidates still unreferenced.
+    1. Unlocked: scan, and take the payloads older than ``grace_s`` that nothing
+       references as candidates (``only`` narrows them, e.g. to the payloads of a chat
+       just deleted). No candidates — the steady state — means no write lock at all.
+    2. ``BEGIN IMMEDIATE``: rescan EVERY row and delete the candidates still
+       unreferenced. (A rowid-mark partial rescan missed rows that reused a deleted
+       max rowid — #4313 review m1. Rows are bounded by retention on write, so the
+       full rescan is cheap.)
 
-    Returns payloads removed. Residual case, accepted: a turn that re-uses a payload
-    that was already unreferenced (and older than the grace) while a GC runs can lose it;
-    that block then reads back as a text placeholder, never a broken image."""
+    Writers re-check payload existence inside their own write transaction
+    (``graph.checkpoint_serde.store_media``), so a row re-using a payload either sees
+    this GC's delete and re-inserts it, or commits first and is seen here. Returns
+    payloads removed."""
     import time as _time
 
     cutoff = (now if now is not None else _time.time()) - grace_s
@@ -226,10 +226,6 @@ def gc_media(
     try:
         if not _has_media_table(conn):
             return 0
-        marks = (
-            conn.execute("SELECT COALESCE(MAX(rowid), -1) FROM checkpoints").fetchone()[0],
-            conn.execute("SELECT COALESCE(MAX(rowid), -1) FROM writes").fetchone()[0],
-        )
         live = _scan_refs(conn)
         cands = [
             h
@@ -239,7 +235,7 @@ def gc_media(
         if not cands:
             return 0
         conn.execute("BEGIN IMMEDIATE")
-        live |= _scan_refs(conn, after=marks)
+        live = _scan_refs(conn)
         dead = [(h,) for h in cands if h.encode() not in live]
         conn.executemany("DELETE FROM checkpoint_media WHERE hash=?", dead)
         conn.commit()
@@ -290,8 +286,13 @@ def delete_thread(db_path: str, thread_id: str, *, cascade: bool = False) -> int
         conn.close()
     if refs:
         # The chat's images go with it now, not at the next sweep — those no other chat
-        # still references (media is shared per DB).
-        gc_media(db_path, grace_s=0, only=refs)
+        # still references (media is shared per DB). Best-effort: the rows are already
+        # gone, so a failure here must not fail the delete; the sweep's GC catches up
+        # (#4313 review m2).
+        try:
+            gc_media(db_path, grace_s=0, only=refs)
+        except sqlite3.Error:
+            _log.warning("[checkpoint-prune] media GC after deleting %s failed; the sweep will retry", thread_id, exc_info=True)
     return n
 
 

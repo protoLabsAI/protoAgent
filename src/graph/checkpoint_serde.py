@@ -53,32 +53,56 @@ MEDIA_TABLE_DDL = (
 _REF_BYTES = REF_PREFIX.encode()
 
 
+def _has_table(conn: sqlite3.Connection, name: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
 def ensure_media_table(conn: sqlite3.Connection) -> None:
     """Create ``checkpoint_media`` and fold in #4306's per-thread ``checkpoint_blobs``
     (same payloads, keyed ``(thread_id, hash)``): one row per hash, the newest
-    ``created`` kept, then the old table dropped. Idempotent; one transaction."""
-    conn.execute(MEDIA_TABLE_DDL)
-    legacy = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='checkpoint_blobs'"
-    ).fetchone()
-    if legacy:
-        conn.execute(
-            "INSERT OR IGNORE INTO checkpoint_media (hash, data, created)"
-            " SELECT hash, data, MAX(created) FROM checkpoint_blobs GROUP BY hash"
-        )
-        conn.execute("DROP TABLE checkpoint_blobs")
-        log.info("[checkpoint-serde] migrated per-thread checkpoint_blobs into checkpoint_media")
-    conn.commit()
+    ``created`` kept, then the old table dropped.
+
+    One ``BEGIN IMMEDIATE`` transaction that re-checks for the legacy table INSIDE it, so
+    two processes opening the DB at once can't both migrate (#4313 review m3). Never
+    raises: a failed migration is logged and retried on the next open — the checkpointer
+    must not fall back to in-memory history over it (old references then read as the
+    text placeholder until it succeeds)."""
+    try:
+        if conn.in_transaction:
+            conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(MEDIA_TABLE_DDL)
+            if _has_table(conn, "checkpoint_blobs"):
+                conn.execute(
+                    "INSERT OR IGNORE INTO checkpoint_media (hash, data, created)"
+                    " SELECT hash, data, MAX(created) FROM checkpoint_blobs GROUP BY hash"
+                )
+                conn.execute("DROP TABLE checkpoint_blobs")
+                log.info("[checkpoint-serde] migrated per-thread checkpoint_blobs into checkpoint_media")
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
+    except sqlite3.Error:
+        log.error("[checkpoint-serde] could not create/migrate checkpoint_media; retrying on next open", exc_info=True)
 
 
 def store_media(conn: sqlite3.Connection, blobs: dict[str, str]) -> None:
-    """Insert payloads not already stored. Never commits: the saver's own commit right
-    after (``put`` / ``put_writes`` both serialize, then write and commit on this same
-    connection) covers it, and the payload ``INSERT`` always executes before the row's,
-    so a row can't commit without its payloads. Committing here raced other threads'
-    commits on the shared connection ("cannot commit - no transaction is active")."""
+    """Make sure every payload is stored, inside the write transaction the row will
+    commit in.
+
+    Opens ``BEGIN IMMEDIATE`` (when no transaction is open) BEFORE checking which
+    payloads exist, and never commits: the saver's own commit right after covers the
+    payloads and the row together. Holding the write lock from the existence check to
+    that commit is what makes a dedupe hit safe against ``gc_media`` on another
+    connection — the GC either ran first (the check sees the payload gone and re-inserts
+    it) or runs after (and sees the row). Callers must serialize use of ``conn``
+    (``ThreadedSqliteSaver`` holds its lock across the whole ``put``)."""
     if not blobs:
         return
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     hashes = list(blobs)
     have: set[str] = set()
     for k in range(0, len(hashes), 500):
@@ -165,5 +189,10 @@ class ProtoagentSerde(JsonPlusSerializer):
 
 def protoagent_serde(conn: sqlite3.Connection, *, offload: bool = True, **kwargs: Any) -> ProtoagentSerde:
     """The serializer to hand any LangGraph saver on a protoAgent checkpoint DB:
-    ``SqliteSaver(conn, serde=protoagent_serde(conn))``."""
+    ``SqliteSaver(conn, serde=protoagent_serde(conn))``.
+
+    It reads and writes ``checkpoint_media`` on ``conn``, so ``conn`` must be used
+    serially: fine for a script or Studio (LangGraph's own single-threaded guidance for
+    ``SqliteSaver``); a multi-threaded saver must hold one lock across its whole ``put``,
+    as ``graph.checkpointer.ThreadedSqliteSaver`` does."""
     return ProtoagentSerde(conn, offload=offload, **kwargs)

@@ -92,9 +92,12 @@ async def run_aside(
         # 3. Drop the ephemeral thread's checkpoint — the side chat leaves no disk trace.
         if db_path:
             try:
+                import asyncio
+
                 from graph.checkpoint_prune import delete_thread
 
-                delete_thread(db_path, aside_tid, cascade=True)
+                # Off the loop: the delete frees the aside's media with a reference scan.
+                await asyncio.to_thread(delete_thread, db_path, aside_tid, cascade=True)
             except Exception as e:  # noqa: BLE001 — cleanup is best-effort; isolation already holds
                 log.info("[aside] ephemeral checkpoint cleanup skipped: %s", e)
 

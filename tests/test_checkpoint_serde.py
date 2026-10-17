@@ -160,30 +160,35 @@ def test_per_thread_blobs_from_4306_migrate_into_per_db_media(tmp_path):
 
 
 def test_gc_spares_a_payload_a_row_referenced_while_it_ran(tmp_path, monkeypatch):
-    """Phase 2 rescans rows written after phase 1 began (rowid above the mark), so a row
-    that commits a reference mid-GC keeps its payload."""
+    """Phase 2 rescans every row under the write lock, so a row that commits a reference
+    between the phases keeps its payload — wherever its rowid lands (a rowid-mark
+    partial rescan missed rows that reused a deleted max rowid, #4313 review m1)."""
     db = str(tmp_path / "c.db")
     _write(db, "a2a:t", [1])
     conn = sqlite3.connect(db)
-    conn.execute("DELETE FROM checkpoints")
-    conn.execute("DELETE FROM writes")
-    conn.commit()
     (h,) = conn.execute("SELECT hash FROM checkpoint_media").fetchone()
+    top = conn.execute("SELECT MAX(rowid) FROM checkpoints").fetchone()[0]
+    conn.execute("DELETE FROM writes")
+    conn.execute("DELETE FROM checkpoints WHERE rowid < ?", (top,))
+    conn.execute("UPDATE checkpoints SET checkpoint = x'00' WHERE rowid = ?", (top,))  # unreferenced now
+    conn.commit()
     conn.close()
 
     real = checkpoint_prune._scan_refs
     calls = []
 
-    def _racing(c, *, after=None):
-        found = real(c, after=after)
-        if after is None and not calls:
+    def _racing(c):
+        found = real(c)
+        if not calls:
             calls.append(1)
             w = sqlite3.connect(db)
-            w.execute(
+            w.execute("DELETE FROM checkpoints WHERE rowid = ?", (top,))  # the max rowid goes…
+            w.execute(  # …and a new referencing row lands at or below the old max
                 "INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, type, checkpoint, metadata)"
                 " VALUES ('a2a:new', '', 'x', 'msgpack', ?, '{}')",
                 ((REF_PREFIX + h).encode(),),
             )
+            assert w.execute("SELECT rowid FROM checkpoints WHERE thread_id='a2a:new'").fetchone()[0] <= top
             w.commit()
             w.close()
         return found
@@ -196,6 +201,109 @@ def test_gc_spares_a_payload_a_row_referenced_while_it_ran(tmp_path, monkeypatch
     conn.commit()
     conn.close()
     assert checkpoint_prune.gc_media(db, grace_s=0) == 1
+
+
+def test_a_put_reusing_a_payload_holds_off_the_gc_until_its_row_commits(tmp_path, monkeypatch):
+    """The dedupe hit and the row commit share one write transaction: a GC that starts
+    after the existence check waits for the row, then sees it (and keeps the payload)."""
+    import threading
+
+    from graph import checkpoint_serde
+
+    db = str(tmp_path / "c.db")
+    _write(db, "a2a:old", [4])  # image 4 stored…
+    conn = sqlite3.connect(db)
+    conn.execute("DELETE FROM checkpoints")  # …then unreferenced and old
+    conn.execute("DELETE FROM writes")
+    conn.execute("UPDATE checkpoint_media SET created = 0")
+    conn.commit()
+    conn.close()
+
+    stored, release = threading.Event(), threading.Event()
+    real_store = checkpoint_serde.store_media
+
+    def _slow_store(c, blobs):
+        if not blobs:  # text-only puts (the input step) pass straight through
+            return real_store(c, blobs)
+        real_store(c, blobs)  # existence check + BEGIN IMMEDIATE done; row not yet written
+        stored.set()
+        release.wait(5)
+
+    monkeypatch.setattr(checkpoint_serde, "store_media", _slow_store)
+    errors: list[BaseException] = []
+
+    def _turn():
+        try:
+            _write(db, "a2a:new", [4])  # re-sends the same image
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    t = threading.Thread(target=_turn)
+    t.start()
+    assert stored.wait(5)
+    gc_result: list[int] = []
+    g = threading.Thread(target=lambda: gc_result.append(checkpoint_prune.gc_media(db, grace_s=0)))
+    g.start()
+    release.set()
+    t.join(10)
+    g.join(10)
+    assert not errors and gc_result == [0]
+    conn = sqlite3.connect(db, check_same_thread=False)
+    tup = SqliteSaver(conn, serde=protoagent_serde(conn)).get_tuple({"configurable": {"thread_id": "a2a:new"}})
+    assert _image_urls(tup)[-1] == _url(4)
+    conn.close()
+
+
+def test_concurrent_writers_on_one_saver_never_fail(tmp_path):
+    """#4313 review B1: SqliteSaver.put serializes BEFORE taking its lock; with media SQL in
+    the serializer that raced other threads' transactions on the shared connection."""
+    import concurrent.futures as cf
+
+    db = str(tmp_path / "c.db")
+    saver = build_sqlite_checkpointer(db)
+
+    def _chat(i: int):
+        seed = [i]
+        app = _app(saver, seed)
+        cfg = {"configurable": {"thread_id": f"a2a:c{i}"}}
+        for k in range(15):
+            seed[0] = (i * 100 + k) if i % 2 else 0  # odd chats: new images; even: text-ish reuse
+            app.invoke({"messages": [HumanMessage(content=str(k))]}, cfg)
+
+    with cf.ThreadPoolExecutor(6) as ex:
+        list(ex.map(_chat, range(6)))  # raises on any failed write
+    for i in range(6):
+        tup = saver.get_tuple({"configurable": {"thread_id": f"a2a:c{i}"}})
+        assert all(REF_PREFIX not in u for u in _image_urls(tup))
+
+
+def test_a_failed_media_gc_does_not_fail_the_chat_delete(tmp_path, monkeypatch):
+    db = str(tmp_path / "c.db")
+    _write(db, "a2a:x", [9])
+
+    def _locked(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(checkpoint_prune, "gc_media", _locked)
+    assert checkpoint_prune.delete_thread(db, "a2a:x", cascade=True) > 0  # no raise
+
+
+def test_media_table_setup_never_raises(tmp_path, caplog):
+    """A locked DB at open must not make the checkpointer fall back to in-memory history."""
+    from graph.checkpoint_serde import ensure_media_table
+
+    db = str(tmp_path / "c.db")
+    holder = sqlite3.connect(db)
+    holder.execute("CREATE TABLE t (x)")
+    holder.execute("BEGIN EXCLUSIVE")
+    conn = sqlite3.connect(db, timeout=0.1)
+    ensure_media_table(conn)  # logs, doesn't raise
+    assert "could not create/migrate" in caplog.text
+    holder.rollback()
+    holder.close()
+    ensure_media_table(conn)  # next open succeeds
+    assert conn.execute("SELECT name FROM sqlite_master WHERE name='checkpoint_media'").fetchone()
+    conn.close()
 
 
 def test_serde_is_a_jsonplus_serializer():

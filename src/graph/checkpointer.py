@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import threading
 import time
 
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -85,6 +86,14 @@ class ThreadedSqliteSaver(SqliteSaver):
     background_keep: int = 1
     prune_on_write: bool = True
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Reentrant, and held across the WHOLE put (below): ``SqliteSaver.put`` serializes
+        # before taking the lock, and our serializer reads/writes ``checkpoint_media`` on
+        # this same connection — unlocked, that raced other threads' transactions
+        # ("cannot start a transaction within a transaction", #4313 review B1).
+        self.lock = threading.RLock()
+
     @property
     def offload_media(self) -> bool:
         """Media offload lives in the serializer (``graph.checkpoint_serde``); this is
@@ -97,6 +106,10 @@ class ThreadedSqliteSaver(SqliteSaver):
             self.serde.offload = bool(value)
 
     def put(self, config, checkpoint, metadata, new_versions):
+        with self.lock:
+            return self._put_locked(config, checkpoint, metadata, new_versions)
+
+    def _put_locked(self, config, checkpoint, metadata, new_versions):
         out = super().put(config, checkpoint, metadata, new_versions)
         if self.prune_on_write:
             thread_id = str(config["configurable"]["thread_id"])
