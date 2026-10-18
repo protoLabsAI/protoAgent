@@ -88,9 +88,10 @@ For authenticated endpoints, see [Goal API](/reference/automation#goal-api).
 
 ## Reacting to a goal
 
-Plugins can react to completion or failure; see [goal hooks](/reference/automation#reacting-to-a-goal).
-
+<!-- Preserve links to the former follow-up section. -->
 <a id="goal-fires-→-run-a-follow-up-agent-turn"></a>
+
+Plugins can react to completion or failure; see [goal hooks](/reference/automation#reacting-to-a-goal).
 
 ## Verifier types
 

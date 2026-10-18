@@ -53,15 +53,17 @@ Sub-folders are organizational only — a skill is named by its frontmatter, not
 
 ## The index & source tags
 
-Skills live in a SQLite/FTS5 index (`skills.db`). Each row carries a `source`:
+Skills live in a SQLite/FTS5 index (`skills.db`). The commands below assume a
+permanent package install; see the [CLI setup alternatives](/guides/skills#sharing-skills-across-a-fleet-the-commons)
+for source checkouts and `uvx`. Each row carries a `source`:
 
 | `source` | Produced by | Curated? |
 |---|---|---|
 | `disk` | `SKILL.md` files + console CRUD (re-seeded each boot) | **pinned** — never decayed/pruned |
 | `distilled` | the `/distill` subagent (`save_skill`) | yes (curator) |
-| `promoted` | `python -m server skills promote <name>` → the **commons** | **dedupe only** in the commons by default; no idle decay or automatic pruning. Remove one with `python -m server skills forget <name>`. |
+| `promoted` | `protoagent skills promote <name>` → the **commons** | **dedupe only** in the commons by default; no idle decay or automatic pruning. Remove one with `protoagent skills forget <name>`. |
 
-Run the curator with `python -m server skills curate [--tier private|commons]`: the **private** tier
+Run the curator with `protoagent skills curate [--tier private|commons]`: the **private** tier
 decays + dedupes + prunes non-`disk` skills; the **commons** is trusted, so it **dedupes only** (no
 idle-decay, no auto-prune — `--prune` opts in). See the [Skills guide](/guides/skills).
 
