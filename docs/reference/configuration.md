@@ -198,13 +198,13 @@ A stricter mode that outright *refuses* the operator bearer on `/a2a` once a fed
 
 ## `subagents`
 
-One entry per subagent name. Each entry matches a `SubagentConfig` in `graph/subagents/config.py` and a `SubagentDef` field in `LangGraphConfig`.
+The built-in `subagents.researcher` block accepts the fields below. Plugin roles are registered with `register_subagent`; arbitrary YAML names do not create new roles. Defaults shown are for the built-in researcher.
 
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `true` | If false, the subagent is still registered but dispatches return "disabled" errors. |
-| `tools` | `[]` | Allowlist. Tool names not listed here are invisible to this subagent. |
-| `max_turns` | `30` | Tool rounds per delegation: the subagent can call tools this many times, then it must answer. The runner converts this into LangGraph's step-based `recursion_limit` using the compiled middleware stack, so adding middleware never shrinks it. Round `max_turns + 1` hard-stops, and the partial output comes back marked `hard-stopped at max_turns`. |
+| `tools` | researcher tool list | Allowlist; see the researcher example in [Configure subagents](/guides/subagents#_3-add-to-the-yaml). Tool names not listed are unavailable to this role. |
+| `max_turns` | `40` | Tool rounds per delegation: the subagent can call tools this many times, then it must answer. The runner converts this into LangGraph's step-based `recursion_limit` using the compiled middleware stack, so adding middleware never shrinks it. Round `max_turns + 1` hard-stops, and the partial output comes back marked `hard-stopped at max_turns`. |
 | `model` | `""` | Pin this subagent to a model. A subagent run picks its model in this order: this pin, then the delegating turn's model override (the chat tab's pick, `metadata.model`), then `routing.aux_model`, then the main model. The same order covers `task` / `task_batch`, `/<subagent>` slash runs and background jobs. A background job runs as a detached turn, so it takes the pin or the override when one is set and otherwise runs on the main model. |
 
 Two `subagents`-block keys govern **fan-out** via the `task_batch` tool (concurrent delegation):
@@ -223,7 +223,7 @@ subagents:
     tools: [...]
 ```
 
-Adding a new subagent name to the YAML requires matching entries in `graph/subagents/config.py::SUBAGENT_REGISTRY`, `graph/config.py::LangGraphConfig`, and the `from_yaml()` loop. See [Configure subagents](/guides/subagents).
+For a new role, use a plugin and its declared settings. See [Configure subagents](/guides/subagents) for registration and verification without editing core.
 
 ## `middleware`
 
@@ -751,7 +751,7 @@ Human-authored skills in the AgentSkills [`SKILL.md`](../guides/skills.md) forma
 |---|---|---|
 | `enabled` | `true` | Load `SKILL.md` skills and list the `<available_skills>` index. |
 | `db_path` | `/sandbox/skills.db` (legacy) | Private FTS5 index resolves to `<instance_root>/skills.db`; shared mode uses `<commons>/skills.db`. The legacy configured path no longer selects private storage. |
-| `top_k` | `5` | Max skills listed in the always-on `<available_skills>` index per turn (the rest stay reachable via `list_skills`; any one's body loads on demand via `load_skill`). |
+| `top_k` | `24` | Full descriptions retained in the index; every discoverable skill keeps its name/slash identity. Bodies load on demand through `load_skill`. |
 | `dir` | `""` | Optional override for the *writable* skills root. Default: `<config-dir>/skills` (where `<config-dir>` is `<instance_root>/config`). |
 
 Skills load from bundled `config/skills/`, live `<config-dir>/skills/`, the console's

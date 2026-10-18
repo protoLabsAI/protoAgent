@@ -880,6 +880,7 @@
         "/reference/starter-tools",
         "/reference/ingestion",
         "/reference/memory-delivery",
+        "/reference/automation",
         "/reference/operator-api",
         "/reference/a2a-endpoints",
         "/reference/a2a-conformance",
@@ -948,6 +949,10 @@
           "text": "Agent and operator APIs",
           "collapsed": false,
           "items": [
+            {
+              "text": "Automation APIs and integration",
+              "link": "/reference/automation"
+            },
             {
               "text": "Operator REST API",
               "link": "/reference/operator-api"

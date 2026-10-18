@@ -87,7 +87,7 @@
       "label": "Automate work",
       "nav_label": "Automate",
       "landing": "guides/automate-work.md",
-      "intro": "Teach reusable procedures, schedule work, and delegate tasks. Start with a skill or a schedule before configuring a larger workflow.",
+      "intro": "Teach reusable procedures, schedule work, and delegate tasks. Choose the smallest mechanism that fits:\n\n| What you need | Start here |\n| --- | --- |\n| Instructions for a recurring task, chosen by you or the agent | [Skill](/tutorials/first-skill) |\n| Run at a time or on a calendar cadence | [Schedule](/guides/scheduler) |\n| React when an external condition changes | [Watch](/guides/watches) |\n| Keep working until a completion check passes | [Goal](/guides/goal-mode) |\n| Run a saved sequence of specialist steps | [Workflow](/guides/workflows) |\n| Give a focused task to a local specialist | [Subagent](/guides/subagents) |\n| Use another agent or coding CLI | [Delegate](/guides/delegates) |\n\nVerify one small task before making it recurring or expanding to multiple agents. The individual guides explain permissions, stopping conditions, and where results appear.",
       "groups": [
         {
           "label": "Learn with an example",
@@ -254,6 +254,7 @@
         {
           "label": "Agent and operator APIs",
           "pages": [
+            "reference/automation.md",
             "reference/operator-api.md",
             "reference/a2a-endpoints.md",
             "reference/a2a-conformance.md",
@@ -621,6 +622,10 @@
     },
     "reference/starter-tools.md": {
       "title": "Starter tools",
+      "status": "current"
+    },
+    "reference/automation.md": {
+      "title": "Automation APIs and integration",
       "status": "current"
     },
     "reference/operator-api.md": {

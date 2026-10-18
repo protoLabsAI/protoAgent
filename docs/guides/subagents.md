@@ -24,123 +24,66 @@ Prefer `task_batch` whenever the delegations don't depend on each other.
 
 ## 1. Define the config
 
-`graph/subagents/config.py` already defines `RESEARCHER_CONFIG`. To add a second role, define another `SubagentConfig` and register it:
+First inspect the **Subagents** roster to see available roles. This panel is
+read-only. For the built-in researcher, adjust the existing `subagents.researcher`
+configuration; use [configuration reference](/reference/configuration#subagents).
+For a new role, create a [plugin](/tutorials/first-plugin) and register it:
 
 ```python
-SUMMARIZER_CONFIG = SubagentConfig(
-    name="summarizer",
-    description=(
-        "Condenses long source text into a tight brief. "
-        "Returns a ≤200-word summary; the lead decides what to do next."
-    ),
-    system_prompt="""You are the summarizer subagent.
+from graph.subagents.config import SubagentConfig
 
-Your job: given source text or URLs, return a concise brief (≤200 words):
-- What the material says
-- Key facts worth keeping
-- Any obvious gaps or caveats
-
-Rules:
-- Keep responses focused — the lead agent is waiting on your return
-  value, not a conversation.
-- Answer naturally, like the lead agent — reasoning streams natively; no `<scratch_pad>` / `<output>` tags.
-""",
-    tools=["fetch_url", "current_time"],
-    max_turns=15,
-)
-
-SUBAGENT_REGISTRY: dict[str, SubagentConfig] = {
-    "researcher": RESEARCHER_CONFIG,
-    "summarizer": SUMMARIZER_CONFIG,
-}
+def register(registry):
+    registry.register_subagent(SubagentConfig(
+        name="summarizer",
+        description="Summarize supplied text in at most 200 words.",
+        system_prompt="Return a concise summary and identify material uncertainty.",
+        tools=["current_time"],
+        max_turns=5,
+    ))
 ```
+
+Enable or reload the plugin, confirm the role appears in **Subagents**, then ask
+the lead to delegate a small summary to `summarizer`. Inspect the result before
+using it in a workflow. Tool names must exist and be permitted in the runtime.
+See [`register_subagent`](/reference/plugin-registry-api#registry-register-subagent)
+for the extension contract.
 
 ## 2. Expose the config shape
 
-The template's `LangGraphConfig` (in `graph/config.py`) has a `researcher` field. Add one for each new subagent:
-
-```python
-@dataclass
-class LangGraphConfig:
-    # ... existing fields ...
-    researcher: SubagentDef = field(default_factory=lambda: SubagentDef(
-        tools=[
-            "current_time",
-            "web_search", "fetch_url",
-            "memory_recall", "memory_list",
-        ],
-        max_turns=40,
-    ))
-    summarizer: SubagentDef = field(default_factory=lambda: SubagentDef(
-        tools=["fetch_url", "current_time"],
-        max_turns=15,
-    ))
-```
-
-And update the `from_yaml()` subagent loop:
-
-```python
-for name in ("researcher", "summarizer"):  # ← add new names
-    if name in subagents:
-        sub = subagents[name]
-        setattr(config, name, SubagentDef(
-            enabled=sub.get("enabled", True),
-            tools=sub.get("tools", getattr(config, name).tools),
-            max_turns=sub.get("max_turns", getattr(config, name).max_turns),
-        ))
-```
+A plugin role does not require a new core dataclass field or a `from_yaml` loop
+edit. If it needs operator controls, declare [plugin configuration](/guides/plugins#config-secrets-settings)
+and use that configuration when constructing its `SubagentConfig`.
 
 ## 3. Add to the YAML
 
-`config/langgraph-config.yaml`:
+For the built-in researcher, use the active instance's configuration, located
+with `config explain`:
 
 ```yaml
 subagents:
   researcher:
     enabled: true
-    tools:
-      - current_time
-      - web_search
-      - fetch_url
-      - memory_recall
-      - memory_list
+    tools: [current_time, web_search, fetch_url, memory_recall, memory_list, memory_ingest]
     max_turns: 40
-  summarizer:
-    enabled: true
-    tools: [fetch_url, current_time]
-    max_turns: 15
 ```
+
+Other plugin roles use their plugin's declared configuration; an arbitrary
+`subagents.<name>` block does not automatically create a role.
 
 ## 4. Teach the lead agent
 
-The lead's `task()` tool docstring is how the LLM learns what subagents exist. It's generated automatically from `SUBAGENT_REGISTRY`, but the lead also needs to *know when to delegate*. Add that guidance to your persona file, **`config/SOUL.md`** (read into the system prompt by `graph/prompts.py::build_system_prompt` — you don't edit `prompts.py`):
-
-```markdown
-Available subagents (invoke via the `task` tool):
-- `researcher` — gathers + synthesizes background on a topic, returns a sourced brief
-- `summarizer` — condenses long source text into a ≤200-word brief
-
-Delegate to researcher when a user asks an open-ended "find out about X"
-question. Handle short factual queries yourself.
-```
-
-> **No-fork path:** a subagent can also be shipped as a [plugin](/guides/plugins)
-> (`register_subagent`) — added to `SUBAGENT_REGISTRY` at load with no edit to
-> `graph/subagents/config.py` or `graph/config.py`.
+The delegation tool exposes registered role descriptions. Make each description
+say when that role is useful and what it returns. Put recurring task instructions
+in a [skill](/guides/skills) or [workflow](/guides/workflows); use persona settings
+for the agent's identity and general style.
 
 ## 5. Turn subagents off entirely
 
-If your agent is simple enough that subagents are pure overhead, flip `include_subagents=False` when the graph is built. In `server/agent_init.py::_init_langgraph_agent`:
-
-```python
-_graph = create_agent_graph(
-    _graph_config,
-    knowledge_store=knowledge_store,  # keep the bundled store wired up
-    include_subagents=False,           # ← skip the task() tool and subagent machinery
-)
-```
-
-This drops the `task()` tool from the lead's toolset. No runtime hit.
+Disable roles through their supported configuration: `subagents.researcher.enabled: false`
+for the researcher, or disable the contributing plugin for plugin roles. Check
+the roster afterward. Embedders can build a graph with `include_subagents=False`
+to omit the delegation machinery; this is a Python integration option, not a
+setting in the read-only roster.
 
 ## The adversarial-research roles
 
@@ -186,37 +129,7 @@ retirement harvest — the jobs DB is the system of record. Jobs spawned from an
 thread inherit the no-memory-trail contract: no auto-resume, no indexing; the report still
 drains normally.
 
-**Reuse it from your own code — `BackgroundManager.spawn_work(...)`.** Not every long job is an
-LLM turn. A *deterministic* pipeline — media transcription, a bulk import, a crawl — shouldn't
-spend a model turn on itself. `spawn_work` runs a plain coroutine through the **same** durable
-registry + concurrency cap + `background.*` event stream + drain-on-next-turn + idle-wake as a
-background subagent, with no LLM turn:
-
-```python
-from runtime.state import STATE
-
-mgr = STATE.background_mgr  # None when the background subsystem is disabled → run inline instead
-if mgr is not None:
-    job_id = await mgr.spawn_work(
-        origin_session=session_id,
-        kind="ingest",                     # short label — shows on the job card
-        description="Ingest that video",
-        detail=source,                     # recorded on the job row
-        work=lambda: do_the_work(source),  # an async () -> result-string callable
-    )
-```
-
-The `knowledge_ingest` tool is the first consumer — it detaches any slow URL/media ingest this
-way so a 20-minute transcription never freezes the chat. Reach for `spawn_work` whenever a tool
-or plugin has a long **deterministic** operation that shouldn't block the turn (vs.
-`run_in_background`, which is for detaching an *LLM subagent* turn).
-
-**From a plugin, use the consumption SDK instead of `STATE`.** `graph.sdk.spawn_background(prompt,
-*, subagent_type, origin_session, label=None)` spawns a detached *subagent* job through the same
-pipeline — the report card, KB indexing, and the push-resume nudge all land for free — and
-`graph.sdk.background_status(task_id)` reads the job row (`{status, description, report?}`) so a
-plugin dashboard can show progress between launch and the nudge. See
-[Plugins ▸ Tapping core deeper](/guides/plugins#consumption-sdk).
+For plugin jobs and deterministic background work, see [Background integration](/reference/automation#background-work).
 
 ## What you get for free
 

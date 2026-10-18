@@ -59,7 +59,7 @@ Skills live in a SQLite/FTS5 index (`skills.db`). Each row carries a `source`:
 |---|---|---|
 | `disk` | `SKILL.md` files + console CRUD (re-seeded each boot) | **pinned** — never decayed/pruned |
 | `distilled` | the `/distill` subagent (`save_skill`) | yes (curator) |
-| `promoted` | `python -m server skills promote <name>` → the **commons** | **no** — the curator writes the private tier only, so promoted skills never auto-decay. Remove one with `python -m server skills forget <name>`. |
+| `promoted` | `python -m server skills promote <name>` → the **commons** | **dedupe only** in the commons by default; no idle decay or automatic pruning. Remove one with `python -m server skills forget <name>`. |
 
 Run the curator with `python -m server skills curate [--tier private|commons]`: the **private** tier
 decays + dedupes + prunes non-`disk` skills; the **commons** is trusted, so it **dedupes only** (no
@@ -71,7 +71,7 @@ idle-decay, no auto-prune — `--prune` opts in). See the [Skills guide](/guides
 |---|---|---|
 | `enabled` | `true` | Load skills + list the `<available_skills>` index at all |
 | `db_path` | `/sandbox/skills.db` | Index location (legacy default resolves to `<instance_root>/skills.db`) |
-| `top_k` | `5` | Max skills listed in the always-on `<available_skills>` index per turn (rest via `list_skills`; bodies via `load_skill`) |
+| `top_k` | `24` | Maximum full descriptions in the per-turn `<available_skills>` index. Every discoverable skill retains its name/slash identity; bodies load through `load_skill`. |
 | `dir` | `""` | Override the writable skills root |
 | `scope` | `""` (→ `scoped`) | Tier: `scoped` (private, **default**) · `shared` (one commons) · `layered` (read commons ∪ private, write private, `promote` to lift) ([ADR 0041](/adr/0041-workspaces-and-tiered-stores)). Sharing is opt-in — a fresh agent keeps its learned skills private. |
 | `shared` | `false` | Back-compat boolean — `true` → `scope: shared` when `scope` is blank |
@@ -80,5 +80,5 @@ The shared-tier **commons** base dir is `commons.path` (blank → `<box_root>/co
 is **host-level and un-scoped** — every agent on the host reads the same `commons.path` regardless of
 the instance root, so isolate two co-located fleets by giving each a distinct `commons.path`. Boot logs
 the active tier + path (`[skills] tier=… into …`). Curate the commons by hand —
-`skills promote`/`forget` (it's curator-immutable; see the source table above).
+`skills promote`/`forget`; a commons curation pass deduplicates by default and only prunes with an explicit `--prune`.
 `GET /api/runtime/status` reports `skills.count`.

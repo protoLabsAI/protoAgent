@@ -555,6 +555,10 @@
           "label": "Agent and operator APIs",
           "items": [
             {
+              "path": "reference/automation.md",
+              "title": "Automation APIs and integration"
+            },
+            {
               "path": "reference/operator-api.md",
               "title": "Operator REST API"
             },

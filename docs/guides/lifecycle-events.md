@@ -1,5 +1,7 @@
 # System lifecycle events
 
+This is advanced configuration and plugin automation. For a timed task use a [schedule](/guides/scheduler); for a condition use a [watch](/guides/watches). You need access to the instance configuration or a plugin to wire lifecycle reactions.
+
 The agent broadcasts a few **system lifecycle** events on the [event bus](/guides/plugins#event-bus) —
 that it finished booting, that it just woke up from an idle stretch, that the desktop shell came
 back. An operator can react to them from a config file; a plugin can react in code. Both are

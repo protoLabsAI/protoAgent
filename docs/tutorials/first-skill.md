@@ -1,6 +1,6 @@
 # Write your first skill
 
-A **skill** teaches the agent how and when to handle a recurring task. You drop in a
+A **skill** teaches the agent how and when to handle a recurring task. Create it in Settings or use a
 `SKILL.md` folder; the agent loads its instructions when it needs them — no code, no
 re-explaining each turn. By the end of this tutorial you'll have a skill the agent uses
 automatically *and* can run on demand as a `/slash` command.
@@ -11,12 +11,17 @@ automatically *and* can run on demand as a `/slash` command.
 
 ## 1. Create the skill
 
-Make a folder under your instance skills root with a `SKILL.md` inside. Use
-`protoagent config explain` to find that root; a normal default host install uses:
+Open **Settings → Skills** and use the add button to open **New skill**:
 
-```
-~/.protoagent/default/skills/tldr/SKILL.md
-```
+- **Name:** `tldr`
+- **Description:** “Use whenever the user asks for a TL;DR, a summary, or the short version of a document, thread, or block of text.”
+- **Procedure:** read the provided text; reply with exactly three one-sentence bullets; include uncertainty that changes the conclusion.
+
+Choose **Create skill**. It is available immediately.
+
+::: details File alternative
+Create `<instance_root>/skills/tldr/SKILL.md`. Find the root with the [configuration command for your install](/guides/backup-and-restore#find-your-data).
+Use this file:
 
 ```markdown
 ---
@@ -37,17 +42,13 @@ tools: []
 The agent sees the **description** in its available-skills index and uses it to
 decide whether to load the full procedure. State when the skill is useful.
 
+:::
+
 ## 2. Load it
 
-The agent indexes `SKILL.md` files at boot, so restart the server (or trigger a config
-reload). Confirm it loaded:
-
-```bash
-curl -s localhost:7870/api/runtime/status | grep -o '"skills":[^}]*'
-```
-
-> Shortcut: the console's **Settings → Skills → New** authors a skill **live** — no restart.
-> The file path above is the portable, fork-friendly way and shows the raw format.
+Confirm `tldr` appears in **Settings → Skills**. App-created skills are already
+live. For a file created by hand, reload configuration or restart the server,
+then check the list. If it is missing, check its path and required frontmatter.
 
 ## 3. Watch it fire
 
@@ -63,21 +64,13 @@ below lets you choose it explicitly.
 
 ## 4. Make it runnable on demand
 
-Add two frontmatter keys so the skill becomes a `/slash` command too:
+Edit the skill, enable **Invokable as a /slash command**, enter `tldr` as the
+slash token, and save. Type `/tldr` in the composer to find it in the slash menu.
+Run `/tldr <text>` to invoke the procedure explicitly.
 
-```markdown
----
-name: tldr
-description: >-
-  Use whenever the user asks for a TL;DR or summary of some text.
-user_facing: true
-slash: tldr
----
-```
-
-Restart, then type `/tldr` in the composer — it appears in the slash menu. `/tldr <text>`
-runs the procedure on the spot (it rewrites the turn with your skill's body as the
-directive; [ADR 0052](/adr/0052-user-facing-skills-slash-commands)).
+For the file alternative, add `user_facing: true` and `slash: tldr` to its
+frontmatter, then reload configuration. This runs the skill in the normal chat
+turn; it does not create a separate worker.
 
 ## What you learned
 

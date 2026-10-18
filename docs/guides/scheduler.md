@@ -44,40 +44,11 @@ unavailable while disabled. See [scheduler configuration](/reference/configurati
 
 ## Operator API
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/scheduler/jobs` | List jobs (`{jobs, backend}`) |
-| `POST` | `/api/scheduler/jobs` | Create: `{prompt, schedule, job_id?, timezone?}` |
-| `PUT` | `/api/scheduler/jobs/{id}` | Partial update: `{prompt?, schedule?, timezone?}` |
-| `DELETE` | `/api/scheduler/jobs/{id}` | Cancel |
-
-Omitted update fields keep their values. `timezone: null` or `""` resets to UTC.
-Invalid schedules/timezones, empty prompts or schedules, and empty updates return
-`400` without changing the job.
+See [Automation integration](/reference/automation) for scheduler endpoints and plugin-owned jobs.
 
 ## Plugin-owned recurring jobs
 
-Plugins use [`sdk.schedule_recurring`](/reference/plugin-sdk-api#sdk-schedule-recurring)
-with a stable job id:
-
-```python
-from graph import sdk
-
-def register(registry):
-    sdk.schedule_recurring(
-        "Review the project's outstanding tasks.", "0 9 * * *",
-        plugin_id=registry.plugin_id, job_id="daily-review",
-    )
-```
-
-Calling it again with the same id replaces the pending job. It accepts cron
-only; use `sdk.run_in_session` for a one-shot turn. The default destination is
-Activity; `session` targets a particular chat.
-
-The host namespaces ids as `plugin:<plugin_id>:<job_id>` and removes owned jobs
-on plugin disable/reload or uninstall. Re-enabling depends on the plugin
-re-arming in `register()`. Plugins can also call `sdk.cancel_scheduled` or
-`sdk.cancel_plugin_jobs`; see the SDK reference for their signatures.
+See [Automation integration](/reference/automation) for scheduler endpoints and plugin-owned jobs.
 
 ## Multi-agent isolation
 
