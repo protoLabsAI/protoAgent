@@ -77,6 +77,17 @@ test("Add a device cancels with kind device (it can't drop a pending agent code)
   await expect.poll(() => cancels).toEqual([{ kind: "device" }]);
 });
 
+test("Add a device shows the short code beside the QR, the URL to open, and the countdown", async ({ page }) => {
+  await openDevices(page);
+  await page.getByRole("button", { name: "Add a device" }).click();
+  const card = page.getByRole("region", { name: "Pair a new device" });
+  // ONE code (ADR 0087 D3 amendment): what the QR carries is also what a phone types.
+  await expect(card.getByTestId("device-pair-code")).toHaveText("3HV8T-QW6RN");
+  await expect(card.getByTestId("device-pair-url")).toHaveText("http://100.64.0.5:7871/app/");
+  await expect(card).toContainText("Have a pairing code?");
+  await expect(card).toContainText(/Expires in [45]:\d\d/);
+});
+
 test("an expired agent code offers New code", async ({ page }) => {
   // Pin the mock's clock 10 minutes in the past, so the code it mints is already expired
   // by this page's real clock — the countdown's expiry path, without waiting 5 minutes.

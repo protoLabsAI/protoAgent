@@ -87,7 +87,7 @@ describe("Settings type scale → DS tokens (#3688 part 7a)", () => {
   it("migrated every in-range site to an in-scale token, at the expected per-file counts", () => {
     expect(tokenCount(pluginsCss)).toBe(15);
     expect(tokenCount(snapshotCss)).toBe(11);
-    expect(tokenCount(devicesCss)).toBe(6);
+    expect(tokenCount(devicesCss)).toBe(7); // +1: .devices-url--open (#4336 S2), born tokenized
     expect(tokenCount(keybindingsCss)).toBe(7);
   });
 

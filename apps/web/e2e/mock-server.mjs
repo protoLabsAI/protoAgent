@@ -1896,7 +1896,7 @@ const server = createServer(async (req, res) => {
           auth_configured: true,
         }, 409);
       }
-      const ttl = kind === "agent" ? 300 : 120;
+      const ttl = 300; // both kinds since the ADR 0087 D3 amendment: the device code is typeable too
       const expires_at = Math.floor(nowFor(req) / 1000) + ttl;
       if (kind === "agent") {
         return sendJson(res, {
@@ -1909,8 +1909,12 @@ const server = createServer(async (req, res) => {
         });
       }
       return sendJson(res, {
-        ok: true, kind, code: "e2e-phone-code", expires_at, ttl,
-        hosts: [{ host: "100.64.0.5", kind: "tailnet", url: "http://100.64.0.5:7871/app/#pair=e2e-phone-code", qr: null }],
+        ok: true, kind, code: "3HV8T-QW6RN", expires_at, ttl,
+        hosts: [{
+          host: "100.64.0.5", kind: "tailnet",
+          base_url: "http://100.64.0.5:7871/app/",
+          url: "http://100.64.0.5:7871/app/#pair=3HV8T-QW6RN", qr: null,
+        }],
       });
     }
     if (pathname === "/api/pairing/cancel" && req.method === "POST") {

@@ -68,6 +68,34 @@ The code is:
 Claiming mints a *new* device token. The scanning device sends its own name (derived from its
 user agent, e.g. "iPhone"), so the operator sees what joined rather than an anonymous entry.
 
+**Amended 2026-10-18 (#4336 S2): one short, typeable code.** A phone that can't scan (no
+camera permission, a code shown on a terminal or a screen share) had no way in short of
+copying the shared operator bearer, which is the thing D1 exists to avoid. So the device
+code is now the same shape as an agent code (ADR 0113 D2): **10 Crockford base32
+characters shown as `XXXXX-XXXXX`, 300 s TTL**, minted by the same function and folded on
+claim the same way (case, dashes/spaces, O→0, I/L→1). The QR still encodes
+`…/app/#pair=<code>`, and the Devices panel shows the same code as text beside it together
+with the console URL to open; the console's AuthGate gains "Have a pairing code?" to type
+it; `protoagent pair --device` prints code, URLs and a terminal QR for a headless box.
+
+*One code, not two.* Keeping the 190-bit QR code and adding a typed one would leave the
+pairing exactly as strong as the weaker code, so the long code would buy nothing but a
+second thing to cancel and expire. One code keeps "single-use" literally true: scanning or
+typing it spends it.
+
+*Why ~50 bits is honest here.* The guard was never entropy alone. The claim is
+single-use, the code lives 300 s, and the failed-claim counter is shared across both kinds:
+five consecutive misses drop **every** pending code. A prober gets about 5 guesses per code
+the operator issues, so the odds per issued code are ~5/2^50 (about 4×10⁻¹⁵). The TTL went
+from 120 s to 300 s because typing a code read off another screen takes longer than
+scanning; it matches the agent-code window for the same reason. The D4 residual risk
+(anyone who can see the screen during the window can claim) is unchanged in kind and only
+longer in time. The panel cancels the code when it closes.
+
+Links issued before the amendment carried the long code. They can't still be pending
+(pending codes are memory-only, so the upgrade restart cleared them), and a long code is
+simply a miss against the new store. The `#pair=` mechanism itself is unchanged.
+
 ### D4 — The claim endpoint is unauthenticated, and that is the sensitive part
 
 `POST /api/pairing/claim` cannot require auth — obtaining auth is its entire purpose. It is
@@ -79,8 +107,8 @@ when no pairing is pending (the common case is a closed door), and a failed-atte
 that invalidates all pending codes rather than allowing indefinite guessing. Constant-time
 comparison throughout.
 
-**Accepted residual risk:** anyone who can see the operator's screen during the 120-second
-window can scan the code and claim a device. This is inherent to QR pairing and is why the
+**Accepted residual risk:** anyone who can see the operator's screen during the code's
+window (120 s originally, 300 s since the D3 amendment) can scan the code and claim a device. This is inherent to QR pairing and is why the
 window is short, the code single-use, and the resulting device *visible and revocable* in a
 list. The alternative — no pairing — leaves people hand-typing bearer tokens, which in
 practice means picking weak ones or reusing them.

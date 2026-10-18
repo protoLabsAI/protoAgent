@@ -13,8 +13,19 @@ interfaces; use firewall or tailnet rules to limit reachability.
 
 ## 2. Open it on the phone {#_2-reach-it-from-the-phone}
 
-Follow [Pair a phone](/guides/pairing#pair-a-phone-qr) to scan the QR and confirm
-the phone appears in Devices. If a code expires, generate a new one.
+Pair the phone so it gets its own token. Pick whichever is easier:
+
+- **Scan the QR.** On the agent, open **Settings ▸ Devices ▸ Add a device** and scan the
+  QR with the phone's camera. See [Pair a phone (QR)](/guides/pairing#pair-a-phone-qr).
+- **Type the code.** On the phone, open the URL shown beside the QR, tap
+  **Have a pairing code?**, and type the ten-character code (`XXXXX-XXXXX`). See
+  [Pair a phone by typing the code](/guides/pairing#pair-a-phone-by-typing-the-code).
+- **No screen on the agent machine?** Run `protoagent pair --device` there. It prints the
+  QR, the code and the URL in the terminal. See
+  [Pair a phone from a headless box](/guides/pairing#pair-a-phone-from-a-headless-box).
+
+Codes last five minutes and work once. Five wrong codes in a row cancel every pending
+code; make a new one. Confirm the phone appears in Devices.
 
 Alternatively, open `http://<host>:<port>/app/` and enter the operator token
 when asked. Use an address and port shown by the agent. Desktop can choose a

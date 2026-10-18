@@ -14,9 +14,10 @@ import { request } from "./http";
 import { tauriCore } from "./desktop";
 
 /** A reachable address in a pairing-start answer. For a PHONE code `url` is the full
- *  `…/app/#pair=<code>` link and `qr` its rendered SVG; for an AGENT code (ADR 0113) `url` is
- *  the bare base URL a hub pairs against and there is no QR — the code is typed, not scanned. */
-export type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr?: string | null };
+ *  `…/app/#pair=<code>` link, `qr` its rendered SVG, and `base_url` the bare console URL a
+ *  phone that can't scan opens before TYPING the same code (ADR 0087 D3 amendment); for an
+ *  AGENT code (ADR 0113) `url` is the bare base URL a hub pairs against and there is no QR. */
+export type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr?: string | null; base_url?: string };
 export type PairAddress = { host: string; kind: "tailnet" | "lan" };
 /** A row of `GET /api/devices`. `kind` says whether the client is a phone/tablet or another
  *  agent's hub (ADR 0113 D3) — fixed by the code it claimed; absent (pre-0113) reads `device`. */
@@ -43,7 +44,15 @@ export type PairingStart =
   /** Nothing reachable — `available` is what the server COULD bind to (ADR 0087 D6).
    *  `authConfigured` is THIS SERVER's answer to "do I have a token", which a client cannot
    *  infer: localStorage holding one says nothing about what the server accepts. */
-  | { ok: false; error: string; available: PairAddress[]; bind: string; authConfigured: boolean };
+  | {
+      ok: false;
+      error: string;
+      available: PairAddress[];
+      bind: string;
+      authConfigured: boolean;
+      /** `no_console`: a phone code on a `--ui none` instance (nothing for a phone to open). */
+      reason?: string;
+    };
 
 export const runtimeApi = {
   runtimeStatus() {
@@ -83,6 +92,7 @@ export const runtimeApi = {
       // Absent (an older server) is treated as NOT configured, so the flow mints rather than
       // assuming — minting a second token is recoverable; writing a bind with no token is not.
       authConfigured: data?.auth_configured === true,
+      ...(typeof data?.reason === "string" ? { reason: data.reason } : {}),
     };
   },
   /** Drop this dialog's pending code. Scoped by kind (see `cancelBody`): an unscoped cancel

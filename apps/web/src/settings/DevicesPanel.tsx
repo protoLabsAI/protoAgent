@@ -176,6 +176,10 @@ export function DevicesPanel() {
           name: res.name,
         });
         setHostIdx(0);
+      } else if (res.reason === "no_console") {
+        // `--ui none` (a hub console can open a headless member's Devices): the server's
+        // message is the whole story — no address list would help.
+        setPairError(res.error);
       } else if (res.available.length) {
         // Loopback-bound but fixable — offer the addresses instead of an error the operator
         // can't act on. This is the desktop app's default state.
@@ -449,12 +453,23 @@ export function DevicesPanel() {
             // origin, generated from a URL we just built ourselves.
             <div className="devices-qr" dangerouslySetInnerHTML={{ __html: host.qr }} />
           ) : (
-            <p className="setting-desc">Scan unavailable — use the link below.</p>
+            <p className="setting-desc">Scan unavailable — type the code below instead.</p>
           )}
           <div className="devices-pair-body">
             <p className="devices-pair-hint">
               Scan with the device&apos;s camera. Expires in <strong>{formatCountdown(remaining)}</strong>.
             </p>
+            {/* The SAME code the QR carries (ADR 0087 D3 amendment), for a phone that can't
+                scan: open the console URL below, then "Have a pairing code?" and type it. */}
+            <p className="setting-desc">Can&apos;t scan? Open this on the device, tap <strong>Have a pairing code?</strong>, and enter:</p>
+            <div className="devices-code">
+              <code data-testid="device-pair-code" aria-label={`Pairing code ${pairing.code.split("").join(" ")}`}>
+                {pairing.code}
+              </code>
+            </div>
+            <code className="devices-url devices-url--open" data-testid="device-pair-url">
+              {host.base_url ?? host.url.split("#")[0]}
+            </code>
             {pairing.hosts.length > 1 && (
               <div className="devices-hosts">
                 {pairing.hosts.map((h, i) => (
@@ -469,7 +484,6 @@ export function DevicesPanel() {
                 ))}
               </div>
             )}
-            <code className="devices-url">{host.url}</code>
             <p className="setting-desc">
               {host.kind === "tailnet"
                 ? "Works from any network the device is on."

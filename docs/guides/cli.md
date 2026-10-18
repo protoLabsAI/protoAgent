@@ -55,7 +55,7 @@ then exits:
 | `protoagent fleet ls` · `up` · `down` · `new` · `rm` · `rename` · `remote add\|edit\|rm` · `pair` · `order` | Inspect, run and **manage** fleet **member** agents — **live from the running hub** when one answers, from this instance's `fleet.json` (through the `ops/` layer) otherwise (see below). `--json` on each. | [0042](../adr/0042-fleet-supervisor-unified-console.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent fleet friction` · `friction resolve <id>` | Read **every member's friction ledger** through the hub (`--kind`, `--severity major`, `--since 7d`, `--agent`, `--resolved`, `--raw`, `-v`, `--json`) — ranked worst-first, with signals several agents hit called out and unreadable members named. `resolve` stamps a signal fixed on the agents you name (`--agent`, or `--all-agents`; `--reason`, `--reopen`). Live hub only. | [friction log](friction-log.md#across-the-fleet-from-the-terminal) |
 | `protoagent fleet --all` | The **hub tree**: every hub on this box (heartbeats, instance roots with a fleet, listeners by port) probed for its version and member counts, plus peers found on the network. `--offline` skips the scan and the probes. Not a member command: it never reads one hub's fleet. | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
-| `protoagent pair` | Print a **one-time code** another agent's hub claims to pair with the protoAgent running on this machine — the headless half of agent pairing (see below). `--json` for scripts. | [0113](../adr/0113-agent-pairing-for-remote-fleet-members.md) |
+| `protoagent pair` | Print a **one-time code** another agent's hub claims to pair with the protoAgent running on this machine — the headless half of agent pairing (see below). `--device` pairs a **phone** instead: code, console URL and a terminal QR. `--json` for scripts. | [0113](../adr/0113-agent-pairing-for-remote-fleet-members.md) |
 | `protoagent skills ls` · `promote <name>` | Inspect and curate the SKILL.md library. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent config explain` · `get` · `set key=value …` | Explain the config cascade; print `config.yaml`; write dotted keys (JSON-typed) to disk. | [0047](../adr/0047-layered-settings-cascade.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent knowledge ingest <url\|file>` | Fetch/extract a source and index it into this instance's knowledge base. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
@@ -157,6 +157,46 @@ instance bound to loopback can't be paired, because nothing else can reach it:
 is a reachable bind *with* an auth token (`--host 0.0.0.0`, or *Allow devices on my network*
 in Settings ▸ Devices), never an open instance. A fleet member listens on loopback behind
 its hub, so pair the hub instead.
+
+#### Pairing a phone from the terminal: `protoagent pair --device`
+
+Pairs a phone or tablet with the protoAgent running on this machine, for a box with no
+screen to open **Settings ▸ Devices** on
+([ADR 0087](../adr/0087-device-pairing-and-per-device-tokens.md)). It authenticates to the
+instance exactly like `protoagent pair`, starts a phone pairing, and prints a terminal QR,
+the code, and the console URL for each reachable address:
+
+```text
+$ protoagent pair --device
+Scan with the phone's camera:
+█████████████████████████████████████
+██ ▄▄▄▄▄ █ ▀▀ ▄ ██▄▄▀▄█▀▀ ▄█ ▄▄▄▄▄ ██
+   … (QR continues) …
+
+Pairing code:  K7QM2-XPA4F   (expires in 4:59)
+
+Or on the phone, open this agent and tap "Have a pairing code?", then type the code:
+  http://100.64.1.2:7870/app/   (any network the phone is on, if it runs Tailscale)
+  http://192.168.1.20:7870/app/   (same Wi-Fi only)
+
+The code works once. The phone shows up under Settings ▸ Devices, where you can revoke it.
+```
+
+The QR encodes the first (tailnet-first) address with the code in its `#pair=` fragment.
+The code follows the same rules as an agent code: ten characters, case-insensitive, works
+once, expires after five minutes, and five wrong tries cancel every pending code.
+
+| Flag | Effect |
+| --- | --- |
+| `--no-qr` | Print only the code and URLs. |
+| `--light` | Draw the QR for a light-background terminal. The default suits a dark one. |
+| `--json` | Print the instance's raw answer (`code`, `expires_at`, `hosts[].base_url`, `hosts[].url`). |
+| `--url`, `--token` | Pair a specific instance, as for `protoagent pair`. |
+
+On a loopback-bound instance it exits 1 and explains the fix, the same as `protoagent pair`.
+On a `--ui none` instance it exits 1 with *Restart it with --ui console (the default) to
+pair a phone*: there is no console for the phone to open, so the instance makes no code.
+See [Pair a phone by typing the code](./pairing.md#pair-a-phone-by-typing-the-code).
 
 ### Point at a local model
 

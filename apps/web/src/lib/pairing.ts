@@ -5,9 +5,22 @@
  * `Referer` headers, which a query string would not.
  *
  * Redemption runs BEFORE React mounts, so the app never renders its "enter your token"
- * gate for a device that is about to be authorised. */
+ * gate for a device that is about to be authorised.
+ *
+ * The same code can also be TYPED (ADR 0087 D3, amended 2026-10-18): a phone that can't scan
+ * opens the console, gets the AuthGate, and enters the `XXXXX-XXXXX` code under "Have a
+ * pairing code?". Both paths go through `claimPairingCode`, so the token lands in exactly
+ * one place, the same strict way. */
 
+import { AGENT_CODE_LENGTH, formatAgentCode, isCompleteAgentCode, normalizeAgentCode } from "./agentPairing";
 import { writeKey, writeKeyStrict } from "./storage";
+
+/** A pairing code — device or agent — is 10 Crockford chars shown as `XXXXX-XXXXX`. The
+ *  shape is shared with agent codes (one minting path server-side), so are the helpers. */
+export const PAIRING_CODE_LENGTH = AGENT_CODE_LENGTH;
+export const formatPairingCode = formatAgentCode;
+export const normalizePairingCode = normalizeAgentCode;
+export const isCompletePairingCode = isCompleteAgentCode;
 
 const KEY = "protoagent.authToken";
 const DEVICE_KEY = "protoagent.deviceId";
@@ -48,29 +61,48 @@ function deviceName(): string {
 }
 
 export type PairResult = { ok: true } | { ok: false; error: string } | null;
+export type ClaimResult = { ok: true } | { ok: false; error: string; status?: number };
+
+/** What a failed claim means, in words a person holding a phone can act on.
+ *
+ *  The server answers every bad code with ONE 403 (unknown / expired / already used / the
+ *  pending codes were just dropped by the 5-miss lockout) — deliberately, so a prober learns
+ *  nothing about which codes exist (ADR 0087 D4). The console can't tell those apart either,
+ *  so it names all three causes and the one fix that covers them: a fresh code. */
+export function describePairingError(res: { status?: number; error: string }): string {
+  if (res.status === 403) {
+    return (
+      "That code didn't work. Check it against the screen it's shown on — or, if it expired " +
+      "(codes last 5 minutes and work once) or several wrong tries cancelled it, make a new " +
+      "one under Settings ▸ Devices ▸ Add a device, or with protoagent pair --device."
+    );
+  }
+  if (res.status === undefined && /abort|timeout|timed out|failed to fetch|network|offline|load failed/i.test(res.error)) {
+    return "Couldn't reach this agent. Check the phone is on the same Wi-Fi (or tailnet) and try again.";
+  }
+  return res.error;
+}
 
 /**
- * Claim a pairing code if the URL carries one. Returns null when there's nothing to do.
+ * Redeem a pairing code for this device's token and store it.
  *
  * Deliberately NOT routed through `lib/api.ts`: that attaches the operator bearer, and this
  * request runs precisely when we don't have one. It is also the one endpoint that must work
  * unauthenticated (ADR 0087 D4).
  */
-export async function redeemPairingFromUrl(): Promise<PairResult> {
-  const code = takePairingCode();
-  if (!code) return null;
+export async function claimPairingCode(code: string): Promise<ClaimResult> {
   try {
     const res = await fetch("/api/pairing/claim", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code, name: deviceName() }),
       // First render waits on this, so it must not hang forever on a flaky network — the
-      // pairing code outlives a retry (120s) but a wedged request would strand the app.
+      // pairing code outlives a retry (5 minutes) but a wedged request would strand the app.
       signal: AbortSignal.timeout(10_000),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data?.token) {
-      return { ok: false, error: `HTTP ${res.status}: ${String(data?.error || "pairing failed")}` };
+      return { ok: false, status: res.status, error: `HTTP ${res.status}: ${String(data?.error || "pairing failed")}` };
     }
     // Strict (ADR 0114 D1): a token the browser failed to keep must not report success —
     // the throw lands in the catch below and comes back as { ok: false }.
@@ -81,4 +113,14 @@ export async function redeemPairingFromUrl(): Promise<PairResult> {
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "pairing failed" };
   }
+}
+
+/**
+ * Claim a pairing code if the URL carries one. Returns null when there's nothing to do.
+ */
+export async function redeemPairingFromUrl(): Promise<PairResult> {
+  const code = takePairingCode();
+  if (!code) return null;
+  const res = await claimPairingCode(code);
+  return res.ok ? res : { ok: false, error: res.error };
 }

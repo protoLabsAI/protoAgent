@@ -373,6 +373,21 @@ select:disabled {
   background: rgb(8, 8, 12);
 }
 
+/* AuthGate "Have a pairing code?" (ADR 0087 D3 amendment). The code is copied off another
+   screen, so it reads like that screen: monospace, letter-spaced so 0/O and 1/I stay distinct.
+   The lg step keeps it at the 16px iOS no-zoom floor on every device, not just touch ones. */
+.auth-gate-code-label {
+  display: block;
+  margin-bottom: var(--pl-space-1);
+  font-weight: 600;
+}
+.auth-dialog .auth-gate-code {
+  font-family: var(--pl-font-mono);
+  font-size: var(--pl-font-size-lg);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 /* Toast top-right anchoring now comes from the DS prop (`<ToastProvider position="top-right">`,
    @protolabsai/ui ≥ 0.49) — the `.pl-toast-stack` override that used to live here is retired. */
 

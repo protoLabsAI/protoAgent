@@ -6,10 +6,12 @@ short-lived, single-use code; the other side claims it; the claim mints a per-cl
 that this agent stores only as a hash and that you can revoke on its own, from
 **Settings ▸ Devices**, without signing anything else out.
 
-For a phone or tablet, scan a QR code from **Settings → Devices → Add a device**.
-The code expires after two minutes and is single-use; restarting clears pending
-codes. The resulting token grants operator access to this agent, so pair only
-devices you intend to give that control.
+For a phone or tablet, open **Settings → Devices → Add a device** and either scan the
+QR or type the short code shown beside it (`XXXXX-XXXXX`). On a box with no screen,
+`protoagent pair --device` prints the same code and QR in the terminal. A code expires
+after five minutes and works once; restarting clears pending codes. The resulting token
+grants operator access to this agent, so pair only devices you intend to give that
+control.
 
 To add another agent to a fleet, use [Pair a remote fleet member](/guides/pair-an-agent).
 
@@ -71,6 +73,62 @@ Never turn on `PROTOAGENT_ALLOW_OPEN=1` to make pairing work. Pairing adds clien
    server log.
 3. The device appears in the Devices list on the agent. That list growing is the
    confirmation; the phone can't tell the other window it succeeded.
+
+## Pair a phone by typing the code
+
+Use this when the phone can't scan the QR (no camera access, a broken camera, the code
+is on a terminal or a screen share), or when you'd rather not.
+
+1. On the agent: **Settings ▸ Devices ▸ Add a device**. Beside the QR, the panel shows a
+   ten-character code such as `3HV8T-QW6RN`, the console URL to open on the phone, and
+   the countdown. On a headless box, run [`protoagent pair --device`](#pair-a-phone-from-a-headless-box)
+   instead.
+2. On the phone: open that URL in the browser, for example `http://100.64.0.5:7870/app/`.
+   The console asks for authentication.
+3. Tap **Have a pairing code?**, type the code and tap **Pair this device**. Case doesn't
+   matter, the dash is optional, and the letters O, I and L are read as 0, 1 and 1, so a
+   misread look-alike still works.
+4. The console opens, and the phone appears in **Settings ▸ Devices** on the agent with its
+   own token.
+
+The QR and the typed code are the same code. Using either one spends it.
+
+### If the code doesn't work
+
+The agent answers every bad code the same way, on purpose: it never tells a guesser which
+codes exist. The phone shows **That code didn't work** and names the possible causes.
+
+| Cause | What happened | What to do |
+| --- | --- | --- |
+| Mistyped | A character is wrong. The **Pair this device** button stays disabled until all ten characters are entered, so a short code never spends a try. | Check it against the agent's screen and try again. |
+| Expired | Codes last five minutes. Restarting the agent, or closing the Add a device card, also cancels the code. | Make a new code. |
+| Already used | Each code works once, by QR or by typing. | Make a new code if this phone isn't in the Devices list. |
+| Locked out | After five wrong codes in a row, the agent cancels **every** pending code, including agent-pairing codes. This stops anyone from guessing their way in. | Make a new code. A new code starts with five fresh tries. |
+
+If the phone says **Couldn't reach this agent**, the problem is the network, not the
+code. See [Access from your phone](./phone-access.md#tailscale-reach-it-from-anywhere).
+
+## Pair a phone from a headless box
+
+A server or container with no screen can still pair a phone. Run this on the machine
+where the agent is running:
+
+```bash
+protoagent pair --device
+```
+
+It finds the running instance the same way `protoagent pair` does, starts a phone
+pairing, and prints a QR in the terminal, the code, and the console URL for each address
+the phone can use (tailnet first). Scan the QR, or open a URL on the phone and type the
+code as described above. `--no-qr` skips the drawing, `--light` draws it for a
+light-background terminal, and `--json` prints the raw response. See the
+[CLI reference](./cli.md#pairing-a-phone-from-the-terminal-protoagent-pair-device) for
+example output.
+
+The agent must serve the console (the default `--ui console`) and be reachable with a
+token, as in [Before you pair](#before-you-pair-make-this-agent-reachable). On a
+`--ui none` agent the command says to restart it with `--ui console` and exits 1, without
+making a code. Pairing another agent doesn't need the console.
 
 To install the console on the phone's home screen and for the Tailscale setup, see
 [Access from your phone](./phone-access.md).

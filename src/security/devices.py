@@ -19,9 +19,10 @@ Two halves, deliberately different in durability:
   behavior: a code nobody claimed within its window should not survive anything.
 
 Two KINDS of pending code share that one store and its one failed-claim counter (ADR 0113
-D2): a **device** code (a phone scans it off a QR — long, url-safe, 120s) and an **agent**
-code (read off one screen and typed into another machine's "Pair…" dialog — 10 Crockford
-base32 chars, 300s). The kind is fixed when the code is MINTED and copied onto the device it
+D2): a **device** code (a phone scans it off a QR, or types it into the console's "Have a
+pairing code?") and an **agent** code (typed into another machine's "Pair…" dialog). Both are
+the same shape — 10 Crockford base32 chars shown as ``XXXXX-XXXXX``, 300s (ADR 0087 D3 as
+amended 2026-10-18). The kind is fixed when the code is MINTED and copied onto the device it
 yields, so a claimer can never relabel what it is.
 
 The registry lives at the INSTANCE tier, not ``config_dir`` — config is the tier that gets
@@ -46,11 +47,12 @@ from infra.paths import instance_paths
 
 logger = logging.getLogger(__name__)
 
-# A pairing code is displayed on screen (usually as a QR) and is claimable by anyone who can
-# read it, so its safety comes from being short-lived and single-use rather than secret.
-PAIRING_TTL_SECONDS = 120
-# 32 url-safe chars ≈ 190 bits. Guessing is not the threat model; screen-visibility is.
-_CODE_BYTES = 24
+# A pairing code is displayed on screen (as a QR AND as text) and is claimable by anyone who
+# can read it, so its safety comes from being short-lived, single-use and lockout-guarded
+# rather than secret. 300s, not the original 120s: since ADR 0087's 2026-10-18 amendment the
+# one device code is also TYPED on the phone, and typing takes longer than scanning — the
+# same reasoning that gave agent codes 300s.
+PAIRING_TTL_SECONDS = 300
 _TOKEN_BYTES = 32
 # Consecutive failed claims before every pending code is dropped. A legitimate scanner gets
 # the code right first time; repeated misses mean someone is probing. SHARED across code
@@ -61,12 +63,15 @@ KIND_DEVICE = "device"
 KIND_AGENT = "agent"
 _KINDS = frozenset({KIND_DEVICE, KIND_AGENT})
 
-# Agent codes (ADR 0113 D2) are TYPED, not scanned: short, unambiguous, and a longer window
-# because reading a code off one machine and typing it into another takes longer than a scan.
-# 10 chars of Crockford base32 = 50 bits; with the shared 5-miss lockout a prober's odds per
-# issued code are ~5/2^50. Crockford drops I, L, O and U so what's shown can't be misread —
-# and claim folds the look-alikes back (O→0, I/L→1) in case it is anyway.
+# Every code is TYPEABLE (agent codes per ADR 0113 D2; device codes since ADR 0087's
+# 2026-10-18 amendment): short, unambiguous, with a window long enough to read it off one
+# screen and type it into another. 10 chars of Crockford base32 = 50 bits; with the shared
+# 5-miss lockout a prober's odds per issued code are ~5/2^50. Crockford drops I, L, O and U so
+# what's shown can't be misread — and claim folds the look-alikes back (O→0, I/L→1) in case
+# it is anyway. One alphabet, one length, one fold for both kinds: what differs is only the
+# kind stamped on the device the code yields.
 AGENT_PAIRING_TTL_SECONDS = 300
+_TTL_BY_KIND = {KIND_DEVICE: PAIRING_TTL_SECONDS, KIND_AGENT: AGENT_PAIRING_TTL_SECONDS}
 _AGENT_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 _AGENT_CODE_LEN = 10
 _AGENT_CODE_STRIP = str.maketrans({"-": None, " ": None, "_": None, "O": "0", "I": "1", "L": "1"})
@@ -221,8 +226,8 @@ def _register(name: str, kind: str = KIND_DEVICE) -> tuple[Device, str]:
 
 
 # ── Pending pairings (memory-only, see the module docstring) ────────────────────────────
-# normalized code -> (expiry timestamp, kind). Device codes are stored as issued; agent codes
-# are stored normalized (no dash, uppercase) so claim compares like with like.
+# normalized code -> (expiry timestamp, kind). Every code is stored normalized (no dash,
+# uppercase) so claim compares like with like.
 _PENDING: dict[str, tuple[float, str]] = {}
 _failed_claims = [0]
 # Claims arrive on the event loop today, but nothing stops a sync caller on a worker thread
@@ -237,42 +242,46 @@ def _prune(now: float) -> None:
             del _PENDING[code]
 
 
-def _new_agent_code() -> str:
+def _new_code() -> str:
     return "".join(secrets.choice(_AGENT_CODE_ALPHABET) for _ in range(_AGENT_CODE_LEN))
 
 
-def format_agent_code(code: str) -> str:
+def format_code(code: str) -> str:
     """``ABCDEFGHJK`` → ``ABCDE-FGHJK`` — the form shown to (and typed by) the operator."""
     half = _AGENT_CODE_LEN // 2
     return f"{code[:half]}-{code[half:]}"
 
 
-def normalize_agent_code(code: str) -> str:
+def normalize_code(code: str) -> str:
     """Fold what a human might type into the stored form: case, dashes/spaces/underscores,
-    and the Crockford look-alikes (O→0, I/L→1). Never applied to device codes — those are
-    case-sensitive url-safe strings where folding would merge distinct codes."""
+    and the Crockford look-alikes (O→0, I/L→1). Applied to every claim — device and agent
+    codes share the alphabet, so folding can't merge two distinct issued codes."""
     return (code or "").upper().translate(_AGENT_CODE_STRIP)
+
+
+# The ADR 0113 names, kept so existing callers (and the hub-side fleet code) read unchanged.
+_new_agent_code = _new_code
+format_agent_code = format_code
+normalize_agent_code = normalize_code
 
 
 def start_pairing(kind: str = KIND_DEVICE) -> tuple[str, float]:
     """Mint a pairing code of ``kind``. Operator-authed callers only (enforced at the route).
 
-    Returns the code in its DISPLAY form (an agent code as ``XXXXX-XXXXX``) and its expiry.
+    Returns the code in its DISPLAY form (``XXXXX-XXXXX``, either kind) and its expiry.
     """
     if kind not in _KINDS:
         raise ValueError(f"unknown pairing kind: {kind!r}")
     now = time.time()
     with _LOCK:
         _prune(now)
-        if kind == KIND_AGENT:
+        # Looked up through the module so a test can pin the generator by monkeypatching
+        # `_new_agent_code` (the alias) — the name tests have always patched.
+        stored = _new_agent_code()
+        while stored in _PENDING:  # astronomically unlikely; cheap to rule out
             stored = _new_agent_code()
-            while stored in _PENDING:  # astronomically unlikely; cheap to rule out
-                stored = _new_agent_code()
-            shown = format_agent_code(stored)
-            expires_at = now + AGENT_PAIRING_TTL_SECONDS
-        else:
-            stored = shown = secrets.token_urlsafe(_CODE_BYTES)
-            expires_at = now + PAIRING_TTL_SECONDS
+        shown = format_code(stored)
+        expires_at = now + _TTL_BY_KIND[kind]
         _PENDING[stored] = (expires_at, kind)
         # A fresh code gets a fresh 5-miss budget (ADR 0113 D2: "5 guesses per code the
         # operator issues"). Without this the counter never decays: four stale misses, then
@@ -301,15 +310,16 @@ def cancel_pairings(kind: str | None = None) -> None:
 def _match(code: str) -> str | None:
     """The pending key ``code`` redeems, or None. Caller holds ``_LOCK``.
 
-    Device codes: exact, constant-time — as before. Agent codes: normalized first, then
-    constant-time against AGENT codes only, so folding can never make a device code match.
-    Every candidate is compared (no early exit on kind) to keep timing uniform.
+    Every code (either kind) is stored normalized, so the claim is folded once and compared
+    constant-time against every candidate — no early exit, to keep timing uniform. A
+    pre-amendment ``#pair=`` link carried a long url-safe code; none can still be pending
+    (pending codes are memory-only and a restart clears them), and such a string folds to
+    something no 10-char code equals, so it is simply a miss.
     """
     matched: str | None = None
-    folded = normalize_agent_code(code)
-    for pending, (_expires, kind) in _PENDING.items():
-        candidate = code if kind == KIND_DEVICE else folded
-        if hmac.compare_digest(pending.encode("utf-8"), candidate.encode("utf-8")) and matched is None:
+    folded = normalize_code(code).encode("utf-8")
+    for pending in _PENDING:
+        if hmac.compare_digest(pending.encode("utf-8"), folded) and matched is None:
             matched = pending
     return matched
 
