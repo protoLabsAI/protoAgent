@@ -86,7 +86,8 @@ for setup and verification.
 The convention carries trace context in A2A request metadata, so peers can
 forward it with the request. It is a protoLabs convention, not a requirement of
 A2A or a substitute for every HTTP tracing integration. Peers that ignore it
-still process the task but start an independent trace.
+still process the task. They start an independent trace if no other propagation
+mechanism connects it to the caller.
 
 ## Why both ship in the template (and not as separate agents)
 

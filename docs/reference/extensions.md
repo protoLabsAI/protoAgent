@@ -28,7 +28,7 @@ declared because this runtime does not emit it.
 
 ### Full wire example — terminal artifact
 
-A `SendStreamingMessage` frame closing the answer artifact. Three extension fragments merged by `pa.merge_extension_metadata(...)` into one `metadata` map; the answer itself is the only `part`:
+A `SendStreamingMessage` frame closing the answer artifact. Two extension fragments merged by `pa.merge_extension_metadata(...)` into one `metadata` map; the answer itself is the only `part`:
 
 ```json
 {
