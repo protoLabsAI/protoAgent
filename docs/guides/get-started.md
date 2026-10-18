@@ -2,7 +2,9 @@
 
 # Get started
 
-Install protoAgent, connect a model, and send your first message. For everyday tasks, continue to [Use protoAgent](/guides/use-protoagent).
+Start with [Set up your first agent](/tutorials/first-agent): use the desktop app for the simplest setup, or choose the Python package for a terminal-launched browser console. The tutorial also includes a source-checkout route for developers.
+
+Finish when your model answers a first message, then continue to [Use protoAgent](/guides/use-protoagent). If the app will not open, start with [Troubleshooting](/guides/troubleshooting#app-won-t-open).
 
 ## Install and connect
 
