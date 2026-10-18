@@ -67,7 +67,7 @@ card has an editable HTML source and Playwright renderer. See the
 
 Local validation (2026-10-18): Astro check (0 errors, one existing navigator.platform
 hint), Astro build (7 routes), VitePress build at `/docs/`, generated navigation/API/
-plugin-directory/roadmap checks. Combined output: 13,749 local links/assets across
+plugin-directory/roadmap checks. Combined output: 13,750 local links/assets across
 255 pages, no missing files/fragments or duplicate IDs. Playwright Chromium checked
 all seven marketing routes in desktop light/dark and 390px mobile layouts: no
 horizontal overflow or JavaScript errors; keyboard skip link, mobile navigation,

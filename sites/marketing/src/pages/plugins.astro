@@ -8,7 +8,7 @@ import overrides from '../../data/plugins.json';
 
 const topic = 'https://github.com/topics/protoagent-plugin';
 const listFile = 'https://github.com/protoLabsAI/protoAgent/blob/main/config/plugin-directory.yaml';
-const publishDocs = '/docs/guides/plugin-registry';
+const publishDocs = '/docs/guides/publish-a-plugin';
 
 // ── The plugin catalog is built automatically at deploy time ──────────────────────────
 // (1) BUNDLED plugins: parse every plugins/<id>/protoagent.plugin.yaml manifest in the
@@ -230,9 +230,9 @@ const counts = Object.fromEntries(
               <div class="plugin-install">
                 {p.bundled
                   ? (p.enable
-                      ? <span>bundled · enable <strong>{p.enable}</strong> in <strong>plugins.enabled</strong></span>
+                      ? <span>bundled · enable <strong>{p.enable}</strong> in <strong>Settings → Plugins</strong></span>
                       : <span>built-in</span>)
-                  : <span>plugin install <strong>{p.install}</strong></span>}
+                  : <span>protoagent plugin install <strong>{p.install}</strong></span>}
               </div>
             </div>
             <div class="plugin-links">
@@ -254,7 +254,7 @@ const counts = Object.fromEntries(
       <p class="pl-eyebrow">Publish your own</p>
       <p class="pl-section-intro">
         A plugin is a public repo with a <code>protoagent.plugin.yaml</code> manifest — anyone can
-        install one from its git URL with <code>plugin install &lt;git-url&gt;</code>. For safety,
+        install one from its git URL with <code>protoagent plugin install &lt;git-url&gt;</code>. For safety,
         this page only auto-lists plugins from the <strong>protoLabsAI</strong> org; tagging an
         outside repo never links it here on its own.
       </p>
@@ -276,7 +276,7 @@ const counts = Object.fromEntries(
             <div class="pl-step__title">Community</div>
             <div class="pl-step__body">
               Tag the topic so it's discoverable across GitHub, then open a PR adding it to
-              <a href={listFile} target="_blank" rel="noopener noreferrer"><code>plugins.json</code></a>
+              <a href={listFile} target="_blank" rel="noopener noreferrer"><code>config/plugin-directory.yaml</code></a>
               — we review it before it's listed here.
             </div>
           </div>
