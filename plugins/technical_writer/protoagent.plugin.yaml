@@ -1,0 +1,12 @@
+id: technical_writer
+name: Technical Writer
+version: 0.1.0
+min_protoagent_version: "0.208.0"
+description: >-
+  Code-grounded documentation skills: discover a codebase, write guides and tutorials,
+  audit sections, improve information architecture, plan reusable media, and verify delivery.
+  Prompt-only; the Technical Writer archetype enables this pack.
+enabled: false
+capabilities:
+  network: []
+  filesystem: none

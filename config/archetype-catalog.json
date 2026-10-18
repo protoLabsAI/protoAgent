@@ -59,6 +59,14 @@
       ]
     },
     {
+      "id": "technical-writer",
+      "label": "Technical Writer",
+      "icon": "BookOpen",
+      "bundle": "https://github.com/protoLabsAI/technical-writer-archetype",
+      "blurb": "Writes and maintains code-grounded docs, guides, and tutorials; audits content, organizes reader paths, and tracks media through verified delivery.",
+      "soul_preset": "technical-writer"
+    },
+    {
       "id": "custom",
       "label": "Custom",
       "icon": "PenLine",
