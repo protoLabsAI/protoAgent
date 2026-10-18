@@ -6,7 +6,7 @@ and the reference quietly stops being complete. Nobody notices, because nothing 
 docs rot silently by construction.
 
 So the reference is generated (``scripts/gen_plugin_api.py``) and this suite fails when the
-committed pages drift, the same way ``test_docs_plugin.test_nav_json_in_sync_with_sidebar``
+committed pages drift, the same way ``test_docs_plugin.test_generated_navigation_and_landings_are_in_sync``
 guards the docs nav. The remedy is always one command, printed in the failure message.
 
 The coverage assertions below are the part that matters most: they say every *public*

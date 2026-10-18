@@ -3676,8 +3676,10 @@ def test_the_docs_guide_exists_and_is_in_the_sidebar():
     assert guide.is_file()
     text = guide.read_text(encoding="utf-8")
     assert "agent-browser install" in text and "browser_pdf" in text
-    sidebar = (REPO / "docs" / ".vitepress" / "config.mts").read_text(encoding="utf-8")
-    assert "/guides/browser-automation" in sidebar
+    navigation = json.loads((REPO / "docs" / ".vitepress" / "navigation.json").read_text(encoding="utf-8"))
+    links = {item["link"] for sidebar in navigation["sidebars"]
+             for group in sidebar["groups"] for item in group["items"]}
+    assert "/guides/browser-automation" in links
 
 
 def test_the_plugin_directory_row_is_bundled_and_the_catalog_is_regenerated():

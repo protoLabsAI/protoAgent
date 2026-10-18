@@ -1,0 +1,1040 @@
+{
+  "nav": [
+    {
+      "text": "Get started",
+      "link": "/guides/get-started"
+    },
+    {
+      "text": "Use",
+      "link": "/guides/use-protoagent"
+    },
+    {
+      "text": "Automate",
+      "link": "/guides/automate-work"
+    },
+    {
+      "text": "Build",
+      "link": "/guides/extend"
+    },
+    {
+      "text": "Operate",
+      "link": "/guides/deploy-and-operate"
+    },
+    {
+      "text": "Reference",
+      "link": "/reference/"
+    }
+  ],
+  "sidebars": [
+    {
+      "routes": [
+        "/tutorials/",
+        "/guides/",
+        "/reference/",
+        "/explanation/",
+        "/adr/"
+      ],
+      "groups": [
+        {
+          "text": "Documentation",
+          "items": [
+            {
+              "text": "Get started",
+              "link": "/guides/get-started"
+            },
+            {
+              "text": "Use",
+              "link": "/guides/use-protoagent"
+            },
+            {
+              "text": "Automate",
+              "link": "/guides/automate-work"
+            },
+            {
+              "text": "Build",
+              "link": "/guides/extend"
+            },
+            {
+              "text": "Operate",
+              "link": "/guides/deploy-and-operate"
+            },
+            {
+              "text": "Reference",
+              "link": "/reference/"
+            }
+          ]
+        },
+        {
+          "text": "Browse by document type",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Tutorials",
+              "link": "/tutorials/"
+            },
+            {
+              "text": "All guides",
+              "link": "/guides/"
+            },
+            {
+              "text": "Concepts and architecture",
+              "link": "/explanation/"
+            }
+          ]
+        },
+        {
+          "text": "History and compatibility",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Architecture decisions",
+              "link": "/adr/"
+            },
+            {
+              "text": "ACP runtime (deprecated)",
+              "link": "/guides/acp-runtime"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "routes": [
+        "/guides/get-started",
+        "/tutorials/first-agent",
+        "/guides/windows-desktop"
+      ],
+      "groups": [
+        {
+          "text": "Start here",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Get started",
+              "link": "/guides/get-started"
+            }
+          ]
+        },
+        {
+          "text": "Install and connect",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Set up your first agent",
+              "link": "/tutorials/first-agent"
+            }
+          ]
+        },
+        {
+          "text": "Platform help",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Windows desktop app (install & recovery)",
+              "link": "/guides/windows-desktop"
+            }
+          ]
+        },
+        {
+          "text": "Browse by document type",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Tutorials",
+              "link": "/tutorials/"
+            },
+            {
+              "text": "All guides",
+              "link": "/guides/"
+            },
+            {
+              "text": "Concepts and architecture",
+              "link": "/explanation/"
+            }
+          ]
+        },
+        {
+          "text": "History and compatibility",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Architecture decisions",
+              "link": "/adr/"
+            },
+            {
+              "text": "ACP runtime (deprecated)",
+              "link": "/guides/acp-runtime"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "routes": [
+        "/guides/use-protoagent",
+        "/guides/react-tauri-ui",
+        "/guides/model-connections",
+        "/guides/command-palette",
+        "/guides/documents-and-files",
+        "/guides/python-runtime",
+        "/guides/manage-memory",
+        "/guides/ingestion",
+        "/guides/knowledge",
+        "/guides/plugin-registry",
+        "/guides/mcp",
+        "/guides/discord",
+        "/guides/browser-automation",
+        "/guides/phone-access",
+        "/guides/pairing",
+        "/guides/agent-snapshots",
+        "/guides/backup-and-restore",
+        "/guides/troubleshooting",
+        "/guides/file-github-issues",
+        "/guides/friction-log",
+        "/explanation/steering",
+        "/explanation/memory-and-knowledge"
+      ],
+      "groups": [
+        {
+          "text": "Start here",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Use protoAgent",
+              "link": "/guides/use-protoagent"
+            }
+          ]
+        },
+        {
+          "text": "Chat and models",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Use the app",
+              "link": "/guides/react-tauri-ui"
+            },
+            {
+              "text": "Connect and change models",
+              "link": "/guides/model-connections"
+            },
+            {
+              "text": "Command palette (⌘⇧K)",
+              "link": "/guides/command-palette"
+            }
+          ]
+        },
+        {
+          "text": "Files and memory",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Work with files and documents",
+              "link": "/guides/documents-and-files"
+            },
+            {
+              "text": "Enable document creation (desktop)",
+              "link": "/guides/python-runtime"
+            },
+            {
+              "text": "Inspect and manage memory",
+              "link": "/guides/manage-memory"
+            },
+            {
+              "text": "Ingest documents & media",
+              "link": "/guides/ingestion"
+            },
+            {
+              "text": "Tune knowledge recall",
+              "link": "/guides/knowledge"
+            }
+          ]
+        },
+        {
+          "text": "Tools and integrations",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Install and manage plugins",
+              "link": "/guides/plugin-registry"
+            },
+            {
+              "text": "Connect MCP servers",
+              "link": "/guides/mcp"
+            },
+            {
+              "text": "Discord surface",
+              "link": "/guides/discord"
+            },
+            {
+              "text": "Browser automation",
+              "link": "/guides/browser-automation"
+            }
+          ]
+        },
+        {
+          "text": "Devices and data",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Access from your phone (LAN / Tailscale)",
+              "link": "/guides/phone-access"
+            },
+            {
+              "text": "Pair devices & agents",
+              "link": "/guides/pairing"
+            },
+            {
+              "text": "Export or copy an agent",
+              "link": "/guides/agent-snapshots"
+            },
+            {
+              "text": "Back up and restore data",
+              "link": "/guides/backup-and-restore"
+            }
+          ]
+        },
+        {
+          "text": "Get help",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Fix a problem in the app",
+              "link": "/guides/troubleshooting"
+            },
+            {
+              "text": "File GitHub issues (/issue)",
+              "link": "/guides/file-github-issues"
+            },
+            {
+              "text": "Review reported problems",
+              "link": "/guides/friction-log"
+            }
+          ]
+        },
+        {
+          "text": "Understand your agent",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Mid-turn steering",
+              "link": "/explanation/steering"
+            },
+            {
+              "text": "Memory & knowledge store",
+              "link": "/explanation/memory-and-knowledge"
+            }
+          ]
+        },
+        {
+          "text": "Browse by document type",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Tutorials",
+              "link": "/tutorials/"
+            },
+            {
+              "text": "All guides",
+              "link": "/guides/"
+            },
+            {
+              "text": "Concepts and architecture",
+              "link": "/explanation/"
+            }
+          ]
+        },
+        {
+          "text": "History and compatibility",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Architecture decisions",
+              "link": "/adr/"
+            },
+            {
+              "text": "ACP runtime (deprecated)",
+              "link": "/guides/acp-runtime"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "routes": [
+        "/guides/automate-work",
+        "/tutorials/first-skill",
+        "/tutorials/two-agents-over-a2a",
+        "/guides/skills",
+        "/guides/scheduler",
+        "/guides/watches",
+        "/guides/goal-mode",
+        "/guides/lifecycle-events",
+        "/guides/delegates",
+        "/guides/coding-agents",
+        "/guides/rooms",
+        "/guides/subagents",
+        "/guides/workflows",
+        "/guides/coder",
+        "/guides/portfolio",
+        "/guides/build-with-a-coding-agent",
+        "/explanation/rooms",
+        "/explanation/a2a-protocol"
+      ],
+      "groups": [
+        {
+          "text": "Start here",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Automate work",
+              "link": "/guides/automate-work"
+            }
+          ]
+        },
+        {
+          "text": "Learn with an example",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Write your first skill",
+              "link": "/tutorials/first-skill"
+            },
+            {
+              "text": "Two agents over A2A",
+              "link": "/tutorials/two-agents-over-a2a"
+            }
+          ]
+        },
+        {
+          "text": "Skills and scheduled work",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Skills (SKILL.md)",
+              "link": "/guides/skills"
+            },
+            {
+              "text": "Schedule future work",
+              "link": "/guides/scheduler"
+            },
+            {
+              "text": "Watches",
+              "link": "/guides/watches"
+            },
+            {
+              "text": "Goal mode",
+              "link": "/guides/goal-mode"
+            },
+            {
+              "text": "System lifecycle events",
+              "link": "/guides/lifecycle-events"
+            }
+          ]
+        },
+        {
+          "text": "Delegation and workflows",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Delegates (agents & endpoints)",
+              "link": "/guides/delegates"
+            },
+            {
+              "text": "Delegate coding work",
+              "link": "/guides/coding-agents"
+            },
+            {
+              "text": "Talk to delegates in a room",
+              "link": "/guides/rooms"
+            },
+            {
+              "text": "Configure subagents",
+              "link": "/guides/subagents"
+            },
+            {
+              "text": "Reusable workflows",
+              "link": "/guides/workflows"
+            },
+            {
+              "text": "Verify coding outcomes",
+              "link": "/guides/coder"
+            }
+          ]
+        },
+        {
+          "text": "Coordinate projects",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Coordinate project boards",
+              "link": "/guides/portfolio"
+            },
+            {
+              "text": "Build with a coding agent",
+              "link": "/guides/build-with-a-coding-agent"
+            }
+          ]
+        },
+        {
+          "text": "Understand collaboration",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "How rooms work",
+              "link": "/explanation/rooms"
+            },
+            {
+              "text": "A2A protocol",
+              "link": "/explanation/a2a-protocol"
+            }
+          ]
+        },
+        {
+          "text": "Browse by document type",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Tutorials",
+              "link": "/tutorials/"
+            },
+            {
+              "text": "All guides",
+              "link": "/guides/"
+            },
+            {
+              "text": "Concepts and architecture",
+              "link": "/explanation/"
+            }
+          ]
+        },
+        {
+          "text": "History and compatibility",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Architecture decisions",
+              "link": "/adr/"
+            },
+            {
+              "text": "ACP runtime (deprecated)",
+              "link": "/guides/acp-runtime"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "routes": [
+        "/guides/extend",
+        "/tutorials/first-plugin",
+        "/tutorials/first-tool",
+        "/guides/plugins",
+        "/guides/build-a-plugin-view",
+        "/guides/building-react-plugin-views",
+        "/guides/communication-plugins",
+        "/guides/publish-a-plugin",
+        "/guides/bundles",
+        "/guides/middleware",
+        "/guides/add-a-skill",
+        "/guides/build-console",
+        "/guides/developer-flags",
+        "/guides/fork-the-template",
+        "/guides/customize-and-deploy",
+        "/guides/operator-fork",
+        "/guides/upstream-sync",
+        "/guides/evals",
+        "/guides/releasing",
+        "/explanation/plugin-architecture",
+        "/explanation/architecture",
+        "/explanation/prompt-contracts",
+        "/explanation/output-protocol"
+      ],
+      "groups": [
+        {
+          "text": "Start here",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Build & extend",
+              "link": "/guides/extend"
+            }
+          ]
+        },
+        {
+          "text": "Build your first extension",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Build your first plugin",
+              "link": "/tutorials/first-plugin"
+            },
+            {
+              "text": "Write your first tool",
+              "link": "/tutorials/first-tool"
+            }
+          ]
+        },
+        {
+          "text": "Build and publish plugins",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Build plugins",
+              "link": "/guides/plugins"
+            },
+            {
+              "text": "Build a plugin view",
+              "link": "/guides/build-a-plugin-view"
+            },
+            {
+              "text": "Plugin view integration",
+              "link": "/guides/building-react-plugin-views"
+            },
+            {
+              "text": "Build a communication plugin",
+              "link": "/guides/communication-plugins"
+            },
+            {
+              "text": "Publish a plugin",
+              "link": "/guides/publish-a-plugin"
+            },
+            {
+              "text": "Bundles (plugin sets)",
+              "link": "/guides/bundles"
+            },
+            {
+              "text": "Middleware",
+              "link": "/guides/middleware"
+            },
+            {
+              "text": "Advertise a capability (A2A card)",
+              "link": "/guides/add-a-skill"
+            }
+          ]
+        },
+        {
+          "text": "Develop the app or a fork",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Build and test the console",
+              "link": "/guides/build-console"
+            },
+            {
+              "text": "Control preview features",
+              "link": "/guides/developer-flags"
+            },
+            {
+              "text": "Fork the template (fast path)",
+              "link": "/guides/fork-the-template"
+            },
+            {
+              "text": "Customize & deploy",
+              "link": "/guides/customize-and-deploy"
+            },
+            {
+              "text": "Build an operator fork (Roxy)",
+              "link": "/guides/operator-fork"
+            },
+            {
+              "text": "Sync a fork from upstream",
+              "link": "/guides/upstream-sync"
+            },
+            {
+              "text": "Eval your fork",
+              "link": "/guides/evals"
+            },
+            {
+              "text": "Releasing",
+              "link": "/guides/releasing"
+            }
+          ]
+        },
+        {
+          "text": "Architecture and contracts",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Plugin architecture",
+              "link": "/explanation/plugin-architecture"
+            },
+            {
+              "text": "Architecture",
+              "link": "/explanation/architecture"
+            },
+            {
+              "text": "Prompt contracts",
+              "link": "/explanation/prompt-contracts"
+            },
+            {
+              "text": "Output protocol",
+              "link": "/explanation/output-protocol"
+            }
+          ]
+        },
+        {
+          "text": "Browse by document type",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Tutorials",
+              "link": "/tutorials/"
+            },
+            {
+              "text": "All guides",
+              "link": "/guides/"
+            },
+            {
+              "text": "Concepts and architecture",
+              "link": "/explanation/"
+            }
+          ]
+        },
+        {
+          "text": "History and compatibility",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Architecture decisions",
+              "link": "/adr/"
+            },
+            {
+              "text": "ACP runtime (deprecated)",
+              "link": "/guides/acp-runtime"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "routes": [
+        "/guides/deploy-and-operate",
+        "/guides/cli",
+        "/guides/headless",
+        "/guides/deploy-docker",
+        "/guides/deploy-proxmox",
+        "/guides/deploy",
+        "/guides/multi-instance",
+        "/guides/fleet",
+        "/guides/fleet-deck",
+        "/guides/operating-a-fleet",
+        "/guides/sandboxing",
+        "/guides/exposing-protoagent",
+        "/guides/observability",
+        "/guides/model-concurrency",
+        "/explanation/litellm-gateway",
+        "/explanation/security-and-trust",
+        "/explanation/network-egress",
+        "/explanation/cost-and-trace",
+        "/explanation/tuning-and-cost"
+      ],
+      "groups": [
+        {
+          "text": "Start here",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Deploy & operate",
+              "link": "/guides/deploy-and-operate"
+            }
+          ]
+        },
+        {
+          "text": "Run a service",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Use the command line",
+              "link": "/guides/cli"
+            },
+            {
+              "text": "Run headless (API + A2A)",
+              "link": "/guides/headless"
+            },
+            {
+              "text": "Deploy in Docker (seed + UI override)",
+              "link": "/guides/deploy-docker"
+            },
+            {
+              "text": "Deploy on Proxmox (reusable LXC template)",
+              "link": "/guides/deploy-proxmox"
+            },
+            {
+              "text": "Publish images to GHCR",
+              "link": "/guides/deploy"
+            }
+          ]
+        },
+        {
+          "text": "Manage agents and fleets",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Run multiple instances",
+              "link": "/guides/multi-instance"
+            },
+            {
+              "text": "Create and manage a fleet",
+              "link": "/guides/fleet"
+            },
+            {
+              "text": "Use the fleet terminal",
+              "link": "/guides/fleet-deck"
+            },
+            {
+              "text": "Operate and recover a fleet",
+              "link": "/guides/operating-a-fleet"
+            }
+          ]
+        },
+        {
+          "text": "Secure and monitor",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Sandboxing & egress",
+              "link": "/guides/sandboxing"
+            },
+            {
+              "text": "Expose to the world",
+              "link": "/guides/exposing-protoagent"
+            },
+            {
+              "text": "Monitor traces, metrics, and logs",
+              "link": "/guides/observability"
+            },
+            {
+              "text": "Manage model concurrency",
+              "link": "/guides/model-concurrency"
+            }
+          ]
+        },
+        {
+          "text": "Understand operations",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "LiteLLM gateway",
+              "link": "/explanation/litellm-gateway"
+            },
+            {
+              "text": "Security & trust model",
+              "link": "/explanation/security-and-trust"
+            },
+            {
+              "text": "Network egress",
+              "link": "/explanation/network-egress"
+            },
+            {
+              "text": "Cost & trace propagation",
+              "link": "/explanation/cost-and-trace"
+            },
+            {
+              "text": "Tuning & cost",
+              "link": "/explanation/tuning-and-cost"
+            }
+          ]
+        },
+        {
+          "text": "Browse by document type",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Tutorials",
+              "link": "/tutorials/"
+            },
+            {
+              "text": "All guides",
+              "link": "/guides/"
+            },
+            {
+              "text": "Concepts and architecture",
+              "link": "/explanation/"
+            }
+          ]
+        },
+        {
+          "text": "History and compatibility",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Architecture decisions",
+              "link": "/adr/"
+            },
+            {
+              "text": "ACP runtime (deprecated)",
+              "link": "/guides/acp-runtime"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "routes": [
+        "/reference/",
+        "/reference/configuration",
+        "/reference/environment-variables",
+        "/reference/skills",
+        "/reference/knowledge",
+        "/reference/agent-snapshots",
+        "/reference/starter-tools",
+        "/reference/operator-api",
+        "/reference/a2a-endpoints",
+        "/reference/a2a-conformance",
+        "/reference/agent-card",
+        "/reference/extensions",
+        "/reference/plugin-manifest",
+        "/reference/plugin-registry-api",
+        "/reference/plugin-sdk-api",
+        "/reference/plugin-testkit",
+        "/reference/plugin-cli",
+        "/reference/plugin-view-bridge",
+        "/reference/plugin-events",
+        "/reference/plugin-coding-agent",
+        "/reference/command-palette"
+      ],
+      "groups": [
+        {
+          "text": "Start here",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Reference",
+              "link": "/reference/"
+            }
+          ]
+        },
+        {
+          "text": "Configuration and capabilities",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Configuration",
+              "link": "/reference/configuration"
+            },
+            {
+              "text": "Environment variables",
+              "link": "/reference/environment-variables"
+            },
+            {
+              "text": "Skills (SKILL.md)",
+              "link": "/reference/skills"
+            },
+            {
+              "text": "Knowledge settings and tools",
+              "link": "/reference/knowledge"
+            },
+            {
+              "text": "Agent snapshots",
+              "link": "/reference/agent-snapshots"
+            },
+            {
+              "text": "Starter tools",
+              "link": "/reference/starter-tools"
+            }
+          ]
+        },
+        {
+          "text": "Agent and operator APIs",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Operator REST API",
+              "link": "/reference/operator-api"
+            },
+            {
+              "text": "A2A endpoints",
+              "link": "/reference/a2a-endpoints"
+            },
+            {
+              "text": "A2A conformance",
+              "link": "/reference/a2a-conformance"
+            },
+            {
+              "text": "Agent card",
+              "link": "/reference/agent-card"
+            },
+            {
+              "text": "Extensions",
+              "link": "/reference/extensions"
+            }
+          ]
+        },
+        {
+          "text": "Plugin development",
+          "collapsed": false,
+          "items": [
+            {
+              "text": "Plugin manifest",
+              "link": "/reference/plugin-manifest"
+            },
+            {
+              "text": "Plugin registry API",
+              "link": "/reference/plugin-registry-api"
+            },
+            {
+              "text": "Plugin SDK (graph.sdk)",
+              "link": "/reference/plugin-sdk-api"
+            },
+            {
+              "text": "Plugin testkit",
+              "link": "/reference/plugin-testkit"
+            },
+            {
+              "text": "Plugin CLI",
+              "link": "/reference/plugin-cli"
+            },
+            {
+              "text": "Plugin view bridge (wire protocol)",
+              "link": "/reference/plugin-view-bridge"
+            },
+            {
+              "text": "Event bus topics",
+              "link": "/reference/plugin-events"
+            },
+            {
+              "text": "Coding-agent dispatch (ACP)",
+              "link": "/reference/plugin-coding-agent"
+            },
+            {
+              "text": "Command palette extensions",
+              "link": "/reference/command-palette"
+            }
+          ]
+        },
+        {
+          "text": "Browse by document type",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Tutorials",
+              "link": "/tutorials/"
+            },
+            {
+              "text": "All guides",
+              "link": "/guides/"
+            },
+            {
+              "text": "Concepts and architecture",
+              "link": "/explanation/"
+            }
+          ]
+        },
+        {
+          "text": "History and compatibility",
+          "collapsed": true,
+          "items": [
+            {
+              "text": "Architecture decisions",
+              "link": "/adr/"
+            },
+            {
+              "text": "ACP runtime (deprecated)",
+              "link": "/guides/acp-runtime"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

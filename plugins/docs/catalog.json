@@ -1,0 +1,760 @@
+{
+  "version": 1,
+  "journeys": [
+    {
+      "id": "start",
+      "label": "Get started",
+      "nav_label": "Get started",
+      "landing": "guides/get-started.md",
+      "intro": "Install protoAgent, connect a model, and send your first message. For everyday tasks, continue to [Use protoAgent](/guides/use-protoagent).",
+      "groups": [
+        {
+          "label": "Install and connect",
+          "pages": [
+            "tutorials/first-agent.md"
+          ]
+        },
+        {
+          "label": "Platform help",
+          "pages": [
+            "guides/windows-desktop.md"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "use",
+      "label": "Use protoAgent",
+      "nav_label": "Use",
+      "landing": "guides/use-protoagent.md",
+      "intro": "Chat, work with files, connect tools, and manage your data. If something fails, start with [Troubleshooting](/guides/troubleshooting).",
+      "groups": [
+        {
+          "label": "Chat and models",
+          "pages": [
+            "guides/react-tauri-ui.md",
+            "guides/model-connections.md",
+            "guides/command-palette.md"
+          ]
+        },
+        {
+          "label": "Files and memory",
+          "pages": [
+            "guides/documents-and-files.md",
+            "guides/python-runtime.md",
+            "guides/manage-memory.md",
+            "guides/ingestion.md",
+            "guides/knowledge.md"
+          ]
+        },
+        {
+          "label": "Tools and integrations",
+          "pages": [
+            "guides/plugin-registry.md",
+            "guides/mcp.md",
+            "guides/discord.md",
+            "guides/browser-automation.md"
+          ]
+        },
+        {
+          "label": "Devices and data",
+          "pages": [
+            "guides/phone-access.md",
+            "guides/pairing.md",
+            "guides/agent-snapshots.md",
+            "guides/backup-and-restore.md"
+          ]
+        },
+        {
+          "label": "Get help",
+          "pages": [
+            "guides/troubleshooting.md",
+            "guides/file-github-issues.md",
+            "guides/friction-log.md"
+          ]
+        },
+        {
+          "label": "Understand your agent",
+          "pages": [
+            "explanation/steering.md",
+            "explanation/memory-and-knowledge.md"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "automate",
+      "label": "Automate work",
+      "nav_label": "Automate",
+      "landing": "guides/automate-work.md",
+      "intro": "Teach reusable procedures, schedule work, and delegate tasks. Start with a skill or a schedule before configuring a larger workflow.",
+      "groups": [
+        {
+          "label": "Learn with an example",
+          "pages": [
+            "tutorials/first-skill.md",
+            "tutorials/two-agents-over-a2a.md"
+          ]
+        },
+        {
+          "label": "Skills and scheduled work",
+          "pages": [
+            "guides/skills.md",
+            "guides/scheduler.md",
+            "guides/watches.md",
+            "guides/goal-mode.md",
+            "guides/lifecycle-events.md"
+          ]
+        },
+        {
+          "label": "Delegation and workflows",
+          "pages": [
+            "guides/delegates.md",
+            "guides/coding-agents.md",
+            "guides/rooms.md",
+            "guides/subagents.md",
+            "guides/workflows.md",
+            "guides/coder.md"
+          ]
+        },
+        {
+          "label": "Coordinate projects",
+          "pages": [
+            "guides/portfolio.md",
+            "guides/build-with-a-coding-agent.md"
+          ]
+        },
+        {
+          "label": "Understand collaboration",
+          "pages": [
+            "explanation/rooms.md",
+            "explanation/a2a-protocol.md"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "build",
+      "label": "Build & extend",
+      "nav_label": "Build",
+      "landing": "guides/extend.md",
+      "intro": "Use settings for model and persona changes, [skills](/guides/skills) for reusable procedures, and [MCP](/guides/mcp) for existing external tools. Build a plugin for new tools, routes, background work, or views; fork the core when your change needs it.\n\nPlugins run with server privileges. A separate MCP process is not automatically a sandbox. Read [Plugin architecture](/explanation/plugin-architecture) before choosing an extension boundary.",
+      "groups": [
+        {
+          "label": "Build your first extension",
+          "pages": [
+            "tutorials/first-plugin.md",
+            "tutorials/first-tool.md"
+          ]
+        },
+        {
+          "label": "Build and publish plugins",
+          "pages": [
+            "guides/plugins.md",
+            "guides/build-a-plugin-view.md",
+            "guides/building-react-plugin-views.md",
+            "guides/communication-plugins.md",
+            "guides/publish-a-plugin.md",
+            "guides/bundles.md",
+            "guides/middleware.md",
+            "guides/add-a-skill.md"
+          ]
+        },
+        {
+          "label": "Develop the app or a fork",
+          "pages": [
+            "guides/build-console.md",
+            "guides/developer-flags.md",
+            "guides/fork-the-template.md",
+            "guides/customize-and-deploy.md",
+            "guides/operator-fork.md",
+            "guides/upstream-sync.md",
+            "guides/evals.md",
+            "guides/releasing.md"
+          ]
+        },
+        {
+          "label": "Architecture and contracts",
+          "pages": [
+            "explanation/plugin-architecture.md",
+            "explanation/architecture.md",
+            "explanation/prompt-contracts.md",
+            "explanation/output-protocol.md"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "operate",
+      "label": "Deploy & operate",
+      "nav_label": "Operate",
+      "landing": "guides/deploy-and-operate.md",
+      "intro": "Run an agent as a service, manage multiple instances, and monitor deployments. [Back up your data](/guides/backup-and-restore) before upgrades or recovery work.",
+      "groups": [
+        {
+          "label": "Run a service",
+          "pages": [
+            "guides/cli.md",
+            "guides/headless.md",
+            "guides/deploy-docker.md",
+            "guides/deploy-proxmox.md",
+            "guides/deploy.md"
+          ]
+        },
+        {
+          "label": "Manage agents and fleets",
+          "pages": [
+            "guides/multi-instance.md",
+            "guides/fleet.md",
+            "guides/fleet-deck.md",
+            "guides/operating-a-fleet.md"
+          ]
+        },
+        {
+          "label": "Secure and monitor",
+          "pages": [
+            "guides/sandboxing.md",
+            "guides/exposing-protoagent.md",
+            "guides/observability.md",
+            "guides/model-concurrency.md"
+          ]
+        },
+        {
+          "label": "Understand operations",
+          "pages": [
+            "explanation/litellm-gateway.md",
+            "explanation/security-and-trust.md",
+            "explanation/network-egress.md",
+            "explanation/cost-and-trace.md",
+            "explanation/tuning-and-cost.md"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reference",
+      "label": "Reference",
+      "nav_label": "Reference",
+      "landing": "reference/index.md",
+      "intro": "Look up configuration fields, API contracts, protocols, and SDK signatures. For a procedure, choose [Use](/guides/use-protoagent), [Build](/guides/extend), or [Operate](/guides/deploy-and-operate).",
+      "groups": [
+        {
+          "label": "Configuration and capabilities",
+          "pages": [
+            "reference/configuration.md",
+            "reference/environment-variables.md",
+            "reference/skills.md",
+            "reference/knowledge.md",
+            "reference/agent-snapshots.md",
+            "reference/starter-tools.md"
+          ]
+        },
+        {
+          "label": "Agent and operator APIs",
+          "pages": [
+            "reference/operator-api.md",
+            "reference/a2a-endpoints.md",
+            "reference/a2a-conformance.md",
+            "reference/agent-card.md",
+            "reference/extensions.md"
+          ]
+        },
+        {
+          "label": "Plugin development",
+          "pages": [
+            "reference/plugin-manifest.md",
+            "reference/plugin-registry-api.md",
+            "reference/plugin-sdk-api.md",
+            "reference/plugin-testkit.md",
+            "reference/plugin-cli.md",
+            "reference/plugin-view-bridge.md",
+            "reference/plugin-events.md",
+            "reference/plugin-coding-agent.md",
+            "reference/command-palette.md"
+          ]
+        }
+      ]
+    }
+  ],
+  "pages": {
+    "tutorials/first-agent.md": {
+      "title": "Set up your first agent",
+      "status": "current"
+    },
+    "guides/windows-desktop.md": {
+      "title": "Windows desktop app (install & recovery)",
+      "status": "current"
+    },
+    "guides/react-tauri-ui.md": {
+      "title": "Use the app",
+      "status": "current"
+    },
+    "guides/model-connections.md": {
+      "title": "Connect and change models",
+      "status": "current"
+    },
+    "guides/command-palette.md": {
+      "title": "Command palette (⌘⇧K)",
+      "status": "current"
+    },
+    "guides/documents-and-files.md": {
+      "title": "Work with files and documents",
+      "status": "current"
+    },
+    "guides/python-runtime.md": {
+      "title": "Enable document creation (desktop)",
+      "status": "current"
+    },
+    "guides/manage-memory.md": {
+      "title": "Inspect and manage memory",
+      "status": "current"
+    },
+    "guides/ingestion.md": {
+      "title": "Ingest documents & media",
+      "status": "current"
+    },
+    "guides/knowledge.md": {
+      "title": "Tune knowledge recall",
+      "status": "current"
+    },
+    "guides/plugin-registry.md": {
+      "title": "Install and manage plugins",
+      "status": "current"
+    },
+    "guides/mcp.md": {
+      "title": "Connect MCP servers",
+      "status": "current"
+    },
+    "guides/discord.md": {
+      "title": "Discord surface",
+      "status": "current"
+    },
+    "guides/browser-automation.md": {
+      "title": "Browser automation",
+      "status": "current"
+    },
+    "guides/phone-access.md": {
+      "title": "Access from your phone (LAN / Tailscale)",
+      "status": "current"
+    },
+    "guides/pairing.md": {
+      "title": "Pair devices & agents",
+      "status": "current"
+    },
+    "guides/agent-snapshots.md": {
+      "title": "Export or copy an agent",
+      "status": "current"
+    },
+    "guides/backup-and-restore.md": {
+      "title": "Back up and restore data",
+      "status": "current"
+    },
+    "guides/troubleshooting.md": {
+      "title": "Fix a problem in the app",
+      "status": "current"
+    },
+    "guides/file-github-issues.md": {
+      "title": "File GitHub issues (/issue)",
+      "status": "current"
+    },
+    "guides/friction-log.md": {
+      "title": "Review reported problems",
+      "status": "current"
+    },
+    "explanation/steering.md": {
+      "title": "Mid-turn steering",
+      "status": "current"
+    },
+    "explanation/memory-and-knowledge.md": {
+      "title": "Memory & knowledge store",
+      "status": "current"
+    },
+    "tutorials/first-skill.md": {
+      "title": "Write your first skill",
+      "status": "current"
+    },
+    "tutorials/two-agents-over-a2a.md": {
+      "title": "Two agents over A2A",
+      "status": "current"
+    },
+    "guides/skills.md": {
+      "title": "Skills (SKILL.md)",
+      "status": "current"
+    },
+    "guides/scheduler.md": {
+      "title": "Schedule future work",
+      "status": "current"
+    },
+    "guides/watches.md": {
+      "title": "Watches",
+      "status": "current"
+    },
+    "guides/goal-mode.md": {
+      "title": "Goal mode",
+      "status": "current"
+    },
+    "guides/lifecycle-events.md": {
+      "title": "System lifecycle events",
+      "status": "current"
+    },
+    "guides/delegates.md": {
+      "title": "Delegates (agents & endpoints)",
+      "status": "current"
+    },
+    "guides/coding-agents.md": {
+      "title": "Delegate coding work",
+      "status": "current"
+    },
+    "guides/rooms.md": {
+      "title": "Talk to delegates in a room",
+      "status": "current"
+    },
+    "guides/subagents.md": {
+      "title": "Configure subagents",
+      "status": "current"
+    },
+    "guides/workflows.md": {
+      "title": "Reusable workflows",
+      "status": "current"
+    },
+    "guides/coder.md": {
+      "title": "Verify coding outcomes",
+      "status": "current"
+    },
+    "guides/portfolio.md": {
+      "title": "Coordinate project boards",
+      "status": "current"
+    },
+    "guides/build-with-a-coding-agent.md": {
+      "title": "Build with a coding agent",
+      "status": "current"
+    },
+    "explanation/rooms.md": {
+      "title": "How rooms work",
+      "status": "current"
+    },
+    "explanation/a2a-protocol.md": {
+      "title": "A2A protocol",
+      "status": "current"
+    },
+    "tutorials/first-plugin.md": {
+      "title": "Build your first plugin",
+      "status": "current"
+    },
+    "tutorials/first-tool.md": {
+      "title": "Write your first tool",
+      "status": "current"
+    },
+    "guides/plugins.md": {
+      "title": "Build plugins",
+      "status": "current"
+    },
+    "guides/build-a-plugin-view.md": {
+      "title": "Build a plugin view",
+      "status": "current"
+    },
+    "guides/building-react-plugin-views.md": {
+      "title": "Plugin view integration",
+      "status": "current"
+    },
+    "guides/communication-plugins.md": {
+      "title": "Build a communication plugin",
+      "status": "current"
+    },
+    "guides/publish-a-plugin.md": {
+      "title": "Publish a plugin",
+      "status": "current"
+    },
+    "guides/bundles.md": {
+      "title": "Bundles (plugin sets)",
+      "status": "current"
+    },
+    "guides/middleware.md": {
+      "title": "Middleware",
+      "status": "current"
+    },
+    "guides/add-a-skill.md": {
+      "title": "Advertise a capability (A2A card)",
+      "status": "current"
+    },
+    "guides/build-console.md": {
+      "title": "Build and test the console",
+      "status": "current"
+    },
+    "guides/developer-flags.md": {
+      "title": "Control preview features",
+      "status": "current"
+    },
+    "guides/fork-the-template.md": {
+      "title": "Fork the template (fast path)",
+      "status": "current"
+    },
+    "guides/customize-and-deploy.md": {
+      "title": "Customize & deploy",
+      "status": "current"
+    },
+    "guides/operator-fork.md": {
+      "title": "Build an operator fork (Roxy)",
+      "status": "current"
+    },
+    "guides/upstream-sync.md": {
+      "title": "Sync a fork from upstream",
+      "status": "current"
+    },
+    "guides/evals.md": {
+      "title": "Eval your fork",
+      "status": "current"
+    },
+    "guides/releasing.md": {
+      "title": "Releasing",
+      "status": "current"
+    },
+    "explanation/plugin-architecture.md": {
+      "title": "Plugin architecture",
+      "status": "current"
+    },
+    "explanation/architecture.md": {
+      "title": "Architecture",
+      "status": "current"
+    },
+    "explanation/prompt-contracts.md": {
+      "title": "Prompt contracts",
+      "status": "current"
+    },
+    "explanation/output-protocol.md": {
+      "title": "Output protocol",
+      "status": "current"
+    },
+    "guides/cli.md": {
+      "title": "Use the command line",
+      "status": "current"
+    },
+    "guides/headless.md": {
+      "title": "Run headless (API + A2A)",
+      "status": "current"
+    },
+    "guides/deploy-docker.md": {
+      "title": "Deploy in Docker (seed + UI override)",
+      "status": "current"
+    },
+    "guides/deploy-proxmox.md": {
+      "title": "Deploy on Proxmox (reusable LXC template)",
+      "status": "current"
+    },
+    "guides/deploy.md": {
+      "title": "Publish images to GHCR",
+      "status": "current"
+    },
+    "guides/multi-instance.md": {
+      "title": "Run multiple instances",
+      "status": "current"
+    },
+    "guides/fleet.md": {
+      "title": "Create and manage a fleet",
+      "status": "current"
+    },
+    "guides/fleet-deck.md": {
+      "title": "Use the fleet terminal",
+      "status": "current"
+    },
+    "guides/operating-a-fleet.md": {
+      "title": "Operate and recover a fleet",
+      "status": "current"
+    },
+    "guides/sandboxing.md": {
+      "title": "Sandboxing & egress",
+      "status": "current"
+    },
+    "guides/exposing-protoagent.md": {
+      "title": "Expose to the world",
+      "status": "current"
+    },
+    "guides/observability.md": {
+      "title": "Monitor traces, metrics, and logs",
+      "status": "current"
+    },
+    "guides/model-concurrency.md": {
+      "title": "Manage model concurrency",
+      "status": "current"
+    },
+    "explanation/litellm-gateway.md": {
+      "title": "LiteLLM gateway",
+      "status": "current"
+    },
+    "explanation/security-and-trust.md": {
+      "title": "Security & trust model",
+      "status": "current"
+    },
+    "explanation/network-egress.md": {
+      "title": "Network egress",
+      "status": "current"
+    },
+    "explanation/cost-and-trace.md": {
+      "title": "Cost & trace propagation",
+      "status": "current"
+    },
+    "explanation/tuning-and-cost.md": {
+      "title": "Tuning & cost",
+      "status": "current"
+    },
+    "reference/configuration.md": {
+      "title": "Configuration",
+      "status": "current"
+    },
+    "reference/environment-variables.md": {
+      "title": "Environment variables",
+      "status": "current"
+    },
+    "reference/skills.md": {
+      "title": "Skills (SKILL.md)",
+      "status": "current"
+    },
+    "reference/knowledge.md": {
+      "title": "Knowledge settings and tools",
+      "status": "current"
+    },
+    "reference/agent-snapshots.md": {
+      "title": "Agent snapshots",
+      "status": "current"
+    },
+    "reference/starter-tools.md": {
+      "title": "Starter tools",
+      "status": "current"
+    },
+    "reference/operator-api.md": {
+      "title": "Operator REST API",
+      "status": "current"
+    },
+    "reference/a2a-endpoints.md": {
+      "title": "A2A endpoints",
+      "status": "current"
+    },
+    "reference/a2a-conformance.md": {
+      "title": "A2A conformance",
+      "status": "current"
+    },
+    "reference/agent-card.md": {
+      "title": "Agent card",
+      "status": "current"
+    },
+    "reference/extensions.md": {
+      "title": "Extensions",
+      "status": "current"
+    },
+    "reference/plugin-manifest.md": {
+      "title": "Plugin manifest",
+      "status": "current"
+    },
+    "reference/plugin-registry-api.md": {
+      "title": "Plugin registry API",
+      "status": "current"
+    },
+    "reference/plugin-sdk-api.md": {
+      "title": "Plugin SDK (graph.sdk)",
+      "status": "current"
+    },
+    "reference/plugin-testkit.md": {
+      "title": "Plugin testkit",
+      "status": "current"
+    },
+    "reference/plugin-cli.md": {
+      "title": "Plugin CLI",
+      "status": "current"
+    },
+    "reference/plugin-view-bridge.md": {
+      "title": "Plugin view bridge (wire protocol)",
+      "status": "current"
+    },
+    "reference/plugin-events.md": {
+      "title": "Event bus topics",
+      "status": "current"
+    },
+    "reference/plugin-coding-agent.md": {
+      "title": "Coding-agent dispatch (ACP)",
+      "status": "current"
+    },
+    "reference/command-palette.md": {
+      "title": "Command palette extensions",
+      "status": "current"
+    },
+    "guides/acp-runtime.md": {
+      "title": "ACP runtime (deprecated)",
+      "status": "deprecated"
+    },
+    "guides/plugin-views.md": {
+      "title": "Plugin console views (moved)",
+      "status": "moved",
+      "canonical": "guides/building-react-plugin-views.md"
+    },
+    "guides/get-started.md": {
+      "title": "Get started",
+      "status": "current"
+    },
+    "guides/use-protoagent.md": {
+      "title": "Use protoAgent",
+      "status": "current"
+    },
+    "guides/automate-work.md": {
+      "title": "Automate work",
+      "status": "current"
+    },
+    "guides/extend.md": {
+      "title": "Build & extend",
+      "status": "current"
+    },
+    "guides/deploy-and-operate.md": {
+      "title": "Deploy & operate",
+      "status": "current"
+    },
+    "reference/index.md": {
+      "title": "Reference",
+      "status": "current"
+    }
+  },
+  "legacy_anchors": {
+    "guides/index.md": [
+      "how-to-guides",
+      "getting-started",
+      "agent-core-runtime",
+      "skills-subagents-workflows",
+      "knowledge-memory",
+      "a2a-fleet-delegates",
+      "tools-mcp-plugins",
+      "console-ui",
+      "operate-deploy",
+      "forks-evals"
+    ],
+    "tutorials/index.md": [
+      "tutorials",
+      "getting-started",
+      "skills-subagents-workflows",
+      "tools-mcp-plugins",
+      "a2a-fleet-delegates"
+    ],
+    "reference/index.md": [
+      "reference",
+      "agent-core-runtime",
+      "skills-subagents-workflows",
+      "knowledge-memory",
+      "a2a-fleet-delegates",
+      "tools-mcp-plugins",
+      "console-ui"
+    ],
+    "explanation/index.md": [
+      "explanation",
+      "agent-core-runtime",
+      "tools-mcp-plugins",
+      "knowledge-memory",
+      "a2a-fleet-delegates",
+      "operate-deploy",
+      "architecture-decisions"
+    ],
+    "guides/extend.md": [
+      "extend-protoagent",
+      "start-here",
+      "what-a-plugin-can-contribute",
+      "reference",
+      "ship-it"
+    ]
+  }
+}

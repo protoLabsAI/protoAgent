@@ -103,8 +103,9 @@ def test_endpoint_documented_and_wired() -> None:
 
 
 def test_guide_is_in_the_generated_docs_nav() -> None:
-    """`gen_docs_nav.py` must have picked the guide up from the sidebar (its `--check` is a
+    """`gen_docs_nav.py` must have picked the guide up from the catalog (its `--check` is a
     separate CI gate; this pins the committed artifact carries the page)."""
     nav = json.loads(_text(REPO / "plugins" / "docs" / "nav.json"))
-    paths = {it["path"] for groups in nav.values() for grp in groups for it in grp["items"]}
+    operator = next(section for section in nav["sections"] if section["id"] == "operate")
+    paths = {it["path"] for grp in operator["groups"] for it in grp["items"]}
     assert "guides/model-concurrency.md" in paths

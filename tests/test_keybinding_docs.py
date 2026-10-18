@@ -70,7 +70,8 @@ _MUST_STATE_THE_CHORD = (
     "docs/guides/fleet.md",
     "docs/guides/building-react-plugin-views.md",
     "docs/guides/index.md",
-    "docs/.vitepress/config.mts",
+    "plugins/docs/catalog.json",
+    "docs/.vitepress/navigation.json",
     "README.md",
 )
 
@@ -203,7 +204,7 @@ def _palette_labels() -> tuple[set[str], tuple[str, ...]]:
 
 def _doc_pages() -> list[Path]:
     pages = [p for p in (REPO / "docs").rglob("*.md") if _SKIP_DIRS.isdisjoint(p.parts)]
-    pages += [REPO / "README.md", REPO / "PROTO.md", REPO / "docs" / ".vitepress" / "config.mts"]
+    pages += [REPO / "README.md", REPO / "PROTO.md", REPO / "plugins" / "docs" / "catalog.json", REPO / "docs" / ".vitepress" / "navigation.json"]
     return pages
 
 
