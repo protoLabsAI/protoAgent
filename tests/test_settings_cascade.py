@@ -487,6 +487,18 @@ def test_d8_file_wins_over_env(monkeypatch):
     assert cfg.fleet_max_warm == 9
 
 
+def test_fleet_autostart_empty_list_falls_through_to_env(monkeypatch):
+    """The shipped template carries ``fleet.autostart: []``. An empty list must not
+    shadow PROTOAGENT_FLEET_AUTOSTART, or the env fallback is dead on every seeded
+    instance. A non-empty list still wins."""
+    monkeypatch.setenv("PROTOAGENT_FLEET_AUTOSTART", "cindi, matt ,")
+    assert LangGraphConfig.from_dict({"fleet": {"autostart": []}}).fleet_autostart == ["cindi", "matt"]
+    assert LangGraphConfig.from_dict({}).fleet_autostart == ["cindi", "matt"]
+    assert LangGraphConfig.from_dict({"fleet": {"autostart": ["vera"]}}).fleet_autostart == ["vera"]
+    monkeypatch.delenv("PROTOAGENT_FLEET_AUTOSTART")
+    assert LangGraphConfig.from_dict({"fleet": {"autostart": []}}).fleet_autostart == []
+
+
 def test_d8_bad_env_value_degrades_to_default(monkeypatch):
     """A non-integer env var for an int knob degrades to the app default, not a crash."""
     _fleet_env_clear(monkeypatch)

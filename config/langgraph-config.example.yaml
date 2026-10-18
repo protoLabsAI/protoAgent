@@ -553,7 +553,7 @@ fleet:
                             # the hub refreshes recency on member turn starts, so the default
                             # 5min window protects a mid-turn agent from a rapid A→B→A switch
   autostart: []             # member ids/names the hub (re)starts on boot (survives container recreate);
-                            # e.g. [cindi, matt]. Env: PROTOAGENT_FLEET_AUTOSTART (comma-separated)
+                            # e.g. [cindi, matt]. Empty = PROTOAGENT_FLEET_AUTOSTART (comma-separated)
 
 # External secrets manager (ADR 0080) — pull secrets from Infisical at boot, on
 # config reload, and on a refresh interval, and export them as ENV VARS. Values fill
