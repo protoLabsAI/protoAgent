@@ -21,6 +21,9 @@ SECTIONS = ("tutorials", "guides", "reference", "explanation")
 def load_catalog() -> dict:
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     pages = catalog["pages"]
+    statuses = {"current", "moved", "deprecated", "decision", "historical"}
+    if not set(catalog.get("section_status", {}).values()) <= statuses:
+        raise ValueError("Unknown section content status")
     assigned = []
     for journey in catalog["journeys"]:
         assigned.append(journey["landing"])
@@ -28,12 +31,16 @@ def load_catalog() -> dict:
     if len(assigned) != len(set(assigned)):
         raise ValueError("A page has more than one primary navigation home")
     for path, page in pages.items():
+        if page["status"] not in statuses:
+            raise ValueError(f"Unknown content status: {path}")
         if not (REPO / "docs" / path).is_file() and path not in {j["landing"] for j in catalog["journeys"]}:
             raise ValueError(f"Missing catalog page: {path}")
         if page["status"] == "current" and path not in assigned:
             raise ValueError(f"Current page has no primary home: {path}")
-        if page.get("canonical") and page["canonical"] not in pages:
-            raise ValueError(f"Unknown canonical destination: {path}")
+        if page["status"] == "moved":
+            target = pages.get(page.get("canonical"))
+            if not target or target["status"] != "current":
+                raise ValueError(f"Moved page needs a current canonical destination: {path}")
     for path in assigned:
         if pages[path]["status"] != "current":
             raise ValueError(f"Non-current page in primary navigation: {path}")

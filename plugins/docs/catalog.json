@@ -709,6 +709,11 @@
     "reference/index.md": {
       "title": "Reference",
       "status": "current"
+    },
+    "how-to/build-a-plugin-view.md": {
+      "title": "Build a plugin view (moved)",
+      "status": "moved",
+      "canonical": "guides/build-a-plugin-view.md"
     }
   },
   "legacy_anchors": {
@@ -756,5 +761,9 @@
       "reference",
       "ship-it"
     ]
+  },
+  "section_status": {
+    "adr": "decision",
+    "plans": "historical"
   }
 }

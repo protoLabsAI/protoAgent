@@ -155,6 +155,9 @@ def test_data_routes(tmp_path) -> None:
 
     res = c.get("/api/plugins/docs/search", params={"q": "skills"}).json()["results"]
     assert any(r["path"] == "guides/skills.md" for r in res)
+    task = c.get("/api/plugins/docs/search", params={"q": "install a plugin"}).json()["results"]
+    assert task[0]["path"] == "guides/plugin-registry.md"
+    assert c.get("/api/plugins/docs/doc", params={"path": "guides/plugin-views.md"}).status_code == 200
 
     doc = c.get("/api/plugins/docs/doc", params={"path": "guides/skills.md"}).json()
     assert doc["path"] == "guides/skills.md" and "<h1>" in doc["html"]
@@ -307,3 +310,72 @@ def test_register_falls_back_loudly_on_bad_root(tmp_path, caplog) -> None:
         assert corpus.is_custom_root() is False
     finally:
         corpus.set_docs_root(None)
+
+
+@pytest.mark.parametrize(("query", "expected"), [
+    ("install a plugin", "guides/plugin-registry.md"),
+    ("create a document", "guides/documents-and-files.md"),
+    ("connect a model", "guides/model-connections.md"),
+    ("schedule a task", "guides/scheduler.md"),
+    ("backup restore", "guides/backup-and-restore.md"),
+    ("deploy docker", "guides/deploy-docker.md"),
+    ("build a plugin view", "guides/build-a-plugin-view.md"),
+    ("access from phone", "guides/phone-access.md"),
+])
+def test_task_search_prefers_current_instructions(query, expected) -> None:
+    """Use the shipped corpus: short aliases and ADR prose must not beat task guides."""
+    index = _load_docs().DocsIndex()
+    index.seed()
+    assert index.search(query)[0].path == expected
+
+
+def test_search_preserves_reference_and_decision_lookups() -> None:
+    index = _load_docs().DocsIndex()
+    index.seed()
+    assert "reference/plugin-registry-api.md" in [
+        row.path for row in index.search("PluginRegistry register_tool", 3)
+    ]
+    assert index.search("ADR 0065")[0].path == "adr/0065-two-tier-instance-paths.md"
+    assert index.search("egress security")[0].path == "explanation/security-and-trust.md"
+    assert any(row.path == "guides/acp-runtime.md" for row in index.search("deprecated ACP runtime", 5))
+
+
+def test_alias_is_readable_but_search_returns_canonical_pages() -> None:
+    docs = _load_docs()
+    index = docs.DocsIndex()
+    index.seed()
+    alias = "guides/plugin-views.md"
+    assert index.has(alias)
+    assert docs.read_doc(alias)
+    hits = [row.path for row in index.search("plugin views", 200)]
+    assert alias not in hits
+    assert "guides/building-react-plugin-views.md" in hits
+
+
+def test_custom_search_does_not_apply_bundled_status(tmp_path) -> None:
+    docs = _load_docs()
+    corpus = sys.modules["docs_plugin_under_test.corpus"]
+    (tmp_path / "guides").mkdir()
+    alias = tmp_path / "guides" / "plugin-views.md"
+    alias.write_text("# Team dashboards\n\nQuokka widgets\n", encoding="utf-8")
+    corpus.set_docs_root(tmp_path)
+    try:
+        index = docs.DocsIndex()
+        index.seed()
+        hits = index.search("quokka")
+        assert hits[0].path == "guides/plugin-views.md"
+        assert hits[0].title == "Team dashboards"
+    finally:
+        corpus.set_docs_root(None)
+
+
+
+def test_search_preview_skips_generator_comments_and_legacy_anchors() -> None:
+    docs = _load_docs()
+    corpus = sys.modules["docs_plugin_under_test.corpus"]
+    text = '<!-- Generated file\nDo not edit. -->\n# A task\n<span id="old"></span>\n\nUseful instructions.'
+    assert corpus.doc_preview(text) == "Useful instructions."
+    index = docs.DocsIndex()
+    index.seed()
+    hub = next(row for row in index.search("Use protoAgent", 200) if row.path == "guides/use-protoagent.md")
+    assert hub.preview.startswith("Chat, work with files")

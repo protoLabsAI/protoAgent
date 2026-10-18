@@ -181,8 +181,14 @@ def grouped_tree(root: Path | None = None) -> list[dict]:
 def doc_preview(content: str, limit: int = 240) -> str:
     """A short plain-text lede: the first non-heading, non-frontmatter line, trimmed."""
     in_fm = False
+    in_comment = False
     for raw in content.splitlines():
         line = raw.strip()
+        if in_comment or line.startswith("<!--"):
+            in_comment = "-->" not in line
+            continue
+        if line.startswith(('<span id="', '<a id="')):
+            continue
         if line == "---":  # YAML frontmatter fence
             in_fm = not in_fm
             continue

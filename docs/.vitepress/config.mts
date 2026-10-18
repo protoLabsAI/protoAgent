@@ -1,5 +1,6 @@
 import { defineConfig } from "vitepress";
 import navigation from "./navigation.json";
+import catalog from "../../plugins/docs/catalog.json";
 
 // GitHub Pages serves under /protoAgent/; the Cloudflare marketing build folds
 // the docs in at /docs/ (DOCS_BASE=/docs/). Env-driven so both coexist.
@@ -67,6 +68,43 @@ export default defineConfig({
 
     search: {
       provider: "local",
+      options: {
+        // Search metadata changes the index only; every page and old URL stays readable.
+        _render(src, env, md) {
+          const path = env.relativePath;
+          const page = (catalog.pages as Record<string, { title: string; status: string }>)[path];
+          const status = page?.status ??
+            (catalog.section_status as Record<string, string>)[path.split("/")[0]] ?? "current";
+          if (status === "moved") return "";
+          const label = ({ decision: "ADR", historical: "Historical", deprecated: "Deprecated" } as Record<string, string>)[status];
+          const html = md.render(src, env);
+          if (env.frontmatter?.search === false) return "";
+          // Label the search result after rendering so its heading anchor still
+          // matches the published page, including explicit legacy heading IDs.
+          return label ? html.replace(/(<h1\b[^>]*>)/, "$1[" + label + "] ") : html;
+        },
+        miniSearch: {
+          options: {
+            processTerm(term) {
+              const word = term.toLowerCase();
+              return "a an and are as at be by can do does for from how i in is it of on or the to what with you your"
+                .split(" ").includes(word) ? null : word;
+            },
+          },
+          searchOptions: {
+            boost: { title: 6, titles: 4, text: 1 },
+            // VitePress serializes this callback into the browser: keep it self-contained.
+            boostDocument(_id, term, fields) {
+              const labels = [fields?.title, ...(fields?.titles ?? [])].join(" ");
+              if (/\[(ADR|Historical|Deprecated)\]/.test(labels) &&
+                  !/^(adr|decision|history|historical|deprecated|\d{4})$/i.test(term)) {
+                return labels.includes("[ADR]") ? 0.25 : 0.15;
+              }
+              return 1;
+            },
+          },
+        },
+      },
     },
 
     footer: {
