@@ -21,6 +21,9 @@ Look up configuration fields, API contracts, protocols, and SDK signatures. For 
 - [Starter tools](/reference/starter-tools)
 - [Ingestion and document runtime APIs](/reference/ingestion)
 - [Memory storage and delivery](/reference/memory-delivery)
+- [Browser automation settings](/reference/browser-automation)
+- [Discord configuration and delivery](/reference/discord)
+- [Friction capture and configuration](/reference/friction)
 
 ## Agent and operator APIs
 
@@ -29,6 +32,7 @@ Look up configuration fields, API contracts, protocols, and SDK signatures. For 
 - [A2A conformance](/reference/a2a-conformance)
 - [Agent card](/reference/agent-card)
 - [Extensions](/reference/extensions)
+- [MCP connections and operator bridge](/reference/mcp)
 
 ## Plugin development
 

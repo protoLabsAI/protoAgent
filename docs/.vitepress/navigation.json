@@ -262,11 +262,11 @@
               "link": "/guides/mcp"
             },
             {
-              "text": "Discord surface",
+              "text": "Connect Discord",
               "link": "/guides/discord"
             },
             {
-              "text": "Browser automation",
+              "text": "Use browser automation",
               "link": "/guides/browser-automation"
             }
           ]
@@ -375,6 +375,7 @@
         "/guides/subagents",
         "/guides/workflows",
         "/guides/coder",
+        "/guides/discord-peer-channels",
         "/guides/portfolio",
         "/guides/build-with-a-coding-agent",
         "/explanation/rooms",
@@ -458,6 +459,10 @@
             {
               "text": "Verify coding outcomes",
               "link": "/guides/coder"
+            },
+            {
+              "text": "Coordinate agents in Discord",
+              "link": "/guides/discord-peer-channels"
             }
           ]
         },
@@ -718,6 +723,7 @@
         "/guides/fleet",
         "/guides/fleet-deck",
         "/guides/operating-a-fleet",
+        "/guides/pair-an-agent",
         "/guides/sandboxing",
         "/guides/exposing-protoagent",
         "/guides/observability",
@@ -784,6 +790,10 @@
             {
               "text": "Operate and recover a fleet",
               "link": "/guides/operating-a-fleet"
+            },
+            {
+              "text": "Pair a remote fleet member",
+              "link": "/guides/pair-an-agent"
             }
           ]
         },
@@ -880,11 +890,15 @@
         "/reference/starter-tools",
         "/reference/ingestion",
         "/reference/memory-delivery",
+        "/reference/browser-automation",
+        "/reference/discord",
+        "/reference/friction",
         "/reference/operator-api",
         "/reference/a2a-endpoints",
         "/reference/a2a-conformance",
         "/reference/agent-card",
         "/reference/extensions",
+        "/reference/mcp",
         "/reference/plugin-manifest",
         "/reference/plugin-registry-api",
         "/reference/plugin-sdk-api",
@@ -941,6 +955,18 @@
             {
               "text": "Memory storage and delivery",
               "link": "/reference/memory-delivery"
+            },
+            {
+              "text": "Browser automation settings",
+              "link": "/reference/browser-automation"
+            },
+            {
+              "text": "Discord configuration and delivery",
+              "link": "/reference/discord"
+            },
+            {
+              "text": "Friction capture and configuration",
+              "link": "/reference/friction"
             }
           ]
         },
@@ -967,6 +993,10 @@
             {
               "text": "Extensions",
               "link": "/reference/extensions"
+            },
+            {
+              "text": "MCP connections and operator bridge",
+              "link": "/reference/mcp"
             }
           ]
         },

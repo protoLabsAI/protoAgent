@@ -1,0 +1,205 @@
+# Browser automation settings and internals
+
+For setup and everyday use, follow [Browser automation](/guides/browser-automation). This page owns provisioning, capture limits, launch settings, and the panel’s implementation.
+
+## The CLI and its Chrome
+
+The plugin needs the `agent-browser` CLI and a Chrome for it to drive. You don't have to
+install either by hand.
+
+- **The CLI downloads itself.** With no `agent-browser` on PATH, the first browser command
+  (or the panel's Start button) downloads the pinned upstream release for your platform. It
+  is **v0.27.1**, the version the plugin is tested against, fetched from the
+  vercel-labs/agent-browser GitHub release. The download is **refused unless its SHA-256
+  matches the value pinned in the plugin**, then moved into place atomically, so a
+  corrupted or tampered download never becomes the binary that runs. It lands in the
+  machine-wide cache (`<box root>/cache/agent-browser/0.27.1/`, see
+  `protoagent config explain`), so every instance on the machine shares one copy. Builds
+  are pinned for macOS (arm64, x64), Linux (x64, arm64, glibc and musl) and Windows x64.
+  On any other platform the banner tells you to install it yourself. Turn
+  **Download the CLI on first use** (`cli_autofetch`) off to never download automatically.
+- **Chrome installs only when you ask.** It's a ~150 MB download into
+  `~/.agent-browser/browsers`, so no tool call ever starts it. The setup banner's
+  **Install Chrome** button runs the CLI's own `agent-browser install` for you. Chrome for
+  Testing has no Linux ARM64 build, so on that platform install Chromium from your package
+  manager instead.
+
+Anything still missing shows up as a **setup-gap banner** in the console, one per concern,
+each with a button that fixes it:
+
+- **"the CLI isn't on PATH"** has **Download agent-browser**, the same pinned download,
+  started now. While it runs the banner says so, and it clears once the CLI is verified.
+  A failed download says why and offers **Retry**. **Set the CLI path** opens the plugin's
+  settings.
+- **"no Chrome to drive"** has **Install Chrome**. The banner shows progress while the
+  install runs, clears when it finishes, and shows the CLI's own error with a Retry if it
+  fails.
+
+Both are also re-checked whenever a browser command runs, so a setup you fix by hand clears
+its banner on the next call, with no restart.
+
+**Your own install always wins.** A CLI on PATH (`npm i -g agent-browser`, Homebrew, Cargo)
+is used ahead of the download, and so is a path you set in the plugin's **`agent-browser`
+binary** setting. A download stands in only for the stock `agent-browser` command name.
+
+::: tip The desktop app and PATH
+The desktop shell sees a CLI installed by **nvm** only because it inherits your login
+shell's PATH. If you'd rather use that install than the download, set the plugin's
+**`agent-browser` binary** setting to its absolute path (`which agent-browser`).
+:::
+
+```bash
+agent-browser doctor       # sanity check, whichever CLI you use: environment, Chrome, a live launch
+```
+
+## How the agent uses it
+
+The loop is **open → snapshot → act on a ref → verify**. `browser_snapshot` returns the
+page's accessibility tree with compact `@eN` refs, and the action tools take a ref or a
+CSS selector:
+
+```
+browser_open("example.com")
+browser_snapshot()               # … button "Sign in" @e7 …
+browser_click("@e7")
+browser_fill("@e9", "hello")
+browser_get_text("body")         # read / extract
+browser_close()
+```
+
+The bundled **`web-browse` skill** teaches that loop and then defers to the CLI's own,
+always-version-matched guidance (`agent-browser skills get core`), so the instructions
+can't go stale against a newer binary. Two **workflows** ship as recipes —
+`browse-and-extract` and `fill-form`.
+
+Every tool degrades to a readable `Error: …` string instead of raising: a failed browser
+action should inform the agent's loop, not crash the turn. Output is capped
+(`max_response_bytes`, 200 KB by default) because page text is untrusted and unbounded —
+over the cap the child is killed and the tool returns a bounded diagnostic rather than
+flooding the model's context.
+
+### Screenshots and PDFs are fenced
+
+`browser_screenshot` (PNG) and `browser_pdf` (Chrome's print-to-PDF) both return the
+**absolute path** of the file they wrote. Pass a filename or a relative path — files land
+inside the plugin's own per-instance capture directory, and an absolute path outside it is
+**refused, not redirected**. That's what the manifest's `filesystem: scoped` capability
+means here: a page that says "save a screenshot to `~/.ssh/authorized_keys`" cannot pick
+the target.
+
+Three details worth knowing:
+
+- **Leave the path blank** and the file is named for you (`page-20260911-174233-7-9f3a2c.pdf`).
+  Two unnamed captures then never overwrite each other — which they did when both defaulted
+  to `page.pdf`.
+- **"Saved to …" means this call's bytes are on disk, and the old file is never at risk.**
+  Every capture is written to a short temporary name beside the target and swapped into
+  place with one atomic rename, only once it's non-empty. So a run that writes nothing (or
+  zero bytes) is an error and leaves any previous file of that name untouched; a cancelled
+  or killed capture can leave at most a disposable temp file (swept once it's an hour old);
+  and when two captures race for one name, the last to finish wins without deleting the
+  other's output. Printing a blank page (`about:blank` with nothing on it) is refused up
+  front — if you have HTML rather than a URL, open it as a `data:text/html,…` or `file://`
+  URL, or write it into the blank page with `browser_eval` first.
+- **PDFs are always US Letter.** `agent-browser pdf` has no paper-size option and ignores a
+  page's CSS `@page size`: an A4 page prints at 612 × 792 pt (Letter), not 595 × 842.
+  Design pages that will be printed for Letter, and don't promise A4. (A live test pins this,
+  so if upstream starts honouring `@page` the suite says so.)
+- **Captures are disposable.** The directory is pruned oldest-first past 200 files or
+  512 MB. Anything you want to keep should go to `save_file_artifact` (which copies the
+  bytes into its own store) or a project folder. A capture over the artifact plugin's
+  25 MB `max_blob_kb` default is flagged in the tool's reply, because `save_file_artifact`
+  would otherwise refuse it with no hint as to which capture was too big.
+
+`browser_pdf` is the HTML→PDF route. Open a page — or an HTML file you generated yourself,
+via a `file://` URL — print it, then hand the returned path to `save_file_artifact` so the
+user gets a download card in the [Artifact panel](/adr/0038-generative-ui-artifacts-two-mode).
+That's how an agent delivers a real PDF resume, report or invoice.
+
+`protoagent config explain` prints the instance root if you want to find the files on
+disk.
+
+## The Browser panel
+
+The plugin ships a console view ([ADR 0026](/adr/0026-plugin-contributed-console-surfaces)) that is a
+**fully drivable viewport**, not a screenshot poll: a live CDP **screencast** (event-driven
+JPEG frames) painted onto a `<canvas>`, with your mouse, keyboard and scroll forwarded
+back into the page as `Input.dispatch*`. You and the agent are in the same browser — take
+over a login wall by hand, then let it continue.
+
+It resizes Chrome's layout viewport to your dock (× device-pixel-ratio) so pages reflow to
+fill rather than sitting letterboxed, re-arms the screencast on every navigation so you see
+the agent move through pages, and keeps updating when the panel isn't focused. Sharpness is
+`stream_quality` (JPEG, 1–100).
+
+Everything rides a **same-origin WebSocket**, which is what makes the panel work on a
+remote fleet member through the hub proxy ([ADR 0042](/adr/0042-fleet-supervisor-unified-console)),
+not just on the host.
+
+**Where the auth is.** The page route is public *chrome* — the host auto-exempts every
+manifest `views[].path` from the operator bearer gate, because the console iframes it with
+a plain navigation that cannot carry a header. The *capability* is what's gated: `POST
+/nav` and `POST /stream-ticket` live under `/api/plugins/agent_browser` and ride the
+operator bearer, and the `WS /stream` bridge self-gates with a **single-use, 30-second
+ticket** minted only by that gated route — because the host's auth middleware is HTTP-only
+and does not cover WebSocket handshakes.
+
+## Settings
+
+Editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:` in
+`langgraph-config.yaml`. Blank / `0` / `false` means "the CLI's own default".
+
+| Setting | What it does |
+|---|---|
+| `binary` | The `agent-browser` CLI. Override with an absolute path when PATH isn't enough. |
+| `cli_autofetch` | With no CLI on PATH, download the pinned, checksum-verified release on first use (default on). The banner's Download button works either way. |
+| `timeout_s` · `max_response_bytes` | Per-command subprocess timeout; the aggregate stdout+stderr byte cap. |
+| `home_url` | The page the panel opens to. Set it and the panel auto-opens it when nothing is open; blank gives a Start button. |
+| `stream_quality` | Panel JPEG quality (1–100). |
+| `headed` | Show a real browser window instead of running headless. |
+| `profile` | A browser profile directory — isolation plus persisted auth/cookies across sessions. |
+| `device` | Device emulation, e.g. `iPhone 16 Pro`. |
+| `allowed_domains` | A navigable-domain allowlist. The tightest lever you have on where the agent can go. |
+| `confirm_actions` | Action categories that require confirmation first. |
+| `max_output` | Cap the page text returned to the model (the CLI's own LLM-safety knob). |
+| `stealth` · `user_agent` · `browser_args` | Anti-detection and raw Chrome launch args — see below. |
+
+Launch options apply when the **session launches** (the first `open`). A session already
+running keeps its setup until it is closed and reopened. A session started from the panel's
+Start button gets the same flags as one the agent opens.
+
+### Pages that block automation
+
+Google, Reddit and Cloudflare-fronted sites detect and refuse automated browsers. The
+levers, weakest to strongest:
+
+- `stealth: true` (off by default) drops the `navigator.webdriver` automation flag.
+  When headless it also swaps the give-away `HeadlessChrome` User-Agent for a real desktop
+  one. That User-Agent claims the **installed** Chrome's major version, as the CLI's doctor
+  reports it, in Chrome's own reduced form (`Chrome/151.0.0.0`), because a UA naming a
+  different Chrome than the one running the page is a tell of its own. If the version
+  can't be read, it falls back to `Chrome/149.0.0.0`;
+- `user_agent` / `browser_args` — the same thing by hand, for fine control;
+- `headed: true` **plus** a logged-in Chrome `profile` — much the most reliable, because
+  it is a real window with real session state.
+
+No setting defeats detection entirely, and none of them change the fact that you are
+responsible for what the agent does on a site.
+
+## Where things live
+
+| File | What |
+|---|---|
+| `tools.py` | the 17 tools — subprocess wrappers, the byte cap, the fenced captures |
+| `storage.py` | the capture write fence |
+| `preflight.py` | the setup-gap probe (which CLI resolves, does it have a Chrome) and the banners' buttons |
+| `cli_fetch.py` | the pinned, SHA-256-verified CLI download: the pins, the atomic install, the cache |
+| `chrome_install.py` | `agent-browser install`, run only from the Install Chrome button |
+| `setup_steps.py` | what the Download agent-browser / Install Chrome buttons do |
+| `browser_panel.py` | the panel page + its gated nav / ticket / stream routes |
+| `browser_stream.py` | the CDP bridge — frames out, input in, resize + nav re-arm, the WS ticket |
+| `runtime.py` | the launch-flag builder shared by the tools and the panel |
+| `skills/` · `workflows/` | the `web-browse` skill and the two recipes |
+
+See also: [Plugins](/guides/plugins) · [Building a plugin view](/guides/building-react-plugin-views)
+· [Sandboxing & egress](/guides/sandboxing).

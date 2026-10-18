@@ -1,329 +1,78 @@
-# MCP (Model Context Protocol)
+# Connect MCP servers
 
-Connect an MCP server to make its tools available to your agent. MCP supports
-external filesystems, browsers, databases, and service APIs without a
-protoAgent-specific plugin. The connection uses
-[`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters).
+Connect an MCP server to give the agent tools for a service, database, browser,
+or other external system. You need the server’s launch command or URL and any
+credentials it requires. Enable only servers you trust; a subprocess is not an
+OS sandbox.
 
-## Enabling it
+## Add a server
 
-MCP is **off by default** — configuring a server is the opt-in. The quickest way is
-the console: **Agent → MCP → Add server** (name, transport, command/args or URL) wires
-it in **without a restart** (the change hot-reloads and the server connects), and the
-remove button drops one the same way. Got a config blob instead? Use **Paste JSON** —
-it accepts the standard `{"mcpServers": {…}}` format (as shared by Claude Desktop / most
-MCP docs), a single server object, or our own export, and imports them all at once.
-Prefer YAML? Add an `mcp` section to your config
-(`config/langgraph-config.yaml`, or via the wizard/drawer):
+1. Open **Settings → MCP**. Use the catalog for a listed integration, or **Add server**.
+2. For a local `stdio` server, enter its command and arguments. The command must
+   be available on the machine running protoAgent. For `http` or `sse`, enter
+   the server URL; `localhost` refers to that machine, not your browser.
+3. If the provider supplies configuration, choose **Paste JSON**. It accepts a
+   standard `mcpServers` object or a single server definition. Include required
+   environment values or headers in the supplied configuration.
+4. Submit, then check that the server appears with its tool count. Changes
+   apply without a restart. A connected server does not prove every tool can
+   access its target service.
+5. Ask for a small read-only task using that integration and inspect the tool
+   result. Names are prefixed with the server name, such as `weather__forecast`.
 
-```yaml
-mcp:
-  enabled: true
-  timeout_seconds: 20        # per-server discovery timeout
-  call_timeout_seconds: 300  # bounds one tool CALL; 0 disables. See note below.
-  denylist: []               # optional: drop specific (namespaced) tool names
-  servers:
-    # Local subprocess over stdio
-    - name: git
-      transport: stdio
-      command: uvx
-      args: ["mcp-server-git", "--repository", "/data"]
-      env: {}                # optional
-    # Remote server over streamable HTTP
-    - name: weather
-      transport: streamable_http
-      url: "https://example.com/mcp"
-      headers: {}            # optional (e.g. auth)
-```
+For filesystem access, prefer the built-in
+[work-folder tools](/guides/react-tauri-ui#working-memory-the-filesystem-fence).
+For `npx` servers on desktop, install Node from the missing-runtime card when
+prompted, or use the [coding-agent runtime guidance](/guides/coding-agents).
 
-Servers are discovered at startup (and on config reload). A server that's
-unreachable or errors is **logged and skipped** — it never blocks boot or the
-other servers.
+## Fix a connection or failed call
 
-::: warning Want filesystem access? Use the built-in tools, not an MCP server.
-protoAgent ships **fenced filesystem tools** (`filesystem.projects`, [ADR 0007]
-(/adr/0007-directory-aware-operator-agent)) — `read_file` / `list_dir` /
-`find_files` / `search_files` / `write_file`, scoped to directories you name.
-They cover the same ground as `@modelcontextprotocol/server-filesystem` and are
-why it is **not** in the quick-add catalog: that server's `search_files` walks
-its root with no default exclusions (it does not skip `node_modules` or `.git`)
-and no depth or result cap — one call over a 2.75M-entry tree measured 222s and
-wedged a live agent turn. If you do wire it up anyway, give it a narrow root and
-pass `excludePatterns`.
-:::
+- **Command missing:** check its installation and the server process’s PATH;
+  an absolute command path can remove ambiguity.
+- **URL or authentication error:** confirm the endpoint and credentials in the
+  server definition. Check access from protoAgent’s machine.
+- **Connected, but no useful tools:** inspect the tool count and configured
+  include/exclude filters. A subagent also needs the tool in its allowlist.
+- **Tool timeout:** narrow the task or increase that server’s call timeout when
+  the work legitimately needs longer. Discovery and invocation have separate
+  timeouts; see [MCP reference](/reference/mcp#how-long-a-call-may-run).
 
-### How long a call may run
+Keep the error message. A missing server may have failed discovery; inspect the
+agent’s log before repeatedly adding it. Remote OAuth sign-in is not handled by
+this connector; use the server’s supported static headers where applicable.
 
-`timeout_seconds` bounds **discovery**; `call_timeout_seconds` bounds a single
-tool **invocation**. They are separate on purpose — connecting to a server should
-be fast, but a legitimate call can be slow. `filesystem__search_files` over a
-large root, for instance, walks the tree with no default exclusions (it does not
-skip `node_modules` or `.git`) and no depth or result cap: one such call over a
-2.75M-entry tree measured ~4 minutes. That is why the default is a generous 300s
-— it is a backstop against a call that will *never* return, not a latency budget.
+## Stop using a server
 
-When it trips, the call is cancelled and the model gets a recoverable tool error
-telling it to narrow the arguments; the turn is not failed. A server that
-genuinely needs longer sets `call_timeout` on its own entry (or `0` to opt out):
+Use its remove button in **Settings → MCP**. For a config-managed server, set
+`enabled: false` on its entry and reload configuration to retain the definition
+without connecting. Plugin-managed servers must be disabled through the plugin
+or its configuration, otherwise the plugin can contribute them again.
 
-```yaml
-    - name: archiver
-      transport: stdio
-      command: /usr/local/bin/archiver-mcp
-      call_timeout: 1800     # this one really does run for half an hour
-```
+## Configuration and extension paths
 
-If a call is being cut off that shouldn't be, prefer raising that server's
-`call_timeout` over disabling the bound globally.
+- [MCP configuration](/reference/configuration#mcp) — YAML fields.
+- [MCP reference](/reference/mcp) — filtering, transports, sessions, timeouts,
+  and exposing this agent’s operator tools to another client.
+- [Build plugins](/guides/plugins#managed-mcp-servers-—-register-mcp-server) — contribute a managed MCP server.
+- [Deprecated ACP runtime](/guides/acp-runtime) — existing configurations only;
+  use [coding delegates](/guides/coding-agents) for new coding work.
 
-## How tools show up
+## Earlier section links
 
-- Each server's tools are **namespaced by server name**: a `read_file` tool on
-  the `filesystem` server becomes **`filesystem__read_file`**. This prevents
-  collisions with protoAgent's built-in tools (any that would still collide are
-  skipped and logged).
-- Tools are available to the **lead agent**. Subagents only get them if you add
-  the namespaced name to that subagent's tool allowlist
-  (`graph/subagents/config.py`).
-- `GET /api/runtime/status` reports `mcp.enabled`, the connected `servers`
-  (`name`, `transport`, `tool_count`), and total `tool_count`.
+<a id="mcp-model-context-protocol"></a>
+<a id="enabling-it"></a>
+<a id="how-long-a-call-may-run"></a>
+<a id="how-tools-show-up"></a>
+<a id="plugin-managed-servers"></a>
+<a id="worked-example-—-wrap-an-external-server-gated-on-config"></a>
+<a id="a-python-server-inside-the-plugin-frozen-apps"></a>
+<a id="keeping-tools-out-of-context-allowlist-lazy-connect"></a>
+<a id="transports"></a>
+<a id="sessions"></a>
+<a id="try-it-locally"></a>
+<a id="expose-this-agent-as-an-mcp-server-operator-tools"></a>
+<a id="profiles-adr-0075"></a>
+<a id="run-on-a-coding-agent-acp-runtime-—-deprecated"></a>
+<a id="notes-limits"></a>
 
-## Plugin-managed servers
-
-A **plugin** can contribute a managed MCP server (you never hand-edit `mcp.servers`)
-via `register_mcp_server(factory)` — `factory(config)` returns an `mcp.servers[]` entry,
-or `None` when the server shouldn't run (off / not yet connected). The factory runs at
-**every graph build** with the live `LangGraphConfig`, so the server comes and goes with
-config. A plugin entry whose `name` matches a configured server **replaces** it, and a
-plugin contributing a server **activates MCP even when `mcp.enabled` is off**.
-
-### Worked example — wrap an external server, gated on config
-
-In the plugin's `__init__.py` (`register(registry)` is the contribution hook — see
-[Plugins](./plugins.md)):
-
-```python
-def register(registry):
-    def mcp_factory(config):
-        # registry.config is this plugin's resolved config section (ADR 0019).
-        token = registry.config.get("api_token")
-        if not token:
-            return None                       # not configured → server doesn't start
-        return {
-            "name": "acme",                   # same name as a user mcp.servers entry → replaces it
-            "transport": "stdio",             # or "streamable_http" / "sse"
-            "command": "npx",
-            "args": ["-y", "@acme/mcp-server"],
-            "env": {"ACME_TOKEN": token},
-        }
-
-    registry.register_mcp_server(mcp_factory)
-```
-
-Enable the plugin and set its `api_token` (Settings ▸ Plugins, or its config section +
-`secrets.yaml`); the `acme` tools appear (namespaced, allowlist-gated like any MCP server)
-on the next graph build and vanish when the token is cleared. The returned dict is the same
-`mcp.servers[]` entry shape as a hand-configured server (`command`/`args` + `env` for
-stdio; `url`/`headers` for http/sse).
-
-### A Python server inside the plugin (frozen apps)
-
-If the plugin *implements* the server itself in Python (rather than wrapping an external
-binary), it exposes an `mcp_main()` that runs the server, and the factory launches it as a
-subprocess. In a **frozen desktop build** there's no `python` on PATH, so the agent
-re-invokes its own binary with the generic **`--mcp-plugin <id>`** shim, which imports the
-plugin and calls its `mcp_main()`. The first-party OAuth-gated Google (Gmail/Calendar)
-plugin is the canonical example.
-
-## Keeping tools out of context (allowlist + lazy connect)
-
-A single MCP server can export dozens or hundreds of tools, and **every bound
-tool's name, description, and full input schema is sent to the model on every
-turn**. Past ~10–15 tools this burns context and measurably degrades tool
-selection ("tool pollution" — see [ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure)).
-Two per-server knobs keep the surface small:
-
-```yaml
-mcp:
-  enabled: true
-  denylist: [dangerous__tool]    # cross-server hard block (always wins)
-  servers:
-    - name: github
-      transport: stdio
-      command: npx
-      args: ["-y", "@modelcontextprotocol/server-github"]
-      tools:
-        include: [get_pull_request, list_issues]   # allowlist — ONLY these bind
-        exclude: [delete_repository]                # drop from whatever remains
-    - name: staging-only
-      enabled: false             # configured but not connected (no tools, no cost)
-      transport: streamable_http
-      url: "https://staging.example.com/mcp"
-```
-
-- **`tools.include`** — an allowlist. When set, *only* the listed tools are
-  bound; everything else from that server is dropped. This is the surgical fix
-  for a chatty server — pick the 2–10 tools you actually use.
-- **`tools.exclude`** — drops the listed tools from whatever remains. `include`
-  wins over a same-server `exclude` if a name appears in both.
-- **`enabled: false`** — the server is **not connected at all** (lazy). Use it
-  to park a server's config without paying its connection or context cost.
-- Both `include`/`exclude` match the **bare** tool name (`get_pull_request`) or
-  the namespaced form (`github__get_pull_request`).
-- The global `denylist` is the hard safety net — it removes a tool even if an
-  `include` lists it.
-
-When no filter is set, all of a server's tools bind (the original behavior), so
-existing configs are unchanged.
-
-## Transports
-
-| Transport | Use when | Required fields |
-|---|---|---|
-| `stdio` | Local tools / simple setups (server runs as a subprocess) | `command`, `args` (`env`, `cwd` optional) |
-| `streamable_http` | Remote, production servers | `url` (`headers` optional) |
-| `sse` | Legacy SSE servers | `url` (`headers` optional) |
-
-::: tip `npx`/`node` not installed? (desktop)
-Many stdio servers launch via `command: npx`. A desktop machine with no Node
-toolchain has none to launch. Provision a managed one once —
-`protoagent runtime install-node` (ADR 0085) — and every `npx`-based server (and
-the [ACP coding agents](/guides/coding-agents)) can start. A Node you install
-yourself wins when it's Node 20 or newer; an older one is shadowed by the managed runtime.
-:::
-
-## Sessions
-
-Each server keeps **one long-lived MCP session** that every tool call reuses
-(the default). This is how other MCP hosts (Claude Desktop, Cursor) drive
-servers too, and it's what makes stdio servers fast: the stateless alternative
-spawns a fresh subprocess **per call** (~1s of pure overhead for a typical
-`npx`-launched server — an agent turn making ten calls would pay ten seconds).
-Sessions open lazily on first use, and a server that dies mid-call is
-reconnected **once** automatically; if that also fails the call returns a
-recoverable tool-error string to the model instead of failing the turn.
-Config reloads close the old sessions and open fresh ones.
-
-If a specific server misbehaves when kept alive (leaks memory, caches stale
-state), opt it out alone with `persistent: false` on its `servers` entry, or
-set `mcp.persistent_sessions: false` to restore fresh-session-per-call
-behavior globally:
-
-```yaml
-mcp:
-  enabled: true
-  persistent_sessions: true    # default — one live session per server
-  servers:
-    - name: flaky
-      transport: stdio
-      command: npx
-      args: ["-y", "some-server"]
-      persistent: false        # this server alone gets a fresh session per call
-```
-
-## Try it locally
-
-A minimal stdio server ships at `examples/mcp/echo_server.py`:
-
-```yaml
-mcp:
-  enabled: true
-  servers:
-    - name: echo
-      transport: stdio
-      command: python
-      args: ["examples/mcp/echo_server.py"]
-```
-
-Start protoAgent and check `GET /api/runtime/status` — you'll see the `echo`
-server with one tool (`echo__echo`).
-
-## Expose THIS agent as an MCP server (operator tools)
-
-The reverse direction (ADR 0033): publish this agent's own tools as an MCP server, so any
-MCP client — Claude Desktop, Cursor, or an ACP coding-agent runtime — can **operate the
-instance** (read/write notes & tasks, recall/ingest memory, run workflows, delegate to
-subagents, set goals, schedule work). It's **opt-in + allowlist-gated** — only the tools you
-name are exposed:
-
-```yaml
-operator_mcp:
-  enabled: true
-  tools: [memory_recall, memory_ingest, task_list, task_create, notes_read, run_workflow]
-```
-
-### Profiles (ADR 0075)
-
-Instead of enumerating tools, pick a **profile** — a curated preset over the same allowlist:
-
-```yaml
-operator_mcp:
-  profile: read-only        # reads/queries only, no state change
-  # profile: full           # everything (≡ tools: ["*"])
-  tools: [show_component]   # optional — a profile UNIONs with any explicit names
-```
-
-- **`read-only`** — a stable, principled set (recall/list/search/status; no writes).
-- **`full`** — everything (`"*"`), minus the danger set below.
-- **unset** (default) — deny-by-default: a foreign client gets *only* what `tools` names.
-- The safe middle tier **`safe-operator`** (reads + non-destructive writes) lands with the ops
-  layer (ADR 0075 D2), which carries per-op read/write metadata so it isn't a hand-maintained list.
-
-**Env override:** `PROTOAGENT_MCP_TRUST=full` forces the `full` profile — for a trusted or
-headless box where you vouch for the client (CI, your own machine). Per-op grants stay the
-`tools` allowlist.
-
-**Two tools are never exposed over MCP, even when named or via `"*"`:** `ask_human` and
-`request_user_input` are HITL tools that pause the turn via an interrupt only the lead runner
-resumes — over a foreign MCP client they'd hang it. (`execute_code` is dropped from `"*"` but
-can be re-added by name — a coding-agent brain already has its own.)
-
-Run it standalone:
-
-```bash
-python -m server.operator_mcp                 # stdio (for an MCP client / ACP session)
-python -m server.operator_mcp --http --port 8848
-```
-
-**Core + plugin tools ride the same bridge** — a plugin's `register_tools` tools are exposed
-through this one server (no per-plugin MCP); plugins that *are* an MCP server (`register_mcp_server`)
-are mounted by the client directly. Empty `tools` ⇒ nothing exposed (don't hand `execute_code`
-etc. to an outside brain unless you mean to). The sidecar boots **stores only** — it never starts
-the agent's background loops — so it's safe to run against a live instance's data.
-
-## Run on a coding agent (ACP runtime) — deprecated
-
-> **Deprecated**: this runtime mode is no longer offered in the wizard or Settings. Existing
-> configs keep working; use a [coding-agent delegate](/guides/delegates) instead. Kept here
-> because the operator MCP bus below is what such an instance still uses.
-
-protoAgent can hand the *whole turn* to an external coding agent — **proto, Codex, Claude,
-Copilot, OpenCode** — over ACP (ADR 0033). The coding agent is the brain (with its own
-tools); protoAgent stays the shell (A2A, scheduling, goals, console, memory), and exposes
-its operator tools to that brain via the MCP server above, mounted into the ACP session.
-
-```yaml
-agent_runtime: acp:proto         # native (default) | acp:<agent>
-operator_mcp:
-  tools: [memory_recall, memory_ingest, task_create, task_list, notes_read, run_workflow]
-# acp:                           # optional — override an agent's launch command
-#   agents:
-#     codex: { command: npx, args: ["-y", "@agentclientprotocol/codex-acp"] }
-```
-
-With this set, each turn is driven by the coding agent: protoAgent assembles the context
-(a cacheable persona prefix sent once, then per-turn deltas — ADR 0033 D5), the agent reasons
-+ uses its own tools, and reaches back into protoAgent's notes/tasks/memory/workflows through
-the mounted operator MCP server. Defaults are `native` (the built-in LangGraph loop), so this
-is inert until you opt in — and since the selection UI is gone, that means hand-editing the
-YAML on an instance that already runs this way. Each agent needs its CLI installed +
-authenticated on the host.
-
-## Notes & limits
-
-- **Tools only** for now — MCP *Resources* and *Prompts* aren't wired yet.
-- Changing the `mcp` config is picked up on restart/reload, not hot-swapped
-  per-request.
-- Remote-server auth (OAuth 2.1) beyond static `headers` isn't handled yet —
-  pass tokens via `headers` for now.
-- Only enable servers you trust: their tools run with the agent's privileges.
+Earlier advanced sections are in [MCP reference](/reference/mcp), [plugin authoring](/guides/plugins#managed-mcp-servers-—-register-mcp-server), and [ACP migration guidance](/guides/acp-runtime).

@@ -9,6 +9,29 @@ File a GitHub issue straight from the console — two ways, one backend path:
 The `/issue` command is user-only and handled by the server. Its form scaffolds
 and validates the required issue sections before submitting through `gh`.
 
+## Before you submit
+
+Issue creation needs `gh` installed and authenticated on the machine running the
+agent, with write access to the destination repository. If unavailable, use the
+[GitHub issue form](https://github.com/protoLabsAI/protoAgent/issues/new/choose)
+in your browser. Include reproduction steps and the exact error; remove tokens
+and private content from attachments.
+
+Choose the bug button or `/issue` from the slash menu. Check the **Repo** field,
+fill in the form, review the draft, and submit. Success is a **Filed** note with
+the issue URL; open it to confirm the destination and content.
+
+## The form dialog
+
+The 🐛 button (and picking `/issue` from the slash menu) opens a form: **Type**
+(Bug/Enhancement), **Repo**, **Title**, and the type-specific section fields. It
+assembles a body with the exact headings the gate checks, so a dialog-filed issue
+always conforms; on success it drops a `✓ Filed … <url>` note in the current chat.
+
+The **Repo** field is a quick-toggle dropdown of your configured repos (see below),
+with a **Custom…** option that swaps in a free-text box (an inline **×** returns you
+to the list) for a one-off repo.
+
 ## Syntax
 
 ```
@@ -55,20 +78,9 @@ If a required section is missing, nothing is filed — the command replies with 
 missing and a ready-to-fill scaffold. Run `/issue <title> --bug` with no body to get the
 scaffold up front.
 
-## The form dialog
-
-The 🐛 button (and picking `/issue` from the slash menu) opens a form: **Type**
-(Bug/Enhancement), **Repo**, **Title**, and the type-specific section fields. It
-assembles a body with the exact headings the gate checks, so a dialog-filed issue
-always conforms; on success it drops a `✓ Filed … <url>` note in the current chat.
-
-The **Repo** field is a quick-toggle dropdown of your configured repos (see below),
-with a **Custom…** option that swaps in a free-text box (an inline **×** returns you
-to the list) for a one-off repo.
-
 ## Which repo
 
-Configure the repos under **Settings ▸ System ▸ GitHub**:
+Configure the repos under the installed GitHub plugin’s configuration in **Settings → Plugins**:
 
 - **Repos for /issue** (`github.repos`) — the `owner/name` list shown in the dialog's
   dropdown. Pairs with the [portfolio manager](/guides/portfolio)'s many-repo setup.
