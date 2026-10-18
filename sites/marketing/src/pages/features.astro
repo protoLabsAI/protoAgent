@@ -1,6 +1,8 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
-const groups = [
+import ProductMedia from '../components/ProductMedia.astro';
+type Feature = { title: string; body: string; href: string; media?: 'marketing-workspace' | 'marketing-memory' };
+const groups: { id: string; title: string; items: Feature[] }[] = [
   {
     "id": "work",
     "title": "Work in the app",
@@ -12,6 +14,7 @@ const groups = [
       },
       {
         "title": "Files and deliverables",
+        "media": "marketing-workspace",
         "body": "Attach material to a chat, work in registered folders, and download generated files. Document creation on desktop can require the optional Python runtime.",
         "href": "/docs/guides/documents-and-files"
       },
@@ -22,6 +25,7 @@ const groups = [
       },
       {
         "title": "Inspectable memory and knowledge",
+        "media": "marketing-memory",
         "body": "Keep standing preferences, past-session context, and reference material. Review injections and correct saved facts. Optional embeddings add semantic retrieval to keyword search.",
         "href": "/docs/guides/manage-memory"
       },
@@ -127,6 +131,7 @@ const groups = [
     <h2 class="pl-heading">{group.title}</h2>
     {group.items.map((item) => <div class="pl-row"><div class="pl-row__label"><a href={item.href}>Guide →</a></div><div>
       <h3 class="pl-row__name">{item.title}</h3><p class="pl-row__desc">{item.body}</p>
+      {item.media && <ProductMedia id={item.media} />}
     </div></div>)}
   </div></section>)}
   <section class="pl-section"><div class="pl-container">

@@ -1,5 +1,6 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
+import ProductMedia from '../components/ProductMedia.astro';
 import catalog from '../../../../config/archetype-catalog.json';
 const archetypes = catalog.archetypes.filter((entry) => entry.bundle);
 const cases = [
@@ -35,6 +36,8 @@ const cases = [
     <p class="pl-eyebrow">{item.audience}</p><h2 class="pl-heading">{item.title}</h2>
     <p class="pl-section-intro">{item.body}</p>
     <blockquote class="task-example"><p>{item.prompt}</p><footer>Example request</footer></blockquote>
+    {item.id === 'documents' && <ProductMedia id="marketing-first-task" />}
+    {item.id === 'fleet' && <ProductMedia id="marketing-fleet" />}
     <p>{item.setup}</p><div class="actions">{item.links.map((link) => <a class="pl-btn" href={link.href}>{link.label} →</a>)}</div>
   </div></section>)}
   <section class="pl-section"><div class="pl-container">

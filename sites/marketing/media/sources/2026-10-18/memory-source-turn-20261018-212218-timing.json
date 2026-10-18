@@ -1,0 +1,147 @@
+{
+  "script": "memory-source-turn",
+  "started_at": "2026-10-18T21:22:18+00:00",
+  "clock": "seconds since page creation = video t=0 (\u00b10.1s)",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_scale_factor": 2.0,
+  "video_size": {
+    "width": 1440,
+    "height": 900
+  },
+  "capture": {
+    "scale": "css"
+  },
+  "duration_s": 13.033,
+  "marks": {},
+  "screenshots": {
+    "memory-saved-preference": "shots/memory-source-turn-20261018-212218/memory-saved-preference.png",
+    "memory-real-response": "shots/memory-source-turn-20261018-212218/memory-real-response.png",
+    "memory-injection-overview": "shots/memory-source-turn-20261018-212218/memory-injection-overview.png"
+  },
+  "steps": [
+    {
+      "index": 1,
+      "op": "goto",
+      "desc": "goto /app/",
+      "t_start": 0.0,
+      "t_end": 0.223
+    },
+    {
+      "index": 2,
+      "op": "wait_for",
+      "desc": "wait for role='heading' name='Memory' exact (visible)",
+      "t_start": 0.223,
+      "t_end": 0.345
+    },
+    {
+      "index": 3,
+      "op": "click",
+      "desc": "click role='tab' name='Hot memory' exact",
+      "t_start": 0.345,
+      "t_end": 0.797
+    },
+    {
+      "index": 4,
+      "op": "wait_for",
+      "desc": "wait for text='Demo preference: Format task summaries as three short bullet points.' exact (visible)",
+      "t_start": 0.797,
+      "t_end": 0.826
+    },
+    {
+      "index": 5,
+      "op": "hold",
+      "desc": "hold 1500ms",
+      "t_start": 0.826,
+      "t_end": 2.329
+    },
+    {
+      "index": 6,
+      "op": "screenshot",
+      "desc": "screenshot memory-saved-preference",
+      "t_start": 2.329,
+      "t_end": 2.429
+    },
+    {
+      "index": 7,
+      "op": "click",
+      "desc": "click role='button' name='Chat' exact",
+      "t_start": 2.429,
+      "t_end": 2.823
+    },
+    {
+      "index": 8,
+      "op": "click",
+      "desc": "click role='button' name='New chat \u2014 Shift+click for incognito (Shift+Enter when focused)' exact",
+      "t_start": 2.823,
+      "t_end": 3.268
+    },
+    {
+      "index": 9,
+      "op": "fill",
+      "desc": "fill role='textbox' name='Message protoAgent\u2026'",
+      "t_start": 3.269,
+      "t_end": 3.627
+    },
+    {
+      "index": 10,
+      "op": "click",
+      "desc": "click role='button' name='Send' exact",
+      "t_start": 3.627,
+      "t_end": 3.995
+    },
+    {
+      "index": 11,
+      "op": "wait_for",
+      "desc": "wait for role='button' name='Copy' exact (visible) (timeout 120000ms)",
+      "t_start": 3.995,
+      "t_end": 8.295
+    },
+    {
+      "index": 12,
+      "op": "hold",
+      "desc": "hold 1500ms",
+      "t_start": 8.295,
+      "t_end": 9.803
+    },
+    {
+      "index": 13,
+      "op": "screenshot",
+      "desc": "screenshot memory-real-response",
+      "t_start": 9.803,
+      "t_end": 9.894
+    },
+    {
+      "index": 14,
+      "op": "click",
+      "desc": "click role='button' name='Memory' exact",
+      "t_start": 9.894,
+      "t_end": 10.306
+    },
+    {
+      "index": 15,
+      "op": "click",
+      "desc": "click role='tab' name='Injections' exact",
+      "t_start": 10.306,
+      "t_end": 10.672
+    },
+    {
+      "index": 16,
+      "op": "hold",
+      "desc": "hold 2000ms",
+      "t_start": 10.672,
+      "t_end": 12.681
+    },
+    {
+      "index": 17,
+      "op": "screenshot",
+      "desc": "screenshot memory-injection-overview",
+      "t_start": 12.681,
+      "t_end": 12.783
+    }
+  ],
+  "error": "",
+  "failed_step": 0
+}

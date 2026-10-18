@@ -1,0 +1,130 @@
+{
+  "name": "memory-source-turn",
+  "base_url": "http://127.0.0.1:8920",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_scale_factor": 2,
+  "color_scheme": "dark",
+  "timezone_id": "UTC",
+  "locale": "en-US",
+  "redact": {
+    "presets": [
+      "home_paths",
+      "emails",
+      "secrets"
+    ]
+  },
+  "storage": {
+    "local": {
+      "protoagent.ui": {
+        "state": {
+          "surface": "memory",
+          "rightCollapsed": true,
+          "leftCollapsed": false
+        },
+        "version": 14
+      }
+    }
+  },
+  "steps": [
+    {
+      "goto": "/app/"
+    },
+    {
+      "wait_for": {
+        "role": "heading",
+        "name": "Memory",
+        "exact": true
+      }
+    },
+    {
+      "click": {
+        "role": "tab",
+        "name": "Hot memory",
+        "exact": true
+      }
+    },
+    {
+      "wait_for": {
+        "text": "Demo preference: Format task summaries as three short bullet points.",
+        "exact": true
+      }
+    },
+    {
+      "hold": 1500
+    },
+    {
+      "screenshot": {
+        "name": "memory-saved-preference"
+      }
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "Chat",
+        "exact": true
+      }
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "New chat \u2014 Shift+click for incognito (Shift+Enter when focused)",
+        "exact": true
+      }
+    },
+    {
+      "fill": {
+        "role": "textbox",
+        "name": "Message protoAgent\u2026",
+        "value": "Summarize this task status: the draft is written; review is next; publishing waits for approval."
+      }
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "Send",
+        "exact": true
+      }
+    },
+    {
+      "wait_for": {
+        "role": "button",
+        "name": "Copy",
+        "exact": true,
+        "timeout_ms": 120000
+      }
+    },
+    {
+      "hold": 1500
+    },
+    {
+      "screenshot": {
+        "name": "memory-real-response"
+      }
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "Memory",
+        "exact": true
+      }
+    },
+    {
+      "click": {
+        "role": "tab",
+        "name": "Injections",
+        "exact": true
+      }
+    },
+    {
+      "hold": 2000
+    },
+    {
+      "screenshot": {
+        "name": "memory-injection-overview"
+      }
+    }
+  ]
+}

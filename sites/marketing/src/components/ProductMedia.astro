@@ -1,0 +1,25 @@
+---
+import plan from '../../media/plan.json';
+interface Props { id: keyof typeof plan.media }
+const { id } = Astro.props;
+const media = plan.media[id];
+const clip = plan.media['marketing-first-task'];
+const visible = media.status === 'ready' || media.status === 'refresh-needed';
+---
+{visible && <figure class="product-media" aria-describedby={`${id}-caption`}>
+  {media.kind === 'video' ? <>
+    <video controls playsinline preload="none" poster={clip.poster} width={media.width} height={media.height} aria-label={media.alt}>
+      <source src={media.asset} type="video/mp4" />
+      <a href={media.asset}>Open the screen recording</a>
+    </video>
+    <p class="media-links"><a href={media.asset}>Open video at full size</a> · <a href={clip.transcript}>Read the text walkthrough</a></p>
+  </> : <a href={media.asset} aria-label={`Open full-size image: ${media.alt}`}>
+    <img src={media.asset} alt={media.alt} width={media.width} height={media.height} loading="lazy" decoding="async" />
+  </a>}
+  <figcaption id={`${id}-caption`}>{media.caption}</figcaption>
+</figure>}
+<style>
+  .product-media { margin: 2rem 0; }
+  .product-media img, .product-media video { display: block; width: 100%; height: auto; border-radius: 0.75rem; }
+  .product-media figcaption, .media-links { margin: 0.75rem 0 0; font-size: 0.95rem; line-height: 1.6; }
+</style>

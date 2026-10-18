@@ -1,5 +1,6 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
+import ProductMedia from '../components/ProductMedia.astro';
 import ProductOverview from '../components/ProductOverview.astro';
 const outcomes = [
   { title: 'Work with your files', body: 'Bring documents into a conversation, create downloadable results, and give the agent access to selected work folders.', href: '/docs/guides/documents-and-files', label: 'Files and documents' },
@@ -26,6 +27,7 @@ const paths = [
     </div>
     <p class="meta-note">Public beta for macOS, Windows, and Linux. Bring a supported subscription, API connection, or local model endpoint.</p>
     <ProductOverview />
+    <ProductMedia id="marketing-workspace" />
   </div></section>
   <section class="pl-section"><div class="pl-container">
     <p class="pl-eyebrow">Everyday work</p><h2 class="pl-heading">More than a conversation</h2>

@@ -1,0 +1,113 @@
+{
+  "name": "fleet-real-handoff",
+  "base_url": "http://127.0.0.1:8920",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "device_scale_factor": 2,
+  "capture": "device",
+  "color_scheme": "dark",
+  "timezone_id": "UTC",
+  "locale": "en-US",
+  "total_timeout_s": 360,
+  "redact": {
+    "presets": [
+      "home_paths",
+      "emails",
+      "secrets"
+    ]
+  },
+  "storage": {
+    "local": {
+      "protoagent.ui": {
+        "state": {
+          "surface": "chat",
+          "rightCollapsed": true,
+          "leftCollapsed": false
+        },
+        "version": 14
+      }
+    }
+  },
+  "steps": [
+    {
+      "goto": "/app/"
+    },
+    {
+      "wait_for": {
+        "role": "textbox",
+        "name": "Message protoAgent\u2026"
+      }
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "New chat \u2014 Shift+click for incognito (Shift+Enter when focused)",
+        "exact": true
+      }
+    },
+    {
+      "fill": {
+        "role": "textbox",
+        "name": "Message protoAgent\u2026",
+        "value": "Use delegate_to to ask researcher to extract exactly two facts from this sample: \u201cThe draft is ready. Review is next.\u201d Then use delegate_to to ask editor to combine the facts actually returned by researcher into one plain sentence. Show both returned replies under Researcher and Editor headings. End your final reply with \u201cHandoff complete.\u201d"
+      }
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "Send",
+        "exact": true
+      }
+    },
+    {
+      "wait_for": {
+        "text": "Handoff complete.",
+        "exact": true,
+        "timeout_ms": 240000
+      }
+    },
+    {
+      "wait_for": {
+        "role": "textbox",
+        "name": "Message protoAgent\u2026",
+        "timeout_ms": 30000
+      }
+    },
+    {
+      "screenshot": {
+        "name": "fleet-real-return"
+      }
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "Switch agent",
+        "exact": true
+      }
+    },
+    {
+      "wait_for": {
+        "role": "menuitem",
+        "name": "Researcher",
+        "exact": true
+      }
+    },
+    {
+      "wait_for": {
+        "role": "menuitem",
+        "name": "Editor",
+        "exact": true
+      }
+    },
+    {
+      "hold": 1500
+    },
+    {
+      "screenshot": {
+        "name": "marketing-fleet"
+      }
+    }
+  ]
+}
