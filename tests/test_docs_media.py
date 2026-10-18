@@ -236,3 +236,37 @@ def test_public_symlink_directory_is_rejected(media_repo):
         pytest.skip("symlink privilege unavailable")
     with pytest.raises(ValueError, match="not symlinks"):
         save(root, data)
+
+
+@pytest.mark.platform_sensitive
+def test_reader_media_links_open_locally_for_root_and_fleet():
+    """Execute the reader's URL and click paths, without a server or browser fixture."""
+    import re
+    import shutil
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is needed to execute reader JavaScript")
+    view = _load_docs()._VIEW_HTML
+    helper = re.search(r"function localMediaHtml\(html\)\{.*?\n\}", view, re.S)[0]
+    handler = re.search(r'\$reader.addEventListener\("click", async \(e\)=>\{(.*?)\n\}\);', view, re.S)[1]
+    script = '''
+const assert = require("node:assert/strict");
+for (const base of ["", "/agents/demo"]) {
+  HELPER
+  const source = '<video poster="/plugins/docs/media/demo/still.webp"><source src="/plugins/docs/media/demo/clip.mp4"></video><a href="/plugins/docs/media/demo/steps.txt">Text</a>';
+  const html = localMediaHtml(source);
+  for (const file of ["still.webp", "clip.mp4", "steps.txt"]) assert.ok(html.includes(base+"/plugins/docs/media/demo/"+file));
+  const $reader = {contains: () => true};
+  const opened = [];
+  const window = {open: (...args) => opened.push(args)};
+  const candidatePaths = () => {throw new Error("Media must not be probed as a doc");};
+  const click = async (e) => { HANDLER };
+  const href = base+"/plugins/docs/media/demo/steps.txt";
+  let prevented = false;
+  await click({target: {closest: () => ({getAttribute: () => href})}, preventDefault: () => {prevented=true;}});
+  assert.ok(prevented);
+  assert.deepEqual(opened, [[href, "_blank", "noopener,noreferrer"]]);
+}
+'''.replace("HELPER", helper).replace("HANDLER", handler)
+    subprocess.run([node, "-e", "(async()=>{" + script + "})().catch(e=>{console.error(e);process.exit(1)})"], check=True)

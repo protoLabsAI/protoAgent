@@ -298,10 +298,15 @@ function liveDocsUrl(fromPath, rawPath, anchor){
 function addHeadingIds(){ $reader.querySelectorAll(".md h1,.md h2,.md h3,.md h4,.md h5,.md h6").forEach(h=>{ if(!h.id) h.id=slugify(h.textContent||""); }); }
 function scrollToAnchor(anchor){ if(!anchor){ $reader.scrollTop=0; return; } const a=decodeURIComponent(anchor); const el=document.getElementById(a)||document.getElementById(slugify(a)); if(el)el.scrollIntoView({block:"start"}); else $reader.scrollTop=0; }
 async function fetchDoc(path){ return api("/doc?path="+encodeURIComponent(path)); }
+function localMediaHtml(html){
+  // Keep asset fetches on the selected fleet member, just like the docs API.
+  return html.replace(/<(?:img|video|source|track|a)\b[^>]*>/g, tag=>
+    tag.replace(/(\b(?:src|poster|href)=")\/plugins\/docs\/media\//g, `$1${base}/plugins/docs/media/`));
+}
 function renderDoc(path, d, anchor){
   currentPath=path;
   if(isPhone()) document.body.classList.add("reading");  // swap list → reader on phones
-  $reader.innerHTML='<article class="md">'+d.html+'</article>';
+  $reader.innerHTML='<article class="md">'+localMediaHtml(d.html)+'</article>';
   addHeadingIds();
   [...document.querySelectorAll(".item")].forEach(a=>a.classList.toggle("active", a.dataset.path===path));
   scrollToAnchor(anchor);
@@ -317,6 +322,7 @@ async function openDoc(path){
 $reader.addEventListener("click", async (e)=>{
   const a=e.target.closest("a[href]"); if(!a||!$reader.contains(a)) return;
   const href=a.getAttribute("href")||""; if(!href) return;
+  if(href.startsWith(base+"/plugins/docs/media/")){ e.preventDefault(); window.open(href,"_blank","noopener,noreferrer"); return; }
   if(href.startsWith("#")){ e.preventDefault(); scrollToAnchor(href.slice(1)); return; }
   if(/^[a-z][\w+.-]*:/i.test(href)||href.startsWith("//")){ e.preventDefault(); window.open(href,"_blank","noopener,noreferrer"); return; }
   e.preventDefault();
