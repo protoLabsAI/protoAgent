@@ -19,6 +19,8 @@ Look up configuration fields, API contracts, protocols, and SDK signatures. For 
 - [Knowledge settings and tools](/reference/knowledge)
 - [Agent snapshots](/reference/agent-snapshots)
 - [Starter tools](/reference/starter-tools)
+- [Ingestion and document runtime APIs](/reference/ingestion)
+- [Memory storage and delivery](/reference/memory-delivery)
 
 ## Agent and operator APIs
 

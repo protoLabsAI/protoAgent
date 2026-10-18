@@ -55,16 +55,4 @@ and [Document artifacts](/adr/0092-desktop-document-baseline-and-versioned-file-
 
 ## Status & API
 
-`GET /api/runtime/python` returns `{python, install}`:
-
-| Key | Meaning |
-|---|---|
-| `needed` | this process would use it (frozen builds only) |
-| `managed` / `managed_version` / `exe` | a working install is present, its version, its interpreter path |
-| `baseline_installed` / `baseline_current` | document-library state vs the current pins |
-| `supported` / `target_version` | can this platform/arch provision, and what an install fetches |
-
-`POST /api/runtime/python/install` starts the provisioning in the background (`202`;
-poll the GET for phase + percent). Unsupported platform/arch combinations return the
-banner state instead — `execute_code` (and the skills behind it) can't run on that
-desktop build.
+See [Managed Python API](/reference/ingestion#managed-python-api) for provisioning and status fields.

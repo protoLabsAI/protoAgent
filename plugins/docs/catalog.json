@@ -27,7 +27,7 @@
       "label": "Use protoAgent",
       "nav_label": "Use",
       "landing": "guides/use-protoagent.md",
-      "intro": "Chat, work with files, connect tools, and manage your data. If something fails, start with [Troubleshooting](/guides/troubleshooting).",
+      "intro": "Chat, work with files, connect tools, and manage your data.\n\nStart with [Use the app](/guides/react-tauri-ui) for chat and controls. Choose [files](/guides/documents-and-files) to work on a document, [knowledge sources](/guides/ingestion) to remember material for later, or [plugins](/guides/plugin-registry) and [MCP](/guides/mcp) to connect tools. If something fails, start with [Troubleshooting](/guides/troubleshooting).",
       "groups": [
         {
           "label": "Chat and models",
@@ -246,7 +246,9 @@
             "reference/skills.md",
             "reference/knowledge.md",
             "reference/agent-snapshots.md",
-            "reference/starter-tools.md"
+            "reference/starter-tools.md",
+            "reference/ingestion.md",
+            "reference/memory-delivery.md"
           ]
         },
         {
@@ -708,6 +710,14 @@
     },
     "reference/index.md": {
       "title": "Reference",
+      "status": "current"
+    },
+    "reference/ingestion.md": {
+      "title": "Ingestion and document runtime APIs",
+      "status": "current"
+    },
+    "reference/memory-delivery.md": {
+      "title": "Memory storage and delivery",
       "status": "current"
     }
   },

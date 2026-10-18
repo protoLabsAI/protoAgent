@@ -6,9 +6,9 @@ follow [Set up your first agent](/tutorials/first-agent).
 
 ## Run it
 
-Open the desktop app, or start an installed Python package with `protoagent serve`
-and visit <http://localhost:7870>. For a source checkout, build the frontend first:
-[Build and test the console](/guides/build-console).
+Open the desktop app, or use the launch command for your
+[installation route](/tutorials/first-agent#_1-install-and-start). The Python-package
+walkthrough uses `uvx`; it does not require a globally installed `protoagent` command.
 
 ## Layout
 
@@ -23,8 +23,16 @@ separate windows to work with more than one at once.
 
 ## Chat
 
-Open a chat, write a message, and send it. Each conversation has its own history
-and status. Switching tabs lets another conversation continue working.
+1. Use **+** in the chat tab bar to start a conversation. Write a message and send it.
+2. Return to a conversation by selecting its tab or searching its title in the
+   [command palette](/guides/command-palette). Switching tabs does not stop its work.
+3. To change direction while it works, send a follow-up message. To stop the
+   current turn, use the composer’s stop control.
+
+Stopping does not undo files or external actions already completed. Inspect the
+last tool result before retrying a task. If a question or approval form is open,
+answer or dismiss that form first; follow-up messages wait until it resumes.
+See [Steering](/explanation/steering) for pending-message behavior.
 
 - **Tool-call cards** show what the agent called, whether it is running or finished,
   and its input and result. Expand a card to inspect it.
@@ -35,8 +43,8 @@ and status. Switching tabs lets another conversation continue working.
 - **Delegation:** a [delegate](/guides/delegates) can return a reply under its own
   name; background work appears above the composer.
 
-The browser streams replies directly. Desktop streams through the native shell;
-if that relay fails, it falls back to displaying the completed reply.
+On desktop, a failed streaming relay can fall back to showing the completed reply.
+If a reply stalls or fails, follow [Chat fails](/guides/troubleshooting#chat-fails).
 
 ## Save a conversation
 

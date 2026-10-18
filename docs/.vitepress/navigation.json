@@ -878,6 +878,8 @@
         "/reference/knowledge",
         "/reference/agent-snapshots",
         "/reference/starter-tools",
+        "/reference/ingestion",
+        "/reference/memory-delivery",
         "/reference/operator-api",
         "/reference/a2a-endpoints",
         "/reference/a2a-conformance",
@@ -931,6 +933,14 @@
             {
               "text": "Starter tools",
               "link": "/reference/starter-tools"
+            },
+            {
+              "text": "Ingestion and document runtime APIs",
+              "link": "/reference/ingestion"
+            },
+            {
+              "text": "Memory storage and delivery",
+              "link": "/reference/memory-delivery"
             }
           ]
         },
