@@ -22,7 +22,12 @@ from .corpus import doc_preview, doc_title, is_custom_root, iter_docs
 
 log = logging.getLogger("protoagent.plugins.docs")
 
-_STOP_WORDS = frozenset("a an and are as at be by can do does for from how i in is it of on or the to what with you your".split())
+try:
+    _CATALOG = json.loads(Path(__file__).with_name("catalog.json").read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    log.warning("[docs] catalog unavailable; indexing without content status or stop words")
+    _CATALOG = {}
+_STOP_WORDS = frozenset(_CATALOG.get("search", {}).get("stop_words", []))
 
 
 def _query_terms(query: str) -> list[str]:
@@ -71,12 +76,7 @@ class DocsIndex:
 
     def seed(self) -> int:
         """Index canonical corpus docs; keep all readable paths, including aliases."""
-        catalog = {}
-        if self._bundled:
-            try:
-                catalog = json.loads(Path(__file__).with_name("catalog.json").read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                log.warning("[docs] catalog unavailable; indexing without content status")
+        catalog = _CATALOG if self._bundled else {}
         rows = []
         for rel, abs_path in iter_docs(self._root):
             try:

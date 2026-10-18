@@ -350,6 +350,14 @@ def test_alias_is_readable_but_search_returns_canonical_pages() -> None:
     hits = [row.path for row in index.search("plugin views", 200)]
     assert alias not in hits
     assert "guides/building-react-plugin-views.md" in hits
+    # This legacy website URL was never in the reader's bundled corpus. Search
+    # classification must not silently broaden the read-access gate.
+    import json
+    catalog = json.loads(Path("plugins/docs/catalog.json").read_text(encoding="utf-8"))
+    website_alias = "how-to/build-a-plugin-view.md"
+    assert catalog["website_pages"][website_alias]["canonical"] == "guides/build-a-plugin-view.md"
+    assert not index.has(website_alias)
+    assert docs.read_doc(website_alias) is None
 
 
 def test_custom_search_does_not_apply_bundled_status(tmp_path) -> None:
@@ -379,3 +387,20 @@ def test_search_preview_skips_generator_comments_and_legacy_anchors() -> None:
     index.seed()
     hub = next(row for row in index.search("Use protoAgent", 200) if row.path == "guides/use-protoagent.md")
     assert hub.preview.startswith("Chat, work with files")
+
+
+
+def test_catalog_rejects_dangling_canonical_on_current_page(tmp_path, monkeypatch) -> None:
+    import importlib.util
+    import json
+
+    spec = importlib.util.spec_from_file_location("nav_validation", Path("scripts/gen_docs_nav.py"))
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    catalog = json.loads(gen.CATALOG.read_text(encoding="utf-8"))
+    catalog["pages"]["guides/skills.md"]["canonical"] = "guides/missing.md"
+    invalid = tmp_path / "catalog.json"
+    invalid.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setattr(gen, "CATALOG", invalid)
+    with pytest.raises(ValueError, match="Unknown canonical destination"):
+        gen.load_catalog()

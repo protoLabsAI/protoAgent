@@ -1,5 +1,6 @@
 import { defineConfig } from "vitepress";
 import navigation from "./navigation.json";
+import { processSearchTerm } from "./search-terms.mjs";
 import catalog from "../../plugins/docs/catalog.json";
 
 // GitHub Pages serves under /protoAgent/; the Cloudflare marketing build folds
@@ -72,7 +73,7 @@ export default defineConfig({
         // Search metadata changes the index only; every page and old URL stays readable.
         _render(src, env, md) {
           const path = env.relativePath;
-          const page = (catalog.pages as Record<string, { title: string; status: string }>)[path];
+          const page = ({ ...catalog.pages, ...catalog.website_pages } as Record<string, { title: string; status: string }>)[path];
           const status = page?.status ??
             (catalog.section_status as Record<string, string>)[path.split("/")[0]] ?? "current";
           if (status === "moved") return "";
@@ -85,11 +86,7 @@ export default defineConfig({
         },
         miniSearch: {
           options: {
-            processTerm(term) {
-              const word = term.toLowerCase();
-              return "a an and are as at be by can do does for from how i in is it of on or the to what with you your"
-                .split(" ").includes(word) ? null : word;
-            },
+            processTerm: processSearchTerm,
           },
           searchOptions: {
             boost: { title: 6, titles: 4, text: 1 },
