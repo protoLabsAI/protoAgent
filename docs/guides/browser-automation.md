@@ -32,6 +32,10 @@ artifact. Open the resulting card and download the copy you want to keep. Browse
 captures are temporary: the capture directory is pruned past its file/size limits.
 PDF output is always US Letter; see [capture limits](/reference/browser-automation#screenshots-and-pdfs-are-fenced).
 
+<!-- docs-media: browser-control -->
+
+<!-- /docs-media -->
+
 ## Change browser settings
 
 Open **Settings → Plugins → Agent Browser**. Useful controls include the home URL,

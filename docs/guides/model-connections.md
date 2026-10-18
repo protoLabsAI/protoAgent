@@ -26,6 +26,10 @@ The row's **Test** checks the model-list endpoint. A successful list does not
 prove a particular model can answer, use tools, or create embeddings. The
 setup wizard's **Test connection** makes a model-completion request instead.
 
+<!-- docs-media: model-select-and-test -->
+
+<!-- /docs-media -->
+
 ## Connect a subscription
 
 1. Choose **Add a connection**, then **Claude subscription** or

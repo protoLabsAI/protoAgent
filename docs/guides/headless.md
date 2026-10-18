@@ -3,6 +3,10 @@
 Run protoAgent as a service and drive it through the OpenAI-compatible API or A2A.
 Configure a model connection first; [Headless setup](#headless-setup) covers that step.
 
+<!-- docs-media: deployment-topology -->
+
+<!-- /docs-media -->
+
 ## Run it
 
 ```bash

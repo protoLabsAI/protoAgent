@@ -34,6 +34,10 @@ Machine-shared defaults live in `<box_root>/host-config.yaml`. Settings resolve
 through the App → Host → Agent cascade; `config explain` shows provenance and
 redacts secrets.
 
+<!-- docs-media: config-precedence -->
+
+<!-- /docs-media -->
+
 ## Full example
 
 ```yaml

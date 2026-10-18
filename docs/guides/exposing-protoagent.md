@@ -21,6 +21,10 @@ A2A callers can trigger the agent's tools, so a token does not replace tool and
 network restrictions. Operator routes additionally expose configuration, files,
 and plugin installation.
 
+<!-- docs-media: exposure-boundaries -->
+
+<!-- /docs-media -->
+
 ## The pattern
 
 1. **Bind the app private.** Run the agent bound to loopback or a private/tailnet

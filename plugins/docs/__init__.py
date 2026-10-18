@@ -18,9 +18,10 @@ from langchain_core.tools import tool
 
 from pathlib import Path
 
-from .corpus import grouped_tree, read_doc, set_docs_root
+from .corpus import grouped_tree, is_custom_root, read_doc, set_docs_root
 from .docs_index import DocsIndex
 from .render import render_markdown
+from .media import media_file
 
 log = logging.getLogger("protoagent.plugins.docs")
 
@@ -87,9 +88,24 @@ def _build_view_router():
     carry a bearer). One mode-adaptive page: full tree+reader on the rail, search-first in
     the ⌘K palette (``?mode=search``). It fetches its data from the gated router below."""
     from fastapi import APIRouter
-    from fastapi.responses import HTMLResponse
+    from fastapi.responses import FileResponse, HTMLResponse, Response
 
     router = APIRouter()
+
+    @router.get("/media/{name:path}")
+    async def _media(name: str):
+        path = media_file(name)
+        if path is None:
+            return Response(status_code=404)
+        return FileResponse(
+            path,
+            media_type={
+                ".vtt": "text/vtt", ".webm": "video/webm", ".mp4": "video/mp4",
+                ".webp": "image/webp", ".svg": "image/svg+xml", ".png": "image/png",
+                ".jpg": "image/jpeg", ".gif": "image/gif", ".txt": "text/plain",
+            }.get(path.suffix.lower()),
+            headers={"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"},
+        )
 
     @router.get("/view")
     async def _view():
@@ -122,7 +138,7 @@ def _build_data_router():
         md = read_doc(path)
         if md is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        out = {"path": path, "title": _title_from_md(md, path), "html": render_markdown(md)}
+        out = {"path": path, "title": _title_from_md(md, path), "html": render_markdown(md, bundled_media=not is_custom_root())}
         if raw:
             # The view's "Copy as markdown" context action (#3030). Opt-in, so the reader
             # path — which only ever renders the HTML — doesn't carry every doc twice.
@@ -290,10 +306,15 @@ function liveDocsUrl(fromPath, rawPath, anchor){
 function addHeadingIds(){ $reader.querySelectorAll(".md h1,.md h2,.md h3,.md h4,.md h5,.md h6").forEach(h=>{ if(!h.id) h.id=slugify(h.textContent||""); }); }
 function scrollToAnchor(anchor){ if(!anchor){ $reader.scrollTop=0; return; } const a=decodeURIComponent(anchor); const el=document.getElementById(a)||document.getElementById(slugify(a)); if(el)el.scrollIntoView({block:"start"}); else $reader.scrollTop=0; }
 async function fetchDoc(path){ return api("/doc?path="+encodeURIComponent(path)); }
+function localMediaHtml(html){
+  // Keep asset fetches on the selected fleet member, just like the docs API.
+  return html.replace(/<(?:img|video|source|track|a)\b[^>]*>/g, tag=>
+    tag.replace(/(\b(?:src|poster|href)=")\/plugins\/docs\/media\//g, `$1${base}/plugins/docs/media/`));
+}
 function renderDoc(path, d, anchor){
   currentPath=path;
   if(isPhone()) document.body.classList.add("reading");  // swap list → reader on phones
-  $reader.innerHTML='<article class="md">'+d.html+'</article>';
+  $reader.innerHTML='<article class="md">'+localMediaHtml(d.html)+'</article>';
   addHeadingIds();
   [...document.querySelectorAll(".item")].forEach(a=>a.classList.toggle("active", a.dataset.path===path));
   scrollToAnchor(anchor);
@@ -309,6 +330,7 @@ async function openDoc(path){
 $reader.addEventListener("click", async (e)=>{
   const a=e.target.closest("a[href]"); if(!a||!$reader.contains(a)) return;
   const href=a.getAttribute("href")||""; if(!href) return;
+  if(href.startsWith(base+"/plugins/docs/media/")){ e.preventDefault(); window.open(new URL(href, location.href).href,"_blank","noopener,noreferrer"); return; }
   if(href.startsWith("#")){ e.preventDefault(); scrollToAnchor(href.slice(1)); return; }
   if(/^[a-z][\w+.-]*:/i.test(href)||href.startsWith("//")){ e.preventDefault(); window.open(href,"_blank","noopener,noreferrer"); return; }
   e.preventDefault();

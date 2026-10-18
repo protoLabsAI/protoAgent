@@ -63,6 +63,7 @@ _SEEDS: dict[str, str] = {
     "docs/reference": "docs/reference",
     "docs/explanation": "docs/explanation",
     "docs/adr": "docs/adr",
+    "docs/public/media": "docs/public/media",  # reviewed docs assets only
 }
 
 

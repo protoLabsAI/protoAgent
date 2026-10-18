@@ -19,6 +19,22 @@ export default defineConfig({
     "Set up, use, extend, and operate local AI agents with protoAgent.",
   base,
 
+  markdown: {
+    config(md) {
+      // VitePress handles img URLs, but raw video/source/track/download URLs
+      // also need the deployment base. Keep generated media plain HTML so the
+      // offline Markdown reader can serve the same block without Vue.
+      const render = md.renderer.rules.html_block;
+      md.renderer.rules.html_block = (tokens, idx, options, env, self) => {
+        const html = render ? render(tokens, idx, options, env, self) : tokens[idx].content;
+        return html.replace(
+          /\b(src|poster|href)="\/media\/([a-zA-Z0-9_./-]+)"/g,
+          (_, attr, path) => `:${attr}="'${base}media/${path}'"`,
+        );
+      };
+    },
+  },
+
   // Follow the reader's OS colour scheme, same as the marketing site this sits
   // under at agent.protolabs.studio — and give them VitePress's toggle on top.
   // This was "force-dark", which the theme now documents as legacy ("locks to

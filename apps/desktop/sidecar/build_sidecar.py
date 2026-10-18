@@ -106,6 +106,7 @@ BUNDLED_DATA: list[tuple[str, str]] = [
     ("docs/reference", "docs/reference"),
     ("docs/explanation", "docs/explanation"),
     ("docs/adr", "docs/adr"),
+    ("docs/public/media", "docs/public/media"),
 ]
 
 # Packages PyInstaller's static analysis under-collects (dynamic imports +

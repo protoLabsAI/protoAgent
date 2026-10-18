@@ -112,6 +112,10 @@ Valid 32-hex trace IDs join the caller's trace; valid 16-hex span IDs select its
 parent span. Invalid trace IDs start fresh traces; invalid span IDs are ignored.
 The caller IDs are also recorded as metadata for correlation.
 
+<!-- docs-media: trace-correlation -->
+
+<!-- /docs-media -->
+
 ### If Langfuse isn't configured
 
 The agent continues without external traces. Authenticated

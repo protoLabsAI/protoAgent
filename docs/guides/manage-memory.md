@@ -25,6 +25,10 @@ This records automatic memory delivery. Tool calls can retrieve more material
 afterward; inspect the turn's tool cards for those reads. An old injection
 record may refer to an entry you have since deleted.
 
+<!-- docs-media: memory-inspector -->
+
+<!-- /docs-media -->
+
 ## Correct or remove a memory {#correct-a-memory}
 
 For a standing preference, open **Memory → Hot memory**, choose the pencil

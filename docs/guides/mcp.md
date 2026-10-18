@@ -25,6 +25,10 @@ For filesystem access, prefer the built-in
 For `npx` servers on desktop, install Node from the missing-runtime card when
 prompted, or use the [coding-agent runtime guidance](/guides/coding-agents).
 
+<!-- docs-media: mcp-connect-test -->
+
+<!-- /docs-media -->
+
 ## Fix a connection or failed call
 
 - **Command missing:** check its installation and the server process’s PATH;

@@ -21,6 +21,10 @@ Press **⌘⇧K** / **Ctrl-Shift-K** for the
 surface or Settings section. In a [fleet](/guides/fleet), switch agents or open
 separate windows to work with more than one at once.
 
+<!-- docs-media: app-layout -->
+
+<!-- /docs-media -->
+
 ## Chat
 
 1. Use **+** in the chat tab bar to start a conversation. Write a message and send it.

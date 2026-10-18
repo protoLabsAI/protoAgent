@@ -45,6 +45,10 @@ a host API it wasn't handed a token for. The
 The asymmetry is intentional: your *backend* is trusted because it must be, your *frontend* is
 sandboxed because it needn't be.
 
+<!-- docs-media: plugin-boundaries -->
+
+<!-- /docs-media -->
+
 ## The load lifecycle
 
 Understanding when your code runs explains most "why didn't that take effect" questions.

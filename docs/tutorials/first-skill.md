@@ -44,6 +44,10 @@ decide whether to load the full procedure. State when the skill is useful.
 
 :::
 
+<!-- docs-media: skill-create-run -->
+
+<!-- /docs-media -->
+
 ## 2. Load it
 
 Confirm `tldr` appears in **Settings → Skills**. App-created skills are already

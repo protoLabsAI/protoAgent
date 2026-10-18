@@ -393,6 +393,10 @@ label before concluding the loop is stuck.
   `reference`, `explanation`, `adr`).
 - Validate with `npm run docs:build`, the docs-related tests, and generated-doc
   checks. Change generated reference prose at its source, then regenerate it.
+- Track documentation media in `docs/dev/media/registry.json`; follow
+  [the media workflow](docs/dev/media/README.md). Run `python scripts/docs_media.py`
+  after changing records or slots; `--check` verifies generated content. Review
+  affected visuals with `--changed-since origin/main` when changing their UI.
 - Keep one owner for each procedure or contract; link to it from other guides.
   Mark completed plans and handoffs as historical. Record ADR implementation status
   separately from decision status; shipped code alone does not imply acceptance.
