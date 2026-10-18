@@ -25,13 +25,13 @@ const subscribePopup = `https://buttondown.com/${BUTTONDOWN_USER}`;
 const macRequirements = [
   'Apple Silicon (M1 or later)',
   'macOS 13 Ventura or newer',
-  'A model gateway — connect an OpenAI-compatible endpoint or key in setup',
+  'A supported model subscription, hosted API connection, or local model endpoint',
 ];
 
 const macInstall = [
   'Download the .dmg above.',
   'Open it and drag protoAgent to Applications.',
-  'Launch protoAgent — it starts its own bundled server. No Python, Node, or runtime is fetched at first launch; the installed app is about 100 MB, all in.',
+  'Launch protoAgent — its server and console are bundled. Python and Node are not required to chat; some optional tools need an additional runtime.',
   'The setup wizard connects your model and you’re live.',
 ];
 
@@ -61,7 +61,7 @@ const linuxInstall = [
 
 <BaseLayout
   title="Download protoAgent"
-  description="Download protoAgent — the lean, A2A-native operator agent for macOS, Windows, and Linux."
+  description="Download protoAgent — the open-source agent workspace for macOS, Windows, and Linux."
 >
   <!-- Detect the OS before paint so the right block is visible with no flash. -->
   <script is:inline>
@@ -259,7 +259,7 @@ const linuxInstall = [
             Over a display without GPU acceleration — a bare <code>Xvfb</code>, some
             container and CI setups, X-forwarding or VNC without DRI3 — WebKitGTK 2.52
             crashes on launch (<a href="https://github.com/protoLabsAI/protoAgent/issues/2866" target="_blank" rel="noopener noreferrer">#2866</a>).
-            Run the server headless there instead: <code>python -m server --ui console</code>.
+            Use the <a href="/docs/guides/headless">server deployment guide</a> for a browser-based or headless setup.
             protoAgent is in public beta and the AppImage updates itself in place; a
             <code>.deb</code> install is apt’s job.
           </div>
@@ -273,7 +273,7 @@ const linuxInstall = [
     <div class="pl-container">
       <p class="pl-eyebrow">Get release announcements</p>
       <p class="pl-section-intro">
-        The desktop app ships for macOS, Windows, and Linux, and updates itself in place.
+        The desktop app ships for macOS, Windows, and Linux. Follow new releases and fixes.
         Leave your email if you’d rather hear about releases than watch the changelog.
       </p>
       <form
@@ -296,11 +296,11 @@ const linuxInstall = [
     <div class="pl-container">
       <p class="pl-eyebrow">Prefer to run it yourself?</p>
       <p class="pl-section-intro">
-        protoAgent is open source — clone
-        <a href={repo} target="_blank" rel="noopener noreferrer">the repo</a> and run the console
-        + server locally (<code>npm ci</code> then <code>python -m server</code>). The
-        <a href="/docs/tutorials/first-agent" target="_blank" rel="noopener noreferrer">first-agent tutorial</a>
-        walks through it. Runs anywhere Python does — macOS, Linux, or Windows.
+        With uv installed, run <code>uvx --from protolabs-agent protoagent serve</code>
+        and open <code>http://localhost:7870</code>. Keep the terminal running.
+        The <a href="/docs/tutorials/first-agent">first-agent tutorial</a> covers this package
+        route and the complete source-checkout setup, including the console build.
+        For deployment, authentication, and backups, use the <a href="/docs/guides/headless">operator guide</a>.
       </p>
       <p class="endnote endnote--flush">
         <a href="/changelog">View full release history →</a>
@@ -325,8 +325,8 @@ const linuxInstall = [
     :root[data-os='other'] .dl-os-other {
       display: block;
     }
-    /* No-JS / pre-detection fallback: show the Mac download (the shipping platform). */
-    :root:not([data-os]) .dl-os-mac {
+    /* Without JavaScript, offer every platform rather than assuming macOS. */
+    :root:not([data-os]) .dl-os-other {
       display: block;
     }
   </style>

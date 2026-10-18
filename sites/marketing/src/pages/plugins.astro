@@ -7,7 +7,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import overrides from '../../data/plugins.json';
 
 const topic = 'https://github.com/topics/protoagent-plugin';
-const listFile = 'https://github.com/protoLabsAI/protoAgent/blob/main/sites/marketing/data/plugins.json';
+const listFile = 'https://github.com/protoLabsAI/protoAgent/blob/main/config/plugin-directory.yaml';
 const publishDocs = '/docs/guides/plugin-registry';
 
 // ── The plugin catalog is built automatically at deploy time ──────────────────────────
@@ -161,14 +161,14 @@ const counts = Object.fromEntries(
       <p class="pl-eyebrow">Plugins</p>
       <h1>Extend a running agent</h1>
       <p class="pl-lead">
-        Drop-in packages that extend a running agent without touching core — tools, skills,
-        subagents, workflows, FastAPI routes, console dashboards, managed MCP servers, memory
-        backends, and their own config + secrets.
+        Add tools, reusable skills, integrations, and custom views to your agent.
+        Browse bundled capabilities and external packages, then follow their setup guides.
       </p>
       <p class="meta-note">
-        A plugin is just a repo. Install one with
-        <code>python -m server plugin install &lt;git-url&gt;</code> (pinned in
-        <code>plugins.lock</code>). The first-party ones below ship with protoAgent.
+        Manage plugins in <a href="/docs/guides/plugin-registry">Settings → Plugins</a>.
+        For a packaged CLI install, use <code>protoagent plugin install &lt;git-url&gt;</code>.
+        Bundled plugins already ship with the app; external packages are installed separately.
+        Some need credentials, a runtime, or other setup before their tools can run.
       </p>
     </div>
   </section>

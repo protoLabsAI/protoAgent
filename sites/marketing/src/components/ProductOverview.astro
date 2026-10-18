@@ -1,0 +1,16 @@
+---
+// A conceptual map, not a screenshot or a claim about an unverified deployment.
+const parts = [
+  { label: 'Your workspace', detail: 'Chat, files, and useful context', href: '/docs/guides/use-protoagent' },
+  { label: 'Your model connections', detail: 'Local endpoints or hosted providers', href: '/docs/guides/model-connections' },
+  { label: 'Tools for the task', detail: 'Skills, plugins, and MCP', href: '/docs/guides/use-protoagent#tools-and-integrations' },
+  { label: 'Work that continues', detail: 'Goals, schedules, and workflows', href: '/docs/guides/automate-work' },
+];
+---
+<figure class="product-map" aria-labelledby="product-map-caption">
+  <div class="product-map__center"><strong>protoAgent</strong><span>Desktop · browser · headless server</span></div>
+  <div class="product-map__parts">
+    {parts.map((part) => <a href={part.href}><strong>{part.label}</strong><span>{part.detail}</span></a>)}
+  </div>
+  <figcaption id="product-map-caption">One agent connects your work, models, and tools. Add more agents when you need separate roles or environments.</figcaption>
+</figure>

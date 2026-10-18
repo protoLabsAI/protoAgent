@@ -4,8 +4,10 @@
     "items": [
       {
         "title": "Remote device improvements",
-        "detail": "a first-class phone and tablet experience: the mobile console, pairing a device with a code, and reaching your agent from anywhere without fiddling with tokens.",
-        "refs": []
+        "detail": "build on existing QR pairing with typed device codes, clearer device identity, easier private-network access, and tablet layout improvements.",
+        "refs": [
+          "#4336"
+        ]
       },
       {
         "title": "Settings, reorganized",
@@ -32,6 +34,18 @@
   {
     "status": "Shipped",
     "items": [
+      {
+        "title": "Phone access and device pairing",
+        "detail": "connect a phone browser to a reachable agent over LAN or a private network, pair with a QR code, and manage paired devices. Offline access and the next device-polish work remain planned.",
+        "refs": []
+      },
+      {
+        "title": "App-first documentation",
+        "detail": "task paths for setup, everyday use, automation, building, and operation, with commands and UI instructions checked against current source.",
+        "refs": [
+          "#4329"
+        ]
+      },
       {
         "title": "Trajectory reference log and read API",
         "detail": "recorded message identities/hashes, paged events, per-call reconstruction with explicit missing-content status, and the /trajectory command. Search, full-text capture and derived-view compaction are deferred.",
