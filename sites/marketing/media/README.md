@@ -21,6 +21,6 @@ and Playwright Chromium required). Check the output before committing it. This i
 an authored brand graphic, not a product screenshot.
 
 Approved marketing placements use `src/components/ProductMedia.astro` and the
-registry asset paths. Replace a revision centrally; keep full-size image links,
+registry asset paths. Replace a revision centrally; keep the on-page image zoom,
 video controls, poster, and text walkthrough available. The first production
 package and capture evidence are in [sources/2026-10-18](sources/2026-10-18/README.md).

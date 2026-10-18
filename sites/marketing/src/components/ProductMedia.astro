@@ -13,13 +13,67 @@ const visible = media.status === 'ready' || media.status === 'refresh-needed';
       <a href={media.asset}>Open the screen recording</a>
     </video>
     <p class="media-links"><a href={media.asset}>Open video at full size</a> · <a href={clip.transcript}>Read the text walkthrough</a></p>
-  </> : <a href={media.asset} aria-label={`Open full-size image: ${media.alt}`}>
-    <img src={media.asset} alt={media.alt} width={media.width} height={media.height} loading="lazy" decoding="async" />
-  </a>}
+  </> : <div data-image-zoom>
+    <button class="image-zoom__open" type="button" aria-haspopup="dialog" aria-controls={`${id}-zoom`} aria-label={`Enlarge image: ${media.alt}`}>
+      <img src={media.asset} alt={media.alt} width={media.width} height={media.height} loading="lazy" decoding="async" />
+    </button>
+    <dialog id={`${id}-zoom`} class="image-zoom" aria-label="Enlarged screenshot" aria-describedby={`${id}-zoom-caption`}>
+      <div class="image-zoom__toolbar">
+        <button type="button" data-zoom-size aria-pressed="false">Actual size</button>
+        <button type="button" data-zoom-close autofocus aria-label="Close enlarged screenshot">Close</button>
+      </div>
+      <div class="image-zoom__viewport">
+        <img src={media.asset} alt={media.alt} width={media.width} height={media.height} loading="lazy" decoding="async" />
+      </div>
+      <p id={`${id}-zoom-caption`}>{media.caption}</p>
+    </dialog>
+  </div>}
   <figcaption id={`${id}-caption`}>{media.caption}</figcaption>
 </figure>}
+<script>
+  document.querySelectorAll<HTMLElement>('[data-image-zoom]').forEach((container) => {
+    const opener = container.querySelector<HTMLButtonElement>('.image-zoom__open')!;
+    const dialog = container.querySelector<HTMLDialogElement>('dialog')!;
+    const size = container.querySelector<HTMLButtonElement>('[data-zoom-size]')!;
+    const viewport = container.querySelector<HTMLElement>('.image-zoom__viewport')!;
+    let previousOverflow = '';
+    opener.addEventListener('click', () => {
+      previousOverflow = document.body.style.overflow;
+      dialog.showModal();
+      document.body.style.overflow = 'hidden';
+    });
+    container.querySelector('[data-zoom-close]')!.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', (event) => {
+      const rect = dialog.getBoundingClientRect();
+      if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) dialog.close();
+    });
+    size.addEventListener('click', () => {
+      const actualSize = viewport.classList.toggle('image-zoom__viewport--actual');
+      size.setAttribute('aria-pressed', String(actualSize));
+      size.textContent = actualSize ? 'Fit to screen' : 'Actual size';
+      viewport.scrollTo(0, 0);
+    });
+    dialog.addEventListener('close', () => {
+      document.body.style.overflow = previousOverflow;
+      viewport.classList.remove('image-zoom__viewport--actual');
+      viewport.scrollTo(0, 0);
+      size.setAttribute('aria-pressed', 'false');
+      size.textContent = 'Actual size';
+      opener.focus({ preventScroll: true });
+    });
+  });
+</script>
 <style>
   .product-media { margin: 2rem 0; }
   .product-media img, .product-media video { display: block; width: 100%; height: auto; border-radius: 0.75rem; }
   .product-media figcaption, .media-links { margin: 0.75rem 0 0; font-size: 0.95rem; line-height: 1.6; }
+  .image-zoom__open { display: block; width: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; border-radius: 0.75rem; }
+  .image-zoom { width: calc(100vw - 2rem); max-width: calc(100vw - 2rem); max-height: calc(100dvh - 2rem); padding: 1rem; border: 0; border-radius: 0.75rem; background: var(--pl-color-bg); color: var(--pl-color-fg); }
+  .image-zoom::backdrop { background: rgb(0 0 0 / 80%); }
+  .image-zoom__toolbar { display: flex; justify-content: flex-end; gap: 0.75rem; margin-bottom: 1rem; }
+  .image-zoom__toolbar button { min-height: 44px; padding: 0.5rem 1rem; border: 1px solid var(--pl-color-border-strong); border-radius: 0.375rem; background: var(--pl-color-bg-raised); color: var(--pl-color-fg); cursor: pointer; }
+  .image-zoom__viewport { overflow: auto; max-height: calc(100dvh - 12rem); }
+  .image-zoom__viewport img { width: auto; max-width: 100%; max-height: calc(100dvh - 12rem); margin: auto; border-radius: 0; }
+  .image-zoom__viewport--actual img { max-width: none; max-height: none; margin: 0; }
+  .image-zoom p { margin: 1rem 0 0; font-size: 0.95rem; line-height: 1.5; }
 </style>
