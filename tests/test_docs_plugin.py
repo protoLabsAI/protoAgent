@@ -179,6 +179,9 @@ def test_generated_navigation_and_landings_are_in_sync() -> None:
     assert spec and spec.loader
     spec.loader.exec_module(gen)
     committed = json.loads(Path("plugins/docs/nav.json").read_text(encoding="utf-8"))
+    assert gen.route("index.md") == "/"
+    assert gen.route("guides/index.md") == "/guides/"
+    assert gen.route("guides/reindex.md") == "/guides/reindex"
     assert gen.build_nav() == committed
     for path, expected in gen.build_outputs().items():
         assert path.read_text(encoding="utf-8") == expected, f"{path} is stale — run scripts/gen_docs_nav.py"

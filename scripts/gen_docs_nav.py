@@ -46,7 +46,7 @@ def load_catalog() -> dict:
 
 
 def route(path: str) -> str:
-    return "/" + (path[:-8] if path.endswith("index.md") else path[:-3])
+    return "/" + (path[:-8] if (path == "index.md" or path.endswith("/index.md")) else path[:-3])
 
 
 def build_nav(catalog: dict | None = None) -> dict:
