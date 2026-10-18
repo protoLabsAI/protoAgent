@@ -65,11 +65,12 @@ card has an editable HTML source and Playwright renderer. See the
 
 Local validation (2026-10-18): Astro check (0 errors, one existing navigator.platform
 hint), Astro build (7 routes), VitePress build at `/docs/`, generated navigation/API/
-plugin-directory/roadmap checks. Combined output: 13,743 local links/assets across
+plugin-directory/roadmap checks. Combined output: 13,748 local links/assets across
 255 pages, no missing files/fragments or duplicate IDs. Playwright Chromium checked
 all seven marketing routes in desktop light/dark and 390px mobile layouts: no
 horizontal overflow or JavaScript errors; keyboard skip link, mobile navigation,
 plugin search, canonical URLs, and no-JS platform choices passed. Social graphic
-and desktop/mobile homepage captures visually inspected. Python gate and current-head
-PR review pending; record deployment revision here after merge. Site validation does not prove a model-backed
+and desktop/mobile homepage captures visually inspected. Full Python gate: 14,069 passed / 44 skipped; all five checks passed. Integrated
+main through `f44fde54`, preserving the concurrent roadmap refresh, then reran lint,
+site builds and browser/link checks. Current-head PR review and deployment pending. Site validation does not prove a model-backed
 product journey or native desktop playback. Actual captures remain separate production work.
