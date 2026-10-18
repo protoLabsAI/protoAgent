@@ -939,8 +939,11 @@ def _main():
 
             # Stop a still-running autostart BEFORE the sweep. start() checks this under
             # the fleet.json lock that shutdown_all also takes, so every member autostart
-            # spawned is recorded for the sweep and none spawns after it.
+            # spawned is recorded for the sweep and none spawns after it. Cancelling the task
+            # only ends its await; the worker thread still sees the stop and returns.
             _FLEET_BOOT_STOP.set()
+            if _FLEET_BOOT_TASK is not None:
+                _FLEET_BOOT_TASK.cancel()
             stopped = await asyncio.to_thread(_sup.shutdown_all)
             if stopped:
                 log.info("[fleet] spun down %d member(s) on host exit", len(stopped))

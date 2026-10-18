@@ -1294,3 +1294,4 @@ def test_hub_startup_does_not_wait_for_the_fleet():
     assert '"app_loaded"' in _src(boot) and '"app_loaded"' not in _src(startup)
     down = _src(shutdown)
     assert down.index("_FLEET_BOOT_STOP.set()") < down.index("_sup.shutdown_all")
+    assert down.index("_FLEET_BOOT_TASK.cancel()") < down.index("_sup.shutdown_all")
