@@ -295,6 +295,13 @@ plugins:
     tagline: "The skill pack behind the Engineer archetype — onboard a repo (its README, manifest and a code-linked architecture diagram, then a guided tour), then debug one checkpoint per turn: you write the fix, the agent reviews. Prompt-only; off by default."
     adds: [skill]
 
+  - id: technical_writer
+    name: Technical Writer
+    category: Engineering
+    bundled: true
+    tagline: "Code-grounded docs, guides, and tutorials; section audits, reader paths, media planning, and verified delivery. Prompt-only; off by default."
+    adds: [skill]
+
   # Moved in-tree in #3450 from cowork-plugin (now retired; the bundled manifest's
   # `supersedes` retires an installed copy). On by default, like notes/docs/craft.
   - id: cowork
@@ -471,3 +478,7 @@ archetype_repos:
     repo: protoLabsAI/product-archetype
     archetype: null   # not in the starter catalog; fate tracked in the census follow-ups
     tagline: "Product Manager — the PM toolkit (pm) + generative UI (artifact), one install."
+  - id: technical-writer-archetype
+    repo: protoLabsAI/technical-writer-archetype
+    archetype: technical-writer
+    tagline: "Technical Writer — code-grounded documentation, systematic audits, reader paths, media planning, and verified delivery."

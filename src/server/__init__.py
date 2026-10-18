@@ -1425,17 +1425,6 @@ def _main():
             async def _serve_manifest() -> FileResponse:
                 return FileResponse(str(manifest_path), media_type="application/manifest+json")
 
-        sw_path = static_dir / "sw.js"
-        if sw_path.exists():
-
-            @fastapi_app.get("/sw.js", include_in_schema=False)
-            async def _serve_sw() -> FileResponse:
-                return FileResponse(
-                    str(sw_path),
-                    media_type="application/javascript",
-                    headers={"Service-Worker-Allowed": "/"},
-                )
-
         # Root favicon so a bare browser request (the agent's base URL, not just
         # /app) shows the brand mark instead of a 404. Both /favicon.svg and the
         # legacy /favicon.ico path resolve to the SVG mark.

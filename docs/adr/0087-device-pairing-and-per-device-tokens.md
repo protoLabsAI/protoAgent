@@ -65,8 +65,8 @@ The code is:
 - **memory-only** — never written to disk, so a restart invalidates every pending pairing.
   That is the desired behavior, not a limitation.
 
-Claiming mints a *new* device token. The scanner names the device, so the operator sees what
-joined rather than an anonymous entry.
+Claiming mints a *new* device token. The scanning device sends its own name (derived from its
+user agent, e.g. "iPhone"), so the operator sees what joined rather than an anonymous entry.
 
 ### D4 — The claim endpoint is unauthenticated, and that is the sensitive part
 

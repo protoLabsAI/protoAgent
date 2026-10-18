@@ -47,10 +47,78 @@
         ]
       },
       {
+        "title": "Interactive answers",
+        "detail": "tables, charts and artifacts render inline in the transcript, with previews that stream in while the agent writes them.",
+        "refs": [
+          "v0.201.0"
+        ]
+      },
+      {
+        "title": "Real documents in the Artifact panel",
+        "detail": "PDF, Word, slides, spreadsheets, images and video render as themselves, not as text dumps.",
+        "refs": [
+          "v0.191.0",
+          "v0.196.0",
+          "v0.207.0"
+        ]
+      },
+      {
         "title": "Trajectory reference log and read API",
         "detail": "recorded message identities/hashes, paged events, per-call reconstruction with explicit missing-content status, and the /trajectory command. Search, full-text capture and derived-view compaction are deferred.",
         "refs": [
           "#2806"
+        ]
+      },
+      {
+        "title": "Model in-flight limiter",
+        "detail": "per-lane caps on concurrent model calls, with priority classes and queue telemetry.",
+        "refs": [
+          "v0.185.0"
+        ]
+      },
+      {
+        "title": "Pair agents with a code",
+        "detail": "a fleet hub pairs with a remote protoAgent from a one-time code instead of a pasted token.",
+        "refs": [
+          "v0.184.1"
+        ]
+      },
+      {
+        "title": "Use protoAgent from Zed",
+        "detail": "talk to your agent in Zed's Agent Panel over ACP, and file paths in tool results open in your editor.",
+        "refs": [
+          "v0.179.0",
+          "v0.176.0"
+        ]
+      },
+      {
+        "title": "Code pane",
+        "detail": "a read-only file and diff viewer beside chat that follows a delegate's edits live.",
+        "refs": [
+          "v0.178.0",
+          "v0.190.0"
+        ]
+      },
+      {
+        "title": "Theme gallery",
+        "detail": "28 theme families, each with a dark and a light variant.",
+        "refs": [
+          "v0.169.0"
+        ]
+      },
+      {
+        "title": "The fleet deck",
+        "detail": "protoagent fleet talks to, acts on, and manages every fleet member and hub on the box from the terminal.",
+        "refs": [
+          "v0.166.0"
+        ]
+      },
+      {
+        "title": "Delegation ledger",
+        "detail": "a durable record of who handed what work to whom and what it cost, drawn on the org chart.",
+        "refs": [
+          "v0.161.0",
+          "v0.162.0"
         ]
       },
       {

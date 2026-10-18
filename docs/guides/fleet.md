@@ -102,6 +102,21 @@ bundles. Installing a bundle with an `archetype:` block adds its starter type.
 For manifests, catalog overrides, installation, updates, and publishing, see
 [Bundles](./bundles.md) and [ADR 0100](../adr/0100-agent-archetypes.md).
 
+### The Technical Writer archetype
+
+Choose **Technical Writer** to write and maintain documentation for a codebase.
+Supply a local checkout during setup, or give it a repository from chat. Start with
+a task such as “write a first-run tutorial” or “audit the operator guides for stale
+commands and missing recovery steps.”
+
+It grounds claims in code, tracks multi-section work, and uses separate skills for
+writing, audits, navigation, media planning, and verification. Say whether you want
+findings only, implemented edits, or delivery through a PR/merge. Repository access,
+command approvals, and hosting credentials still apply. See the
+[skill pack](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/technical_writer)
+for examples and the [bundle](https://github.com/protoLabsAI/technical-writer-archetype)
+for setup requirements.
+
 ### The Engineer archetype — a navigator, not a solver
 
 Choose **Engineer** for guided repository onboarding and debugging on your machine.

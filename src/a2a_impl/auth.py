@@ -70,7 +70,6 @@ _PUBLIC_PREFIXES = (
     "/.well-known/",
     "/app",
     "/manifest.json",
-    "/sw.js",
     "/favicon.svg",
     "/favicon.ico",
     "/static/",

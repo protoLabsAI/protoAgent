@@ -22,8 +22,16 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 - **Phone access and device pairing** — connect a phone browser to a reachable agent over LAN or a private network, pair with a QR code, and manage paired devices. Offline access and the next device-polish work remain planned.
 - **App-first documentation** — task paths for setup, everyday use, automation, building, and operation, with commands and UI instructions checked against current source. (#4329)
 
+- **Interactive answers** — tables, charts and artifacts render inline in the transcript, with previews that stream in while the agent writes them. (v0.201.0)
+- **Real documents in the Artifact panel** — PDF, Word, slides, spreadsheets, images and video render as themselves, not as text dumps. (v0.191.0, v0.196.0, v0.207.0)
 - **Trajectory reference log and read API** — recorded message identities/hashes, paged events, per-call reconstruction with explicit missing-content status, and the `/trajectory` command. Search, full-text capture and derived-view compaction are deferred. (#2806)
-
+- **Model in-flight limiter** — per-lane caps on concurrent model calls, with priority classes and queue telemetry. (v0.185.0)
+- **Pair agents with a code** — a fleet hub pairs with a remote protoAgent from a one-time code instead of a pasted token. (v0.184.1)
+- **Use protoAgent from Zed** — talk to your agent in Zed's Agent Panel over ACP, and file paths in tool results open in your editor. (v0.179.0, v0.176.0)
+- **Code pane** — a read-only file and diff viewer beside chat that follows a delegate's edits live. (v0.178.0, v0.190.0)
+- **Theme gallery** — 28 theme families, each with a dark and a light variant. (v0.169.0)
+- **The fleet deck** — `protoagent fleet` talks to, acts on, and manages every fleet member and hub on the box from the terminal. (v0.166.0)
+- **Delegation ledger** — a durable record of who handed what work to whom and what it cost, drawn on the org chart. (v0.161.0, v0.162.0)
 - **Federation token follow-ups** — management UI, peer rotation, and fleet integration for ADR 0066 tokens. (v0.160.0)
 - **Multi-window desktop chat** — "Open in New Window" spawns a real second desktop window with its own chat surface. (v0.117.0)
 - **Plugin Python deps in the desktop app** — opt-in install of a plugin's requires_pip packages inside the frozen desktop build: pure-Python wheels onto the host path, or into the managed Python runtime that also gives the desktop app a working execute_code. (v0.108.0)

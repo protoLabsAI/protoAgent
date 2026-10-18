@@ -126,7 +126,6 @@ _ALL_ROUTES = [
         "/app",
         "/app/settings",
         "/manifest.json",
-        "/sw.js",
         "/favicon.svg",
         "/favicon.ico",
         "/plugins/example/status",
@@ -797,7 +796,6 @@ def test_public_paths_stay_public_when_token_set(monkeypatch):
     assert c.get("/app").status_code == 200
     assert c.get("/app/settings").status_code == 200
     assert c.get("/manifest.json").status_code == 200
-    assert c.get("/sw.js").status_code == 200
     assert c.get("/favicon.svg").status_code == 200
     assert c.get("/favicon.ico").status_code == 200
 
@@ -1001,7 +999,6 @@ def test_requires_operator_classification(path, operator):
         ("/app", True),
         ("/app/settings/auth", True),
         ("/manifest.json", True),
-        ("/sw.js", True),
         ("/favicon.svg", True),
         ("/favicon.ico", True),
         ("/static/js/main.js", True),
