@@ -197,13 +197,18 @@
   setTimeout(start, 1500);
 
   /** The Fleet scope only means anything on a hub with members, so ask once and reveal the
-   *  toggle only if there is a fleet to roll up. A dead tab is worse than no tab. */
+   *  toggle only if there is a fleet to roll up. A dead tab is worse than no tab. Asks the
+   *  roster, not the rollup: the rollup fans out to every member, and runs only when the
+   *  operator actually picks Fleet. */
+  let fleetChecked = false;
   async function revealFleetToggleIfHub() {
+    if (fleetChecked) return;
+    fleetChecked = true;
     try {
-      const res = await kit.apiFetch("/api/plugins/friction/fleet");
+      const res = await kit.apiFetch("/api/plugins/friction/fleet/roster");
       if (!res.ok) return;
       const data = await res.json();
-      if (data.is_hub && ((data.members || []).length || (data.unreachable || []).length)) {
+      if (data.is_hub && (data.members || []).length) {
         document.getElementById("scope-tabs").hidden = false;
       }
     } catch { /* not a hub, or the roster is unavailable — leave it hidden */ }

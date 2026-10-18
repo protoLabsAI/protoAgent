@@ -1133,6 +1133,39 @@ def test_the_fleet_route_is_ttl_cached(monkeypatch, tmp_path):
     assert len(calls) == 2
 
 
+def test_the_fleet_roster_answers_without_contacting_a_member(monkeypatch, tmp_path):
+    """Opening the log only needs to know whether to show the Fleet tab. Asking the
+    rollup for that fanned out to every member's ledger on open and on every live reload."""
+    from plugins import friction
+
+    client = _client(monkeypatch, tmp_path)
+
+    async def _no_rollup(**_kw):
+        raise AssertionError("the roster must not fan out to members")
+
+    monkeypatch.setattr(friction, "fleet_rollup", _no_rollup)
+    monkeypatch.setattr("graph.fleet.supervisor.list_remotes",
+                        lambda: [{"name": "vera", "url": "http://127.0.0.1:9"}, {"name": "no-url"}])
+    assert client.get("/api/friction/fleet/roster").json() == {"is_hub": True, "members": ["vera"]}
+
+    monkeypatch.setattr("graph.fleet.supervisor.list_remotes", lambda: [])
+    assert client.get("/api/friction/fleet/roster").json() == {"is_hub": False, "members": []}
+
+
+def test_the_view_reveals_the_fleet_tab_from_the_roster_once(monkeypatch):
+    from pathlib import Path as _P
+
+    from plugins import friction
+
+    page = (_P(friction.__file__).parent / "view.html").read_text(encoding="utf-8")
+    body = page[page.index("async function revealFleetToggleIfHub"):]
+    body = body[: body.index("\n  }\n") + 4]
+
+    assert '"/api/plugins/friction/fleet/roster"' in body
+    assert '"/api/plugins/friction/fleet"' not in body
+    assert "if (fleetChecked) return;" in body
+
+
 def test_the_view_hides_fleet_until_it_knows_it_is_a_hub_and_cannot_resolve_there(monkeypatch):
     from pathlib import Path as _P
 
