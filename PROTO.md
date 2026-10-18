@@ -381,8 +381,10 @@ label before concluding the loop is stuck.
 - Check commands, UI labels, config paths, and defaults against source. Source
   checkouts need a frontend build and use `uv run python -m server`; packaged
   installs use `protoagent`.
-- After sidebar edits, run `python scripts/gen_docs_nav.py` so in-app help matches
-  the site. Keep primary task pages in the corpus sections (`tutorials`, `guides`,
+- Edit `plugins/docs/catalog.json` for task navigation and page classification, then
+  run `python scripts/gen_docs_nav.py` to update website navigation, landing pages,
+  and in-app help together. Do not edit generated listings directly.
+  Keep primary task pages in the corpus sections (`tutorials`, `guides`,
   `reference`, `explanation`, `adr`).
 - Validate with `npm run docs:build`, the docs-related tests, and generated-doc
   checks. Change generated reference prose at its source, then regenerate it.

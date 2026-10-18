@@ -1,1031 +1,649 @@
 {
-  "tutorials": [
+  "version": 2,
+  "sections": [
     {
-      "label": "Getting started",
-      "items": [
+      "id": "start",
+      "label": "Get started",
+      "groups": [
         {
-          "path": "tutorials/first-agent.md",
-          "title": "Set up your first agent"
+          "label": "Start here",
+          "items": [
+            {
+              "path": "guides/get-started.md",
+              "title": "Get started"
+            }
+          ]
+        },
+        {
+          "label": "Install and connect",
+          "items": [
+            {
+              "path": "tutorials/first-agent.md",
+              "title": "Set up your first agent"
+            }
+          ]
+        },
+        {
+          "label": "Platform help",
+          "items": [
+            {
+              "path": "guides/windows-desktop.md",
+              "title": "Windows desktop app (install & recovery)"
+            }
+          ]
         }
       ]
     },
     {
-      "label": "Skills, subagents & workflows",
-      "items": [
+      "id": "use",
+      "label": "Use protoAgent",
+      "groups": [
         {
-          "path": "tutorials/first-skill.md",
-          "title": "Write your first skill"
+          "label": "Start here",
+          "items": [
+            {
+              "path": "guides/use-protoagent.md",
+              "title": "Use protoAgent"
+            }
+          ]
+        },
+        {
+          "label": "Chat and models",
+          "items": [
+            {
+              "path": "guides/react-tauri-ui.md",
+              "title": "Use the app"
+            },
+            {
+              "path": "guides/model-connections.md",
+              "title": "Connect and change models"
+            },
+            {
+              "path": "guides/command-palette.md",
+              "title": "Command palette (⌘⇧K)"
+            }
+          ]
+        },
+        {
+          "label": "Files and memory",
+          "items": [
+            {
+              "path": "guides/documents-and-files.md",
+              "title": "Work with files and documents"
+            },
+            {
+              "path": "guides/python-runtime.md",
+              "title": "Enable document creation (desktop)"
+            },
+            {
+              "path": "guides/manage-memory.md",
+              "title": "Inspect and manage memory"
+            },
+            {
+              "path": "guides/ingestion.md",
+              "title": "Ingest documents & media"
+            },
+            {
+              "path": "guides/knowledge.md",
+              "title": "Tune knowledge recall"
+            }
+          ]
+        },
+        {
+          "label": "Tools and integrations",
+          "items": [
+            {
+              "path": "guides/plugin-registry.md",
+              "title": "Install and manage plugins"
+            },
+            {
+              "path": "guides/mcp.md",
+              "title": "Connect MCP servers"
+            },
+            {
+              "path": "guides/discord.md",
+              "title": "Discord surface"
+            },
+            {
+              "path": "guides/browser-automation.md",
+              "title": "Browser automation"
+            }
+          ]
+        },
+        {
+          "label": "Devices and data",
+          "items": [
+            {
+              "path": "guides/phone-access.md",
+              "title": "Access from your phone (LAN / Tailscale)"
+            },
+            {
+              "path": "guides/pairing.md",
+              "title": "Pair devices & agents"
+            },
+            {
+              "path": "guides/agent-snapshots.md",
+              "title": "Export or copy an agent"
+            },
+            {
+              "path": "guides/backup-and-restore.md",
+              "title": "Back up and restore data"
+            }
+          ]
+        },
+        {
+          "label": "Get help",
+          "items": [
+            {
+              "path": "guides/troubleshooting.md",
+              "title": "Fix a problem in the app"
+            },
+            {
+              "path": "guides/file-github-issues.md",
+              "title": "File GitHub issues (/issue)"
+            },
+            {
+              "path": "guides/friction-log.md",
+              "title": "Review reported problems"
+            }
+          ]
+        },
+        {
+          "label": "Understand your agent",
+          "items": [
+            {
+              "path": "explanation/steering.md",
+              "title": "Mid-turn steering"
+            },
+            {
+              "path": "explanation/memory-and-knowledge.md",
+              "title": "Memory & knowledge store"
+            }
+          ]
         }
       ]
     },
     {
-      "label": "Tools, MCP & plugins",
-      "items": [
+      "id": "automate",
+      "label": "Automate work",
+      "groups": [
         {
-          "path": "tutorials/first-tool.md",
-          "title": "Write your first tool"
+          "label": "Start here",
+          "items": [
+            {
+              "path": "guides/automate-work.md",
+              "title": "Automate work"
+            }
+          ]
         },
         {
-          "path": "tutorials/first-plugin.md",
-          "title": "Build your first plugin"
+          "label": "Learn with an example",
+          "items": [
+            {
+              "path": "tutorials/first-skill.md",
+              "title": "Write your first skill"
+            },
+            {
+              "path": "tutorials/two-agents-over-a2a.md",
+              "title": "Two agents over A2A"
+            }
+          ]
+        },
+        {
+          "label": "Skills and scheduled work",
+          "items": [
+            {
+              "path": "guides/skills.md",
+              "title": "Skills (SKILL.md)"
+            },
+            {
+              "path": "guides/scheduler.md",
+              "title": "Schedule future work"
+            },
+            {
+              "path": "guides/watches.md",
+              "title": "Watches"
+            },
+            {
+              "path": "guides/goal-mode.md",
+              "title": "Goal mode"
+            },
+            {
+              "path": "guides/lifecycle-events.md",
+              "title": "System lifecycle events"
+            }
+          ]
+        },
+        {
+          "label": "Delegation and workflows",
+          "items": [
+            {
+              "path": "guides/delegates.md",
+              "title": "Delegates (agents & endpoints)"
+            },
+            {
+              "path": "guides/coding-agents.md",
+              "title": "Delegate coding work"
+            },
+            {
+              "path": "guides/rooms.md",
+              "title": "Talk to delegates in a room"
+            },
+            {
+              "path": "guides/subagents.md",
+              "title": "Configure subagents"
+            },
+            {
+              "path": "guides/workflows.md",
+              "title": "Reusable workflows"
+            },
+            {
+              "path": "guides/coder.md",
+              "title": "Verify coding outcomes"
+            }
+          ]
+        },
+        {
+          "label": "Coordinate projects",
+          "items": [
+            {
+              "path": "guides/portfolio.md",
+              "title": "Coordinate project boards"
+            },
+            {
+              "path": "guides/build-with-a-coding-agent.md",
+              "title": "Build with a coding agent"
+            }
+          ]
+        },
+        {
+          "label": "Understand collaboration",
+          "items": [
+            {
+              "path": "explanation/rooms.md",
+              "title": "How rooms work"
+            },
+            {
+              "path": "explanation/a2a-protocol.md",
+              "title": "A2A protocol"
+            }
+          ]
         }
       ]
     },
     {
-      "label": "A2A, fleet & delegates",
-      "items": [
+      "id": "build",
+      "label": "Build & extend",
+      "groups": [
         {
-          "path": "tutorials/two-agents-over-a2a.md",
-          "title": "Two agents over A2A"
-        }
-      ]
-    }
-  ],
-  "guides": [
-    {
-      "label": "Getting started",
-      "items": [
-        {
-          "path": "guides/react-tauri-ui.md",
-          "title": "Use the app"
+          "label": "Start here",
+          "items": [
+            {
+              "path": "guides/extend.md",
+              "title": "Build & extend"
+            }
+          ]
         },
         {
-          "path": "guides/model-connections.md",
-          "title": "Connect and change models"
+          "label": "Build your first extension",
+          "items": [
+            {
+              "path": "tutorials/first-plugin.md",
+              "title": "Build your first plugin"
+            },
+            {
+              "path": "tutorials/first-tool.md",
+              "title": "Write your first tool"
+            }
+          ]
         },
         {
-          "path": "guides/documents-and-files.md",
-          "title": "Work with files and documents"
+          "label": "Build and publish plugins",
+          "items": [
+            {
+              "path": "guides/plugins.md",
+              "title": "Build plugins"
+            },
+            {
+              "path": "guides/build-a-plugin-view.md",
+              "title": "Build a plugin view"
+            },
+            {
+              "path": "guides/building-react-plugin-views.md",
+              "title": "Plugin view integration"
+            },
+            {
+              "path": "guides/communication-plugins.md",
+              "title": "Build a communication plugin"
+            },
+            {
+              "path": "guides/publish-a-plugin.md",
+              "title": "Publish a plugin"
+            },
+            {
+              "path": "guides/bundles.md",
+              "title": "Bundles (plugin sets)"
+            },
+            {
+              "path": "guides/middleware.md",
+              "title": "Middleware"
+            },
+            {
+              "path": "guides/add-a-skill.md",
+              "title": "Advertise a capability (A2A card)"
+            }
+          ]
         },
         {
-          "path": "guides/python-runtime.md",
-          "title": "Enable document creation"
+          "label": "Develop the app or a fork",
+          "items": [
+            {
+              "path": "guides/build-console.md",
+              "title": "Build and test the console"
+            },
+            {
+              "path": "guides/developer-flags.md",
+              "title": "Control preview features"
+            },
+            {
+              "path": "guides/fork-the-template.md",
+              "title": "Fork the template (fast path)"
+            },
+            {
+              "path": "guides/customize-and-deploy.md",
+              "title": "Customize & deploy"
+            },
+            {
+              "path": "guides/operator-fork.md",
+              "title": "Build an operator fork (Roxy)"
+            },
+            {
+              "path": "guides/upstream-sync.md",
+              "title": "Sync a fork from upstream"
+            },
+            {
+              "path": "guides/evals.md",
+              "title": "Eval your fork"
+            },
+            {
+              "path": "guides/releasing.md",
+              "title": "Releasing"
+            }
+          ]
         },
         {
-          "path": "guides/plugin-registry.md",
-          "title": "Install and manage plugins"
-        },
-        {
-          "path": "guides/backup-and-restore.md",
-          "title": "Back up and restore data"
-        },
-        {
-          "path": "guides/troubleshooting.md",
-          "title": "Fix a problem in the app"
-        },
-        {
-          "path": "guides/agent-snapshots.md",
-          "title": "Export or copy an agent"
-        }
-      ]
-    },
-    {
-      "label": "Agent core & runtime",
-      "items": [
-        {
-          "path": "guides/goal-mode.md",
-          "title": "Goal mode"
-        },
-        {
-          "path": "guides/watches.md",
-          "title": "Watches"
-        },
-        {
-          "path": "guides/lifecycle-events.md",
-          "title": "System lifecycle events"
-        },
-        {
-          "path": "guides/file-github-issues.md",
-          "title": "File GitHub issues (/issue)"
-        },
-        {
-          "path": "guides/friction-log.md",
-          "title": "Friction log (triage the agent's rough edges)"
-        },
-        {
-          "path": "guides/scheduler.md",
-          "title": "Schedule future work"
-        },
-        {
-          "path": "guides/middleware.md",
-          "title": "Middleware"
-        },
-        {
-          "path": "guides/acp-runtime.md",
-          "title": "Run on a coding agent (ACP runtime)"
-        }
-      ]
-    },
-    {
-      "label": "Skills, subagents & workflows",
-      "items": [
-        {
-          "path": "guides/skills.md",
-          "title": "Skills (SKILL.md)"
-        },
-        {
-          "path": "guides/add-a-skill.md",
-          "title": "Advertise a capability (A2A card)"
-        },
-        {
-          "path": "guides/subagents.md",
-          "title": "Configure subagents"
-        },
-        {
-          "path": "guides/workflows.md",
-          "title": "Reusable workflows"
-        }
-      ]
-    },
-    {
-      "label": "Knowledge & memory",
-      "items": [
-        {
-          "path": "guides/manage-memory.md",
-          "title": "Inspect and manage memory"
-        },
-        {
-          "path": "guides/ingestion.md",
-          "title": "Ingest documents & media"
-        },
-        {
-          "path": "guides/knowledge.md",
-          "title": "Tune knowledge recall"
-        }
-      ]
-    },
-    {
-      "label": "A2A, fleet & delegates",
-      "items": [
-        {
-          "path": "guides/delegates.md",
-          "title": "Delegates (agents & endpoints)"
-        },
-        {
-          "path": "guides/rooms.md",
-          "title": "Talk to delegates in a room"
-        },
-        {
-          "path": "guides/coding-agents.md",
-          "title": "Spawn CLI coding agents (ACP)"
-        },
-        {
-          "path": "guides/coder.md",
-          "title": "Verifier-grounded coder (coder_solve)"
-        },
-        {
-          "path": "guides/fleet.md",
-          "title": "Fleet (many agents on one host)"
-        },
-        {
-          "path": "guides/fleet-deck.md",
-          "title": "The fleet deck (the fleet in a terminal)"
-        },
-        {
-          "path": "guides/pairing.md",
-          "title": "Pair devices & agents"
-        },
-        {
-          "path": "guides/portfolio.md",
-          "title": "Portfolio (one PM across boards)"
-        },
-        {
-          "path": "guides/build-with-a-coding-agent.md",
-          "title": "Build out your agent with a coding agent"
+          "label": "Architecture and contracts",
+          "items": [
+            {
+              "path": "explanation/plugin-architecture.md",
+              "title": "Plugin architecture"
+            },
+            {
+              "path": "explanation/architecture.md",
+              "title": "Architecture"
+            },
+            {
+              "path": "explanation/prompt-contracts.md",
+              "title": "Prompt contracts"
+            },
+            {
+              "path": "explanation/output-protocol.md",
+              "title": "Output protocol"
+            }
+          ]
         }
       ]
     },
     {
-      "label": "Tools, MCP & plugins",
-      "items": [
+      "id": "operate",
+      "label": "Deploy & operate",
+      "groups": [
         {
-          "path": "guides/extend.md",
-          "title": "Extend protoAgent (start here)"
+          "label": "Start here",
+          "items": [
+            {
+              "path": "guides/deploy-and-operate.md",
+              "title": "Deploy & operate"
+            }
+          ]
         },
         {
-          "path": "guides/mcp.md",
-          "title": "Connect MCP servers"
+          "label": "Run a service",
+          "items": [
+            {
+              "path": "guides/cli.md",
+              "title": "Use the command line"
+            },
+            {
+              "path": "guides/headless.md",
+              "title": "Run headless (API + A2A)"
+            },
+            {
+              "path": "guides/deploy-docker.md",
+              "title": "Deploy in Docker (seed + UI override)"
+            },
+            {
+              "path": "guides/deploy-proxmox.md",
+              "title": "Deploy on Proxmox (reusable LXC template)"
+            },
+            {
+              "path": "guides/deploy.md",
+              "title": "Publish images to GHCR"
+            }
+          ]
         },
         {
-          "path": "guides/plugins.md",
-          "title": "Build plugins"
+          "label": "Manage agents and fleets",
+          "items": [
+            {
+              "path": "guides/multi-instance.md",
+              "title": "Run multiple instances"
+            },
+            {
+              "path": "guides/fleet.md",
+              "title": "Create and manage a fleet"
+            },
+            {
+              "path": "guides/fleet-deck.md",
+              "title": "Use the fleet terminal"
+            },
+            {
+              "path": "guides/operating-a-fleet.md",
+              "title": "Operate and recover a fleet"
+            }
+          ]
         },
         {
-          "path": "guides/build-a-plugin-view.md",
-          "title": "Build a plugin view (quickstart)"
+          "label": "Secure and monitor",
+          "items": [
+            {
+              "path": "guides/sandboxing.md",
+              "title": "Sandboxing & egress"
+            },
+            {
+              "path": "guides/exposing-protoagent.md",
+              "title": "Expose to the world"
+            },
+            {
+              "path": "guides/observability.md",
+              "title": "Monitor traces, metrics, and logs"
+            },
+            {
+              "path": "guides/model-concurrency.md",
+              "title": "Manage model concurrency"
+            }
+          ]
         },
         {
-          "path": "guides/building-react-plugin-views.md",
-          "title": "Plugin views (full guide)"
-        },
-        {
-          "path": "guides/bundles.md",
-          "title": "Bundles (plugin sets)"
-        },
-        {
-          "path": "guides/communication-plugins.md",
-          "title": "Build a communication plugin"
-        },
-        {
-          "path": "guides/publish-a-plugin.md",
-          "title": "Publish a plugin"
-        },
-        {
-          "path": "guides/discord.md",
-          "title": "Discord surface"
-        },
-        {
-          "path": "guides/browser-automation.md",
-          "title": "Browser automation"
+          "label": "Understand operations",
+          "items": [
+            {
+              "path": "explanation/litellm-gateway.md",
+              "title": "LiteLLM gateway"
+            },
+            {
+              "path": "explanation/security-and-trust.md",
+              "title": "Security & trust model"
+            },
+            {
+              "path": "explanation/network-egress.md",
+              "title": "Network egress"
+            },
+            {
+              "path": "explanation/cost-and-trace.md",
+              "title": "Cost & trace propagation"
+            },
+            {
+              "path": "explanation/tuning-and-cost.md",
+              "title": "Tuning & cost"
+            }
+          ]
         }
       ]
     },
     {
-      "label": "Console & UI",
-      "items": [
+      "id": "reference",
+      "label": "Reference",
+      "groups": [
         {
-          "path": "guides/build-console.md",
-          "title": "Build and test the console"
+          "label": "Start here",
+          "items": [
+            {
+              "path": "reference/index.md",
+              "title": "Reference"
+            }
+          ]
         },
         {
-          "path": "guides/windows-desktop.md",
-          "title": "Windows desktop app (install & recovery)"
+          "label": "Configuration and capabilities",
+          "items": [
+            {
+              "path": "reference/configuration.md",
+              "title": "Configuration"
+            },
+            {
+              "path": "reference/environment-variables.md",
+              "title": "Environment variables"
+            },
+            {
+              "path": "reference/skills.md",
+              "title": "Skills (SKILL.md)"
+            },
+            {
+              "path": "reference/knowledge.md",
+              "title": "Knowledge settings and tools"
+            },
+            {
+              "path": "reference/agent-snapshots.md",
+              "title": "Agent snapshots"
+            },
+            {
+              "path": "reference/starter-tools.md",
+              "title": "Starter tools"
+            }
+          ]
         },
         {
-          "path": "guides/python-runtime.md",
-          "title": "Enable document creation (desktop)"
+          "label": "Agent and operator APIs",
+          "items": [
+            {
+              "path": "reference/operator-api.md",
+              "title": "Operator REST API"
+            },
+            {
+              "path": "reference/a2a-endpoints.md",
+              "title": "A2A endpoints"
+            },
+            {
+              "path": "reference/a2a-conformance.md",
+              "title": "A2A conformance"
+            },
+            {
+              "path": "reference/agent-card.md",
+              "title": "Agent card"
+            },
+            {
+              "path": "reference/extensions.md",
+              "title": "Extensions"
+            }
+          ]
         },
         {
-          "path": "guides/command-palette.md",
-          "title": "Command palette (⌘⇧K)"
-        },
-        {
-          "path": "guides/developer-flags.md",
-          "title": "Developer flags (gate pre-release features)"
-        },
-        {
-          "path": "guides/phone-access.md",
-          "title": "Access from your phone (LAN / Tailscale)"
-        },
-        {
-          "path": "guides/headless.md",
-          "title": "Run headless (API + A2A)"
+          "label": "Plugin development",
+          "items": [
+            {
+              "path": "reference/plugin-manifest.md",
+              "title": "Plugin manifest"
+            },
+            {
+              "path": "reference/plugin-registry-api.md",
+              "title": "Plugin registry API"
+            },
+            {
+              "path": "reference/plugin-sdk-api.md",
+              "title": "Plugin SDK (graph.sdk)"
+            },
+            {
+              "path": "reference/plugin-testkit.md",
+              "title": "Plugin testkit"
+            },
+            {
+              "path": "reference/plugin-cli.md",
+              "title": "Plugin CLI"
+            },
+            {
+              "path": "reference/plugin-view-bridge.md",
+              "title": "Plugin view bridge (wire protocol)"
+            },
+            {
+              "path": "reference/plugin-events.md",
+              "title": "Event bus topics"
+            },
+            {
+              "path": "reference/plugin-coding-agent.md",
+              "title": "Coding-agent dispatch (ACP)"
+            },
+            {
+              "path": "reference/command-palette.md",
+              "title": "Command palette extensions"
+            }
+          ]
         }
       ]
     },
     {
-      "label": "Operate & deploy",
-      "items": [
-        {
-          "path": "guides/cli.md",
-          "title": "The protoagent command (CLI)"
-        },
-        {
-          "path": "guides/deploy.md",
-          "title": "Deploy via GHCR"
-        },
-        {
-          "path": "guides/deploy-docker.md",
-          "title": "Deploy in Docker (seed + UI override)"
-        },
-        {
-          "path": "guides/deploy-proxmox.md",
-          "title": "Deploy on Proxmox (reusable LXC template)"
-        },
-        {
-          "path": "guides/releasing.md",
-          "title": "Releasing"
-        },
-        {
-          "path": "guides/multi-instance.md",
-          "title": "Run multiple instances"
-        },
-        {
-          "path": "guides/sandboxing.md",
-          "title": "Sandboxing & egress"
-        },
-        {
-          "path": "guides/exposing-protoagent.md",
-          "title": "Expose to the world"
-        },
-        {
-          "path": "guides/observability.md",
-          "title": "Wire Langfuse + Prometheus"
-        },
-        {
-          "path": "guides/model-concurrency.md",
-          "title": "Operate the model in-flight limiter"
-        },
-        {
-          "path": "guides/operating-a-fleet.md",
-          "title": "Operating a fleet (health, rollout, triage, recovery)"
-        }
-      ]
-    },
-    {
-      "label": "Forks & evals",
-      "items": [
-        {
-          "path": "guides/fork-the-template.md",
-          "title": "Fork the template (fast path)"
-        },
-        {
-          "path": "guides/customize-and-deploy.md",
-          "title": "Customize & deploy"
-        },
-        {
-          "path": "guides/operator-fork.md",
-          "title": "Build an operator fork (Roxy)"
-        },
-        {
-          "path": "guides/upstream-sync.md",
-          "title": "Sync a fork from upstream"
-        },
-        {
-          "path": "guides/evals.md",
-          "title": "Eval your fork"
-        }
-      ]
-    }
-  ],
-  "reference": [
-    {
-      "label": "Agent core & runtime",
-      "items": [
-        {
-          "path": "reference/configuration.md",
-          "title": "Configuration"
-        },
-        {
-          "path": "reference/environment-variables.md",
-          "title": "Environment variables"
-        }
-      ]
-    },
-    {
-      "label": "Skills, subagents & workflows",
-      "items": [
-        {
-          "path": "reference/skills.md",
-          "title": "Skills (SKILL.md)"
-        }
-      ]
-    },
-    {
-      "label": "Knowledge & memory",
-      "items": [
-        {
-          "path": "reference/knowledge.md",
-          "title": "Knowledge settings and tools"
-        }
-      ]
-    },
-    {
-      "label": "A2A, fleet & delegates",
-      "items": [
-        {
-          "path": "reference/a2a-endpoints.md",
-          "title": "A2A endpoints"
-        },
-        {
-          "path": "reference/a2a-conformance.md",
-          "title": "A2A conformance"
-        },
-        {
-          "path": "reference/agent-card.md",
-          "title": "Agent card"
-        },
-        {
-          "path": "reference/agent-snapshots.md",
-          "title": "Agent snapshots"
-        },
-        {
-          "path": "reference/extensions.md",
-          "title": "Extensions"
-        }
-      ]
-    },
-    {
-      "label": "Tools, MCP & plugins",
-      "items": [
-        {
-          "path": "reference/starter-tools.md",
-          "title": "Starter tools"
-        },
-        {
-          "path": "reference/plugin-manifest.md",
-          "title": "Plugin manifest"
-        },
-        {
-          "path": "reference/plugin-registry-api.md",
-          "title": "Plugin registry API"
-        },
-        {
-          "path": "reference/plugin-sdk-api.md",
-          "title": "Plugin SDK (graph.sdk)"
-        },
-        {
-          "path": "reference/plugin-testkit.md",
-          "title": "Plugin testkit"
-        },
-        {
-          "path": "reference/plugin-cli.md",
-          "title": "Plugin CLI"
-        },
-        {
-          "path": "reference/plugin-view-bridge.md",
-          "title": "Plugin view bridge (wire protocol)"
-        },
-        {
-          "path": "reference/command-palette.md",
-          "title": "Command palette extensions"
-        },
-        {
-          "path": "reference/plugin-events.md",
-          "title": "Event bus topics"
-        },
-        {
-          "path": "reference/plugin-coding-agent.md",
-          "title": "Coding-agent dispatch (ACP)"
-        }
-      ]
-    },
-    {
-      "label": "Console & UI",
-      "items": [
-        {
-          "path": "reference/operator-api.md",
-          "title": "Operator REST API"
-        }
-      ]
-    }
-  ],
-  "explanation": [
-    {
-      "label": "Agent core & runtime",
-      "items": [
-        {
-          "path": "explanation/architecture.md",
-          "title": "Architecture"
-        },
-        {
-          "path": "explanation/prompt-contracts.md",
-          "title": "Prompt contracts"
-        },
-        {
-          "path": "explanation/output-protocol.md",
-          "title": "Output protocol"
-        },
-        {
-          "path": "explanation/steering.md",
-          "title": "Mid-turn steering"
-        },
-        {
-          "path": "explanation/litellm-gateway.md",
-          "title": "LiteLLM gateway"
-        }
-      ]
-    },
-    {
-      "label": "Knowledge & memory",
-      "items": [
-        {
-          "path": "explanation/memory-and-knowledge.md",
-          "title": "Memory & knowledge store"
-        }
-      ]
-    },
-    {
-      "label": "Tools, MCP & plugins",
-      "items": [
-        {
-          "path": "explanation/plugin-architecture.md",
-          "title": "Plugin architecture"
-        }
-      ]
-    },
-    {
-      "label": "A2A, fleet & delegates",
-      "items": [
-        {
-          "path": "explanation/rooms.md",
-          "title": "How rooms work"
-        },
-        {
-          "path": "explanation/a2a-protocol.md",
-          "title": "A2A protocol"
-        },
-        {
-          "path": "explanation/cost-and-trace.md",
-          "title": "Cost & trace propagation"
-        }
-      ]
-    },
-    {
-      "label": "Operate & deploy",
-      "items": [
-        {
-          "path": "explanation/security-and-trust.md",
-          "title": "Security & trust model"
-        },
-        {
-          "path": "explanation/network-egress.md",
-          "title": "Network egress"
-        },
-        {
-          "path": "explanation/tuning-and-cost.md",
-          "title": "Tuning & cost"
-        }
-      ]
-    }
-  ],
-  "adr": [
-    {
-      "label": "ADRs",
-      "items": [
-        {
-          "path": "adr/0001-extensibility-and-plugin-architecture.md",
-          "title": "ADR 0001 — Extensibility & Plugin Architecture"
-        },
-        {
-          "path": "adr/0002-reusable-subagent-workflows.md",
-          "title": "ADR 0002 — Reusable Subagent Workflows"
-        },
-        {
-          "path": "adr/0003-reactive-agent-activity-thread.md",
-          "title": "ADR 0003 — Reactive Agent: Activity Thread, Event Bus & Inbound Inbox"
-        },
-        {
-          "path": "adr/0004-multi-instance-data-scoping.md",
-          "title": "ADR 0004 — Multi-Instance Data Scoping"
-        },
-        {
-          "path": "adr/0005-tool-pollution-and-progressive-disclosure.md",
-          "title": "ADR 0005 — Tool Pollution & Progressive Tool Disclosure"
-        },
-        {
-          "path": "adr/0006-observability-and-the-self-improving-flywheel.md",
-          "title": "ADR 0006 — Observability & the Self-Improving Flywheel"
-        },
-        {
-          "path": "adr/0007-directory-aware-operator-agent.md",
-          "title": "ADR 0007 — Directory-Aware Operator Primitives (enabling a \"Roxy\" fork)"
-        },
-        {
-          "path": "adr/0008-sandboxing-and-openshell.md",
-          "title": "ADR 0008 — Sandboxing posture & NVIDIA OpenShell"
-        },
-        {
-          "path": "adr/0009-studio-control-stack.md",
-          "title": "ADR 0009 — The Studio control stack (goals · workflows · subagents · skills)"
-        },
-        {
-          "path": "adr/0010-headless-setup-and-ui-tiers.md",
-          "title": "ADR 0010 — Headless setup & UI deployment tiers (lighter stack)"
-        },
-        {
-          "path": "adr/0011-deep-research-workflow.md",
-          "title": "ADR 0011 — Deep-research workflow with adversarial review"
-        },
-        {
-          "path": "adr/0012-eval-strategy-and-model-comparison.md",
-          "title": "ADR 0012 — Eval strategy: model-tagged tracking & model comparison"
-        },
-        {
-          "path": "adr/0013-console-data-layer-react-query.md",
-          "title": "ADR 0013 — Console data layer: TanStack Query + Suspense + ErrorBoundary"
-        },
-        {
-          "path": "adr/0014-a2a-1.0-migration.md",
-          "title": "ADR 0014 — A2A 0.3 → 1.0: adopt `a2a-sdk` + `protolabs-a2a`"
-        },
-        {
-          "path": "adr/0015-discord-ingress-surface.md",
-          "title": "ADR 0015 — Optional native Discord surface (ingress + outbound)"
-        },
-        {
-          "path": "adr/0016-discord-ui-config.md",
-          "title": "ADR 0016 — In-app Discord configuration (token, admin list, live connect)"
-        },
-        {
-          "path": "adr/0017-google-ui-config.md",
-          "title": "ADR 0017 — In-app Google (Gmail + Calendar) connect flow"
-        },
-        {
-          "path": "adr/0018-plugin-surfaces-routes-subagents.md",
-          "title": "ADR 0018 — Plugins contribute surfaces, routes & subagents"
-        },
-        {
-          "path": "adr/0019-plugin-config-settings-secrets.md",
-          "title": "ADR 0019 — Plugins contribute config, settings & secrets"
-        },
-        {
-          "path": "adr/0020-console-ia-run-from-chat.md",
-          "title": "ADR 0020 — Console IA: run from Chat, manage from surfaces"
-        },
-        {
-          "path": "adr/0021-agent-memory-architecture.md",
-          "title": "ADR 0021 — Agent memory: extract, don't dump"
-        },
-        {
-          "path": "adr/0022-activity-provenance-feed.md",
-          "title": "ADR 0022 — Activity is a provenance feed, not a second chat"
-        },
-        {
-          "path": "adr/0023-server-decomposition.md",
-          "title": "ADR 0023 — Decompose server.py: an AppState container + a composition root"
-        },
-        {
-          "path": "adr/0024-spawn-cli-coding-agents-acp.md",
-          "title": "0024 — Spawn CLI coding agents over ACP (`code_with`)"
-        },
-        {
-          "path": "adr/0025-unified-delegate-registry-and-panel.md",
-          "title": "0025 — Unified delegate registry + hot-swappable management panel"
-        },
-        {
-          "path": "adr/0026-plugin-contributed-console-surfaces.md",
-          "title": "0026 — Plugin-contributed console surfaces (rail views + tabs)"
-        },
-        {
-          "path": "adr/0027-install-plugins-from-git-url.md",
-          "title": "0027 — Install plugins from a git URL (shareable plugin repos)"
-        },
-        {
-          "path": "adr/0028-plugin-goal-verifiers.md",
-          "title": "0028 — Plugin-contributed goal verifiers (+ safe programmatic goals)"
-        },
-        {
-          "path": "adr/0029-communication-plugins-standard.md",
-          "title": "ADR 0029 — A standard for communication (chat-surface) plugins"
-        },
-        {
-          "path": "adr/0030-monitor-goals.md",
-          "title": "0030 — Monitor goals: cadence-evaluated, hook-reactive objectives (+ per-goal no-progress limit)"
-        },
-        {
-          "path": "adr/0031-pluggable-knowledge-backend.md",
-          "title": "ADR 0031 — Pluggable knowledge backend"
-        },
-        {
-          "path": "adr/0032-pluggable-middleware.md",
-          "title": "ADR 0032 — Pluggable middleware"
-        },
-        {
-          "path": "adr/0033-pluggable-agent-runtime-acp.md",
-          "title": "ADR 0033 — Pluggable agent runtime (ACP executor)"
-        },
-        {
-          "path": "adr/0034-plugin-ui-first-class-react.md",
-          "title": "ADR 0034 — Plugin UI as first-class React (Module Federation)"
-        },
-        {
-          "path": "adr/0035-console-layout-dual-rail-mobile-first.md",
-          "title": "ADR 0035 — Console layout: symmetric dual-rail, mobile-first, persisted UI state"
-        },
-        {
-          "path": "adr/0036-context-menu-system.md",
-          "title": "ADR 0036 — A unified context-menu system (+ plugin-contributed items)"
-        },
-        {
-          "path": "adr/0037-design-system-foundation.md",
-          "title": "ADR 0037 — Design-system foundation: Tailwind + `@protolabsai/design` + shadcn/Radix"
-        },
-        {
-          "path": "adr/0038-generative-ui-artifacts-two-mode.md",
-          "title": "ADR 0038 — Generative-UI artifacts + a two-mode plugin UI (retire federation)"
-        },
-        {
-          "path": "adr/0039-plugin-event-bus.md",
-          "title": "0039 — A plugin event bus (decoupled pub/sub, no cross-plugin dependencies)"
-        },
-        {
-          "path": "adr/0040-plugin-bundles.md",
-          "title": "0040 — Plugin bundles (install a curated set of plugins as one)"
-        },
-        {
-          "path": "adr/0041-workspaces-and-tiered-stores.md",
-          "title": "0041 — Workspaces & tiered stores (the fleet-on-one-host model)"
-        },
-        {
-          "path": "adr/0042-fleet-supervisor-unified-console.md",
-          "title": "0042 — Fleet supervisor & unified console (background agents, in-place switching)"
-        },
-        {
-          "path": "adr/0043-plugin-consumption-sdk-workflows-extraction.md",
-          "title": "0043 — Plugin consumption SDK + workflows as the first opt-in core extraction"
-        },
-        {
-          "path": "adr/0044-plugin-driven-console-navigation.md",
-          "title": "0044 — Plugin-driven console navigation"
-        },
-        {
-          "path": "adr/0045-chat-panel-slot.md",
-          "title": "0045 — The chat panel is a slot (swappable chat plugins)"
-        },
-        {
-          "path": "adr/0046-pluggable-utility-bar.md",
-          "title": "ADR 0046 — Pluggable utility bar: declarative widgets + data tickers"
-        },
-        {
-          "path": "adr/0047-layered-settings-cascade.md",
-          "title": "ADR 0047 — Layered settings cascade (App→Host→Agent, per-field, `Field.scope`)"
-        },
-        {
-          "path": "adr/0048-settings-ia-two-scope-homes.md",
-          "title": "ADR 0048 — Settings & console-configuration IA (domain-first, scope-as-badge)"
-        },
-        {
-          "path": "adr/0049-bundle-pin-lifecycle.md",
-          "title": "0049 — Bundle pin lifecycle (a pin means \"last verified working\")"
-        },
-        {
-          "path": "adr/0050-background-subagents-reactive-notifications.md",
-          "title": "0050 — Background subagents & reactive task notifications"
-        },
-        {
-          "path": "adr/0051-a2a-realtime-streaming-and-component-rendering.md",
-          "title": "0051 — A2A realtime streaming & component rendering"
-        },
-        {
-          "path": "adr/0052-user-facing-skills-slash-commands.md",
-          "title": "0052 — User-facing skills (slash commands in chat)"
-        },
-        {
-          "path": "adr/0053-wait-yield-and-resume.md",
-          "title": "0053 — `wait`: yield-and-resume instead of busy-polling"
-        },
-        {
-          "path": "adr/0054-dream-distill-curation-subagents.md",
-          "title": "0054 — `dream` & `distill`: scheduled self-curation subagents"
-        },
-        {
-          "path": "adr/0055-multi-team-orchestration-federated-boards.md",
-          "title": "0055 — Multi-team orchestration: federated boards over A2A (scale-out)"
-        },
-        {
-          "path": "adr/0056-unified-dockable-view-model.md",
-          "title": "ADR 0056 — Unified dockable-view model (tabs ↔ rails)"
-        },
-        {
-          "path": "adr/0057-command-palette.md",
-          "title": "ADR 0057 — Command palette (⌘⇧K): plugin-extensible quick command"
-        },
-        {
-          "path": "adr/0058-runtime-plugin-install-frozen-app.md",
-          "title": "0058 — Runtime plugin install in the frozen desktop app (Discord as the first external comms plugin)"
-        },
-        {
-          "path": "adr/0059-unified-plugin-manager.md",
-          "title": "0059 — Unified plugin manager: in-app directory (Discover) + folded config (Installed)"
-        },
-        {
-          "path": "adr/0060-skill-progressive-disclosure.md",
-          "title": "0060 — Skills: progressive disclosure (always-on index + load on demand)"
-        },
-        {
-          "path": "adr/0061-frontend-extension-registries.md",
-          "title": "0061 — Frontend extension registries (fork-safe console behavior seams)"
-        },
-        {
-          "path": "adr/0062-full-screen-document-viewer.md",
-          "title": "ADR 0062 — Full-screen document viewer surface"
-        },
-        {
-          "path": "adr/0063-keybinding-system.md",
-          "title": "ADR 0063 — Scoped, user-rebindable keybinding system"
-        },
-        {
-          "path": "adr/0064-coder-execution-grounded-code-solve.md",
-          "title": "0064 — `coder`: execution-grounded code-solve (the board's verifier-grounded coder)"
-        },
-        {
-          "path": "adr/0065-two-tier-instance-paths.md",
-          "title": "0065 — Two-tier instance paths (box / instance) + single resolution rule"
-        },
-        {
-          "path": "adr/0066-goal-trust-operator-channel.md",
-          "title": "0066 — Goal trust-gate Phase 2: federation token + operator `/api` channel"
-        },
-        {
-          "path": "adr/0067-standalone-watch-primitive.md",
-          "title": "0067 — Standalone `watch` primitive (many concurrent watches)"
-        },
-        {
-          "path": "adr/0068-developer-flags-and-panel.md",
-          "title": "0068 — Developer flags & the Developer panel (gating pre-release functionality)"
-        },
-        {
-          "path": "adr/0069-memory-delivery-layer.md",
-          "title": "ADR 0069 — Memory delivery layer: attributed digest, provenance, trust tiers"
-        },
-        {
-          "path": "adr/0070-background-results-push-resume.md",
-          "title": "ADR 0070 — Background results: push-resume, indexed reports, disposable workers"
-        },
-        {
-          "path": "adr/0071-plugin-permissions-trust-model.md",
-          "title": "ADR 0071 — Plugin permissions: a trust-and-consent model, not a runtime sandbox"
-        },
-        {
-          "path": "adr/0072-fleet-seed-team-via-config.md",
-          "title": "0072 — Fleet seed: declare a team in config (team-via-config)"
-        },
-        {
-          "path": "adr/0073-goal-completion-contracts.md",
-          "title": "0073 — Goal completion contracts"
-        },
-        {
-          "path": "adr/0074-system-lifecycle-events.md",
-          "title": "0074 — System lifecycle events"
-        },
-        {
-          "path": "adr/0075-external-interfaces-cli-mcp-api.md",
-          "title": "0075 — External interfaces: a first-class `protoagent` CLI + tightened MCP / API / model onboarding"
-        },
-        {
-          "path": "adr/0076-managed-git-acp-delegates.md",
-          "title": "0076 — Managed git for `acp` delegates: framework-owned branch/commit/push/PR"
-        },
-        {
-          "path": "adr/0077-adversarial-code-review-workflow.md",
-          "title": "0077 — Adversarial code-review workflow + the findings convention"
-        },
-        {
-          "path": "adr/0078-fleet-pr-review-qa-tier.md",
-          "title": "0078 — Fleet PR review as a protoAgent tier: harvest Quinn, keep the panel"
-        },
-        {
-          "path": "adr/0079-autonomous-operating-model.md",
-          "title": "0079 — Autonomous operating model (goals · tasks · scheduling · watches → one OODA loop)"
-        },
-        {
-          "path": "adr/0080-external-secrets-manager.md",
-          "title": "0080 — External secrets manager: env hydration with pluggable providers (Infisical first)"
-        },
-        {
-          "path": "adr/0081-self-authored-persona-edit-soul.md",
-          "title": "0081 — Self-authored persona: a guarded `edit_soul` tool"
-        },
-        {
-          "path": "adr/0082-per-chat-acp-runtime.md",
-          "title": "0082 — Per-chat ACP runtime: hot-swap a coding agent like a model"
-        },
-        {
-          "path": "adr/0083-cowork-mode-archetype.md",
-          "title": "0083 — Cowork mode: a prepackaged knowledge-worker archetype"
-        },
-        {
-          "path": "adr/0084-computer-use-cua-driver.md",
-          "title": "0084 — Computer use: an out-of-process driver, and the fence it voids"
-        },
-        {
-          "path": "adr/0085-managed-node-runtime.md",
-          "title": "0085 — Managed Node.js runtime, provisioned on demand"
-        },
-        {
-          "path": "adr/0086-chat-first-mobile-shell.md",
-          "title": "ADR 0086 — Chat-first mobile shell (amends ADR 0035 D6)"
-        },
-        {
-          "path": "adr/0087-device-pairing-and-per-device-tokens.md",
-          "title": "ADR 0087 — Device pairing: per-device revocable tokens + short-TTL QR codes"
-        },
-        {
-          "path": "adr/0088-per-finding-inline-review-threads.md",
-          "title": "0088 — Per-finding inline review threads: finding-granular GitHub-native memory"
-        },
-        {
-          "path": "adr/0089-intra-instance-trust-boundary.md",
-          "title": "ADR 0089 — Intra-instance trust boundary: the hub authenticates, members trust a fleet service token"
-        },
-        {
-          "path": "adr/0090-goals-drive-in-a-chat-tab.md",
-          "title": "ADR 0090 — Console-created goals drive in a dedicated chat tab (attach / detach)"
-        },
-        {
-          "path": "adr/0091-agent-snapshot-portability.md",
-          "title": "ADR 0091 — Agent snapshot portability: a declarative, secret-free bundle (not a raw state dump)"
-        },
-        {
-          "path": "adr/0092-desktop-document-baseline-and-versioned-file-artifacts.md",
-          "title": "0092 — Desktop document-generation baseline + versioned file artifacts"
-        },
-        {
-          "path": "adr/0093-pip-less-wheel-installer-frozen-plugins.md",
-          "title": "0093 — Pip-less wheel installer for frozen-app plugin deps"
-        },
-        {
-          "path": "adr/0094-managed-python-runtime.md",
-          "title": "0094 — Managed Python runtime: execute_code on the frozen desktop app"
-        },
-        {
-          "path": "adr/0095-managed-projects-registry.md",
-          "title": "0095 — Managed projects registry: one place to declare a project"
-        },
-        {
-          "path": "adr/0096-self-building-loop.md",
-          "title": "0096 — The self-building loop: plugin-devkit closes design → build → test → hot-swap"
-        },
-        {
-          "path": "adr/0097-native-oauth-subscription-providers.md",
-          "title": "0097 — Native OAuth-subscription providers (run Claude / ChatGPT on your own plan)"
-        },
-        {
-          "path": "adr/0098-process-tree-lifecycle.md",
-          "title": "0098 — One process-tree lifecycle: `infra/proc` anchors and kills every child tree"
-        },
-        {
-          "path": "adr/0099-chat-bundle-format.md",
-          "title": "0099 — Chat-bundle format v1: a structured, artifact-aware export for the P2 hosted viewer"
-        },
-        {
-          "path": "adr/0100-agent-archetypes.md",
-          "title": "0100 — Agent archetypes (starter agent types, ratified)"
-        },
-        {
-          "path": "adr/0101-context-lifecycle-log-surface-pressure.md",
-          "title": "0101 — Context lifecycle: log, surface, pressure"
-        },
-        {
-          "path": "adr/0102-the-trajectory-session-log-and-derived-surface.md",
-          "title": "0102 — The trajectory: append-only session log + derived surface"
-        },
-        {
-          "path": "adr/0103-programmatic-tool-calls-from-execute-code.md",
-          "title": "0103 — Programmatic tool calls: agent tools callable from execute_code"
-        },
-        {
-          "path": "adr/0104-session-turns-read-api.md",
-          "title": "0104 — The session turns read API: durable chat history has a server-side reader"
-        },
-        {
-          "path": "adr/0105-fleet-shared-delegates.md",
-          "title": "0105 — Fleet-shared delegates: one roster on the box, every member's bench"
-        },
-        {
-          "path": "adr/0106-provider-registry.md",
-          "title": "0106 — Providers are a registry; every model reference names its provider"
-        },
-        {
-          "path": "adr/0107-unified-self-improvement-policy.md",
-          "title": "0107 — Unified, policy-bounded self-improvement reviews"
-        },
-        {
-          "path": "adr/0108-context-architecture-v2.md",
-          "title": "0108 — Context Architecture v2: lifecycle, authority, and projection"
-        },
-        {
-          "path": "adr/0109-project-board-one-board-n-repos.md",
-          "title": "0109 — project_board: one board, one store, N repos"
-        },
-        {
-          "path": "adr/0110-plugin-setup-steps.md",
-          "title": "0110 — Plugin setup steps: a host-run, operator-only fix behind a setup-gap button"
-        },
-        {
-          "path": "adr/0111-zed-operator-editor-acp-shim.md",
-          "title": "0111 — Zed as the operator's editor: ACP agent shim, editor deep-links, operator MCP"
-        },
-        {
-          "path": "adr/0112-console-code-pane.md",
-          "title": "0112 — Console code pane: a read-only navigator surface the agent points into"
-        },
-        {
-          "path": "adr/0113-agent-pairing-for-remote-fleet-members.md",
-          "title": "0113 — Agent pairing: remote fleet members get a paired, revocable token"
-        },
-        {
-          "path": "adr/0114-console-browser-storage-budget.md",
-          "title": "0114: Console browser storage — transcripts in IndexedDB, a budget, and a full quota never crashes"
-        },
-        {
-          "path": "adr/0115-gateway-inflight-limiter.md",
-          "title": "0115 — Model calls share a bounded, priority-ordered in-flight lane per endpoint and model (off by default)"
-        },
-        {
-          "path": "adr/0116-local-first-data-analyst-duckdb-and-vega-lite-charts.md",
-          "title": "0116 — A local-first data analyst: DuckDB over files in place, charts as Vega-Lite specs, and a plugin-service call seam"
-        },
-        {
-          "path": "adr/0117-subagent-only-tools.md",
-          "title": "0117 — Subagent-only tools: a domain's tools live in the subagent that owns it"
-        },
-        {
-          "path": "adr/0118-interactive-answers-inline-artifacts-and-frame-components.md",
-          "title": "0118 — Interactive answers: inline artifacts in chat, streamed previews, a send-to-chat bridge, and frame-rendered plugin components"
-        },
-        {
-          "path": "adr/0119-source-layout-with-stable-imports.md",
-          "title": "ADR 0119 — Organize runtime source without renaming imports"
-        },
-        {
-          "path": "adr/0120-checkpoint-growth-bounds-and-alerts.md",
-          "title": "ADR 0120 — Bound checkpoint growth on the write path, and alert on it"
-        },
-        {
-          "path": "adr/index.md",
-          "title": "Architecture Decision Records"
+      "id": "background",
+      "label": "More documentation",
+      "groups": [
+        {
+          "label": "Browse by document type",
+          "items": [
+            {
+              "path": "tutorials/index.md",
+              "title": "Tutorials"
+            },
+            {
+              "path": "guides/index.md",
+              "title": "All guides"
+            },
+            {
+              "path": "explanation/index.md",
+              "title": "Concepts and architecture"
+            }
+          ]
+        },
+        {
+          "label": "History and compatibility",
+          "items": [
+            {
+              "path": "adr/index.md",
+              "title": "Architecture decisions"
+            },
+            {
+              "path": "guides/acp-runtime.md",
+              "title": "ACP runtime (deprecated)"
+            }
+          ]
         }
       ]
     }

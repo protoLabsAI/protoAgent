@@ -10,7 +10,10 @@ hero:
       link: /tutorials/first-agent
     - theme: alt
       text: Use the app
-      link: /guides/react-tauri-ui
+      link: /guides/use-protoagent
+    - theme: alt
+      text: Fix a problem
+      link: /guides/troubleshooting
 
 features:
   - title: Local data
@@ -39,9 +42,22 @@ features:
 | Build a plugin or customize the core | [Extend protoAgent](/guides/extend) |
 | Run a service without a UI | [Run headless](/guides/headless) |
 
+## Builder and operator paths
+
+- [Build & extend](/guides/extend): create plugins, tools, and views, or develop a fork.
+- [Deploy & operate](/guides/deploy-and-operate): run services, manage fleets, secure access, and monitor health.
+
 ## Browse the documentation
 
-- [Tutorials](/tutorials/) walk through a first working example.
-- [Guides](/guides/) help you complete a specific task.
-- [Reference](/reference/) lists APIs, configuration fields, and protocols.
-- [Explanation](/explanation/) describes the runtime, architecture, and trust model.
+| Task area | What you can do |
+| --- | --- |
+| [Get started](/guides/get-started) | Install, connect a model, and send your first message |
+| [Use protoAgent](/guides/use-protoagent) | Chat, work with files, connect tools, and manage your data |
+| [Automate work](/guides/automate-work) | Teach skills, schedule work, and delegate tasks |
+| [Build & extend](/guides/extend) | Build plugins or customize the app |
+| [Deploy & operate](/guides/deploy-and-operate) | Run and maintain agents as services |
+| [Reference](/reference/) | Look up configuration, APIs, and SDK contracts |
+
+You can also browse [tutorials](/tutorials/), [all guides](/guides/), or
+[concepts and architecture](/explanation/). [Architecture decisions](/adr/)
+preserve the reasoning and history behind the implementation.

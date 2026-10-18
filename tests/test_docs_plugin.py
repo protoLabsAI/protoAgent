@@ -148,11 +148,10 @@ def test_data_routes(tmp_path) -> None:
     c = TestClient(app)
 
     tree = c.get("/api/plugins/docs/tree").json()["sections"]
-    assert {s["id"] for s in tree} >= {"guides", "reference"}  # real corpus
-    # Domain-grouped (mirrors the site sidebar): guides has the Skills domain group.
-    guides = next(s for s in tree if s["id"] == "guides")
-    assert any(g["label"] == "Skills, subagents & workflows" for g in guides["groups"])
-    assert any(it["path"] == "guides/skills.md" for g in guides["groups"] for it in g["items"])
+    assert [s["id"] for s in tree][:6] == ["start", "use", "automate", "build", "operate", "reference"]
+    automate = next(s for s in tree if s["id"] == "automate")
+    paths = {it["path"] for g in automate["groups"] for it in g["items"]}
+    assert {"guides/skills.md", "tutorials/first-skill.md", "explanation/rooms.md"} <= paths
 
     res = c.get("/api/plugins/docs/search", params={"q": "skills"}).json()["results"]
     assert any(r["path"] == "guides/skills.md" for r in res)
@@ -170,9 +169,8 @@ def test_data_routes(tmp_path) -> None:
     assert c.get("/api/plugins/docs/doc", params={"path": "dev/secret.md"}).status_code == 404
 
 
-def test_nav_json_in_sync_with_sidebar() -> None:
-    """The committed nav.json must match what the generator produces from the live sidebar
-    (run `python scripts/gen_docs_nav.py` after editing docs/.vitepress/config.mts)."""
+def test_generated_navigation_and_landings_are_in_sync() -> None:
+    """One catalog generates the website, in-app reader, and task listings."""
     import importlib.util
     import json
 
@@ -181,7 +179,9 @@ def test_nav_json_in_sync_with_sidebar() -> None:
     assert spec and spec.loader
     spec.loader.exec_module(gen)
     committed = json.loads(Path("plugins/docs/nav.json").read_text(encoding="utf-8"))
-    assert gen.build_nav() == committed, "nav.json is stale — run `python scripts/gen_docs_nav.py`"
+    assert gen.build_nav() == committed
+    for path, expected in gen.build_outputs().items():
+        assert path.read_text(encoding="utf-8") == expected, f"{path} is stale — run scripts/gen_docs_nav.py"
 
 
 def test_grouped_tree_falls_back_to_sections(tmp_path) -> None:

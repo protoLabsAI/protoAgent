@@ -1,126 +1,202 @@
 #!/usr/bin/env python3
-"""Generate ``plugins/docs/nav.json`` — the Diátaxis→domain doc tree the Docs plugin's
-reader shows — from the VitePress sidebar (``docs/.vitepress/config.mts``).
+"""Generate website/in-app navigation and task indexes from plugins/docs/catalog.json.
 
-The domain grouping lives ONLY in the sidebar config; the markdown files carry no domain
-metadata. We extract it at build/sync time into a committed JSON the plugin reads at runtime
-(the frozen desktop app has no ``.vitepress/``). ``tests/test_docs_plugin.py`` asserts the
-committed file stays in sync, so a sidebar edit that isn't regenerated fails CI.
-
-    python scripts/gen_docs_nav.py            # write plugins/docs/nav.json
-    python scripts/gen_docs_nav.py --check    # exit 1 if the committed file is stale
-
-The parser is deliberately narrow (the sidebar is a regular object literal: double-quoted
-values, only the bare keys text/link/items/collapsed, no inline comments) and never runs
-the TS — it brace-matches the ``sidebar`` object, quotes those keys, drops trailing commas,
-and ``json.loads`` it.
+Run after changing the catalog; --check verifies every generated surface. Document
+paths remain unchanged: journeys can combine tutorials, guides, and explanations.
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import re
-import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-CONFIG = REPO / "docs" / ".vitepress" / "config.mts"
-OUT = REPO / "plugins" / "docs" / "nav.json"
-
-# Sidebar route key → corpus section dir. ADRs aren't enumerated in the sidebar (just a
-# link to /adr/), so they're listed from the filesystem below.
-SECTION_ROUTE = {
-    "/tutorials/": "tutorials",
-    "/guides/": "guides",
-    "/reference/": "reference",
-    "/explanation/": "explanation",
-}
+CATALOG = REPO / "plugins/docs/catalog.json"
+OUT = REPO / "plugins/docs/nav.json"
+SECTIONS = ("tutorials", "guides", "reference", "explanation")
 
 
-def _load_corpus():
-    """Load the plugin's corpus module standalone (it imports only stdlib)."""
-    spec = importlib.util.spec_from_file_location("docs_corpus_gen", REPO / "plugins" / "docs" / "corpus.py")
-    mod = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(mod)
-    return mod
+def load_catalog() -> dict:
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    pages = catalog["pages"]
+    assigned = []
+    for journey in catalog["journeys"]:
+        assigned.append(journey["landing"])
+        assigned.extend(p for group in journey["groups"] for p in group["pages"])
+    if len(assigned) != len(set(assigned)):
+        raise ValueError("A page has more than one primary navigation home")
+    for path, page in pages.items():
+        if not (REPO / "docs" / path).is_file() and path not in {j["landing"] for j in catalog["journeys"]}:
+            raise ValueError(f"Missing catalog page: {path}")
+        if page["status"] == "current" and path not in assigned:
+            raise ValueError(f"Current page has no primary home: {path}")
+        if page.get("canonical") and page["canonical"] not in pages:
+            raise ValueError(f"Unknown canonical destination: {path}")
+    for path in assigned:
+        if pages[path]["status"] != "current":
+            raise ValueError(f"Non-current page in primary navigation: {path}")
+    for section in SECTIONS:
+        for path in (REPO / "docs" / section).rglob("*.md"):
+            rel = path.relative_to(REPO / "docs").as_posix()
+            if path.name != "index.md" and rel not in pages:
+                raise ValueError(f"Unclassified document: {rel}")
+    return catalog
 
 
-def _sidebar_object(src: str) -> str:
-    """Brace-match the object literal after ``sidebar:`` (respecting string contents)."""
-    j = src.index("{", src.index("sidebar:"))
-    depth = 0
-    in_str = esc = False
-    for k in range(j, len(src)):
-        c = src[k]
-        if in_str:
-            esc = (c == "\\") and not esc
-            if c == '"' and not esc:
-                in_str = False
-            continue
-        if c == '"':
-            in_str = True
-        elif c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return src[j : k + 1]
-    raise ValueError("unbalanced sidebar object in config.mts")
+def route(path: str) -> str:
+    return "/" + (path[:-8] if path.endswith("index.md") else path[:-3])
 
 
-def _parse_sidebar() -> dict:
-    obj = _sidebar_object(CONFIG.read_text(encoding="utf-8"))
-    obj = re.sub(r"\b(text|link|items|collapsed)\s*:", r'"\1":', obj)  # quote bare keys
-    obj = re.sub(r",(\s*[}\]])", r"\1", obj)  # drop trailing commas
-    return json.loads(obj)
+def build_nav(catalog: dict | None = None) -> dict:
+    catalog = catalog or load_catalog()
+    pages = catalog["pages"]
+    sections = []
+    for journey in catalog["journeys"]:
+        groups = [{"label": "Start here", "pages": [journey["landing"]]}, *journey["groups"]]
+        sections.append(
+            {
+                "id": journey["id"],
+                "label": journey["label"],
+                "groups": [
+                    {"label": g["label"], "items": [{"path": p, "title": pages[p]["title"]} for p in g["pages"]]}
+                    for g in groups
+                ],
+            }
+        )
+    sections.append(
+        {
+            "id": "background",
+            "label": "More documentation",
+            "groups": [
+                {
+                    "label": "Browse by document type",
+                    "items": [
+                        {"path": f"{s}/index.md", "title": t}
+                        for s, t in [
+                            ("tutorials", "Tutorials"),
+                            ("guides", "All guides"),
+                            ("explanation", "Concepts and architecture"),
+                        ]
+                    ],
+                },
+                {
+                    "label": "History and compatibility",
+                    "items": [
+                        {"path": "adr/index.md", "title": "Architecture decisions"},
+                        *[{"path": p, "title": m["title"]} for p, m in pages.items() if m["status"] == "deprecated"],
+                    ],
+                },
+            ],
+        }
+    )
+    return {"version": 2, "sections": sections}
 
 
-def build_nav() -> dict:
-    corpus = _load_corpus()
-    valid = corpus.valid_paths()
-    titles = {rel: corpus.doc_title(p) for rel, p in corpus.iter_docs()}
-    sidebar = _parse_sidebar()
+def _listing(groups: list[dict], pages: dict) -> str:
+    return "\n\n".join(
+        "## " + g["label"] + "\n\n" + "\n".join(f"- [{pages[p]['title']}]({route(p)})" for p in g["pages"])
+        for g in groups
+        if g["pages"]
+    )
 
-    nav: dict[str, list] = {}
-    for route, section in SECTION_ROUTE.items():
-        groups = []
-        for grp in sidebar.get(route, []):
-            items = []
-            for it in grp.get("items", []):
-                link = (it.get("link") or "").strip()
-                # Only same-section doc links (skips Overview "/guides/" + cross-section refs).
-                if not link.startswith("/" + section + "/") or link.rstrip("/") == "/" + section:
-                    continue
-                path = link.lstrip("/") + ".md"
-                if path in valid:
-                    items.append({"path": path, "title": it.get("text") or titles.get(path, path)})
-            if items:
-                groups.append({"label": grp.get("text", ""), "items": items})
-        nav[section] = groups
 
-    adrs = sorted(p for p in valid if p.startswith("adr/"))
-    nav["adr"] = [{"label": "ADRs", "items": [{"path": p, "title": titles[p]} for p in adrs]}] if adrs else []
-    return nav
+def _page(path: str, title: str, intro: str, body: str, catalog: dict) -> str:
+    # Keep old heading targets when a section index becomes task-oriented. Explicit
+    # spans also avoid tying compatibility to the renderer's slug algorithm.
+    headings = [title, *[line[3:] for line in body.splitlines() if line.startswith("## ")]]
+    current_ids = {re.sub(r"\s+", "-", re.sub(r"[^\w\s-]", "", h.lower()).strip()) for h in headings}
+    anchors = "\n".join(
+        f'<span id="{a}"></span>' for a in catalog["legacy_anchors"].get(path, []) if a not in current_ids
+    )
+    return (
+        "<!-- Generated by scripts/gen_docs_nav.py; edit plugins/docs/catalog.json. -->\n\n"
+        + f"# {title}\n\n"
+        + (anchors + "\n\n" if anchors else "")
+        + intro
+        + "\n\n"
+        + body
+        + "\n"
+    )
+
+
+def build_outputs() -> dict[Path, str]:
+    catalog = load_catalog()
+    pages = catalog["pages"]
+    nav = build_nav(catalog)
+    dump = lambda data: json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    outputs = {OUT: dump(nav)}
+    top = [{"text": j["nav_label"], "link": route(j["landing"])} for j in catalog["journeys"]]
+    more = [
+        {
+            "text": g["label"],
+            "collapsed": True,
+            "items": [{"text": i["title"], "link": route(i["path"])} for i in g["items"]],
+        }
+        for g in nav["sections"][-1]["groups"]
+    ]
+    base = [{"text": "Documentation", "items": top}, *more]
+    sidebars = [{"routes": [f"/{s}/" for s in (*SECTIONS, "adr")], "groups": base}]
+    for journey, section in zip(catalog["journeys"], nav["sections"]):
+        groups = [
+            {
+                "text": g["label"],
+                "collapsed": False,
+                "items": [{"text": i["title"], "link": route(i["path"])} for i in g["items"]],
+            }
+            for g in section["groups"]
+        ]
+        routes = [route(journey["landing"]), *[route(p) for g in journey["groups"] for p in g["pages"]]]
+        sidebars.append({"routes": routes, "groups": [*groups, *more]})
+        outputs[REPO / "docs" / journey["landing"]] = _page(
+            journey["landing"], journey["label"], journey["intro"], _listing(journey["groups"], pages), catalog
+        )
+    outputs[REPO / "docs/.vitepress/navigation.json"] = dump({"nav": top, "sidebars": sidebars})
+    for section, title, intro in [
+        (
+            "guides",
+            "All guides",
+            "Choose a task area below. For a shorter starting point, use [the task navigation](/guides/get-started).",
+        ),
+        (
+            "tutorials",
+            "Tutorials",
+            "Work through a first example. Start with [your first agent](/tutorials/first-agent), then choose a capability to learn.",
+        ),
+        (
+            "explanation",
+            "Concepts and architecture",
+            "Understand the behavior behind a task. [Architecture decisions](/adr/) preserve historical reasoning; current guides describe what to do today.",
+        ),
+    ]:
+        groups = [
+            {"label": j["label"], "pages": [p for g in j["groups"] for p in g["pages"] if p.startswith(section + "/")]}
+            for j in catalog["journeys"]
+        ]
+        path = f"{section}/index.md"
+        outputs[REPO / "docs" / path] = _page(path, title, intro, _listing(groups, pages), catalog)
+    return outputs
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--check", action="store_true", help="exit 1 if plugins/docs/nav.json is stale")
-    args = ap.parse_args()
-
-    payload = json.dumps(build_nav(), indent=2, ensure_ascii=False) + "\n"
-    if args.check:
-        current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
-        if current != payload:
-            sys.exit("plugins/docs/nav.json is stale — run `python scripts/gen_docs_nav.py`")
-        print("nav.json is in sync with the sidebar")
-        return
-    OUT.write_text(payload, encoding="utf-8")
-    n = sum(len(g["items"]) for groups in build_nav().values() for g in groups)
-    print(f"wrote {OUT.relative_to(REPO)} ({n} docs)")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    stale = []
+    for path, content in build_outputs().items():
+        if args.check:
+            if not path.exists() or path.read_text(encoding="utf-8") != content:
+                stale.append(str(path.relative_to(REPO)))
+        else:
+            path.write_text(content, encoding="utf-8")
+    if stale:
+        raise SystemExit(
+            "Generated docs navigation is stale: " + ", ".join(stale) + "; run python scripts/gen_docs_nav.py"
+        )
+    print(
+        "Docs navigation and landing pages are in sync" if args.check else "Generated docs navigation and landing pages"
+    )
 
 
 if __name__ == "__main__":
