@@ -19,10 +19,10 @@ const visible = media.status === 'ready' || media.status === 'refresh-needed';
     </button>
     <dialog id={`${id}-zoom`} class="image-zoom" aria-label="Enlarged screenshot" aria-describedby={`${id}-zoom-caption`}>
       <div class="image-zoom__toolbar">
-        <button type="button" data-zoom-size aria-pressed="false">Actual size</button>
+        <button type="button" data-zoom-size>Actual size</button>
         <button type="button" data-zoom-close autofocus aria-label="Close enlarged screenshot">Close</button>
       </div>
-      <div class="image-zoom__viewport">
+      <div class="image-zoom__viewport" tabindex="0" role="region" aria-label="Screenshot viewport">
         <img src={media.asset} alt={media.alt} width={media.width} height={media.height} loading="lazy" decoding="async" />
       </div>
       <p id={`${id}-zoom-caption`}>{media.caption}</p>
@@ -49,7 +49,6 @@ const visible = media.status === 'ready' || media.status === 'refresh-needed';
     });
     size.addEventListener('click', () => {
       const actualSize = viewport.classList.toggle('image-zoom__viewport--actual');
-      size.setAttribute('aria-pressed', String(actualSize));
       size.textContent = actualSize ? 'Fit to screen' : 'Actual size';
       viewport.scrollTo(0, 0);
     });
@@ -57,7 +56,6 @@ const visible = media.status === 'ready' || media.status === 'refresh-needed';
       document.body.style.overflow = previousOverflow;
       viewport.classList.remove('image-zoom__viewport--actual');
       viewport.scrollTo(0, 0);
-      size.setAttribute('aria-pressed', 'false');
       size.textContent = 'Actual size';
       opener.focus({ preventScroll: true });
     });
