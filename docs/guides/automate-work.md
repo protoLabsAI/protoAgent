@@ -2,7 +2,19 @@
 
 # Automate work
 
-Teach reusable procedures, schedule work, and delegate tasks. Start with a skill or a schedule before configuring a larger workflow.
+Teach reusable procedures, schedule work, and delegate tasks. Choose the smallest mechanism that fits:
+
+| What you need | Start here |
+| --- | --- |
+| Instructions for a recurring task, chosen by you or the agent | [Skill](/tutorials/first-skill) |
+| Run at a time or on a calendar cadence | [Schedule](/guides/scheduler) |
+| React when an external condition changes | [Watch](/guides/watches) |
+| Keep working until a completion check passes | [Goal](/guides/goal-mode) |
+| Run a saved sequence of specialist steps | [Workflow](/guides/workflows) |
+| Give a focused task to a local specialist | [Subagent](/guides/subagents) |
+| Use another agent or coding CLI | [Delegate](/guides/delegates) |
+
+Verify one small task before making it recurring or expanding to multiple agents. The individual guides explain permissions, stopping conditions, and where results appear.
 
 ## Learn with an example
 

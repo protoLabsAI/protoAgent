@@ -7,10 +7,9 @@ bounded cross-board rollup, and watches for changes — all over A2A, on the
 [fleet](/guides/fleet) spine. This is the **scale-out** model: multiplicity lives in
 the fleet, not inside one board (see [ADR 0055](../adr/0055-multi-team-orchestration-federated-boards.md)).
 
-The `portfolio` plugin is **pure composition** — it adds no new dispatch or registry
-machinery, just tools over three things you already have: the fleet (the team-agent
-registry), [delegates](/guides/delegates) (the A2A dispatch primitive), and
-`project_board` (the board read).
+Before expanding to many teams, complete [one PM and coder setup](/guides/build-with-a-coding-agent).
+Each team needs the external project-board plugin, a repository, authenticated
+coding tools, and working CI. The PM needs the external portfolio plugin.
 
 ## Setup
 
@@ -33,6 +32,13 @@ registry), [delegates](/guides/delegates) (the A2A dispatch primitive), and
 > On loopback with no `auth.token` set, a team-agent runs in open mode (the
 > default-deny A2A auth is a no-op) — handy for local testing. Across a LAN/tailnet,
 > give each team-agent an `A2A_AUTH_TOKEN` and register it with that token.
+
+## Verify one team
+
+Ask the PM to list boards, then read one named board. Confirm the expected repo
+and feature state before dispatching a small task. An authentication error or an
+unreachable board must be resolved before relying on a portfolio rollup. Inspect
+the team's resulting PR and checks before enabling scheduled dispatch.
 
 ## Tools
 

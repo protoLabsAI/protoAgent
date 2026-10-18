@@ -71,10 +71,12 @@ This is the whole loop, end to end, with what you should see at each step.
 
 **Tell the PM what you want — in chat, as an outcome.** Concrete beats clever:
 
-> In the console repo, the Settings ▸ About panel should show the running server
-> version. Done means: the version renders in About, comes from the existing
-> `/api/version` endpoint, and a unit test covers the component. Files I'd
-> expect: the About panel component and its test.
+> In our project's README, add a “Run tests” section with the command verified
+> against this checkout. Done means a newcomer can run it and see the suite pass.
+> Keep this first change to the README and report the command's result.
+
+Use a small task in your own repository; do not assume it has protoAgent-specific
+panels or API endpoints.
 
 **The PM curates it into a feature.** It reads the repo (read-only file tools),
 writes the brief, and creates the card — `board_create_feature`, then

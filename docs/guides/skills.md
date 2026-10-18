@@ -11,15 +11,15 @@ to other agents, use an [A2A card entry](/guides/add-a-skill).
 
 ## Write one (the short path)
 
-1. Create `<instance_root>/skills/<name>/SKILL.md`, using the root from
-   `protoagent config explain`, or create a skill in **Settings → Skills**.
-2. Give it frontmatter — `name` + a one-line `description`. That description is the
-   *only* thing the agent sees until it loads the skill, so write it as "when to use
-   this", not as a title.
-3. Write the procedure in the body: the steps, the tools to use, what "done" looks like.
-4. Reload (**Settings → Skills → Reload**, or restart). The skill appears in the index.
-5. Ask the agent to do the task. Watch for the `load_skill` tool card — that's the
-   confirmation it picked your skill up.
+1. Open **Settings → Skills**, use the add button, and enter a name, a description
+   of when to use it, and the procedure. Choose **Create skill**; it is live immediately.
+2. Ask for a small task matching its description. Look for the `load_skill` card
+   and check whether the result follows the procedure.
+3. If selection is unreliable, improve the description or make the skill
+   **Invokable as a /slash command** and choose it yourself.
+
+Follow [Write your first skill](/tutorials/first-skill) for a complete example
+and the file-based alternative. File edits need a configuration reload or restart.
 
 ## Anatomy of a skill
 
@@ -46,17 +46,9 @@ tools: [web_search, fetch_url]   # optional, advisory
 
 ### Frontmatter
 
-| Field | Required | Notes |
-|---|---|---|
-| `name` | ✅ | Unique, lowercase-with-hyphens. |
-| `description` | ✅ | ≤ 1024 chars. This is the **trigger signal** — write it "pushy": say plainly *when* the agent should reach for this skill, or it under-triggers. |
-| `tools` (or `metadata.tools`) | — | Advisory list of tool names the skill uses. When the agent loads the skill (`load_skill`), these are surfaced to it as `Relevant tools:` so it knows which of its (already-bound) tools this skill relies on — a hint, not a gate. Any that turn out to be unbound in that invocation, or gated shut by config (e.g. the project-registration tool when `onboarding.enabled` is off), are named as `Unavailable in this context:` before the procedure so the agent doesn't plan around a tool it can't call. See [ADR 0005](/adr/0005-tool-pollution-and-progressive-disclosure). |
-| `user_facing` | — | `true` makes the skill directly invokable as a `/<slash>` command in the chat composer (ADR 0052). Off by default. |
-| `user_only` | — | `true` makes it an **operator-only** skill: a `/<slash>` command **withheld from the agent's `<available_skills>` index** (the agent never sees or loads it). Implies `user_facing`. Off by default. |
-| `slash` | — | The trigger token for a `user_facing` skill (whitespace-free); blank → slug of `name`. e.g. `slash: web-research` → `/web-research`. |
-
-The markdown **body** is the skill's instructions — freeform; write whatever
-helps the agent perform the task.
+The [Skills reference](/reference/skills#frontmatter-fields) owns the complete field
+schema, including advisory tools and operator-only slash commands. The body
+contains the procedure and its completion check.
 
 ## Run a skill on demand (`/slash`)
 
@@ -114,18 +106,10 @@ reload, since there's no filesystem watch on the skill roots.
 
 ## Configuration
 
-```yaml
-skills:
-  enabled: true            # default
-  db_path: /sandbox/skills.db   # resolves to <instance_root>/skills.db
-  top_k: 5                 # max skills listed in the always-on <available_skills> index
-  dir: ""                  # optional override for the writable skills root
-```
-
-`top_k` caps the per-turn **index** (the rest stay reachable via `list_skills`,
-and any one's full body loads on demand via `load_skill`) — not what's usable.
-`GET /api/runtime/status` reports `skills.count` so you can confirm how many
-loaded.
+Skills are enabled by default. `skills.top_k` limits full descriptions in the
+per-turn index; every discoverable skill keeps its name and slash identity.
+Bodies load on demand. See [Skills configuration](/reference/skills#configuration-skills-block)
+for fields, fallback defaults, and the bundled example's explicit override.
 
 ## Sharing skills across a fleet (the commons)
 
@@ -151,14 +135,16 @@ The commons is **host-level and un-scoped** — every agent pointing at the same
 one host by giving each a distinct `commons.path`. The boot log names the active
 tier and path (`[skills] tier=layered into …`).
 
-Curate the skill library from the CLI:
+Curate the skill library from a permanent package install with the CLI below.
+For a source checkout, prefix commands with `uv run`; for a temporary package
+run, use `uvx --from protolabs-agent protoagent skills …`.
 
 ```bash
-python -m server skills ls                  # list both tiers + the commons path
-python -m server skills promote <name>      # lift a private skill into the commons (upsert)
-python -m server skills forget  <name>      # remove a skill from the commons
-python -m server skills curate              # curate the PRIVATE tier (decay + dedupe + prune)
-python -m server skills curate --tier commons   # curate the COMMONS — dedupe ONLY
+protoagent skills ls                  # list both tiers + the commons path
+protoagent skills promote <name>      # lift a private skill into the commons (upsert)
+protoagent skills forget  <name>      # remove a skill from the commons
+protoagent skills curate              # curate the PRIVATE tier (decay + dedupe + prune)
+protoagent skills curate --tier commons   # curate the COMMONS — dedupe ONLY
 ```
 
 `curate` runs the skill curator against **one concrete tier**. The **private** tier
@@ -180,6 +166,4 @@ promoted runbook mustn't rot because the fleet was idle) and never auto-prunes
   + prunes non-pinned **private** skills; disk skills (your `SKILL.md` files) are
   pinned; the **commons** is dedupe-only (no decay/auto-prune) and removed from via
   `skills forget`.
-- Only `name` / `description` / `tools` / `user_facing` / `slash` are read; any other
-  frontmatter keys are ignored. See the [Skills reference](/reference/skills) for the exact
-  field + config schema.
+- See the [Skills reference](/reference/skills) for supported frontmatter, including `user_only`.

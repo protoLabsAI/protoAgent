@@ -894,6 +894,7 @@
         "/reference/discord",
         "/reference/friction",
         "/reference/operator-api",
+        "/reference/automation",
         "/reference/a2a-endpoints",
         "/reference/a2a-conformance",
         "/reference/agent-card",
@@ -977,6 +978,10 @@
             {
               "text": "Operator REST API",
               "link": "/reference/operator-api"
+            },
+            {
+              "text": "Automation APIs and integration",
+              "link": "/reference/automation"
             },
             {
               "text": "A2A endpoints",

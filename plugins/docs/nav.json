@@ -579,6 +579,10 @@
               "title": "Operator REST API"
             },
             {
+              "path": "reference/automation.md",
+              "title": "Automation APIs and integration"
+            },
+            {
               "path": "reference/a2a-endpoints.md",
               "title": "A2A endpoints"
             },

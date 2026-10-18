@@ -30,6 +30,7 @@ Use [configuration](/reference/configuration) for saved settings, [environment v
 ## Agent and operator APIs
 
 - [Operator REST API](/reference/operator-api)
+- [Automation APIs and integration](/reference/automation)
 - [A2A endpoints](/reference/a2a-endpoints)
 - [A2A conformance](/reference/a2a-conformance)
 - [Agent card](/reference/agent-card)

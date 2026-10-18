@@ -4,46 +4,46 @@ Learning-oriented. In about ten minutes you'll run a second agent, verify it's a
 conforming A2A 1.0 peer, have your first agent delegate real work to it over the
 protocol, and then read the whole cross-agent exchange as one trace.
 
-Every command here was run against a real pair of agents; the outputs are copied
-from that session, not composed.
-
-**You'll need:** a working protoAgent (the [first-agent tutorial](/tutorials/first-agent)
-gets you there) with a model gateway configured. Langfuse is optional — the last
-section is the only part that needs it.
+The output excerpts illustrate an earlier successful run; model text, identifiers,
+and trace URLs will differ. This is a source-checkout tutorial for macOS/Linux
+shells. Prepare the checkout with the source route in [Set up your first agent](/tutorials/first-agent),
+including its environment and frontend build. Keep that first agent running on
+port 7870 with a working model connection and its operator token. You also need
+`curl` and `jq`; Langfuse is optional.
 
 ## 1. Start a second agent
 
-Instance scoping (ADR 0004) makes this a one-liner: a second agent with its own
-config, chat history, and stores, leaving your existing one untouched.
+Use an unused instance name (`a2a-tutorial` below) and port. Check the instance's
+resolved paths before starting; if that name already contains work, choose another
+name and use it consistently in every command, including cleanup.
 
 ```bash
-PROTOAGENT_INSTANCE=demo PORT=7891 scripts/dev.sh --ui none
+PROTOAGENT_INSTANCE=a2a-tutorial uv run protoagent config explain
 ```
 
-::: warning Pick a genuinely free port
-If you already run a fleet, the obvious ports are taken — and a container
-publishing `7881` will answer TCP without being the agent you meant, so you get a
-confusing `404` instead of a connection error. Check first:
+This exercise assumes both source-launched agents use the same box root. The
+packaged desktop app normally uses a different root and its connections are not
+inherited by this command. The new instance has its own data but shares the
+source-launched first agent's box configuration and model connections. It is not a fully isolated box. If the model is not available,
+configure a connection in the new instance; do not parse credential files with
+shell word splitting. See [Multiple instances](/guides/multi-instance).
+
+Start it in a dedicated terminal, using a unique local-test token in place of
+`demo-agent-token` in this guide:
 
 ```bash
-(echo >/dev/tcp/127.0.0.1/7891) 2>/dev/null && echo BUSY || echo free
+PROTOAGENT_INSTANCE=a2a-tutorial PORT=7891 A2A_AUTH_TOKEN=demo-agent-token scripts/dev.sh --ui none
 ```
-:::
 
-The new instance seeds its config from your default one. It needs a model key —
-if you keep yours in `~/.protoagent/protoagent.env`, pass it through:
+Wait for `Application startup complete`, then verify health from another terminal:
 
 ```bash
-env $(grep -E '^(OPENAI_API_KEY|LANGFUSE_)' ~/.protoagent/protoagent.env | xargs) \
-  PROTOAGENT_INSTANCE=demo PORT=7891 A2A_AUTH_TOKEN=demo-agent-token \
-  scripts/dev.sh --ui none
+curl --fail http://127.0.0.1:7891/healthz
 ```
 
-Wait for `Application startup complete`, then:
-
-```bash
-curl -s http://127.0.0.1:7891/healthz     # 200
-```
+If the port is occupied, stop and choose a free one; a response from an existing
+server does not verify this new instance. Keep the server terminal open through
+the exercise.
 
 ## 2. Read its agent card
 
@@ -67,7 +67,7 @@ The fields that matter for interop:
 Don't take the card's word for it. Point the prober at it:
 
 ```bash
-python scripts/a2a_conformance.py --url http://127.0.0.1:7891 --token demo-agent-token
+uv run python scripts/a2a_conformance.py --url http://127.0.0.1:7891 --token demo-agent-token
 ```
 
 ```
@@ -147,6 +147,9 @@ That pre-flight fetches the peer's card and compares versions, so a mismatch fai
 with a legible message instead of an opaque `-32009` mid-dispatch.
 
 ## 5. Make them talk
+
+Save the following as a temporary Python file outside the tracked source, then run
+it with `uv run python <path-to-file>` from this checkout.
 
 ```python
 import asyncio
@@ -234,9 +237,22 @@ asks of a multi-agent system, and one you cannot answer from logs.
 
 ## Clean up
 
+Stop the tutorial server with Ctrl+C in its terminal. Preview removal for the
+**same instance name** used above:
+
 ```bash
-scripts/dev-reset.sh          # wipes only the sandbox instance
+PROTOAGENT_INSTANCE=a2a-tutorial uv run protoagent reset --dry-run
 ```
+
+Check that the plan names only the tutorial instance's data. If correct, run:
+
+```bash
+PROTOAGENT_INSTANCE=a2a-tutorial uv run protoagent reset
+```
+
+Confirm the interactive prompt only after reading the plan. Do not use
+`--purge-box` or `--all`: the model connections and other instances share box
+state. Remove your temporary client file as well.
 
 ## Where to go next
 

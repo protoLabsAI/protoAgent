@@ -84,51 +84,14 @@ finished one. When closing its chat tab, choose whether to keep it running in
 the background or stop it. Stopping from that prompt also closes the tasks
 filed in that session's backlog.
 
-Backed by:
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/goals` | List all goals across sessions (`{goals, enabled}`) |
-| `GET` | `/api/goals/{session_id}` | One goal's detail + its `plan` artifact |
-| `POST` | `/api/goals` | Set a goal (operator-tier — any verifier). `kick:false` drives it from a chat tab instead of a headless turn |
-| `POST` | `/api/goals/{session_id}/rearm` | Extend an active goal's budget, or restart a terminal one |
-| `POST` | `/api/goals/{session_id}/resume` | Keep an active goal running headlessly (detach on tab close) |
-| `DELETE` | `/api/goals/{session_id}` | Clear (stop) one (`{cleared, tasks_closed}`); `?close_tasks=true` also closes its task backlog |
-
-The agent's `set_goal` tool accepts registered plugin verifiers only. Plugins
-can drive a goal loop through
-[`sdk.start_goal_loop`](/reference/plugin-sdk-api#sdk-start-goal-loop).
+For authenticated endpoints, see [Goal API](/reference/automation#goal-api).
 
 ## Reacting to a goal
 
-Plugins can subscribe to `goal.achieved` or `goal.failed` on the
-[event bus](/guides/plugins#event-bus). The failed event covers `exhausted` and
-`unachievable`; both events carry
-`{session_id, condition, status, reason, evidence}`.
+<!-- Preserve links to the former follow-up section. -->
+<a id="goal-fires-→-run-a-follow-up-agent-turn"></a>
 
-For the full terminal goal state, use
-`registry.register_goal_hook(on_achieved=…, on_failed=…)`.
-
-### Goal fires → run a follow-up agent turn
-
-A hook can enqueue a one-shot turn in the completed goal's session:
-
-```python
-from graph import sdk
-
-def register(registry):
-    async def on_achieved(goal):
-        sdk.run_in_session(
-            goal.session_id,
-            f"Summarize the completed goal: {goal.condition}. "
-            f"Evidence: {goal.last_evidence}",
-        )
-    registry.register_goal_hook(on_achieved=on_achieved)
-```
-
-`run_in_session` returns without waiting for the turn. Its `job_id` makes
-scheduling idempotent; `delay_seconds` defers it. See the
-[SDK reference](/reference/plugin-sdk-api#sdk-run-in-session) for the contract.
+Plugins can react to completion or failure; see [goal hooks](/reference/automation#reacting-to-a-goal).
 
 ## Verifier types
 

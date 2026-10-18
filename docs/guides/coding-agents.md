@@ -41,6 +41,8 @@ Add or edit delegates in **Settings → Delegates**, then choose **Save** to
 apply them without a restart. The first delegate adds `delegate_to` for the
 next turn.
 
+:::: details Other adapters and migration notes
+
 ### Other coding agents
 
 Any agent that speaks ACP works — just point `command`/`args` at it:
@@ -142,6 +144,8 @@ and the `background=True` fan-out path.
 
 **opencode** (`opencode acp`) and **GitHub Copilot CLI** (`copilot --acp`) ship native
 ACP servers — point `command`/`args` straight at them, no adapter needed.
+
+::::
 
 ## Use it
 

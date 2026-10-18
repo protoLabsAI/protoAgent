@@ -227,8 +227,9 @@ context:
 # disclosure, ADR 0060).
 skills:
   db_path: /sandbox/skills.db
-  # Max skills listed in the always-on <available_skills> index each turn (the rest
-  # stay reachable via list_skills; any one's body loads on demand via load_skill).
+  # Cap full descriptions in the per-turn index; every discoverable name/slash
+  # remains listed. This example explicitly uses 5; omitting the key falls back
+  # to 24. Full bodies load on demand via load_skill.
   top_k: 5
   # Tier (ADR 0041 slice 3): scope = scoped (private) | shared (one commons for all)
   # | layered (read commons ∪ private, write private, promote to commons). Blank →

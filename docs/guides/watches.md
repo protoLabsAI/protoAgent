@@ -16,32 +16,7 @@ agent itself must do the work. An instance can hold many watches.
 4. Clear it when it is no longer needed. Disabling watch tools does not stop
    existing watches.
 
-| Creation path | Verifier and lifetime inputs |
-| --- | --- |
-| Agent `create_watch` | Plugin `check` name and optional `check_args`; `expires_in_s` is relative to now; reaction runs in the creating session |
-| Plugin `sdk.create_watch` | Plugin name in `verifier`, optional `verifier_args`; epoch `deadline`; set both `run_prompt` and `run_session` for a reaction turn |
-| Operator `POST /api/watches` | Any [verifier spec](/guides/goal-mode#verifier-types); absolute `deadline` as ISO-8601 or epoch; optional reaction prompt/session |
-
-The operator API also provides `GET /api/watches`, `PATCH /api/watches/{id}`,
-and `DELETE /api/watches/{id}`. Shell, test, CI, data, and LLM verifiers are
-operator-only. For example, an authenticated operator can post:
-
-```json
-{
-  "condition": "rollout complete",
-  "interval_s": 60,
-  "run_prompt": "Run the smoke test and report.",
-  "run_session": "ops",
-  "verifier": {
-    "type": "command",
-    "command": "kubectl rollout status deploy/api",
-    "timeout": 30
-  }
-}
-```
-
-Add an absolute `deadline` if this watch should expire. This command runs on the
-server host, which needs `kubectl` and access to the cluster.
+For plugin and authenticated API creation paths, lifetime fields, and a command-check example, see [Watch creation API](/reference/automation#watch-creation-api). Shell, test, CI, data, and LLM verifiers are operator-only.
 
 ## Configuring it
 
