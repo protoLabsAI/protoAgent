@@ -274,3 +274,17 @@ def test_pair_device_json(monkeypatch, capsys):
 def test_terminal_qr_renders_a_scannable_block_drawing():
     drawn = pair._terminal_qr("http://100.64.1.2:7870/app/#pair=K7QM2-XPA4F", light=False)
     assert drawn and len(drawn.splitlines()) > 10
+
+
+def test_pair_device_on_a_ui_none_instance_says_to_run_the_console(monkeypatch, capsys):
+    """`--ui none` serves no console for the phone to open: say so, exit non-zero, and skip
+    the bind advice (the instance may be perfectly reachable)."""
+    from operator_api.pairing_routes import NO_CONSOLE_ERROR
+
+    body = {"ok": False, "reason": "no_console", "error": NO_CONSOLE_ERROR, "hosts": [], "available": []}
+    _connect_to(monkeypatch, lambda r: httpx.Response(409, json=body))
+    assert pair.run_pair_cli(["--device"]) == 1
+    captured = capsys.readouterr()
+    assert "--ui console" in captured.err
+    assert "--host 0.0.0.0" not in captured.err
+    assert "Pairing code" not in captured.out

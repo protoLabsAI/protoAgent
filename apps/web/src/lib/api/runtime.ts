@@ -44,7 +44,15 @@ export type PairingStart =
   /** Nothing reachable — `available` is what the server COULD bind to (ADR 0087 D6).
    *  `authConfigured` is THIS SERVER's answer to "do I have a token", which a client cannot
    *  infer: localStorage holding one says nothing about what the server accepts. */
-  | { ok: false; error: string; available: PairAddress[]; bind: string; authConfigured: boolean };
+  | {
+      ok: false;
+      error: string;
+      available: PairAddress[];
+      bind: string;
+      authConfigured: boolean;
+      /** `no_console`: a phone code on a `--ui none` instance (nothing for a phone to open). */
+      reason?: string;
+    };
 
 export const runtimeApi = {
   runtimeStatus() {
@@ -84,6 +92,7 @@ export const runtimeApi = {
       // Absent (an older server) is treated as NOT configured, so the flow mints rather than
       // assuming — minting a second token is recoverable; writing a bind with no token is not.
       authConfigured: data?.auth_configured === true,
+      ...(typeof data?.reason === "string" ? { reason: data.reason } : {}),
     };
   },
   /** Drop this dialog's pending code. Scoped by kind (see `cancelBody`): an unscoped cancel

@@ -196,6 +196,11 @@ def run_pair_cli(argv: list[str]) -> int:
             print(json.dumps(res, indent=2))
             return 0 if res.get("ok") else 1
         if not res.get("ok"):
+            if res.get("reason") == "no_console":
+                # `--ui none`: nothing for the phone to open. The bind advice below would be
+                # beside the point — say the one thing that fixes it.
+                print(f"protoagent pair: {res.get('error')}", file=sys.stderr)
+                return 1
             _print_unreachable(res, again="protoagent pair --device")
             return 1
         _print_device_code(res, qr=not args.no_qr, light=args.light)

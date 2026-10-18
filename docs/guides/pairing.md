@@ -125,8 +125,10 @@ light-background terminal, and `--json` prints the raw response. See the
 [CLI reference](./cli.md#pairing-a-phone-from-the-terminal-protoagent-pair-device) for
 example output.
 
-The agent must serve the console (the default `--ui console`, not `--ui none`) and be
-reachable with a token, as in [Before you pair](#before-you-pair-make-this-agent-reachable).
+The agent must serve the console (the default `--ui console`) and be reachable with a
+token, as in [Before you pair](#before-you-pair-make-this-agent-reachable). On a
+`--ui none` agent the command says to restart it with `--ui console` and exits 1, without
+making a code. Pairing another agent doesn't need the console.
 
 To install the console on the phone's home screen and for the Tailscale setup, see
 [Access from your phone](./phone-access.md).

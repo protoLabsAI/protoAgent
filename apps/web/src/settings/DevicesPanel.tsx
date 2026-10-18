@@ -176,6 +176,10 @@ export function DevicesPanel() {
           name: res.name,
         });
         setHostIdx(0);
+      } else if (res.reason === "no_console") {
+        // `--ui none` (a hub console can open a headless member's Devices): the server's
+        // message is the whole story — no address list would help.
+        setPairError(res.error);
       } else if (res.available.length) {
         // Loopback-bound but fixable — offer the addresses instead of an error the operator
         // can't act on. This is the desktop app's default state.

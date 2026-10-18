@@ -230,6 +230,29 @@ def _requested_kind(body: dict) -> str | None:
     return kind if kind in (KIND_AGENT, KIND_DEVICE) else None
 
 
+# The refusal a phone code gets on an instance that serves no console. Shared wording so the
+# CLI and the Devices panel (a hub console can open a `--ui none` member's Devices) say the
+# same thing.
+NO_CONSOLE_ERROR = (
+    "This agent runs with --ui none, so it serves no console for a phone to open. "
+    "Restart it with --ui console (the default) to pair a phone; agent pairing works either way."
+)
+
+
+def _console_served() -> bool:
+    """Whether this process mounts the console SPA at ``/app``.
+
+    ``server`` resolves the UI tier from ``--ui`` / ``PROTOAGENT_UI`` / the deprecated
+    ``--headless`` and mirrors the FINAL value into ``PROTOAGENT_UI`` before any request is
+    served (``graph/config_load.py`` reads it the same way). Read it from there: this
+    package may not import ``server``. Unset means a process that never went through that
+    resolution (tests, an embedder) — the default tier, ``console``.
+    """
+    import os
+
+    return os.environ.get("PROTOAGENT_UI", "console").strip().lower() != "none"
+
+
 def _default_agent_name() -> str:
     """This agent's name when the server didn't inject its resolver. Mirrors
     ``server.agent_name`` (identity.name → ``AGENT_NAME`` → "protoagent"), which this
@@ -269,6 +292,16 @@ def register_pairing_routes(app, agent_name=None) -> None:
         )
 
         kind = _requested_kind(await _json_body(request)) or KIND_DEVICE
+
+        if kind == KIND_DEVICE and not _console_served():
+            # A phone code is redeemed BY the console (`…/app/#pair=` or the AuthGate's typed
+            # path). With `--ui none` there is no `/app` to open, so a code would be a promise
+            # nothing can keep — refuse before minting one. Agent codes are claimed by a hub's
+            # server over the API and need no console, so they fall through.
+            return JSONResponse(
+                {"ok": False, "reason": "no_console", "error": NO_CONSOLE_ERROR, "hosts": [], "available": []},
+                status_code=409,
+            )
 
         # Socket probes + QR rendering are blocking. Run them in a worker thread: a sync
         # call here stalls the ENTIRE event loop, which is how a 5s hostname lookup managed

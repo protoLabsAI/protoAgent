@@ -194,7 +194,8 @@ once, expires after five minutes, and five wrong tries cancel every pending code
 | `--url`, `--token` | Pair a specific instance, as for `protoagent pair`. |
 
 On a loopback-bound instance it exits 1 and explains the fix, the same as `protoagent pair`.
-The instance must serve the console (`--ui console`, the default) for the phone to open it.
+On a `--ui none` instance it exits 1 with *Restart it with --ui console (the default) to
+pair a phone*: there is no console for the phone to open, so the instance makes no code.
 See [Pair a phone by typing the code](./pairing.md#pair-a-phone-by-typing-the-code).
 
 ### Point at a local model

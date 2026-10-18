@@ -524,6 +524,9 @@ def client(devices, monkeypatch):
 
     monkeypatch.setattr(pr, "_local_addresses", lambda: ["100.119.239.8", "192.168.5.31"])
     monkeypatch.setattr(pr, "_BIND_HOST", ["0.0.0.0"])
+    # The console tier by default; a leaked PROTOAGENT_UI=none from another test would flip
+    # every device start into the no-console refusal.
+    monkeypatch.delenv("PROTOAGENT_UI", raising=False)
     app = FastAPI()
     pr.register_pairing_routes(app, agent_name=lambda: "remoteBox")
     return TestClient(app, base_url="http://testserver:7931")
@@ -621,3 +624,34 @@ def test_cancel_route_with_no_body_clears_everything(client):
     agent = client.post("/api/pairing/start", json={"kind": "agent"}).json()["code"]
     client.post("/api/pairing/cancel")
     assert client.post("/api/pairing/claim", json={"code": agent, "name": "h"}).status_code == 403
+
+
+# ── `--ui none`: no console, so no phone code (#4336 S2 follow-up) ─────────────────────
+
+
+def test_device_start_refuses_without_a_console(client, devices, monkeypatch):
+    """A phone code is redeemed BY the console; `--ui none` serves none, so refuse clearly —
+    and mint nothing that could sit claimable."""
+    monkeypatch.setenv("PROTOAGENT_UI", "none")
+    r = client.post("/api/pairing/start", json={"kind": "device"})
+    assert r.status_code == 409
+    body = r.json()
+    assert body["ok"] is False and body["reason"] == "no_console"
+    assert "--ui console" in body["error"]
+    assert devices._PENDING == {}
+    # No body = device too (the pre-ADR-0113 console form).
+    assert client.post("/api/pairing/start").json()["reason"] == "no_console"
+
+
+def test_agent_pairing_still_works_without_a_console(client, monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_UI", "none")
+    r = client.post("/api/pairing/start", json={"kind": "agent"})
+    assert r.status_code == 200 and r.json()["kind"] == "agent"
+    code = r.json()["code"]
+    assert client.post("/api/pairing/claim", json={"code": code, "name": "hub"}).status_code == 200
+
+
+@pytest.mark.parametrize("ui", ["console", "CONSOLE", ""])
+def test_device_start_works_on_the_console_tier(client, monkeypatch, ui):
+    monkeypatch.setenv("PROTOAGENT_UI", ui)
+    assert client.post("/api/pairing/start").status_code == 200

@@ -142,7 +142,12 @@ protoagent pair --device
 
 The command prints a terminal QR, a ten-character code and the console URL. Scan the QR
 with the phone, or open the URL on the phone, tap **Have a pairing code?** and type the
-code. The phone gets its own revocable token, so you never copy `$PROTOAGENT_TOKEN` onto
+code.
+
+With `--ui none` there is no console for the phone to open, so the agent refuses to make a
+phone code: `protoagent pair --device` prints *This agent runs with --ui none, so it serves
+no console for a phone to open. Restart it with --ui console (the default) to pair a
+phone* and exits 1. Agent pairing (`protoagent pair`) still works on a `--ui none` agent. The phone gets its own revocable token, so you never copy `$PROTOAGENT_TOKEN` onto
 it. See [Pair a phone from a headless box](./pairing.md#pair-a-phone-from-a-headless-box).
 
 ## What else runs headless
