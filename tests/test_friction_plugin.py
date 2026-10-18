@@ -1164,6 +1164,8 @@ def test_the_view_reveals_the_fleet_tab_from_the_roster_once(monkeypatch):
     assert '"/api/plugins/friction/fleet/roster"' in body
     assert '"/api/plugins/friction/fleet"' not in body
     assert "if (fleetChecked) return;" in body
+    # Settled only by an answer: a failed first ask must not hide the tab for the session.
+    assert body.index("fleetChecked = true;") > body.index("const data = await res.json();")
 
 
 def test_the_view_hides_fleet_until_it_knows_it_is_a_hub_and_cannot_resolve_there(monkeypatch):
