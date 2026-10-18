@@ -1,159 +1,62 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
-
-const repo = 'https://github.com/protoLabsAI/protoAgent';
-
-// Concrete agents running on protoAgent today. `key` is the scannable mono label
-// in the row's first column — the studio's index idiom, not a card grid.
-const inAction = [
-  {
-    key: 'goal mode',
-    title: 'Chase a goal autonomously',
-    caption:
-      'A SpaceTraders agent runs an OODA loop on the scheduler — observe every 20 min, escalate to a strategist subagent hourly — grinding toward a standing goal of 1,000,000 credits. The goal verifier checks the outcome, not the model\'s self-report.',
-    evidence: 'docs/guides/goal-mode.md · docs/adr/0028-plugin-goal-verifiers.md',
-  },
-  {
-    key: 'fleet',
-    title: 'Orchestrate a fleet over A2A',
-    caption:
-      'A PM agent (Roxy) fans out work across engineering teams over A2A delegate_to — dispatching features, tracking boards, and auto-disposing teams when they finish. Every agent speaks the same open protocol.',
-    evidence: 'plugins/delegates/ · docs/guides/portfolio.md · docs/explanation/a2a-protocol.md',
-  },
-  {
-    key: 'plugin views',
-    title: 'Plugins that bring their own UI',
-    caption:
-      'A plugin adds its own left-rail dashboard — Fleet view, Quant Desk, telemetry panels — that slots into the React console without touching core or rebuilding. One protoagent plugin install <git-url>, pinned in plugins.lock.',
-    evidence: 'plugins/ · docs/guides/plugin-views.md · apps/web/',
-  },
-  {
-    key: 'cost',
-    title: 'Know what every turn costs',
-    caption:
-      'Per-turn cost, latency (p50/p95), token counts, and cache-hit rates — tracked natively, exportable as CSV, and wired to Langfuse + Prometheus. Cost visibility is core, not an add-on.',
-    evidence: 'docs/explanation/cost-and-trace.md · runtime/state.py · docs/reference/extensions.md',
-  },
+import ProductOverview from '../components/ProductOverview.astro';
+const outcomes = [
+  { title: 'Work with your files', body: 'Bring documents into a conversation, create downloadable results, and give the agent access to selected work folders.', href: '/docs/guides/documents-and-files', label: 'Files and documents' },
+  { title: 'Keep useful context', body: 'Save preferences and reference material for later. Inspect the memory and sources that reach a turn, and correct what the agent remembers.', href: '/docs/guides/manage-memory', label: 'Memory you can inspect' },
+  { title: 'Give recurring work a home', body: 'Use schedules for timed jobs, watches for events, and goals for work that needs to continue. Follow progress and stop work from the app.', href: '/docs/guides/automate-work', label: 'Choose an automation' },
+  { title: 'Connect the tools you use', body: 'Add a reusable skill, connect an MCP server, or install a plugin with its own tools and interface. Enable the capabilities your task needs.', href: '/docs/guides/use-protoagent#tools-and-integrations', label: 'Connect and extend' },
 ];
-
-const features = [
-  {
-    title: 'A2A-native, built for fleets',
-    body: 'Every agent is a spec-compliant A2A 1.0 server — agent card, JSON-RPC, streaming, push, and per-turn cost carried in the A2A metadata map. Delegate to other a2a / openai / acp endpoints. Run one, or orchestrate many across your machines.',
-  },
-  {
-    title: 'A lean core, not a bundle',
-    body: "Start small and legible, then add tools, skills, subagents, workflows, memory backends, and console views as git-URL plugins — pinned, removable, shareable as repos. You opt in to surface area; you don't fight to remove it. The whole macOS app is about 100 MB installed, agent server included.",
-  },
-  {
-    title: 'An operator console',
-    body: 'A React console (+ a native desktop app) with live token-by-token streaming, chat that survives navigation, knowledge, delegates, cost telemetry, and plugin dashboards that slot right in. Run from chat, manage from surfaces.',
-  },
-  {
-    title: 'Headless or hands-on',
-    body: 'API-first: run it with no UI and drive it over the OpenAI-compatible /v1 API or A2A — point any OpenAI client or agent at it. Powered by your models, local or hosted. The console is optional, not the product.',
-  },
-];
-
-const steps = [
-  { title: 'Clone & run', body: 'Pull the template and start the server — python -m server. Zero config to first boot.' },
-  { title: 'Walk the wizard', body: 'Connect your model, name the agent, pick a persona. The setup wizard tests the connection and you’re live.' },
-  { title: 'Extend, then ship', body: 'Add skills, plugins, and subagents; wire it to your fleet over A2A. Fork it to ship your own.' },
+const paths = [
+  { title: 'Use the app', body: 'Install, connect a model, and get your first reply. Then work with files, tools, and memory.', href: '/docs/tutorials/first-agent', label: 'Start here' },
+  { title: 'Build on it', body: 'Write a skill or plugin, add a custom view, and keep your domain logic alongside your code.', href: '/docs/guides/extend', label: 'Builder guides' },
+  { title: 'Operate your agents', body: 'Run a headless server, manage separate instances, connect a fleet, and inspect traces and costs.', href: '/docs/guides/deploy-and-operate', label: 'Operator guides' },
 ];
 ---
-
-<BaseLayout
-  title="protoAgent — the lean, A2A-native agent you own"
-  description="A lean, A2A-native agent on LangGraph: ships a small core, grows with git-URL plugins. Run one agent or orchestrate a fleet — from a console, the OpenAI API, or A2A. Local-first."
->
-  <section class="pl-hero">
-    <div class="pl-container">
-      <p class="pl-eyebrow">LangGraph · A2A-native · yours to fork</p>
-      <h1>
-        Build an agent. <span class="pl-gradient-text">Orchestrate a fleet.</span>
-      </h1>
-      <p class="pl-lead">
-        protoAgent ships a small, legible core — then you add exactly what you need as
-        plugins, instead of deleting what you don't. Every agent speaks A2A, so it runs
-        solo or as part of a fleet across your machines. Local models, your stack, no bloat.
-      </p>
-      <div class="pl-hero__cta">
-        <a href="/download" class="pl-btn pl-btn--primary">Download</a>
-        <a href={repo} target="_blank" rel="noopener noreferrer" class="pl-btn">View on GitHub</a>
-        <a href="/docs/" target="_blank" rel="noopener noreferrer" class="pl-btn">Read the docs</a>
-      </div>
-      <p class="meta-note">Desktop app for macOS (signed &amp; notarized) and Windows. Linux in testing.</p>
+<BaseLayout title="protoAgent — put your AI agent to work" description="Chat, work with files, keep useful context, and automate tasks with an AI agent you control. Desktop app for macOS, Windows, and Linux; local or hosted models.">
+  <section class="pl-hero"><div class="pl-container">
+    <p class="pl-eyebrow">Open source · desktop and browser · your model connections</p>
+    <h1>Put your AI agent <span class="pl-gradient-text">to work.</span></h1>
+    <p class="pl-lead">Chat, work with files, remember useful context, and automate recurring tasks.
+      Start with a desktop app, connect your own model, and add tools as you need them.
+      Grow into multiple agents when the work calls for it.</p>
+    <div class="pl-hero__cta">
+      <a href="/download" class="pl-btn pl-btn--primary">Download protoAgent</a>
+      <a href="/use-cases" class="pl-btn">Explore what you can do</a>
     </div>
-  </section>
-
-  <section class="pl-section">
-    <div class="pl-container">
-      <p class="pl-eyebrow">In action</p>
-      <p class="pl-section-intro">
-        The same substrate, wildly different agents. Here's what's running on protoAgent today.
-      </p>
-      <div>
-        {inAction.map((item) => (
-          <div class="pl-row">
-            <div class="pl-row__label">{item.key}</div>
-            <div>
-              <div class="pl-row__name">{item.title}</div>
-              <div class="pl-row__desc">{item.caption}</div>
-              <div class="evidence">{item.evidence}</div>
-            </div>
-          </div>
-        ))}
-      </div>
+    <p class="meta-note">Public beta for macOS, Windows, and Linux. Bring a supported subscription, API connection, or local model endpoint.</p>
+    <ProductOverview />
+  </div></section>
+  <section class="pl-section"><div class="pl-container">
+    <p class="pl-eyebrow">Everyday work</p><h2 class="pl-heading">More than a conversation</h2>
+    <div class="pl-deliverables">{outcomes.map((item) => <div class="pl-deliverable">
+      <h3 class="pl-deliverable__title">{item.title}</h3><p class="pl-deliverable__body">{item.body}</p>
+      <a href={item.href}>{item.label} →</a>
+    </div>)}</div>
+    <div class="actions"><a href="/features" class="pl-btn">See the full feature set</a></div>
+  </div></section>
+  <section class="pl-section"><div class="pl-container">
+    <p class="pl-eyebrow">Get started</p><h2 class="pl-heading">From install to a useful first task</h2>
+    <ol class="start-steps">
+      <li><strong>Install the app.</strong> The desktop download includes the server and console; Python and Node are not needed just to chat.</li>
+      <li><strong>Connect a model.</strong> Choose a supported Claude or ChatGPT / Codex subscription, or an OpenAI-compatible hosted or local endpoint. Test it in setup.</li>
+      <li><strong>Give it a bounded task.</strong> Ask a question, attach a document, or choose a starter archetype. Add permissions and integrations as the task needs them.</li>
+    </ol>
+    <div class="actions"><a href="/docs/tutorials/first-agent" class="pl-btn pl-btn--primary">Follow the first-agent tutorial</a></div>
+  </div></section>
+  <section class="pl-section"><div class="pl-container">
+    <p class="pl-eyebrow">Choose your path</p>
+    <div class="pl-deliverables">{paths.map((item) => <div class="pl-deliverable">
+      <h2 class="pl-deliverable__title">{item.title}</h2><p class="pl-deliverable__body">{item.body}</p><a href={item.href}>{item.label} →</a>
+    </div>)}</div>
+  </div></section>
+  <section class="pl-section"><div class="pl-container">
+    <p class="pl-eyebrow">Before you start</p>
+    <div class="faq-list">
+      <details><summary>Do I need a model subscription?</summary><p>You need a working model connection. That can be a supported subscription, a hosted API, or a local endpoint you run. protoAgent is MIT-licensed; provider charges and infrastructure costs are separate.</p></details>
+      <details><summary>Does everything stay on my machine?</summary><p>The agent runs where you install it and keeps its local state there. Prompts and selected context go to your configured model; tools and integrations can contact other services. Choose local models and review enabled capabilities to match your requirements.</p></details>
+      <details><summary>Can I use it from my phone?</summary><p>Yes, through the browser console connected to a running, reachable agent. Pair over your LAN or a private network such as Tailscale. It is not an offline mobile app. <a href="/docs/guides/phone-access">Phone setup →</a></p></details>
+      <details><summary>Can I run it without the desktop app?</summary><p>Yes. Run the Python package, a source checkout, or a headless deployment. The <a href="/docs/tutorials/first-agent">setup guide</a> covers the package and source routes; <a href="/docs/guides/headless">deployment guides</a> cover servers.</p></details>
     </div>
-  </section>
-
-  <section class="pl-section">
-    <div class="pl-container">
-      <p class="pl-eyebrow">What you get</p>
-      <div class="pl-deliverables">
-        {features.map((f) => (
-          <div class="pl-deliverable">
-            <div class="pl-deliverable__title">{f.title}</div>
-            <div class="pl-deliverable__body">{f.body}</div>
-          </div>
-        ))}
-      </div>
-      <div class="actions">
-        <a href="/features" class="pl-btn">What makes it different →</a>
-      </div>
-    </div>
-  </section>
-
-  <section class="pl-section">
-    <div class="pl-container">
-      <p class="pl-eyebrow">From clone to shipped</p>
-      <div class="pl-steps">
-        {steps.map((s, i) => (
-          <div class="pl-step">
-            <div class="pl-step__num">{i + 1}</div>
-            <div>
-              <div class="pl-step__title">{s.title}</div>
-              <div class="pl-step__body">{s.body}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  </section>
-
-  <section class="pl-section">
-    <div class="pl-container">
-      <p class="pl-eyebrow">Quickstart</p>
-      <pre class="code-well"><code>git clone https://github.com/protoLabsAI/protoAgent
-cd protoAgent && pip install -r requirements.txt
-python -m server            <span class="comment"># walk the wizard at http://localhost:7870</span></code></pre>
-      <div class="actions">
-        <a href="/docs/" target="_blank" rel="noopener noreferrer" class="pl-btn pl-btn--primary">Read the docs</a>
-        <a href="/docs/guides/plugin-registry" target="_blank" rel="noopener noreferrer" class="pl-btn">Build a plugin</a>
-      </div>
-      <p class="meta-note">
-        A working A2A server, starter tools, and a console — on a fresh clone. Clone it tonight; own every line.
-      </p>
-    </div>
-  </section>
+  </div></section>
 </BaseLayout>

@@ -1,157 +1,136 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
-
-// Differentiators deep-dive, organized around protoAgent's three ideas: a simple core,
-// a fully extensible plugin platform, and A2A-native fleet orchestration. Everything here
-// is accurate to the codebase — keep it that way (this is the public feature claim).
-
-const pillars = [
+const groups = [
   {
-    title: 'Simple, legible core',
-    body: "You start with a small core you can actually read: the agent runtime, a spec-compliant A2A server, and a handful of keyless tools. Everything else — extra tools, skills, subagents, workflows, memory backends, console views — is opt-in. No inheriting a pile of use-cases you'll never use, then fighting to remove them.",
+    "id": "work",
+    "title": "Work in the app",
+    "items": [
+      {
+        "title": "Chat that you can steer",
+        "body": "Stream replies, change the model for a conversation, and steer ongoing work. Use the command palette to reach app actions.",
+        "href": "/docs/guides/react-tauri-ui"
+      },
+      {
+        "title": "Files and deliverables",
+        "body": "Attach material to a chat, work in registered folders, and download generated files. Document creation on desktop can require the optional Python runtime.",
+        "href": "/docs/guides/documents-and-files"
+      },
+      {
+        "title": "Rich answers and document previews",
+        "body": "View supported tables, charts, diagrams, and interactive artifacts alongside the conversation. Open generated documents in the Artifact panel, review versions, and download the result you want to keep.",
+        "href": "/docs/guides/documents-and-files"
+      },
+      {
+        "title": "Inspectable memory and knowledge",
+        "body": "Keep standing preferences, past-session context, and reference material. Review injections and correct saved facts. Optional embeddings add semantic retrieval to keyword search.",
+        "href": "/docs/guides/manage-memory"
+      },
+      {
+        "title": "Your model connections",
+        "body": "Connect hosted or local OpenAI-compatible endpoints and supported subscription logins. Select the agent model or override it for one chat.",
+        "href": "/docs/guides/model-connections"
+      },
+      {
+        "title": "Use another device",
+        "body": "Pair the browser console on a phone with a reachable running agent. LAN and private-network access let you continue with the same agent and data.",
+        "href": "/docs/guides/phone-access"
+      }
+    ]
   },
   {
-    title: 'Extensible platform',
-    body: "Grow the agent without forking. Drop-in plugins — installable from a git URL, pinned in a lockfile, shareable as repos — add tools, SKILL.md skills, subagents, workflows, FastAPI routes, managed MCP servers, and their own console dashboards. The core stays lean; you opt into surface area as you need it.",
+    "id": "automate",
+    "title": "Automate with the right mechanism",
+    "items": [
+      {
+        "title": "Goals and progress",
+        "body": "Give sustained work an objective, follow its progress, and stop it when needed. Verification behavior depends on the goal and any configured verifier.",
+        "href": "/docs/guides/goal-mode"
+      },
+      {
+        "title": "Schedules and watches",
+        "body": "Run work at a time or react to an event. Choose the trigger that fits the job and inspect its state instead of hiding it in a chat instruction.",
+        "href": "/docs/guides/watches"
+      },
+      {
+        "title": "Workflows and approval gates",
+        "body": "Define ordered steps and subagent work for repeatable processes. Include gates where a person needs to approve before the workflow continues.",
+        "href": "/docs/guides/workflows"
+      }
+    ]
   },
   {
-    title: 'Fleet orchestration',
-    body: 'Every protoAgent is a first-class A2A 1.0 server. Agents discover and delegate to one another (delegate_to over a2a / openai / acp), and a single slug-routed console manages the whole fleet — built to run distributed across your machines, not as one monolith on one box.',
-  },
-];
-
-// The features that carry those three ideas — accurate to the codebase, no competitor
-// framing. `key` is the scannable mono label in the row's first column.
-const differentiators = [
-  {
-    key: 'acp',
-    title: 'Drive any coding agent (ACP)',
-    body: 'Delegate a real coding job to protoCLI, Claude Code, Codex, or Gemini CLI over the Agent Client Protocol — or run the whole turn on one. protoAgent orchestrates coding agents rather than competing as one.',
-  },
-  {
-    key: 'a2a 1.0',
-    title: 'A2A 1.0 as the native interface',
-    body: 'protoAgent IS a spec-compliant A2A 1.0 server — HTTP/JSON-RPC, an agent card, and wire extensions (per-turn cost, worldstate deltas, tool calls) carried in the A2A metadata map. A hot-swappable delegate registry fans a sub-task out to other a2a / openai / acp endpoints, so agents discover and delegate to each other over the open standard.',
-  },
-  {
-    key: 'langgraph',
-    title: 'Built on LangGraph',
-    body: 'The runtime is LangGraph — durable checkpointing, the tool/subagent loop, and the LangChain ecosystem underneath. You extend a graph, not a bespoke loop, so what you learn here transfers.',
-  },
-  {
-    key: 'lean core',
-    title: 'A lean core, not a bundle',
-    body: 'A small, legible core ships by default; you add the rest as git-URL plugins — pinned in a lockfile, removable cleanly, shareable as repos. A plugin is a full package (tools, skills, subagents, workflows, routes, console views), so you opt in to surface area instead of opting out of it. Lean is measurable, not a vibe: the macOS desktop app is about 100 MB installed — bundled agent server included — and it fetches no runtime at first launch.',
-  },
-  {
-    key: 'extend',
-    title: 'Extend without forking',
-    body: 'Three opt-in ways to extend a running agent: SKILL.md skills (auto-retrieved into context, even agent-authored), MCP servers (external tools over stdio/HTTP), and plugins (full packages). Shared-runtime fixes land upstream; your domain logic lives in your fork or your plugins.',
+    "id": "extend",
+    "title": "Build a workspace for your domain",
+    "items": [
+      {
+        "title": "Skills and starter archetypes",
+        "body": "Load reusable procedures when relevant. Start with a persona and capability bundle for a role, then adapt it to your codebase or work.",
+        "href": "/docs/guides/fleet#bundles-and-archetypes"
+      },
+      {
+        "title": "Plugins and custom views",
+        "body": "Install tools, skills, routes, and console views from a plugin. Bundled capabilities and external plugins have separate enable/install paths.",
+        "href": "/docs/guides/plugin-registry"
+      },
+      {
+        "title": "MCP connections",
+        "body": "Connect external tool servers and test the connection in the app. Available tools and authentication depend on the server you choose.",
+        "href": "/docs/guides/mcp"
+      },
+      {
+        "title": "Read code beside the conversation",
+        "body": "Inspect files and diffs in the code pane, follow a delegate's edits, or open a file in your configured editor. Keep the evidence close to the explanation.",
+        "href": "/docs/guides/react-tauri-ui#the-code-pane"
+      },
+      {
+        "title": "Coding-agent delegates",
+        "body": "Hand coding tasks to a configured ACP coding agent such as Claude Code, Codex, Gemini CLI, or protoCLI, and inspect the returned work.",
+        "href": "/docs/guides/coding-agents"
+      }
+    ]
   },
   {
-    key: 'console',
-    title: 'An operator console + custom dashboards',
-    body: 'A dedicated React console (and a native desktop app) where a plugin can add its own left-rail dashboard — a Fleet view, a Quant Desk — without a rebuild. Run from chat, manage from surfaces, orchestrate a fleet from one place.',
-  },
-  {
-    key: 'knowledge',
-    title: 'Memory, knowledge & skills',
-    body: 'A bundled hybrid knowledge store (SQLite FTS5 + embeddings, RRF fusion) the agent reads before every turn, with ingestion for docs / web / audio / video. Skills are retrieved into context automatically and curated over time — the agent can even author its own.',
-  },
-  {
-    key: 'goals',
-    title: 'Goals with testable outcomes',
-    body: 'Beyond a scheduler: goal mode with pluggable verifiers (a goal is met when a check passes, not when the model says so) and monitor goals for long-horizon, externally-driven targets — e.g. a background loop grinding toward 1M credits, evaluated out-of-band.',
-  },
-  {
-    key: 'telemetry',
-    title: 'Built-in cost & latency telemetry',
-    body: 'A per-turn telemetry store (cost, p50/p95 latency, tokens, cache-hit, by-model) with CSV export and a retention guardrail — plus first-class Langfuse + Prometheus. Cost and latency visibility is treated as core, not an add-on.',
-  },
-  {
-    key: 'local-first',
-    title: 'Local-first & model-agnostic',
-    body: 'Powered by your models through an OpenAI-compatible gateway — a local 30B, a hosted frontier model, whatever you point it at. Model choice is gateway config, not code.',
-  },
-  {
-    key: 'headless',
-    title: 'Headless, API-first',
-    body: 'Run it with no UI (--ui none): A2A + an OpenAI-compatible /v1 endpoint + /metrics. Point any OpenAI client or agent fleet at it. The console is optional, not the product.',
-  },
-  {
-    key: 'sandbox',
-    title: 'Sandboxed by design',
-    body: 'Optional OpenShell isolation (kernel-enforced filesystem + seccomp + an egress proxy) and a deny-by-default fetch_url host fence — generated from your config, so the blast radius is bounded without hand-writing policy.',
-  },
+    "id": "operate",
+    "title": "Operate one agent or a fleet",
+    "items": [
+      {
+        "title": "Separate agents and shared oversight",
+        "body": "Create agents with their own workspaces and manage them through the console or Fleet Deck. Configure delegation and optional shared knowledge deliberately.",
+        "href": "/docs/guides/fleet"
+      },
+      {
+        "title": "Headless and protocol access",
+        "body": "Run a server without a desktop window. Use its A2A interface or OpenAI-compatible API to connect clients and other agents.",
+        "href": "/docs/guides/headless"
+      },
+      {
+        "title": "Costs, traces, and recovery",
+        "body": "Inspect reported usage and traces, diagnose failed turns, and back up local agent state. Cost availability depends on the model/provider metadata.",
+        "href": "/docs/guides/observability"
+      },
+      {
+        "title": "Explicit access boundaries",
+        "body": "Configure project access, command approvals, and fetch-host rules. These application controls are not an OS sandbox; use an isolation layer for untrusted execution.",
+        "href": "/docs/guides/sandboxing"
+      }
+    ]
+  }
 ];
 ---
-
-<BaseLayout
-  title="Features — protoAgent"
-  description="protoAgent: a simple, legible core, a fully extensible plugin platform, and A2A-native fleet orchestration. Run one agent or orchestrate many — local-first."
->
-  <section class="pl-hero">
-    <div class="pl-container">
-      <p class="pl-eyebrow">Features</p>
-      <h1>Why protoAgent</h1>
-      <p class="pl-lead">
-        Three ideas, one substrate: a simple core you can actually read, a fully extensible
-        plugin platform, and A2A-native fleet orchestration. Start with a working agent on a
-        fresh clone, grow it into exactly what you need, and run it solo or as a fleet across
-        your machines.
-      </p>
-    </div>
-  </section>
-
-  <section class="pl-section">
-    <div class="pl-container">
-      <p class="pl-eyebrow">The three ideas</p>
-      <div class="pl-deliverables">
-        {pillars.map((p) => (
-          <div class="pl-deliverable">
-            <div class="pl-deliverable__title">{p.title}</div>
-            <div class="pl-deliverable__body">{p.body}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  </section>
-
-  <section class="pl-section">
-    <div class="pl-container">
-      <p class="pl-eyebrow">The features behind them</p>
-      <div>
-        {differentiators.map((f) => (
-          <div class="pl-row">
-            <div class="pl-row__label">{f.key}</div>
-            <div>
-              <div class="pl-row__name">{f.title}</div>
-              <div class="pl-row__desc">{f.body}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  </section>
-
-  <section class="pl-section">
-    <div class="pl-container">
-      <p class="pl-eyebrow">Dogfooding</p>
-      <h2 class="pl-heading">Stress-tested by building on it</h2>
-      <p class="pl-section-intro">
-        We don't just ship the core — we build real agents on it and contribute the patterns
-        back as plugins. A <strong>SpaceTraders</strong> agent runs an OODA loop on the scheduler
-        (observe every 20 min, escalate to a strategist subagent hourly) toward a standing goal
-        of 1,000,000 credits — with a Fleet dashboard, entirely as plugins that never touch core.
-        A <strong>protoTrader Finance</strong> plugin adds market data, backtesting, and a gated
-        paper broker. <strong>ORBIS</strong> (voice companion) connects over A2A to control it by
-        voice. Same substrate, wildly different agents.
-      </p>
-      <div class="actions">
-        <a href="/docs/tutorials/first-agent" target="_blank" rel="noopener noreferrer" class="pl-btn pl-btn--primary">Build your agent →</a>
-        <a href="/plugins" class="pl-btn">Browse plugins</a>
-        <a href="/docs/" target="_blank" rel="noopener noreferrer" class="pl-btn">Read the docs</a>
-      </div>
-    </div>
-  </section>
+<BaseLayout title="Features — protoAgent" description="Explore protoAgent's chat, files, memory, model connections, automation, plugins, coding delegates, and fleet operations.">
+  <section class="pl-hero"><div class="pl-container">
+    <p class="pl-eyebrow">Features</p><h1>From everyday work to a fleet of agents</h1>
+    <p class="pl-lead">Use the app for the task in front of you. Add persistent context, repeatable processes, and integrations as the work grows.</p>
+    <nav class="actions" aria-label="Feature sections">{groups.map((g) => <a class="pl-btn" href={'#'+g.id}>{g.title}</a>)}</nav>
+  </div></section>
+  {groups.map((group) => <section class="pl-section" id={group.id}><div class="pl-container">
+    <h2 class="pl-heading">{group.title}</h2>
+    {group.items.map((item) => <div class="pl-row"><div class="pl-row__label"><a href={item.href}>Guide →</a></div><div>
+      <h3 class="pl-row__name">{item.title}</h3><p class="pl-row__desc">{item.body}</p>
+    </div></div>)}
+  </div></section>)}
+  <section class="pl-section"><div class="pl-container">
+    <p class="pl-eyebrow">Under the hood</p><p class="pl-section-intro">protoAgent is built on LangGraph, with a React console and a native desktop shell. Its A2A interface connects agents; plugins keep domain-specific capabilities outside the core. The source and technical contracts are available when you need to go deeper.</p>
+    <div class="actions"><a href="/download" class="pl-btn pl-btn--primary">Get protoAgent</a><a href="/docs/explanation/a2a-protocol" class="pl-btn">A2A interface</a><a href="https://github.com/protoLabsAI/protoAgent" class="pl-btn">Explore the source</a></div>
+  </div></section>
 </BaseLayout>

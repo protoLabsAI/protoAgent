@@ -1,0 +1,52 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import catalog from '../../../../config/archetype-catalog.json';
+const archetypes = catalog.archetypes.filter((entry) => entry.bundle);
+const cases = [
+  { id: 'documents', title: 'Turn source material into a useful deliverable', audience: 'Everyday work',
+    prompt: 'Read these meeting notes and draft a concise decision log. Flag anything the notes do not establish.',
+    body: 'Attach a file for the current task, or add reference documents to knowledge for later questions. Review the result in chat and download generated files.',
+    setup: 'Document-generation tools may need the optional Python runtime on desktop. Use registered work folders when the agent needs to edit local files.',
+    links: [{ label: 'Work with files', href: '/docs/guides/documents-and-files' }, { label: 'Add reference material', href: '/docs/guides/ingestion' }] },
+  { id: 'codebase', title: 'Get oriented in a codebase and move work forward', audience: 'Builders',
+    prompt: 'Explain how requests reach the database in this repository. Cite the source files and identify what you have not verified.',
+    body: 'Register a checkout and use the Engineer archetype for guided onboarding and debugging. Connect a coding-agent delegate when you want to hand off implementation work.',
+    setup: 'The Engineer is a navigator: you drive the edits unless you authorize them. Delegation needs a configured coding CLI and its own access to the repository.',
+    links: [{ label: 'Starter archetypes', href: '/docs/guides/fleet#bundles-and-archetypes' }, { label: 'Coding delegates', href: '/docs/guides/coding-agents' }] },
+  { id: 'recurring', title: 'Make a recurring task repeatable', audience: 'Automation',
+    prompt: 'Help me define a weekly project summary from these sources. Run it once for review before making it recurring.',
+    body: 'Capture the procedure as a skill, try it on a small task, then add a schedule. For event-driven work use a watch; for a fixed sequence of steps use a workflow.',
+    setup: 'The agent must remain running. Connect the required sources, verify one result, and choose how the task stops before enabling unattended work.',
+    links: [{ label: 'Choose the mechanism', href: '/docs/guides/automate-work' }, { label: 'Create a schedule', href: '/docs/guides/scheduler' }] },
+  { id: 'fleet', title: 'Give different roles their own agents', audience: 'Operators',
+    prompt: 'Help me separate research and implementation into two agents, with an explicit handoff and a way to inspect the result.',
+    body: 'Create separate workspaces and model configurations, connect delegates, and manage the fleet through the console or terminal deck. Share knowledge only where you need it.',
+    setup: 'Remote agents need reachable endpoints and the appropriate credentials. Start with one verified handoff before expanding the fleet.',
+    links: [{ label: 'Manage a fleet', href: '/docs/guides/fleet' }, { label: 'Try an A2A handoff', href: '/docs/tutorials/two-agents-over-a2a' }] },
+];
+---
+<BaseLayout title="Use cases — protoAgent" description="Use protoAgent for documents, codebase work, recurring tasks, and multi-agent operations. Start with a concrete task and the right setup.">
+  <section class="pl-hero"><div class="pl-container">
+    <p class="pl-eyebrow">Use cases</p><h1>Start with the work you need done</h1>
+    <p class="pl-lead">These are starting workflows you can adapt, with the setup each one needs. Your model, connected tools, and permissions determine what the agent can do.</p>
+    <nav class="actions" aria-label="Use cases">{cases.map((item) => <a class="pl-btn" href={'#'+item.id}>{item.audience}</a>)}</nav>
+  </div></section>
+  {cases.map((item) => <section class="pl-section" id={item.id}><div class="pl-container">
+    <p class="pl-eyebrow">{item.audience}</p><h2 class="pl-heading">{item.title}</h2>
+    <p class="pl-section-intro">{item.body}</p>
+    <blockquote class="task-example"><p>{item.prompt}</p><footer>Example request</footer></blockquote>
+    <p>{item.setup}</p><div class="actions">{item.links.map((link) => <a class="pl-btn" href={link.href}>{link.label} →</a>)}</div>
+  </div></section>)}
+  <section class="pl-section"><div class="pl-container">
+    <p class="pl-eyebrow">Starter roles</p><h2 class="pl-heading">Choose a starting point</h2>
+    <p class="pl-section-intro">Archetypes combine a persona with a suggested set of capabilities. These are the roles in the current app catalog; availability depends on your installed version. You can also start with Basic or write your own persona.</p>
+    {archetypes.map((entry) => <div class="pl-row"><div class="pl-row__label">{entry.label}</div><div>
+      <p class="pl-row__desc">{entry.blurb}</p><a href={entry.bundle!}>Setup and bundle details →</a>
+    </div></div>)}
+    <div class="actions"><a href="/docs/guides/fleet#bundles-and-archetypes" class="pl-btn">Create an agent from a role</a></div>
+  </div></section>
+  <section class="pl-section"><div class="pl-container"><h2 class="pl-heading">Try one small task first</h2>
+    <p>Install the app, connect a model, and verify a reply before adding integrations or recurring work.</p>
+    <div class="actions"><a href="/download" class="pl-btn pl-btn--primary">Download protoAgent</a><a href="/docs/tutorials/first-agent" class="pl-btn">First-agent tutorial</a></div>
+  </div></section>
+</BaseLayout>

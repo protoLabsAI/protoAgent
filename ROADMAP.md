@@ -9,7 +9,7 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 ## Planned
 
-- **Remote device improvements** — a first-class phone and tablet experience: the mobile console, pairing a device with a code, and reaching your agent from anywhere without fiddling with tokens. (#4336)
+- **Remote device improvements** — build on existing QR pairing with typed device codes, clearer device identity, easier private-network access, and tablet layout improvements. (#4336)
 - **Settings, reorganized** — one place for every setting: each field reachable from a real panel (not only a shortcut chip), grouped by what you're trying to do, with clearer wording and safer saves.
 - **A smarter command palette** — jump to anything and run any action from one box: better ranking across sessions, settings, plugins and commands, and consistent behavior on desktop and mobile.
 
@@ -18,6 +18,9 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 - **Ollama & Hugging Face listings** — protoAgent as an Ollama community integration and a Hugging Face "Use this model" local app; the listing PRs are open upstream, awaiting maintainer review.
 
 ## Shipped
+
+- **Phone access and device pairing** — connect a phone browser to a reachable agent over LAN or a private network, pair with a QR code, and manage paired devices. Offline access and the next device-polish work remain planned.
+- **App-first documentation** — task paths for setup, everyday use, automation, building, and operation, with commands and UI instructions checked against current source. (#4329)
 
 - **Interactive answers** — tables, charts and artifacts render inline in the transcript, with previews that stream in while the agent writes them. (v0.201.0)
 - **Real documents in the Artifact panel** — PDF, Word, slides, spreadsheets, images and video render as themselves, not as text dumps. (v0.191.0, v0.196.0, v0.207.0)

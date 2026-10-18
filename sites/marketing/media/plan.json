@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "tracker": "https://github.com/protoLabsAI/protoAgent/issues/4339",
+  "baseline": "99bc8ac4a7f0b177fa273b6e507a895a075e7ba3",
+  "media": {
+    "marketing-workspace": {
+      "kind": "image",
+      "priority": "P1",
+      "status": "planned",
+      "owner": null,
+      "placement": "/ after the product overview; /features#work",
+      "brief": "A fresh workspace with a readable conversation, one attached safe sample document, and a downloadable result. Capture the full app at a legible desktop size; avoid empty onboarding, account names, private paths, and invented output.",
+      "acceptance": "Recognition: the reviewer can identify chat, attachment, and result controls; verify on the captured commit.",
+      "watch": [
+        "apps/web/src/chat",
+        "package-lock.json"
+      ],
+      "source": null,
+      "asset": null,
+      "alt": null,
+      "caption": null,
+      "verified_commit": null,
+      "verified_on": null,
+      "reviewer": null
+    },
+    "marketing-first-task": {
+      "kind": "video",
+      "priority": "P1",
+      "status": "planned",
+      "owner": null,
+      "placement": "/use-cases#documents",
+      "brief": "From a connected model, attach a public sample document, ask one bounded question, and open the real generated result. Keep the model wait visible or label any time compression. Supply poster, transcript, captions for narration, and a text procedure.",
+      "acceptance": "A new viewer can follow the action and recognize the result; test controls and playback on desktop and mobile.",
+      "watch": [
+        "apps/web/src/chat",
+        "package-lock.json"
+      ],
+      "source": null,
+      "asset": null,
+      "alt": null,
+      "caption": null,
+      "verified_commit": null,
+      "verified_on": null,
+      "reviewer": null
+    },
+    "marketing-memory": {
+      "kind": "image",
+      "priority": "P2",
+      "status": "planned",
+      "owner": null,
+      "placement": "/features#work beside inspectable memory",
+      "brief": "Capture a safe saved preference and the injection view for a turn that received it. Use actual state, redact personal data, and retain source capture plus annotation project.",
+      "acceptance": "The source and injected context can be matched; caption must not promise every saved item reaches every turn.",
+      "watch": [
+        "apps/web/src/memory",
+        "package-lock.json"
+      ],
+      "source": null,
+      "asset": null,
+      "alt": null,
+      "caption": null,
+      "verified_commit": null,
+      "verified_on": null,
+      "reviewer": null
+    },
+    "marketing-fleet": {
+      "kind": "image",
+      "priority": "P2",
+      "status": "planned",
+      "owner": null,
+      "placement": "/use-cases#fleet",
+      "brief": "Show two disposable local agents and one completed real handoff. Capture the fleet view with no production names, endpoints, tokens, or private task content.",
+      "acceptance": "Roles and returned result are readable; verify the handoff in the captured environment.",
+      "watch": [
+        "apps/web/src/fleet",
+        "package-lock.json"
+      ],
+      "source": null,
+      "asset": null,
+      "alt": null,
+      "caption": null,
+      "verified_commit": null,
+      "verified_on": null,
+      "reviewer": null
+    }
+  }
+}

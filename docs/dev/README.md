@@ -43,3 +43,8 @@ Put current procedures in guides, contracts in reference, and decisions in ADRs.
   theirs.)
 - This area is **not** part of `npm run docs:build` output — it won't render on
   the site or break the build.
+
+## Marketing maintenance
+
+[Marketing audit](marketing-audit.md) records current page ownership, claim evidence,
+validation, and the product-capture backlog for the public site.
