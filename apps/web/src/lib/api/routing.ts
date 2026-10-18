@@ -1,3 +1,4 @@
+import { effectiveToken } from "../credentials";
 import { readKey } from "../storage";
 /**
  * Slug routing + auth for the console's HTTP calls (ADR 0042), split out of `lib/api.ts`
@@ -116,17 +117,14 @@ export function memberPath(slug: string, rel: string): string {
   return base ? `${base}${p.startsWith("/") ? p : `/${p}`}` : p;
 }
 
-/** Operator bearer token, set in localStorage (`protoagent.authToken`). Sent on
- * every fetch-based API + A2A call so a token-configured deployment's console
- * authenticates against the server guard. Blank ⇒ no header — the default
- * local/desktop case (no token) stays open. (The `/api/events` EventSource is
- * exempt server-side since EventSource can't set headers.) */
+/** The bearer this console sends — a paired device's own token (`protoagent.deviceToken`)
+ * if it has one, else the operator token (`protoagent.authToken`); see `lib/credentials.ts`
+ * for why the two are kept apart. Sent on every fetch-based API + A2A call so a
+ * token-configured deployment's console authenticates against the server guard. Blank ⇒ no
+ * header — the default local/desktop case (no token) stays open. (The `/api/events`
+ * EventSource is exempt server-side since EventSource can't set headers.) */
 export function authToken(): string {
-  try {
-    return readKey("local", "protoagent.authToken") || "";
-  } catch {
-    return "";
-  }
+  return effectiveToken();
 }
 
 export function applyAuth(headers: Headers): Headers {

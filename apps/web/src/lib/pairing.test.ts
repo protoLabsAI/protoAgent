@@ -6,7 +6,10 @@ import {
   formatPairingCode,
   isCompletePairingCode,
   redeemPairingFromUrl,
+  subscribePaired,
+  takePairedNotice,
 } from "./pairing";
+import { authToken } from "./api/routing";
 import { QuotaStorage } from "./quotaStorage.testkit";
 import { __resetStorageSeamForTests } from "./storage";
 
@@ -43,7 +46,9 @@ describe("redeemPairingFromUrl", () => {
       })),
     );
     expect(await redeemPairingFromUrl()).toEqual({ ok: true });
-    expect(window.localStorage.getItem("protoagent.authToken")).toBe("device-token");
+    // Its OWN key (#4336 S3) — the operator key is left alone.
+    expect(window.localStorage.getItem("protoagent.deviceToken")).toBe("device-token");
+    expect(window.localStorage.getItem("protoagent.authToken")).toBeNull();
     expect(window.localStorage.getItem("protoagent.deviceId")).toBe("dev1");
   });
 
@@ -68,6 +73,7 @@ describe("redeemPairingFromUrl", () => {
     // A dead code in the address bar is pure leak — no upside to keeping it.
     expect(window.location.hash).toBe("");
     expect(window.localStorage.getItem("protoagent.authToken")).toBeNull();
+    expect(window.localStorage.getItem("protoagent.deviceToken")).toBeNull();
   });
 
   it("does not store a token when the response omits one", async () => {
@@ -120,6 +126,7 @@ describe("redeemPairingFromUrl on a full quota", () => {
     expect(res?.ok).toBe(false);
     expect(res && !res.ok ? res.error : "").toMatch(/storage is full/);
     expect(full.getItem("protoagent.authToken")).toBeNull();
+    expect(full.getItem("protoagent.deviceToken")).toBeNull();
     vi.unstubAllGlobals();
     __resetStorageSeamForTests();
   });
@@ -148,7 +155,7 @@ describe("claimPairingCode + typed-code helpers", () => {
     }));
     vi.stubGlobal("fetch", fetchSpy);
     expect(await claimPairingCode("K7QM2-XPA4F")).toEqual({ ok: true });
-    expect(window.localStorage.getItem("protoagent.authToken")).toBe("typed-token");
+    expect(window.localStorage.getItem("protoagent.deviceToken")).toBe("typed-token");
     const body = JSON.parse(String((fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].body));
     expect(body.code).toBe("K7QM2-XPA4F");
   });
@@ -170,6 +177,81 @@ describe("claimPairingCode + typed-code helpers", () => {
     const body = JSON.parse(String((fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].body));
     expect(body.code).toBe("K7QM2-XPA4F");
     expect(window.location.hash).toBe("");
+  });
+});
+
+// #4336 S3 — the token's own key, the claim's URL, and the phone-side confirmation.
+describe("claimPairingCode (#4336 S3)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.unstubAllGlobals();
+    window.history.replaceState(null, "", "/app/");
+    takePairedNotice();
+  });
+
+  const ok = (device: object = { id: "d9", name: "Josh's iPhone" }) =>
+    vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, token: "dev-tok", device }),
+    }));
+
+  it("never overwrites an operator token already in this browser", async () => {
+    window.localStorage.setItem("protoagent.authToken", "operator-secret");
+    vi.stubGlobal("fetch", ok());
+    expect(await claimPairingCode("K7QM2-XPA4F")).toEqual({ ok: true });
+    expect(window.localStorage.getItem("protoagent.authToken")).toBe("operator-secret");
+    expect(window.localStorage.getItem("protoagent.deviceToken")).toBe("dev-tok");
+    // …and the device token is the one sent from now on.
+    expect(authToken()).toBe("dev-tok");
+  });
+
+  it("claims at the origin-root /api for the host console", async () => {
+    const fetchSpy = ok();
+    vi.stubGlobal("fetch", fetchSpy);
+    await claimPairingCode("K7QM2-XPA4F");
+    expect(fetchSpy.mock.calls[0][0]).toBe("/api/pairing/claim");
+  });
+
+  it("claims through the hub's per-agent prefix when the console is served under one", async () => {
+    window.history.replaceState(null, "", "/app/agent/ava/");
+    const fetchSpy = ok();
+    vi.stubGlobal("fetch", fetchSpy);
+    await claimPairingCode("K7QM2-XPA4F");
+    expect(fetchSpy.mock.calls[0][0]).toBe("/agents/ava/api/pairing/claim");
+  });
+
+  it("claims against an explicit API base", async () => {
+    window.localStorage.setItem("protoagent.apiBase", "http://10.0.0.5:7870/");
+    const fetchSpy = ok();
+    vi.stubGlobal("fetch", fetchSpy);
+    await claimPairingCode("K7QM2-XPA4F");
+    expect(fetchSpy.mock.calls[0][0]).toBe("http://10.0.0.5:7870/api/pairing/claim");
+  });
+
+  it("leaves a one-shot 'paired as' notice with the server's name for the device", async () => {
+    const seen = vi.fn();
+    const off = subscribePaired(seen);
+    vi.stubGlobal("fetch", ok());
+    await claimPairingCode("K7QM2-XPA4F");
+    off();
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(takePairedNotice()).toEqual({ id: "d9", name: "Josh's iPhone" });
+    expect(takePairedNotice()).toBeNull(); // consumed — one claim confirms once
+  });
+
+  it("a failed claim leaves no notice", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 403, json: async () => ({}) })));
+    await claimPairingCode("ZZZZZ-ZZZZZ");
+    expect(takePairedNotice()).toBeNull();
+  });
+
+  it("a re-pair drops the previous device id before storing the new token", async () => {
+    window.localStorage.setItem("protoagent.deviceId", "old-id");
+    vi.stubGlobal("fetch", ok({ name: "iPhone" })); // no id in the answer
+    await claimPairingCode("K7QM2-XPA4F");
+    // An old id must never be paired with the NEW token — it would mark the wrong row.
+    expect(window.localStorage.getItem("protoagent.deviceId")).toBeNull();
   });
 });
 

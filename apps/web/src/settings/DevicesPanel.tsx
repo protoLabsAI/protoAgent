@@ -1,12 +1,11 @@
-import { Spinner } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
-import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { Copy, Network, QrCode, RefreshCw, Smartphone, Trash2 } from "lucide-react";
+import { Badge, Button } from "@protolabsai/ui/primitives";
+import { Copy, Network, QrCode, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { StatusPill } from "../app/StatusPill";
 import { formatCountdown, hostKindLabel, secondsLeft, tailnetFirst, type PairKind } from "../lib/agentPairing";
 import { api } from "../lib/api";
+import { DeviceList } from "./DeviceList";
 import { PairingTokenRecoveryError, savePairingToken } from "./pairingToken";
 import { SettingsSubPanel } from "./SettingsSubPanel";
 import "./devices.css";
@@ -21,15 +20,6 @@ type Pairing = { kind: PairKind; code: string; expires_at: number; ttl: number; 
 /** Loopback-bound: what we COULD bind to, so the panel can offer the fix rather than
  *  dead-ending on an error the operator has no way to act on. */
 type Unreachable = { error: string; available: PairAddress[]; authConfigured: boolean };
-
-function ago(ts: number | null): string {
-  if (!ts) return "never used";
-  const secs = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-  if (secs < 60) return "active now";
-  if (secs < 3600) return `last seen ${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `last seen ${Math.floor(secs / 3600)}h ago`;
-  return `last seen ${Math.floor(secs / 86400)}d ago`;
-}
 
 /**
  * Settings ▸ Devices — paired devices and the QR that adds one (ADR 0087), plus "Pair an
@@ -69,7 +59,6 @@ export function DevicesPanel() {
   // an agent code is typed on ANOTHER machine, and the operator may only find out it expired
   // when the hub says "invalid or expired".
   const [expired, setExpired] = useState<PairKind | null>(null);
-  const [revoking, setRevoking] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
 
   const refresh = useCallback(async () => {
@@ -129,7 +118,12 @@ export function DevicesPanel() {
             message: `${hub?.name ?? "The other agent's hub"} can now reach this agent. Remove it here to revoke.`,
           });
         } else {
-          toast({ tone: "success", title: "Device paired", message: "It can now reach this agent." });
+          const phone = [...res.devices].reverse().find((d) => d.kind !== "agent");
+          toast({
+            tone: "success",
+            title: "Device paired",
+            message: `${phone?.name ?? "It"} can now reach this agent. Rename it in the list below.`,
+          });
         }
       }
     }, 2000);
@@ -252,17 +246,6 @@ export function DevicesPanel() {
     // Scoped to this dialog's kind: an unscoped cancel would also drop a code of the other
     // kind (ADR 0113 — both kinds share the pending store).
     if (kind) await api.pairingCancel(kind).catch(() => {});
-  }
-
-  async function revoke(device: Device) {
-    setRevoking(device.id);
-    try {
-      await api.revokeDevice(device.id);
-      toast({ title: `Removed ${device.name}`, message: "Its token no longer works." });
-      await refresh();
-    } finally {
-      setRevoking(null);
-    }
   }
 
   const host = pairing?.hosts[hostIdx];
@@ -493,55 +476,8 @@ export function DevicesPanel() {
         </section>
       )}
 
-      {loading ? (
-        <div className="devices-loading">
-          <Spinner size={18} />
-          <span>Loading devices…</span>
-        </div>
-      ) : devices.length === 0 ? (
-        <Empty
-          icon={<Smartphone size={20} />}
-          title="No paired devices"
-          description="Add a phone or tablet, or pair another agent's hub, to reach this agent without typing a token."
-        />
-      ) : (
-        <div className="subagent-list devices-list">
-          {devices.map((d) => (
-            <div className="subagent-row" key={d.id}>
-              <div>
-                {/* Text-first like the other manager rows — an inline glyph here sits off
-                    the strong's baseline and earns nothing; the panel is already "Devices". */}
-                <strong>
-                  {d.name}
-                  {/* Which entries are other agents (ADR 0113 D3) — the kind is fixed by the
-                      code the client claimed, so this can't be spoofed by the claimer. */}
-                  <Badge status={d.kind === "agent" ? "info" : "neutral"}>
-                    {d.kind === "agent" ? "Agent" : "Device"}
-                  </Badge>
-                  {d.last_seen_at && Date.now() / 1000 - d.last_seen_at < 60 ? (
-                    <StatusPill label="active" tone="success" />
-                  ) : null}
-                </strong>
-                <span>{ago(d.last_seen_at)}</span>
-              </div>
-              <div className="issue-actions">
-                <Button
-                  icon
-                  variant="ghost"
-                  type="button"
-                  title="Remove"
-                  aria-label={`Remove ${d.name}`}
-                  loading={revoking === d.id}
-                  disabled={revoking != null}
-                  onClick={() => revoke(d)}
-                >
-                  <Trash2 size={15} />
-                </Button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* The paired-devices list — rename, "This device", revoke (DeviceList.tsx). */}
+      <DeviceList devices={devices} loading={loading} onChanged={refresh} />
     </SettingsSubPanel>
   );
 }

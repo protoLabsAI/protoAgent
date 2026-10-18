@@ -4,6 +4,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./app/App";
+import { PairingConfirmation } from "./app/PairingConfirmation";
 import { PairingRecovery } from "./app/PairingRecovery";
 import { Launcher } from "./app/Launcher";
 import { AppCrash, ForcedQuotaCrash } from "./app/AppCrash";
@@ -21,7 +22,12 @@ import "./app/mobile-native.css"; // touch-input layer (≤767px) — must load 
 import { activateSlugAgent } from "./lib/api";
 import { queryClient } from "./lib/queryClient";
 import { watchThemeChanges } from "./lib/agentTheme";
-import { redeemPairingFromUrl } from "./lib/pairing";
+import { migrateLegacyDeviceToken, redeemPairingFromUrl } from "./lib/pairing";
+
+// A phone paired before #4336 S3 holds its device token in the OPERATOR key. Move it to its
+// own key before anything sends a request. Copy-then-remove, so a failed write leaves the
+// old key authenticating exactly as before — nobody is signed out by the upgrade.
+migrateLegacyDeviceToken();
 
 watchThemeChanges(); // fire `protoagent:theme` on any theme change → plugin iframes repaint live
 
@@ -60,6 +66,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             bar / composer) via the DS prop — no `.pl-toast-stack` CSS override needed
             since @protolabsai/ui 0.49 (ToastProvider `position`). */}
         <ToastProvider position="top-right">
+          <PairingConfirmation />
           <PairingRecovery error={pairingError}>{launcher ? <Launcher /> : <App />}</PairingRecovery>
         </ToastProvider>
       </QueryClientProvider>

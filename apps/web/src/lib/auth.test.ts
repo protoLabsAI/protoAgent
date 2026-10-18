@@ -47,6 +47,17 @@ describe("auth store", () => {
     expect(authRequired()).toBe(false);
   });
 
+  it("saveAuthToken drops a paired-device token that would otherwise shadow it (#4336 S3)", () => {
+    // The device token is sent first, so if the gate is up it is the one that 401'd.
+    window.localStorage.setItem("protoagent.deviceToken", "revoked-device-token");
+    window.localStorage.setItem("protoagent.deviceId", "ph1");
+    notifyAuthRequired();
+    expect(saveAuthToken("operator-token")).toEqual({ ok: true });
+    expect(window.localStorage.getItem("protoagent.deviceToken")).toBeNull();
+    expect(window.localStorage.getItem("protoagent.deviceId")).toBeNull();
+    expect(window.localStorage.getItem("protoagent.authToken")).toBe("operator-token");
+  });
+
   it("saveAuthToken with a blank value removes the stored token", () => {
     window.localStorage.setItem("protoagent.authToken", "old");
     saveAuthToken("   ");

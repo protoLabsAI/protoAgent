@@ -59,6 +59,8 @@ const SLUG = "([^:/.]+)";
 export const KEY_REGISTRY: readonly KeySpec[] = [
   // ── credentials / connection ──
   { id: "authToken", area: "local", pattern: /^protoagent\.authToken$/, category: "auth", slug: noSlug, evictable: false },
+  // A paired device's own token (#4336 S3) — kept apart from the operator's `authToken`.
+  { id: "deviceToken", area: "local", pattern: /^protoagent\.deviceToken$/, category: "auth", slug: noSlug, evictable: false },
   { id: "deviceId", area: "local", pattern: /^protoagent\.deviceId$/, category: "auth", slug: noSlug, evictable: false },
   { id: "apiBase", area: "local", pattern: /^protoagent\.apiBase$/, category: "auth", slug: noSlug, evictable: false },
   { id: "frame.sendTrust", area: "local", pattern: /^protoagent:frame-send-trust:v1$/, category: "auth", slug: noSlug, evictable: false },

@@ -1920,6 +1920,19 @@ const server = createServer(async (req, res) => {
     if (pathname === "/api/pairing/cancel" && req.method === "POST") {
       return sendJson(res, { ok: true });
     }
+    // Rename (#4336 S3). Mirrors the real route's 1–64 rule and its `detail` refusal.
+    if (req.method === "PATCH" && /^\/api\/devices\/[^/]+$/.test(pathname)) {
+      const id = decodeURIComponent(pathname.split("/").pop());
+      const name = typeof body?.name === "string" ? body.name.trim().replace(/\s+/g, " ") : "";
+      if (!name) return sendJson(res, { ok: false, error: "name can't be empty", detail: "name can't be empty" }, 400);
+      if (name.length > 64) {
+        return sendJson(res, { ok: false, error: "name must be 64 characters or fewer", detail: "name must be 64 characters or fewer" }, 400);
+      }
+      const device = (fleet.devices ?? []).find((d) => d.id === id);
+      if (!device) return sendJson(res, { ok: false, error: "unknown device", detail: "unknown device" }, 404);
+      device.name = name;
+      return sendJson(res, { ok: true, device });
+    }
     if (req.method === "DELETE" && /^\/api\/devices\/[^/]+$/.test(pathname)) {
       const id = decodeURIComponent(pathname.split("/").pop());
       fleet.devices = (fleet.devices ?? []).filter((d) => d.id !== id);

@@ -25,7 +25,9 @@ Pair the phone so it gets its own token. Pick whichever is easier:
   [Pair a phone from a headless box](/guides/pairing#pair-a-phone-from-a-headless-box).
 
 Codes last five minutes and work once. Five wrong codes in a row cancel every pending
-code; make a new one. Confirm the phone appears in Devices.
+code; make a new one. The phone shows **Paired as <name>** when it worked, and appears in
+Devices on the agent, where the row for the phone you're holding is marked **This device**.
+To rename or revoke it, see [Manage devices](/guides/pairing#manage-devices).
 
 Alternatively, open `http://<host>:<port>/app/` and enter the operator token
 when asked. Use an address and port shown by the agent. Desktop can choose a

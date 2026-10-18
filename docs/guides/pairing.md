@@ -71,8 +71,10 @@ Never turn on `PROTOAGENT_ALLOW_OPEN=1` to make pairing work. Pairing adds clien
    claims the code, stores the device token in that browser, and strips the code from the
    address bar and history. The code travels in the `#fragment`, so it never reaches a
    server log.
-3. The device appears in the Devices list on the agent. That list growing is the
-   confirmation; the phone can't tell the other window it succeeded.
+3. The phone shows **Paired as <name>**, the name it now has in the agent's Devices list
+   (a guess from the browser, such as `iPhone` or `Android phone`; you can
+   [rename it](#rename-a-device)). On the agent, the device appears in the Devices list and
+   a **Device paired** notice names it.
 
 ## Pair a phone by typing the code
 
@@ -88,8 +90,8 @@ is on a terminal or a screen share), or when you'd rather not.
 3. Tap **Have a pairing code?**, type the code and tap **Pair this device**. Case doesn't
    matter, the dash is optional, and the letters O, I and L are read as 0, 1 and 1, so a
    misread look-alike still works.
-4. The console opens, and the phone appears in **Settings ▸ Devices** on the agent with its
-   own token.
+4. The console opens and shows **Paired as <name>**. The phone appears in
+   **Settings ▸ Devices** on the agent with its own token.
 
 The QR and the typed code are the same code. Using either one spends it.
 
@@ -141,7 +143,30 @@ See [Pair a remote fleet member](/guides/pair-an-agent) for this operator proced
 
 See [Pair a remote fleet member](/guides/pair-an-agent) for this operator procedure.
 
-## Revoke
+## Manage devices
+
+**Settings ▸ Devices** lists every phone, tablet and hub paired to this agent. Each row
+shows the name, a **Device** or **Agent** badge, and when it was last used.
+
+- **active** means the device made a request in the last few minutes. The agent records
+  last use at most once every five minutes, to avoid a disk write on every request, so
+  the badge covers that whole window and the row reads **in use in the last few minutes**
+  rather than a misleading exact time.
+- **This device** marks the row for the browser you're using, when that browser was
+  paired. A browser signed in with the operator token isn't a paired device, so no row
+  is marked.
+
+### Rename a device
+
+Select the pencil icon on its row, type a new name and press **Enter** (or **Save**).
+**Escape** cancels. Names are 1 to 64 characters on one line. Control and invisible
+formatting characters are refused, so a name can't be made to display as something else.
+Renaming changes only the label: the device stays signed in.
+
+A paired phone can rename its own row from its own Settings, which is the quickest way to
+replace a guessed name like `iPhone`.
+
+### Revoke
 
 On the agent that was paired **to**: **Settings ▸ Devices**, then the trash icon on the
 phone's or hub's row. The token stops working at once, and nothing else is signed out: the
@@ -151,9 +176,25 @@ shared bearer, the desktop app and every other device keep working.
 - A revoked **hub** sees its next proxied call to that remote answer `401`, and its fleet
   row turns to **token rejected — re-pair** within about 30 seconds (the next token check).
   Get a new code on the remote and **Re-pair** from the hub's row.
+- **Revoking this device** (the row marked **This device**) asks first, in the panel:
+  **Remove and sign out** or **Keep**. Removing it forgets the device token in this
+  browser. If the browser also holds the operator token, you stay signed in with that;
+  otherwise the console asks you to pair again or enter a token.
 
 Removing the remote from the hub's fleet only unregisters it on the hub; revoke it on the
 remote too if the hub shouldn't hold a working token.
+
+### Where the phone keeps its token
+
+A paired browser stores its device token in its own `localStorage` key,
+`protoagent.deviceToken`, next to `protoagent.deviceId`. The operator token you type into
+**Authentication required** stays in `protoagent.authToken`. Pairing a browser that already
+holds the operator token no longer overwrites it. When both are present, the console sends
+the device token. Entering a token in **Authentication required** replaces a device token
+that stopped working.
+
+Phones paired before this change kept their device token in `protoagent.authToken`. The
+console moves it to the new key the next time it loads, without signing the phone out.
 
 ## The `auth` badge
 
