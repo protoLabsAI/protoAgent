@@ -1614,7 +1614,10 @@ def start_autostart_members(
                 return False
             return not start(ident, stop=stop).get("cancelled")
         except FleetError as exc:
-            log.error("[fleet] autostart: %r failed to start: %s", ident, exc)
+            if stop is not None and stop.is_set():  # the hub's own shutdown took it down
+                log.info("[fleet] autostart: %r stopped by hub shutdown mid-boot", ident)
+            else:
+                log.error("[fleet] autostart: %r failed to start: %s", ident, exc)
         except Exception:  # noqa: BLE001 — autostart must never block hub boot
             log.exception("[fleet] autostart: unexpected error starting %r", ident)
         return False
