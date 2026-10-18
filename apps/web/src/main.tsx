@@ -18,6 +18,7 @@ import "katex/dist/katex.min.css"; // KaTeX glyph layout for math in the DS <Mar
 import "./app/theme-base.css"; // shared token bridge + resets — must load before the rest
 import "./app/theme.css";
 import "./app/mobile-native.css"; // touch-input layer (≤767px) — must load LAST to win over the DS
+import "./app/tablet.css"; // tablet band of the desktop shell (#4336 S5) — portrait overlay + touch floor
 import { activateSlugAgent } from "./lib/api";
 import { queryClient } from "./lib/queryClient";
 import { watchThemeChanges } from "./lib/agentTheme";

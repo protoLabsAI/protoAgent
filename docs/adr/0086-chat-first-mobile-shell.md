@@ -140,7 +140,10 @@ the first time.
   component that fills its container.
 - The 768px breakpoint is now a **shell switch**. It must stay in lockstep across
   `lib/useIsMobile.ts`, the DS `mobileBreakpoint`, and the `@media` blocks.
-- The tablet band (768–1024px) still gets the desktop shell, unchanged — consistent with the
-  2026-07-07 decision to leave it as-is.
+- The tablet band (768–1024px) still gets the desktop shell — consistent with the
+  2026-07-07 decision not to build a tablet shell. (#4336 S5 adapts it rather than replacing it:
+  on a touch tablet in portrait the right column floats over chat instead of splitting the stage,
+  and the desktop shell's controls get a touch floor at ≥768px. See `lib/useTabletOverlay.ts`
+  and `app/tablet.css`.)
 - `quickBar` state remains in the store for now (persisted, harmless) but is unread on
   mobile. Removing it is a separate cleanup.

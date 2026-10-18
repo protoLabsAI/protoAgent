@@ -6,6 +6,7 @@ import { useUI } from "../state/uiStore";
 import { isCodePaneEnabled } from "./enabled";
 import { focusDiffFile, showCodeRef, useCodeViewer, type CodeRef } from "./store";
 import { readKey, writeKey } from "../lib/storage";
+import { autoOpenSuppressed, isMobileViewport } from "../lib/autoOpen";
 
 // Routing the code pane onto a dock (ADR 0112). The store (store.ts) says WHAT to show; this
 // says WHERE — and is the one place the placement rule, the one-time widen and the mobile
@@ -22,16 +23,6 @@ const WIDENED_KEY = "protoagent.codePane.widened";
 
 /** Minimum gap between two follow-mode jumps (ms). */
 export const FOLLOW_THROTTLE_MS = 800;
-
-const MOBILE_QUERY = "(max-width: 767px)";
-
-function isMobileViewport(): boolean {
-  try {
-    return typeof window !== "undefined" && window.matchMedia(MOBILE_QUERY).matches;
-  } catch {
-    return false;
-  }
-}
 
 type Dock = "left" | "right" | "bottom";
 
@@ -83,7 +74,8 @@ function widenOnce(dock: Dock): void {
 
 export type OpenCodeOptions = {
   /** An open the operator did NOT ask for (the agent's show_code). Never takes over a phone
-   *  screen (ADR 0086): on mobile it only seeds the pane; the chip pushes it on a tap. */
+   *  screen (ADR 0086): on a phone or a portrait touch tablet (lib/autoOpen.ts) it only seeds
+   *  the pane; the chip opens it on a tap. */
   auto?: boolean;
 };
 
@@ -106,8 +98,8 @@ export function withOrigin<T extends { sessionId?: string }>(ref: T): T {
 export function openCode(ref: CodeRef, opts: OpenCodeOptions = {}): void {
   if (!isCodePaneEnabled()) return;
   if (!showCodeRef(withOrigin(ref))) return;
+  if (opts.auto && autoOpenSuppressed()) return;
   const mobile = isMobileViewport();
-  if (opts.auto && mobile) return;
   if (!mobile) widenOnce(placeCodeSurface());
   // flushSync: a collapsed dock UNMOUNTS its column (DS AppShell), so the pane only exists
   // after this commit — committing now lets the pane's scroll-to-line run against a real DOM.
@@ -125,7 +117,7 @@ let pendingJump: (() => void) | null = null;
 
 function followAllowed(): boolean {
   const s = useCodeViewer.getState();
-  return isCodePaneEnabled() && s.follow && !s.pinned && !isMobileViewport();
+  return isCodePaneEnabled() && s.follow && !s.pinned && !autoOpenSuppressed();
 }
 
 /** The throttle both followers share: at most one jump per FOLLOW_THROTTLE_MS, trailing, so
