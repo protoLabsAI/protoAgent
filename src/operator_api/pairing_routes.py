@@ -5,6 +5,11 @@
     POST   /api/pairing/cancel  → drop pending codes (operator closed the dialog; optional
                                   ``{"kind": …}`` scopes it to that dialog's kind)
     POST   /api/pairing/claim   → redeem a code for a device token  ← UNAUTHENTICATED
+    GET    /api/pairing/reach   → how this instance can be reached: bind, token, Tailscale,
+                                  and whether the panel can restart it (#4336 S4)
+    POST   /api/pairing/tailscale/serve    → serve this instance over tailnet HTTPS
+                                             (refused unless a token is configured)
+    DELETE /api/pairing/tailscale/serve    → stop serving it (only OUR handler)
     GET    /api/devices         → list paired devices
     PATCH  /api/devices/{id}    → rename one (body ``{"name": …}``)
     DELETE /api/devices/{id}    → revoke one
@@ -48,9 +53,31 @@ _WILDCARD_BINDS = frozenset({"0.0.0.0", "::", ""})
 _TAILNET_NET = ipaddress.ip_network("100.64.0.0/10")
 
 
-def set_bind_host(host: str) -> None:
-    """Record the resolved bind interface (called from the server bootstrap)."""
+# Addresses served IN ADDITION to the bind. A specific-interface bind also listens on
+# loopback (server/bind.py) so the local console keeps working; this records what actually
+# bound, so "is loopback served?" (tailscale serve proxies there) has a true answer.
+_EXTRA_LISTEN: list[str] = []
+
+# `--host` on the command line beats `network.bind`, and a restart re-execs with the same
+# argv — so a bind picked in the panel would never apply. Recorded so the panel can say so.
+_BIND_PINNED: list[str] = [""]
+
+# What the bind was ASKED to be at boot. Differs from `_BIND_HOST` when server/bind.py fell
+# back to loopback because the picked IP was gone; "restart pending" compares against this,
+# so a fallback doesn't read as "restart to apply" forever.
+_BIND_REQUESTED: list[str] = [""]
+
+
+def set_bind_host(
+    host: str, *, extra: list[str] | None = None, pinned_by_flag: bool = False, requested: str | None = None
+) -> None:
+    """Record the resolved bind interface (called from the server bootstrap). ``extra`` is
+    any additional address actually listened on; ``pinned_by_flag`` says ``--host`` set it;
+    ``requested`` is what the bind was asked to be, when a fallback changed it."""
     _BIND_HOST[0] = (host or "").strip() or "127.0.0.1"
+    _BIND_REQUESTED[0] = (requested or "").strip() or _BIND_HOST[0]
+    _EXTRA_LISTEN[:] = [a for a in (extra or []) if a]
+    _BIND_PINNED[0] = _BIND_HOST[0] if pinned_by_flag else ""
 
 
 def bind_host() -> str:
@@ -65,7 +92,21 @@ def _reachable(addr: str) -> bool:
     bind = _BIND_HOST[0]
     if bind in _WILDCARD_BINDS:
         return True
-    return addr == bind
+    return addr == bind or addr in _EXTRA_LISTEN
+
+
+def _loopback_served() -> bool:
+    """Does this instance answer on 127.0.0.1? ``tailscale serve`` proxies there, so an
+    HTTPS tailnet address only works when it does."""
+    bind = _BIND_HOST[0]
+    if bind in _WILDCARD_BINDS or bind in ("localhost", "127.0.0.1"):
+        return True
+    try:
+        if ipaddress.ip_address(bind).is_loopback:
+            return True
+    except ValueError:
+        pass
+    return "127.0.0.1" in _EXTRA_LISTEN
 
 
 def _source_ip_for(target: str) -> str | None:
@@ -211,6 +252,108 @@ def _pairable_addresses() -> list[dict]:
     return out
 
 
+def _tailscale_offers(port: int, ip_hosts: list[dict]) -> tuple[list[dict], dict]:
+    """The Tailscale NAME addresses for this instance, best first, plus the status the panel
+    shows (#4336 S4, ADR 0121 D1).
+
+    - ``https://<machine>.<tailnet>.ts.net`` when ``tailscale serve`` already proxies HTTPS
+      to this instance — works with a localhost bind, survives IP changes, and is a secure
+      context on the phone.
+    - ``http://<machine>.<tailnet>.ts.net:<port>`` when MagicDNS is on and a tailnet IP is
+      directly reachable (the bind covers it) — the name survives IP changes, but it's http.
+
+    Never raises: no CLI, a stopped daemon or a slow answer just means no name addresses."""
+    from infra import tailscale
+
+    st = tailscale.status()
+    info: dict = st.as_dict()
+    info["served"] = None
+    info["https_admin_url"] = tailscale.HTTPS_ADMIN_URL
+    out: list[dict] = []
+    if not (st.available and st.running and st.dns_name):
+        return out, info
+    served = tailscale.served_url(port) if _loopback_served() else None
+    info["served"] = served
+    if served:
+        out.append(
+            {
+                "host": st.dns_name,
+                "kind": "tailnet",
+                "via": "serve",
+                "secure": True,
+                "funnel": bool(served.get("funnel")),
+                "origin": served["url"],
+            }
+        )
+    tailnet_ip_reachable = any(h["kind"] == "tailnet" for h in ip_hosts)
+    if st.magicdns and tailnet_ip_reachable:
+        out.append(
+            {"host": st.dns_name, "kind": "tailnet", "via": "magicdns", "origin": f"http://{st.dns_name}:{port}"}
+        )
+    return out, info
+
+
+def _offer_hosts(port: int) -> tuple[list[dict], dict]:
+    """Every address to offer, in ADR 0121 D1 order: tailnet HTTPS → tailnet MagicDNS
+    name → tailnet IP → LAN IP. Each carries ``origin`` (scheme://host[:port]); the
+    second value is the Tailscale status for the panel. Blocking — run in a thread."""
+    ips = [dict(h, via="ip", origin=f"http://{h['host']}:{port}") for h in _candidate_hosts()]
+    names, ts_info = _tailscale_offers(port, ips)
+    return names + ips, ts_info
+
+
+def _restart_info() -> dict:
+    """Can the panel restart this instance so a new bind applies — and if not, what to do.
+
+    The restart itself is ``POST /api/restart`` (operator_api.runtime_routes): drain, then
+    re-exec with the same argv. That covers ``python -m server``/``protoagent``, the desktop
+    sidecar and a container's PID 1 alike. What it can't fix: a ``--host`` flag (re-exec keeps
+    it, and it beats ``network.bind``), and a container, whose reachable ports are the ones
+    the container runtime publishes — not this process's bind."""
+    import os
+
+    from runtime.state import STATE
+
+    supported = getattr(STATE, "uvicorn_server", None) is not None
+    hints: list[str] = []
+    if not supported:
+        hints.append("This process can't restart itself. Stop it and start it again the way you launched it.")
+    pinned = _BIND_PINNED[0]
+    if pinned:
+        hints.append(
+            f"This agent was started with --host {pinned}, which overrides the bind setting. "
+            "Start it again without --host (or with the address you want) for a new bind to apply."
+        )
+    container = os.path.exists("/.dockerenv")
+    if container:
+        hints.append(
+            "This agent runs in a container: phones reach the ports the container publishes, "
+            "not this bind. Publish the port in your compose file instead (see the phone-access guide)."
+        )
+    hint = " ".join(hints)
+    configured = ""
+    cfg = getattr(STATE, "graph_config", None)
+    if cfg is not None:
+        configured = str(getattr(cfg, "bind_host", "") or "").strip()
+    return {
+        "supported": supported,
+        "bind_pinned": pinned,
+        "container": container,
+        "hint": hint,
+        # The saved bind differs from the live one: a restart is still owed.
+        "pending": bool(configured) and configured != (_BIND_REQUESTED[0] or _BIND_HOST[0]) and not pinned,
+    }
+
+
+def _server_port(request: Request) -> int:
+    """The port this process LISTENS on. Not ``request.url.port``: through ``tailscale
+    serve`` the Host is ``<name>.ts.net`` on 443, which says nothing about our socket."""
+    server = request.scope.get("server")
+    if isinstance(server, (tuple, list)) and len(server) == 2 and server[1]:
+        return int(server[1])
+    return request.url.port or 7870
+
+
 async def _json_body(request: Request) -> dict:
     """The request's JSON object, or ``{}`` for an empty / non-JSON / non-object body — the
     console's pre-ADR-0113 calls send no body at all, and that must keep meaning "device"."""
@@ -307,7 +450,18 @@ def register_pairing_routes(app, agent_name=None) -> None:
         # Socket probes + QR rendering are blocking. Run them in a worker thread: a sync
         # call here stalls the ENTIRE event loop, which is how a 5s hostname lookup managed
         # to freeze every other request on the server, not just this one.
-        hosts = await asyncio.to_thread(_candidate_hosts)
+        port = _server_port(request)
+        hosts, ts_info = await asyncio.to_thread(_offer_hosts, port)
+        from a2a_impl.auth import bearer_configured
+
+        reach = {
+            "tailscale": ts_info,
+            "restart": _restart_info(),
+            "auth_configured": bearer_configured(),
+            # This server co-binds loopback beside a picked interface (server/bind.py), so the
+            # panel may write that IP rather than 0.0.0.0. An older server omits it.
+            "bind_interface": True,
+        }
         if not hosts:
             # Nothing to encode — but don't dead-end. Same answer for BOTH kinds: a hub on
             # another machine can't reach a loopback-bound instance any more than a phone can.
@@ -316,7 +470,6 @@ def register_pairing_routes(app, agent_name=None) -> None:
             # unusable in exactly the place it was asked for). Still no PROTOAGENT_ALLOW_OPEN
             # suggestion: the fix is a reachable bind WITH a token, never an open instance.
             available = await asyncio.to_thread(_pairable_addresses)
-            from a2a_impl.auth import bearer_configured
 
             return JSONResponse(
                 {
@@ -334,16 +487,18 @@ def register_pairing_routes(app, agent_name=None) -> None:
                     # Those diverge whenever a token is rotated or removed, and acting on the
                     # wrong one writes a bind the server then refuses to boot with.
                     "auth_configured": bearer_configured(),
+                    # Tailscale + restart facts, so the panel can offer "Enable HTTPS via
+                    # Tailscale" (no bind change at all) before "listen on my network".
+                    "reach": reach,
                 },
                 status_code=409,
             )
-        port = request.url.port or 7870
         if kind == KIND_AGENT:
             # A hub pairs against a BASE URL (it POSTs /api/pairing/claim there itself), so
             # each host carries that — no QR, no fragment: the code is typed, not scanned.
             code, expires_at = start_pairing(KIND_AGENT)
             for host in hosts:
-                host["url"] = f"http://{host['host']}:{port}"
+                host["url"] = host["origin"]
             return JSONResponse(
                 {
                     "ok": True,
@@ -353,6 +508,7 @@ def register_pairing_routes(app, agent_name=None) -> None:
                     "ttl": AGENT_PAIRING_TTL_SECONDS,
                     "hosts": hosts,
                     "name": resolve_name(),
+                    "reach": reach,
                 }
             )
         code, expires_at = start_pairing()
@@ -363,7 +519,7 @@ def register_pairing_routes(app, agent_name=None) -> None:
         # phone that can't scan opens before typing the code into "Have a pairing code?".
         def _render() -> None:
             for host in hosts:
-                host["base_url"] = f"http://{host['host']}:{port}/app/"
+                host["base_url"] = f"{host['origin']}/app/"
                 host["url"] = f"{host['base_url']}#pair={code}"
                 host["qr"] = _qr_svg(host["url"])
 
@@ -376,8 +532,76 @@ def register_pairing_routes(app, agent_name=None) -> None:
                 "expires_at": expires_at,
                 "ttl": PAIRING_TTL_SECONDS,
                 "hosts": hosts,
+                "reach": reach,
             }
         )
+
+    @router.get("/api/pairing/reach")
+    async def _reach(request: Request):  # noqa: ANN202
+        """How this instance can be reached right now — what the "Add a device" dialog's
+        reach section renders, and what it re-reads after enabling serve or a restart."""
+        from a2a_impl.auth import bearer_configured
+
+        port = _server_port(request)
+        hosts, ts_info = await asyncio.to_thread(_offer_hosts, port)
+        available = await asyncio.to_thread(_pairable_addresses)
+        return JSONResponse(
+            {
+                "bind": _BIND_HOST[0],
+                "port": port,
+                "hosts": hosts,
+                "available": available,
+                "auth_configured": bearer_configured(),
+                "tailscale": ts_info,
+                "restart": _restart_info(),
+                "bind_interface": True,
+            }
+        )
+
+    @router.post("/api/pairing/tailscale/serve")
+    async def _serve_on(request: Request):  # noqa: ANN202
+        """Serve this instance over tailnet HTTPS with ``tailscale serve --bg``.
+
+        SECURITY: serve's requests reach us from 127.0.0.1. Auth never trusts loopback (the
+        bearer is checked on every request, ``a2a_impl.auth`` R5), so with a token set a
+        proxied request without one is a 401 — but an instance with NO token answers
+        everyone as operator, and serve would hand that to the whole tailnet. So: refused
+        until a bearer token is configured. (``a2a_impl.hosts`` also refuses serve-forwarded
+        requests on a tokenless loopback instance, for a token removed later.)"""
+        from a2a_impl.auth import bearer_configured
+        from infra import tailscale
+
+        if not bearer_configured():
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "reason": "no_token",
+                    "error": (
+                        "Set an auth token first. Tailscale forwards requests from this machine, "
+                        "so without a token anyone on your tailnet would get full control of this agent."
+                    ),
+                },
+                status_code=409,
+            )
+        if not _loopback_served():
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "reason": "no_loopback",
+                    "error": "This agent isn't listening on 127.0.0.1, which is where Tailscale forwards to.",
+                },
+                status_code=409,
+            )
+        result = await asyncio.to_thread(tailscale.enable_serve, _server_port(request))
+        return JSONResponse(result.as_dict(), status_code=200 if result.ok else 409)
+
+    @router.delete("/api/pairing/tailscale/serve")
+    async def _serve_off(request: Request):  # noqa: ANN202
+        """Stop serving THIS instance over tailnet HTTPS. Other serve config is untouched."""
+        from infra import tailscale
+
+        result = await asyncio.to_thread(tailscale.disable_serve, _server_port(request))
+        return JSONResponse(result.as_dict(), status_code=200 if result.ok else 409)
 
     @router.post("/api/pairing/cancel")
     async def _cancel(request: Request):  # noqa: ANN202

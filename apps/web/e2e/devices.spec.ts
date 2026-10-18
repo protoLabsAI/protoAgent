@@ -248,3 +248,82 @@ test("a phone paired before the key split keeps working and is migrated on boot"
   expect([...bearers].filter(Boolean)).toEqual(["Bearer legacy-device-token"]);
   await expect(page.locator(".subagent-row", { hasText: "Josh's iPhone" }).getByText("This device", { exact: true })).toBeVisible();
 });
+
+// ── #4336 S4: reach from anywhere (Tailscale HTTPS), the picked interface, restart ──────────
+
+test("loopback-bound on a tailnet: HTTPS via Tailscale is offered first and pairs without a bind change", async ({ page }) => {
+  await page.setExtraHTTPHeaders({ "x-e2e-fleet": scope(test.info()), "x-e2e-pairing": "tailscale" });
+  const writes = [];
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/settings")) writes.push(r.postDataJSON());
+    if (r.url().endsWith("/api/pairing/tailscale/serve")) writes.push({ serve: r.method() });
+  });
+  await openDevices(page);
+  await page.getByRole("button", { name: "Add a device" }).click();
+  const step = page.getByRole("region", { name: "Make this agent reachable" });
+  const option = step.getByTestId("reach-tailscale");
+  await expect(option).toContainText("https://box.tail1234.ts.net");
+  await expect(option).toContainText("needs the Tailscale app, signed in to the same tailnet");
+  await option.getByRole("button", { name: "Use HTTPS via Tailscale" }).click();
+
+  const card = page.getByRole("region", { name: "Pair a new device" });
+  await expect(card.getByTestId("device-pair-url")).toHaveText("https://box.tail1234.ts.net/app/");
+  await expect(card.getByTestId("device-pair-requirement")).toContainText("over HTTPS");
+  await expect(card.getByTestId("device-pair-requirement")).toContainText("Tailscale app");
+  // No bind was written and nothing needs a restart: serve keeps the agent on localhost.
+  expect(writes).toEqual([{ serve: "POST" }]);
+  await expect(page.getByRole("region", { name: "Restart required" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Turn off Tailscale HTTPS" })).toBeVisible();
+});
+
+test("picking an address binds THAT address, then Restart now reconnects and reopens the dialog", async ({ page }) => {
+  await page.setExtraHTTPHeaders({ "x-e2e-fleet": scope(test.info()), "x-e2e-pairing": "loopback" });
+  const binds = [];
+  page.on("request", (r) => {
+    if (r.url().endsWith("/api/settings")) binds.push(r.postDataJSON());
+  });
+  let restarted = false;
+  await page.route("**/api/restart", (route) => {
+    restarted = true;
+    return route.fulfill({ status: 202, contentType: "application/json", body: '{"ok":true,"restarting":true}' });
+  });
+  let probes = 0;
+  await page.route("**/healthz", (route) => {
+    probes += 1;
+    // Down for the first probe, then back — the console waits for both.
+    return probes === 1 ? route.abort() : route.fulfill({ status: 200, contentType: "application/json", body: '{"ok":true}' });
+  });
+  await openDevices(page);
+  await page.getByRole("button", { name: "Add a device" }).click();
+  const step = page.getByRole("region", { name: "Make this agent reachable" });
+  await expect(step).toContainText("on localhost so this app keeps");
+  await expect(step).toContainText("Tailscale app signed in to the same tailnet");
+  await step.getByRole("button", { name: "Tailnet · 100.64.0.5" }).click();
+  await expect.poll(() => binds).toEqual([{ updates: { "network.bind": "100.64.0.5" }, layer: "host" }]);
+
+  const notice = page.getByRole("region", { name: "Restart required" });
+  await notice.getByRole("button", { name: "Restart now" }).click();
+  await expect(page.getByText("Restarted", { exact: true })).toBeVisible({ timeout: 15000 });
+  expect(restarted).toBe(true);
+  await expect(notice).toHaveCount(0);
+  // The dialog reopened (still loopback in this mock, so the reach step is back).
+  await expect(page.getByRole("region", { name: "Make this agent reachable" })).toBeVisible();
+});
+
+test("a --host launch can't apply a new bind: the panel says what to run instead of offering Restart", async ({ page }) => {
+  await page.setExtraHTTPHeaders({ "x-e2e-fleet": scope(test.info()), "x-e2e-pairing": "loopback", "x-e2e-restart": "pinned" });
+  await openDevices(page);
+  await page.getByRole("button", { name: "Add a device" }).click();
+  await page.getByRole("region", { name: "Make this agent reachable" }).getByRole("button", { name: "Wi-Fi · 192.168.5.20" }).click();
+  const notice = page.getByRole("region", { name: "Restart required" });
+  await expect(notice.getByTestId("restart-hint")).toContainText("--host 127.0.0.1");
+  await expect(notice.getByRole("button", { name: "Restart now" })).toHaveCount(0);
+});
+
+test("the device QR says a tailnet address needs Tailscale on the phone", async ({ page }) => {
+  await openDevices(page);
+  await page.getByRole("button", { name: "Add a device" }).click();
+  await expect(page.getByRole("region", { name: "Pair a new device" }).getByTestId("device-pair-requirement")).toContainText(
+    "the phone needs the Tailscale app, signed in to the same tailnet",
+  );
+});

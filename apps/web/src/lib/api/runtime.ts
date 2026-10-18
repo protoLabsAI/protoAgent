@@ -17,8 +17,48 @@ import { tauriCore } from "./desktop";
  *  `…/app/#pair=<code>` link, `qr` its rendered SVG, and `base_url` the bare console URL a
  *  phone that can't scan opens before TYPING the same code (ADR 0087 D3 amendment); for an
  *  AGENT code (ADR 0113) `url` is the bare base URL a hub pairs against and there is no QR. */
-export type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr?: string | null; base_url?: string };
+export type PairHost = {
+  host: string;
+  kind: "tailnet" | "lan";
+  url: string;
+  qr?: string | null;
+  base_url?: string;
+  /** How the address reaches this agent (#4336 S4): `serve` = tailnet HTTPS through
+   *  `tailscale serve`, `magicdns` = the tailnet NAME over http, `ip` = a raw address.
+   *  Absent from older servers (read as `ip`). */
+  via?: "serve" | "magicdns" | "ip";
+  /** https — a secure context on the phone. */
+  secure?: boolean;
+  /** The serve handler is ALSO public through Tailscale Funnel. */
+  funnel?: boolean;
+  /** scheme://host[:port] of this address. */
+  origin?: string;
+};
 export type PairAddress = { host: string; kind: "tailnet" | "lan" };
+
+/** `tailscale status` as the server sees it (infra/tailscale.py). */
+export type TailscaleInfo = {
+  available: boolean;
+  running: boolean;
+  dns_name: string;
+  magicdns: boolean;
+  https: boolean;
+  ips: string[];
+  error: string;
+  served: { url: string; https_port: number; funnel: boolean } | null;
+  https_admin_url: string;
+};
+/** Whether the panel can restart this agent so a new bind applies, and what to say if not. */
+export type RestartInfo = { supported: boolean; bind_pinned: string; container: boolean; hint: string; pending: boolean };
+/** How this agent can be reached (#4336 S4) — carried on every pairing-start answer. */
+export type PairReach = {
+  tailscale: TailscaleInfo;
+  restart: RestartInfo;
+  auth_configured: boolean;
+  /** This server listens on a picked interface AND loopback, so binding the picked IP is safe. */
+  bind_interface?: boolean;
+};
+export type ServeResult = { ok: boolean; url?: string; reason?: string; error?: string; enable_url?: string };
 /** A row of `GET /api/devices`. `kind` says whether the client is a phone/tablet or another
  *  agent's hub (ADR 0113 D3) — fixed by the code it claimed; absent (pre-0113) reads `device`. */
 export type PairedDevice = {
@@ -43,6 +83,7 @@ export type PairingStart =
       hosts: PairHost[];
       /** Agent codes only: this agent's display name, so the hint can say who's pairing. */
       name?: string;
+      reach?: PairReach;
     }
   /** Nothing reachable — `available` is what the server COULD bind to (ADR 0087 D6).
    *  `authConfigured` is THIS SERVER's answer to "do I have a token", which a client cannot
@@ -55,6 +96,7 @@ export type PairingStart =
       authConfigured: boolean;
       /** `no_console`: a phone code on a `--ui none` instance (nothing for a phone to open). */
       reason?: string;
+      reach?: PairReach;
     };
 
 export const runtimeApi = {
@@ -96,7 +138,32 @@ export const runtimeApi = {
       // assuming — minting a second token is recoverable; writing a bind with no token is not.
       authConfigured: data?.auth_configured === true,
       ...(typeof data?.reason === "string" ? { reason: data.reason } : {}),
+      ...(data?.reach && typeof data.reach === "object" ? { reach: data.reach as PairReach } : {}),
     };
+  },
+  /** Serve this agent over tailnet HTTPS (`tailscale serve`), or stop. Read directly: the
+   *  409 body (`no_token`, `https_disabled` + `enable_url`, …) is what the panel shows. */
+  async tailscaleServe(on: boolean): Promise<ServeResult> {
+    const headers = applyAuth(new Headers());
+    const res = await fetch(apiUrl("/api/pairing/tailscale/serve"), { method: on ? "POST" : "DELETE", headers });
+    const data = await res.json().catch(() => ({}));
+    return {
+      ok: res.ok && data?.ok === true,
+      ...(typeof data?.url === "string" ? { url: data.url } : {}),
+      ...(typeof data?.reason === "string" ? { reason: data.reason } : {}),
+      error: typeof data?.error === "string" ? data.error : res.ok ? undefined : `${res.status} ${res.statusText}`,
+      ...(typeof data?.enable_url === "string" ? { enable_url: data.enable_url } : {}),
+    };
+  },
+  /** Whether the server answers at all — `/healthz` is public, so this works mid-restart
+   *  and before the boot gate has a token. */
+  async serverUp(): Promise<boolean> {
+    try {
+      const res = await fetch(apiUrl("/healthz", { host: true }), { cache: "no-store" });
+      return res.ok;
+    } catch {
+      return false;
+    }
   },
   /** Drop this dialog's pending code. Scoped by kind (see `cancelBody`): an unscoped cancel
    *  would also kill a code of the OTHER kind that another dialog is still showing. */

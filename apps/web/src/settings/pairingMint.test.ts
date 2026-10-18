@@ -23,8 +23,11 @@ describe("makeReachable mint decision", () => {
     expect(src).not.toMatch(/if\s*\(!previous\)\s*\{/);
   });
 
-  it("still binds the wildcard, so loopback survives for the desktop app", () => {
-    expect(src).toContain('"network.bind": "0.0.0.0"');
+  it("binds the wildcard for a server that can't co-bind loopback", () => {
+    expect(src).toContain('reach?.bind_interface ? addr.host : "0.0.0.0"');
   });
 
+  it("mints before enabling tailscale serve too (serve forwards from 127.0.0.1)", () => {
+    expect(src).toMatch(/if \(on\) await ensureToken\(\);/);
+  });
 });

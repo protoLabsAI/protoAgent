@@ -114,7 +114,6 @@ async def test_open_instance_refuses_an_untrusted_host_everywhere(tmp_path, meth
         "localhost",
         "LocalHost.:5173",
         "app.localhost:7870",
-        "box.tail1234.ts.net",
         "JOSHS-MBP.local:7870",
     ],
 )
@@ -135,6 +134,49 @@ async def test_trusted_hosts_env_allowed_origins_and_bind_name(tmp_path, monkeyp
     assert (await _req(app, "GET", "/api/config", "hub.lan")).status_code == 403
     hosts.set_bind_host("Hub.LAN")
     assert (await _req(app, "GET", "/api/config", "hub.lan:7870")).status_code == 200
+
+
+# ── tailscale serve in front of a TOKENLESS instance (#4336 S4) ───────────────────────────
+#
+# `tailscale serve` forwards `https://<machine>.<tailnet>.ts.net` to 127.0.0.1:<port>, so its
+# requests arrive from loopback. An open instance rates every caller operator — serve in front
+# of it would hand the whole tailnet full control. Refused unless PROTOAGENT_ALLOW_OPEN=1.
+
+
+@pytest.mark.parametrize("path", ["/api/config", "/app/", "/healthz"])
+async def test_open_instance_refuses_a_tailscale_serve_forwarded_request(tmp_path, monkeypatch, path):
+    monkeypatch.delenv("PROTOAGENT_ALLOW_OPEN", raising=False)
+    monkeypatch.setattr(hosts, "_TAILNET_REFUSAL_LOGGED", [])
+    r = await _req(_app(tmp_path), "GET", path, "box.tail1234.ts.net")
+    assert r.status_code == 403
+    assert "no auth token" in r.json()["detail"]
+
+
+def test_open_instance_refuses_a_tailscale_serve_websocket(tmp_path, monkeypatch):
+    monkeypatch.delenv("PROTOAGENT_ALLOW_OPEN", raising=False)
+    client = TestClient(_app(tmp_path))
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/agents/alice/x", headers={"host": "box.tail1234.ts.net"}):
+            pass
+    assert exc.value.code == 1008
+
+
+async def test_allow_open_keeps_ts_net_hosts(tmp_path, monkeypatch):
+    """PROTOAGENT_ALLOW_OPEN=1 is the operator declaring a network boundary — today's behaviour."""
+    monkeypatch.setenv("PROTOAGENT_ALLOW_OPEN", "1")
+    assert (await _req(_app(tmp_path), "GET", "/api/config", "box.tail1234.ts.net")).status_code == 200
+
+
+async def test_gated_instance_rejects_a_tokenless_serve_request_and_admits_the_token(tmp_path):
+    """The proxied shape exactly — Host *.ts.net, TCP peer 127.0.0.1 — with a token set: no
+    token is a 401 (loopback earns nothing, R5), the token is a 200."""
+    app = _app(tmp_path, bearer="s3cret")
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 51000))
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:7870") as c:
+        bare = await c.get("/api/config", headers={"host": "box.tail1234.ts.net", "x-forwarded-proto": "https"})
+        assert bare.status_code == 401
+        ok = await c.get("/api/config", headers={"host": "box.tail1234.ts.net", "authorization": "Bearer s3cret"})
+        assert ok.status_code == 200
 
 
 def test_missing_host_is_a_non_browser_client_and_passes():
@@ -169,7 +211,7 @@ def test_open_instance_refuses_a_websocket_with_an_untrusted_host(tmp_path, host
     assert exc.value.code == 1008
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1:7870", "localhost:5173", "box.tail1234.ts.net"])
+@pytest.mark.parametrize("host", ["127.0.0.1:7870", "localhost:5173"])
 def test_open_instance_accepts_a_websocket_on_its_own_host(tmp_path, host):
     client = TestClient(_app(tmp_path))
     with client.websocket_connect("/agents/alice/x", headers={"host": host}) as ws:

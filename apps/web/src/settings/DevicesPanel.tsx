@@ -5,12 +5,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { formatCountdown, hostKindLabel, secondsLeft, tailnetFirst, type PairKind } from "../lib/agentPairing";
 import { api } from "../lib/api";
+import { currentSlug } from "../lib/api/routing";
+import { reachKey, reachLabel, reachRequirement, waitForRestart } from "../lib/deviceReach";
 import { DeviceList } from "./DeviceList";
 import { PairingTokenRecoveryError, savePairingToken } from "./pairingToken";
 import { SettingsSubPanel } from "./SettingsSubPanel";
 import "./devices.css";
 
-import type { PairAddress, PairedDevice, PairHost } from "../lib/api";
+import type { PairAddress, PairedDevice, PairHost, PairReach } from "../lib/api";
 
 type Device = PairedDevice;
 /** A live code. `kind` is the dialog it belongs to: a phone QR (`device`) or a typeable agent
@@ -19,7 +21,9 @@ type Device = PairedDevice;
 type Pairing = { kind: PairKind; code: string; expires_at: number; ttl: number; hosts: PairHost[]; name?: string };
 /** Loopback-bound: what we COULD bind to, so the panel can offer the fix rather than
  *  dead-ending on an error the operator has no way to act on. */
-type Unreachable = { error: string; available: PairAddress[]; authConfigured: boolean };
+type Unreachable = { error: string; available: PairAddress[]; authConfigured: boolean; kind: PairKind };
+/** A `tailscale serve` attempt that didn't work, with where to fix it when there's a place. */
+type ServeProblem = { error: string; enableUrl?: string };
 
 /**
  * Settings ▸ Devices — paired devices and the QR that adds one (ADR 0087), plus "Pair an
@@ -45,6 +49,12 @@ export function DevicesPanel() {
   const [unreachable, setUnreachable] = useState<Unreachable | null>(null);
   const [exposing, setExposing] = useState<string | null>(null);
   const [needsRestart, setNeedsRestart] = useState(false);
+  // How this agent is reachable (#4336 S4): Tailscale, restart ability, token — from the
+  // latest pairing-start answer, so the reach section renders from server facts.
+  const [reach, setReach] = useState<PairReach | null>(null);
+  const [serving, setServing] = useState(false);
+  const [serveProblem, setServeProblem] = useState<ServeProblem | null>(null);
+  const [restarting, setRestarting] = useState(false);
   // A token MINTED by this flow exists nowhere the operator can see it — it goes straight
   // into this browser's localStorage. Every other client (the desktop app's own webview, the
   // CLI, another browser) then gets 401s with no way to know the secret. Surface it once.
@@ -139,6 +149,8 @@ export function DevicesPanel() {
   // closure otherwise.
   const liveRef = useRef<PairKind | null>(null);
   liveRef.current = pairing?.kind ?? null;
+  // The dialog to reopen after a restart.
+  const lastKindRef = useRef<PairKind>("device");
   useEffect(
     () => () => {
       if (liveRef.current) void api.pairingCancel(liveRef.current).catch(() => {});
@@ -147,6 +159,7 @@ export function DevicesPanel() {
   );
 
   async function startPairing(kind: PairKind) {
+    lastKindRef.current = kind;
     setPairError(null);
     setUnreachable(null);
     setExpired(null);
@@ -158,6 +171,7 @@ export function DevicesPanel() {
     setStarting(kind);
     try {
       const res = await api.pairingStart(kind);
+      setReach(res.reach ?? null);
       if (res.ok) {
         setPairing({
           kind,
@@ -177,7 +191,10 @@ export function DevicesPanel() {
       } else if (res.available.length) {
         // Loopback-bound but fixable — offer the addresses instead of an error the operator
         // can't act on. This is the desktop app's default state.
-        setUnreachable({ error: res.error, available: res.available, authConfigured: res.authConfigured });
+        setUnreachable({ error: res.error, available: res.available, authConfigured: res.authConfigured, kind });
+      } else if (res.reach?.tailscale.running && res.reach.tailscale.dns_name) {
+        // No IP to offer, but Tailscale is up: `tailscale serve` needs no bind at all.
+        setUnreachable({ error: res.error, available: [], authConfigured: res.authConfigured, kind });
       } else {
         setPairError(`${res.error} No tailnet or LAN address was found on this machine either.`);
       }
@@ -189,45 +206,49 @@ export function DevicesPanel() {
   }
 
   /**
-   * Make the agent reachable so phones can pair, minting an auth token first if the instance
-   * has none.
+   * Mint an auth token if the SERVER has none — both ways of reaching this agent from a phone
+   * need one: a non-loopback bind is refused at boot without it, and `tailscale serve`
+   * forwards from 127.0.0.1, so a tokenless agent would be open to the whole tailnet.
    *
-   * Binds `0.0.0.0`, NOT the address the operator picked. uvicorn takes ONE host, and binding
-   * a single non-loopback address DROPS loopback — which breaks the desktop app outright,
-   * because its webview talks to its own sidecar over `http://127.0.0.1:<port>`. Choosing
-   * "Tailnet" therefore selects the address we ADVERTISE in the QR, not the only one we
-   * listen on. `0.0.0.0` is the only single value that satisfies both callers.
+   * Decided from what the SERVER reports, never from what this browser happens to hold.
+   * Those are different facts and they diverge the moment a token is rotated or removed —
+   * and acting on the wrong one wrote a non-loopback bind onto an instance with no token,
+   * which the boot guard then refuses, bricking the app until someone edits YAML by hand.
    *
    * ORDER MATTERS. `auth.token` applies LIVE (no restart), so writing it would 401 this very
    * session on the next request if the browser didn't already hold it. Store it locally
    * first, then save; roll the local value back if the save fails, or we'd lock ourselves
    * out with a token the server never accepted.
+   */
+  async function ensureToken() {
+    const serverHasToken = unreachable?.authConfigured === true || reach?.auth_configured === true;
+    if (serverHasToken) return;
+    const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+    // Strict (ADR 0114 D1): if the browser can't keep the token, throw BEFORE the server is
+    // told about a token this session wouldn't be sending.
+    await savePairingToken(token, (value) => api.saveSettings({ "auth.token": value }, "agent"));
+    setMintedToken(token);
+    setReach((r) => (r ? { ...r, auth_configured: true } : r));
+  }
+
+  /**
+   * Listen on the address the operator picked (#4336 S4), minting a token first if needed.
    *
-   * `network.bind` is host-scoped and restart-gated, hence the restart notice rather than a
+   * The picked IP, not `0.0.0.0`: this server also listens on loopback beside a picked
+   * interface (`server/bind.py`), so the desktop app's webview — which reaches its sidecar
+   * over `http://127.0.0.1:<port>` — keeps working. An OLDER server (no `bind_interface` in
+   * its answer) binds exactly one host, where a specific address DROPS loopback and bricks
+   * the desktop app; for it this still writes `0.0.0.0`.
+   *
+   * `network.bind` is host-scoped and restart-gated, hence "Restart now" rather than a
    * silent "done".
    */
   async function makeReachable(addr: PairAddress) {
     setExposing(addr.host);
-    // Mint based on what the SERVER reports, never on what this browser happens to hold.
-    // Those are different facts and they diverge the moment a token is rotated or removed —
-    // and acting on the wrong one wrote a non-loopback bind onto an instance with no token,
-    // which the boot guard then refuses, bricking the app until someone edits YAML by hand.
-    const serverHasToken = unreachable?.authConfigured === true;
     try {
-      if (!serverHasToken) {
-        // The server REFUSES a non-loopback bind with no token, so exposing without one
-        // isn't an option we could offer even if we wanted to.
-        const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
-        // Store locally BEFORE saving: `auth.token` applies live, so the very next request
-        // would 401 this session if the browser weren't already holding it.
-        // Strict (ADR 0114 D1): if the browser can't keep the token, throw into the catch
-        // below BEFORE the server is told about a token this session wouldn't be sending.
-        await savePairingToken(token, (value) => api.saveSettings({ "auth.token": value }, "agent"));
-        setMintedToken(token);
-      }
-      // See the note above: 0.0.0.0, not addr.host — a specific bind kills loopback and with
-      // it the desktop app's own connection to the sidecar.
-      const bind = await api.saveSettings({ "network.bind": "0.0.0.0" }, "host");
+      await ensureToken();
+      const target = reach?.bind_interface ? addr.host : "0.0.0.0";
+      const bind = await api.saveSettings({ "network.bind": target }, "host");
       if (!bind.ok) throw new Error(bind.messages.join(" · ") || "could not set the bind address");
       setUnreachable(null);
       setNeedsRestart(true);
@@ -236,6 +257,58 @@ export function DevicesPanel() {
       setPairError(err instanceof Error ? err.message : "could not update the bind address");
     } finally {
       setExposing(null);
+    }
+  }
+
+  /**
+   * Serve this agent over tailnet HTTPS with `tailscale serve` (#4336 S4, ADR 0121 D1). The
+   * agent STAYS on localhost — tailscaled terminates HTTPS and forwards to 127.0.0.1 — so no
+   * bind change and no restart. A token is required first (see `ensureToken`); the server
+   * refuses without one too.
+   */
+  async function setTailscaleHttps(on: boolean, kind: PairKind = pairing?.kind ?? unreachable?.kind ?? "device") {
+    setServing(true);
+    setServeProblem(null);
+    try {
+      if (on) await ensureToken();
+      const res = await api.tailscaleServe(on);
+      if (!res.ok) {
+        setServeProblem({ error: res.error ?? "tailscale serve failed", enableUrl: res.enable_url });
+        return;
+      }
+      toast(
+        on
+          ? { tone: "success", title: "HTTPS via Tailscale is on", message: res.url ?? "Devices on your tailnet can reach this agent." }
+          : { title: "Tailscale HTTPS is off", message: "This agent is no longer served on your tailnet." },
+      );
+      setUnreachable(null);
+      await startPairing(kind);
+    } catch (err) {
+      if (err instanceof PairingTokenRecoveryError) setRecoveryToken(err.priorToken);
+      setServeProblem({ error: err instanceof Error ? err.message : "tailscale serve failed" });
+    } finally {
+      setServing(false);
+    }
+  }
+
+  /** Restart from the panel (`POST /api/restart`: drain, re-exec with the same argv), wait
+   *  for the server to come back, then reopen the dialog on the new bind. */
+  async function restartNow() {
+    setRestarting(true);
+    try {
+      await api.restart();
+      const back = await waitForRestart(() => api.serverUp());
+      if (!back) {
+        setPairError("protoAgent didn't come back within a minute. Check the terminal or app it runs in.");
+        return;
+      }
+      setNeedsRestart(false);
+      toast({ tone: "success", title: "Restarted", message: "The new network setting is live." });
+      await startPairing(lastKindRef.current);
+    } catch (err) {
+      setPairError(err instanceof Error ? err.message : "could not restart");
+    } finally {
+      setRestarting(false);
     }
   }
 
@@ -249,6 +322,14 @@ export function DevicesPanel() {
   }
 
   const host = pairing?.hosts[hostIdx];
+  const ts = reach?.tailscale;
+  // Tailscale is up on this machine and has a name to serve — "HTTPS via Tailscale" is on offer.
+  const tsReady = Boolean(ts?.running && ts.dns_name);
+  const restartOwed = needsRestart || reach?.restart.pending === true;
+  // Restart targets the HOST process (api.restart is host-routed), so only offer it from the
+  // host's own console, and only where a re-exec actually applies the new bind.
+  const canRestart =
+    reach?.restart.supported !== false && !reach?.restart.bind_pinned && !reach?.restart.container && currentSlug() === "host";
 
   return (
     <SettingsSubPanel
@@ -299,12 +380,27 @@ export function DevicesPanel() {
         </section>
       )}
 
-      {needsRestart && (
+      {restartOwed && (
         <section className="devices-notice" aria-label="Restart required">
           <p className="devices-pair-hint">
-            <strong>Restart protoAgent to finish.</strong> The bind interface only takes effect
-            at startup — reopen the app, then add your device or pair the other agent.
+            <strong>Restart protoAgent to finish.</strong> The network address only takes effect
+            at startup.
+            {canRestart ? " This console reconnects on its own." : null}
           </p>
+          {canRestart ? (
+            <div className="devices-hosts">
+              <Button type="button" onClick={restartNow} loading={restarting} disabled={restarting}>
+                <RefreshCw size={14} aria-hidden /> {restarting ? "Restarting…" : "Restart now"}
+              </Button>
+            </div>
+          ) : (
+            <p className="setting-desc" data-testid="restart-hint">
+              {reach?.restart.hint ||
+                (currentSlug() !== "host"
+                  ? "Restart this agent from its own console or the Fleet panel, then add your device or pair the other agent."
+                  : "Quit and reopen the app (or stop and start protoAgent the way you launched it), then add your device or pair the other agent.")}
+            </p>
+          )}
           {mintedToken && (
             <>
               <p className="setting-desc">
@@ -333,34 +429,85 @@ export function DevicesPanel() {
       {unreachable && (
         <section className="devices-notice" aria-label="Make this agent reachable">
           <p className="devices-pair-hint">{unreachable.error}</p>
-          <p className="setting-desc">
-            Allow devices on your network to reach it. This agent will start listening on{" "}
-            <strong>all</strong> your network interfaces rather than localhost only — that&apos;s
-            what keeps this app working while your phone or another agent connects — and will
-            require a token; one is generated now if you don&apos;t have one. Pick the address
-            you&apos;ll share.
-            Undo it any time in Settings ▸ Network by setting the bind interface back to{" "}
-            <code>127.0.0.1</code>.
-          </p>
-          <div className="devices-hosts">
-            {unreachable.available.map((a) => (
-              <Button
-                key={a.host}
-                type="button"
-                variant="ghost"
-                loading={exposing === a.host}
-                disabled={exposing != null}
-                onClick={() => makeReachable(a)}
-              >
-                {a.kind === "tailnet" ? "Tailnet" : "Wi-Fi"} · {a.host}
-              </Button>
-            ))}
-          </div>
-          <p className="setting-desc">
-            {unreachable.available.some((a) => a.kind === "tailnet")
-              ? "Tailnet is the safer address to share — only your own devices can reach it, from any network."
-              : "This is a local-network address, so it's reachable by anything on this Wi-Fi."}
-          </p>
+          {tsReady && ts && (
+            // The preferred path (ADR 0121 D1): no bind change, no restart, a stable name and a
+            // real certificate. Offered first whenever this machine is on a tailnet.
+            <div className="devices-reach-option" data-testid="reach-tailscale">
+              <p className="setting-desc">
+                <strong>Recommended: HTTPS via Tailscale.</strong> This agent stays on localhost;
+                Tailscale serves it at <code>https://{ts.dns_name}</code> to devices signed in to
+                your tailnet. The phone needs the Tailscale app, signed in to the same tailnet.
+                {unreachable.authConfigured ? null : " An auth token is created first."}
+              </p>
+              {!ts.https && (
+                <p className="setting-desc">
+                  HTTPS certificates aren&apos;t enabled on your tailnet yet. Turn them on in the{" "}
+                  <a href={ts.https_admin_url} target="_blank" rel="noreferrer">
+                    Tailscale admin console (DNS ▸ HTTPS Certificates)
+                  </a>
+                  , then come back.
+                </p>
+              )}
+              <div className="devices-hosts">
+                <Button type="button" onClick={() => setTailscaleHttps(true, unreachable.kind)} loading={serving} disabled={serving || exposing != null}>
+                  Use HTTPS via Tailscale
+                </Button>
+              </div>
+            </div>
+          )}
+          {unreachable.available.length > 0 && (
+            <>
+              <p className="setting-desc">
+                {tsReady ? "Or listen on a network address. " : null}
+                {reach?.bind_interface ? (
+                  <>
+                    This agent will listen on the address you pick, and on localhost so this app keeps
+                    working, and will require a token
+                  </>
+                ) : (
+                  <>
+                    This agent will start listening on <strong>all</strong> your network interfaces rather than
+                    localhost only — that&apos;s what keeps this app working while your phone or another agent
+                    connects — and will require a token
+                  </>
+                )}
+                ; one is generated now if you don&apos;t have one. It takes a restart. Undo it any time in
+                Settings ▸ Network by setting the bind interface back to <code>127.0.0.1</code>.
+              </p>
+              <div className="devices-hosts">
+                {unreachable.available.map((a) => (
+                  <Button
+                    key={a.host}
+                    type="button"
+                    variant="ghost"
+                    loading={exposing === a.host}
+                    disabled={exposing != null || serving}
+                    onClick={() => makeReachable(a)}
+                  >
+                    {a.kind === "tailnet" ? "Tailnet" : "Wi-Fi"} · {a.host}
+                  </Button>
+                ))}
+              </div>
+              <p className="setting-desc">
+                {unreachable.available.some((a) => a.kind === "tailnet")
+                  ? "A tailnet address is the safer one to share: only your own devices can reach it, from any network — and each phone needs the Tailscale app signed in to the same tailnet. A Wi-Fi address works only while the phone is on this Wi-Fi, and anything on that network can reach it."
+                  : "This is a local-network address: it works only while the phone is on this Wi-Fi, and anything on that network can reach it."}
+              </p>
+            </>
+          )}
+          {serveProblem && (
+            <p className="setting-desc devices-error" data-testid="serve-problem">
+              {serveProblem.error}
+              {serveProblem.enableUrl ? (
+                <>
+                  {" "}
+                  <a href={serveProblem.enableUrl} target="_blank" rel="noreferrer">
+                    Enable it in Tailscale
+                  </a>
+                </>
+              ) : null}
+            </p>
+          )}
         </section>
       )}
 
@@ -413,7 +560,7 @@ export function DevicesPanel() {
                 </p>
                 <ul className="devices-agent-hosts">
                   {pairing.hosts.map((h) => (
-                    <li key={h.host}>
+                    <li key={reachKey(h)}>
                       <Badge status={h.kind === "tailnet" ? "info" : "neutral"}>{hostKindLabel(h.kind)}</Badge>
                       <code>{h.url}</code>
                     </li>
@@ -457,21 +604,47 @@ export function DevicesPanel() {
               <div className="devices-hosts">
                 {pairing.hosts.map((h, i) => (
                   <button
-                    key={h.host}
+                    key={reachKey(h)}
                     type="button"
                     className={`devices-host${i === hostIdx ? " on" : ""}`}
                     onClick={() => setHostIdx(i)}
                   >
-                    {h.kind === "tailnet" ? "Tailnet" : "Wi-Fi"} · {h.host}
+                    {reachLabel(h)}
                   </button>
                 ))}
               </div>
             )}
-            <p className="setting-desc">
-              {host.kind === "tailnet"
-                ? "Works from any network the device is on."
-                : "Only works while both are on this Wi-Fi."}
+            <p className="setting-desc" data-testid="device-pair-requirement">
+              {reachRequirement(host)}
             </p>
+            {tsReady && ts && (
+              // Tailnet HTTPS from the QR card itself: on when it isn't (the QR then leads with
+              // the https name), off when it is. Only this agent's handler is ever touched.
+              <div className="devices-hosts">
+                {ts.served ? (
+                  <Button type="button" variant="ghost" onClick={() => setTailscaleHttps(false)} loading={serving} disabled={serving}>
+                    Turn off Tailscale HTTPS
+                  </Button>
+                ) : (
+                  <Button type="button" variant="ghost" onClick={() => setTailscaleHttps(true)} loading={serving} disabled={serving}>
+                    Use HTTPS via Tailscale
+                  </Button>
+                )}
+              </div>
+            )}
+            {serveProblem && !unreachable && (
+              <p className="setting-desc devices-error" data-testid="serve-problem">
+                {serveProblem.error}
+                {serveProblem.enableUrl ? (
+                  <>
+                    {" "}
+                    <a href={serveProblem.enableUrl} target="_blank" rel="noreferrer">
+                      Enable it in Tailscale
+                    </a>
+                  </>
+                ) : null}
+              </p>
+            )}
           </div>
         </section>
       )}

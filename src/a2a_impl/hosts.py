@@ -109,7 +109,8 @@ def host_allowed(host: str | None) -> bool:
     - ``localhost`` and ``*.localhost`` (RFC 6761: browsers resolve them to loopback
       themselves, no DNS involved).
     - ``*.ts.net`` — Tailscale MagicDNS (``tailscale serve`` forwards its own
-      ``<machine>.<tailnet>.ts.net``). That zone is Tailscale's.
+      ``<machine>.<tailnet>.ts.net``). That zone is Tailscale's. The open-mode middleware
+      still refuses these unless ``PROTOAGENT_ALLOW_OPEN=1`` (``tailnet_proxy_refusal``).
     - This machine's ``<short>.local`` mDNS name (see ``_own_names`` for why not the bare or
       DNS hostname), and the bind address when it is a name.
     - ``PROTOAGENT_TRUSTED_HOSTS`` and the hosts of ``A2A_ALLOWED_ORIGINS``.
@@ -138,6 +139,33 @@ def host_allowed(host: str | None) -> bool:
     if name == host_name(_BIND_HOST[0]) or name in _own_names():
         return True
     return name in _trusted_host_names()
+
+
+def tailnet_proxy_refusal(host: str | None) -> str | None:
+    """Why an OPEN instance must refuse a request addressed to ``*.ts.net``, or None.
+
+    ``tailscale serve`` terminates HTTPS for ``<machine>.<tailnet>.ts.net`` and forwards to
+    ``127.0.0.1:<port>`` — so its requests arrive from loopback, carrying the ``.ts.net``
+    Host. Auth never trusts loopback (``a2a_impl.auth`` R5): with a token set, a forwarded
+    request without one is a 401 like any other. But an OPEN instance answers everyone as
+    operator, so a serve handler in front of it hands full control (plugin install = code
+    execution) to every device on the tailnet. The Devices panel refuses to enable serve
+    without a token; this covers serve set up by hand, or a token removed afterwards.
+
+    Without ``PROTOAGENT_ALLOW_OPEN=1`` an open instance can only be loopback-bound (the boot
+    gate refuses anything else), so a ``.ts.net`` Host on it can only have come through a
+    proxy on this machine. ``PROTOAGENT_ALLOW_OPEN=1`` is the operator saying a network
+    boundary fences the port; it keeps today's behaviour."""
+    if not host:
+        return None
+    if not host_name(host).endswith(".ts.net"):
+        return None
+    if os.environ.get("PROTOAGENT_ALLOW_OPEN", "") == "1":
+        return None
+    return (
+        "Forbidden: this agent has no auth token, so it refuses requests forwarded by tailscale "
+        "serve (anyone on the tailnet would get full control). Set an auth token first."
+    )
 
 
 # ── Cross-site requests (Origin + Fetch Metadata) ─────────────────────────────────────────
@@ -290,6 +318,10 @@ def json_content_type(value: str | None) -> bool:
 
 # ── The middleware ──────────────────────────────────────────────────────────────────────────
 
+# One warning per process for the tokenless tailscale-serve refusal — a phone retrying must
+# not become a log flood.
+_TAILNET_REFUSAL_LOGGED: list[bool] = []
+
 # Hosts already logged, so a burst of refused requests is one WARNING per name, not a flood.
 _LOGGED_HOSTS: set[str] = set()
 _LOGGED_HOSTS_MAX = 64
@@ -347,6 +379,9 @@ class HostGuardMiddleware:
       403). ``403`` rather than ``421 Misdirected Request``: 421 tells a client to retry on a
       different connection (browsers do so automatically under HTTP/2 coalescing), and this is
       a policy refusal, not a routing hint.
+    - **A ``*.ts.net`` Host without ``PROTOAGENT_ALLOW_OPEN=1``** (``tailnet_proxy_refusal``,
+      #4336 S4) → ``403`` / close ``1008``: on a tokenless instance that can only be
+      ``tailscale serve`` forwarding the tailnet to an unauthenticated operator surface.
     - **A cross-site state-changing request or WebSocket** (``cross_site_refusal`` with the
       console origins admitted) → ``403`` / close ``1008``. Applies to every method but
       GET/HEAD/OPTIONS, and to every WebSocket handshake. A trusted ``Host`` says the request
@@ -384,6 +419,21 @@ class HostGuardMiddleware:
                 await send({"type": "websocket.close", "code": 1008, "reason": "host not allowed"})
                 return
             return await _send_json(send, 403, "Forbidden: untrusted Host header")
+        tailnet_refusal = tailnet_proxy_refusal(host)
+        if tailnet_refusal is not None:
+            if not _TAILNET_REFUSAL_LOGGED:
+                _TAILNET_REFUSAL_LOGGED.append(True)
+                logger.warning(
+                    "[auth] refusing a request forwarded under %r (path %s): this instance has no auth "
+                    "token, and tailscale serve would expose it to the whole tailnet. Set an auth token "
+                    "(Settings ▸ Devices does it) or turn serve off.",
+                    (host or "")[:120],
+                    path[:200],
+                )
+            if kind == "websocket":
+                await send({"type": "websocket.close", "code": 1008, "reason": "no auth token"})
+                return
+            return await _send_json(send, 403, tailnet_refusal)
         method = "GET" if kind == "websocket" else (scope.get("method") or "GET").upper()
         if kind == "websocket" or method not in _BODYLESS_METHODS:
             from starlette.datastructures import Headers

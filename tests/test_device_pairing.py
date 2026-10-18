@@ -540,8 +540,20 @@ def test_start_agent_route_shape(client, devices):
     assert body["ttl"] == 300 and body["name"] == "remoteBox"
     assert len(body["code"]) == 11 and body["code"][5] == "-"
     assert body["hosts"] == [
-        {"host": "100.119.239.8", "kind": "tailnet", "url": "http://100.119.239.8:7931"},
-        {"host": "192.168.5.31", "kind": "lan", "url": "http://192.168.5.31:7931"},
+        {
+            "host": "100.119.239.8",
+            "kind": "tailnet",
+            "via": "ip",
+            "origin": "http://100.119.239.8:7931",
+            "url": "http://100.119.239.8:7931",
+        },
+        {
+            "host": "192.168.5.31",
+            "kind": "lan",
+            "via": "ip",
+            "origin": "http://192.168.5.31:7931",
+            "url": "http://192.168.5.31:7931",
+        },
     ]  # base URLs a hub pairs against — no QR, no fragment
 
 

@@ -125,6 +125,21 @@ def _write(text: str) -> None:
         print("(this terminal can't draw the QR — open the URL below and type the code)")
 
 
+def _host_note(h: dict) -> str:
+    """What a phone needs to use this address — said plainly (#4336 S4)."""
+    kind = h.get("kind") or ""
+    if kind == "tailnet":
+        need = "the phone needs the Tailscale app, signed in to the same tailnet"
+        if h.get("funnel"):
+            return "HTTPS, also PUBLIC through Tailscale Funnel"
+        if h.get("secure"):
+            return f"HTTPS from any network; {need}"
+        return f"any network; {need}"
+    if kind == "lan":
+        return "same Wi-Fi only"
+    return kind
+
+
 def _print_device_code(res: dict, *, qr: bool, light: bool) -> None:
     code = res.get("code") or ""
     left = _remaining(res.get("expires_at"))
@@ -141,8 +156,7 @@ def _print_device_code(res: dict, *, qr: bool, light: bool) -> None:
     print('Or on the phone, open this agent and tap "Have a pairing code?", then type the code:')
     for h in hosts:
         base = h.get("base_url") or str(h.get("url") or "").split("#", 1)[0]
-        kind = h.get("kind") or ""
-        note = {"tailnet": "any network the phone is on, if it runs Tailscale", "lan": "same Wi-Fi only"}.get(kind, kind)
+        note = _host_note(h)
         print(f"  {base}" + (f"   ({note})" if note else ""))
     print()
     print("The code works once. The phone shows up under Settings ▸ Devices, where you can revoke it.")
@@ -156,10 +170,19 @@ def _print_unreachable(res: dict, again: str = "protoagent pair") -> None:
         print(f"It could be reached on: {where}", file=sys.stderr)
     # Never suggest PROTOAGENT_ALLOW_OPEN (ADR 0087 D6): the fix is a reachable bind WITH a
     # token, and the server refuses a non-loopback bind without one.
+    ts = ((res.get("reach") or {}).get("tailscale") or {}) if isinstance(res.get("reach"), dict) else {}
+    if ts.get("running") and ts.get("dns_name"):
+        # The localhost-friendly path (ADR 0121 D1): tailscale serve proxies HTTPS to this
+        # instance's loopback port, so nothing has to listen on the network at all.
+        print(
+            f"This machine is on Tailscale ({ts['dns_name']}). The simplest fix: Settings ▸ Devices ▸ "
+            "'Use HTTPS via Tailscale' (it needs an auth token, and makes one if there isn't one).",
+            file=sys.stderr,
+        )
     print(
-        "To make it pairable, bind every interface with an auth token configured — Settings ▸ "
-        "Devices ▸ 'Allow devices on my network' does both — or start it with `--host 0.0.0.0` "
-        f"(it refuses to start that way without a token). Then run `{again}` again.",
+        "Or listen on one network interface with an auth token configured — Settings ▸ Devices "
+        "offers the addresses and does both — or start it with `--host <that address>` (it refuses "
+        f"to start without a token). Then run `{again}` again.",
         file=sys.stderr,
     )
     if res.get("auth_configured") is False:

@@ -4,28 +4,31 @@ import { describe, expect, it } from "vitest";
 // one guard would be a worse trade than importing the source as a string.
 import src from "./DevicesPanel.tsx?raw";
 
-// Regression guard for ADR 0087 D6 (v0.104.2).
+// Regression guard for ADR 0087 D6 (v0.104.2), revised for #4336 S4.
 //
-// `makeReachable` must bind 0.0.0.0 — NOT the address the operator picked. uvicorn takes one
-// host, and a single non-loopback bind DROPS loopback, which breaks the desktop app outright:
-// its webview reaches its own sidecar over http://127.0.0.1:<port> (src-tauri/src/lib.rs).
+// A single non-loopback bind used to DROP loopback (uvicorn takes one host), which breaks the
+// desktop app outright: its webview reaches its own sidecar over http://127.0.0.1:<port>.
 // v0.104.1 shipped the specific-address version and hung the desktop app on launch.
 //
-// Asserted against the source because the failure is a one-token change that type-checks,
-// passes every behavioural test, and only shows up on a machine where loopback is the
-// client — i.e. not in CI.
+// Since S4 the server opens the picked interface AND 127.0.0.1 itself (`server/bind.py`) and
+// says so with `bind_interface: true`. So the panel binds the picked address ONLY when the
+// server reports that, and keeps writing 0.0.0.0 for an older server that would drop
+// loopback. Asserted against the source: the failure is a one-token change that
+// type-checks, passes every behavioural test, and only shows up on a machine where loopback
+// is the client — i.e. not in CI.
 describe("makeReachable bind target", () => {
-  it("saves 0.0.0.0, so loopback survives for the desktop app", () => {
-    expect(src).toContain('"network.bind": "0.0.0.0"');
+  it("binds the picked address only when the server co-binds loopback", () => {
+    expect(src).toContain('const target = reach?.bind_interface ? addr.host : "0.0.0.0";');
+    expect(src).toContain('{ "network.bind": target }');
   });
 
-  it("never binds the operator's chosen address (that is the QR target, not the bind)", () => {
+  it("never writes the picked address unconditionally", () => {
     expect(src).not.toMatch(/"network\.bind":\s*addr\.host/);
   });
 
-  it("explains that it listens on ALL interfaces, not just the chosen one", () => {
-    // The copy has to match reality; "listen on the address you pick" was wrong AND
-    // undersold the exposure.
-    expect(src).toMatch(/all<\/strong>\s*\{?"?\s*your network interfaces/);
+  it("says what it listens on, for both server generations", () => {
+    expect(src).toContain("listen on the address you pick, and on localhost so this app keeps");
+    // The older-server copy still says ALL interfaces — it must match reality there too.
+    expect(src).toMatch(/all<\/strong>\s*your network interfaces/);
   });
 });
