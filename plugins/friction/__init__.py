@@ -1094,6 +1094,30 @@ def _build_router(*, legacy: bool = False):
                        for k in _KINDS},
         }
 
+    @router.get("/api/friction/fleet/roster" if legacy else "/fleet/roster")
+    async def _fleet_roster() -> dict:
+        """Is this a hub with members? Answered from the local roster alone.
+
+        The view asks this to decide whether to show the Fleet tab. It used to ask
+        ``/fleet``, so opening the log (and every live reload after) fanned out to every
+        member's ledger just to reveal a toggle the operator might never press. A roster
+        that fails to read is a 503, not "no fleet": the view settles on the first answer,
+        so it must not cache a blip."""
+        from fastapi import HTTPException
+
+        try:
+            from graph.fleet.supervisor import list_remotes
+        except Exception:  # noqa: BLE001 — no fleet module: genuinely not a hub
+            return {"is_hub": False, "members": []}
+        try:
+            members = [m for m in list_remotes() if isinstance(m, dict) and m.get("url")]
+        except Exception as exc:  # noqa: BLE001 — surfaced as a retryable failure
+            raise HTTPException(status_code=503, detail="fleet roster unavailable") from exc
+        return {
+            "is_hub": bool(members),
+            "members": [str(m.get("name") or m.get("id") or "") for m in members],
+        }
+
     @router.get("/api/friction/fleet" if legacy else "/fleet")
     async def _fleet(force: bool = False) -> dict:
         """Friction across the hub's members (#2595 acceptance 2).
@@ -1184,14 +1208,19 @@ async def _member_friction(client, member: dict) -> dict | None:
     }
 
 
-async def fleet_rollup(*, timeout_s: float = 4.0) -> dict:
-    """Friction across the fleet, merged by (kind, summary) with per-member attribution."""
+def _fleet_members() -> list[dict]:
+    """The hub's roster, read locally — no member is contacted."""
     try:
         from graph.fleet.supervisor import list_remotes
 
-        members = [m for m in list_remotes() if isinstance(m, dict) and m.get("url")]
+        return [m for m in list_remotes() if isinstance(m, dict) and m.get("url")]
     except Exception:  # noqa: BLE001 — not a hub, or the fleet module isn't available
-        members = []
+        return []
+
+
+async def fleet_rollup(*, timeout_s: float = 4.0) -> dict:
+    """Friction across the fleet, merged by (kind, summary) with per-member attribution."""
+    members = _fleet_members()
     if not members:
         return {"items": [], "members": [], "unreachable": [], "is_hub": False}
 
