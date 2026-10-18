@@ -201,7 +201,11 @@ def test_media_route_exact_allowlist_and_containment(media_repo, monkeypatch):
     # Media types cannot depend on the host OS MIME registry (notably Windows).
     import mimetypes
     monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **kw: (None, None))
-    for suffix, expected in (("vtt", "text/vtt"), ("mp4", "video/mp4"), ("webm", "video/webm")):
+    for suffix, expected in (
+        ("vtt", "text/vtt"), ("mp4", "video/mp4"), ("webm", "video/webm"),
+        ("webp", "image/webp"), ("svg", "image/svg+xml"), ("png", "image/png"),
+        ("jpg", "image/jpeg"), ("gif", "image/gif"), ("txt", "text/plain"),
+    ):
         name = f"approved.{suffix}"
         (base / name).write_bytes(b"test fixture")
         (root / "plugins/docs/media-assets.json").write_text(json.dumps({"files": [name]}))

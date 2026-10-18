@@ -99,7 +99,11 @@ def _build_view_router():
             return Response(status_code=404)
         return FileResponse(
             path,
-            media_type={".vtt": "text/vtt", ".webm": "video/webm", ".mp4": "video/mp4"}.get(path.suffix.lower()),
+            media_type={
+                ".vtt": "text/vtt", ".webm": "video/webm", ".mp4": "video/mp4",
+                ".webp": "image/webp", ".svg": "image/svg+xml", ".png": "image/png",
+                ".jpg": "image/jpeg", ".gif": "image/gif", ".txt": "text/plain",
+            }.get(path.suffix.lower()),
             headers={"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"},
         )
 
