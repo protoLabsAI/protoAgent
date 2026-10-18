@@ -198,6 +198,17 @@ def test_media_route_exact_allowlist_and_containment(media_repo, monkeypatch):
     assert response.status_code == 200 and response.content == b"reviewed capture"
     assert response.headers["content-type"] == "image/webp"
     assert client.get("/plugins/docs/media/draft.webp").status_code == 404
+    # Media types cannot depend on the host OS MIME registry (notably Windows).
+    import mimetypes
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **kw: (None, None))
+    for suffix, expected in (("vtt", "text/vtt"), ("mp4", "video/mp4"), ("webm", "video/webm")):
+        name = f"approved.{suffix}"
+        (base / name).write_bytes(b"test fixture")
+        (root / "plugins/docs/media-assets.json").write_text(json.dumps({"files": [name]}))
+        response = client.get(f"/plugins/docs/media/{name}")
+        assert response.status_code == 200
+        assert response.headers["content-type"].split(";")[0] == expected
+
     assert media.media_file("../../secret.txt") is None
     try:
         (base / "escape.webp").symlink_to(root / "src/control.py")
@@ -259,6 +270,7 @@ for (const base of ["", "/agents/demo"]) {
   for (const file of ["still.webp", "clip.mp4", "steps.txt"]) assert.ok(html.includes(base+"/plugins/docs/media/demo/"+file));
   const $reader = {contains: () => true};
   const opened = [];
+  const location = {href: "http://127.0.0.1:7870"+base+"/plugins/docs/view"};
   const window = {open: (...args) => opened.push(args)};
   const candidatePaths = () => {throw new Error("Media must not be probed as a doc");};
   const click = async (e) => { HANDLER };
@@ -266,7 +278,7 @@ for (const base of ["", "/agents/demo"]) {
   let prevented = false;
   await click({target: {closest: () => ({getAttribute: () => href})}, preventDefault: () => {prevented=true;}});
   assert.ok(prevented);
-  assert.deepEqual(opened, [[href, "_blank", "noopener,noreferrer"]]);
+  assert.deepEqual(opened, [["http://127.0.0.1:7870"+href, "_blank", "noopener,noreferrer"]]);
 }
 '''.replace("HELPER", helper).replace("HANDLER", handler)
     subprocess.run([node, "-e", "(async()=>{" + script + "})().catch(e=>{console.error(e);process.exit(1)})"], check=True)

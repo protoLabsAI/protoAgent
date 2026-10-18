@@ -396,7 +396,7 @@ Show where a workflow waits for a human decision.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
-**Watch:** `apps/web/src`, `package-lock.json`
+**Watch:** `apps/web/src`, `package-lock.json`, `plugins/workflows`
 
 **Published asset:** `not created` · **Source:** not created
 
@@ -406,7 +406,7 @@ Show where a workflow waits for a human decision.
 
 Give builders a concrete success state for the quickstart.
 
-**Capture / drawing brief:** Capture the bundled chat_example plugin in the rail, with its rendered page and one functioning interaction. Keep the example code editable in the existing source.
+**Capture / drawing brief:** Capture the copied chat_example plugin enabled in the chat slot, with its greeting, composer, and one functioning interaction. Keep the example code editable in the existing source.
 
 **Placement:** [guides/build-a-plugin-view.md](../guides/build-a-plugin-view.md) → Copy the example
 
@@ -416,7 +416,7 @@ Give builders a concrete success state for the quickstart.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
-**Watch:** `plugins`
+**Watch:** `examples/plugins/chat_example`
 
 **Published asset:** `not created` · **Source:** not created
 

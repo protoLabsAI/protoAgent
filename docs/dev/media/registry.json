@@ -669,7 +669,7 @@
       "status": "planned",
       "owner": "Docs maintainers",
       "purpose": "Distinguish adding a connection, testing its model list, and selecting the primary model.",
-      "brief": "A 20\u201340 second silent capture: add a demo endpoint, Test, choose Primary model, Save & apply, send a short chat. Hold each success state. Supply a poster and numbered text walkthrough.",
+      "brief": "A 20–40 second silent capture: add a demo endpoint, Test, choose Primary model, Save & apply, send a short chat. Hold each success state. Supply a poster and numbered text walkthrough.",
       "alt": "Distinguish adding a connection, testing its model list, and selecting the primary model.",
       "caption": "Distinguish adding a connection, testing its model list, and selecting the primary model.",
       "placements": [
@@ -697,7 +697,7 @@
       "status": "planned",
       "owner": "Docs maintainers",
       "purpose": "Show the difference between an input attachment and a downloadable output.",
-      "brief": "Two short scenes in one 20\u201340 second silent clip: attach a small public sample and ask about it; request a document and download its artifact. Use a poster with both states and a text walkthrough.",
+      "brief": "Two short scenes in one 20–40 second silent clip: attach a small public sample and ask about it; request a document and download its artifact. Use a poster with both states and a text walkthrough.",
       "alt": "Show the difference between an input attachment and a downloadable output.",
       "caption": "Show the difference between an input attachment and a downloadable output.",
       "placements": [
@@ -753,7 +753,7 @@
       "status": "planned",
       "owner": "Docs maintainers",
       "purpose": "Show what successful ingestion and later retrieval look like.",
-      "brief": "A two-panel still: import a public sample into Knowledge \u2192 Store, then show its title in search results. Include the completion state; no embedding requirement implied.",
+      "brief": "A two-panel still: import a public sample into Knowledge → Store, then show its title in search results. Include the completion state; no embedding requirement implied.",
       "alt": "Show what successful ingestion and later retrieval look like.",
       "caption": "Show what successful ingestion and later retrieval look like.",
       "placements": [
@@ -809,7 +809,7 @@
       "status": "planned",
       "owner": "Docs maintainers",
       "purpose": "Locate the MCP connection controls and success state.",
-      "brief": "Capture Settings \u2192 MCP with a harmless demo server, connected status, and discovered tools. A second crop may show Add server. Never include environment secrets.",
+      "brief": "Capture Settings → MCP with a harmless demo server, connected status, and discovered tools. A second crop may show Add server. Never include environment secrets.",
       "alt": "Locate the MCP connection controls and success state.",
       "caption": "Locate the MCP connection controls and success state.",
       "placements": [
@@ -837,7 +837,7 @@
       "status": "planned",
       "owner": "Docs maintainers",
       "purpose": "Show when the agent acts and when the user can intervene.",
-      "brief": "A 20\u201340 second silent demo on a public example page: open Browser, request navigation, intervene manually, save a screenshot. Exclude real logins; show capture expiry text if visible.",
+      "brief": "A 20–40 second silent demo on a public example page: open Browser, request navigation, intervene manually, save a screenshot. Exclude real logins; show capture expiry text if visible.",
       "alt": "Show when the agent acts and when the user can intervene.",
       "caption": "Show when the agent acts and when the user can intervene.",
       "placements": [
@@ -892,7 +892,7 @@
       "status": "planned",
       "owner": "Docs maintainers",
       "purpose": "Explain attachment, stored knowledge, and recalled context as different lifetimes.",
-      "brief": "Draw three clearly labelled paths: attachment \u2192 current chat; ingest \u2192 saved store \u2192 retrieval; memory \u2192 later turns. Include inspect/edit/delete actions and retain the prose as the full explanation. Export SVG from an editable diagram source.",
+      "brief": "Draw three clearly labelled paths: attachment → current chat; ingest → saved store → retrieval; memory → later turns. Include inspect/edit/delete actions and retain the prose as the full explanation. Export SVG from an editable diagram source.",
       "alt": "Explain attachment, stored knowledge, and recalled context as different lifetimes.",
       "caption": "Explain attachment, stored knowledge, and recalled context as different lifetimes.",
       "placements": [
@@ -919,7 +919,7 @@
       "status": "planned",
       "owner": "Docs maintainers",
       "purpose": "Make the first app-authored skill concrete.",
-      "brief": "A 20\u201340 second silent clip creating the tutorial skill in Settings \u2192 Skills, saving it, then invoking its slash name in chat. Poster shows the saved skill; transcript includes its short text.",
+      "brief": "A 20–40 second silent clip creating the tutorial skill in Settings → Skills, saving it, then invoking its slash name in chat. Poster shows the saved skill; transcript includes its short text.",
       "alt": "Make the first app-authored skill concrete.",
       "caption": "Make the first app-authored skill concrete.",
       "placements": [
@@ -1003,13 +1003,13 @@
       "status": "planned",
       "owner": "Docs maintainers",
       "purpose": "Explain the different triggers and stopping conditions.",
-      "brief": "Three short lanes: scheduled time \u2192 run; watch condition \u2192 notify/act; goal \u2192 work/verify/repeat until stop. Label missed-fire and iteration limits by linking text rather than packing config into the drawing.",
+      "brief": "Three short lanes: scheduled time → run; watch condition → notify/act; goal → work/verify/repeat until stop. Label missed-fire and iteration limits by linking text rather than packing config into the drawing.",
       "alt": "Explain the different triggers and stopping conditions.",
       "caption": "Explain the different triggers and stopping conditions.",
       "placements": [
         {
           "page": "guides/watches.md",
-          "heading": "## Watch vs goal \u2014 which?"
+          "heading": "## Watch vs goal — which?"
         }
       ],
       "watch": [
@@ -1069,7 +1069,8 @@
       ],
       "watch": [
         "apps/web/src",
-        "package-lock.json"
+        "package-lock.json",
+        "plugins/workflows"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
       "asset": null,
@@ -1086,7 +1087,7 @@
       "status": "planned",
       "owner": "Docs maintainers",
       "purpose": "Give builders a concrete success state for the quickstart.",
-      "brief": "Capture the bundled chat_example plugin in the rail, with its rendered page and one functioning interaction. Keep the example code editable in the existing source.",
+      "brief": "Capture the copied chat_example plugin enabled in the chat slot, with its greeting, composer, and one functioning interaction. Keep the example code editable in the existing source.",
       "alt": "Give builders a concrete success state for the quickstart.",
       "caption": "Give builders a concrete success state for the quickstart.",
       "placements": [
@@ -1096,7 +1097,7 @@
         }
       ],
       "watch": [
-        "plugins"
+        "examples/plugins/chat_example"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
       "asset": null,
@@ -1255,7 +1256,7 @@
       "placements": [
         {
           "page": "guides/exposing-protoagent.md",
-          "heading": "## The threat model \u2014 know what each surface is"
+          "heading": "## The threat model — know what each surface is"
         }
       ],
       "watch": [

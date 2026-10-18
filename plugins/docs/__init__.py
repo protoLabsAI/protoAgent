@@ -97,7 +97,11 @@ def _build_view_router():
         path = media_file(name)
         if path is None:
             return Response(status_code=404)
-        return FileResponse(path, headers={"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"})
+        return FileResponse(
+            path,
+            media_type={".vtt": "text/vtt", ".webm": "video/webm", ".mp4": "video/mp4"}.get(path.suffix.lower()),
+            headers={"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"},
+        )
 
     @router.get("/view")
     async def _view():
@@ -322,7 +326,7 @@ async function openDoc(path){
 $reader.addEventListener("click", async (e)=>{
   const a=e.target.closest("a[href]"); if(!a||!$reader.contains(a)) return;
   const href=a.getAttribute("href")||""; if(!href) return;
-  if(href.startsWith(base+"/plugins/docs/media/")){ e.preventDefault(); window.open(href,"_blank","noopener,noreferrer"); return; }
+  if(href.startsWith(base+"/plugins/docs/media/")){ e.preventDefault(); window.open(new URL(href, location.href).href,"_blank","noopener,noreferrer"); return; }
   if(href.startsWith("#")){ e.preventDefault(); scrollToAnchor(href.slice(1)); return; }
   if(/^[a-z][\w+.-]*:/i.test(href)||href.startsWith("//")){ e.preventDefault(); window.open(href,"_blank","noopener,noreferrer"); return; }
   e.preventDefault();
