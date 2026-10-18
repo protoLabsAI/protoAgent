@@ -1,6 +1,6 @@
 # ADR 0121 — Device pairing over an operator-supplied public URL
 
-- Status: Proposed
+- Status: Accepted (2026-10-18, Josh)
 - Date: 2026-10-18
 - Epic: #4336 (remote device improvements), slice S6. S7 implements it.
 - Builds on: [ADR 0087](./0087-device-pairing-and-per-device-tokens.md) (QR pairing and
@@ -273,6 +273,9 @@ bearer in the config. The ceiling makes revocation **final through the console's
 surface**, which is the property ADR 0087 D1 actually promised. Containing tools is the job of
 tool policy (`filesystem.allow_run: false`) and of D6's identity-aware proxy.
 
+A narrower tool policy for `device`-scope chat turns (for example, no shell from a phone) is
+**out of scope** for this ADR. It is possible future work and would need its own decision.
+
 Rejected:
 
 - **A new `device` trust tier.** It silently breaks every `== "operator"` consumer (see above).
@@ -444,17 +447,18 @@ behaviour each describes. Those are S7.1 (0087 D4, 0113 D2), S7.2 (0087 D1, 0089
 - **Nothing changes unless S7.4's key is set.** An instance with no `public_console_url` is
   never publicly offered. S7.1 to S7.3 tighten every instance, and that is intended.
 
-## Open questions for the operator
+## Resolved 2026-10-18 (Josh)
 
-1. **`device` scope for every new phone pairing,** LAN and tailnet included (recommended), or
-   only for claims over the public URL?
-2. **Legacy devices:** keep them `full`, labelled, with a Limit action (recommended), or migrate
-   them all to `device`?
-3. **Tool policy for `device`-scope chat turns** (for example, no shell from a phone): leave it
-   out of this ADR (recommended), or fold it in?
-4. Is **one home origin plus a one-tap handoff** an acceptable reading of "moves between home
-   Wi-Fi and away without re-pairing"? Active multi-origin failover is rejected in D1.
-5. **Token-only public exposure:** support it with a warning (recommended), or require an
-   identity-aware proxy and refuse otherwise? The agent cannot verify that Access is present, so
-   "require" would only be a documentation rule.
-6. **Defaults:** are 30 idle days and weekly rotation right?
+Josh accepted this ADR with every open question resolved as recommended:
+
+1. **Scope everywhere.** Every new phone pairing gets `device` scope, including over the LAN and
+   the tailnet (D4).
+2. **Legacy devices** keep `full`, labelled "Full access" in Devices, with a **Limit** action
+   (D4).
+3. **Tool policy** for `device`-scope chat turns is out of scope here and noted as possible
+   future work (D4).
+4. **One home origin plus a one-tap handoff** satisfies "moves between home Wi-Fi and away
+   without re-pairing" (D1).
+5. **Token-only public exposure** is allowed, with the Devices-panel warning. An identity-aware
+   proxy (Cloudflare Access) is the recommended recipe (D6).
+6. **Defaults:** 30 idle days (`devices.idle_ttl_days`) and weekly rotation (D5).
