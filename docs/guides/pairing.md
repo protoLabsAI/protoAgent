@@ -71,7 +71,7 @@ Never turn on `PROTOAGENT_ALLOW_OPEN=1` to make pairing work. Pairing adds clien
    claims the code, stores the device token in that browser, and strips the code from the
    address bar and history. The code travels in the `#fragment`, so it never reaches a
    server log.
-3. The phone shows **Paired as <name>**, the name it now has in the agent's Devices list
+3. The phone shows **Paired as &lt;name&gt;**, the name it now has in the agent's Devices list
    (a guess from the browser, such as `iPhone` or `Android phone`; you can
    [rename it](#rename-a-device)). On the agent, the device appears in the Devices list and
    a **Device paired** notice names it.
@@ -90,7 +90,7 @@ is on a terminal or a screen share), or when you'd rather not.
 3. Tap **Have a pairing code?**, type the code and tap **Pair this device**. Case doesn't
    matter, the dash is optional, and the letters O, I and L are read as 0, 1 and 1, so a
    misread look-alike still works.
-4. The console opens and shows **Paired as <name>**. The phone appears in
+4. The console opens and shows **Paired as &lt;name&gt;**. The phone appears in
    **Settings ▸ Devices** on the agent with its own token.
 
 The QR and the typed code are the same code. Using either one spends it.
