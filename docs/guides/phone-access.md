@@ -52,10 +52,13 @@ A tablet pairs and connects the same way. What you see depends on its width:
   Chat fills the screen; other views open over it from the menu.
 - **Portrait, 768–1024px** (iPads held upright): the desktop layout with both
   rails, but chat uses the whole middle. The right panel (Work, notes, plugin
-  views) starts closed. Tap its icon on the right rail to open it over chat; tap
-  chat to close it.
+  views) starts closed. Tap its icon on the right rail to open it over chat,
+  which dims behind it; tap the dimmed chat to close it. As on a phone, an
+  artifact or code the agent shows does not open the panel by itself. A chip
+  appears in chat; tap it to open the panel.
 - **Landscape**: the desktop split, chat on the left and the right panel beside
-  it. Drag the divider between them to resize.
+  it. Drag the divider between them to resize. Artifacts and code the agent
+  shows open in the right panel automatically, as on a desktop.
 
 Buttons, tabs and the divider get finger-sized hit areas on a touch screen. An
 iPad with a trackpad or mouse attached keeps the normal desktop split in either

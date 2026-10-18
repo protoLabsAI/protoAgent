@@ -885,7 +885,10 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
         : "left";
   // Tablet portrait (#4336 S5): the right column floats over chat instead of splitting the
   // stage with it — see lib/useTabletOverlay.ts.
-  const tabletOverlay = useTabletOverlay({ isMobile, chatOnLeft: chatRail === "left" });
+  const { active: tabletOverlay, dismiss: dismissTabletOverlay } = useTabletOverlay({
+    isMobile,
+    chatOnLeft: chatRail === "left",
+  });
   // Background-stream pulse on the chat rail icon (#613 dot, ADR 0039): show it while a turn
   // streams and chat ISN'T the visible surface on its dock — collapse-aware, any rail. (The
   // old check keyed off the left-only `surface`, so it never pulsed for chat on right/bottom.)
@@ -1167,6 +1170,17 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
         quickBarIds={quickBar}
         leftContent={
           <>
+            {/* Tablet portrait (#4336 S5): while the right panel floats over chat, a scrim
+                covers chat — it reads as "behind" and a tap on it closes the panel without
+                also landing on whatever was underneath. */}
+            {tabletOverlay && !rightCollapsed ? (
+              <div
+                className="tablet-scrim"
+                data-testid="tablet-scrim"
+                aria-hidden="true"
+                onClick={dismissTabletOverlay}
+              />
+            ) : null}
             {chatRail === "left" || isMobile ? (
               <ChatSlot
                 onError={onChatError}

@@ -1,5 +1,8 @@
 import { devices, expect, test, type Page } from "@playwright/test";
 
+import { withArtifactPanel } from "./artifactPanel";
+import { withCodePane } from "./codePane";
+
 // Tablet band of the desktop shell (#4336 S5). Runs under the `tablet` Playwright project
 // (playwright.config.ts) with real device profiles — isMobile + hasTouch + DPR, so
 // `(hover: none)` / `(pointer: coarse)` match the way they do on the hardware. Engine is forced
@@ -25,6 +28,13 @@ function profile(name: string) {
   // `defaultBrowserType` can't be set per describe block; the project pins chromium.
   const { defaultBrowserType, ...rest } = devices[name];
   return rest;
+}
+
+async function sendMessage(page: Page, text: string) {
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await composer.waitFor({ state: "visible" });
+  await composer.fill(text);
+  await composer.press("Enter");
 }
 
 const leftCol = (page: Page) => page.locator(".pl-appshell__col--left");
@@ -104,9 +114,47 @@ for (const p of PROFILES) {
         // No divider to drag between chat and a floating panel.
         await expect(page.locator(".pl-appshell__handle")).toBeHidden();
 
-        // A tap back in chat dismisses it.
+        // A scrim covers chat while the panel floats; tapping it dismisses the panel (and
+        // the scrim with it) without the tap landing on chat underneath.
+        const scrim = page.getByTestId("tablet-scrim");
+        await expect(scrim).toBeVisible();
         const lb = (await leftCol(page).boundingBox())!;
+        const sb = (await scrim.boundingBox())!;
+        expect(sb.width).toBeCloseTo(lb.width, 0);
+        expect(await scrim.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe("rgba(0, 0, 0, 0)");
         await page.touchscreen.tap(lb.x + 40, lb.y + lb.height / 2);
+        await expect(rightCol(page)).toHaveCount(0);
+        await expect(scrim).toHaveCount(0);
+      });
+
+      // Opens the operator did not ask for follow the phone rule (ADR 0086, lib/autoOpen.ts):
+      // the chip lands in chat and the panel stays closed until it is tapped.
+      test("portrait: show_code never auto-opens the panel; tapping the chip does", async ({ page }) => {
+        await withCodePane(page);
+        await page.goto("/app/", { waitUntil: "load" });
+        await expect(rightCol(page)).toHaveCount(0);
+        await sendMessage(page, "SHOWCODE: on the tablet");
+
+        const chip = page.getByTestId("code-ref-chip");
+        await expect(chip).toBeVisible();
+        await page.waitForTimeout(400);
+        await expect(rightCol(page)).toHaveCount(0);
+        await expect(page.getByTestId("tablet-scrim")).toHaveCount(0);
+
+        await chip.tap();
+        await expect(rightCol(page)).toBeVisible();
+        await expect(page.getByTestId("code-pane-path")).toHaveText("src/server.ts");
+        await expect(page.getByTestId("tablet-scrim")).toBeVisible();
+      });
+
+      test("portrait: an artifact-ref never auto-opens the panel", async ({ page }) => {
+        await withArtifactPanel(page);
+        await page.goto("/app/", { waitUntil: "load" });
+        await expect(rightCol(page)).toHaveCount(0);
+        await sendMessage(page, "ARTIFACTREF V1 on the tablet");
+
+        await expect(page.getByTestId("artifact-ref-chip")).toBeVisible();
+        await page.waitForTimeout(400);
         await expect(rightCol(page)).toHaveCount(0);
       });
 
@@ -127,6 +175,17 @@ for (const p of PROFILES) {
         await expect(page.locator(".app-shell-main--tablet-overlay")).toHaveCount(0);
         await expect(rightCol(page)).toBeVisible();
         await expect(page.getByRole("separator", { name: "Resize panels" })).toBeVisible();
+        await expect(page.getByTestId("tablet-scrim")).toHaveCount(0);
+      });
+
+      test("landscape: show_code still auto-opens the pane beside chat", async ({ page }) => {
+        await withCodePane(page);
+        await page.goto("/app/", { waitUntil: "load" });
+        await sendMessage(page, "SHOWCODE: on the tablet");
+        await expect(page.getByTestId("code-ref-chip")).toBeVisible();
+        await expect(page.getByTestId("code-pane-path")).toHaveText("src/server.ts");
+        await expect(rightCol(page)).not.toHaveCSS("position", "absolute");
+        await expect(page.getByTestId("tablet-scrim")).toHaveCount(0);
       });
     }
   });

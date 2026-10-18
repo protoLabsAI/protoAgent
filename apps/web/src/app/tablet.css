@@ -6,7 +6,8 @@
 
    1. Portrait overlay. `.app-shell-main--tablet-overlay` is set by lib/useTabletOverlay.ts
       (touch tablet, portrait, 768–1024px, chat on the left dock). The right column leaves
-      the flex row and floats over chat, so chat keeps the whole stage instead of 275px.
+      the flex row and floats over chat, so chat keeps the whole stage instead of 275px,
+      and a scrim covers chat while it is open.
       Its WIDTH stays the DS-controlled `rightWidth` (PROTO.md: never re-clamp it); only a
       max-width keeps it on screen.
 
@@ -30,12 +31,37 @@
   background: var(--pl-color-bg);
   box-shadow: var(--pl-shadow-popover);
 }
+/* The scrim over chat while the panel floats (App renders it inside the left column).
+   The DS overlay token, the same one the Dialog and Drawer scrims use, so it follows the
+   theme: lighter in light mode, deeper in dark. Below the panel (z-index 3), above chat. */
+.app-shell-main--tablet-overlay .pl-appshell__col--left {
+  position: relative;
+}
+.tablet-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--pl-color-overlay);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  animation: tablet-scrim-in var(--pl-motion-fast) var(--pl-motion-ease);
+}
+@keyframes tablet-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tablet-scrim {
+    animation: none;
+  }
+}
 /* Sit beside the right rail rather than under it. */
 .app-shell-main--tablet-overlay .pl-appshell:has(> .pl-rail--right) > .pl-appshell__col--right:not(.pl-appshell__col--fill) {
   right: 64px;
 }
 /* A divider between chat and a floating panel resizes nothing useful — the panel is
-   dismissed by tapping chat, opened from its rail icon. */
+   dismissed by tapping the scrim, opened from its rail icon. */
 .app-shell-main--tablet-overlay .pl-appshell__handle,
 .app-shell-main--tablet-overlay .pl-appshell__reopen--right {
   display: none;

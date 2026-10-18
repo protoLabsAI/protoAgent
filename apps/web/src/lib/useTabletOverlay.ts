@@ -1,18 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useUI } from "../state/uiStore";
+import { TABLET_PORTRAIT_QUERY } from "./autoOpen";
 
 // Tablet portrait (#4336 S5). Between 768px and 1024px a touch tablet held upright gets the
 // desktop dual-rail shell (the mobile shell stops at 767px, ADR 0086) — two 64px rails plus a
 // 360px right column leave chat at 275–341px, narrower than a phone. Rather than a third shell,
 // the right column turns into an OVERLAY in that band: chat keeps the full stage, and the right
-// panel floats over it when opened and is dismissed by tapping back into chat.
+// panel floats over it when opened, over a scrim that dismisses it on a tap.
 //
 // Gated on INPUT, not just width: a narrow desktop window, or an iPad with a trackpad attached
 // (hover: hover / pointer: fine), keeps the split. Landscape keeps the split too — at 1024px+
 // the chat column is already wider than 530px.
-export const TABLET_PORTRAIT_QUERY =
-  "(min-width: 768px) and (max-width: 1024px) and (orientation: portrait) and (hover: none) and (pointer: coarse)";
+// The query lives with the auto-open gate (lib/autoOpen.ts) so both agree on what "tablet
+// portrait" is.
+export { TABLET_PORTRAIT_QUERY };
 
 function useMedia(query: string): boolean {
   const [match, setMatch] = useState(false);
@@ -27,20 +29,24 @@ function useMedia(query: string): boolean {
 }
 
 /**
- * True while the right column renders as an overlay over chat. Drives three behaviours:
+ * Drives the portrait overlay. Returns `active` (the right column renders as an overlay) and
+ * `dismiss` (what the scrim over chat calls on a tap).
  *
  *  - Entering the band collapses the right panel once (an open overlay on load would cover
  *    chat), and leaving it restores the panel if this hook was the one that collapsed it — so
  *    rotating to landscape gives back the split the operator had.
- *  - A tap inside the left column (chat) while the overlay is open dismisses it — the
- *    light-dismiss every overlay on a touch device is expected to have.
- *  - Programmatic opens (palette, artifact/code chips) still work: they un-collapse the panel
- *    through the store, which simply shows the overlay.
+ *  - While the overlay is open a scrim covers chat (App renders it); tapping it dismisses.
+ *  - Opens the operator asks for (rail icon, palette, a tapped chip) work as on desktop: they
+ *    un-collapse the panel through the store, which shows the overlay. Opens they did NOT ask
+ *    for are suppressed here as on a phone — see lib/autoOpen.ts.
  *
  * Off when chat itself is not on the left dock — overlaying the right column would then cover
  * chat with chat's own sibling and the split is the lesser evil.
  */
-export function useTabletOverlay(opts: { isMobile: boolean; chatOnLeft: boolean }): boolean {
+export function useTabletOverlay(opts: { isMobile: boolean; chatOnLeft: boolean }): {
+  active: boolean;
+  dismiss: () => void;
+} {
   const portrait = useMedia(TABLET_PORTRAIT_QUERY);
   const leftCollapsed = useUI((s) => s.leftCollapsed);
   const active = portrait && !opts.isMobile && opts.chatOnLeft && !leftCollapsed;
@@ -59,20 +65,11 @@ export function useTabletOverlay(opts: { isMobile: boolean; chatOnLeft: boolean 
     }
   }, [active]);
 
-  useEffect(() => {
-    if (!active) return;
-    const onDown = (e: PointerEvent) => {
-      const t = e.target as Element | null;
-      if (!t?.closest?.(".pl-appshell__col--left")) return;
-      const { rightCollapsed, setRightCollapsed } = useUI.getState();
-      if (rightCollapsed) return;
-      // The operator closed it themselves — don't re-open it on rotate.
-      autoCollapsed.current = false;
-      setRightCollapsed(true);
-    };
-    document.addEventListener("pointerdown", onDown, true);
-    return () => document.removeEventListener("pointerdown", onDown, true);
-  }, [active]);
+  const dismiss = useCallback(() => {
+    // The operator closed it themselves — don't re-open it on rotate.
+    autoCollapsed.current = false;
+    useUI.getState().setRightCollapsed(true);
+  }, []);
 
-  return active;
+  return { active, dismiss };
 }

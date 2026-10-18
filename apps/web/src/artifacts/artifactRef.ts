@@ -5,6 +5,7 @@ import { chatStore } from "../chat/chat-store";
 import { postToPluginView, setPluginViewContext } from "../lib/pluginViewInbox";
 import { useUI } from "../state/uiStore";
 import { clampHeight } from "./inlineFrames";
+import { autoOpenSuppressed } from "../lib/autoOpen";
 
 // The `artifact-ref` chat component (#3617) — what the artifact plugin's create/revise tools
 // emit: a POINTER to one artifact version, `{artifact_id, version, versions_total?, title,
@@ -78,16 +79,6 @@ export function versionLabel(version: number, state: RefState): string {
 
 // ── opening the panel ────────────────────────────────────────────────────────────────
 
-const MOBILE_QUERY = "(max-width: 767px)";
-
-function isMobileViewport(): boolean {
-  try {
-    return typeof window !== "undefined" && window.matchMedia(MOBILE_QUERY).matches;
-  } catch {
-    return false;
-  }
-}
-
 type Dock = "left" | "right" | "bottom" | "hidden";
 
 function dockOf(id: string): Dock | null {
@@ -125,15 +116,15 @@ export type OpenArtifactOptions = {
  *  `protoArtifact:select` (delivered once its page is listening — a collapsed dock mounts
  *  it only on this open), then route to it. Returns whether it opened.
  *
- *  An AUTO open (the live turn) is more careful than a click: never on a phone (ADR 0086 —
- *  the chip pushes the panel on a tap instead), never for a background tab's turn, and never
- *  when the panel shares chat's dock, where opening it would swap the conversation out from
- *  under the operator. */
+ *  An AUTO open (the live turn) is more careful than a click: never on a phone or a portrait
+ *  touch tablet (ADR 0086, lib/autoOpen.ts — the chip opens the panel on a tap instead),
+ *  never for a background tab's turn, and never when the panel shares chat's dock, where
+ *  opening it would swap the conversation out from under the operator. */
 export function openArtifactRef(ref: Pick<ArtifactRef, "id" | "version">, opts: OpenArtifactOptions = {}): boolean {
   const dock = dockOf(ARTIFACT_VIEW_KEY);
   if (!dock) return false;
   if (opts.auto) {
-    if (isMobileViewport()) return false;
+    if (autoOpenSuppressed()) return false;
     let active: string | null = null;
     try {
       active = chatStore.getSnapshot().currentSessionId;
