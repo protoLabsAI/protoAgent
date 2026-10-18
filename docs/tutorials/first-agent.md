@@ -5,8 +5,21 @@ endpoint (hosted or local), or a supported Claude or ChatGPT subscription.
 
 ## 1. Install and start
 
-**Desktop:** [download protoAgent](https://agent.protolabs.studio/download) for
-your operating system and open it. The server and console are bundled.
+**Recommended: desktop app.** [Download protoAgent](https://agent.protolabs.studio/download)
+for your operating system. The server and console are bundled; you do not need
+Python or Node to chat.
+
+- **macOS:** open the `.dmg`, drag protoAgent to Applications, then launch it.
+- **Windows:** run the installer, then launch protoAgent from the Start Menu.
+  See [Windows installation help](/guides/windows-desktop) for the unsigned-build prompt.
+- **Linux:** make the downloaded AppImage executable and run it, or install the
+  `.deb` with your package manager. The download page lists supported systems.
+
+The setup wizard should open. If the app will not open, start with
+[App won't open](/guides/troubleshooting#app-won-t-open).
+
+::: details Alternative: run the Python package in a browser
+Use this route if you prefer starting the server from a terminal.
 
 **Python package:** with uv installed, run:
 
@@ -14,26 +27,31 @@ your operating system and open it. The server and console are bundled.
 uvx --from protolabs-agent protoagent serve
 ```
 
-Keep the terminal open, then visit <http://localhost:7870>.
+Keep the terminal open, then visit <http://localhost:7870>. Run the same command
+when you want to start it again.
+:::
 
 ::: details Run from a source checkout
-You need Git, uv, Python 3.11+, Node 20, and npm 11+. Build the console before
+Use a checkout to develop or change protoAgent. You need Git, uv, Python 3.11+,
+Node 20, and npm 11+. On Windows, choose a short checkout path such as
+`C:\src\protoAgent` to avoid long dependency paths. Build the console before
 starting the server:
 
 ```bash
 git clone https://github.com/protoLabsAI/protoAgent.git
 cd protoAgent
 uv sync --frozen
+```
+
+If you use nvm, run `nvm use` now. Check `npm --version`; if it is below 11,
+run `npm install -g npm@11` before continuing.
+
+```bash
 npm ci
 npm run build --workspace @protoagent/web
 uv run python -m server
 ```
 
-If you use nvm, `nvm use` selects the repository's Node version. Node 20 ships an
-older npm; run `npm install -g npm@11` if `npm --version` is below 11.
-
-On Windows, keep the checkout near the drive root, such as `C:\src\protoAgent`,
-to avoid long dependency paths.
 :::
 
 ## 2. Choose and name your agent
@@ -41,11 +59,6 @@ to avoid long dependency paths.
 The setup wizard opens on a fresh instance. Click **Next**, choose **Basic** for
 this walkthrough, and give the agent a name. Leave the starting persona as-is;
 you can edit it later in **Settings → Identity**.
-
-Other archetypes add a persona and tools for a particular job. Use
-[Enable document creation](/guides/python-runtime) for Cowork's desktop
-requirements, or [Build with a coding agent](/guides/build-with-a-coding-agent)
-for Project Manager setup.
 
 ## 3. Connect a model
 
@@ -63,39 +76,38 @@ Click **Test connection**. Continue when the wizard reports that the model
 responded. If it fails, check the endpoint URL, credentials, and selected model;
 for a local endpoint, confirm its server is running.
 
-To add a CLI coding agent for coding jobs, configure a
-[delegate](/guides/coding-agents) after setup.
+For sign-in or connection errors, see [Chat fails](/guides/troubleshooting#chat-fails).
 
 ## 4. Finish and chat
 
 Review your choices and click **Finish**. Once the chat opens, send:
 
-> What time is it in Tokyo?
+> Say hello in one sentence.
 
-You should see a `current_time` tool call followed by a reply. Then try:
+A reply confirms that setup is complete and the selected model can answer.
+Continue to [Use protoAgent](/guides/use-protoagent) for everyday tasks.
 
-> Find three recent articles about the A2A protocol and summarize them with links.
-
-This exercises web search, URL fetching, and the model's tool loop. If the reply
-fails, read the error in chat and check **Settings → Model → Connections**. If a
-tool is unavailable, check **Settings → Tools** and the
-[starter-tool reference](/reference/starter-tools).
+**Optional: try a tool.** Ask “What time is it in Tokyo?” With the starter tools
+available, you should see a `current_time` tool call followed by a reply.
+A failed tool does not necessarily mean the model connection failed. Read the
+error in chat, check **Settings → Tools**, and use
+[Troubleshooting](/guides/troubleshooting) for the matching symptom.
 
 ## Find your configuration
 
-Setup saves the model connection, name, and persona for this instance. To see the
-actual paths and where settings came from, run:
+Setup saves the model connection, name, and persona for this instance. You do
+not need to edit configuration files to finish setup.
+
+For desktop data locations, see [Find your data](/guides/backup-and-restore#find-your-data).
+For the Python-package route above, open a second terminal and run:
 
 ```bash
-protoagent config explain
-# In a source checkout:
-uv run python -m server config explain
+uvx --from protolabs-agent protoagent config explain
 ```
 
-A normal source or package install writes config to
-`~/.protoagent/default/config/`, including `langgraph-config.yaml`, `secrets.yaml`,
-and `SOUL.md`. Desktop and Docker use different roots; the
-[configuration reference](/reference/configuration) explains the layout.
+In a source checkout, use `uv run python -m server config explain`. These
+commands report the paths and settings for the same environment used to start
+the server. See [Configuration](/reference/configuration) for field details.
 
 ## Changing your mind
 
@@ -106,10 +118,7 @@ does not switch the primary model; follow
 
 ## Next steps
 
-- [Use the app](/guides/react-tauri-ui) — chats, settings, and progress.
+Continue with [Use protoAgent](/guides/use-protoagent) to learn chat, files, and tools.
+
+- [Work with files and documents](/guides/documents-and-files) — attach a file or create a document.
 - [Back up your data](/guides/backup-and-restore) — preserve chats and settings.
-- [Fix a problem](/guides/troubleshooting) — recover from a failed connection or task.
-- [Work with files and documents](/guides/documents-and-files) — attach files, create documents, and download them.
-- [Add documents and media](/guides/ingestion) — give the agent material to recall.
-- [Install a plugin](/guides/plugin-registry) — connect more tools and integrations.
-- [Write your first skill](/tutorials/first-skill) — teach a reusable procedure.
