@@ -357,7 +357,9 @@ def _write_yaml(dir_path: Path, body: str, *, secrets: str | None = None) -> str
 # ---------------------------------------------------------------------------
 
 
-def test_from_yaml_example_golden():
+def test_from_yaml_example_golden(monkeypatch):
+    # The template leaves fleet.autostart out, so the env fallback applies; keep it hermetic.
+    monkeypatch.delenv("PROTOAGENT_FLEET_AUTOSTART", raising=False)
     cfg = LangGraphConfig.from_yaml(EXAMPLE_PATH)
 
     # Redacted / unpinned fields get dedicated assertions.

@@ -2281,12 +2281,15 @@ class LangGraphConfig:
             fleet_warm_grace_seconds=warm.get(
                 "grace_seconds", _env_default("PROTOAGENT_FLEET_WARM_GRACE", cls.fleet_warm_grace_seconds, int)
             ),
-            # An empty list falls through to the env roster: the shipped config template
-            # carries ``autostart: []``, so on every seeded instance it shadowed the env
-            # fallback and PROTOAGENT_FLEET_AUTOSTART did nothing.
+            # File > env, and an explicit ``[]`` means "none": the Fleet panel saves ``[]``
+            # when the last member is switched off. So the shipped template must leave the
+            # key out, or it shadows PROTOAGENT_FLEET_AUTOSTART on every seeded instance.
             fleet_autostart=list(
-                fleet.get("autostart")
-                or [s.strip() for s in os.environ.get("PROTOAGENT_FLEET_AUTOSTART", "").split(",") if s.strip()]
+                fleet.get(
+                    "autostart",
+                    [s.strip() for s in os.environ.get("PROTOAGENT_FLEET_AUTOSTART", "").split(",") if s.strip()],
+                )
+                or []
             ),
             # System lifecycle reactions (ADR 0074) — top-level ``lifecycle_hooks:`` list.
             # Opt-in: absent/empty ⇒ [] ⇒ nothing fires beyond the bus broadcast.

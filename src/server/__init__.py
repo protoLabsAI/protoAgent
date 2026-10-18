@@ -937,17 +937,10 @@ def _main():
         try:
             from graph.fleet import supervisor as _sup
 
-            # Let an in-flight autostart settle first: a member mid-launch is not in
-            # fleet.json yet, and shutdown_all would leave it running with no host. Bounded
-            # by one boot watch, since the stop event lets no further member launch.
+            # Stop a still-running autostart BEFORE the sweep. start() checks this under
+            # the fleet.json lock that shutdown_all also takes, so every member autostart
+            # spawned is recorded for the sweep and none spawns after it.
             _FLEET_BOOT_STOP.set()
-            if _FLEET_BOOT_TASK is not None and not _FLEET_BOOT_TASK.done():
-                try:
-                    await asyncio.wait_for(
-                        asyncio.shield(_FLEET_BOOT_TASK), timeout=_sup._BOOT_WATCH_SECONDS + 2
-                    )
-                except Exception:  # noqa: BLE001 — a stuck start must not hold shutdown
-                    log.warning("[fleet] autostart still running at shutdown; spinning down anyway")
             stopped = await asyncio.to_thread(_sup.shutdown_all)
             if stopped:
                 log.info("[fleet] spun down %d member(s) on host exit", len(stopped))

@@ -487,16 +487,29 @@ def test_d8_file_wins_over_env(monkeypatch):
     assert cfg.fleet_max_warm == 9
 
 
-def test_fleet_autostart_empty_list_falls_through_to_env(monkeypatch):
-    """The shipped template carries ``fleet.autostart: []``. An empty list must not
-    shadow PROTOAGENT_FLEET_AUTOSTART, or the env fallback is dead on every seeded
-    instance. A non-empty list still wins."""
+def test_fleet_autostart_file_wins_and_an_explicit_empty_list_means_none(monkeypatch):
+    """The env roster applies only when the key is absent. An explicit ``[]`` is what the
+    Fleet panel saves when the last member is switched off, so it must read back as none,
+    not as the env roster (the toggles would flip back on)."""
     monkeypatch.setenv("PROTOAGENT_FLEET_AUTOSTART", "cindi, matt ,")
-    assert LangGraphConfig.from_dict({"fleet": {"autostart": []}}).fleet_autostart == ["cindi", "matt"]
     assert LangGraphConfig.from_dict({}).fleet_autostart == ["cindi", "matt"]
-    assert LangGraphConfig.from_dict({"fleet": {"autostart": ["vera"]}}).fleet_autostart == ["vera"]
-    monkeypatch.delenv("PROTOAGENT_FLEET_AUTOSTART")
     assert LangGraphConfig.from_dict({"fleet": {"autostart": []}}).fleet_autostart == []
+    assert LangGraphConfig.from_dict({"fleet": {"autostart": ["vera"]}}).fleet_autostart == ["vera"]
+
+
+def test_the_shipped_template_leaves_fleet_autostart_unset(monkeypatch):
+    """A seeded config is a copy of the template; an ``autostart: []`` there shadowed
+    PROTOAGENT_FLEET_AUTOSTART on every instance seeded from it."""
+    from pathlib import Path
+
+    import yaml
+
+    from tests.test_config_roundtrip import EXAMPLE_PATH
+
+    raw = yaml.safe_load(Path(EXAMPLE_PATH).read_text(encoding="utf-8"))
+    assert "autostart" not in (raw.get("fleet") or {})
+    monkeypatch.setenv("PROTOAGENT_FLEET_AUTOSTART", "cindi")
+    assert LangGraphConfig.from_yaml(EXAMPLE_PATH).fleet_autostart == ["cindi"]
 
 
 def test_d8_bad_env_value_degrades_to_default(monkeypatch):

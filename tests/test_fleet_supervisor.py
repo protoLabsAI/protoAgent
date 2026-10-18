@@ -813,7 +813,7 @@ def _fake_slow_start(monkeypatch, *, delay=0.2):
 
     lock, live, peak, order = _th.Lock(), [0], [0], []
 
-    def _start(ident):
+    def _start(ident, **_kw):
         with lock:
             live[0] += 1
             peak[0] = max(peak[0], live[0])
@@ -855,6 +855,17 @@ def test_start_autostart_launches_nothing_after_stop(fleet, monkeypatch):
     started = supervisor.start_autostart_members(stop=stop, concurrency=1)
 
     assert started == ["a"] == order  # the in-flight boot finishes; nothing new launches
+
+
+def test_start_spawns_nothing_once_the_hub_is_stopping(fleet):
+    # Checked under the fleet.json lock shutdown_all takes, so a start can't land after it.
+    import threading as _th
+
+    manager.create("cindi", port=7891)
+    stop = _th.Event()
+    stop.set()
+    assert supervisor.start("cindi", stop=stop)["cancelled"] is True
+    assert not supervisor.is_running("cindi")
 
 
 def test_reconcile_on_boot_stamps_and_returns_previous(tmp_path, monkeypatch):
