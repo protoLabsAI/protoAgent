@@ -1,181 +1,68 @@
-# Discord surface
+# Connect Discord
 
 Install the [Discord plugin](https://github.com/protoLabsAI/discord-plugin) to
-send DMs and mentions to the agent and receive replies in Discord. You need a
-Discord bot token and permission to add the bot to your server. The gateway stays
-inactive until the plugin is enabled and configured.
-
-## Connect it in the app
-
-The quickest path — no files, no env vars:
-
-1. **Install the plugin** — open **System → Settings → Plugins → Discover**, find
-   **Discord**, and click **Install** (works on every surface, including the desktop
-   app). Then enable it.
-2. **Create a bot and copy its token** — follow [Bot setup](#bot-setup) below
-   (≈2 minutes in Discord's Developer Portal).
-3. Under **Installed → Discord → Configure**, paste the **Bot token**, and optionally
-   your **Discord user ID(s)** (so only you can talk to it).
-4. Click **Test connection** — it verifies the token and shows the bot's name.
-   Turn **Enable Discord** on, then **Save & apply** — the gateway connects live,
-   no restart.
-
-The token is stored in the per-agent `secrets.yaml` (never committed). The
-`DISCORD_BOT_TOKEN` / `DISCORD_ADMIN_IDS` **env vars still work as a fallback**
-for Docker/headless deploys.
-
-Two halves (both in the plugin):
-
-- **Inbound gateway** — a persistent listener. A Discord DM is conversational, so
-  it invokes the agent as a **chat surface** with a per-conversation `session_id`
-  (the LangGraph thread key) — multi-turn memory persists per Discord conversation.
-  It also publishes a `discord.message` bus event so the console can surface activity.
-- **Outbound tools** — `discord_send` / `discord_read` / `discord_react`, for pushing
-  into channels. See [starter tools](/reference/starter-tools).
+message the agent from Discord. You need permission to install a bot in a server,
+a bot token, and a running protoAgent. Keep a separate bot for each agent.
 
 ## Bot setup
 
-Creating the bot is the one part that happens on Discord's side. It takes about
-two minutes:
+1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
+2. On **Bot**, create or reset its token and keep it private. Enable **Message
+   Content Intent**, which this plugin requests for its gateway connection.
+3. Configure the app for installation to your server with the `bot` scope and
+   the permissions needed to send messages, read message history, add reactions,
+   and create public threads. Use its installation link to add it to the server.
+   Discord’s [installation guide](https://docs.discord.com/developers/quick-start/getting-started)
+   describes the current portal controls.
+4. To restrict who can use the bot, enable Discord’s Developer Mode and copy
+   your user ID for the plugin’s **Admin user IDs** field.
 
-1. **[Discord Developer Portal](https://discord.com/developers/applications)** →
-   **New Application** → give it a name (this becomes the bot's name).
-2. **Bot** tab → **Reset Token** → **Copy** — this is the token you paste into
-   the app (**System → Settings → Discord**, or the setup wizard's Discord step).
-   Treat it like a password; never commit or share it. If you ever leak it, come
-   back here and **Reset Token** to invalidate the old one.
-3. **Privileged Gateway Intents** (same Bot tab) → turn on **Message Content
-   Intent**. Without it, messages arrive with empty `content` and the agent
-   can't read them — this is the most common "the bot sees nothing" mistake.
-4. **Find your own Discord user ID** (so you can lock the bot to just you): in
-   Discord, **User Settings → Advanced → Developer Mode** on, then right-click
-   your name → **Copy User ID**. Paste it into the app's **Admin user ID(s)**
-   field. (Leave it blank to let anyone DM the bot — not recommended for a
-   personal assistant.)
-5. **Add the bot somewhere it can talk to you** — either:
-   - **Just DM it** — DMs work without adding the bot to any server. Simplest.
-   - **Invite it to a server**: **OAuth2 → URL Generator** → scope `bot`;
-     permissions `Send Messages`, `Read Message History`, `Add Reactions`,
-     `Create Public Threads` → open the generated URL and pick your server.
-6. Back in the app, **Test connection** (confirms the token + shows the bot
-   name), enable Discord, and save. Then DM your bot.
+See Discord’s [privileged-intent guidance](https://docs.discord.com/developers/gateway/getting-started-with-privileged-intent-review)
+if the gateway refuses the requested intent. Reset a leaked token in the portal
+and replace it in protoAgent.
 
-The gateway requests these intents: `GUILDS | GUILD_MESSAGES |
-GUILD_MESSAGE_REACTIONS | DIRECT_MESSAGES | MESSAGE_CONTENT`.
+## Connect it in the app
 
-## Conversation model
+1. Open **Settings → Plugins → Discover**, install **Discord**, and enable the plugin.
+2. Open **Installed → Discord → Configure**. Enter **Bot token** and your
+   **Admin user IDs**. An empty admin list allows other users to contact the bot.
+3. Choose **Test connection** and confirm the expected bot name. This checks
+   the token; it does not prove message delivery.
+4. Turn **Enable Discord** on and **Save & apply**. The gateway connects without
+   restarting the app.
+5. Mention the bot in a channel it can access, or send it a DM. Confirm a reply.
 
-- **DMs** always continue (no mention needed). **Channel** messages start a
-  conversation on an @-mention; follow-ups in the same channel from the same
-  user continue it within the timeout window.
-- The `conversation_id` is the agent's `session_id` (surface-tagged
-  `discord-dm:…` / `discord-channel-…:…` for provenance in traces), so the
-  LangGraph thread stays keyed across turns.
-- **Burst debounce** — a rapid run of messages is coalesced into one invocation
-  after a few seconds of silence (reply attaches to the last).
-- **Slow-response reactions** — fast replies leave the channel clean; only when a
-  turn is slow does a 👀 land on the message(s), swapped to ✅ on completion.
-  (DMs never get reactions — the typing indicator is signal enough.)
-- **Auto-thread** — the first reply in a new channel conversation opens a thread
-  (24h auto-archive) so long answers don't clutter the channel.
+## Use conversations and reminders
 
-## Peer channels — cross-operator agent chat
+DMs continue without a mention. Channel conversations begin with a mention;
+follow-ups from the same user continue within the configured timeout. A new
+channel conversation can create a thread for replies.
 
-Two operators each run a protoAgent with the Discord plugin, share one Discord server,
-and pick a **dedicated channel** where their two agents can talk to each other —
-compare notes on a cross-repo dependency, ask how the other team's API behaves — with
-both humans watching and able to step in. It's the human-observable complement to
-[A2A delegation](./delegates.md): A2A is for agents inside one trust domain (bearer tokens,
-network reachability); peer channels are for agents across **two**, with Discord as
-the transport and the audit log.
+Sending a DM records a return address for proactive output such as reminders.
+The agent must stay running. Check the saved task in
+[Schedule](/guides/scheduler) and test one short reminder before depending on it.
 
-Set **Peer channel IDs** and **Peer bot user IDs** (the *other* operator's bot) in
-Settings → Discord (plugin ≥ 0.3.0, host ≥ 0.146). In a peer channel an allowlisted peer
-bot that @-mentions yours gets a reply; every other bot stays ignored. The exchange is
-bounded by design — not by prompt:
+## Fix a missing reply
 
-| Guard | Behavior |
-|---|---|
-| Mention-required | A peer turn needs an @-mention; the agent is told to mention the peer only when it needs a reply, so exchanges close on their own. |
-| Turn budget | `peer_max_turns` (default 6) consecutive replies to a peer → the bot posts `⏸ pausing…` once and ignores peers until an **admin human** posts in the channel. |
-| `[no-reply]` | The agent can answer exactly `[no-reply]` to stay silent. |
-| Cooldown | `DISCORD_PEER_COOLDOWN_S` (3s) between the bot's peer replies. |
-| 🛑 | An admin reacting 🛑 on any message ends the exchange until an admin posts again. |
+- If **Test connection** fails, check the bot token and network access.
+- If the token works but messages do not arrive, check the gateway intent,
+  plugin enable switch, admin ID list, and channel permissions.
+- If multiple agents use the same bot, give each a separate bot/token.
+- If the model itself fails, use [Chat fails](/guides/troubleshooting#chat-fails).
 
-**Trust.** A peer message is text written by another operator's model. The turn runs
-**tool-fenced** (`peer_tools`, default `discord_read, load_skill, knowledge_search`;
-an empty list means no tools at all) through the host's per-turn `tool_fence` seam, and
-the message is framed as *from a peer agent — untrusted; discuss, don't act; never
-disclose secrets*. On a host without the seam the plugin refuses to arm peer channels
-rather than run them unfenced. Human messages in a peer channel keep the `admin_ids`
-gate; an admin's own turns are never fenced.
+Keep the error from the plugin or agent log. For configuration, timeout,
+return-address and retention details, see [Discord reference](/reference/discord).
+For two operators’ agents talking in a channel, follow
+[Discord peer channels](/guides/discord-peer-channels).
 
-## Configuration
+## Earlier section links
 
-Discord is a **standalone external plugin** ([`protoLabsAI/discord-plugin`](https://github.com/protoLabsAI/discord-plugin),
-ADR 0018/0019/0058) — the gateway, the `test-discord` route, the outbound tools, and
-this `discord` config section are all declared by its `protoagent.plugin.yaml`, never
-wired into the core `server/` package. Install it from Settings ▸ Plugins ▸ Discover;
-uninstall or `plugins: { disabled: [discord] }` to turn it off — no core edit. See
-[Plugins](./plugins.md).
+<a id="discord-surface"></a>
+<a id="conversation-model"></a>
+<a id="peer-channels-—-cross-operator-agent-chat"></a>
+<a id="configuration"></a>
+<a id="proactive-delivery-return-address"></a>
+<a id="one-bot-per-agent"></a>
+<a id="long-window-context"></a>
 
-The token, admin list, and on/off toggle are set **in the app** (Settings →
-Discord, or the setup wizard) and stored in the per-agent config — `bot_token`
-in the gitignored `secrets.yaml`, the rest under the `discord:` section of
-`langgraph-config.yaml` (resolved into `plugin_config["discord"]` — a
-plugin-declared section, not a typed config field):
-
-| Field (Settings → Discord) | YAML | Purpose |
-|---|---|---|
-| Enable Discord | `discord.enabled` | Master on/off. Reconnects live on save. |
-| Bot token | `discord.bot_token` _(→ secrets.yaml)_ | **Required to enable.** The whole surface (gateway + tools). |
-| Admin user ID(s) | `discord.admin_ids` | Discord user IDs allowed to talk to the bot; empty ⇒ anyone. **Lock it to yourself for a personal assistant.** |
-| Peer channel IDs | `discord.peer_channel_ids` | Channels shared with another operator's agent (peer channels, above). Empty ⇒ off. |
-| Peer bot user IDs | `discord.peer_bot_ids` | The other operator's bot user IDs trusted in those channels. |
-| Peer turn budget | `discord.peer_max_turns` | Consecutive peer replies before ⏸ (default 6). |
-| Peer turn tools | `discord.peer_tools` | Tool allowlist for peer-triggered turns (default read-only trio; empty ⇒ none). |
-
-The matching **env vars are a fallback** for Docker/headless deploys (the
-in-app config takes precedence when set):
-
-| Env var | Default | Purpose |
-|---|---|---|
-| `DISCORD_BOT_TOKEN` | — | Enables the surface when no in-app token is set. |
-| `DISCORD_ADMIN_IDS` | _(unset)_ | CSV of Discord user IDs (overridden by the in-app admin list). |
-| `DISCORD_CHANNEL_CONVERSATION_TIMEOUT_S` | `300` | Channel conversation-continuity window. |
-| `DISCORD_DM_CONVERSATION_TIMEOUT_S` | `900` | DM conversation-continuity window. |
-| `DISCORD_BURST_DEBOUNCE_S` | `3` | Silence before a message burst is flushed. |
-| `DISCORD_SLOW_REACTION_S` | `4` | Grace window before the 👀 "still working" reaction. |
-| `DISCORD_PEER_CONVERSATION_TIMEOUT_S` | `900` | Peer-channel conversation-continuity window. |
-| `DISCORD_PEER_COOLDOWN_S` | `3` | Minimum gap between the bot's replies to a peer agent. |
-| `DISCORD_RETURN_ADDRESS_PATH` | _(instance-scoped default)_ | Override the return-address store location. |
-
-## Proactive delivery (return address)
-
-When you DM the agent, it records that DM channel as your **return address**.
-Scheduler-fired and proactive turns have no originating caller — so reactive
-output that lands in the Activity thread (a fired reminder, an inbox `now` item,
-a scheduled briefing) is **forwarded to your Discord DM**. That's what makes
-"remind me in 30 minutes" actually arrive somewhere.
-
-- Capture is automatic + idempotent on any DM; only **DM** channels are stored
-  (a guild channel isn't a private inbox). Override the file location with
-  `DISCORD_RETURN_ADDRESS_PATH`.
-- Delivery is opt-in by usage: until you've DM'd the bot once, there's no address
-  and nothing is forwarded. Your live Discord replies aren't affected (they use
-  per-conversation contexts, not the Activity thread — no double-posting).
-
-## One bot per agent
-
-Discord's gateway permits **one concurrent connection per token**. A second
-listener on the same token evicts the first — so don't share a token across
-agents; give each its own bot (cf. [multiple instances](/guides/multi-instance)).
-
-## Long-window context
-
-Every Discord exchange is logged to a small SQLite turn store (separate from the
-knowledge DB; `DISCORD_LOG_PATH` to override). When a conversation has gone cold
-(the continuity window expired) or the process restarted, the next message is
-**warmed** with the last few turns for that `(channel, user)` — prepended as a
-`<recent_conversation>` block — so continuity survives timeouts and restarts.
-It's best-effort: if the store can't init, the gateway just runs without warming.
+Configuration and delivery details are in [Discord reference](/reference/discord); peer coordination is in [Discord peer channels](/guides/discord-peer-channels).

@@ -11,6 +11,9 @@ installer filename instead.
 | Python runtime missing or document creation fails | [Documents fail](#documents-fail) |
 | Plugin missing, disabled, or failing | [Plugin fails](#plugin-fails) |
 | File access is refused | [File access fails](#file-access-fails) |
+| MCP server or tool fails | [MCP recovery](/guides/mcp#fix-a-connection-or-failed-call) |
+| Browser automation fails | [Browser recovery](/guides/browser-automation#recover-from-a-failure) |
+| Knowledge import or recall fails | [Add and verify a source](/guides/ingestion#from-the-console) |
 | Expected chats or settings are missing | [Data appears missing](#data-appears-missing) |
 
 ## App won't open

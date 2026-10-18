@@ -18,6 +18,7 @@ Run an agent as a service, manage multiple instances, and monitor deployments. [
 - [Create and manage a fleet](/guides/fleet)
 - [Use the fleet terminal](/guides/fleet-deck)
 - [Operate and recover a fleet](/guides/operating-a-fleet)
+- [Pair a remote fleet member](/guides/pair-an-agent)
 
 ## Secure and monitor
 

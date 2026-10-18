@@ -54,6 +54,7 @@ Choose a task area below. For a shorter starting point, use [the task navigation
 - [Configure subagents](/guides/subagents)
 - [Reusable workflows](/guides/workflows)
 - [Verify coding outcomes](/guides/coder)
+- [Coordinate agents in Discord](/guides/discord-peer-channels)
 - [Coordinate project boards](/guides/portfolio)
 - [Build with a coding agent](/guides/build-with-a-coding-agent)
 
@@ -87,6 +88,7 @@ Choose a task area below. For a shorter starting point, use [the task navigation
 - [Create and manage a fleet](/guides/fleet)
 - [Use the fleet terminal](/guides/fleet-deck)
 - [Operate and recover a fleet](/guides/operating-a-fleet)
+- [Pair a remote fleet member](/guides/pair-an-agent)
 - [Sandboxing & egress](/guides/sandboxing)
 - [Expose to the world](/guides/exposing-protoagent)
 - [Monitor traces, metrics, and logs](/guides/observability)

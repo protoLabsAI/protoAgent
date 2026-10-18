@@ -25,6 +25,7 @@ Teach reusable procedures, schedule work, and delegate tasks. Start with a skill
 - [Configure subagents](/guides/subagents)
 - [Reusable workflows](/guides/workflows)
 - [Verify coding outcomes](/guides/coder)
+- [Coordinate agents in Discord](/guides/discord-peer-channels)
 
 ## Coordinate projects
 

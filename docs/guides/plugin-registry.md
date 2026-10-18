@@ -66,43 +66,9 @@ release ref and reinstall it explicitly.
 
 ## Automatic updates
 
-A git-URL-installed plugin is pinned in `plugins.lock` at the ref you installed
-(a branch, a release tag, or an exact commit). By default updates are **manual**:
-the console **Plugins** panel shows an *Update available* badge when a plugin is
-behind its ref, and the **Update** button pulls the latest code + hot-reloads it
-(`POST /api/plugins/{id}/update`).
-
-To let chosen plugins update themselves in the background, opt them into an
-**auto-update policy** (#1720):
-
-```yaml
-plugins:
-  autoupdate_interval_hours: 6      # sweep cadence; 0 disables the loop entirely
-  update_policy:
-    my-plugin:
-      track: main                   # arms auto-update (the ref itself comes from the lock)
-      when: idle                    # idle (default) | always
-    another-plugin:
-      track: main
-      when: always
-```
-
-Each sweep, for every plugin listed in `update_policy`, the runtime checks whether
-it's behind its locked ref and — if so — pulls + hot-reloads it exactly like the
-**Update** button, then emits `plugin.updated` on the [event bus](/guides/plugins#event-bus).
-The gates:
-
-- **Opt-in only.** A plugin is auto-updated only if it appears in `update_policy`
-  with a non-empty `track`. Everything else stays manual.
-- **Never a pinned commit.** A plugin pinned to an exact SHA is immutable and is
-  skipped; a release-tag pin moves to the newest matching tag, a branch pulls its head.
-- **`when: idle`** (the default) defers a plugin's update while a chat turn is — or
-  was just — in flight. A reload rebuilds tools/routers, which is safe *between*
-  turns but disruptive *during* one. **`when: always`** updates on the next sweep
-  regardless.
-
-The default config has an empty `update_policy`, so nothing auto-updates until you
-add a plugin to it.
+Updates are manual by default. For selected plugins, an operator can opt into an
+automatic update policy. Read [Plugin automatic updates](/reference/configuration#plugin-automatic-updates)
+for ref tracking, idle-vs-always behavior, and pinned-commit limits.
 
 ## Remove a plugin
 
@@ -163,25 +129,11 @@ For enforced source allowlists and dependency declarations, see
 
 ## For plugin authors
 
-The authoring sections moved to [Publish a plugin](/guides/publish-a-plugin).
-These links preserve the earlier section URLs:
+Publishing, dependency declarations, bundle pins, and directory listing are owned
+by [Publish a plugin](/guides/publish-a-plugin).
 
-### When a plugin moves into core (`supersedes`)
-
-See [Moving a plugin into core](/guides/publish-a-plugin#when-a-plugin-moves-into-core-supersedes).
-
-### Keep a bundle fresh (the pin lifecycle)
-
-See [Bundle pins](/guides/publish-a-plugin#keep-a-bundle-fresh-the-pin-lifecycle).
-
-### Publish one
-
-See [Publish one](/guides/publish-a-plugin#publish-one).
-
-### Platform-specific deps (environment markers)
-
-See [Platform-specific dependencies](/guides/publish-a-plugin#platform-specific-deps-environment-markers).
-
-### Get listed in the directory
-
-See [Directory listing](/guides/publish-a-plugin#get-listed-in-the-directory).
+<a id="when-a-plugin-moves-into-core-supersedes"></a>
+<a id="keep-a-bundle-fresh-the-pin-lifecycle"></a>
+<a id="publish-one"></a>
+<a id="platform-specific-deps-environment-markers"></a>
+<a id="get-listed-in-the-directory"></a>

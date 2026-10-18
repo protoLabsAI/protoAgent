@@ -114,7 +114,8 @@
             "guides/rooms.md",
             "guides/subagents.md",
             "guides/workflows.md",
-            "guides/coder.md"
+            "guides/coder.md",
+            "guides/discord-peer-channels.md"
           ]
         },
         {
@@ -207,7 +208,8 @@
             "guides/multi-instance.md",
             "guides/fleet.md",
             "guides/fleet-deck.md",
-            "guides/operating-a-fleet.md"
+            "guides/operating-a-fleet.md",
+            "guides/pair-an-agent.md"
           ]
         },
         {
@@ -248,7 +250,10 @@
             "reference/agent-snapshots.md",
             "reference/starter-tools.md",
             "reference/ingestion.md",
-            "reference/memory-delivery.md"
+            "reference/memory-delivery.md",
+            "reference/browser-automation.md",
+            "reference/discord.md",
+            "reference/friction.md"
           ]
         },
         {
@@ -258,7 +263,8 @@
             "reference/a2a-endpoints.md",
             "reference/a2a-conformance.md",
             "reference/agent-card.md",
-            "reference/extensions.md"
+            "reference/extensions.md",
+            "reference/mcp.md"
           ]
         },
         {
@@ -718,6 +724,30 @@
     },
     "reference/memory-delivery.md": {
       "title": "Memory storage and delivery",
+      "status": "current"
+    },
+    "reference/mcp.md": {
+      "title": "MCP connections and operator bridge",
+      "status": "current"
+    },
+    "reference/browser-automation.md": {
+      "title": "Browser automation settings",
+      "status": "current"
+    },
+    "reference/discord.md": {
+      "title": "Discord configuration and delivery",
+      "status": "current"
+    },
+    "guides/discord-peer-channels.md": {
+      "title": "Coordinate agents in Discord",
+      "status": "current"
+    },
+    "guides/pair-an-agent.md": {
+      "title": "Pair a remote fleet member",
+      "status": "current"
+    },
+    "reference/friction.md": {
+      "title": "Friction capture and configuration",
       "status": "current"
     }
   },

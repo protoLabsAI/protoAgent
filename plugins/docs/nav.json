@@ -240,6 +240,10 @@
             {
               "path": "guides/coder.md",
               "title": "Verify coding outcomes"
+            },
+            {
+              "path": "guides/discord-peer-channels.md",
+              "title": "Coordinate agents in Discord"
             }
           ]
         },
@@ -450,6 +454,10 @@
             {
               "path": "guides/operating-a-fleet.md",
               "title": "Operate and recover a fleet"
+            },
+            {
+              "path": "guides/pair-an-agent.md",
+              "title": "Pair a remote fleet member"
             }
           ]
         },
@@ -548,6 +556,18 @@
             {
               "path": "reference/memory-delivery.md",
               "title": "Memory storage and delivery"
+            },
+            {
+              "path": "reference/browser-automation.md",
+              "title": "Browser automation settings"
+            },
+            {
+              "path": "reference/discord.md",
+              "title": "Discord configuration and delivery"
+            },
+            {
+              "path": "reference/friction.md",
+              "title": "Friction capture and configuration"
             }
           ]
         },
@@ -573,6 +593,10 @@
             {
               "path": "reference/extensions.md",
               "title": "Extensions"
+            },
+            {
+              "path": "reference/mcp.md",
+              "title": "MCP connections and operator bridge"
             }
           ]
         },

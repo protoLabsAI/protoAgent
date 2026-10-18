@@ -6,42 +6,15 @@ screen, but it has no offline mode.
 
 ## 1. Make the agent reachable {#_1-bind-to-the-network-set-a-token}
 
-For the desktop app:
-
-1. Open **Settings → Devices → Add a device**.
-2. If the agent is bound to localhost, choose an address from the reachability
-   notice: **Tailnet** for your Tailscale devices, or **Wi-Fi** for the local network.
-3. If the app creates a token, **Copy** it and save it. Other browsers, the CLI,
-   or the desktop app after restart may need it; it is only shown once.
-4. When **Restart protoAgent to finish** appears, quit from the tray or menu bar
-   and reopen the app. Closing the window alone can leave the server running.
-5. Open **Settings → Devices → Add a device** again.
-
-Choosing an address makes the server listen on all network interfaces; it does
-not limit listening to that one address. Requests require a token. Use your
-firewall or tailnet access rules to limit which machines can reach it. See
-[Pair devices and agents](/guides/pairing#before-you-pair-make-this-agent-reachable)
-for reversing this change.
-
-::: details Start a source or package server for phone access
-Generate a token and keep its displayed value before starting the server:
-
-```bash
-PROTOAGENT_PHONE_TOKEN=$(openssl rand -hex 24)
-printf '%s\n' "$PROTOAGENT_PHONE_TOKEN"
-A2A_AUTH_TOKEN="$PROTOAGENT_PHONE_TOKEN" protoagent serve --host 0.0.0.0 --port 7870
-```
-
-In a source checkout, replace `protoagent serve` with
-`uv run python -m server`. You must have built the console first; see
-[Build and test the console](/guides/build-console).
-:::
+Follow [Make this agent reachable](/guides/pairing#before-you-pair-make-this-agent-reachable).
+It covers desktop and terminal-launched servers, saving the operator token, and
+restarting after a bind change. Choosing an address enables listening on all
+interfaces; use firewall or tailnet rules to limit reachability.
 
 ## 2. Open it on the phone {#_2-reach-it-from-the-phone}
 
-Scan the QR from **Add a device**. The phone receives its own token, and its
-entry appears in the agent's Devices list. If the code expired or the agent
-restarted, choose **New code** and scan again.
+Follow [Pair a phone](/guides/pairing#pair-a-phone-qr) to scan the QR and confirm
+the phone appears in Devices. If a code expires, generate a new one.
 
 Alternatively, open `http://<host>:<port>/app/` and enter the operator token
 when asked. Use an address and port shown by the agent. Desktop can choose a
