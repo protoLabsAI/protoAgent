@@ -42,7 +42,7 @@ const winRequirements = [
 
 const winInstall = [
   'Download the setup.exe above and run it.',
-  'Launch protoAgent — it starts its own bundled server, nothing else to install.',
+  'Launch protoAgent — its server and console are bundled. Optional tools may need an additional runtime or setup.',
   'The setup wizard connects your model and you’re live.',
 ];
 
@@ -54,7 +54,7 @@ const linuxRequirements = [
 
 const linuxInstall = [
   'Download the .AppImage above, chmod +x it, and run it — or install the .deb with apt.',
-  'Launch protoAgent — it starts its own bundled server, nothing else to install.',
+  'Launch protoAgent — its server and console are bundled. Optional tools may need an additional runtime or setup.',
   'The setup wizard connects your model and you’re live.',
 ];
 ---
@@ -139,6 +139,7 @@ const linuxInstall = [
           <a href={appImageUrl} class="pl-btn">Linux (.AppImage)</a>
         </div>
         <p class="meta-note">Couldn’t detect your platform — pick a build, or <a href={repo} target="_blank" rel="noopener noreferrer">run it from source</a>.</p>
+        <p class="meta-note">On a phone or tablet? <a href="/docs/guides/phone-access">Pair the browser console</a> with an agent already running on another machine.</p>
       </div>
     </div>
   </section>
@@ -254,12 +255,10 @@ const linuxInstall = [
         <div class="pl-deliverable note-block">
           <div class="pl-deliverable__title">Needs a real desktop session</div>
           <div class="pl-deliverable__body">
-            The app renders through WebKitGTK, which requires working accelerated
-            compositing. In a normal GNOME/KDE session on Wayland or X11 that’s a given.
-            Over a display without GPU acceleration — a bare <code>Xvfb</code>, some
-            container and CI setups, X-forwarding or VNC without DRI3 — WebKitGTK 2.52
-            crashes on launch (<a href="https://github.com/protoLabsAI/protoAgent/issues/2866" target="_blank" rel="noopener noreferrer">#2866</a>).
-            Use the <a href="/docs/guides/headless">server deployment guide</a> for a browser-based or headless setup.
+            Use a normal desktop session with working graphics. Headless displays,
+            containers, or remote sessions without graphics acceleration may not run
+            the desktop shell. For those environments, use the
+            <a href="/docs/guides/headless">server deployment guide</a> for browser-based or headless access.
             protoAgent is in public beta and the AppImage updates itself in place; a
             <code>.deb</code> install is apt’s job.
           </div>
