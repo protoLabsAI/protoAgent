@@ -1,6 +1,7 @@
 # Marketing audit — October 2026
 
 Tracker: [#4339](https://github.com/protoLabsAI/protoAgent/issues/4339).
+Implementation: [PR #4343](https://github.com/protoLabsAI/protoAgent/pull/4343).
 Baseline: `99bc8ac4a7f0b177fa273b6e507a895a075e7ba3`; live site reviewed
 2026-10-18 at <https://agent.protolabs.studio/>. Audience priority: app users,
 then explicit builder and operator paths. Preserve the existing design system and URLs.
