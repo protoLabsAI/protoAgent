@@ -254,8 +254,8 @@
         {
           "label": "Agent and operator APIs",
           "pages": [
-            "reference/automation.md",
             "reference/operator-api.md",
+            "reference/automation.md",
             "reference/a2a-endpoints.md",
             "reference/a2a-conformance.md",
             "reference/agent-card.md",

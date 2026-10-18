@@ -6,8 +6,10 @@ protocol, and then read the whole cross-agent exchange as one trace.
 
 The output excerpts illustrate an earlier successful run; model text, identifiers,
 and trace URLs will differ. This is a source-checkout tutorial for macOS/Linux
-shells. You need `uv sync` in this checkout, `curl`, `jq`, a working first agent
-with its operator token, and a configured model connection. Langfuse is optional.
+shells. Prepare the checkout with the source route in [Set up your first agent](/tutorials/first-agent),
+including its environment and frontend build. Keep that first agent running on
+port 7870 with a working model connection and its operator token. You also need
+`curl` and `jq`; Langfuse is optional.
 
 ## 1. Start a second agent
 
@@ -19,8 +21,10 @@ name and use it consistently in every command, including cleanup.
 PROTOAGENT_INSTANCE=a2a-tutorial uv run protoagent config explain
 ```
 
-This instance has its own data but shares the machine's box configuration and
-model connections. It is not a fully isolated box. If the model is not available,
+This exercise assumes both source-launched agents use the same box root. The
+packaged desktop app normally uses a different root and its connections are not
+inherited by this command. The new instance has its own data but shares the
+source-launched first agent's box configuration and model connections. It is not a fully isolated box. If the model is not available,
 configure a connection in the new instance; do not parse credential files with
 shell word splitting. See [Multiple instances](/guides/multi-instance).
 
