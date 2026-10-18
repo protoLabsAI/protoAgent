@@ -2281,6 +2281,9 @@ class LangGraphConfig:
             fleet_warm_grace_seconds=warm.get(
                 "grace_seconds", _env_default("PROTOAGENT_FLEET_WARM_GRACE", cls.fleet_warm_grace_seconds, int)
             ),
+            # File > env, and an explicit ``[]`` means "none": the Fleet panel saves ``[]``
+            # when the last member is switched off. So the shipped template must leave the
+            # key out, or it shadows PROTOAGENT_FLEET_AUTOSTART on every seeded instance.
             fleet_autostart=list(
                 fleet.get(
                     "autostart",

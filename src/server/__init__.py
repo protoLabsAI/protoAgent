@@ -32,6 +32,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 
 import httpx
@@ -229,6 +230,10 @@ def _install_parent_death_watchdog() -> None:
 #: How often a running process re-sweeps for trees left by a dead owner (#3463).
 ORPHAN_SWEEP_INTERVAL_S = 600.0
 _ORPHAN_SWEEP_TASK: "asyncio.Task | None" = None
+# Fleet boot (reconcile + autostart + app.loaded) runs beside the server rather than in
+# front of it; shutdown sets the event so a half-done roster launches nothing more.
+_FLEET_BOOT_TASK: "asyncio.Task | None" = None
+_FLEET_BOOT_STOP = threading.Event()
 
 
 async def _sweep_orphaned_trees_once() -> int:
@@ -858,6 +863,14 @@ def _main():
         await _sweep_orphaned_trees_once()
         _ORPHAN_SWEEP_TASK = asyncio.create_task(_sweep_orphaned_trees_forever())
 
+        # Fleet boot runs in the background so the hub serves the console right away.
+        # Awaited here, autostart held startup until every member had bound its port: an
+        # 8-member desktop hub showed nothing for about a minute after launch.
+        global _FLEET_BOOT_TASK
+        _FLEET_BOOT_STOP.clear()
+        _FLEET_BOOT_TASK = asyncio.create_task(_fleet_boot())
+
+    async def _fleet_boot() -> None:
         # First-boot-after-update reconcile (version-coherence P2): stamp this
         # boot's app version beside fleet.json and log the transition when it
         # changed (in-app update, DMG swap, git pull — all land here). The live
@@ -869,10 +882,12 @@ def _main():
             await asyncio.to_thread(_sup.reconcile_on_boot)
             # Autostart roster (ADR 0072 slice): bring declared members back up after a
             # container recreate / host restart killed their detached processes. Off the
-            # loop (spawns + per-member boot-watch), best-effort — never blocks hub boot.
-            await asyncio.to_thread(_sup.start_autostart_members)
+            # loop (spawns + per-member boot-watch, a few at a time), best-effort.
+            await asyncio.to_thread(_sup.start_autostart_members, stop=_FLEET_BOOT_STOP)
         except Exception:
             log.exception("[fleet] boot version reconcile failed")
+        if _FLEET_BOOT_STOP.is_set():
+            return  # shutting down — this boot never finished
 
         # System lifecycle: app.loaded (ADR 0074). Boot is done — graph compiled, scheduler
         # + surfaces + fleet autostart up — so broadcast it on the bus, fire plugin
@@ -922,6 +937,13 @@ def _main():
         try:
             from graph.fleet import supervisor as _sup
 
+            # Stop a still-running autostart BEFORE the sweep. start() checks this under
+            # the fleet.json lock that shutdown_all also takes, so every member autostart
+            # spawned is recorded for the sweep and none spawns after it. Cancelling the task
+            # only ends its await; the worker thread still sees the stop and returns.
+            _FLEET_BOOT_STOP.set()
+            if _FLEET_BOOT_TASK is not None:
+                _FLEET_BOOT_TASK.cancel()
             stopped = await asyncio.to_thread(_sup.shutdown_all)
             if stopped:
                 log.info("[fleet] spun down %d member(s) on host exit", len(stopped))

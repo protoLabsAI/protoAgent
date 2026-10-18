@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -204,7 +205,7 @@ def _log_tail_since(log_path: Path, offset: int, limit: int = 500) -> str:
 _BOOT_WATCH_SECONDS = 10.0
 
 
-def start(ident: str) -> dict:
+def start(ident: str, *, stop: threading.Event | None = None) -> dict:
     """Spawn the workspace's agent (by id or display name) as a detached background
     process. No-op (returns the live record) if it's already running.
 
@@ -212,6 +213,10 @@ def start(ident: str) -> dict:
     during the boot watch — a member that dies at boot (broken spawn, bad config,
     taken port) used to report ``running: true`` and just show up dead on the next
     poll, with the reason buried in a log nothing surfaced (#1565 fallout).
+
+    ``stop`` (the hub's shutdown signal) is checked under the state lock, so a start
+    racing ``shutdown_all`` either records its member before the sweep reads fleet.json or
+    spawns nothing: returns ``cancelled: True``.
     """
     ws = manager._find(manager._safe(ident))
     if ws is None:
@@ -223,6 +228,8 @@ def start(ident: str) -> dict:
         rec = state.get(wid)
         if rec and _alive(rec.get("pid")):
             return {**rec, "name": name, "running": True, "already": True}
+        if stop is not None and stop.is_set():
+            return {"name": name, "running": False, "already": False, "cancelled": True}
 
         env, argv = manager.run_exec(wid, ["--ui", "none"])
         full_env = {**os.environ, **env}
@@ -1556,7 +1563,16 @@ def autostart_members() -> list[str]:
         return []
 
 
-def start_autostart_members() -> list[str]:
+# How many autostart members boot at once. A member's boot is a few seconds of CPU
+# (imports, plugins, graph compile), so starting the whole roster at once spikes the host
+# while the operator is using it, and starting one at a time made an 8-member hub take
+# about a minute. A small cap gets both: about a third of the serial time, few cores busy.
+_AUTOSTART_CONCURRENCY = 3
+
+
+def start_autostart_members(
+    *, stop: threading.Event | None = None, concurrency: int = _AUTOSTART_CONCURRENCY
+) -> list[str]:
     """(Re)start every configured autostart member that isn't already alive — the
     hub-boot half of ADR 0072's ``autostart``.
 
@@ -1568,9 +1584,13 @@ def start_autostart_members() -> list[str]:
     Hub-only by construction, like :func:`reconcile_on_boot`: a member runs
     ``PROTOAGENT_INSTANCE``-scoped, so its own config carries no autostart roster and this
     no-ops inside a member. Best-effort per member — a missing workspace or a boot-time
-    spawn failure is logged and skipped, never blocking the hub or the rest of the roster.
-    Members are started sequentially (each ``start`` briefly boot-watches the child); call
-    off the event loop (the boot hook does via ``asyncio.to_thread``).
+    spawn failure is logged and skipped, never blocking the rest of the roster.
+
+    Up to ``concurrency`` members start at once (each ``start`` boot-watches its child
+    until the port binds). ``stop`` is checked before each launch and again under the
+    state lock in ``start``, so once the hub is shutting down nothing new spawns, and any
+    member that did spawn is already in ``fleet.json`` for ``shutdown_all``. Blocking —
+    call off the event loop. Returns the started members in roster order.
     """
     # Hub-only — enforced, not merely "by construction". A member inherits the hub's
     # PROTOAGENT_FLEET_AUTOSTART env, so autostart_members() returns a NON-empty roster
@@ -1582,20 +1602,31 @@ def start_autostart_members() -> list[str]:
     roster = autostart_members()
     if not roster:
         return []
-    started: list[str] = []
-    for ident in roster:
+
+    def _one(ident: str) -> bool:
+        if stop is not None and stop.is_set():
+            return False
         try:
             if is_running(ident):
-                continue
+                return False
             if manager._find(manager._safe(ident)) is None:
                 log.warning("[fleet] autostart: no workspace %r — skipping (create it first)", ident)
-                continue
-            start(ident)
-            started.append(ident)
+                return False
+            return not start(ident, stop=stop).get("cancelled")
         except FleetError as exc:
-            log.error("[fleet] autostart: %r failed to start: %s", ident, exc)
+            if stop is not None and stop.is_set():  # the hub's own shutdown took it down
+                log.info("[fleet] autostart: %r stopped by hub shutdown mid-boot", ident)
+            else:
+                log.error("[fleet] autostart: %r failed to start: %s", ident, exc)
         except Exception:  # noqa: BLE001 — autostart must never block hub boot
             log.exception("[fleet] autostart: unexpected error starting %r", ident)
+        return False
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="fleet-autostart") as pool:
+        flags = list(pool.map(_one, roster))
+    started = [ident for ident, ok in zip(roster, flags) if ok]
     if started:
         log.info("[fleet] autostart: (re)started %d member(s): %s", len(started), ", ".join(started))
     return started

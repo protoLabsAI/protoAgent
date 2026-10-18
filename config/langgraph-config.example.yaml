@@ -552,8 +552,9 @@ fleet:
     grace_seconds: 300      # spare agents touched within N s from LRU eviction (0 = pure LRU) —
                             # the hub refreshes recency on member turn starts, so the default
                             # 5min window protects a mid-turn agent from a rapid A→B→A switch
-  autostart: []             # member ids/names the hub (re)starts on boot (survives container recreate);
-                            # e.g. [cindi, matt]. Env: PROTOAGENT_FLEET_AUTOSTART (comma-separated)
+  # autostart: [cindi, matt]  # member ids/names the hub (re)starts on boot (survives container
+                              # recreate). Left out = PROTOAGENT_FLEET_AUTOSTART (comma-separated);
+                              # an explicit [] means none, so don't set it to [] to "default" it.
 
 # External secrets manager (ADR 0080) — pull secrets from Infisical at boot, on
 # config reload, and on a refresh interval, and export them as ENV VARS. Values fill
