@@ -1,4 +1,4 @@
-# Ingestion API and configuration
+# Ingestion and document runtime APIs
 
 For adding and verifying a source in the app, follow [Add documents and media](/guides/ingestion). API requests use the operator token when authentication is enabled.
 
@@ -42,7 +42,7 @@ knowledge:
 Chat attachments take the same path above `attach_inline_budget` (default 8000 chars):
 small files are read inline for the turn; larger ones are ingested + indexed and a lede
 is surfaced, so a big paste never dumps into context. See
-[chat file upload](/explanation/memory-and-knowledge).
+[working with attachments](/guides/documents-and-files#attach-a-file-and-ask-a-question).
 
 ## Managed Python API
 

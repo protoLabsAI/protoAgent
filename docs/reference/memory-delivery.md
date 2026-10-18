@@ -15,7 +15,7 @@ the agent knows; rows are distinguished by a few columns:
 | `namespace` | optional per-project / per-owner scope (ADR 0021) — a *filter* for multi-project forks, never required |
 | `source` / `source_type` | provenance: for conversation-derived rows (harvest summaries, extracted facts, background reports) `source` is the **originating session/thread id** (ADR 0069 D5); for ingested content it is the **document origin** (URL/path); other writes may leave it unset or stamp the writing surface (e.g. `console`). `source_type` names the write path and maps onto a [trust tier](#trust-tiers) |
 | `created_at` / `invalidated_at` | when the row was stored, and — for superseded facts — when a newer revision replaced it (ADR 0069 D9; retrieval excludes invalidated rows by default) |
-| `memory_kind` / `subject` / `review_state` / `expires_at` | typed memory (#3072, [ADR 0108 D4](/adr/0108-context-architecture-v2.md)): what the chunk *is* (`profile`, `standing`, `fact`, `decision`, `note`, `episode`, `reference`, `legacy`), what it's about, whether an operator confirmed it, and when it lapses. `NULL` on untyped rows |
+| `memory_kind` / `subject` / `review_state` / `expires_at` | typed memory (#3072, [ADR 0108 D4](/adr/0108-context-architecture-v2)): what the chunk *is* (`profile`, `standing`, `fact`, `decision`, `note`, `episode`, `reference`, `legacy`), what it's about, whether an operator confirmed it, and when it lapses. `NULL` on untyped rows |
 | `delivery_policy` | *when* the chunk enters the prompt (ADR 0108 D4): `always` (every turn — what `domain="hot"` has always meant; a hot write is stamped `always` automatically), `retrieved` (on a RAG match — the `NULL` default), `on_demand` (only via `memory_recall`). Rows that predate the column were classified once from `domain` on the first open after the upgrade |
 | `heading`, `content` | the chunk itself |
 
@@ -31,19 +31,19 @@ onto primitives it already has:
   digest entry (below). **Conversation summaries** (`domain="conversation"`): a
   retired thread is summarized into searchable store chunks.
 - **Procedural** — **Playbooks / skills** (`skills.db`, a separate FTS5 index).
-  Methodology the agent retrieves but never "runs". See [Skills](/guides/skills.md).
+  Methodology the agent retrieves but never "runs". See [Skills](/guides/skills).
 
 ## Write paths
 
 1. **Memory tools** — the agent calls `memory_ingest` to record a fact the user
    shared, `memory_recall` to search durable knowledge, and `session_search` /
    `recall_session` to find prior conversations by content or id. See
-   [Starter tools](/reference/starter-tools.md).
+   [Starter tools](/reference/starter-tools).
 2. **Session summaries** — `SessionSummaryMiddleware` writes a per-session JSON
    summary (messages, top tool calls, final output — all reasoning-stripped) to
    the session-memory dir on each terminal turn, atomically (temp file →
    rename, so a crash never leaves a partial file). It skips incognito threads,
-   `background:*` worker sessions ([ADR 0070](/adr/0070-background-results-push-resume.md):
+   `background:*` worker sessions ([ADR 0070](/adr/0070-background-results-push-resume):
    the worker's transcript is disposable — its *report* is delivered and indexed
    to the origin session instead), and turns with no resolvable session identity
    (no more pooled `unknown.json`).
@@ -60,7 +60,7 @@ onto primitives it already has:
 ### The reasoning guardrail
 
 The agent reasons natively — on the gateway's `reasoning_content` channel, not in
-the answer text (see [model output](/explanation/output-protocol.md)). As a defense-in-depth
+the answer text (see [model output](/explanation/output-protocol)). As a defense-in-depth
 guardrail, `add_chunk` **strips any leaked `<scratch_pad>`/`<think>` from every
 write** — so reasoning a provider leaks into content can never reach the store (and
 never gets recycled into a later prompt via retrieval). A chunk that is *only*
@@ -151,7 +151,7 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
    separate* sessions. The topic derives from the first *user* message only
    (no assistant text — that's the identity confusion + poisoning surface).
    Which sessions the digest lists is a policy, `context.prior_sessions`
-   ([ADR 0108 D9](/adr/0108-context-architecture-v2.md)): `newest` (default)
+   ([ADR 0108 D9](/adr/0108-context-architecture-v2)): `newest` (default)
    takes the newest `memory.max_sessions` summaries (10, and `memory.max_tokens`
    caps the block — both are ceilings, and both were inert until #3308);
    `relevant` takes only sessions whose content
@@ -180,7 +180,7 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
    always-on operator facts: the newest 100 under a 6 000-char budget inject
    **every turn**, loaded fresh per turn so a just-added fact is seen
    immediately. Always-on is a *policy*, not a domain
-   ([ADR 0108 D4 + D6](/adr/0108-context-architecture-v2.md)): every
+   ([ADR 0108 D4 + D6](/adr/0108-context-architecture-v2)): every
    `domain="hot"` write is stamped with it whatever the caller said, so the
    legacy hot domain still works, and a row on any other domain (say a
    `preferences` fact) can be pinned always-on the same way. Rows an operator
@@ -202,7 +202,7 @@ prompt layer, don't just hope the store stays clean). Three parts, in order:
    **trust tiers** (below).
 
 The always-on `<available_skills>` index stays **outside** the envelope — it is
-capability, not memory ([ADR 0060](/adr/0060-skill-progressive-disclosure.md)).
+capability, not memory ([ADR 0060](/adr/0060-skill-progressive-disclosure)).
 
 ### One projection for every runtime (ADR 0108 D8)
 
@@ -217,7 +217,7 @@ index, and `<working_state>` the native loop injects, with the incognito rule
 and the injection log applied identically — and the delivery knobs come off the
 same config (`ProjectionOptions.from_config`). The middleware keeps only what is
 graph-specific: the turn-entry guard, the digest cache, and the ephemeral
-delivery ([ADR 0108](/adr/0108-context-architecture-v2.md) D2). The result is
+delivery ([ADR 0108](/adr/0108-context-architecture-v2) D2). The result is
 a typed `ProjectedContext` — text, per-section labels, the injected ids, and
 the sources that fed it.
 
@@ -251,7 +251,7 @@ lowest-ranked end, then the prior-session digest one **entry** at a time from
 the end (oldest under `newest`, lowest-rank under `relevant` — ADR 0108 D9;
 the section drops when none remain), then the skill index gives up
 descriptions one row at a time down to its identity floor — every skill's name
-stays listed ([ADR 0060](/adr/0060-skill-progressive-disclosure.md), #2867).
+stays listed ([ADR 0060](/adr/0060-skill-progressive-disclosure), #2867).
 Working state and always-on memory are **never shed**: if they alone exceed
 the budget they are delivered anyway and a warning names the sizes (once per
 distinct standing-context size), because a silently missing standing
@@ -286,7 +286,7 @@ hit never outranks an operator- or agent-authored one, while relevance order is
 preserved within a tier. A floor (`knowledge.inject_min_trust`) can exclude low
 tiers from auto-injection entirely; excluded content stays reachable on demand
 via `memory_recall`, tier visible. The knobs, with worked examples:
-[Knowledge reference → Delivery controls](/reference/knowledge.md#memory-delivery-controls-adr-0069).
+[Knowledge reference → Delivery controls](/reference/knowledge#memory-delivery-controls-adr-0069).
 
 ### Incognito threads
 
@@ -304,7 +304,7 @@ controls its mode, so turning incognito off can let later summarization include
 earlier content. Start a new ordinary chat to keep the histories separate.
 Manual `/compact` refuses in incognito because it requires an archive; automatic
 compaction can still shorten the live context without archiving it. See
-[Use incognito](/guides/manage-memory.md#use-incognito) for the app controls.
+[Use incognito](/guides/manage-memory#use-incognito) for the app controls.
 
 ## Forensics: the injection log
 
@@ -347,7 +347,7 @@ knowledge:
 ```
 
 ::: warning The embed model is gateway-specific
-`embed_model` must name a model your [LiteLLM gateway](/explanation/litellm-gateway.md)
+`embed_model` must name a model your [LiteLLM gateway](/explanation/litellm-gateway)
 actually serves — it is **not** the chat model. The default `qwen3-embedding`
 suits the protoLabs gateway; for a local Ollama gateway set something it serves
 (e.g. `nomic-embed-text`). Check `GET /v1/models` for what your key can access. With a
@@ -368,15 +368,15 @@ persistence overrides. Use [Tune recall](/guides/knowledge) to compare changes.
 
 ## See also
 
-- [ADR 0021 — Agent memory: extract, don't dump](/adr/0021-agent-memory-architecture.md)
-- [ADR 0069 — Memory delivery layer](/adr/0069-memory-delivery-layer.md) — digest, framing, provenance, trust tiers, injection record
-- [ADR 0070 — Background results](/adr/0070-background-results-push-resume.md) — why `background:*` workers leave no summary trail
-- [Manage memory](/guides/manage-memory.md) — inspect, correct, reject, and delete saved context
-- [Tune knowledge recall](/guides/knowledge.md) — check retrieval and compare settings
-- [Knowledge reference](/reference/knowledge.md) — settings, tools, and delivery controls
-- [ADR 0041 — Workspaces & tiered stores](/adr/0041-workspaces-and-tiered-stores.md) — the private/commons tiering behind `knowledge.scope`
-- [Run a fleet](/guides/fleet.md) — sharing a knowledge commons across many agents on one host
-- [Prompt contracts](/explanation/prompt-contracts.md) — the stable prompt this projected context is deliberately kept out of, and the size ceilings that keep it cacheable
-- [Model output](/explanation/output-protocol.md) — native reasoning + the leaked-reasoning guard this enforces
-- [Skills](/guides/skills.md) — procedural memory (Playbooks)
-- [Starter tools](/reference/starter-tools.md) — the `memory_*` tools
+- [ADR 0021 — Agent memory: extract, don't dump](/adr/0021-agent-memory-architecture)
+- [ADR 0069 — Memory delivery layer](/adr/0069-memory-delivery-layer) — digest, framing, provenance, trust tiers, injection record
+- [ADR 0070 — Background results](/adr/0070-background-results-push-resume) — why `background:*` workers leave no summary trail
+- [Manage memory](/guides/manage-memory) — inspect, correct, reject, and delete saved context
+- [Tune knowledge recall](/guides/knowledge) — check retrieval and compare settings
+- [Knowledge reference](/reference/knowledge) — settings, tools, and delivery controls
+- [ADR 0041 — Workspaces & tiered stores](/adr/0041-workspaces-and-tiered-stores) — the private/commons tiering behind `knowledge.scope`
+- [Run a fleet](/guides/fleet) — sharing a knowledge commons across many agents on one host
+- [Prompt contracts](/explanation/prompt-contracts) — the stable prompt this projected context is deliberately kept out of, and the size ceilings that keep it cacheable
+- [Model output](/explanation/output-protocol) — native reasoning + the leaked-reasoning guard this enforces
+- [Skills](/guides/skills) — procedural memory (Playbooks)
+- [Starter tools](/reference/starter-tools) — the `memory_*` tools

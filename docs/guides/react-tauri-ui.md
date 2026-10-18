@@ -43,6 +43,7 @@ See [Steering](/explanation/steering) for pending-message behavior.
 - **Delegation:** a [delegate](/guides/delegates) can return a reply under its own
   name; background work appears above the composer.
 
+On desktop, a failed streaming relay can fall back to showing the completed reply.
 If a reply stalls or fails, follow [Chat fails](/guides/troubleshooting#chat-fails).
 
 ## Save a conversation
