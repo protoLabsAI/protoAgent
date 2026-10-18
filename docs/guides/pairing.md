@@ -22,9 +22,9 @@ A phone or a hub on another machine can't reach an agent bound to loopback (`127
 which is the default for a desktop or local run. Open **Settings ▸ Devices ▸ Add a
 device** (or **Pair an agent**). If the agent is loopback-bound, the reachability
 notice lists addresses; choose **Tailnet** or **Wi-Fi** to allow access. Tailnet
-addresses come first and are marked as the safer pick: only your own devices can reach a
-tailnet address, from any network, while a Wi-Fi (LAN) address is reachable by anything on
-that network.
+addresses come first. Access depends on your tailnet membership and ACLs; a LAN
+address can be reachable by other devices on that network. Check the applicable
+network rules before pairing.
 
 Picking an address does two things:
 

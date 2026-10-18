@@ -43,4 +43,4 @@ Start with [Use the app](/guides/react-tauri-ui) for chat and controls. Choose [
 ## Understand your agent
 
 - [Mid-turn steering](/explanation/steering)
-- [Memory & knowledge store](/explanation/memory-and-knowledge)
+- [Memory and knowledge](/explanation/memory-and-knowledge)

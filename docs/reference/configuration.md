@@ -866,18 +866,18 @@ runs. Running and paused records are not pruned by that history limit.
 
 ## `plugins`
 
-Drop-in [plugins](../guides/plugins.md) (manifest + `register()`) that contribute tools, bundled skills, FastAPI routes, background surfaces, subagents, and managed MCP servers (ADR 0018/0019). They run **in-process** with the agent's privileges, so a third-party plugin is **disabled by default** — only enable plugins you trust. (First-party bundled plugins like `discord`/`google` ship `enabled: true` in their own manifest.)
+Drop-in [plugins](../guides/plugins.md) (manifest + `register()`) that contribute tools, bundled skills, FastAPI routes, background surfaces, subagents, and managed MCP servers (ADR 0018/0019). They run **in-process** with the agent's privileges, so a third-party plugin is **disabled by default** — only enable plugins you trust. Bundled plugins declare their defaults in their manifests; Discord and Google are external plugins installed separately.
 
 | Key | Default | What |
 |---|---|---|
 | `enabled` | `[]` | Plugin `id`s to load. A plugin also loads if its own manifest has `enabled: true`. |
-| `disabled` | `[]` | Plugin `id`s to force **OFF** even when their manifest says `enabled: true` — the way a fork drops a bundled first-party plugin (e.g. `discord`, `google`) without deleting its directory or editing core. |
-| `dir` | `""` | Override the writable plugins root (default `<config-dir>/plugins`). |
+| `disabled` | `[]` | Plugin `id`s to force **OFF** even when their manifest says `enabled: true` — the way a fork drops a bundled plugin (e.g. `friction`) without deleting its directory or editing core. |
+| `dir` | `""` | Override the writable plugins root (default `<instance_root>/plugins`). |
 | `sources.allow` | _(absent)_ | Optional list of host/org glob strings for git-URL installs (e.g. `[github.com/yourorg/*]`). A scalar string or a non-string entry is rejected; CLI installs also fail closed when the policy cannot be read. Absent-vs-explicit-empty is semantic (#2743, same rule as `sources.official`): key **absent** = any URL allowed (gated install); an **explicit `[]`** = deny-all — the hardening stance a defense-minded admin writing an empty list means. A config carrying a literal `allow: []` from before #2743 flips from open to deny and the boot log says so loudly — remove the key to stay open. (ADR 0027.) |
 | `update_policy` | `{}` | Opt-in background auto-updates, keyed by plugin `id`. Each value is `{track, when}`: a non-empty `track` **arms** the plugin (the ref comes from `plugins.lock`); `when` is `idle` (default — defer while a chat turn is/was just in flight) or `always`. A SHA-pinned plugin is never auto-updated. Empty = manual-only (the default). (#1720; see the [Plugins guide](../guides/plugins.md#keeping-plugins-current).) |
 | `autoupdate_interval_hours` | `6` | Cadence of the auto-update sweep in hours; `0` disables the loop. Only plugins in `update_policy` are ever touched. |
 
-Plugins load from two roots — bundled (`plugins/`, e.g. `hello`, `discord`, `google`, `plugin-devkit`) and writable (`<config-dir>/plugins/`, where git-URL installs land); live overrides bundled by `id`. Plugin tools that shadow a core/MCP tool are skipped. `GET /api/runtime/status` reports `plugins[]` (`id`, `enabled`, `loaded`, `tools`, `skills`, `views`, routes/surfaces/subagents counts). Plugins are installable from a git URL (`python -m server plugin install <url>`) — see [Install & publish plugins](../guides/plugin-registry.md) — and a repo can ship tools, subagents, skills, workflows, and console views. See the [Plugins guide](../guides/plugins.md).
+Plugins load from two roots — bundled (`plugins/`, e.g. `hello`, `friction`, `plugin-devkit`) and writable (`<instance_root>/plugins/`, where git-URL installs land); live overrides bundled by `id`. Plugin tools that shadow a core/MCP tool are skipped. `GET /api/runtime/status` reports `plugins[]` (`id`, `enabled`, `loaded`, `tools`, `skills`, `views`, routes/surfaces/subagents counts). Plugins are installable from a git URL (`python -m server plugin install <url>`) — see [Install plugins](../guides/plugin-registry.md) — and a repo can ship tools, subagents, skills, workflows, and console views. See the [Plugins guide](../guides/plugins.md).
 
 ### Plugin-declared config sections (ADR 0019)
 

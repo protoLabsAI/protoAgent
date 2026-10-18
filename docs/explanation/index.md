@@ -15,7 +15,7 @@ Understand the behavior behind a task. [Architecture decisions](/adr/) preserve 
 ## Use protoAgent
 
 - [Mid-turn steering](/explanation/steering)
-- [Memory & knowledge store](/explanation/memory-and-knowledge)
+- [Memory and knowledge](/explanation/memory-and-knowledge)
 
 ## Automate work
 

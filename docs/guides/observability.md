@@ -4,6 +4,43 @@ Use local telemetry for turn history, Langfuse for distributed traces,
 Prometheus for monitoring, and the audit log for tool-call details. Start with a
 configured agent and choose the signals you need; these layers work independently.
 
+## Start with local evidence
+
+Send one small test turn and inspect its row in **Telemetry**. Check the server
+log for startup or connection failures and the [audit log](#audit-log) for tool
+calls. These checks do not require Langfuse or Prometheus. If local evidence is
+healthy and you need cross-agent traces or time-series monitoring, configure the
+optional backends below and verify the same test turn reaches them.
+
+## Local telemetry store
+
+Enabled by default, `<instance_root>/telemetry.db` stores turn outcomes, tokens,
+cost, duration, and model/tool-call counts, including coding-agent runs.
+`telemetry.enabled: false` disables this store; `telemetry.db_path` relocates it.
+History is pruned by `telemetry.retention_days` (default 90).
+
+Use the operator token when querying a protected instance:
+
+```bash
+curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
+  http://localhost:7870/api/telemetry/summary
+curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
+  'http://localhost:7870/api/telemetry/recent?limit=20'
+curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
+  http://localhost:7870/api/telemetry/insights
+```
+
+`summary` includes totals, success rate, latency percentiles, cache-hit ratio,
+and a per-model breakdown. `insights` flags outliers and possible savings; it
+never changes configuration. Its reasons identify the baseline used: latency
+compares like models or kinds of work, while cost compares priced turns.
+`/api/telemetry/export` downloads CSV.
+
+Plugin numeric series from `sdk.record_metric` live separately in `metrics.db`.
+They remain enabled when turn telemetry is off because watches and other plugin
+features depend on their history. See the
+[consumption SDK](/guides/plugins#consumption-sdk).
+
 ## Langfuse (distributed traces)
 
 In **Settings → Tracing**, enable **Send traces to Langfuse**, enter your host
@@ -109,35 +146,6 @@ set and labels. Cost and cache usage depend on the model endpoint's reporting.
 ### If prometheus-client isn't installed
 
 `/metrics` reports that metrics are disabled; the rest of the agent still runs.
-
-## Local telemetry store
-
-Enabled by default, `<instance_root>/telemetry.db` stores turn outcomes, tokens,
-cost, duration, and model/tool-call counts, including coding-agent runs.
-`telemetry.enabled: false` disables this store; `telemetry.db_path` relocates it.
-History is pruned by `telemetry.retention_days` (default 90).
-
-Use the operator token when querying a protected instance:
-
-```bash
-curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
-  http://localhost:7870/api/telemetry/summary
-curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
-  'http://localhost:7870/api/telemetry/recent?limit=20'
-curl -H "Authorization: Bearer $PROTOAGENT_TOKEN" \
-  http://localhost:7870/api/telemetry/insights
-```
-
-`summary` includes totals, success rate, latency percentiles, cache-hit ratio,
-and a per-model breakdown. `insights` flags outliers and possible savings; it
-never changes configuration. Its reasons identify the baseline used: latency
-compares like models or kinds of work, while cost compares priced turns.
-`/api/telemetry/export` downloads CSV.
-
-Plugin numeric series from `sdk.record_metric` live separately in `metrics.db`.
-They remain enabled when turn telemetry is off because watches and other plugin
-features depend on their history. See the
-[consumption SDK](/guides/plugins#consumption-sdk).
 
 ## Fleet trace export (the flywheel Observe)
 

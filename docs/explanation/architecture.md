@@ -6,7 +6,7 @@
 ┌──────────────┐     A2A JSON-RPC + SSE      ┌──────────────────┐
 │   Consumer   │ ──────────────────────────▶ │  A2A handler     │
 │  (any A2A    │                             │  (FastAPI app)   │
-│   client)    │ ◀──── cost-v1 DataPart ─────│                  │
+│   client)    │ ◀──── cost-v1 metadata ─────│                  │
 └──────────────┘                             └────────┬─────────┘
                                                       │ submits message
                                                       ▼

@@ -9,8 +9,8 @@ reacts to these with `registry.on` or [`sdk.react_on`](/reference/plugin-sdk-api
 and a console view through the
 [view bridge](/reference/plugin-view-bridge#events-subscribe-event-publish).
 
-The bus is the **only** inter-plugin channel — plugins publish topics as their public API and
-never import one another ([ADR 0039](/adr/0039-plugin-event-bus)). It is also ephemeral: a
+The bus carries inter-plugin events. For direct calls, use registered [plugin services](/reference/plugin-sdk-api#sdk-service). Plugins
+must not import one another's internals ([ADR 0039](/adr/0039-plugin-event-bus)). The bus is ephemeral: a
 small ring buffer lets a reconnecting subscriber catch up via `since`, but there is no durable
 log. Persist what you need to keep.
 

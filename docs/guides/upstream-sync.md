@@ -33,9 +33,14 @@ git log --oneline origin/main..upstream/main
 
 # 3. Branch off origin/main (NOT local main) and merge upstream.
 git checkout -b chore/sync-upstream-$(date +%Y%m%d) origin/main
-git merge upstream/main            # resolve: identity=ours, code=theirs (see hotspots)
+git merge upstream/main            # review and resolve conflicts (see hotspots)
 
-# 4. Run tests, open a PR, and merge it as a MERGE COMMIT:
+# 4. Validate this checkout, then open the sync PR.
+uv sync --frozen
+uv run python scripts/gate.py
+gh pr create
+
+# 5. After review and required checks pass, merge as a MERGE COMMIT.
 gh pr merge --merge                # NOT --squash
 ```
 
@@ -58,7 +63,7 @@ Real example (protoTrader, after two squash-syncs):
 | Behind count | 57 (mostly phantom) | 3 (all genuinely new) |
 
 If your fork is already in the squash-broken state, fix it once: do the next sync
-as a true merge commit (resolving the now-phantom conflicts in upstream's favor)
+as a true merge commit (reviewing each conflict against your fork's intended changes)
 and merge with `--merge`. The base re-anchors and the inflation clears.
 
 ## CHANGELOG: stop the duplicates
@@ -71,8 +76,8 @@ duplicate `## [X.Y.Z]` sections to hand-dedupe).
 
 Forks own their changelog narrative — switch it to `merge=ours` (above) so a sync
 keeps your changelog and ignores upstream's. Don't import upstream's `## [X.Y.Z]`
-version headers; if you want a specific upstream entry, copy it into your own
-`[Unreleased]` by hand.
+version headers; if you want a specific upstream entry, add a fork-owned changelog fragment
+using your release process.
 
 ## Conflict hotspots
 
@@ -93,11 +98,17 @@ rather than re-porting the edit every sync.
 
 ## Running the fork's tests
 
-A fork usually shares deps with the template; the template venv works:
+Run the gate from the fork's checkout using its own editable environment:
 
 ```sh
-PYTHONPATH=~/dev/<fork> ~/dev/protoAgent/.venv/bin/python -m pytest -q
+uv sync --frozen
+uv run python scripts/gate.py
 ```
+
+The source layout includes packages under `src/` and bundled plugins at the
+repository root. Reusing another checkout's virtualenv can import that checkout's
+code and give a misleading pass. Follow the fork's `PROTO.md` for additional web,
+docs, or platform checks before opening the sync PR.
 
 ## Related
 

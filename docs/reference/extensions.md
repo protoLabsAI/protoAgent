@@ -13,18 +13,22 @@ Extension data reaches a consumer one of two ways, and **which one an extension 
 | Where | the `metadata` map on an `Artifact` or a status `Message`, keyed by the extension URI | an entry in `parts[]` with `metadata.mimeType` set |
 | Carries | **telemetry / annotations** about the turn | **renderable content** produced by the turn |
 | Extensions | `cost-v1`, `worldstate-delta-v1`, `tool-call-v1` | `hitl-v1`, `reasoning-v1`, `component-v1`, `context-v1`, structured skill results |
-| Declared on the card | yes — all four, by default | no (template-local, no shared contract) |
+| Declared on the card | yes — the three listed here | no (template-local, no shared contract) |
 | Helper | `protolabs_a2a.<ext>_metadata(...)` | `protolabs_a2a.data_part(payload, mime)` |
 
 Until protolabs-a2a **0.3.0** all four fleet extensions rode `parts[]` as MIME-typed `DataPart`s. They moved to `metadata` for one reason: **a generic A2A client renders `parts[]` as content.** A client that doesn't know `application/vnd.protolabs.cost-v1+json` still has to do *something* with an unrecognized part, and "something" is usually dumping it into the transcript — so every turn ended with a blob of token counts stapled to the answer. The A2A spec's own guidance ("extensions should place custom attributes in the `metadata` map present on core data structures", the same convention the official Timestamp extension follows) resolves it: **content stays in `parts[]`, metadata stays in `metadata`.** An ignorant client now correctly ignores telemetry; a knowing client routes `metadata` by URI.
 
 The template-local extensions stayed `DataPart`s precisely because they *are* content — a form to fill in, a thinking stream, a table to render. Rendering them as an unknown blob is a degradation, not a bug.
 
-The URI is both the card declaration and the metadata key, with the version encoded in it (`…/cost-v1`); bump the URI to version an extension. `protolabs_a2a.ALL_EXTENSION_URIS` is the canonical four-tuple, and `protolabs_a2a.build_agent_card` defaults `capabilities.extensions[]` to it — `server/a2a.py::_build_agent_card_proto` doesn't override it, so this agent declares exactly those four.
+The URI is both the card declaration and the metadata key, with the version
+encoded in it (`…/cost-v1`). The SDK's `ALL_EXTENSION_URIS` includes confidence,
+but `src/server/a2a.py::_build_agent_card_proto` explicitly passes the runtime's
+emitted URI set: **cost, worldstate delta, and tool call**. Confidence is not
+declared because this runtime does not emit it.
 
 ### Full wire example — terminal artifact
 
-A `message/stream` frame closing the answer artifact. Three extension fragments merged by `pa.merge_extension_metadata(...)` into one `metadata` map; the answer itself is the only `part`:
+A `SendStreamingMessage` frame closing the answer artifact. Three extension fragments merged by `pa.merge_extension_metadata(...)` into one `metadata` map; the answer itself is the only `part`:
 
 ```json
 {
@@ -341,7 +345,11 @@ Mutations go through `protoComponent:send`, which is a confirmed, visible user t
 
 `blast-v1` (`https://proto-labs.ai/a2a/ext/blast-v1`), `hitl-mode-v1` (`…/hitl-mode-v1`), and `effect-domain-v1` (`…/effect-domain-v1`) are **purely declarative** protoLabs extensions — per-skill statements on the card (`{uri, params: {skills: {...}}}`) that let a consumer gate or rank work before dispatching it: blast radius (`self` / `project` / `repo`), approval policy (`autonomous` / `notification`), and declared world-state effects (`{domain, path, delta, confidence}`) respectively.
 
-**Status**: none of the three is declared by this template. `protolabs_a2a.build_agent_card` defaults `capabilities.extensions[]` to `ALL_EXTENSION_URIS` (the four above) and `server/a2a.py::_build_agent_card_proto` doesn't pass `extension_uris`, so the card carries exactly four extensions and no commented stanza remains in the code. They are documented here because forks with mutating skills do declare them and [ADR 0014](/adr/0014-a2a-1.0-migration) left them as fork territory. To add one, pass your own `extension_uris` (or post-process the card) and keep the declaration honest: an over-declared `effect-domain-v1` confuses a planner into routing your agent for goals it can't move, and a declared effect should be matched by a real `worldstate-delta-v1` fragment at runtime.
+**Status:** none of these declarative extensions is emitted or declared by the
+stock runtime. A fork adding one must extend the explicit `extension_uris` passed
+by `src/server/a2a.py::_build_agent_card_proto`, and keep its declarations consistent
+with its behavior. A declared effect should match a real `worldstate-delta-v1`
+fragment; otherwise a planner can route work the agent cannot perform.
 
 ## `a2a.trace` — distributed Langfuse propagation
 
@@ -353,13 +361,13 @@ When the caller stamps their trace context:
 
 ```json
 {
-  "method": "message/send",
+  "method": "SendMessage",
   "params": {
     "message": {...},
     "metadata": {
       "a2a.trace": {
-        "traceId": "abc123",
-        "spanId": "def456"
+        "traceId": "0123456789abcdef0123456789abcdef",
+        "spanId": "0123456789abcdef"
       }
     }
   }
@@ -374,7 +382,7 @@ The executor reads it (`a2a_impl/executor.py::_extract_caller_trace`, line 568 �
 2. Emit or parse it in `a2a_impl/executor.py` (`_terminal_parts` for terminal telemetry, `_tool_call_frame`/the event loop for streaming frames) or `server/chat.py` (to yield a new producer event).
 3. For a metadata extension, declare the URI on the card under `capabilities.extensions` — pass `extension_uris` to `pa.build_agent_card` in `server/a2a.py::_build_agent_card_proto`. Version by URI suffix.
 4. Document the shape in this file.
-5. Add a test to `tests/test_a2a_integration.py` asserting the declaration is on the card (see `test_agent_card_declares_all_four_protolabs_extensions`), and one to `tests/test_a2a_handler.py` asserting the payload lands where you say it does.
+5. Add a test to `tests/test_a2a_integration.py` asserting the declaration is on the card (see `test_agent_card_declares_exactly_the_extensions_it_emits`), and one to `tests/test_a2a_handler.py` asserting the payload lands where you say it does.
 
 ## Related
 

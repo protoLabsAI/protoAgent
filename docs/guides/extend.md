@@ -12,6 +12,8 @@ Use settings for model and persona changes, [skills](/guides/skills) for reusabl
 
 Plugins run with server privileges. A separate MCP process is not automatically a sandbox. Read [Plugin architecture](/explanation/plugin-architecture) before choosing an extension boundary.
 
+Choose [First plugin](/tutorials/first-plugin) for a minimal extension, or [First tool](/tutorials/first-tool) for a focused model-callable tool. For a UI, follow the [view quickstart](/guides/build-a-plugin-view) before the detailed integration guide. [Publish](/guides/publish-a-plugin) owns distribution. For a core fork, follow the [fork checklist](/guides/fork-the-template); [Customize and deploy](/guides/customize-and-deploy) is its worked walkthrough.
+
 ## Build your first extension
 
 - [Build your first plugin](/tutorials/first-plugin)

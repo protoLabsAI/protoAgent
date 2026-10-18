@@ -9,7 +9,9 @@
 <span id="tools-mcp-plugins"></span>
 <span id="console-ui"></span>
 
-Look up configuration fields, API contracts, protocols, and SDK signatures. For a procedure, choose [Use](/guides/use-protoagent), [Build](/guides/extend), or [Operate](/guides/deploy-and-operate).
+Look up configuration fields, API contracts, protocols, and SDK signatures. For a procedure, choose [Use](/guides/use-protoagent), [Automate](/guides/automate-work), [Build](/guides/extend), or [Operate](/guides/deploy-and-operate).
+
+Use [configuration](/reference/configuration) for saved settings, [environment variables](/reference/environment-variables) for process overrides, and [Operator API](/reference/operator-api) for authenticated management endpoints. Plugin authors can start with the [registry](/reference/plugin-registry-api), then the [SDK](/reference/plugin-sdk-api) for calls into host services. Generated pages retain complete signatures and fields; guides link here instead of maintaining duplicate inventories.
 
 ## Configuration and capabilities
 

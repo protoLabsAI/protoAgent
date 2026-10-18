@@ -91,7 +91,9 @@ gets `<its-id>.new`. That's the difference between a convention and a boundary.
 
 ## Plugins never import each other
 
-The event bus ([ADR 0039](/adr/0039-plugin-event-bus)) is the only inter-plugin channel. A plugin
+Use the event bus ([ADR 0039](/adr/0039-plugin-event-bus)) for notifications and
+registered [plugin services](/reference/plugin-sdk-api#sdk-service) for direct optional
+calls. Handle an absent service provider; do not import its implementation. A plugin
 publishes topics as its public API and others subscribe by name, so no plugin has a hard dependency
 on another being installed, enabled, or a particular version. A plugin can declare its topics — and
 optionally their payload schemas — in the manifest, which is how a consumer discovers a contract

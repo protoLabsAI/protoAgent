@@ -8,11 +8,9 @@ Start with the [plugin-view quickstart](/guides/build-a-plugin-view). This guide
 covers the bridge, event subscriptions, and chat-slot behavior. For build-time
 components inside a fork, see [Fork components](#fork-components-no-plugin-no-iframe).
 
-> [!TIP]
-> **Copy the example.** [`examples/plugins/chat_example`](https://github.com/protoLabsAI/protoAgent/tree/main/examples/plugins/chat_example)
-> is a single-page vanilla-JS view that follows every rule below — the init/theme handshake, live
-> re-theming, slug-aware routing, the DS kit, and a real turn over a gated `/api/` route. Start by
-> copying it: `cp -r examples/plugins/chat_example plugins/`.
+The quickstart owns copying, installing, and testing the example in your
+instance's plugin root. Use that procedure rather than copying an example into
+the checkout's bundled `plugins/` directory.
 
 ## The four rules
 
@@ -170,19 +168,9 @@ ADR 0045** — it encodes the hard-won invariants (never remount mid-turn, recon
 load, render terminal text once, key local state per agent slug).
 
 `examples/plugins/chat_example` is the worked reference: a vanilla-JS panel that does the handshake,
-live re-theming, slug-aware routing, and a turn over the **non-streaming** `/api/chat` fallback. Copy
-it and grow your panel from there:
-
-```bash
-cp -r examples/plugins/chat_example plugins/
-```
-
-```yaml
-plugins:
-  enabled: [chat_example]
-```
-
-Reload — Chat becomes the example panel. Disable (or delete) the copy and the built-in chat is back.
+live re-theming, slug-aware routing, and a turn over the **non-streaming** `/api/chat` fallback.
+Install and verify it using the [view quickstart](/guides/build-a-plugin-view).
+Disable the installed plugin to return to the built-in chat.
 
 Forks have an in-process alternative: register a `src/ext` surface with `id: "chat"` (ADR 0038 D3) —
 it overrides the slot ahead of plugin claims, with full React context.

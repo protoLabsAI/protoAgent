@@ -138,7 +138,7 @@
       "label": "Build & extend",
       "nav_label": "Build",
       "landing": "guides/extend.md",
-      "intro": "Use settings for model and persona changes, [skills](/guides/skills) for reusable procedures, and [MCP](/guides/mcp) for existing external tools. Build a plugin for new tools, routes, background work, or views; fork the core when your change needs it.\n\nPlugins run with server privileges. A separate MCP process is not automatically a sandbox. Read [Plugin architecture](/explanation/plugin-architecture) before choosing an extension boundary.",
+      "intro": "Use settings for model and persona changes, [skills](/guides/skills) for reusable procedures, and [MCP](/guides/mcp) for existing external tools. Build a plugin for new tools, routes, background work, or views; fork the core when your change needs it.\n\nPlugins run with server privileges. A separate MCP process is not automatically a sandbox. Read [Plugin architecture](/explanation/plugin-architecture) before choosing an extension boundary.\n\nChoose [First plugin](/tutorials/first-plugin) for a minimal extension, or [First tool](/tutorials/first-tool) for a focused model-callable tool. For a UI, follow the [view quickstart](/guides/build-a-plugin-view) before the detailed integration guide. [Publish](/guides/publish-a-plugin) owns distribution. For a core fork, follow the [fork checklist](/guides/fork-the-template); [Customize and deploy](/guides/customize-and-deploy) is its worked walkthrough.",
       "groups": [
         {
           "label": "Build your first extension",
@@ -189,7 +189,7 @@
       "label": "Deploy & operate",
       "nav_label": "Operate",
       "landing": "guides/deploy-and-operate.md",
-      "intro": "Run an agent as a service, manage multiple instances, and monitor deployments. [Back up your data](/guides/backup-and-restore) before upgrades or recovery work.",
+      "intro": "Run an agent as a service, manage multiple instances, and monitor deployments.\n\n| Deployment task | Start here |\n| --- | --- |\n| Run the installed agent without a desktop | [Headless service](/guides/headless) |\n| Run the published container with persistent data | [Docker](/guides/deploy-docker) |\n| Provision a Proxmox LXC | [Proxmox](/guides/deploy-proxmox) |\n| Publish and deploy your own fork's image | [GHCR deployment](/guides/deploy) |\n| Run independent instances on one machine | [Multiple instances](/guides/multi-instance) |\n| Manage local and remote agents through a hub | [Fleet](/guides/fleet) |\n\nFollow each deployment's health and authentication checks before adding work. [Back up your data](/guides/backup-and-restore) before upgrades or recovery; container operators use [Docker backups](/guides/backup-and-restore#docker-backups). Start diagnosis with [local telemetry and logs](/guides/observability).",
       "groups": [
         {
           "label": "Run a service",
@@ -236,7 +236,7 @@
       "label": "Reference",
       "nav_label": "Reference",
       "landing": "reference/index.md",
-      "intro": "Look up configuration fields, API contracts, protocols, and SDK signatures. For a procedure, choose [Use](/guides/use-protoagent), [Build](/guides/extend), or [Operate](/guides/deploy-and-operate).",
+      "intro": "Look up configuration fields, API contracts, protocols, and SDK signatures. For a procedure, choose [Use](/guides/use-protoagent), [Automate](/guides/automate-work), [Build](/guides/extend), or [Operate](/guides/deploy-and-operate).\n\nUse [configuration](/reference/configuration) for saved settings, [environment variables](/reference/environment-variables) for process overrides, and [Operator API](/reference/operator-api) for authenticated management endpoints. Plugin authors can start with the [registry](/reference/plugin-registry-api), then the [SDK](/reference/plugin-sdk-api) for calls into host services. Generated pages retain complete signatures and fields; guides link here instead of maintaining duplicate inventories.",
       "groups": [
         {
           "label": "Configuration and capabilities",
@@ -368,7 +368,7 @@
       "status": "current"
     },
     "explanation/memory-and-knowledge.md": {
-      "title": "Memory & knowledge store",
+      "title": "Memory and knowledge",
       "status": "current"
     },
     "tutorials/first-skill.md": {
