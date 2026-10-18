@@ -70,11 +70,16 @@ idle-decay, no auto-prune — `--prune` opts in). See the [Skills guide](/guides
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | Load skills + list the `<available_skills>` index at all |
-| `db_path` | `/sandbox/skills.db` | Index location (legacy default resolves to `<instance_root>/skills.db`) |
-| `top_k` | `24` | Maximum full descriptions in the per-turn `<available_skills>` index. Every discoverable skill retains its name/slash identity; bodies load through `load_skill`. |
-| `dir` | `""` | Override the writable skills root |
+| `db_path` | `/sandbox/skills.db` (legacy) | Private storage resolves to `<instance_root>/skills.db`; shared mode uses `<commons>/skills.db`. The configured legacy path no longer selects private storage. |
+| `top_k` | `24` when omitted | Maximum full descriptions in the per-turn `<available_skills>` index. Every discoverable skill retains its name/slash identity; bodies load through `load_skill`. |
+| `dir` | `""` | Override the writable skills root, normally `<instance_root>/config/skills`. |
 | `scope` | `""` (→ `scoped`) | Tier: `scoped` (private, **default**) · `shared` (one commons) · `layered` (read commons ∪ private, write private, `promote` to lift) ([ADR 0041](/adr/0041-workspaces-and-tiered-stores)). Sharing is opt-in — a fresh agent keeps its learned skills private. |
 | `shared` | `false` | Back-compat boolean — `true` → `scope: shared` when `scope` is blank |
+
+The bundled `config/langgraph-config.example.yaml` explicitly sets `top_k: 5`.
+A copied example or an existing explicit value overrides the fallback of 24;
+changing the code default does not rewrite that configuration. In either case,
+the limit applies to descriptions, not to which skill identities are listed.
 
 The shared-tier **commons** base dir is `commons.path` (blank → `<box_root>/commons`). The commons
 is **host-level and un-scoped** — every agent on the host reads the same `commons.path` regardless of

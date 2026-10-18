@@ -106,11 +106,10 @@ reload, since there's no filesystem watch on the skill roots.
 
 ## Configuration
 
-Skills are enabled by default. `skills.top_k` defaults to **24** and limits full
-descriptions in the per-turn index; every discoverable skill keeps its name and
-slash identity. Bodies load on demand. See [Skills configuration](/reference/skills#configuration-skills-block)
-for the exact fields and [configuration reference](/reference/configuration#skills)
-for surrounding settings.
+Skills are enabled by default. `skills.top_k` limits full descriptions in the
+per-turn index; every discoverable skill keeps its name and slash identity.
+Bodies load on demand. See [Skills configuration](/reference/skills#configuration-skills-block)
+for fields, fallback defaults, and the bundled example's explicit override.
 
 ## Sharing skills across a fleet (the commons)
 
