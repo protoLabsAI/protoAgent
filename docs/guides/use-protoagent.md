@@ -24,8 +24,8 @@ Start with [Use the app](/guides/react-tauri-ui) for chat and controls. Choose [
 
 - [Install and manage plugins](/guides/plugin-registry)
 - [Connect MCP servers](/guides/mcp)
-- [Discord surface](/guides/discord)
-- [Browser automation](/guides/browser-automation)
+- [Connect Discord](/guides/discord)
+- [Use browser automation](/guides/browser-automation)
 
 ## Devices and data
 

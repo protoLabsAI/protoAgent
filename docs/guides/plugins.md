@@ -155,13 +155,6 @@ plugin module — the binary re-invokes itself and the shim runs it.
 
 ### Plugin-managed MCP example
 
-A **plugin** can contribute a managed MCP server (you never hand-edit `mcp.servers`)
-via `register_mcp_server(factory)` — `factory(config)` returns an `mcp.servers[]` entry,
-or `None` when the server shouldn't run (off / not yet connected). The factory runs at
-**every graph build** with the live `LangGraphConfig`, so the server comes and goes with
-config. A plugin entry whose `name` matches a configured server **replaces** it, and a
-plugin contributing a server **activates MCP even when `mcp.enabled` is off**.
-
 #### Worked example — wrap an external server, gated on config
 
 In the plugin's `__init__.py` (`register(registry)` is the contribution hook — see
