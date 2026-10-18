@@ -31,7 +31,7 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: /mobile\.spec\.ts/,
+      testIgnore: /(mobile|tablet)\.spec\.ts/,
     },
     // A real device profile, not just a narrow viewport: `isMobile` + `hasTouch` + DPR + UA
     // all differ, and touch is what the shell is built around. Mobile regressions went
@@ -48,6 +48,14 @@ export default defineConfig({
       name: "mobile",
       use: { ...devices["iPhone 13"], browserName: "chromium" },
       testMatch: /mobile\.spec\.ts/,
+    },
+    // Tablet band of the DESKTOP shell (#4336 S5). The spec sets a device profile per describe
+    // block (iPad Mini / iPad Pro 11 / Galaxy Tab S4, both orientations), so this project only
+    // pins the engine — chromium, for the same CI-install reason as the mobile project above.
+    {
+      name: "tablet",
+      use: { browserName: "chromium" },
+      testMatch: /tablet\.spec\.ts/,
     },
   ],
   webServer: {

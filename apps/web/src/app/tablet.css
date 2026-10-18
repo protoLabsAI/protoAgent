@@ -1,0 +1,89 @@
+/* tablet.css — the tablet band of the DESKTOP shell (#4336 S5).
+   ────────────────────────────────────────────────────────────────────────────
+   Tablets (768px and up) get the desktop dual-rail shell, not the chat-first mobile shell
+   (ADR 0086). Two adaptations make it fit a finger and an upright screen, without a third
+   shell to maintain:
+
+   1. Portrait overlay. `.app-shell-main--tablet-overlay` is set by lib/useTabletOverlay.ts
+      (touch tablet, portrait, 768–1024px, chat on the left dock). The right column leaves
+      the flex row and floats over chat, so chat keeps the whole stage instead of 275px.
+      Its WIDTH stays the DS-controlled `rightWidth` (PROTO.md: never re-clamp it); only a
+      max-width keeps it on screen.
+
+   2. Touch floor for the controls the DS touch layer (`styles/touch.css`) doesn't expand,
+      all of which appear only in the desktop shell: the tab strip's tabs and its collapsed
+      select, small text buttons, and the 5px resize handle. Gated on touch AND min-width
+      768px so a mouse desktop and the phone shell are untouched. Every block here is a
+      [DS] gap — retire it when `@protolabsai/ui` grows the equivalent. */
+
+/* ── 1. Portrait overlay ───────────────────────────────────────────────────── */
+.app-shell-main--tablet-overlay .pl-appshell {
+  position: relative;
+}
+.app-shell-main--tablet-overlay .pl-appshell__col--right:not(.pl-appshell__col--fill) {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  z-index: 3;
+  max-width: calc(100% - 128px);
+  background: var(--pl-color-bg);
+  box-shadow: var(--pl-shadow-popover);
+}
+/* Sit beside the right rail rather than under it. */
+.app-shell-main--tablet-overlay .pl-appshell:has(> .pl-rail--right) > .pl-appshell__col--right:not(.pl-appshell__col--fill) {
+  right: 64px;
+}
+/* A divider between chat and a floating panel resizes nothing useful — the panel is
+   dismissed by tapping chat, opened from its rail icon. */
+.app-shell-main--tablet-overlay .pl-appshell__handle,
+.app-shell-main--tablet-overlay .pl-appshell__reopen--right {
+  display: none;
+}
+
+/* ── 2. Touch floor, tablet widths ─────────────────────────────────────────── */
+@media (hover: none) and (pointer: coarse) and (min-width: 768px) {
+  /* [DS] The collapsed tab strip is a native select: grow the box (no ::after on a
+     replaced element). */
+  .pl-tabbar__select {
+    min-height: 44px;
+  }
+
+  /* [DS] Tabs and small text buttons: 44px hit area via an ::after overlay so the tab
+     strip and card footers keep their density (same idiom as the DS touch layer). */
+  .pl-tabbar__tab,
+  .pl-btn--sm:not(.pl-btn--icon) {
+    position: relative;
+  }
+  .pl-tabbar__tab::after,
+  .pl-btn--sm:not(.pl-btn--icon)::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    min-width: 44px;
+    min-height: 44px;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* [DS] The 5px resize handle is unhittable with a finger. Widen the HIT area to 24px
+     (WCAG 2.5.8 minimum) without moving the columns. Deliberately not 44: the overlay
+     straddles the chat column's edge, and 22px into it would start a drag from taps
+     near the composer's send button. */
+  .pl-appshell__handle {
+    position: relative;
+    z-index: 2;
+  }
+  .pl-appshell__handle::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 24px;
+    min-width: 24px;
+    transform: translateX(-50%);
+  }
+}

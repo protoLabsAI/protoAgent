@@ -1,6 +1,6 @@
 # Access the app from your phone
 
-Open the console on your phone to chat with the same agent and read its work.
+Open the console on your phone or tablet to chat with the same agent and read its work.
 The agent must stay running and reachable. You can add the console to your home
 screen, but it has no offline mode.
 
@@ -43,6 +43,24 @@ Once the console opens, use the phone browser's **Add to Home Screen** action:
 **Share** in iOS Safari, or the menu in Android Chrome. Use the resulting icon
 to return to the console. If it asks for access again, pair it or enter the
 operator token.
+
+## On a tablet {#on-a-tablet}
+
+A tablet pairs and connects the same way. What you see depends on its width:
+
+- **Narrower than 768px** (some Android tablets held upright): the phone layout.
+  Chat fills the screen; other views open over it from the menu.
+- **Portrait, 768–1024px** (iPads held upright): the desktop layout with both
+  rails, but chat uses the whole middle. The right panel (Work, notes, plugin
+  views) starts closed. Tap its icon on the right rail to open it over chat; tap
+  chat to close it.
+- **Landscape**: the desktop split, chat on the left and the right panel beside
+  it. Drag the divider between them to resize.
+
+Buttons, tabs and the divider get finger-sized hit areas on a touch screen. An
+iPad with a trackpad or mouse attached keeps the normal desktop split in either
+orientation. Rotating from portrait to landscape reopens a right panel that
+portrait closed.
 
 ## No offline mode
 

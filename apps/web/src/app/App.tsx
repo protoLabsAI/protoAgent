@@ -92,6 +92,7 @@ import { CommandPalette } from "@protolabsai/ui/command-palette";
 import type { PaletteView } from "@protolabsai/ui/command-palette";
 import { Alert } from "@protolabsai/ui/data";
 import { useIsMobile } from "../lib/useIsMobile";
+import { useTabletOverlay } from "../lib/useTabletOverlay";
 import { useKeyboardInset } from "../lib/useKeyboardInset";
 import { MobileShell } from "./MobileShell";
 import "./mobile-shell.css";
@@ -882,6 +883,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       : railOrder.bottom.includes("chat")
         ? "bottom"
         : "left";
+  // Tablet portrait (#4336 S5): the right column floats over chat instead of splitting the
+  // stage with it — see lib/useTabletOverlay.ts.
+  const tabletOverlay = useTabletOverlay({ isMobile, chatOnLeft: chatRail === "left" });
   // Background-stream pulse on the chat rail icon (#613 dot, ADR 0039): show it while a turn
   // streams and chat ISN'T the visible surface on its dock — collapse-aware, any rail. (The
   // old check keyed off the left-only `surface`, so it never pulsed for chat on right/bottom.)
@@ -1076,7 +1080,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           store); the shell renders our content + emits callbacks. Chat mounts UNCONDITIONALLY
           (streaming continuity #613) inside the column content, on whichever rail holds it. */}
       <AppShell
-        className="app-shell-main"
+        className={tabletOverlay ? "app-shell-main app-shell-main--tablet-overlay" : "app-shell-main"}
         leftItems={railSurfaces("left").map((s) => ({
           ...s,
           dot: s.id === "chat" ? chatDot : pluginDots[s.id] || undefined,
