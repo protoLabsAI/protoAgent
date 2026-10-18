@@ -124,7 +124,7 @@ retired behavior; follow linked guides and references for current procedures.
 | [0110](./0110-plugin-setup-steps.md) | Plugin setup steps: a host-run, operator-only fix behind a setup-gap button | Accepted |
 | [0111](./0111-zed-operator-editor-acp-shim.md) | Zed as the operator's editor: ACP agent shim, editor deep-links, operator MCP | Proposed |
 | [0112](./0112-console-code-pane.md) | Console code pane: a read-only navigator surface the agent points into | Proposed |
-| [0113](./0113-agent-pairing-for-remote-fleet-members.md) | Agent pairing: remote fleet members get a paired, revocable token | Proposed |
+| [0113](./0113-agent-pairing-for-remote-fleet-members.md) | Agent pairing: remote fleet members get a paired, revocable token | Accepted |
 | [0114](./0114-console-browser-storage-budget.md) | Console browser storage — transcripts in IndexedDB, a budget, and a full quota never crashes | Proposed |
 | [0115](./0115-gateway-inflight-limiter.md) | Model calls share a bounded, priority-ordered in-flight lane per endpoint and model (off by default) | Proposed; implemented (off by default) |
 | [0116](./0116-local-first-data-analyst-duckdb-and-vega-lite-charts.md) | A local-first data analyst: DuckDB over files in place, charts as Vega-Lite specs, and a plugin-service call seam | Proposed |

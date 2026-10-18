@@ -1,6 +1,6 @@
 # 0113 — Agent pairing: remote fleet members get a paired, revocable token
 
-- Status: Proposed
+- Status: Accepted (shipped in v0.184.1, epic #3652)
 - Date: 2026-09-26
 - Builds on: [ADR 0042](./0042-fleet-supervisor-unified-console.md) §I (remote fleet
   members), [ADR 0087](./0087-device-pairing-and-per-device-tokens.md) (device pairing +

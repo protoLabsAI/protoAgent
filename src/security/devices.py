@@ -286,9 +286,8 @@ def cancel_pairings(kind: str | None = None) -> None:
 
     With ``kind``, only that kind goes: closing the phone dialog must not kill an agent code
     the operator is halfway through typing on another machine (and vice versa). With no
-    argument, every pending code goes — the pre-ADR-0113 behaviour. NOTE: until the console
-    slice (ADR 0113 S6) the console's cancel still sends no kind, so closing either dialog
-    still clears both.
+    argument, every pending code goes — the pre-ADR-0113 behaviour. The console always sends
+    its dialog's kind (``agentPairing.cancelBody``).
     """
     with _LOCK:
         if kind is None:
