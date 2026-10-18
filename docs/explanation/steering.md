@@ -6,24 +6,10 @@ the next model call, so you can redirect without stopping (and losing) the strea
 
 ## Why not just stop and re-ask
 
-Stopping a turn discards in-flight work (an open delegation, a half-built answer) and
-restarts cold. Steering instead **queues** your message and lets the running turn pick it
-up on its next reasoning step — the agent course-corrects mid-flight, keeping everything
-it's already done.
-
-## How it works
-
-- **A per-session queue** (`graph/steering.py`) holds messages submitted during a turn.
-  `enqueue` adds, `drain` removes-and-returns all, `dequeue` cancels one before it's used.
-- **`SteeringMiddleware`** (`graph/middleware/steering.py`) runs in the `before_model`
-  hook: it drains the queue and, if anything's there, prepends it as a `HumanMessage` so
-  the reducer appends it before the next model call. It wraps the text in an advisory —
-  *"address it now if it changes the task, otherwise acknowledge briefly and keep going"* —
-  so the agent treats it as guidance, not a hard interrupt. Empty queue → no-op, so normal
-  turns are unaffected.
-
-Because the middleware fires before *every* model call in the turn, a steer lands at the
-next step regardless of how deep the tool loop is.
+Stopping ends the current turn; it does not undo completed file changes or external
+actions. Steering queues a correction for the next model call while work continues.
+Use Stop for work that should end, and steering for work that should continue with
+new instructions. Inspect completed actions before retrying a stopped task.
 
 ## What you see in the console
 
@@ -69,3 +55,17 @@ Two different controls:
 
 See also [ADR 0051](/adr/0051-a2a-realtime-streaming-and-component-rendering) (realtime
 streaming + stop) and the [output protocol](/explanation/output-protocol).
+
+## How it works
+
+- **A per-session queue** (`graph/steering.py`) holds messages submitted during a turn.
+  `enqueue` adds, `drain` removes-and-returns all, `dequeue` cancels one before it's used.
+- **`SteeringMiddleware`** (`graph/middleware/steering.py`) runs in the `before_model`
+  hook: it drains the queue and, if anything's there, prepends it as a `HumanMessage` so
+  the reducer appends it before the next model call. It wraps the text in an advisory —
+  *"address it now if it changes the task, otherwise acknowledge briefly and keep going"* —
+  so the agent treats it as guidance, not a hard interrupt. Empty queue → no-op, so normal
+  turns are unaffected.
+
+Because the middleware fires before *every* model call in the turn, a steer lands at the
+next step regardless of how deep the tool loop is.

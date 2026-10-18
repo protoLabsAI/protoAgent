@@ -24,9 +24,10 @@ This folder holds the desktop agent, its fleet workspaces, and shared settings
 and credentials. Copy the whole folder, including hidden files. Copying only
 `config/` does not preserve your conversations.
 
-For a Python or source installation, run `protoagent config explain` with the
-same environment as the server (in a checkout, use
-`uv run python -m server config explain`). Back up the reported **box root** and
+For a permanent Python installation, run `protoagent config explain` with the
+same environment as the server. For the onboarding `uvx` route, use
+`uvx --from protolabs-agent protoagent config explain`; in a checkout, use
+`uv run python -m server config explain`. Back up the reported **box root** and
 any **instance root** outside it. A normal host box root is `~/.protoagent/`.
 See [Docker backups](#docker-backups) for containers.
 

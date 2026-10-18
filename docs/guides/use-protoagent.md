@@ -2,7 +2,9 @@
 
 # Use protoAgent
 
-Chat, work with files, connect tools, and manage your data. If something fails, start with [Troubleshooting](/guides/troubleshooting).
+Chat, work with files, connect tools, and manage your data.
+
+Start with [Use the app](/guides/react-tauri-ui) for chat and controls. Choose [files](/guides/documents-and-files) to work on a document, [knowledge sources](/guides/ingestion) to remember material for later, or [plugins](/guides/plugin-registry) and [MCP](/guides/mcp) to connect tools. If something fails, start with [Troubleshooting](/guides/troubleshooting).
 
 ## Chat and models
 

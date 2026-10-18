@@ -1,7 +1,8 @@
 # Ingest documents & media
 
 Pull files, web pages, and media into the knowledge store so the agent can recall
-them. Ingestion **extracts text, chunks it, embeds it, and indexes it** — one call
+them. Ingestion extracts text, splits it into chunks, and indexes it for search.
+Embeddings are optional and disabled by default. One import
 handles plain text, Markdown, HTML, PDF, Word (`.docx`), audio, video, and web/YouTube URLs.
 
 > This is the *ingest* (write) side. For how recall works and the tuning knobs, see
@@ -13,7 +14,17 @@ handles plain text, Markdown, HTML, PDF, Word (`.docx`), audio, video, and web/Y
 **Knowledge → Store → Add source.** Drop a file, or paste a web/YouTube URL, pick a
 **domain** (defaults to `general`), and import. The form accepts `txt, md, html, pdf, docx`
 and audio/video (`mp3, wav, m4a, flac, ogg, opus, aac, mp4, mov, mkv, webm, avi, m4v`).
-You'll see `Added N chunks from "<title>"`.
+You’ll see `Added N chunks from "<title>"`.
+
+Search **Knowledge → Store** for a distinctive word from the source, then ask a
+question about it in a new chat. Check **Memory → Injections** to see what reached
+the turn. Importing a source does not guarantee every passage enters every answer.
+See [Check retrieval](/guides/knowledge#check-what-is-being-recalled).
+
+For a failed import, read the error before retrying. Check the supported format,
+required library or media model below, and whether a URL is reachable from the
+agent’s machine. Scanned PDFs may lack extractable text. Remove unwanted imports
+using [Manage memory](/guides/manage-memory#correct-a-memory).
 
 ## From the agent
 
@@ -40,23 +51,7 @@ the tool falls back to inline/blocking ingestion.)
 
 ## From the API
 
-```bash
-# a file
-curl -F file=@notes.pdf -F domain=research \
-  http://localhost:7870/api/knowledge/ingest
-
-# a web page or YouTube URL
-curl -F url=https://example.com/post -F title="That post" \
-  http://localhost:7870/api/knowledge/ingest
-
-# raw text
-curl -F text="the thing to remember" -F title=Note \
-  http://localhost:7870/api/knowledge/ingest
-```
-
-`POST /api/knowledge/ingest` (multipart) takes one of `file` / `url` / `text`, plus
-optional `title` and `domain`. It responds with the chunk `ids`, the `chunks` count,
-the detected `source_type`, and `chars`.
+See [Ingestion API](/reference/ingestion#from-the-api) for multipart requests and responses.
 
 ## What's supported
 
@@ -88,22 +83,4 @@ Audio/video always transcribe **through the gateway** (no local ASR); leave
 
 ## Chunking & enrichment (config)
 
-Large documents are split before embedding. Tune under `knowledge:` in
-`langgraph-config.yaml`:
-
-```yaml
-knowledge:
-  transcribe_model: whisper-1     # gateway STT model; blank disables audio/video
-  chunk_max_chars: 1200           # target ceiling per chunk
-  chunk_overlap_chars: 150        # shared tail between adjacent chunks
-  chunk_min_chars: 200            # trailing fragments fold into the prior chunk
-  contextual_enrichment: false    # prepend a 1-sentence doc context per chunk before
-                                  # embedding (Anthropic Contextual Retrieval) — one aux
-                                  # LLM call per chunk at INGEST time; off by default
-  context_max_doc_chars: 12000    # doc cap fed to the enrichment prompt
-```
-
-Chat attachments take the same path above `attach_inline_budget` (default 8000 chars):
-small files are read inline for the turn; larger ones are ingested + indexed and a lede
-is surfaced, so a big paste never dumps into context. See
-[chat file upload](/explanation/memory-and-knowledge).
+See [Ingestion configuration](/reference/ingestion#chunking-enrichment-config) for chunk sizes, enrichment, and media settings.

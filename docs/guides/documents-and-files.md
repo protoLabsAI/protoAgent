@@ -5,11 +5,23 @@ download the results. Document creation needs the bundled Cowork skills and
 `execute_code`; both are enabled by default. On desktop, install the
 [Python runtime](/guides/python-runtime) before creating office documents.
 
+## Choose where the file belongs
+
+| Task | Use | What to keep in mind |
+| --- | --- | --- |
+| Ask about a file in this conversation | Chat attachment | Small extracted text goes into the turn; larger text is indexed for this chat. Deleting the chat removes its session attachments. |
+| Keep material for later recall | [Add a knowledge source](/guides/ingestion) | It remains in the knowledge store until removed there. |
+| Let the agent edit files on disk | A writable work folder | This is on the server’s machine; it needs its own backup. |
+| Keep a deliverable on your device | Download the file artifact | Save the downloaded copy; artifact history can be evicted. |
+
+Incognito does not prevent file uploads or explicit memory operations. See
+[Use incognito](/guides/manage-memory#use-incognito) before relying on it for retention.
+
 ## Attach a file and ask a question
 
 1. Use the composer's attachment control or drag a file into chat. You can also
    paste an image from the clipboard.
-2. Wait for the attachment to finish uploading. If its chip reports an error,
+2. For supported documents and media, check [supported sources](/guides/ingestion#what-s-supported). Wait for the attachment to finish uploading. If its chip reports an error,
    remove it or retry before sending the request.
 3. Ask a concrete question, such as:
 

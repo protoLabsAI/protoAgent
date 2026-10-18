@@ -540,6 +540,14 @@
             {
               "path": "reference/starter-tools.md",
               "title": "Starter tools"
+            },
+            {
+              "path": "reference/ingestion.md",
+              "title": "Ingestion and document runtime APIs"
+            },
+            {
+              "path": "reference/memory-delivery.md",
+              "title": "Memory storage and delivery"
             }
           ]
         },
