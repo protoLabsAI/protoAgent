@@ -3,7 +3,7 @@
 Ships a keyword FTS index over the bundled `docs/` tree (built in memory at load) plus two
 tools — `docs_search` (find the right page) and `docs_read` (read its markdown) — and a
 SKILL.md (`skills/answering-docs.md`, auto-discovered) that teaches search → read → cite.
-First-party, `enabled: true`. A console Docs reader view + ⌘K search come in a follow-up.
+First-party, `enabled: true`, with a console Docs reader and palette search.
 
 No knowledge-store coupling and no embeddings: the index is self-contained and offline, so
 docs Q&A works in the frozen desktop app and never pollutes the operator's knowledge store.

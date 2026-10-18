@@ -756,5 +756,47 @@
       "reference",
       "ship-it"
     ]
+  },
+  "section_status": {
+    "adr": "decision",
+    "plans": "historical"
+  },
+  "website_pages": {
+    "how-to/build-a-plugin-view.md": {
+      "title": "Build a plugin view (moved)",
+      "status": "moved",
+      "canonical": "guides/build-a-plugin-view.md"
+    }
+  },
+  "search": {
+    "stop_words": [
+      "a",
+      "an",
+      "and",
+      "are",
+      "as",
+      "at",
+      "be",
+      "by",
+      "can",
+      "do",
+      "does",
+      "for",
+      "from",
+      "how",
+      "i",
+      "in",
+      "is",
+      "it",
+      "of",
+      "on",
+      "or",
+      "the",
+      "to",
+      "what",
+      "with",
+      "you",
+      "your"
+    ]
   }
 }

@@ -384,6 +384,11 @@ label before concluding the loop is stuck.
 - Edit `plugins/docs/catalog.json` for task navigation and page classification, then
   run `python scripts/gen_docs_nav.py` to update website navigation, landing pages,
   and in-app help together. Do not edit generated listings directly.
+  Search prefers current canonical pages; classify moved/deprecated pages in the
+  catalog. ADRs are decision records (not necessarily obsolete); archived plans
+  are historical. Both remain readable and searchable. Keep website-only legacy
+  aliases in `website_pages`; this does not expand the in-app corpus or bundle.
+  The catalog also owns the stop-word list used by both search engines.
   Keep primary task pages in the corpus sections (`tutorials`, `guides`,
   `reference`, `explanation`, `adr`).
 - Validate with `npm run docs:build`, the docs-related tests, and generated-doc
