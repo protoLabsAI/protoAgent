@@ -807,6 +807,56 @@ def test_start_autostart_is_hub_only_even_with_inherited_env(fleet, monkeypatch)
     assert not supervisor.is_running("cindi")  # nothing spawned inside a member
 
 
+def _fake_slow_start(monkeypatch, *, delay=0.2):
+    """A stand-in start() that tracks how many boots overlap."""
+    import threading as _th
+
+    lock, live, peak, order = _th.Lock(), [0], [0], []
+
+    def _start(ident):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+            order.append(ident)
+        time.sleep(delay)
+        with lock:
+            live[0] -= 1
+        return {}
+
+    monkeypatch.setattr(supervisor, "start", _start)
+    monkeypatch.setattr(supervisor, "is_running", lambda _i: False)
+    monkeypatch.setattr(supervisor.manager, "_find", lambda _i: {"id": _i})
+    return peak, order
+
+
+def test_start_autostart_boots_a_few_at_a_time(fleet, monkeypatch):
+    # Serial boots made an 8-member hub take about a minute; all at once spikes the host.
+    roster = [f"m{i}" for i in range(7)]
+    monkeypatch.setattr(supervisor, "autostart_members", lambda: roster)
+    peak, _order = _fake_slow_start(monkeypatch)
+
+    began = time.monotonic()
+    started = supervisor.start_autostart_members(concurrency=3)
+    elapsed = time.monotonic() - began
+
+    assert started == roster  # roster order, whatever order the boots finished in
+    assert peak[0] == 3
+    assert elapsed < 7 * 0.2  # overlapped, not serial
+
+
+def test_start_autostart_launches_nothing_after_stop(fleet, monkeypatch):
+    import threading as _th
+
+    monkeypatch.setattr(supervisor, "autostart_members", lambda: ["a", "b", "c", "d"])
+    _peak, order = _fake_slow_start(monkeypatch, delay=0.3)
+    stop = _th.Event()
+    _th.Timer(0.1, stop.set).start()  # the hub begins shutting down mid-roster
+
+    started = supervisor.start_autostart_members(stop=stop, concurrency=1)
+
+    assert started == ["a"] == order  # the in-flight boot finishes; nothing new launches
+
+
 def test_reconcile_on_boot_stamps_and_returns_previous(tmp_path, monkeypatch):
     import infra.paths as paths_mod
 
@@ -1208,3 +1258,28 @@ def test_list_shaped_remotes_file_is_treated_as_empty(tmp_path, monkeypatch):
     assert not any(a.get("remote") for a in rows)
     assert rows[0]["host"] is True  # the host still reports, which is the point
     supervisor.refresh_remote_probes()  # and the probe sweep is a no-op, not a raise
+
+
+def test_hub_startup_does_not_wait_for_the_fleet():
+    """Awaited in the startup hook, autostart held the whole hub until every member had
+    bound its port (about a minute for 8). It runs as a task now, app.loaded fires once it
+    finishes, and shutdown stops the roster before spinning members down. The hooks are
+    nested in app construction, so this checks their parsed bodies."""
+    import ast
+    import inspect
+
+    import server
+
+    tree = ast.parse(inspect.getsource(server))
+    hooks = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)}
+    startup, boot, shutdown = hooks["_scheduler_startup"], hooks["_fleet_boot"], hooks["_scheduler_shutdown"]
+
+    def _src(node):
+        return ast.get_source_segment(inspect.getsource(server), node) or ""
+
+    assert "start_autostart_members" not in _src(startup)
+    assert "create_task(_fleet_boot())" in _src(startup)
+    assert "start_autostart_members, stop=_FLEET_BOOT_STOP" in _src(boot)
+    assert '"app_loaded"' in _src(boot) and '"app_loaded"' not in _src(startup)
+    down = _src(shutdown)
+    assert down.index("_FLEET_BOOT_STOP.set()") < down.index("_sup.shutdown_all")
