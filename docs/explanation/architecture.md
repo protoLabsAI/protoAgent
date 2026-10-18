@@ -6,7 +6,7 @@
 ┌──────────────┐     A2A JSON-RPC + SSE      ┌──────────────────┐
 │   Consumer   │ ──────────────────────────▶ │  A2A handler     │
 │  (any A2A    │                             │  (FastAPI app)   │
-│   client)    │ ◀──── cost-v1 DataPart ─────│                  │
+│   client)    │ ◀──── cost-v1 metadata ─────│                  │
 └──────────────┘                             └────────┬─────────┘
                                                       │ submits message
                                                       ▼
@@ -26,12 +26,13 @@
                                                       │ chat completions
                                                       ▼
                                             ┌──────────────────┐
-                                            │  LiteLLM gateway │
-                                            │  (OpenAI-compat) │
+                                            │ Model connection │
+                                            │ (native or HTTP) │
                                             └──────────────────┘
 ```
 
-Each arrow is a deliberate boundary.
+Each arrow is a deliberate boundary. The configured [model connection](/guides/model-connections)
+can use a native provider or an OpenAI-compatible endpoint; a LiteLLM gateway is optional.
 
 ## Why A2A handler is its own layer
 

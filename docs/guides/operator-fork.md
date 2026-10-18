@@ -1,5 +1,7 @@
 # Build an operator fork (like "Roxy")
 
+This is an optional worked example after the [fork checklist](/guides/fork-the-template), not a prerequisite for operating a fleet.
+
 protoAgent ships the **primitives** for a multi-project operator agent — a
 fenced filesystem toolset, a project registry, and the reactive substrate
 (scheduler / inbox / Activity). The *operator* itself — a persona that monitors

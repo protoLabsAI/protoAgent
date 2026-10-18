@@ -2,7 +2,18 @@
 
 # Deploy & operate
 
-Run an agent as a service, manage multiple instances, and monitor deployments. [Back up your data](/guides/backup-and-restore) before upgrades or recovery work.
+Run an agent as a service, manage multiple instances, and monitor deployments.
+
+| Deployment task | Start here |
+| --- | --- |
+| Run the installed agent without a desktop | [Headless service](/guides/headless) |
+| Run the published container with persistent data | [Docker](/guides/deploy-docker) |
+| Provision a Proxmox LXC | [Proxmox](/guides/deploy-proxmox) |
+| Publish and deploy your own fork's image | [GHCR deployment](/guides/deploy) |
+| Run independent instances on one machine | [Multiple instances](/guides/multi-instance) |
+| Manage local and remote agents through a hub | [Fleet](/guides/fleet) |
+
+Follow each deployment's health and authentication checks before adding work. [Back up your data](/guides/backup-and-restore) before upgrades or recovery; container operators use [Docker backups](/guides/backup-and-restore#docker-backups). Start diagnosis with [local telemetry and logs](/guides/observability).
 
 ## Run a service
 

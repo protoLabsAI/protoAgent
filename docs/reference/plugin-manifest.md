@@ -13,7 +13,7 @@ ever imported, so the host can gate, configure, and display a plugin it has neve
 That is what makes an install reviewable and a disabled plugin inert.
 
 See [Plugins](/guides/plugins) for how to use these fields, and
-[Install & publish plugins](/guides/plugin-registry) for the distribution ones.
+[Publish a plugin](/guides/publish-a-plugin) for distribution.
 
 ## At a glance
 

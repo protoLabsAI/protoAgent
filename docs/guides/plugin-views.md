@@ -16,8 +16,4 @@ The mechanics — and the four rules every view should follow — live in the ca
 
 → **[Building a plugin view](/guides/building-react-plugin-views)**
 
-Copy the gold-standard reference to start:
-
-```bash
-cp -r examples/plugins/chat_example plugins/
-```
+Follow the [view quickstart](/guides/build-a-plugin-view) to install the reference example in the active instance.

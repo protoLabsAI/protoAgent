@@ -8,7 +8,7 @@ Two features that look similar but exist for different reasons: `cost-v1` emissi
 
 A multi-agent fleet needs to answer: *how much is each (agent, skill) costing, and how often does it succeed?* Without this, every planner falls back to self-declared confidence — which agents can and do over-state.
 
-cost-v1 is the measurement. Every terminal task carries a DataPart with:
+cost-v1 is the measurement. The terminal artifact carries a URI-keyed metadata fragment with:
 
 - `usage.input_tokens`, `usage.output_tokens`, `usage.total_tokens`
 - `usage.cache_read_input_tokens`, `usage.cache_creation_input_tokens` — Anthropic-shaped prompt-cache tokens (ADR 0006)
@@ -40,7 +40,7 @@ elif kind == "on_chat_model_end":
     yield ("usage", {**usage_out, "cost_usd": cost})
 ```
 
-The A2A executor (`a2a_impl/executor.py`) accumulates these `usage` frames across the run, then emits them (cache fields + the lifted-out `costUsd`) on the terminal artifact — since protolabs-a2a 0.3.0 as a **cost-v1 fragment in the artifact's `metadata` map keyed by the extension URI**, not as a DataPart. See [Extensions](/reference/extensions#cost-v1). Per-call **Langfuse** generation spans come from the LiteLLM gateway callback — protoAgent doesn't add a manual span that would bypass `trace_session` nesting.
+The A2A executor (`a2a_impl/executor.py`) accumulates these `usage` frames across the run, then emits them (cache fields + the lifted-out `costUsd`) on the terminal artifact — since protolabs-a2a 0.3.0 as a **cost-v1 fragment in the artifact's `metadata` map keyed by the extension URI**, not as a DataPart. See [Extensions](/reference/extensions#cost-v1). For trace configuration and provider-specific coverage, see [Observability](/guides/observability). A LiteLLM gateway is not required for local cost telemetry.
 
 ### Why `stream_usage=True`
 
@@ -62,31 +62,32 @@ Agent A stamps its current Langfuse context into the outbound A2A request:
 
 ```json
 {
-  "method": "message/send",
+  "method": "SendMessage",
   "params": {
     "message": {...},
     "metadata": {
       "a2a.trace": {
-        "traceId": "abc123",
-        "spanId": "def456"
+        "traceId": "0123456789abcdef0123456789abcdef",
+        "spanId": "0123456789abcdef"
       }
     }
   }
 }
 ```
 
-Agent B reads this in `server/chat.py`, opens its own trace, and stamps `caller_trace_id=abc123`, `caller_span_id=def456` into that trace's metadata.
-
-An operator looking at Agent A's Langfuse trace can copy the trace ID and search Agent B (and C, D, …) by `metadata.caller_trace_id == abc123` to find every downstream trace that branched off.
+Agent B validates the trace and span IDs and uses valid values to join the
+caller's trace under the supplied parent. It also records caller IDs for
+correlation. Invalid trace IDs start a fresh trace; invalid span IDs are ignored.
+See [cross-agent propagation](/guides/observability#cross-agent-trace-propagation)
+for setup and verification.
 
 ### Why not just use OpenTelemetry W3C traceparent
 
-Two reasons:
-
-1. A2A is a protocol-level concept, not an HTTP-level one. Stamping into `params.metadata` survives re-serialization through SSE frames, MCP gateways, queue hops — anywhere OTel headers would get stripped.
-2. Langfuse's span IDs don't map cleanly to W3C — there'd be a lossy translation layer. Using Langfuse-native IDs keeps the debug flow one-hop.
-
-The trade-off is that this is a protoLabs convention, not an industry standard. Agents outside the fleet don't stamp the field, and the trace chain simply ends there. That's fine for our use case.
+The convention carries trace context in A2A request metadata, so peers can
+forward it with the request. It is a protoLabs convention, not a requirement of
+A2A or a substitute for every HTTP tracing integration. Peers that ignore it
+still process the task. They start an independent trace if no other propagation
+mechanism connects it to the caller.
 
 ## Why both ship in the template (and not as separate agents)
 
@@ -99,7 +100,7 @@ Putting both in the template means they're:
 
 - Tested once (for every fork to benefit)
 - Versioned atomically (an extension spec change updates all forks via the template's update path)
-- Cheap to strip if a specific fork doesn't want them (delete the `on_chat_model_end` handler and drop the extension from the card)
+- Configurable through the [observability settings](/guides/observability); forks changing emitted wire behavior must also update their card declarations
 
 The alternative — leaving each fork to implement them — guarantees most forks never will. Observability maintenance is the first thing skipped under deadline pressure.
 

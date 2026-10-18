@@ -4,13 +4,6 @@ Run several agents from one console. Each has its own config, chats, memory, and
 stores; the hub starts and stops local members and routes you to their consoles.
 Model connections and optional commons can be shared across the box.
 
-## What the box shares with every member
-
-Members share the hub's box settings and model connections. Delegates marked
-**Share with fleet** also stay shared, including credential updates; edit them
-from the hub's **Settings → Delegates**. Chats and private stores stay separate.
-See [Run multiple instances](./multi-instance.md) for box and instance boundaries.
-
 ## Create an agent in the console
 
 1. Open **Settings → Fleet** and start the new-agent flow.
@@ -39,6 +32,13 @@ roster and send a small prompt. In a source checkout, replace `protoagent` with
 `uv run python -m server`. Use [CLI management](./cli.md) for flags and offline
 workspace creation; use [Build with a coding agent](./build-with-a-coding-agent.md)
 for a Project Manager's required inputs.
+
+## What the box shares with every member
+
+Members share the hub's box settings and model connections. Delegates marked
+**Share with fleet** also stay shared, including credential updates; edit them
+from the hub's **Settings → Delegates**. Chats and private stores stay separate.
+See [Run multiple instances](./multi-instance.md) for box and instance boundaries.
 
 ## Fleet components
 

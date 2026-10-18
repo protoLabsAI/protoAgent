@@ -3,11 +3,9 @@
 This is the canonical fork checklist; `TEMPLATE.md` points here. For a full
 walkthrough, see [Customize and deploy](/guides/customize-and-deploy).
 
-> **Re-sync is the design goal.** Everything below customizes via **config,
-> SOUL.md, plugins, and env** — *not* by editing core files. The fewer tracked
-> files you touch, the cleaner `git merge upstream/main` (or a cherry-pick)
-> stays. `CHANGELOG.md` is set to `merge=union` (`.gitattributes`), so your
-> entries and upstream's coexist instead of conflicting.
+> Keep customization in config, persona, plugins, and environment settings where
+> possible. Follow [Upstream sync](/guides/upstream-sync) for merge history and
+> the fork-owned changelog policy before the first sync.
 
 ## 0. Name + identity (config, not a rename)
 
@@ -75,22 +73,16 @@ plugin iframe views — see [Building a plugin view](/guides/building-react-plug
 
 ## 3. Configure subagents (optional)
 
-`graph/subagents/config.py` ships with one `researcher`. Either:
-
-- Add more by registering `SubagentConfig` instances in `SUBAGENT_REGISTRY` and matching fields in `graph/config.py::LangGraphConfig`, or
-- Call `create_agent_graph(config, include_subagents=False)` in `server/agent_init.py::_init_langgraph_agent()` to skip subagents entirely.
-
-See [Configure subagents](/guides/subagents) for the full pattern.
+Use the existing researcher settings, or contribute a role with a plugin's
+`register_subagent`. [Configure subagents](/guides/subagents) owns setup and
+verification; ordinary plugin roles do not need core dataclass or parser edits.
 
 ## 4. Point at a model
 
-Find the live config with `protoagent config explain`, then edit `model.name`.
-For gateway connections, two options:
-
-1. **Gateway alias** — register `protolabs/<your-name>` in your LiteLLM gateway, set `name: protolabs/<your-name>`. Swapping models becomes a gateway edit.
-2. **Direct model** — set `name: openai/gpt-4o` or `anthropic/claude-opus-4-8` and let the gateway route through directly.
-
-Option 1 is preferred.
+Follow [Model connections](/guides/model-connections) to configure and test a
+connection, then choose the main and chat models. A LiteLLM gateway is optional;
+its aliases can centralize model choices across a fleet. Direct compatible
+endpoints and native subscription connections also have supported setup paths.
 
 ## 5. Deploy
 

@@ -5,6 +5,11 @@ Install, update, or remove a pinned set of plugins as one bundle. Its
 An optional `archetype:` block also adds a starter agent type to the new-agent
 picker. See [Fleet](/guides/fleet) for creating an agent from one.
 
+For installation and updates, go to [the bundle procedures](#install-one).
+For authoring, start with the manifest below and follow [Publish a plugin](/guides/publish-a-plugin)
+for distribution practices. To create an agent from a bundle's archetype, use the
+[Fleet new-agent flow](/guides/fleet#create-an-agent-in-the-console).
+
 ## The manifest
 
 The full annotated reference lives at

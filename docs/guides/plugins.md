@@ -43,26 +43,11 @@ plugins/hello/
 ### Manifest — `protoagent.plugin.yaml`
 
 ```yaml
-id: hello                 # required, unique
-name: Hello Plugin        # required
+id: hello
+name: Hello Plugin
 version: 0.1.0
-description: One-line summary.
-enabled: false            # author opt-in; operators can also enable by id in config
-entrypoint: ""            # optional module filename (defaults to __init__.py / plugin.py)
-requires_env: []          # env vars the plugin needs (missing → skipped + logged)
-capabilities:             # declarative, for transparency (not yet enforced)
-  network: []
-  filesystem: none
-emits: []                 # event-bus topics this plugin broadcasts (ADR 0039) — its public API.
-                          # An entry is a bare topic name, or {topic, summary?, schema?} to
-                          # declare the payload shape — see "Typed event contracts" below
-subscribes: []            # topics it listens for (declarative — for discoverability)
-public_paths: []          # auth-exempt prefixes under THIS plugin's own namespace
-                          # (/plugins/<id>/… or /api/plugins/<id>/…) — for an inbound
-                          # webhook (no bearer; you verify its signature). See below.
-federation_paths: []      # prefixes under THIS plugin's own namespace that accept the
-                          # federation credential (ADR 0066) — still authenticated, only
-                          # the /api operator ceiling is lowered. See below.
+description: A small greeting tool.
+enabled: false
 ```
 
 **Every field, with its type and default: [Plugin manifest reference](/reference/plugin-manifest).** Generated from the manifest dataclass. The fields worth explaining rather than listing have their own sections below.
@@ -401,8 +386,9 @@ as its per-step runner.
 ## Events — the plugin bus (ADR 0039) {#event-bus}
 
 Plugins coordinate by **broadcasting events**, never by importing each other. You publish under your
-own namespace and forget; anyone who cares subscribes by topic. This is the only inter-plugin
-channel — the **no-cross-dependency** rule.
+own namespace; interested consumers subscribe by topic. For a direct optional call,
+use a registered [plugin service](/reference/plugin-sdk-api#sdk-service) and handle
+an absent provider. Neither path imports another plugin’s internals.
 
 ```python
 def register(registry):
