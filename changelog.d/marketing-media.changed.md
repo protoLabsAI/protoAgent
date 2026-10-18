@@ -1,1 +1,0 @@
-- **Add real product captures to the marketing site:** show document work, inspectable memory, and completed agent handoffs with a controlled video, text walkthrough, and maintained capture provenance. (#0)
