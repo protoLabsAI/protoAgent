@@ -14,9 +14,10 @@ import { request } from "./http";
 import { tauriCore } from "./desktop";
 
 /** A reachable address in a pairing-start answer. For a PHONE code `url` is the full
- *  `…/app/#pair=<code>` link and `qr` its rendered SVG; for an AGENT code (ADR 0113) `url` is
- *  the bare base URL a hub pairs against and there is no QR — the code is typed, not scanned. */
-export type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr?: string | null };
+ *  `…/app/#pair=<code>` link, `qr` its rendered SVG, and `base_url` the bare console URL a
+ *  phone that can't scan opens before TYPING the same code (ADR 0087 D3 amendment); for an
+ *  AGENT code (ADR 0113) `url` is the bare base URL a hub pairs against and there is no QR. */
+export type PairHost = { host: string; kind: "tailnet" | "lan"; url: string; qr?: string | null; base_url?: string };
 export type PairAddress = { host: string; kind: "tailnet" | "lan" };
 /** A row of `GET /api/devices`. `kind` says whether the client is a phone/tablet or another
  *  agent's hub (ADR 0113 D3) — fixed by the code it claimed; absent (pre-0113) reads `device`. */

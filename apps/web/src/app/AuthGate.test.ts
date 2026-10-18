@@ -139,3 +139,114 @@ describe("AuthGate — blocking auth modal (#1921)", () => {
     expect(authRequired()).toBe(true); // still gated — the only exit is authenticating
   });
 });
+
+// "Have a pairing code?" (ADR 0087 D3 amendment, #4336 S2): a phone that can't scan types the
+// short device code here instead of an operator token. Same blocking dialog, second mode.
+describe("AuthGate — typed pairing code", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    notifyAuthRequired();
+  });
+  afterEach(() => {
+    clearAuthRequired();
+    vi.unstubAllGlobals();
+  });
+
+  function mountGate() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    mount(h(QueryClientProvider, { client: qc }, h(AuthGate)));
+  }
+
+  function codeInput() {
+    const el = inPortal<HTMLInputElement>('[data-testid="auth-pair-code"]');
+    if (!el) throw new Error("no pairing-code input");
+    return el;
+  }
+
+  function type(el: HTMLInputElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    act(() => {
+      setter.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  async function click(text: string) {
+    const b = buttonByText(text);
+    if (!b) throw new Error(`no button ${text}`);
+    await act(async () => {
+      b.click();
+    });
+  }
+
+  it("switches to a code field and back without leaving the blocking dialog", async () => {
+    mountGate();
+    await click("Have a pairing code?");
+    expect(codeInput()).toBeTruthy();
+    expect(inPortal(".pl-dialog__close")).toBeNull(); // still non-dismissible
+    await click("Use a token instead");
+    expect(inPortal('[data-testid="auth-pair-code"]')).toBeNull();
+    expect(buttonByText("Connect")).toBeDefined();
+  });
+
+  it("formats as typed and only enables Pair once the code is complete", async () => {
+    mountGate();
+    await click("Have a pairing code?");
+    type(codeInput(), "k7qm2");
+    expect(codeInput().value).toBe("K7QM2");
+    expect(buttonByText("Pair this device")?.disabled).toBe(true);
+    type(codeInput(), "k7qm2 xpa4f");
+    expect(codeInput().value).toBe("K7QM2-XPA4F");
+    expect(buttonByText("Pair this device")?.disabled).toBe(false);
+  });
+
+  it("claims, stores the token where a #pair= link would, and lifts the gate", async () => {
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, token: "device-token", device: { id: "dev9" } }),
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+    mountGate();
+    await click("Have a pairing code?");
+    type(codeInput(), "K7QM2-XPA4F");
+    await click("Pair this device");
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/pairing/claim");
+    expect(JSON.parse(String(init.body)).code).toBe("K7QM2-XPA4F");
+    expect(window.localStorage.getItem("protoagent.authToken")).toBe("device-token");
+    expect(window.localStorage.getItem("protoagent.deviceId")).toBe("dev9");
+    expect(authRequired()).toBe(false);
+  });
+
+  it("a rejected code reads as an actionable message and keeps the gate up", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 403, json: async () => ({ error: "invalid or expired pairing code" }) })),
+    );
+    mountGate();
+    await click("Have a pairing code?");
+    type(codeInput(), "ZZZZZZZZZZ");
+    await click("Pair this device");
+    const alert = inPortal('[role="alert"]');
+    expect(alert?.textContent).toMatch(/didn't work/);
+    expect(alert?.textContent).toMatch(/expired/);
+    expect(alert?.textContent).toMatch(/new one/);
+    expect(alert?.textContent).not.toMatch(/HTTP 403/);
+    expect(authRequired()).toBe(true);
+    expect(window.localStorage.getItem("protoagent.authToken")).toBeNull();
+  });
+
+  it("never sends an incomplete code (each miss spends a lockout guess)", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    mountGate();
+    await click("Have a pairing code?");
+    type(codeInput(), "K7QM2-XP");
+    const form = codeInput().closest("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

@@ -10,9 +10,9 @@
 
 Every route here is behind the ``/api/*`` operator bearer (a2a_impl/auth.py) EXCEPT
 ``claim``, which is on the auth allowlist by necessity — obtaining auth is its purpose. Its
-guards live in ``security.devices``: ~190-bit device codes (120s) or ~50-bit agent codes
-(300s), single-use consumption, and one failed-attempt counter shared by both kinds. See ADR
-0087 D4 and ADR 0113 D2 for the residual risk that buys.
+guards live in ``security.devices``: ~50-bit typeable codes of either kind (300s),
+single-use consumption, and one failed-attempt counter shared by both kinds. See ADR 0087 D4
+(and its 2026-10-18 amendment) and ADR 0113 D2 for the residual risk that buys.
 
 ``operator_api`` may import ``security``/``infra`` but never ``server`` (import-linter).
 """
@@ -324,10 +324,13 @@ def register_pairing_routes(app, agent_name=None) -> None:
         code, expires_at = start_pairing()
 
         # The code rides the FRAGMENT (ADR 0087 D5): fragments are never sent to the server,
-        # so it stays out of access logs, proxy logs and Referer headers.
+        # so it stays out of access logs, proxy logs and Referer headers. The QR and the
+        # typed path carry the SAME short code (ADR 0087 D3 amendment): `base_url` is what a
+        # phone that can't scan opens before typing the code into "Have a pairing code?".
         def _render() -> None:
             for host in hosts:
-                host["url"] = f"http://{host['host']}:{port}/app/#pair={code}"
+                host["base_url"] = f"http://{host['host']}:{port}/app/"
+                host["url"] = f"{host['base_url']}#pair={code}"
                 host["qr"] = _qr_svg(host["url"])
 
         await asyncio.to_thread(_render)

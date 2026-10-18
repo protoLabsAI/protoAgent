@@ -169,3 +169,108 @@ def test_pair_refuses_a_phone_code_from_an_instance_that_predates_agent_pairing(
     captured = capsys.readouterr()
     assert "predates agent pairing" in captured.err
     assert "#pair=" not in captured.out + captured.err
+
+
+# ── --device: pair a PHONE from a headless box (ADR 0087 D3 amendment, #4336 S2) ──────
+
+
+def _device_body(**extra) -> dict:
+    return {
+        "ok": True,
+        "kind": "device",
+        "code": "K7QM2-XPA4F",
+        "expires_at": time.time() + 300,
+        "ttl": 300,
+        "hosts": [
+            {
+                "host": "100.64.1.2",
+                "kind": "tailnet",
+                "base_url": "http://100.64.1.2:7870/app/",
+                "url": "http://100.64.1.2:7870/app/#pair=K7QM2-XPA4F",
+                "qr": "<svg/>",
+            },
+            {
+                "host": "192.168.1.20",
+                "kind": "lan",
+                "base_url": "http://192.168.1.20:7870/app/",
+                "url": "http://192.168.1.20:7870/app/#pair=K7QM2-XPA4F",
+                "qr": "<svg/>",
+            },
+        ],
+        **extra,
+    }
+
+
+def test_pair_device_asks_for_a_device_code_with_the_same_credential(monkeypatch, capsys):
+    got: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        got["auth"] = request.headers.get("Authorization")
+        got["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_device_body())
+
+    _connect_to(monkeypatch, handler)
+    assert pair.run_pair_cli(["--device"]) == 0
+    assert got == {"auth": "Bearer fleet-tok", "body": {"kind": "device"}}
+    out = capsys.readouterr().out
+    assert "fleet-tok" not in out
+
+
+def test_pair_device_prints_code_urls_and_a_terminal_qr(monkeypatch, capsys):
+    _connect_to(monkeypatch, lambda r: httpx.Response(200, json=_device_body()))
+    assert pair.run_pair_cli(["--device"]) == 0
+    out = capsys.readouterr().out
+    assert "Pairing code:  K7QM2-XPA4F" in out
+    # The typed path's URLs are the BASE console URLs (no fragment), tailnet first.
+    assert out.index("http://100.64.1.2:7870/app/") < out.index("http://192.168.1.20:7870/app/")
+    assert "Have a pairing code?" in out
+    assert "Scan with the phone's camera" in out
+    assert "█" in out or "▀" in out  # the half-block QR
+    # Not the agent flow's hub instructions.
+    assert "fleet pair" not in out
+
+
+def test_pair_device_qr_encodes_the_best_link(monkeypatch, capsys):
+    seen: list = []
+    monkeypatch.setattr(pair, "_terminal_qr", lambda url, light: seen.append((url, light)) or "QR\n")
+    _connect_to(monkeypatch, lambda r: httpx.Response(200, json=_device_body()))
+    assert pair.run_pair_cli(["--device", "--light"]) == 0
+    assert seen == [("http://100.64.1.2:7870/app/#pair=K7QM2-XPA4F", True)]
+
+
+def test_pair_device_no_qr(monkeypatch, capsys):
+    _connect_to(monkeypatch, lambda r: httpx.Response(200, json=_device_body()))
+    assert pair.run_pair_cli(["--device", "--no-qr"]) == 0
+    out = capsys.readouterr().out
+    assert "Scan with" not in out and "K7QM2-XPA4F" in out
+
+
+def test_pair_device_falls_back_to_the_link_minus_fragment(monkeypatch, capsys):
+    """An instance from before `base_url` still yields an openable console URL — never the
+    `#pair=` link printed as 'open this and type the code'."""
+    body = _device_body(hosts=[{"host": "192.168.1.20", "kind": "lan", "url": "http://192.168.1.20:7870/app/#pair=x"}])
+    _connect_to(monkeypatch, lambda r: httpx.Response(200, json=body))
+    assert pair.run_pair_cli(["--device", "--no-qr"]) == 0
+    out = capsys.readouterr().out
+    assert "  http://192.168.1.20:7870/app/" in out and "#pair=" not in out
+
+
+def test_pair_device_on_a_loopback_instance_explains_the_fix(monkeypatch, capsys):
+    body = {"ok": False, "error": "This agent only listens on localhost, so a phone can't reach it.", "available": []}
+    _connect_to(monkeypatch, lambda r: httpx.Response(409, json=body))
+    assert pair.run_pair_cli(["--device"]) == 1
+    err = capsys.readouterr().err
+    assert "a phone can't reach it" in err
+    assert "`protoagent pair --device` again" in err
+    assert "ALLOW_OPEN" not in err
+
+
+def test_pair_device_json(monkeypatch, capsys):
+    _connect_to(monkeypatch, lambda r: httpx.Response(200, json=_device_body()))
+    assert pair.run_pair_cli(["--device", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["kind"] == "device"
+
+
+def test_terminal_qr_renders_a_scannable_block_drawing():
+    drawn = pair._terminal_qr("http://100.64.1.2:7870/app/#pair=K7QM2-XPA4F", light=False)
+    assert drawn and len(drawn.splitlines()) > 10

@@ -251,23 +251,49 @@ def test_pairable_ignores_the_bind_but_candidates_do_not(monkeypatch):
 _CROCKFORD = set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
 
 
-def test_device_codes_are_unchanged(devices):
-    """Phone pairing must not move: 32 url-safe chars, 120s, kind 'device'."""
+def test_device_codes_are_short_typeable_codes(devices):
+    """ADR 0087 D3 amendment (2026-10-18): ONE code per phone pairing, scanned or typed —
+    the agent-code shape (10 Crockford chars, XXXXX-XXXXX), 300s, still kind 'device'."""
     before = time.time()
     code, expires_at = devices.start_pairing()
-    assert len(code) == 32
-    assert devices.PAIRING_TTL_SECONDS == 120
-    assert before + 120 - 1 <= expires_at <= time.time() + 120
+    assert len(code) == 11 and code[5] == "-"
+    raw = code.replace("-", "")
+    assert set(raw) <= _CROCKFORD
+    assert devices.PAIRING_TTL_SECONDS == devices.AGENT_PAIRING_TTL_SECONDS == 300
+    assert before + 300 - 1 <= expires_at <= time.time() + 300
+    assert devices._PENDING[raw][1] == "device"
     device, _ = devices.claim_pairing(code, "phone")
     assert device["kind"] == "device"
 
 
-def test_device_code_is_exact_match_only(devices):
-    """Normalization is for agent codes; a device code is case-sensitive url-safe text and
-    folding it could merge distinct codes."""
+@pytest.mark.parametrize("how", ["lower", "nodash", "lower-nodash", "spaces", "underscore"])
+def test_device_codes_are_forgiving_to_type(devices, how):
+    """A phone keyboard lower-cases, drops the dash, or adds spaces — all still claim."""
     code, _ = devices.start_pairing()
-    if code.swapcase() != code:  # 32 random url-safe chars: effectively always has a letter
-        assert devices.claim_pairing(code.swapcase(), "phone") is None
+    device, _ = devices.claim_pairing(_mangle(code, how), "phone")
+    assert device["kind"] == "device"
+
+
+def test_device_code_look_alikes_fold(devices, monkeypatch):
+    monkeypatch.setattr(devices, "_new_agent_code", lambda: "0ABCD1EF01")
+    code, _ = devices.start_pairing()
+    assert code == "0ABCD-1EF01"
+    assert devices.claim_pairing("o abcd ief ol", "phone") is not None
+
+
+def test_device_code_still_expires(devices, monkeypatch):
+    code, _ = devices.start_pairing()
+    real_time = time.time
+    monkeypatch.setattr(devices.time, "time", lambda: real_time() + devices.PAIRING_TTL_SECONDS + 1)
+    assert devices.claim_pairing(code.lower(), "late phone") is None
+
+
+def test_a_pre_amendment_long_link_code_is_a_plain_miss(devices):
+    """An old `#pair=<32 url-safe chars>` link can't still be pending (memory-only codes), and
+    folding it never equals a 10-char code — it's a miss that counts toward the lockout."""
+    code, _ = devices.start_pairing()
+    assert devices.claim_pairing("EULO7xFnwvv4EupKwYwBSwYuxJKMJWXM", "old link") is None
+    assert devices._failed_claims[0] == 1
     assert devices.claim_pairing(code, "phone") is not None
 
 
@@ -291,11 +317,11 @@ def test_unknown_kind_is_refused(devices):
 def test_agent_code_expires(devices, monkeypatch):
     code, _ = devices.start_pairing("agent")
     real_time = time.time
-    # Still good past the phone window…
-    monkeypatch.setattr(devices.time, "time", lambda: real_time() + devices.PAIRING_TTL_SECONDS + 1)
+    # Still good just inside its window…
+    monkeypatch.setattr(devices.time, "time", lambda: real_time() + devices.AGENT_PAIRING_TTL_SECONDS - 5)
     devices._prune(devices.time.time())
     assert devices.normalize_agent_code(code) in devices._PENDING
-    # …gone past its own.
+    # …gone past it.
     monkeypatch.setattr(devices.time, "time", lambda: real_time() + devices.AGENT_PAIRING_TTL_SECONDS + 1)
     assert devices.claim_pairing(code, "late hub") is None
 
@@ -382,13 +408,16 @@ def test_racing_claims_mint_exactly_one_device(devices, monkeypatch):
     assert len(devices.list_devices()) == 1
 
 
-def test_agent_code_never_matches_a_device_code_by_folding(devices):
-    """Folding is scoped to agent codes: a device code's uppercase/dashless variant must not
-    redeem it."""
-    code, _ = devices.start_pairing()
-    folded = devices.normalize_agent_code(code)
-    if folded != code:
-        assert devices.claim_pairing(folded, "x") is None
+def test_typed_device_claims_share_the_lockout(devices):
+    """Typed device claims spend the SAME 5-miss budget: five wrong phone codes drop a pending
+    agent code too, and a typed device code is collateral of agent-code probing."""
+    phone, _ = devices.start_pairing()
+    agent, _ = devices.start_pairing("agent")
+    for _ in range(devices._MAX_FAILED_CLAIMS):
+        assert devices.claim_pairing("ZZZZZ-ZZZZZ", "attacker") is None
+    assert devices._PENDING == {}
+    assert devices.claim_pairing(phone.lower(), "legit phone") is None
+    assert devices.claim_pairing(agent, "legit hub") is None
 
 
 def test_lockout_is_shared_across_kinds(devices):
@@ -517,8 +546,27 @@ def test_start_with_no_body_is_still_a_device_code(client):
     r = client.post("/api/pairing/start")
     body = r.json()
     assert r.status_code == 200 and body["kind"] == "device"
-    assert body["ttl"] == 120 and len(body["code"]) == 32
-    assert body["hosts"][0]["url"].endswith(f"/app/#pair={body['code']}")
+    assert body["ttl"] == 300 and len(body["code"]) == 11 and body["code"][5] == "-"
+    host = body["hosts"][0]
+    # One code: the QR link carries the same short code a phone can type instead.
+    assert host["base_url"] == "http://100.119.239.8:7931/app/"
+    assert host["url"] == f"http://100.119.239.8:7931/app/#pair={body['code']}"
+    assert host["qr"] and host["qr"].startswith("<svg")
+
+
+def test_typed_device_claim_route_folds_and_yields_a_device(client):
+    code = client.post("/api/pairing/start").json()["code"]
+    typed = " " + code.lower().replace("-", " ").replace("0", "o").replace("1", "l") + " "
+    r = client.post("/api/pairing/claim", json={"code": typed, "name": "iPhone"})
+    assert r.status_code == 200
+    assert r.json()["device"]["kind"] == "device" and r.json()["token"]
+
+
+def test_link_path_claims_the_exact_shown_code(client):
+    """`#pair=XXXXX-XXXXX` — what the console sends verbatim from the fragment."""
+    body = client.post("/api/pairing/start").json()
+    fragment = body["hosts"][0]["url"].split("#pair=", 1)[1]
+    assert client.post("/api/pairing/claim", json={"code": fragment, "name": "p"}).status_code == 200
 
 
 @pytest.mark.parametrize("payload", [{"kind": "agent"}, None])

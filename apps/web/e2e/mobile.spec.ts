@@ -246,3 +246,59 @@ test("mobile: an artifact-ref never auto-opens the panel; tapping the chip pushe
   await expect(panel.frameLocator("#frame").locator("svg#v1")).toHaveCount(1);
 });
 
+
+// ── Pair this phone by typing a code (ADR 0087 D3 amendment, #4336 S2) ─────────────────
+// A phone that can't scan the Devices QR opens the console, hits the AuthGate, and types the
+// short code instead of an operator token. The mock isn't token-gated, so the gate is
+// simulated by 401ing every /api/* request that lacks the device token the claim hands back.
+test("mobile: AuthGate pairs this phone from a typed code (16px input, 44px targets)", async ({ page }) => {
+  const DEVICE_TOKEN = "e2e-device-token";
+  const claims: unknown[] = [];
+  await page.route("**/api/**", async (route) => {
+    const req = route.request();
+    if (req.url().endsWith("/api/pairing/claim")) {
+      const body = req.postDataJSON();
+      claims.push(body);
+      // The real server folds case/dashes/look-alikes; the console sends the code as shown.
+      if (body.code !== "3HV8T-QW6RN") {
+        return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ ok: false, error: "invalid or expired pairing code" }) });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, token: DEVICE_TOKEN, device: { id: "ph1", name: "iPhone", kind: "device" } }),
+      });
+    }
+    if ((req.headers()["authorization"] || "") === `Bearer ${DEVICE_TOKEN}`) return route.fallback();
+    return route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ detail: "Unauthorized" }) });
+  });
+
+  await page.goto("/app/", { waitUntil: "load" });
+  const dialog = page.getByRole("dialog", { name: "Authentication required" });
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+  await dialog.getByRole("button", { name: "Have a pairing code?" }).tap();
+
+  const input = dialog.getByTestId("auth-pair-code");
+  await expect(input).toBeVisible();
+  // Touch floor inside the gate: no iOS focus-zoom, no undersized tap targets.
+  expect(await input.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
+  for (const name of ["Use a token instead", "Pair this device"]) {
+    const box = await dialog.getByRole("button", { name }).boundingBox();
+    expect(box && box.height >= 44 && box.width >= 44, `${name} ${JSON.stringify(box)}`).toBe(true);
+  }
+
+  // A wrong code reads as words, not "HTTP 403", and the gate stays up.
+  await input.fill("zzzzzzzzzz");
+  await dialog.getByRole("button", { name: "Pair this device" }).tap();
+  await expect(dialog.getByRole("alert")).toContainText("didn't work");
+  await expect(dialog).toBeVisible();
+
+  // Typed the way a phone keyboard types it — lower-case, no dash — and formatted as shown.
+  await input.fill("3hv8tqw6rn");
+  await expect(input).toHaveValue("3HV8T-QW6RN");
+  await dialog.getByRole("button", { name: "Pair this device" }).tap();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator(".pl-prompt")).toBeVisible({ timeout: 15_000 });
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.authToken"))).toBe(DEVICE_TOKEN);
+  expect(claims.length).toBe(2);
+});

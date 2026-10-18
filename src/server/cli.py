@@ -68,7 +68,7 @@ _FORWARD_HELP = {
     "skills": "Inspect and curate the SKILL.md library (ADR 0041)",
     "fleet": "The fleet deck: bare = interactive TUI over the running hub; ls/up/down = non-interactive (ADR 0042)",
     "top": "Open the fleet deck (alias for bare `protoagent fleet`)",
-    "pair": "Print a one-time code another agent's hub can use to pair with this one (ADR 0113)",
+    "pair": "Print a one-time code another agent's hub (or, with --device, a phone) can use to pair with this one",
     "config": "Explain / get / set this instance's config (ADR 0047)",
     "model": "Point at a local / OpenAI-compatible LLM — Ollama, LM Studio, llama.cpp, vLLM (ADR 0075)",
     "reset": "Factory-reset this instance, or the whole machine box for handoff",

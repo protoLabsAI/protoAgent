@@ -128,6 +128,23 @@ auth:
 Localhost with no token is open for dev convenience; **always set a token when binding to
 `0.0.0.0` or exposing the agent.**
 
+## Pair a phone with a headless agent
+
+A phone can use the console of an agent that has no screen of its own. Serve the console
+(the default `--ui console`, not `--ui none`) on a reachable address with a token, then
+run `protoagent pair --device` on the same machine:
+
+```bash
+A2A_AUTH_TOKEN="$PROTOAGENT_TOKEN" protoagent serve --host 0.0.0.0 --port 7870
+# in another shell on the same machine:
+protoagent pair --device
+```
+
+The command prints a terminal QR, a ten-character code and the console URL. Scan the QR
+with the phone, or open the URL on the phone, tap **Have a pairing code?** and type the
+code. The phone gets its own revocable token, so you never copy `$PROTOAGENT_TOKEN` onto
+it. See [Pair a phone from a headless box](./pairing.md#pair-a-phone-from-a-headless-box).
+
 ## What else runs headless
 
 Everything non-UI: **`/metrics`** (Prometheus), the **reactive inbox**

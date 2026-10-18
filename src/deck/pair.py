@@ -1,4 +1,5 @@
-"""``protoagent pair`` — let another agent pair with the protoAgent running on this machine.
+"""``protoagent pair`` — let another agent (or, with ``--device``, a phone) pair with the
+protoAgent running on this machine.
 
 ADR 0113 D7. The remote side of agent pairing usually happens in the console (Settings ▸
 Devices ▸ Pair an agent), but a docker or server install has nobody at its console. This
@@ -6,6 +7,11 @@ asks the running instance for a short agent pairing code and prints it with the 
 hub can reach it on, so the hub side (``protoagent fleet pair <url> <code>``, or the Fleet
 panel's "Pair…") can claim it. The hub never sees this instance's shared bearer: the claim
 mints a per-hub device token that can be revoked here on its own (ADR 0087 D1).
+
+``--device`` is the same for a PHONE (ADR 0087 D3 as amended 2026-10-18): it starts a device
+pairing and prints the short code, the console URL(s), and a terminal QR of the best one — so
+a headless box with nobody at its console can still pair a phone. The phone scans the QR, or
+opens the URL and types the code into "Have a pairing code?".
 
 Finding and opening the local instance is the fleet deck's job (``deck.hub.connect``): the
 pidfile / heartbeats under every known box root, then the fleet service token read from disk
@@ -33,8 +39,20 @@ def _parser() -> argparse.ArgumentParser:
         prog="protoagent pair",
         description=(
             "Print a one-time code another agent's hub can use to pair with the protoAgent "
-            "running on this machine (ADR 0113). The code works once and expires in minutes."
+            "running on this machine (ADR 0113). The code works once and expires in minutes. "
+            "With --device, pair a phone or tablet instead (ADR 0087)."
         ),
+    )
+    p.add_argument(
+        "--device",
+        action="store_true",
+        help="pair a phone/tablet: print its code, the URL to open, and a terminal QR",
+    )
+    p.add_argument("--no-qr", action="store_true", help="with --device: skip the terminal QR")
+    p.add_argument(
+        "--light",
+        action="store_true",
+        help="with --device: draw the QR for a light-background terminal (default assumes dark)",
     )
     p.add_argument("--url", default=None, help="the instance to pair (default: the one running on this machine)")
     p.add_argument("--token", default=None, help=f"operator credential for --url (default: ${deckhub.ENV_TOKEN} / this box's)")
@@ -75,7 +93,62 @@ def _print_code(res: dict, port: int | None) -> None:
     print("The code works once. The hub it pairs shows up under Settings ▸ Devices, where you can revoke it.")
 
 
-def _print_unreachable(res: dict) -> None:
+def _terminal_qr(url: str, *, light: bool) -> str | None:
+    """``url`` as a QR drawn in half-block characters, or None if it can't be rendered.
+
+    ``invert`` is about the TERMINAL, not the code: a scanner wants dark modules on a light
+    ground, and on a dark terminal the "light" modules are the printed blocks. Never fatal —
+    the code and URL printed beside it are the fallback, exactly like the console's QR.
+    """
+    try:
+        import io
+
+        import qrcode
+
+        qr = qrcode.QRCode(border=2)
+        qr.add_data(url)
+        qr.make(fit=True)
+        buf = io.StringIO()
+        qr.print_ascii(out=buf, invert=not light)
+        return buf.getvalue()
+    except Exception:  # noqa: BLE001 — an optional visual must never break pairing
+        return None
+
+
+def _write(text: str) -> None:
+    """Print, but survive a console that can't encode the QR's block characters (a legacy
+    Windows code page) — the code and URL lines matter, the drawing doesn't."""
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except UnicodeEncodeError:
+        print("(this terminal can't draw the QR — open the URL below and type the code)")
+
+
+def _print_device_code(res: dict, *, qr: bool, light: bool) -> None:
+    code = res.get("code") or ""
+    left = _remaining(res.get("expires_at"))
+    hosts = res.get("hosts") or []
+    best = hosts[0] if hosts else {}
+    if qr and best.get("url"):
+        drawn = _terminal_qr(str(best["url"]), light=light)
+        if drawn:
+            print("Scan with the phone's camera:")
+            _write(drawn)
+            print()
+    print(f"Pairing code:  {code}" + (f"   (expires in {left})" if left else ""))
+    print()
+    print('Or on the phone, open this agent and tap "Have a pairing code?", then type the code:')
+    for h in hosts:
+        base = h.get("base_url") or str(h.get("url") or "").split("#", 1)[0]
+        kind = h.get("kind") or ""
+        note = {"tailnet": "any network the phone is on, if it runs Tailscale", "lan": "same Wi-Fi only"}.get(kind, kind)
+        print(f"  {base}" + (f"   ({note})" if note else ""))
+    print()
+    print("The code works once. The phone shows up under Settings ▸ Devices, where you can revoke it.")
+
+
+def _print_unreachable(res: dict, again: str = "protoagent pair") -> None:
     print(res.get("error") or "This agent only listens on localhost, so no other agent can reach it.", file=sys.stderr)
     avail = res.get("available") or []
     if avail:
@@ -86,7 +159,7 @@ def _print_unreachable(res: dict) -> None:
     print(
         "To make it pairable, bind every interface with an auth token configured — Settings ▸ "
         "Devices ▸ 'Allow devices on my network' does both — or start it with `--host 0.0.0.0` "
-        "(it refuses to start that way without a token). Then run `protoagent pair` again.",
+        f"(it refuses to start that way without a token). Then run `{again}` again.",
         file=sys.stderr,
     )
     if res.get("auth_configured") is False:
@@ -111,13 +184,22 @@ def run_pair_cli(argv: list[str]) -> int:
             print(f"protoagent pair: {exc}", file=sys.stderr)
         return 1
     try:
-        res = conn.client.pairing_start("agent")
+        res = conn.client.pairing_start("device" if args.device else "agent")
     except deckhub.HubError as exc:
         print(f"protoagent pair: {exc}", file=sys.stderr)
         return 1
     finally:
         conn.client.close()
 
+    if args.device:
+        if args.json:
+            print(json.dumps(res, indent=2))
+            return 0 if res.get("ok") else 1
+        if not res.get("ok"):
+            _print_unreachable(res, again="protoagent pair --device")
+            return 1
+        _print_device_code(res, qr=not args.no_qr, light=args.light)
+        return 0
     if res.get("ok") and res.get("kind") != "agent":
         # An instance from before agent pairing ignores `kind` and mints a PHONE code, whose
         # url is a `#pair=` console link a hub cannot claim with. Say so rather than print it.

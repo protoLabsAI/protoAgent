@@ -54,6 +54,12 @@
   word-break: break-all;
   opacity: 0.75;
 }
+/* The console URL a phone that can't scan opens before typing the code. It is read off this
+   screen and typed into a phone browser, so it gets body-size text, not the dimmed caption. */
+.devices-url--open {
+  font-size: var(--pl-font-size-sm);
+  opacity: 1;
+}
 
 .devices-hosts {
   display: flex;

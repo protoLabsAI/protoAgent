@@ -72,6 +72,13 @@
     height: 100%;
   }
 
+  /* The AuthGate is the first thing a phone sees when it opens the console unpaired, and
+     its "Have a pairing code?" path is used ON the phone (ADR 0087 D3 amendment). The DS
+     button is ~37px; a blocking dialog has no density to protect, so grow the boxes. */
+  .auth-dialog .pl-btn {
+    min-height: 44px;
+  }
+
   /* Console-owned scrollers — without containment a flick past the end rubber-bands the
      page behind them. (The DS contains its own overlay bodies and the conversation.) */
   .app-drawer-body,

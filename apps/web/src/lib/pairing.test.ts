@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { redeemPairingFromUrl } from "./pairing";
+import {
+  claimPairingCode,
+  describePairingError,
+  formatPairingCode,
+  isCompletePairingCode,
+  redeemPairingFromUrl,
+} from "./pairing";
 import { QuotaStorage } from "./quotaStorage.testkit";
 import { __resetStorageSeamForTests } from "./storage";
 
@@ -116,5 +122,72 @@ describe("redeemPairingFromUrl on a full quota", () => {
     expect(full.getItem("protoagent.authToken")).toBeNull();
     vi.unstubAllGlobals();
     __resetStorageSeamForTests();
+  });
+});
+
+// ADR 0087 D3 amendment: the same short code can be TYPED (AuthGate "Have a pairing code?").
+describe("claimPairingCode + typed-code helpers", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it("formats a typed code like the screen shows it", () => {
+    expect(formatPairingCode("k7qm2xpa4f")).toBe("K7QM2-XPA4F");
+    expect(formatPairingCode(" k7qm2 xpa4f ")).toBe("K7QM2-XPA4F");
+    expect(formatPairingCode("k7qm2")).toBe("K7QM2"); // no dangling dash
+    expect(isCompletePairingCode("K7QM2-XPA4")).toBe(false);
+    expect(isCompletePairingCode("k7qm2-xpa4f")).toBe(true);
+  });
+
+  it("claims a typed code and stores the token under the same key a link uses", async () => {
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, token: "typed-token", device: { id: "d2" } }),
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+    expect(await claimPairingCode("K7QM2-XPA4F")).toEqual({ ok: true });
+    expect(window.localStorage.getItem("protoagent.authToken")).toBe("typed-token");
+    const body = JSON.parse(String((fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.code).toBe("K7QM2-XPA4F");
+  });
+
+  it("carries the HTTP status on a rejected claim", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 403, json: async () => ({ error: "invalid or expired pairing code" }) })),
+    );
+    const res = await claimPairingCode("ZZZZZ-ZZZZZ");
+    expect(res).toEqual({ ok: false, status: 403, error: "HTTP 403: invalid or expired pairing code" });
+  });
+
+  it("a #pair= link with the short code still claims it verbatim", async () => {
+    window.history.replaceState(null, "", "/app/#pair=K7QM2-XPA4F");
+    const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true, token: "t" }) }));
+    vi.stubGlobal("fetch", fetchSpy);
+    expect(await redeemPairingFromUrl()).toEqual({ ok: true });
+    const body = JSON.parse(String((fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    expect(body.code).toBe("K7QM2-XPA4F");
+    expect(window.location.hash).toBe("");
+  });
+});
+
+describe("describePairingError", () => {
+  it("turns the one 403 into words naming every cause and the fix", () => {
+    const msg = describePairingError({ status: 403, error: "HTTP 403: invalid or expired pairing code" });
+    expect(msg).toMatch(/didn't work/);
+    expect(msg).toMatch(/expired/);
+    expect(msg).toMatch(/wrong tries/);
+    expect(msg).toMatch(/Add a device/);
+  });
+
+  it("explains a network failure as reachability", () => {
+    expect(describePairingError({ error: "Failed to fetch" })).toMatch(/Couldn't reach this agent/);
+    expect(describePairingError({ error: "The operation was aborted due to timeout" })).toMatch(/Couldn't reach/);
+  });
+
+  it("passes a storage failure through untouched", () => {
+    expect(describePairingError({ error: "browser storage is full" })).toBe("browser storage is full");
   });
 });
