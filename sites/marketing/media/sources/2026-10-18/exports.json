@@ -1,0 +1,26 @@
+{
+  "marketing-workspace": {
+    "campaign": 3,
+    "original": "shots/p1-final-20261018-211441/marketing-workspace.png",
+    "export": "sites/marketing/public/media/marketing-workspace/2026-10-18.png",
+    "sha256": "4a6a6eff88668aa4fda5039d8c5c62d150d4d6b00d48c4b025fe2c57bd30ae1e"
+  },
+  "marketing-first-task": {
+    "campaign": 3,
+    "original": "renders/p1-real-document-20261018-210628/20261018-211619/marketing-first-task.mp4",
+    "export": "sites/marketing/public/media/marketing-first-task/2026-10-18.mp4",
+    "sha256": "572d000a1a11e80bab5571ff2af3baec2d38a96c3f795ad593baebe4871113db"
+  },
+  "marketing-memory": {
+    "campaign": 3,
+    "original": "shots/memory-inspection-20261018-212324/marketing-memory.png",
+    "export": "sites/marketing/public/media/marketing-memory/2026-10-18.png",
+    "sha256": "16438595b46be82737e5e22cc90198732574c61cd7f4bdac32d1c552cad4c581"
+  },
+  "marketing-fleet": {
+    "campaign": 3,
+    "original": "shots/fleet-real-handoff-20261018-212544/marketing-fleet.png",
+    "export": "sites/marketing/public/media/marketing-fleet/2026-10-18.png",
+    "sha256": "32628e42ebc9a216c6a8ef4747643490e7c7abee5835f03f08755273c6cbab9e"
+  }
+}

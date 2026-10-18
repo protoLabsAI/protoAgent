@@ -1,0 +1,121 @@
+{
+  "script": "fleet-real-handoff",
+  "started_at": "2026-10-18T21:25:44+00:00",
+  "clock": "seconds since page creation = video t=0 (\u00b10.1s)",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "device_scale_factor": 2.0,
+  "video_size": {
+    "width": 2880,
+    "height": 2000
+  },
+  "capture": {
+    "scale": "device",
+    "fps": 30,
+    "quality": 92,
+    "crf": 16
+  },
+  "duration_s": 19.296,
+  "marks": {},
+  "screenshots": {
+    "fleet-real-return": "shots/fleet-real-handoff-20261018-212544/fleet-real-return.png",
+    "marketing-fleet": "shots/fleet-real-handoff-20261018-212544/marketing-fleet.png"
+  },
+  "steps": [
+    {
+      "index": 1,
+      "op": "goto",
+      "desc": "goto /app/",
+      "t_start": 0.002,
+      "t_end": 0.198
+    },
+    {
+      "index": 2,
+      "op": "wait_for",
+      "desc": "wait for role='textbox' name='Message protoAgent\u2026' (visible)",
+      "t_start": 0.198,
+      "t_end": 0.339
+    },
+    {
+      "index": 3,
+      "op": "click",
+      "desc": "click role='button' name='New chat \u2014 Shift+click for incognito (Shift+Enter when focused)' exact",
+      "t_start": 0.339,
+      "t_end": 0.79
+    },
+    {
+      "index": 4,
+      "op": "fill",
+      "desc": "fill role='textbox' name='Message protoAgent\u2026'",
+      "t_start": 0.79,
+      "t_end": 1.172
+    },
+    {
+      "index": 5,
+      "op": "click",
+      "desc": "click role='button' name='Send' exact",
+      "t_start": 1.172,
+      "t_end": 1.555
+    },
+    {
+      "index": 6,
+      "op": "wait_for",
+      "desc": "wait for text='Handoff complete.' exact (visible) (timeout 240000ms)",
+      "t_start": 1.555,
+      "t_end": 16.937
+    },
+    {
+      "index": 7,
+      "op": "wait_for",
+      "desc": "wait for role='textbox' name='Message protoAgent\u2026' (visible) (timeout 30000ms)",
+      "t_start": 16.937,
+      "t_end": 16.943
+    },
+    {
+      "index": 8,
+      "op": "screenshot",
+      "desc": "screenshot fleet-real-return",
+      "t_start": 16.943,
+      "t_end": 17.041
+    },
+    {
+      "index": 9,
+      "op": "click",
+      "desc": "click role='button' name='Switch agent' exact",
+      "t_start": 17.041,
+      "t_end": 17.569
+    },
+    {
+      "index": 10,
+      "op": "wait_for",
+      "desc": "wait for role='menuitem' name='Researcher' exact (visible)",
+      "t_start": 17.569,
+      "t_end": 17.575
+    },
+    {
+      "index": 11,
+      "op": "wait_for",
+      "desc": "wait for role='menuitem' name='Editor' exact (visible)",
+      "t_start": 17.575,
+      "t_end": 17.584
+    },
+    {
+      "index": 12,
+      "op": "hold",
+      "desc": "hold 1500ms",
+      "t_start": 17.584,
+      "t_end": 19.088
+    },
+    {
+      "index": 13,
+      "op": "screenshot",
+      "desc": "screenshot marketing-fleet",
+      "t_start": 19.088,
+      "t_end": 19.231
+    }
+  ],
+  "error": "",
+  "failed_step": 0
+}

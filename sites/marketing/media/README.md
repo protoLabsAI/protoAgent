@@ -19,3 +19,8 @@ The social card uses the editable `social-card.html` source. Regenerate it with
 `node scripts/render-marketing-social.mjs` from the repo root (root Node dependencies
 and Playwright Chromium required). Check the output before committing it. This is
 an authored brand graphic, not a product screenshot.
+
+Approved marketing placements use `src/components/ProductMedia.astro` and the
+registry asset paths. Replace a revision centrally; keep full-size image links,
+video controls, poster, and text walkthrough available. The first production
+package and capture evidence are in [sources/2026-10-18](sources/2026-10-18/README.md).

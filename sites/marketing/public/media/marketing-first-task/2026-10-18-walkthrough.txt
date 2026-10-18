@@ -1,0 +1,30 @@
+From a public document to a downloadable Markdown result
+
+This is the text alternative to a silent, 54-second screen recording.
+The model wait is shown at real speed. There is no narration or time compression.
+
+Before you start: connect a model, enable the Artifact plugin, and choose a
+document you are allowed to share with that model. This example uses the public
+protoAgent README at commit 761b30f74ed54fd3662d25dc3c8629b989dbbce3.
+
+1. 0–3 seconds: In a new conversation, use Attach files to select the README.
+   The Artifact panel is open beside the empty chat.
+2. 3–13 seconds: Ask: “Using only the attached public README, summarize the setup
+   options in three bullets. Create a downloadable Markdown artifact titled
+   ‘Setup options’ containing those bullets and a source note. Do not install
+   or run anything.” Select Send.
+3. 13–33 seconds: Wait for the model and file tools to finish.
+4. 33–41 seconds: The generated Setup options file appears in the Artifact
+   panel and the agent completes its reply.
+5. 41–54 seconds: Inspect the three setup bullets and source note. The example
+   groups desktop installation, package/source installation, and Docker setup.
+   Nothing is installed or run during this demonstration.
+
+The Download button requests the generated file. This recording shows the
+available result, not a completed save to the viewer's disk. To keep your own
+result, select Download and check the saved file.
+
+Results and timing depend on your model, tools, and input. For current setup
+instructions, follow the documentation rather than copying commands from video.
+
+Recorded by Brandlaunch on 2026-10-18 from source cd99084a79d375a45f5714286fc06d8735c25c7e.

@@ -1,0 +1,158 @@
+{
+  "name": "p1-final",
+  "base_url": "http://127.0.0.1:8920",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_scale_factor": 2,
+  "capture": "device",
+  "color_scheme": "dark",
+  "timezone_id": "UTC",
+  "locale": "en-US",
+  "total_timeout_s": 240,
+  "redact": {
+    "presets": [
+      "home_paths",
+      "emails",
+      "secrets"
+    ]
+  },
+  "storage": {
+    "local": {
+      "protoagent.ui": {
+        "state": {
+          "surface": "chat",
+          "rightPanel": "plugin:artifact:artifact",
+          "rightCollapsed": false,
+          "leftCollapsed": false,
+          "rightWidth": 640
+        },
+        "version": 14
+      }
+    }
+  },
+  "steps": [
+    {
+      "goto": "/app/"
+    },
+    {
+      "wait_for": {
+        "role": "textbox",
+        "name": "Message protoAgent\u2026"
+      }
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "New chat \u2014 Shift+click for incognito (Shift+Enter when focused)",
+        "exact": true
+      }
+    },
+    {
+      "hold": 100
+    },
+    {
+      "hold": 100
+    },
+    {
+      "wait_for": {
+        "role": "textbox",
+        "name": "Message protoAgent\u2026"
+      }
+    },
+    {
+      "mark": "start"
+    },
+    {
+      "hold": 1200
+    },
+    {
+      "upload": {
+        "role": "button",
+        "name": "Attach files",
+        "files": [
+          "/tmp/protoagent/ingest/protoagent-public-readme.md"
+        ]
+      }
+    },
+    {
+      "wait_for": {
+        "text": "protoagent-public-readme.md"
+      }
+    },
+    {
+      "mark": "attached"
+    },
+    {
+      "hold": 2000
+    },
+    {
+      "type": {
+        "target": {
+          "role": "textbox",
+          "name": "Message protoAgent\u2026"
+        },
+        "text": "Using only the attached README, list desktop, published-package and source-checkout setup in three short bullets (under 20 words each). Save them with a source note as a downloadable Markdown file titled \u201cSetup summary\u201d. Do not install or run anything.",
+        "delay_ms": 30
+      }
+    },
+    {
+      "mark": "typed"
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "Send",
+        "exact": true
+      }
+    },
+    {
+      "mark": "sent"
+    },
+    {
+      "mouse_move": {
+        "x": 700,
+        "y": 840,
+        "smooth": false
+      }
+    },
+    {
+      "wait_for": {
+        "role": "button",
+        "name": "Setup summary \u00b7 v1 file",
+        "exact": true,
+        "timeout_ms": 180000
+      }
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "Setup summary \u00b7 v1 file",
+        "exact": true
+      }
+    },
+    {
+      "wait_for": {
+        "role": "button",
+        "name": "Copy",
+        "exact": true,
+        "timeout_ms": 90000
+      }
+    },
+    {
+      "mark": "result"
+    },
+    {
+      "hold": 6000
+    },
+    {
+      "screenshot": {
+        "name": "marketing-workspace"
+      }
+    },
+    {
+      "mark": "end"
+    }
+  ]
+}

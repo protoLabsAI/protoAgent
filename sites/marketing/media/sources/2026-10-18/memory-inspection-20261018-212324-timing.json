@@ -1,0 +1,82 @@
+{
+  "script": "memory-inspection",
+  "started_at": "2026-10-18T21:23:24+00:00",
+  "clock": "seconds since page creation = video t=0 (\u00b10.1s)",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "device_scale_factor": 2.0,
+  "video_size": {
+    "width": 1440,
+    "height": 1000
+  },
+  "capture": {
+    "scale": "css"
+  },
+  "duration_s": 3.225,
+  "marks": {},
+  "screenshots": {
+    "marketing-memory": "shots/memory-inspection-20261018-212324/marketing-memory.png"
+  },
+  "steps": [
+    {
+      "index": 1,
+      "op": "goto",
+      "desc": "goto /app/",
+      "t_start": 0.0,
+      "t_end": 0.161
+    },
+    {
+      "index": 2,
+      "op": "wait_for",
+      "desc": "wait for role='heading' name='Memory' exact (visible)",
+      "t_start": 0.161,
+      "t_end": 0.3
+    },
+    {
+      "index": 3,
+      "op": "click",
+      "desc": "click role='tab' name='Injections' exact",
+      "t_start": 0.3,
+      "t_end": 0.761
+    },
+    {
+      "index": 4,
+      "op": "wait_for",
+      "desc": "wait for role='button' name='used 1 memory' (visible)",
+      "t_start": 0.761,
+      "t_end": 0.789
+    },
+    {
+      "index": 5,
+      "op": "click",
+      "desc": "click role='button' name='used 1 memory'",
+      "t_start": 0.789,
+      "t_end": 1.162
+    },
+    {
+      "index": 6,
+      "op": "wait_for",
+      "desc": "wait for role='dialog' name='What this turn used' (visible)",
+      "t_start": 1.162,
+      "t_end": 1.166
+    },
+    {
+      "index": 7,
+      "op": "hold",
+      "desc": "hold 1500ms",
+      "t_start": 1.166,
+      "t_end": 2.669
+    },
+    {
+      "index": 8,
+      "op": "screenshot",
+      "desc": "screenshot marketing-memory",
+      "t_start": 2.669,
+      "t_end": 2.82
+    }
+  ],
+  "error": "",
+  "failed_step": 0
+}

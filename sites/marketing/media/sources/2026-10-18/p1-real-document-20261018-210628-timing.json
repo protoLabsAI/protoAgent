@@ -1,0 +1,145 @@
+{
+  "script": "p1-real-document",
+  "started_at": "2026-10-18T21:06:28+00:00",
+  "clock": "seconds since page creation = video t=0 (\u00b10.1s)",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_scale_factor": 2.0,
+  "video_size": {
+    "width": 2880,
+    "height": 1800
+  },
+  "capture": {
+    "scale": "device",
+    "fps": 30,
+    "quality": 92,
+    "crf": 16
+  },
+  "duration_s": 193.874,
+  "marks": {
+    "start": 0.778,
+    "attached": 2.393,
+    "typed": 13.256,
+    "sent": 13.623
+  },
+  "screenshots": {},
+  "steps": [
+    {
+      "index": 1,
+      "op": "goto",
+      "desc": "goto /app/",
+      "t_start": 0.002,
+      "t_end": 0.202
+    },
+    {
+      "index": 2,
+      "op": "wait_for",
+      "desc": "wait for role='textbox' name='Message protoAgent\u2026' (visible)",
+      "t_start": 0.202,
+      "t_end": 0.336
+    },
+    {
+      "index": 3,
+      "op": "click",
+      "desc": "click role='button' name='New chat \u2014 Shift+click for incognito (Shift+Enter when focused)' exact",
+      "t_start": 0.336,
+      "t_end": 0.774
+    },
+    {
+      "index": 4,
+      "op": "wait_for",
+      "desc": "wait for role='textbox' name='Message protoAgent\u2026' (visible)",
+      "t_start": 0.774,
+      "t_end": 0.778
+    },
+    {
+      "index": 5,
+      "op": "mark",
+      "desc": "mark start",
+      "t_start": 0.778,
+      "t_end": 0.778
+    },
+    {
+      "index": 6,
+      "op": "hold",
+      "desc": "hold 1200ms",
+      "t_start": 0.778,
+      "t_end": 1.98
+    },
+    {
+      "index": 7,
+      "op": "upload",
+      "desc": "upload protoagent-public-readme.md via role='button' name='Attach files'",
+      "t_start": 1.98,
+      "t_end": 2.379
+    },
+    {
+      "index": 8,
+      "op": "wait_for",
+      "desc": "wait for text='protoagent-public-readme.md' (visible)",
+      "t_start": 2.379,
+      "t_end": 2.393
+    },
+    {
+      "index": 9,
+      "op": "mark",
+      "desc": "mark attached",
+      "t_start": 2.393,
+      "t_end": 2.393
+    },
+    {
+      "index": 10,
+      "op": "hold",
+      "desc": "hold 2000ms",
+      "t_start": 2.393,
+      "t_end": 4.394
+    },
+    {
+      "index": 11,
+      "op": "type",
+      "desc": "type 223 chars into role='textbox' name='Message protoAgent\u2026'",
+      "t_start": 4.394,
+      "t_end": 13.256
+    },
+    {
+      "index": 12,
+      "op": "mark",
+      "desc": "mark typed",
+      "t_start": 13.256,
+      "t_end": 13.256
+    },
+    {
+      "index": 13,
+      "op": "click",
+      "desc": "click role='button' name='Send' exact",
+      "t_start": 13.256,
+      "t_end": 13.623
+    },
+    {
+      "index": 14,
+      "op": "mark",
+      "desc": "mark sent",
+      "t_start": 13.623,
+      "t_end": 13.623
+    },
+    {
+      "index": 15,
+      "op": "mouse_move",
+      "desc": "move the pointer to (1420, 870)",
+      "t_start": 13.623,
+      "t_end": 13.635
+    },
+    {
+      "index": 16,
+      "op": "wait_for",
+      "desc": "wait for text='Setup options' in frame(url='/plugins/artifact/view') (visible) (timeout 180000ms)",
+      "t_start": 13.635,
+      "t_end": 193.641,
+      "error": "Locator.wait_for: Timeout 179999.96058410034ms exceeded. | Call log: |   - waiting for get_by_text(\"Setup options\").visible.first to be visible"
+    }
+  ],
+  "error": "step 16 (wait for text='Setup options' in frame(url='/plugins/artifact/view') (visible) (timeout 180000ms)) failed: Locator.wait_for: Timeout 179999.96058410034ms exceeded. | Call log: |   - waiting for get_by_text(\"Setup options\").visible.first to be visible",
+  "failed_step": 16
+}

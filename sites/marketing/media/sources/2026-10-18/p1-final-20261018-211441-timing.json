@@ -1,0 +1,204 @@
+{
+  "script": "p1-final",
+  "started_at": "2026-10-18T21:14:41+00:00",
+  "clock": "seconds since page creation = video t=0 (\u00b10.1s)",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "device_scale_factor": 2.0,
+  "video_size": {
+    "width": 2880,
+    "height": 1800
+  },
+  "capture": {
+    "scale": "device",
+    "fps": 30,
+    "quality": 92,
+    "crf": 16
+  },
+  "duration_s": 38.365,
+  "marks": {
+    "start": 1.068,
+    "attached": 2.671,
+    "typed": 13.686,
+    "sent": 14.083,
+    "result": 32.207,
+    "end": 38.327
+  },
+  "screenshots": {
+    "marketing-workspace": "shots/p1-final-20261018-211441/marketing-workspace.png"
+  },
+  "steps": [
+    {
+      "index": 1,
+      "op": "goto",
+      "desc": "goto /app/",
+      "t_start": 0.003,
+      "t_end": 0.177
+    },
+    {
+      "index": 2,
+      "op": "wait_for",
+      "desc": "wait for role='textbox' name='Message protoAgent\u2026' (visible)",
+      "t_start": 0.177,
+      "t_end": 0.36
+    },
+    {
+      "index": 3,
+      "op": "click",
+      "desc": "click role='button' name='New chat \u2014 Shift+click for incognito (Shift+Enter when focused)' exact",
+      "t_start": 0.36,
+      "t_end": 0.856
+    },
+    {
+      "index": 4,
+      "op": "hold",
+      "desc": "hold 100ms",
+      "t_start": 0.856,
+      "t_end": 0.957
+    },
+    {
+      "index": 5,
+      "op": "hold",
+      "desc": "hold 100ms",
+      "t_start": 0.957,
+      "t_end": 1.058
+    },
+    {
+      "index": 6,
+      "op": "wait_for",
+      "desc": "wait for role='textbox' name='Message protoAgent\u2026' (visible)",
+      "t_start": 1.058,
+      "t_end": 1.068
+    },
+    {
+      "index": 7,
+      "op": "mark",
+      "desc": "mark start",
+      "t_start": 1.068,
+      "t_end": 1.068
+    },
+    {
+      "index": 8,
+      "op": "hold",
+      "desc": "hold 1200ms",
+      "t_start": 1.068,
+      "t_end": 2.271
+    },
+    {
+      "index": 9,
+      "op": "upload",
+      "desc": "upload protoagent-public-readme.md via role='button' name='Attach files'",
+      "t_start": 2.271,
+      "t_end": 2.666
+    },
+    {
+      "index": 10,
+      "op": "wait_for",
+      "desc": "wait for text='protoagent-public-readme.md' (visible)",
+      "t_start": 2.666,
+      "t_end": 2.671
+    },
+    {
+      "index": 11,
+      "op": "mark",
+      "desc": "mark attached",
+      "t_start": 2.671,
+      "t_end": 2.671
+    },
+    {
+      "index": 12,
+      "op": "hold",
+      "desc": "hold 2000ms",
+      "t_start": 2.671,
+      "t_end": 4.672
+    },
+    {
+      "index": 13,
+      "op": "type",
+      "desc": "type 252 chars into role='textbox' name='Message protoAgent\u2026'",
+      "t_start": 4.672,
+      "t_end": 13.686
+    },
+    {
+      "index": 14,
+      "op": "mark",
+      "desc": "mark typed",
+      "t_start": 13.686,
+      "t_end": 13.686
+    },
+    {
+      "index": 15,
+      "op": "click",
+      "desc": "click role='button' name='Send' exact",
+      "t_start": 13.686,
+      "t_end": 14.083
+    },
+    {
+      "index": 16,
+      "op": "mark",
+      "desc": "mark sent",
+      "t_start": 14.083,
+      "t_end": 14.083
+    },
+    {
+      "index": 17,
+      "op": "mouse_move",
+      "desc": "move the pointer to (700, 840)",
+      "t_start": 14.083,
+      "t_end": 14.097
+    },
+    {
+      "index": 18,
+      "op": "wait_for",
+      "desc": "wait for role='button' name='Setup summary \u00b7 v1 file' exact (visible) (timeout 180000ms)",
+      "t_start": 14.097,
+      "t_end": 27.53
+    },
+    {
+      "index": 19,
+      "op": "click",
+      "desc": "click role='button' name='Setup summary \u00b7 v1 file' exact",
+      "t_start": 27.53,
+      "t_end": 27.902
+    },
+    {
+      "index": 20,
+      "op": "wait_for",
+      "desc": "wait for role='button' name='Copy' exact (visible) (timeout 90000ms)",
+      "t_start": 27.902,
+      "t_end": 32.207
+    },
+    {
+      "index": 21,
+      "op": "mark",
+      "desc": "mark result",
+      "t_start": 32.207,
+      "t_end": 32.207
+    },
+    {
+      "index": 22,
+      "op": "hold",
+      "desc": "hold 6000ms",
+      "t_start": 32.207,
+      "t_end": 38.208
+    },
+    {
+      "index": 23,
+      "op": "screenshot",
+      "desc": "screenshot marketing-workspace",
+      "t_start": 38.208,
+      "t_end": 38.327
+    },
+    {
+      "index": 24,
+      "op": "mark",
+      "desc": "mark end",
+      "t_start": 38.327,
+      "t_end": 38.327
+    }
+  ],
+  "error": "",
+  "failed_step": 0
+}

@@ -1,0 +1,76 @@
+{
+  "name": "memory-inspection",
+  "base_url": "http://127.0.0.1:8920",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "device_scale_factor": 2,
+  "color_scheme": "dark",
+  "timezone_id": "UTC",
+  "locale": "en-US",
+  "redact": {
+    "presets": [
+      "home_paths",
+      "emails",
+      "secrets"
+    ]
+  },
+  "storage": {
+    "local": {
+      "protoagent.ui": {
+        "state": {
+          "surface": "memory",
+          "rightCollapsed": true,
+          "leftCollapsed": false
+        },
+        "version": 14
+      }
+    }
+  },
+  "steps": [
+    {
+      "goto": "/app/"
+    },
+    {
+      "wait_for": {
+        "role": "heading",
+        "name": "Memory",
+        "exact": true
+      }
+    },
+    {
+      "click": {
+        "role": "tab",
+        "name": "Injections",
+        "exact": true
+      }
+    },
+    {
+      "wait_for": {
+        "role": "button",
+        "name": "used 1 memory"
+      }
+    },
+    {
+      "click": {
+        "role": "button",
+        "name": "used 1 memory"
+      }
+    },
+    {
+      "wait_for": {
+        "role": "dialog",
+        "name": "What this turn used"
+      }
+    },
+    {
+      "hold": 1500
+    },
+    {
+      "screenshot": {
+        "name": "marketing-memory"
+      }
+    }
+  ]
+}
