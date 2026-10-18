@@ -26,12 +26,13 @@
                                                       │ chat completions
                                                       ▼
                                             ┌──────────────────┐
-                                            │  LiteLLM gateway │
-                                            │  (OpenAI-compat) │
+                                            │ Model connection │
+                                            │ (native or HTTP) │
                                             └──────────────────┘
 ```
 
-Each arrow is a deliberate boundary.
+Each arrow is a deliberate boundary. The configured [model connection](/guides/model-connections)
+can use a native provider or an OpenAI-compatible endpoint; a LiteLLM gateway is optional.
 
 ## Why A2A handler is its own layer
 
