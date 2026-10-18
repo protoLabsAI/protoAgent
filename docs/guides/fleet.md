@@ -17,6 +17,10 @@ The console creates the workspace and carries the hub's model configuration by
 default. If the agent cannot start, inspect the roster's error and verify its
 model connection and required tools.
 
+<!-- docs-media: fleet-create-result -->
+
+<!-- /docs-media -->
+
 ## Quick start
 
 For an installed package with a running hub:

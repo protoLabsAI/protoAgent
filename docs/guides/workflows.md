@@ -17,6 +17,10 @@ Use one for a repeatable process such as research → review → write a brief.
 The plugin supplies the tools, API, and console surface. `workflows.enabled`
 is not an enable switch; use `plugins.enabled`.
 
+<!-- docs-media: workflow-gate -->
+
+<!-- /docs-media -->
+
 ## Skills vs Workflows
 
 A [skill](/guides/skills) supplies instructions the model can follow. A workflow

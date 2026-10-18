@@ -141,6 +141,10 @@ All terminal states fire push notifications (if configured). Terminal tasks are 
 
 **Restart survives.** Tasks are persisted to an instance-scoped SQLite `a2a-tasks.db` (push configs to `a2a-push.db`) via the SDK's `DatabaseTaskStore`. On boot, `reconcile_interrupted_tasks` flips tasks stranded in `SUBMITTED`/`WORKING` to failed — while deliberately **preserving** `INPUT_REQUIRED` and `AUTH_REQUIRED`, because those are waiting on a human, not on a dead process.
 
+<!-- docs-media: a2a-task-lifecycle -->
+
+<!-- /docs-media -->
+
 ## Trace propagation — not in the spec
 
 The template reads `params.metadata["a2a.trace"]` on incoming requests:

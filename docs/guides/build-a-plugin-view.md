@@ -20,6 +20,10 @@ open the Chat surface to see the plugin's greeting and composer. The example
 claims the chat slot; a normal view adds a rail icon instead. If it does not load,
 check the plugin status, server log, and browser console for errors.
 
+<!-- docs-media: plugin-view-result -->
+
+<!-- /docs-media -->
+
 ## The four rules
 
 1. **Serve the path you declare** — the manifest's `views[].path` MUST equal a path your

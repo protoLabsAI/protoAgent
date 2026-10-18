@@ -18,9 +18,10 @@ from langchain_core.tools import tool
 
 from pathlib import Path
 
-from .corpus import grouped_tree, read_doc, set_docs_root
+from .corpus import grouped_tree, is_custom_root, read_doc, set_docs_root
 from .docs_index import DocsIndex
 from .render import render_markdown
+from .media import media_file
 
 log = logging.getLogger("protoagent.plugins.docs")
 
@@ -87,9 +88,16 @@ def _build_view_router():
     carry a bearer). One mode-adaptive page: full tree+reader on the rail, search-first in
     the ⌘K palette (``?mode=search``). It fetches its data from the gated router below."""
     from fastapi import APIRouter
-    from fastapi.responses import HTMLResponse
+    from fastapi.responses import FileResponse, HTMLResponse, Response
 
     router = APIRouter()
+
+    @router.get("/media/{name:path}")
+    async def _media(name: str):
+        path = media_file(name)
+        if path is None:
+            return Response(status_code=404)
+        return FileResponse(path, headers={"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"})
 
     @router.get("/view")
     async def _view():
@@ -122,7 +130,7 @@ def _build_data_router():
         md = read_doc(path)
         if md is None:
             return JSONResponse({"error": "not found"}, status_code=404)
-        out = {"path": path, "title": _title_from_md(md, path), "html": render_markdown(md)}
+        out = {"path": path, "title": _title_from_md(md, path), "html": render_markdown(md, bundled_media=not is_custom_root())}
         if raw:
             # The view's "Copy as markdown" context action (#3030). Opt-in, so the reader
             # path — which only ever renders the HTML — doesn't carry every doc twice.

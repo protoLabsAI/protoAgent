@@ -28,6 +28,10 @@ inside ordinary message text does not direct the message to that participant.
 If the first name is unknown, the chat shows the available delegates. Check the
 spelling against that list.
 
+<!-- docs-media: delegate-room-round -->
+
+<!-- /docs-media -->
+
 ## Continue the discussion {#multi-round-rooms}
 
 With several addressees, the same participants can reply for up to **three

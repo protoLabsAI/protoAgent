@@ -124,3 +124,7 @@ schedule that follow-up turn.
 
 Design history: [ADR 0067](/adr/0067-standalone-watch-primitive) and
 [ADR 0079](/adr/0079-autonomous-operating-model).
+
+<!-- docs-media: watch-goal-schedule -->
+
+<!-- /docs-media -->

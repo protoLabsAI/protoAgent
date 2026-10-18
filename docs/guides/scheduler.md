@@ -20,6 +20,10 @@ Recurring runs do not inherit the conversation that created them. An agent-tool
 one-shot resumes its originating session; jobs created outside chat normally
 run in Activity.
 
+<!-- docs-media: schedule-state -->
+
+<!-- /docs-media -->
+
 ## Scheduling tools
 
 | Tool | Purpose |

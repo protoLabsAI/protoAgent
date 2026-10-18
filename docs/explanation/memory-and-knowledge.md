@@ -19,6 +19,10 @@ to work with. [Adding a knowledge source](/guides/ingestion) keeps reference
 material for later recall. A work-folder file and a downloaded artifact are
 separate copies; neither is a complete backup of the agent.
 
+<!-- docs-media: memory-lifecycle -->
+
+<!-- /docs-media -->
+
 ## Why an answer used—or missed—a source
 
 Automatic context includes selected past sessions, standing memory, and retrieved

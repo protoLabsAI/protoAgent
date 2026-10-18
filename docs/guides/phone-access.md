@@ -37,6 +37,10 @@ change took effect after restart, and the phone can reach the displayed address.
 On Wi-Fi, guest-network isolation or a firewall can block the connection. If it
 loads but rejects a token, pair again or supply a valid operator token.
 
+<!-- docs-media: phone-pairing -->
+
+<!-- /docs-media -->
+
 ## 3. Add to Home Screen {#_3-add-to-home-screen}
 
 Once the console opens, use the phone browser's **Add to Home Screen** action:

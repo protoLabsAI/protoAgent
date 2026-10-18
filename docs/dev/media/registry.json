@@ -1,0 +1,1357 @@
+{
+  "version": 1,
+  "baseline": "99bc8ac4a7f0b177fa273b6e507a895a075e7ba3",
+  "pages": {
+    "guides/get-started.md": {
+      "journey": "start",
+      "decision": "text",
+      "reason": "Task chooser already supports scanning; avoid decorative screenshots that compete with navigation."
+    },
+    "tutorials/first-agent.md": {
+      "journey": "start",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/windows-desktop.md": {
+      "journey": "start",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/use-protoagent.md": {
+      "journey": "use",
+      "decision": "text",
+      "reason": "Task chooser already supports scanning; avoid decorative screenshots that compete with navigation."
+    },
+    "guides/react-tauri-ui.md": {
+      "journey": "use",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/model-connections.md": {
+      "journey": "use",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/command-palette.md": {
+      "journey": "use",
+      "decision": "reuse",
+      "reason": "Reuse the app-layout orientation through its existing app-guide link; a dedicated palette interaction is a later candidate if navigation still causes confusion."
+    },
+    "guides/documents-and-files.md": {
+      "journey": "use",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/python-runtime.md": {
+      "journey": "use",
+      "decision": "reuse",
+      "reason": "Keep platform-specific install/recovery text; file workflow visuals belong in documents-and-files rather than repeating them here."
+    },
+    "guides/manage-memory.md": {
+      "journey": "use",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/ingestion.md": {
+      "journey": "use",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/knowledge.md": {
+      "journey": "use",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/plugin-registry.md": {
+      "journey": "use",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/mcp.md": {
+      "journey": "use",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/discord.md": {
+      "journey": "use",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/browser-automation.md": {
+      "journey": "use",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/phone-access.md": {
+      "journey": "use",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/pairing.md": {
+      "journey": "use",
+      "decision": "reuse",
+      "reason": "Reuse phone-pairing in the canonical phone-access guide; do not create a second QR walkthrough."
+    },
+    "guides/agent-snapshots.md": {
+      "journey": "use",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/backup-and-restore.md": {
+      "journey": "use",
+      "decision": "reuse",
+      "reason": "Link the box-instance-paths diagram for locations; backup commands and restore verification remain copyable text."
+    },
+    "guides/troubleshooting.md": {
+      "journey": "use",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/file-github-issues.md": {
+      "journey": "use",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/friction-log.md": {
+      "journey": "use",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "explanation/steering.md": {
+      "journey": "use",
+      "decision": "text",
+      "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
+    },
+    "explanation/memory-and-knowledge.md": {
+      "journey": "use",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/automate-work.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "Task chooser already supports scanning; avoid decorative screenshots that compete with navigation."
+    },
+    "tutorials/first-skill.md": {
+      "journey": "automate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "tutorials/two-agents-over-a2a.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/skills.md": {
+      "journey": "automate",
+      "decision": "reuse",
+      "reason": "Reuse skill-create-run in the first-skill tutorial; keep the full guide focused on behavior and configuration."
+    },
+    "guides/scheduler.md": {
+      "journey": "automate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/watches.md": {
+      "journey": "automate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/goal-mode.md": {
+      "journey": "automate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/lifecycle-events.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/delegates.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/coding-agents.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/rooms.md": {
+      "journey": "automate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/subagents.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/workflows.md": {
+      "journey": "automate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/coder.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/discord-peer-channels.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/portfolio.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/build-with-a-coding-agent.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "explanation/rooms.md": {
+      "journey": "automate",
+      "decision": "text",
+      "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
+    },
+    "explanation/a2a-protocol.md": {
+      "journey": "automate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/extend.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "Task chooser already supports scanning; avoid decorative screenshots that compete with navigation."
+    },
+    "tutorials/first-plugin.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "tutorials/first-tool.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/plugins.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/build-a-plugin-view.md": {
+      "journey": "build",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/building-react-plugin-views.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/communication-plugins.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/publish-a-plugin.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/bundles.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/middleware.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/add-a-skill.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/build-console.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/developer-flags.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/fork-the-template.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/customize-and-deploy.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/operator-fork.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/upstream-sync.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/evals.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/releasing.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "explanation/plugin-architecture.md": {
+      "journey": "build",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "explanation/architecture.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
+    },
+    "explanation/prompt-contracts.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
+    },
+    "explanation/output-protocol.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
+    },
+    "guides/deploy-and-operate.md": {
+      "journey": "operate",
+      "decision": "reuse",
+      "reason": "Route to deployment-topology in the headless guide; keep this generated chooser compact."
+    },
+    "guides/cli.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/headless.md": {
+      "journey": "operate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/deploy-docker.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/deploy-proxmox.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/deploy.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/multi-instance.md": {
+      "journey": "operate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/fleet.md": {
+      "journey": "operate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/fleet-deck.md": {
+      "journey": "operate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/operating-a-fleet.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/pair-an-agent.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/sandboxing.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "guides/exposing-protoagent.md": {
+      "journey": "operate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/observability.md": {
+      "journey": "operate",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "guides/model-concurrency.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
+    },
+    "explanation/litellm-gateway.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
+    },
+    "explanation/security-and-trust.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
+    },
+    "explanation/network-egress.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
+    },
+    "explanation/cost-and-trace.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
+    },
+    "explanation/tuning-and-cost.md": {
+      "journey": "operate",
+      "decision": "text",
+      "reason": "Retain the current explanation for this pass; add a diagram only for a specific relationship that remains hard to follow."
+    },
+    "reference/index.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Task chooser already supports scanning; avoid decorative screenshots that compete with navigation."
+    },
+    "reference/configuration.md": {
+      "journey": "reference",
+      "decision": "media",
+      "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
+    },
+    "reference/environment-variables.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/skills.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/knowledge.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/agent-snapshots.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/starter-tools.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/ingestion.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/memory-delivery.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/browser-automation.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/discord.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/friction.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/operator-api.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/automation.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/a2a-endpoints.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/a2a-conformance.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/agent-card.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/extensions.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/mcp.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/plugin-manifest.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/plugin-registry-api.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/plugin-sdk-api.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/plugin-testkit.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/plugin-cli.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/plugin-view-bridge.md": {
+      "journey": "reference",
+      "decision": "reuse",
+      "reason": "Reuse plugin-boundaries in the architecture explanation; wire payloads stay searchable text."
+    },
+    "reference/plugin-events.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/plugin-coding-agent.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "reference/command-palette.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    }
+  },
+  "media": {
+    "setup-model-test": {
+      "priority": "P1",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Recognize a successful model test before finishing setup.",
+      "brief": "Capture the Brain step with a named demo connection, selected model, and successful Test connection result. Crop to the wizard; use dummy credentials. Do not imply Probe is a completion test.",
+      "alt": "Recognize a successful model test before finishing setup.",
+      "caption": "Recognize a successful model test before finishing setup.",
+      "placements": [
+        {
+          "page": "tutorials/first-agent.md",
+          "heading": "## 3. Connect a model"
+        }
+      ],
+      "watch": [
+        "apps/web/src/setup/SetupWizard.tsx",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "first-reply": {
+      "priority": "P1",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Show the observable endpoint of onboarding.",
+      "brief": "Capture a clean chat with the exact one-sentence hello prompt and one reply. No plugins or unrelated panels; make the composer and active agent visible.",
+      "alt": "Show the observable endpoint of onboarding.",
+      "caption": "Show the observable endpoint of onboarding.",
+      "placements": [
+        {
+          "page": "tutorials/first-agent.md",
+          "heading": "## 4. Finish and chat"
+        }
+      ],
+      "watch": [
+        "apps/web/src/chat",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "app-layout": {
+      "priority": "P1",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Locate the rail, conversation tabs, composer, and tool result.",
+      "brief": "Annotated still with four numbered callouts matching the nearby guide. Use a modest window size with legible labels. Keep annotation source separate from the export.",
+      "alt": "Locate the rail, conversation tabs, composer, and tool result.",
+      "caption": "Locate the rail, conversation tabs, composer, and tool result.",
+      "placements": [
+        {
+          "page": "guides/react-tauri-ui.md",
+          "heading": "## Layout"
+        }
+      ],
+      "watch": [
+        "apps/web/src/app",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "model-select-and-test": {
+      "priority": "P1",
+      "kind": "video",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Distinguish adding a connection, testing its model list, and selecting the primary model.",
+      "brief": "A 20\u201340 second silent capture: add a demo endpoint, Test, choose Primary model, Save & apply, send a short chat. Hold each success state. Supply a poster and numbered text walkthrough.",
+      "alt": "Distinguish adding a connection, testing its model list, and selecting the primary model.",
+      "caption": "Distinguish adding a connection, testing its model list, and selecting the primary model.",
+      "placements": [
+        {
+          "page": "guides/model-connections.md",
+          "heading": "## Add a gateway or local endpoint"
+        }
+      ],
+      "watch": [
+        "apps/web/src/settings",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "attach-and-download": {
+      "priority": "P1",
+      "kind": "video",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Show the difference between an input attachment and a downloadable output.",
+      "brief": "Two short scenes in one 20\u201340 second silent clip: attach a small public sample and ask about it; request a document and download its artifact. Use a poster with both states and a text walkthrough.",
+      "alt": "Show the difference between an input attachment and a downloadable output.",
+      "caption": "Show the difference between an input attachment and a downloadable output.",
+      "placements": [
+        {
+          "page": "guides/documents-and-files.md",
+          "heading": "## Attach a file and ask a question"
+        }
+      ],
+      "watch": [
+        "apps/web/src/chat",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "memory-inspector": {
+      "priority": "P1",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Help readers find the evidence behind a reply.",
+      "brief": "Capture an expanded turn memory inspector with synthetic facts and a visible source. Annotate the route and one source entry; avoid exposing real conversations.",
+      "alt": "Help readers find the evidence behind a reply.",
+      "caption": "Help readers find the evidence behind a reply.",
+      "placements": [
+        {
+          "page": "guides/manage-memory.md",
+          "heading": "## See what the agent used {#inspect-a-turn}"
+        }
+      ],
+      "watch": [
+        "apps/web/src/memory",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "knowledge-import-result": {
+      "priority": "P1",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Show what successful ingestion and later retrieval look like.",
+      "brief": "A two-panel still: import a public sample into Knowledge \u2192 Store, then show its title in search results. Include the completion state; no embedding requirement implied.",
+      "alt": "Show what successful ingestion and later retrieval look like.",
+      "caption": "Show what successful ingestion and later retrieval look like.",
+      "placements": [
+        {
+          "page": "guides/ingestion.md",
+          "heading": "## From the console"
+        }
+      ],
+      "watch": [
+        "apps/web/src/knowledge",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "plugin-install-result": {
+      "priority": "P1",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Recognize installation status and the enabled plugin.",
+      "brief": "Review docs/public/readme/install-plugin.webp as a reuse candidate. Recapture if controls differ. Show a first-party sample plugin installed and enabled, with dependency/restart state visible.",
+      "alt": "Recognize installation status and the enabled plugin.",
+      "caption": "Recognize installation status and the enabled plugin.",
+      "placements": [
+        {
+          "page": "guides/plugin-registry.md",
+          "heading": "## Install one"
+        }
+      ],
+      "watch": [
+        "apps/web/src/plugins",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "mcp-connect-test": {
+      "priority": "P1",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Locate the MCP connection controls and success state.",
+      "brief": "Capture Settings \u2192 MCP with a harmless demo server, connected status, and discovered tools. A second crop may show Add server. Never include environment secrets.",
+      "alt": "Locate the MCP connection controls and success state.",
+      "caption": "Locate the MCP connection controls and success state.",
+      "placements": [
+        {
+          "page": "guides/mcp.md",
+          "heading": "## Add a server"
+        }
+      ],
+      "watch": [
+        "apps/web/src/app/McpPanel.tsx",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "browser-control": {
+      "priority": "P2",
+      "kind": "video",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Show when the agent acts and when the user can intervene.",
+      "brief": "A 20\u201340 second silent demo on a public example page: open Browser, request navigation, intervene manually, save a screenshot. Exclude real logins; show capture expiry text if visible.",
+      "alt": "Show when the agent acts and when the user can intervene.",
+      "caption": "Show when the agent acts and when the user can intervene.",
+      "placements": [
+        {
+          "page": "guides/browser-automation.md",
+          "heading": "## Interact with a page"
+        }
+      ],
+      "watch": [
+        "plugins/agent_browser"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "phone-pairing": {
+      "priority": "P2",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Show the desktop-to-phone handoff without making a usable credential public.",
+      "brief": "Two-panel capture of Devices and the connected phone. Replace the QR/token area with an explicit non-scannable DEMO block in the editable source. Show reachable URL shape without real addresses.",
+      "alt": "Show the desktop-to-phone handoff without making a usable credential public.",
+      "caption": "Show the desktop-to-phone handoff without making a usable credential public.",
+      "placements": [
+        {
+          "page": "guides/phone-access.md",
+          "heading": "## 2. Open it on the phone {#_2-reach-it-from-the-phone}"
+        }
+      ],
+      "watch": [
+        "apps/web/src/settings/DevicesPanel.tsx",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "memory-lifecycle": {
+      "priority": "P2",
+      "kind": "diagram",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Explain attachment, stored knowledge, and recalled context as different lifetimes.",
+      "brief": "Draw three clearly labelled paths: attachment \u2192 current chat; ingest \u2192 saved store \u2192 retrieval; memory \u2192 later turns. Include inspect/edit/delete actions and retain the prose as the full explanation. Export SVG from an editable diagram source.",
+      "alt": "Explain attachment, stored knowledge, and recalled context as different lifetimes.",
+      "caption": "Explain attachment, stored knowledge, and recalled context as different lifetimes.",
+      "placements": [
+        {
+          "page": "explanation/memory-and-knowledge.md",
+          "heading": "## What the agent remembers"
+        }
+      ],
+      "watch": [
+        "src/knowledge"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "skill-create-run": {
+      "priority": "P1",
+      "kind": "video",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Make the first app-authored skill concrete.",
+      "brief": "A 20\u201340 second silent clip creating the tutorial skill in Settings \u2192 Skills, saving it, then invoking its slash name in chat. Poster shows the saved skill; transcript includes its short text.",
+      "alt": "Make the first app-authored skill concrete.",
+      "caption": "Make the first app-authored skill concrete.",
+      "placements": [
+        {
+          "page": "tutorials/first-skill.md",
+          "heading": "## 1. Create the skill"
+        }
+      ],
+      "watch": [
+        "apps/web/src/settings",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "schedule-state": {
+      "priority": "P1",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Recognize a saved schedule and its next firing time.",
+      "brief": "Capture a synthetic one-time task in the Schedule view with timezone, enabled state, and next run visible. Add a small second crop showing the Activity result; use fixed sample dates.",
+      "alt": "Recognize a saved schedule and its next firing time.",
+      "caption": "Recognize a saved schedule and its next firing time.",
+      "placements": [
+        {
+          "page": "guides/scheduler.md",
+          "heading": "## Manage from the console"
+        }
+      ],
+      "watch": [
+        "apps/web/src/schedule",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "goal-progress": {
+      "priority": "P1",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Identify progress, verifier evidence, and the stop/extend controls.",
+      "brief": "Capture a demo goal with iteration timeline, verifier result, and Add iterations control visible. Use harmless sample work and a clear running or completed state, never a fabricated pass.",
+      "alt": "Identify progress, verifier evidence, and the stop/extend controls.",
+      "caption": "Identify progress, verifier evidence, and the stop/extend controls.",
+      "placements": [
+        {
+          "page": "guides/goal-mode.md",
+          "heading": "## Manage from the console"
+        }
+      ],
+      "watch": [
+        "apps/web/src/app/GoalsPanel.tsx",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "watch-goal-schedule": {
+      "priority": "P2",
+      "kind": "diagram",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Explain the different triggers and stopping conditions.",
+      "brief": "Three short lanes: scheduled time \u2192 run; watch condition \u2192 notify/act; goal \u2192 work/verify/repeat until stop. Label missed-fire and iteration limits by linking text rather than packing config into the drawing.",
+      "alt": "Explain the different triggers and stopping conditions.",
+      "caption": "Explain the different triggers and stopping conditions.",
+      "placements": [
+        {
+          "page": "guides/watches.md",
+          "heading": "## Watch vs goal \u2014 which?"
+        }
+      ],
+      "watch": [
+        "src/scheduler"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "delegate-room-round": {
+      "priority": "P2",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Recognize participant selection and replies from different agents.",
+      "brief": "Capture a room with two synthetic delegates and one completed round. Annotate member picker, broadcast/send behavior, and author labels. Exclude long output.",
+      "alt": "Recognize participant selection and replies from different agents.",
+      "caption": "Recognize participant selection and replies from different agents.",
+      "placements": [
+        {
+          "page": "guides/rooms.md",
+          "heading": "## Set up and send a message {#what-name-does}"
+        }
+      ],
+      "watch": [
+        "apps/web/src/chat",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "workflow-gate": {
+      "priority": "P2",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Show where a workflow waits for a human decision.",
+      "brief": "Capture a demo recipe paused at an approval gate with preceding step result and approve/reject controls. Caption that the workflow has not advanced yet.",
+      "alt": "Show where a workflow waits for a human decision.",
+      "caption": "Show where a workflow waits for a human decision.",
+      "placements": [
+        {
+          "page": "guides/workflows.md",
+          "heading": "## Run one (the short path)"
+        }
+      ],
+      "watch": [
+        "apps/web/src",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "plugin-view-result": {
+      "priority": "P2",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Give builders a concrete success state for the quickstart.",
+      "brief": "Capture the bundled chat_example plugin in the rail, with its rendered page and one functioning interaction. Keep the example code editable in the existing source.",
+      "alt": "Give builders a concrete success state for the quickstart.",
+      "caption": "Give builders a concrete success state for the quickstart.",
+      "placements": [
+        {
+          "page": "guides/build-a-plugin-view.md",
+          "heading": "## Copy the example"
+        }
+      ],
+      "watch": [
+        "plugins"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "plugin-boundaries": {
+      "priority": "P2",
+      "kind": "diagram",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Explain the plugin boundary and supported communication paths.",
+      "brief": "Show host, registry, plugin tool/router/view, event bus, and optional service calls. Mark public iframe page vs authenticated data API. Do not imply the event bus is the only inter-plugin path.",
+      "alt": "Explain the plugin boundary and supported communication paths.",
+      "caption": "Explain the plugin boundary and supported communication paths.",
+      "placements": [
+        {
+          "page": "explanation/plugin-architecture.md",
+          "heading": "## Two planes, two trust levels"
+        }
+      ],
+      "watch": [
+        "src/graph/plugins"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "deployment-topology": {
+      "priority": "P2",
+      "kind": "diagram",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Help operators choose a topology and understand browser versus server location.",
+      "brief": "Compare desktop/local service, Docker host, and remote host with an authenticated access boundary. Draw model connection as native OR HTTP endpoint; storage sits beside the server, not the browser.",
+      "alt": "Help operators choose a topology and understand browser versus server location.",
+      "caption": "Help operators choose a topology and understand browser versus server location.",
+      "placements": [
+        {
+          "page": "guides/headless.md",
+          "heading": "# Run headless (API + A2A, no UI)"
+        }
+      ],
+      "watch": [
+        "src/infra/paths.py"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "box-instance-paths": {
+      "priority": "P1",
+      "kind": "diagram",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Explain what is shared and what is isolated across instances.",
+      "brief": "Draw one box root containing host config and two named instance roots, each with private config/stores/workspace. Show optional commons separately. Use exact path names from infra.paths and the guide.",
+      "alt": "Explain what is shared and what is isolated across instances.",
+      "caption": "Explain what is shared and what is isolated across instances.",
+      "placements": [
+        {
+          "page": "guides/multi-instance.md",
+          "heading": "## Choose explicit roots"
+        }
+      ],
+      "watch": [
+        "src/infra/paths.py"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "fleet-create-result": {
+      "priority": "P2",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Recognize a newly created, reachable fleet member.",
+      "brief": "Capture the Create agent flow result with two demo agents and a successful first reply from the new member. Label active member; do not expose real machine names.",
+      "alt": "Recognize a newly created, reachable fleet member.",
+      "caption": "Recognize a newly created, reachable fleet member.",
+      "placements": [
+        {
+          "page": "guides/fleet.md",
+          "heading": "## Create an agent in the console"
+        }
+      ],
+      "watch": [
+        "apps/web/src",
+        "package-lock.json"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "fleet-deck-overview": {
+      "priority": "P2",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Explain the terminal roster and selected-member details.",
+      "brief": "Capture a fixed-size terminal with two demo members, one healthy and one waiting for input. Annotate roster, detail pane, and key hints; preserve monospaced legibility.",
+      "alt": "Explain the terminal roster and selected-member details.",
+      "caption": "Explain the terminal roster and selected-member details.",
+      "placements": [
+        {
+          "page": "guides/fleet-deck.md",
+          "heading": "## See what the fleet is doing"
+        }
+      ],
+      "watch": [
+        "src/deck"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "exposure-boundaries": {
+      "priority": "P1",
+      "kind": "diagram",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Clarify which network surfaces require authentication before exposure.",
+      "brief": "Draw public internet, proxy/tunnel, operator API, A2A, and public plugin webhooks as separate routes. Label authentication boundaries from current source, not a generic all-traffic-lock icon.",
+      "alt": "Clarify which network surfaces require authentication before exposure.",
+      "caption": "Clarify which network surfaces require authentication before exposure.",
+      "placements": [
+        {
+          "page": "guides/exposing-protoagent.md",
+          "heading": "## The threat model \u2014 know what each surface is"
+        }
+      ],
+      "watch": [
+        "src/security"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "trace-correlation": {
+      "priority": "P3",
+      "kind": "image",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Show what a joined trace looks like during diagnosis.",
+      "brief": "Use synthetic traffic with two agents; capture a local or Langfuse trace view and annotate parent/child correlation. Record backend version. If no working backend is available, keep planned.",
+      "alt": "Show what a joined trace looks like during diagnosis.",
+      "caption": "Show what a joined trace looks like during diagnosis.",
+      "placements": [
+        {
+          "page": "guides/observability.md",
+          "heading": "### Cross-agent trace propagation"
+        }
+      ],
+      "watch": [
+        "src/observability"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "config-precedence": {
+      "priority": "P2",
+      "kind": "diagram",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Make configuration precedence and file locations easier to scan.",
+      "brief": "Draw the actual layers from config explain, with direction of overrides and separate box/instance locations. Keep environment variables and secret values out of the image. Link the field tables for exhaustive detail.",
+      "alt": "Make configuration precedence and file locations easier to scan.",
+      "caption": "Make configuration precedence and file locations easier to scan.",
+      "placements": [
+        {
+          "page": "reference/configuration.md",
+          "heading": "## File locations"
+        }
+      ],
+      "watch": [
+        "src/infra/paths.py",
+        "src/graph/config.py"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    },
+    "a2a-task-lifecycle": {
+      "priority": "P3",
+      "kind": "diagram",
+      "status": "planned",
+      "owner": "Docs maintainers",
+      "purpose": "Visualize task transitions without duplicating the full protocol reference.",
+      "brief": "Replace or accompany the text diagram with an SVG state diagram of the documented states, including input-required and terminal outcomes. Verify transitions against the implementation; retain textual state definitions.",
+      "alt": "Visualize task transitions without duplicating the full protocol reference.",
+      "caption": "Visualize task transitions without duplicating the full protocol reference.",
+      "placements": [
+        {
+          "page": "explanation/a2a-protocol.md",
+          "heading": "## Task lifecycle"
+        }
+      ],
+      "watch": [
+        "src/a2a_impl"
+      ],
+      "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
+      "asset": null,
+      "poster": null,
+      "transcript": null,
+      "source": null,
+      "verified_on": null,
+      "verified_commit": null,
+      "reviewer": null
+    }
+  },
+  "tracker": "https://github.com/protoLabsAI/protoAgent/issues/4332"
+}

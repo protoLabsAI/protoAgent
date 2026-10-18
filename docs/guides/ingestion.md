@@ -26,6 +26,10 @@ required library or media model below, and whether a URL is reachable from the
 agent’s machine. Scanned PDFs may lack extractable text. Remove unwanted imports
 using [Manage memory](/guides/manage-memory#correct-a-memory).
 
+<!-- docs-media: knowledge-import-result -->
+
+<!-- /docs-media -->
+
 ## From the agent
 
 The agent can ingest **on its own** with the `knowledge_ingest(source, domain, title?)`

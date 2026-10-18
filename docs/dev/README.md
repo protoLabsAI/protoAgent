@@ -16,6 +16,12 @@ from the published docs site** (`srcExclude: ["dev/**"]` in
 | `HANDOFF.md` (repo root, **gitignored**) | Live local scratchpad for the *current* session. | Just you, this machine |
 | `~/.claude/.../memory/` | The agent's cross-session memory (private, auto-loaded). | The agent |
 
+## Documentation media
+
+[Media inventory](media-audit.md) tracks proposed visuals across the docs.
+[Production and refresh workflow](media/README.md) explains stable slots, asset
+review, publishing, and replacement.
+
 ## Historical work
 
 `archive/` holds completed or superseded plans. Public plan URLs remain short

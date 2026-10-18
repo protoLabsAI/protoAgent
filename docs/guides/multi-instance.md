@@ -44,6 +44,10 @@ PROTOAGENT_BOX_ROOT=/tmp/pa-review PROTOAGENT_INSTANCE=review \
 
 A fresh box root has no model connection; configure one before testing chat.
 
+<!-- docs-media: box-instance-paths -->
+
+<!-- /docs-media -->
+
 ## Containers
 
 The bundled entrypoint sets `PROTOAGENT_HOME=/sandbox`. Use a separate data volume

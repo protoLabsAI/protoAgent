@@ -78,6 +78,10 @@ for a local endpoint, confirm its server is running.
 
 For sign-in or connection errors, see [Chat fails](/guides/troubleshooting#chat-fails).
 
+<!-- docs-media: setup-model-test -->
+
+<!-- /docs-media -->
+
 ## 4. Finish and chat
 
 Review your choices and click **Finish**. Once the chat opens, send:
@@ -92,6 +96,10 @@ available, you should see a `current_time` tool call followed by a reply.
 A failed tool does not necessarily mean the model connection failed. Read the
 error in chat, check **Settings → Tools**, and use
 [Troubleshooting](/guides/troubleshooting) for the matching symptom.
+
+<!-- docs-media: first-reply -->
+
+<!-- /docs-media -->
 
 ## Find your configuration
 

@@ -86,6 +86,10 @@ filed in that session's backlog.
 
 For authenticated endpoints, see [Goal API](/reference/automation#goal-api).
 
+<!-- docs-media: goal-progress -->
+
+<!-- /docs-media -->
+
 ## Reacting to a goal
 
 <!-- Preserve links to the former follow-up section. -->

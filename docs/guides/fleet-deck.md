@@ -37,6 +37,10 @@ for you. The hub's own warnings show as a banner above the roster.
 - `s`, `x`, `r` start, stop and restart the selected member; `l` follows its log; `o` opens it
   in the browser console.
 
+<!-- docs-media: fleet-deck-overview -->
+
+<!-- /docs-media -->
+
 ## Talk to a member
 
 `enter` (or `c`) on an online member opens a **conversation**. Your messages and the member's

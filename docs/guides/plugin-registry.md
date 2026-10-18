@@ -22,6 +22,10 @@ If installation fails, keep the error shown by the dialog. Check the repository
 URL, access to it, and the required app version before retrying. Do not reinstall
 repeatedly to fix missing packages; use [Install dependencies](#installing-a-plugin-s-deps-from-the-console).
 
+<!-- docs-media: plugin-install-result -->
+
+<!-- /docs-media -->
+
 ## Enable or disable
 
 In **Settings → Plugins → Installed**, use the plugin's enable toggle. Enabling

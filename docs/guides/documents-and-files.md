@@ -34,6 +34,10 @@ Attaching sends content to the agent's server; relevant content can then go to
 the selected model. For a document collection you want to manage as reference
 material, use [Knowledge → Store → Add source](/guides/ingestion).
 
+<!-- docs-media: attach-and-download -->
+
+<!-- /docs-media -->
+
 ## Create a document
 
 Choose a writable work folder in **Settings → Tools → Filesystem → Work folders**.
