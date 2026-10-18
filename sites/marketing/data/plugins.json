@@ -547,6 +547,22 @@
     }
   },
   {
+    "id": "technical_writer",
+    "name": "Technical Writer",
+    "category": "Engineering",
+    "official": true,
+    "tagline": "Code-grounded docs, guides, and tutorials; section audits, reader paths, media planning, and verified delivery. Prompt-only; off by default.",
+    "adds": [
+      "skill"
+    ],
+    "bundled": true,
+    "enable": "technical_writer",
+    "links": {
+      "source": "https://github.com/protoLabsAI/protoAgent/tree/main/plugins/technical_writer",
+      "docs": "/docs/guides/plugins"
+    }
+  },
+  {
     "id": "cowork",
     "name": "Cowork (document skills)",
     "category": "Productivity",
