@@ -111,3 +111,140 @@ test("loopback-bound: Pair an agent shows the SAME reachability step as the phon
   await expect(step.getByRole("button", { name: "Tailnet · 100.64.0.5" })).toBeVisible();
   await expect(step.getByRole("button", { name: "Wi-Fi · 192.168.5.20" })).toBeVisible();
 });
+
+// ── Device identity (#4336 S3) ────────────────────────────────────────────────────────────
+
+test("rename a device inline; an empty name is refused in place", async ({ page }) => {
+  await openDevices(page);
+  await page.getByRole("button", { name: "Rename Josh's iPhone" }).click();
+  const input = page.getByRole("textbox", { name: "New name for Josh's iPhone" });
+  await expect(input).toHaveValue("Josh's iPhone");
+
+  await input.fill("   ");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Give it a name.");
+
+  const patches = [];
+  page.on("request", (r) => {
+    if (r.method() === "PATCH" && r.url().includes("/api/devices/")) patches.push([r.url(), r.postDataJSON()]);
+  });
+  await input.fill("Kitchen iPad");
+  await input.press("Enter");
+  await expect(page.locator(".subagent-row", { hasText: "Kitchen iPad" })).toBeVisible();
+  await expect(page.locator(".subagent-row", { hasText: "Josh's iPhone" })).toHaveCount(0);
+  expect(patches).toEqual([[expect.stringMatching(/\/api\/devices\/dev-phone1$/), { name: "Kitchen iPad" }]]);
+});
+
+test("Escape cancels a rename without closing Settings", async ({ page }) => {
+  await openDevices(page);
+  await page.getByRole("button", { name: "Rename studio-hub" }).click();
+  const input = page.getByRole("textbox", { name: "New name for studio-hub" });
+  await input.fill("something else");
+  await input.press("Escape");
+  await expect(input).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
+  await expect(page.locator(".subagent-row", { hasText: "studio-hub" })).toBeVisible();
+});
+
+test("this browser's own row is marked; removing it asks first, then signs you out", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("protoagent.deviceToken", "e2e-device-token");
+    window.localStorage.setItem("protoagent.deviceId", "dev-phone1");
+  });
+  await openDevices(page);
+  const mine = page.locator(".subagent-row", { hasText: "Josh's iPhone" });
+  const hub = page.locator(".subagent-row", { hasText: "studio-hub" });
+  await expect(mine.getByText("This device", { exact: true })).toBeVisible();
+  await expect(hub.getByText("This device", { exact: true })).toHaveCount(0);
+
+  const deletes = [];
+  page.on("request", (r) => {
+    if (r.method() === "DELETE") deletes.push(r.url());
+  });
+  await mine.getByRole("button", { name: "Remove Josh's iPhone" }).click();
+  const confirm = mine.getByRole("group", { name: "Remove this device" });
+  await expect(confirm).toContainText("signs you out here");
+  // Asking is not doing: nothing was sent yet, and Keep backs out.
+  expect(deletes).toEqual([]);
+  await confirm.getByRole("button", { name: "Keep" }).click();
+  await expect(confirm).toHaveCount(0);
+
+  await mine.getByRole("button", { name: "Remove Josh's iPhone" }).click();
+  await mine.getByRole("button", { name: "Remove and sign out" }).click();
+  await expect(page.getByRole("dialog", { name: "Authentication required" })).toBeVisible();
+  expect(deletes).toEqual([expect.stringMatching(/\/api\/devices\/dev-phone1$/)]);
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.deviceToken"))).toBeNull();
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.deviceId"))).toBeNull();
+});
+
+test("removing this device keeps you signed in when an operator token is also kept here", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("protoagent.authToken", "e2e-operator-token");
+    window.localStorage.setItem("protoagent.deviceToken", "e2e-device-token");
+    window.localStorage.setItem("protoagent.deviceId", "dev-phone1");
+  });
+  await openDevices(page);
+  const mine = page.locator(".subagent-row", { hasText: "Josh's iPhone" });
+  await mine.getByRole("button", { name: "Remove Josh's iPhone" }).click();
+  await mine.getByRole("button", { name: "Remove and sign out" }).click();
+  await expect(page.getByText("Still connected with this browser's operator token.")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Authentication required" })).toHaveCount(0);
+  await expect(page.locator(".subagent-row", { hasText: "Josh's iPhone" })).toHaveCount(0);
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.authToken"))).toBe("e2e-operator-token");
+});
+
+test("the active badge covers the 5-minute last-seen throttle", async ({ page }) => {
+  const now = Math.floor(Date.now() / 1000);
+  await page.route("**/api/devices", (route) =>
+    route.fulfill({
+      json: {
+        devices: [
+          // Stamped 4 minutes ago: the server won't re-stamp until 5 — this IS in use.
+          { id: "a1", name: "Busy phone", kind: "device", created_at: now - 9000, last_seen_at: now - 240 },
+          { id: "a2", name: "Old tablet", kind: "device", created_at: now - 9000, last_seen_at: now - 3 * 3600, active: false },
+        ],
+      },
+    }),
+  );
+  await openDevices(page);
+  const busy = page.locator(".subagent-row", { hasText: "Busy phone" });
+  await expect(busy.getByText("active", { exact: true })).toBeVisible();
+  await expect(busy).toContainText("in use in the last few minutes");
+  const old = page.locator(".subagent-row", { hasText: "Old tablet" });
+  await expect(old.getByText("active", { exact: true })).toHaveCount(0);
+  await expect(old).toContainText("last seen 3h ago");
+});
+
+test("a #pair= link confirms on the phone and stores the token under its own key", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("protoagent.authToken", "operator-token-on-this-browser"));
+  await page.route("**/api/pairing/claim", (route) =>
+    route.fulfill({ json: { ok: true, token: "fresh-device-token", device: { id: "dev-new", name: "Josh's iPhone", kind: "device" } } }),
+  );
+  await page.goto("/app/#pair=3HV8T-QW6RN", { waitUntil: "load" });
+  await expect(page.getByText("Paired as Josh's iPhone")).toBeVisible();
+  expect(new URL(page.url()).hash).toBe("");
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.deviceToken"))).toBe("fresh-device-token");
+  // The operator token this browser already held is left exactly where it was.
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.authToken"))).toBe("operator-token-on-this-browser");
+});
+
+test("a phone paired before the key split keeps working and is migrated on boot", async ({ page }) => {
+  // Pre-S3 storage: the device token sat in the OPERATOR key, beside its id. The init script
+  // runs before every navigation, so seed it once only.
+  await page.addInitScript(() => {
+    if (window.sessionStorage.getItem("seeded")) return;
+    window.sessionStorage.setItem("seeded", "1");
+    window.localStorage.setItem("protoagent.authToken", "legacy-device-token");
+    window.localStorage.setItem("protoagent.deviceId", "dev-phone1");
+  });
+  const bearers = new Set();
+  page.on("request", (r) => {
+    if (r.url().includes("/api/")) bearers.add(r.headers()["authorization"] || "");
+  });
+  await openDevices(page);
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.deviceToken"))).toBe("legacy-device-token");
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.authToken"))).toBeNull();
+  // Same credential on the wire before and after — nobody was signed out.
+  expect([...bearers].filter(Boolean)).toEqual(["Bearer legacy-device-token"]);
+  await expect(page.locator(".subagent-row", { hasText: "Josh's iPhone" }).getByText("This device", { exact: true })).toBeVisible();
+});

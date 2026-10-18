@@ -10,10 +10,16 @@
  * The same code can also be TYPED (ADR 0087 D3, amended 2026-10-18): a phone that can't scan
  * opens the console, gets the AuthGate, and enters the `XXXXX-XXXXX` code under "Have a
  * pairing code?". Both paths go through `claimPairingCode`, so the token lands in exactly
- * one place, the same strict way. */
+ * one place, the same strict way — its OWN key, `protoagent.deviceToken`, never the
+ * operator's `protoagent.authToken` (#4336 S3, `lib/credentials.ts`).
+ *
+ * A successful claim also leaves a one-shot "paired as <name>" notice (`subscribePaired` /
+ * `takePairedNotice`) for the console to confirm on the phone itself — the operator's screen
+ * learns from its device list, but the phone otherwise just… opened. */
 
 import { AGENT_CODE_LENGTH, formatAgentCode, isCompleteAgentCode, normalizeAgentCode } from "./agentPairing";
-import { writeKey, writeKeyStrict } from "./storage";
+import { apiUrl } from "./api/routing";
+import { storeDeviceCredential } from "./credentials";
 
 /** A pairing code — device or agent — is 10 Crockford chars shown as `XXXXX-XXXXX`. The
  *  shape is shared with agent codes (one minting path server-side), so are the helpers. */
@@ -22,8 +28,32 @@ export const formatPairingCode = formatAgentCode;
 export const normalizePairingCode = normalizeAgentCode;
 export const isCompletePairingCode = isCompleteAgentCode;
 
-const KEY = "protoagent.authToken";
-const DEVICE_KEY = "protoagent.deviceId";
+export { migrateLegacyDeviceToken } from "./credentials";
+
+/** What the phone is told after a successful claim. */
+export type PairedNotice = { id: string; name: string };
+
+let pairedNotice: PairedNotice | null = null;
+const pairedListeners = new Set<() => void>();
+
+/** Subscribe to "a claim just succeeded" (fires once per claim). */
+export function subscribePaired(listener: () => void): () => void {
+  pairedListeners.add(listener);
+  return () => pairedListeners.delete(listener);
+}
+
+/** The pending "paired as …" notice, consumed: a second caller gets null, so one claim
+ *  confirms once even under StrictMode's double effects. */
+export function takePairedNotice(): PairedNotice | null {
+  const n = pairedNotice;
+  pairedNotice = null;
+  return n;
+}
+
+function announcePaired(notice: PairedNotice) {
+  pairedNotice = notice;
+  pairedListeners.forEach((l) => l());
+}
 
 /** Read + immediately erase the `#pair=` code from the URL and history.
  *
@@ -86,13 +116,16 @@ export function describePairingError(res: { status?: number; error: string }): s
 /**
  * Redeem a pairing code for this device's token and store it.
  *
- * Deliberately NOT routed through `lib/api.ts`: that attaches the operator bearer, and this
- * request runs precisely when we don't have one. It is also the one endpoint that must work
- * unauthenticated (ADR 0087 D4).
+ * Deliberately NOT routed through `lib/api.ts`'s `request()`: that attaches the operator
+ * bearer, and this request runs precisely when we don't have one. It is also the one endpoint
+ * that must work unauthenticated (ADR 0087 D4). The URL still goes through `apiUrl`, so a
+ * console served under a hub's per-agent prefix (`/app/agent/<slug>/`) or against an
+ * explicit API base (the desktop shell) claims on the agent that minted the code, not on
+ * whatever origin-root `/api` happens to be.
  */
 export async function claimPairingCode(code: string): Promise<ClaimResult> {
   try {
-    const res = await fetch("/api/pairing/claim", {
+    const res = await fetch(apiUrl("/api/pairing/claim"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code, name: deviceName() }),
@@ -106,8 +139,11 @@ export async function claimPairingCode(code: string): Promise<ClaimResult> {
     }
     // Strict (ADR 0114 D1): a token the browser failed to keep must not report success —
     // the throw lands in the catch below and comes back as { ok: false }.
-    writeKeyStrict("local", KEY, data.token);
-    if (data?.device?.id) writeKey("local", DEVICE_KEY, data.device.id); // informational
+    // Its own key, never the operator's (#4336 S3).
+    const id = typeof data?.device?.id === "string" ? data.device.id : undefined;
+    storeDeviceCredential(data.token, id);
+    const name = typeof data?.device?.name === "string" && data.device.name ? data.device.name : deviceName();
+    announcePaired({ id: id ?? "", name });
 
     return { ok: true };
   } catch (err) {

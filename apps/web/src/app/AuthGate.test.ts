@@ -214,7 +214,9 @@ describe("AuthGate — typed pairing code", () => {
     const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("/api/pairing/claim");
     expect(JSON.parse(String(init.body)).code).toBe("K7QM2-XPA4F");
-    expect(window.localStorage.getItem("protoagent.authToken")).toBe("device-token");
+    // The device's own key (#4336 S3), never the operator's.
+    expect(window.localStorage.getItem("protoagent.deviceToken")).toBe("device-token");
+    expect(window.localStorage.getItem("protoagent.authToken")).toBeNull();
     expect(window.localStorage.getItem("protoagent.deviceId")).toBe("dev9");
     expect(authRequired()).toBe(false);
   });

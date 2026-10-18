@@ -27,6 +27,9 @@ export type PairedDevice = {
   created_at: number;
   last_seen_at: number | null;
   kind?: PairKind;
+  /** Server-computed against its own last-seen write throttle (#4336 S3), so the badge can't
+   *  drift from how often the stamp is refreshed. Absent from older servers. */
+  active?: boolean;
 };
 export type PairingStart =
   | {
@@ -99,6 +102,14 @@ export const runtimeApi = {
    *  would also kill a code of the OTHER kind that another dialog is still showing. */
   pairingCancel(kind: PairKind) {
     return request<{ ok: boolean }>("/api/pairing/cancel", { method: "POST", body: cancelBody(kind) });
+  },
+  /** Rename a paired device (#4336 S3). The server validates (1–64 printable chars) and
+   *  answers a refusal with a `detail` the panel shows as-is. */
+  renameDevice(id: string, name: string) {
+    return request<{ ok: boolean; device: PairedDevice }>(`/api/devices/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: { name },
+    });
   },
   revokeDevice(id: string) {
     return request<{ ok: boolean }>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" });

@@ -299,6 +299,11 @@ test("mobile: AuthGate pairs this phone from a typed code (16px input, 44px targ
   await dialog.getByRole("button", { name: "Pair this device" }).tap();
   await expect(dialog).not.toBeVisible();
   await expect(page.locator(".pl-prompt")).toBeVisible({ timeout: 15_000 });
-  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.authToken"))).toBe(DEVICE_TOKEN);
+  // The phone is TOLD it worked, under the name it now has in the operator's list (#4336 S3).
+  await expect(page.getByText("Paired as iPhone")).toBeVisible();
+  await expect(page.getByText(/Rename or remove it in Settings ▸ Devices/)).toBeVisible();
+  // Its own key, not the operator's (#4336 S3).
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.deviceToken"))).toBe(DEVICE_TOKEN);
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.authToken"))).toBeNull();
   expect(claims.length).toBe(2);
 });

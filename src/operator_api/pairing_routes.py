@@ -6,6 +6,7 @@
                                   ``{"kind": …}`` scopes it to that dialog's kind)
     POST   /api/pairing/claim   → redeem a code for a device token  ← UNAUTHENTICATED
     GET    /api/devices         → list paired devices
+    PATCH  /api/devices/{id}    → rename one (body ``{"name": …}``)
     DELETE /api/devices/{id}    → revoke one
 
 Every route here is behind the ``/api/*`` operator bearer (a2a_impl/auth.py) EXCEPT
@@ -411,6 +412,21 @@ def register_pairing_routes(app, agent_name=None) -> None:
         from security.devices import list_devices
 
         return JSONResponse({"devices": list_devices()})
+
+    @router.patch("/api/devices/{device_id}")
+    async def _rename(device_id: str, request: Request):  # noqa: ANN202
+        from security.devices import rename_device
+
+        body = await _json_body(request)
+        # `detail` alongside `error`: the console's request() surfaces FastAPI's `detail`, so
+        # the operator sees "name must be 64 characters or fewer", not a JSON blob.
+        try:
+            device = rename_device(device_id, body.get("name"))
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc), "detail": str(exc)}, status_code=400)
+        if device is None:
+            return JSONResponse({"ok": False, "error": "unknown device", "detail": "unknown device"}, status_code=404)
+        return JSONResponse({"ok": True, "device": device})
 
     @router.delete("/api/devices/{device_id}")
     async def _revoke(device_id: str):  # noqa: ANN202

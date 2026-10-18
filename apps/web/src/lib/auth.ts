@@ -13,9 +13,10 @@
 // localhost-default + default-deny bearer-gate posture; the real lever beyond localhost is
 // a CSP connect-src egress limit. See docs/guides/deploy-docker.md → "Where the operator
 // token lives".
-import { readKey, removeKeyStrict, writeKeyStrict } from "./storage";
+import { effectiveToken, forgetDeviceCredential, OPERATOR_TOKEN_KEY } from "./credentials";
+import { removeKeyStrict, writeKeyStrict } from "./storage";
 
-const TOKEN_KEY = "protoagent.authToken";
+const TOKEN_KEY = OPERATOR_TOKEN_KEY;
 
 let needed = false;
 const listeners = new Set<() => void>();
@@ -52,10 +53,15 @@ export function clearAuthRequired() {
   emit();
 }
 
-/** Persist the operator bearer (the key api.ts's authToken() reads) and clear the
+/** Persist the operator bearer (the key api.ts's authToken() falls back to) and clear the
  *  prompt. A credential write is STRICT (ADR 0114 D1): when the browser can't keep the
  *  token (full quota, storage disabled) every request would still go out without it, so
- *  this reports the failure and leaves the prompt up instead of pretending it connected. */
+ *  this reports the failure and leaves the prompt up instead of pretending it connected.
+ *
+ *  Also FORGETS a paired-device token (`lib/credentials.ts`). The device token is sent in
+ *  preference to the operator token, so if one is held it is the credential that just
+ *  401'd — leaving it in place would keep shadowing the token being saved, and the gate
+ *  would come straight back. */
 export function saveAuthToken(token: string): { ok: true } | { ok: false; error: string } {
   try {
     const t = token.trim();
@@ -64,6 +70,7 @@ export function saveAuthToken(token: string): { ok: true } | { ok: false; error:
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "could not save the token" };
   }
+  forgetDeviceCredential();
   clearAuthRequired();
   return { ok: true };
 }
@@ -81,7 +88,7 @@ async function tryDesktopSelfAuth(): Promise<void> {
   // Only useful if it differs from what we already sent — otherwise the server rejected
   // this exact token and re-saving it would loop.
   // An unreadable store reads as "" — we just try the shell's token.
-  const existing = readKey("local", TOKEN_KEY) || "";
+  const existing = effectiveToken();
   if (!token || token === existing) return;
   // A token the browser couldn't keep recovers nothing — leave the prompt to say so.
   if (!saveAuthToken(token).ok) return;

@@ -175,7 +175,8 @@ test("a claimed pairing token that cannot be stored shows recovery before the co
   await page.addInitScript(() => {
     const setItem = Storage.prototype.setItem;
     Storage.prototype.setItem = function (key, value) {
-      if (key === "protoagent.authToken") throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+      // The device token's own key (#4336 S3) — what a claim writes strictly.
+      if (key === "protoagent.deviceToken") throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
       return setItem.call(this, key, value);
     };
   });
@@ -183,6 +184,7 @@ test("a claimed pairing token that cannot be stored shows recovery before the co
   await expect(page.getByRole("heading", { name: "Device pairing failed" })).toBeVisible();
   await expect(page.getByText(/request a new pairing code/)).toBeVisible();
   expect(new URL(page.url()).hash).toBe("");
+  expect(await page.evaluate(() => localStorage.getItem("protoagent.deviceToken"))).toBeNull();
   expect(await page.evaluate(() => localStorage.getItem("protoagent.authToken"))).toBeNull();
   await page.getByRole("button", { name: "Continue to console" }).click();
   await expect(page.getByPlaceholder(/Message protoAgent/i)).toBeVisible();

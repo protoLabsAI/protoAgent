@@ -40,6 +40,7 @@ import os
 import secrets
 import threading
 import time
+import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -91,14 +92,59 @@ class Device:
     kind: str = KIND_DEVICE
 
     def public(self) -> dict:
-        """The shape safe to hand the console — everything except the hash."""
+        """The shape safe to hand the console — everything except the hash.
+
+        ``active`` is computed HERE, against the same throttle that writes ``last_seen_at``,
+        so the console's badge can't drift from the write cadence again (it used to test
+        "seen in the last 60 s" against a stamp only refreshed every 300 s, so a phone in
+        constant use showed "active" for one minute in five).
+        """
         return {
             "id": self.id,
             "name": self.name,
             "kind": self.kind,
             "created_at": self.created_at,
             "last_seen_at": self.last_seen_at,
+            "active": is_active(self.last_seen_at),
         }
+
+
+# ── Device names ──────────────────────────────────────────────────────────────────────
+# A name is operator-facing text in a short list, so the rule is "printable, one line,
+# short". Rejected categories: control (Cc), format (Cf — includes the bidi overrides that
+# would let a claimer's name render as something else), unassigned/private-use/surrogate
+# (Cn/Co/Cs) and the line/paragraph separators (Zl/Zp). Everything else — accents, CJK,
+# apostrophes, emoji — is a legitimate thing to call a phone.
+MAX_NAME_LEN = 64
+_BAD_NAME_CATEGORIES = frozenset({"Cc", "Cf", "Cn", "Co", "Cs", "Zl", "Zp"})
+
+
+def _clean_name(raw: str) -> str:
+    """Drop disallowed characters, collapse whitespace runs, trim. May return ``""``."""
+    # Whitespace first (a tab or newline is Cc, but it separated two words), then the rest.
+    spaced = "".join(" " if ch.isspace() else ch for ch in unicodedata.normalize("NFC", raw or ""))
+    kept = "".join(ch for ch in spaced if unicodedata.category(ch) not in _BAD_NAME_CATEGORIES)
+    return " ".join(kept.split())
+
+
+def validate_device_name(raw: object) -> str:
+    """The operator-supplied name for a rename, cleaned — or ``ValueError`` saying why not.
+
+    Strict where `_register` is lenient: a claim name comes from an unauthenticated
+    user-agent sniff and is silently cleaned, but a rename is something the operator TYPED,
+    so an unusable one is refused with a reason rather than quietly altered.
+    """
+    if not isinstance(raw, str):
+        raise ValueError("name must be a string")
+    stripped = raw.strip()
+    if not stripped:
+        raise ValueError("name can't be empty")
+    if any(unicodedata.category(ch) in _BAD_NAME_CATEGORIES for ch in stripped):
+        raise ValueError("name can't contain control or formatting characters")
+    name = _clean_name(stripped)
+    if len(name) > MAX_NAME_LEN:
+        raise ValueError(f"name must be {MAX_NAME_LEN} characters or fewer")
+    return name
 
 
 def _hash(token: str) -> str:
@@ -159,6 +205,24 @@ def list_devices() -> list[dict]:
     return [d.public() for d in _load()]
 
 
+def rename_device(device_id: str, name: object) -> dict | None:
+    """Rename a device; returns its public shape, or None if there's no such device.
+
+    Raises ``ValueError`` (from `validate_device_name`) for an unusable name. Identity only:
+    the token, kind and timestamps are untouched, so the renamed device stays signed in.
+    """
+    clean = validate_device_name(name)
+    with _LOCK:
+        devices = _load()
+        for device in devices:
+            if device.id == device_id:
+                device.name = clean
+                _save(devices)
+                logger.info("[devices] renamed %s", device_id)
+                return device.public()
+    return None
+
+
 def revoke_device(device_id: str) -> bool:
     """Drop a device. Its token stops authenticating on the next request."""
     devices = _load()
@@ -189,7 +253,21 @@ def verify_token(token: str) -> Device | None:
 
 
 # Writing on every request would be a disk write per API call, so last-seen is coarse.
+# Kept at 300 s rather than lowered to match the old 60 s badge: ADR 0121 D5 measures idle
+# expiry against this stamp at DAY granularity, so finer resolution buys nothing there, and
+# every refresh is a full read-modify-rename of devices.json on the request path. The badge
+# follows the throttle instead (`is_active`).
 _LAST_SEEN_THROTTLE_SECONDS = 300
+# A device in continuous use has a stamp at most one throttle window old; the margin covers
+# a request that lands just after the window plus clock skew between list and render.
+ACTIVE_WINDOW_SECONDS = _LAST_SEEN_THROTTLE_SECONDS + 60
+
+
+def is_active(last_seen_at: float | None, now: float | None = None) -> bool:
+    """Was this device used recently enough that its last-seen stamp can't tell us more?"""
+    if not last_seen_at:
+        return False
+    return ((time.time() if now is None else now) - last_seen_at) < ACTIVE_WINDOW_SECONDS
 
 
 def _touch(device_id: str) -> None:
@@ -213,7 +291,9 @@ def _register(name: str, kind: str = KIND_DEVICE) -> tuple[Device, str]:
     token = secrets.token_urlsafe(_TOKEN_BYTES)
     device = Device(
         id=secrets.token_hex(8),
-        name=(name or "").strip()[:64] or ("Unnamed agent" if kind == KIND_AGENT else "Unnamed device"),
+        # Cleaned, not validated: the claimer is unauthenticated and the name is a UA sniff,
+        # so an odd one is repaired rather than failing the pairing.
+        name=_clean_name(name)[:MAX_NAME_LEN].strip() or ("Unnamed agent" if kind == KIND_AGENT else "Unnamed device"),
         token_sha256=_hash(token),
         created_at=time.time(),
         kind=kind,
