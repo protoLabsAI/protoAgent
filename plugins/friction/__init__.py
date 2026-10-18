@@ -1100,8 +1100,19 @@ def _build_router(*, legacy: bool = False):
 
         The view asks this to decide whether to show the Fleet tab. It used to ask
         ``/fleet``, so opening the log (and every live reload after) fanned out to every
-        member's ledger just to reveal a toggle the operator might never press."""
-        members = _fleet_members()
+        member's ledger just to reveal a toggle the operator might never press. A roster
+        that fails to read is a 503, not "no fleet": the view settles on the first answer,
+        so it must not cache a blip."""
+        from fastapi import HTTPException
+
+        try:
+            from graph.fleet.supervisor import list_remotes
+        except Exception:  # noqa: BLE001 — no fleet module: genuinely not a hub
+            return {"is_hub": False, "members": []}
+        try:
+            members = [m for m in list_remotes() if isinstance(m, dict) and m.get("url")]
+        except Exception as exc:  # noqa: BLE001 — surfaced as a retryable failure
+            raise HTTPException(status_code=503, detail="fleet roster unavailable") from exc
         return {
             "is_hub": bool(members),
             "members": [str(m.get("name") or m.get("id") or "") for m in members],

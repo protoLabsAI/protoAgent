@@ -1151,6 +1151,13 @@ def test_the_fleet_roster_answers_without_contacting_a_member(monkeypatch, tmp_p
     monkeypatch.setattr("graph.fleet.supervisor.list_remotes", lambda: [])
     assert client.get("/api/friction/fleet/roster").json() == {"is_hub": False, "members": []}
 
+    def _broken():
+        raise OSError("fleet.json locked")
+
+    # A failed read is retryable, never "no fleet" (the view caches the first answer).
+    monkeypatch.setattr("graph.fleet.supervisor.list_remotes", _broken)
+    assert client.get("/api/friction/fleet/roster").status_code == 503
+
 
 def test_the_view_reveals_the_fleet_tab_from_the_roster_once(monkeypatch):
     from pathlib import Path as _P
