@@ -5,7 +5,9 @@
       {
         "title": "Remote device improvements",
         "detail": "a first-class phone and tablet experience: the mobile console, pairing a device with a code, and reaching your agent from anywhere without fiddling with tokens.",
-        "refs": []
+        "refs": [
+          "#4336"
+        ]
       },
       {
         "title": "Settings, reorganized",
