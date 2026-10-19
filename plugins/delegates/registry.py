@@ -84,6 +84,7 @@ class DelegateRegistry:
         permissions: str | None = None,
         timeout: float | None = None,
         project=None,
+        fresh_session: bool = False,
     ) -> str:
         """Dispatch ``query`` to the named delegate.
 
@@ -91,6 +92,7 @@ class DelegateRegistry:
         lifecycle (ADR 0076); ``resume_task_id`` answers a PARKED a2a task (the
         HITL delegation chain). ``timeout`` overrides the delegate's configured
         timeout for THIS call only (seconds) — ``None`` keeps the configured one.
+        ``fresh_session`` opens a new ACP session, including on a pooled client.
         ``raw=True`` bypasses
         the managed-git lifecycle for programmatic callers that consume the reply as
         DATA (e.g. the coder ladder's candidate generation, ADR 0064) — no branch, no
@@ -202,7 +204,8 @@ class DelegateRegistry:
         ):
             try:
                 reply = await ADAPTERS[d.type].dispatch(
-                    d, query, timeout=timeout, item_id=item_id, resume_task_id=resume_task_id
+                    d, query, timeout=timeout, item_id=item_id, resume_task_id=resume_task_id,
+                    **({"fresh_session": True} if fresh_session and d.type == "acp" else {}),
                 )
             except asyncio.CancelledError:
                 raise

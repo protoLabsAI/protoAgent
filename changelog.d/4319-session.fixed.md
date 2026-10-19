@@ -1,0 +1,1 @@
+- **Fresh ACP background sessions (#4319).** Independent background delegations now open a new session even when reusing a pooled client, while explicit task resumes and foreground/board continuations retain their existing behavior.

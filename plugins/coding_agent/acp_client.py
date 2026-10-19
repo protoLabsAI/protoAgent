@@ -623,12 +623,15 @@ class AcpClient:
 
     # -- lifecycle -----------------------------------------------------------
 
-    async def _ensure_started(self) -> None:
+    async def _ensure_started(self, *, fresh_session: bool = False) -> None:
         """Start the agent for a real dispatch: spawn + ``initialize`` + open the
         session (reattach or new). Idempotent — a no-op when already up, *except* after
-        an abandoned turn, which forces a respawn (see ``_fence_stream``)."""
+        an abandoned turn, which forces a respawn (see ``_fence_stream``), or a
+        fresh-session dispatch, which opens a new conversation on the live process."""
         async with self._start_lock:
             if self._proc is not None and self._proc.returncode is None and not self._stream_fenced:
+                if fresh_session:
+                    await self._open_session(fresh_session=True)
                 return
             if self._stream_fenced:
                 # The last turn was walked away from while the agent was still
@@ -640,7 +643,7 @@ class AcpClient:
                 logger.info("[acp/%s] respawning — the previous turn was abandoned mid-generation", self.name)
                 with contextlib.suppress(Exception):
                     await self.close()
-            await self._start()
+            await self._start(**({"fresh_session": True} if fresh_session else {}))
 
     def _fence_stream(self) -> None:
         """Disown the agent stream the just-abandoned turn was reading (#3040).
@@ -670,7 +673,7 @@ class AcpClient:
                 return
             await self._start(open_session=False)
 
-    async def _start(self, *, open_session: bool = True) -> None:
+    async def _start(self, *, open_session: bool = True, fresh_session: bool = False) -> None:
         if not Path(self.cwd).is_dir():
             raise AcpError(f"workdir does not exist: {self.cwd}")
         # A pooled client that respawns must not report the PREVIOUS process's dying
@@ -726,7 +729,7 @@ class AcpClient:
             # The probe path (handshake) stops here — a liveness check must NOT open a
             # session. A real dispatch opens (reattaches or news) the session.
             if open_session:
-                await self._open_session()
+                await self._open_session(**({"fresh_session": True} if fresh_session else {}))
         except BaseException:
             with contextlib.suppress(Exception):
                 await self.close()
@@ -1515,15 +1518,16 @@ class AcpClient:
             len(self._auth_methods),
         )
 
-    async def _open_session(self) -> None:
+    async def _open_session(self, *, fresh_session: bool = False) -> None:
         """Reattach the persisted session when possible, else start a fresh one.
 
         If a session id was persisted for this launch signature AND the agent
         advertises the ``loadSession`` capability, ``session/load`` reattaches the
         thread (surviving a subprocess crash/restart) instead of losing it to a new
         session. A failed load (expired/unknown id, agent refusal) falls back to a
-        fresh ``session/new`` so a stale id never wedges startup."""
-        persisted = self._read_persisted_session_id()
+        fresh ``session/new`` so a stale id never wedges startup.
+        ``fresh_session=True`` bypasses the persisted id without deleting it."""
+        persisted = None if fresh_session else self._read_persisted_session_id()
         if persisted and self._agent_capabilities.get("loadSession"):
             try:
                 await self._load_session(persisted)
@@ -1638,6 +1642,7 @@ class AcpClient:
         thought_callback: ProgressCallback | None = None,
         plan_callback: PlanCallback | None = None,
         timeout: float = 600.0,
+        fresh_session: bool = False,
     ) -> str:
         """Send one user turn; return the agent's accumulated message text.
 
@@ -1647,6 +1652,9 @@ class AcpClient:
         ``thought_callback`` (``agent_thought_chunk``; falls back to ``progress_callback``)
         as the agent works, and each ``plan`` update (the coder's whole todo list, sanitized)
         to ``plan_callback``. Raises ``AcpError`` on transport/protocol failure.
+
+        ``fresh_session=True`` starts an independent conversation for this turn,
+        bypassing both persisted session loading and in-memory session reuse.
 
         Turns are serialized per client: a concurrent call queues (bounded by its own
         ``timeout``) instead of interleaving prompts into the one session — the per-turn
@@ -1742,6 +1750,7 @@ class AcpClient:
                         thought_callback=thought_callback,
                         plan_callback=plan_callback,
                         timeout=timeout,
+                        **({"fresh_session": True} if fresh_session else {}),
                     )
                 finally:
                     # Read while the lock is still held: these are per-turn instance state,
@@ -2014,6 +2023,7 @@ class AcpClient:
         thought_callback: ProgressCallback | None,
         timeout: float,
         plan_callback: PlanCallback | None = None,
+        fresh_session: bool = False,
     ) -> str:
         # Per-turn state is cleared BEFORE the start attempt, not after it. This client
         # is pooled, and `_ensure_started` raises on every start-failure mode there is —
@@ -2039,7 +2049,8 @@ class AcpClient:
         self._on_thought = thought_callback
         self._on_plan = plan_callback
         try:
-            await self._ensure_started()
+            # Select the session under the turn lock, including for pooled clients.
+            await self._ensure_started(**({"fresh_session": True} if fresh_session else {}))
             # Now — and only now — does this run have a session of its own to be
             # recorded against.
             self._turn_session_id = self._session_id
