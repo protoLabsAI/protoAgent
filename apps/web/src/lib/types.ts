@@ -1296,6 +1296,40 @@ export type ChatMessage = {
    *  strips ephemeral messages at persist time, so a "/btw … saved nowhere" aside
    *  can't reappear from localStorage after a reload and make the promise a lie. */
   ephemeral?: boolean;
+  /** Presentation-only labels for a submitted HITL form response (#4259) — see
+   *  `FormResponseDisplay`. Set on the USER message that resumes an input-required form so the
+   *  bubble renders a compact labeled card (schema titles + option labels) instead of the raw
+   *  resume JSON — which stays this message's `content`, byte-identical, so the server resume
+   *  value, the serialization, and the stored payload are all unchanged. Persisted so the card
+   *  survives reload / session switch; absent on a typed turn, an `ask_human` free-text answer,
+   *  an approval, a plugin composer-form, and any message saved before this shipped (those keep
+   *  their legacy text). */
+  formResponse?: FormResponseDisplay;
+};
+
+// ── HITL form-response display metadata (#4259) ──────────────────────────────────
+// A PRESENTATION-ONLY rendering of a submitted `request_user_input` form, captured at submit
+// time in useHitl from the form's JSON Schema + the operator's answers. It never changes what
+// is sent, serialized, stored, or wired — the canonical resume value stays the message's raw
+// `content` JSON. ChatMessageView renders it as a compact key/value card so the operator sees
+// what they answered (field titles, option labels) rather than the raw JSON.
+export type FormResponseField = {
+  /** The field's schema `title`, or its raw property key when the schema carried none. */
+  label: string;
+  /** The display value: a `oneOf`/`enum` option title, "Yes"/"No" for a boolean, selected
+   *  option titles joined for a multi-select, or an em dash for an empty/skipped answer. */
+  value: string;
+};
+export type FormResponseGroup = {
+  /** A wizard step's title — set only for grouped multi-step forms; absent for a single step. */
+  title?: string;
+  fields: FormResponseField[];
+};
+export type FormResponseDisplay = {
+  /** The form's title (`payload.title`), shown as the card heading when present. */
+  title?: string;
+  /** One group per wizard step (single-step forms yield a single untitled group). */
+  groups: FormResponseGroup[];
 };
 
 // HITL (human-in-the-loop) request surfaced when a turn pauses as input-required
