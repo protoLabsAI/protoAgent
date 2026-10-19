@@ -1352,3 +1352,75 @@ def test_artifact_view_chrome_is_reachable_without_a_bearer(monkeypatch):
         assert c.get("/api/plugins/artifact/current").status_code == 401
     finally:
         auth.set_public_prefixes([])
+
+
+# ── Auth decides on the path the ROUTER dispatches (#4372) ───────────────────
+#
+# ``request.url.path`` is not ``scope["path"]``: both Starlettes drop a decoded tab/CR/LF from
+# ``url.path`` (``urlsplit`` strips them), 1.7 cuts it at a decoded ``?``/``#`` and 1.9 re-encodes
+# those. The router matches ``scope["path"]``. An admit decision taken on ``url.path`` alone
+# let ``/api/plugins/demo/ho%09ok/x`` read as the public ``…/hook/`` prefix while the plugin's
+# ``{p:path}`` route ran with the operator gate never applied. These hold on every Starlette.
+
+
+def _differential_client() -> TestClient:
+    def hit(r):
+        return PlainTextResponse("handler ran")
+
+    app = Starlette(
+        routes=[
+            Route("/api/plugins/demo/{p:path}", hit, methods=["GET", "POST"]),
+            Route("/agents/{slug}/{path:path}", hit, methods=["GET", "POST"]),
+            Route("/media/{name}", hit),
+        ]
+    )
+    app.add_middleware(auth.A2AAuthMiddleware)
+    return TestClient(app)
+
+
+def test_a_control_char_cannot_turn_a_gated_plugin_route_public(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    try:
+        auth.set_public_prefixes(["/api/plugins/demo/hook/"])
+        c = _differential_client()
+        assert c.get("/api/plugins/demo/hook/x").status_code == 200  # the real public prefix
+        for raw in ("/api/plugins/demo/ho%09ok/x", "/api/plugins/demo/%09hook/x", "/api/plugins/demo/hook%0D%0A/x"):
+            assert c.get(raw).status_code == 401, raw
+    finally:
+        auth.set_public_prefixes([])
+
+
+def test_a_control_char_cannot_lower_the_operator_ceiling_for_federation(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="", federation_token="fed")
+    try:
+        auth.set_federation_prefixes(["/api/plugins/demo/fed/"])
+        c = _differential_client()
+        hdr = {"Authorization": "Bearer fed"}
+        assert c.get("/api/plugins/demo/fed/x", headers=hdr).status_code == 200  # the real lowered prefix
+        assert c.get("/api/plugins/demo/f%09ed/x", headers=hdr).status_code == 403
+        # A ``?`` decoded into the slug used to cut 1.7's url.path to ``/agents`` (no ``/api/``).
+        assert c.get("/agents/%3Fpeer/api/config", headers=hdr).status_code == 403
+    finally:
+        auth.set_federation_prefixes([])
+
+
+def test_a_cut_or_stripped_spelling_cannot_make_a_proxied_path_public(monkeypatch):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    c = _differential_client()
+    assert c.get("/agents/peer/healthz").status_code == 200  # a sister's public file
+    for raw in ("/agents/peer/healthz%3Fx", "/agents/peer/app%23/x", "/agents/peer/_d%09s/x", "/agents/peer/healthz%09"):
+        assert c.get(raw).status_code == 401, raw
+
+
+def test_a_signed_media_link_does_not_cover_a_control_char_variant(monkeypatch):
+    from infra import media
+
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    auth.configure(bearer_token="secret", api_key="", allowed_origins_raw="")
+    monkeypatch.setattr(media, "check_access", lambda path, sig, exp="": "ok" if path == "/media/a.png" else "deny")
+    c = _differential_client()
+    assert c.get("/media/a.png?sig=x").status_code == 200
+    assert c.get("/media/a.p%09ng?sig=x").status_code == 401

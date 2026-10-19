@@ -773,6 +773,14 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+        # The router dispatches ``scope["path"]``, not ``url.path`` — and the two differ: both
+        # Starlettes drop a decoded tab/CR/LF from ``url.path`` (``urlsplit`` strips them), 1.7
+        # cuts it at a decoded ``?``/``#``, 1.9 re-encodes those. So every decision that ADMITS
+        # (public, member-public, SSE token, signed media) must hold on BOTH spellings, and every
+        # decision that REFUSES (the operator ceiling) on EITHER — or ``/api/plugins/x/ho%09ok/…``
+        # reads as a public ``…/hook/`` prefix while the plugin's ``{p:path}`` route runs (#4372).
+        route_path = (getattr(request, "scope", None) or {}).get("path") or path
+        spellings = (path,) if route_path == path else (path, route_path)
 
         # CORS preflight is never authenticated — by SPEC. A browser sends `OPTIONS` with no
         # `Authorization` header (the actual credentialed request follows only if this
@@ -787,7 +795,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Public allowlist — pass without auth.
-        if _is_public(path):
+        if all(_is_public(s) for s in spellings):
             return await call_next(request)
 
         # Fleet-proxied member-public paths (#1890): ``/agents/<slug>/<rest>`` where
@@ -798,7 +806,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         # never ``/agents/<slug>/api/…``. ``request.state.member_public`` tells the
         # fleet proxy NOT to lend a stored remote bearer to this request.
         resolver = _MEMBER_PUBLIC[0]
-        if resolver is not None and (_BEARER[0] is not None or _API_KEY[0]):
+        if resolver is not None and route_path == path and (_BEARER[0] is not None or _API_KEY[0]):
             m = _AGENTS_RE.match(path)
             if m and _PLUGIN_NS_RE.match(m.group(2)):
                 try:
@@ -832,7 +840,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         # answered 403 unless a credential admits the request anyway. Anything else
         # falls through to the normal bearer / X-API-Key checks below — default-deny holds.
         media_expired = False
-        if path.startswith("/media/"):
+        if path.startswith("/media/") and route_path == path:
             try:
                 from infra.media import check_access as _media_access
 
@@ -848,7 +856,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         # SSE endpoint: accept either a valid query-string token OR a bearer header.
         # The query token is for browser EventSource clients that cannot send headers
         # (the event bus AND the session-attendance stream — see _SSE_QUERY_TOKEN_PATHS).
-        if _is_sse_query_token_path(path):
+        if all(_is_sse_query_token_path(s) for s in spellings):
             sse_token = request.query_params.get("token", "")
             sse_claims = _sse_token_claims(sse_token)
             if sse_claims is not None:
@@ -892,7 +900,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         # R1 path ceiling (ADR 0066): a federation credential is denied the /api operator
         # surface — otherwise the token split is cosmetic (it has RCE via
         # /api/plugins/install anyway). /a2a + /v1 stay open to either tier.
-        if tier == "federation" and _requires_operator(path):
+        if tier == "federation" and any(_requires_operator(s) for s in spellings):
             return JSONResponse({"detail": "Forbidden: operator credential required"}, status_code=403)
         request.state.trust_tier = tier
         # Credential scope (ADR 0121 D4): orthogonal to the tier. The credential-plane ceiling
@@ -937,19 +945,39 @@ def _credential_error() -> str:
     return "Unauthorized: expected " + " or ".join(accepted)
 
 
+def _ceiling_spellings(request, path: str) -> list[str]:
+    """Every spelling of the request path the credential-plane ceiling must check.
+
+    ``request.url.path`` (what the rest of this middleware keys on) and the ASGI
+    ``scope["path"]`` the router dispatches on differ when a percent-encoded ``?``/``#``
+    (``%3F``/``%23``) is in the path, and HOW they differ moved upstream: Starlette <= 1.8
+    rebuilt ``url.path`` from the decoded path, so a decoded ``?``/``#`` cut it short
+    (``/api/plugins/install%3Fx`` -> ``/api/plugins/install``); Starlette 1.9 builds it from
+    ``raw_path``, so it stays encoded (``…/install%3Fx``) and neither spelling ends on the
+    ceiling route any more (#4367). So the cut is made HERE, not inherited from Starlette:
+    each spelling is checked whole AND truncated at its first ``?``/``#`` — the path a
+    downstream hop (the fleet proxy, a URL rebuild) would see once that character is read as
+    a query or fragment delimiter. Checking every form means none can slip a ceiling route
+    past the others, on any Starlette."""
+    scope_path = (getattr(request, "scope", None) or {}).get("path") or path
+    out: list[str] = []
+    for p in (path, scope_path):
+        for form in (p, re.split(r"[?#]", p, maxsplit=1)[0]):
+            if form and form not in out:
+                out.append(form)
+    return out
+
+
 def _credential_plane_refusal(request, path: str, scope: str, device_id: str | None) -> JSONResponse | None:
     """The ADR 0121 D4 credential-plane ceiling: a 403 when a non-``full`` credential asks for
     a route that changes who can get in (``a2a_impl.credential_scope.CEILING``), else None."""
     if scope == SCOPE_FULL:
         return None
-    # Both spellings of the path: ``request.url.path`` (what the rest of this middleware
-    # keys on) and the ASGI ``scope["path"]`` the router dispatches on. They differ when a
-    # percent-decoded ``?``/``#`` lands in the path; checking both means neither can be used
-    # to slip a ceiling route past the other.
-    raw = (getattr(request, "scope", None) or {}).get("path") or path
-    rule = ceiling_rule(request.method, path, device_id)
-    if rule is None and raw != path:
-        rule = ceiling_rule(request.method, raw, device_id)
+    rule = None
+    for spelling in _ceiling_spellings(request, path):
+        rule = ceiling_rule(request.method, spelling, device_id)
+        if rule is not None:
+            break
     if rule is None:
         return None
     logger.info("[auth] device-scope credential refused %s %s (%s)", request.method, path, rule.why)
