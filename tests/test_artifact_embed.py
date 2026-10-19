@@ -548,6 +548,63 @@ const reasonOf = (p) => p.then(() => null, (e) => e);
     assert out["afterReal"]["renders"] == [{"type": "protoArtifact:render", "ok": False, "error": "⚠ boom"}]
 
 
+def test_a_resource_load_failure_is_not_a_script_error(monkeypatch, tmp_path):
+    """Launch bug B3: ERRBOOT's capture-phase ``error`` listener also receives RESOURCE load
+    failures (a CSP-refused stylesheet, a broken image). It reported each as "⚠ Script error" with
+    a FAILED render verdict, so a vega-lite chart that drew fine failed check_artifact three times.
+    A stylesheet/image failure is now ignored; a failed <script> load is named; a real script
+    error still shows. Run under node against the real ERRBOOT source."""
+    art = _load(monkeypatch, tmp_path)
+    harness = (
+        _assignment(_js(art), "ERRBOOT")
+        + r"""
+const listeners = {}, posted = [], appended = [];
+global.addEventListener = (t, f) => { (listeners[t] = listeners[t] || []).push(f); };
+global.window = global;
+global.parent = { postMessage: (m) => posted.push(m) };
+global.document = {
+  getElementById: () => null,
+  createElement: () => ({ style: {} }),
+  body: { appendChild: (d) => appended.push(d) },
+};
+eval(ERRBOOT.replace(/^<script>/, "").replace(/<\\?\/script>$/, ""));
+const fire = (ev) => (listeners.error || []).forEach((f) => f(ev));
+const renders = () => posted.filter((m) => m.type === "protoArtifact:render");
+const out = {};
+fire({ target: { nodeType: 1, tagName: "LINK", href: "x.css" } });
+fire({ target: { nodeType: 1, tagName: "IMG", src: "x.png" } });
+out.afterResources = { overlays: appended.length, renders: renders() };
+fire({ target: { nodeType: 1, tagName: "SCRIPT", src: "https://h/vendor/vega.min.js" } });
+out.afterScript = { text: appended[0] && appended[0].textContent, renders: renders() };
+console.log(JSON.stringify(out));
+"""
+    )
+    out = _node(harness)
+    assert out["afterResources"] == {"overlays": 0, "renders": []}
+    assert out["afterScript"]["text"] == "⚠ a script failed to load: https://h/vendor/vega.min.js"
+    assert out["afterScript"]["renders"][0]["ok"] is False
+
+
+def test_a_real_script_error_still_reports(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    harness = (
+        _assignment(_js(art), "ERRBOOT")
+        + r"""
+const listeners = {}, posted = [], appended = [];
+global.addEventListener = (t, f) => { (listeners[t] = listeners[t] || []).push(f); };
+global.window = global;
+global.parent = { postMessage: (m) => posted.push(m) };
+global.document = { getElementById: () => null, createElement: () => ({ style: {} }), body: { appendChild: (d) => appended.push(d) } };
+eval(ERRBOOT.replace(/^<script>/, "").replace(/<\\?\/script>$/, ""));
+(listeners.error || []).forEach((f) => f({ target: global, message: "Uncaught TypeError: x is undefined", lineno: 3 }));
+console.log(JSON.stringify({ text: appended[0] && appended[0].textContent, renders: posted }));
+"""
+    )
+    out = _node(harness)
+    assert out["text"] == "⚠ Uncaught TypeError: x is undefined (line 3)"
+    assert out["renders"][0]["ok"] is False
+
+
 def test_frame_color_scheme_follows_the_console_ground_not_the_os(monkeypatch, tmp_path):
     """color-scheme (native scrollbars/date pickers) comes from the console's --pl-color-bg
     luminance — never the shell page's computed color-scheme, which follows the OS (a light OS

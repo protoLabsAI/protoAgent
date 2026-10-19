@@ -129,7 +129,13 @@
     + 'd.style.cssText="position:fixed;left:0;right:0;bottom:0;max-height:60%;overflow:auto;margin:0;padding:10px 13px;background:#2a0f12;color:#ffb4b4;font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;border-top:2px solid #f87171;z-index:2147483647";'
     + '(document.body||document.documentElement).appendChild(d);}d.textContent=String(m);rep(false,m);}'
     + 'W.__artErr=show;W.__artOk=function(){rep(true,"");};'
-    + 'addEventListener("error",function(e){show("⚠ "+(e.message||(e.error&&e.error.message)||"Script error")+(e.lineno?" (line "+e.lineno+")":""));},true);'
+    // Capture phase, so it also sees RESOURCE load failures (they do not bubble). Those are not
+    // script errors: a stylesheet or image that failed to load (or a CSP refused) leaves the
+    // render standing, so it never fails the verdict — reporting it as "Script error" made a
+    // chart that drew fine read as broken. A SCRIPT element that failed to load is named.
+    + 'addEventListener("error",function(e){var t=e.target;'
+    + 'if(t&&t!==W&&t.nodeType===1){if(t.tagName==="SCRIPT")show("⚠ a script failed to load: "+(t.src||"inline"));return;}'
+    + 'show("⚠ "+(e.message||(e.error&&e.error.message)||"Script error")+(e.lineno?" (line "+e.lineno+")":""));},true);'
     // A send()/openLink() refusal the artifact didn't catch is not a render failure: log it
     // quietly (no overlay, no failed verdict) and preventDefault() it, so the browser doesn't also
     // report it as an "Uncaught (in promise)" error. Every other unhandled rejection still shows.
@@ -1387,7 +1393,9 @@
   // Themed from the console's --pl-* tokens and re-drawn on a live theme switch.
   function vegaDoc(code){
     var nonce=cspNonce();
-    var csp="default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'unsafe-inline'; img-src data: blob:; "
+    // style-src admits the ONE vendored DS element-default sheet base() links (pl-embed.css) —
+    // without it the CSP refused the sheet on every chart and logged a violation.
+    var csp="default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'unsafe-inline' "+ORIGIN+"/plugins/artifact/vendor/pl-embed.css; img-src data: blob:; "
       + "font-src data:; media-src 'none'; connect-src 'none'; worker-src 'none'; frame-src 'none'; "
       + "object-src 'none'; base-uri 'none'; form-action 'none'";
     var cfg={spec:String(code||""), tokens:themeTokens()};
