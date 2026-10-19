@@ -1,5 +1,5 @@
 /**
- * VENDORED — @protolabsai/design@0.12.0, the `./vega` entry (src/vega.js).
+ * VENDORED — @protolabsai/design@0.13.0, the `./vega` entry (src/vega.js).
  *
  * The artifact shell serves this file as-is from /plugins/artifact/vendor and loads it as a
  * same-origin module (there is no bundler / node_modules at runtime). It then injects
@@ -118,7 +118,8 @@ export function buildVegaConfig(tok) {
     axis: guide({
       domainColor: axis, tickColor: axis, gridColor: grid,
       labelFontSize: 11, titleFontSize: 12, titleFontWeight: 500,
-      labelLimit: 180,
+      // A fixed budget works across single and composed views with different width signals.
+      labelLimit: 120,
     }),
     legend: guide({
       labelFontSize: 11, titleFontSize: 12, titleFontWeight: 500,
