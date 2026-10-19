@@ -1797,10 +1797,33 @@ def deps_install_running() -> dict | None:
 
 
 def _host_pip() -> list[str]:
-    """The argv prefix for pip in THIS interpreter's environment, the target
-    ``deps_install_target`` names outside the frozen app. It is a seam so that a test can
-    stand a real pip-like process in for pip without touching an actual environment."""
-    return [sys.executable, "-m", "pip"]
+    """The argv prefix that installs into THIS interpreter's environment, the target
+    ``deps_install_target`` names outside the frozen app, up to the package list. It is a
+    seam so that a test can stand a real pip-like process in for pip without touching an
+    actual environment.
+
+    A venv made by ``uv sync`` (PROTO.md's setup) has no pip, so there it is
+    ``uv pip install --python <this interpreter>`` when uv is on PATH (#4263). With neither,
+    it is still pip, which fails, and :func:`_pip_failure` says what to do."""
+    import importlib.util
+
+    if importlib.util.find_spec("pip") is None:
+        uv = shutil.which("uv")
+        if uv:
+            return [uv, "pip", "install", "--python", sys.executable]
+    return [sys.executable, "-m", "pip", "install"]
+
+
+def _pip_failure(proc: subprocess.CompletedProcess, pkgs: list[str]) -> str:
+    """The tail of a failed install's output, plus the fix when the cause is a venv without
+    pip (and no uv to stand in for it)."""
+    out = (proc.stderr or proc.stdout or "").strip()[-400:]
+    if "No module named pip" in out:
+        out += (
+            f" — this Python environment has no pip (uv-made venvs don't ship it) and uv isn't on "
+            f"PATH. Put uv on PATH and retry, or run: uv pip install --python {sys.executable} {' '.join(pkgs)}"
+        )
+    return out
 
 
 def install_deps(
@@ -1962,20 +1985,20 @@ def _install_deps(
     newly: list[str] = []
     if to_pip:
         proc = subprocess.run(
-            [*_host_pip(), "install", "--", *to_pip],
+            [*_host_pip(), "--", *to_pip],
             capture_output=True,
             text=True,
         )
         if proc.returncode != 0:
             _audit("install_deps", {"id": plugin_id, "deps": to_pip}, "pip install failed", success=False)
-            raise InstallError(f"pip install failed: {(proc.stderr or proc.stdout).strip()[-400:]}")
+            raise InstallError(f"pip install failed: {_pip_failure(proc, to_pip)}")
         newly += to_pip
     soft_failed: list[str] = []
     if to_pip_soft:
         # Best-effort (#1953): the plugin runs without these, so a failure is
         # audited + warned, never fatal — the hard deps above already landed.
         proc = subprocess.run(
-            [*_host_pip(), "install", "--", *to_pip_soft],
+            [*_host_pip(), "--", *to_pip_soft],
             capture_output=True,
             text=True,
         )
@@ -1986,7 +2009,7 @@ def _install_deps(
             log.warning(
                 "[plugins] %s: optional dep install failed (continuing without): %s",
                 plugin_id,
-                (proc.stderr or proc.stdout).strip()[-400:],
+                _pip_failure(proc, to_pip_soft),
             )
             soft_failed = list(to_pip_soft)
             if failed is not None:
