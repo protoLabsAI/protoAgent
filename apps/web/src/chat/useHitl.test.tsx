@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
 import type { HitlPayload } from "../lib/types";
-import { useHitl, type HitlRunTurn, type UseHitlOptions } from "./useHitl";
+import { formResponseText, useHitl, type HitlRunTurn, type UseHitlOptions } from "./useHitl";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -215,5 +215,24 @@ describe("useHitl — per-render closures", () => {
     last = "asst-late"; // the slot's memo is computed after the hook call on the same render
     await act(() => r.current.dismissHitl());
     expect(runTurn.mock.calls[0][1]).toMatchObject({ resumeMessageId: "asst-late" });
+  });
+});
+
+describe("formResponseText — the card as the durable bubble text", () => {
+  it("one Label: value line per field", () => {
+    expect(formResponseText({ title: "Pick a plan", groups: [{ fields: [{ label: "Plan", value: "Plan C" }] }] })).toBe(
+      "Plan: Plan C",
+    );
+  });
+
+  it("keeps a multi-step card's step titles, one block per step", () => {
+    expect(
+      formResponseText({
+        groups: [
+          { title: "Target", fields: [{ label: "Environment", value: "staging" }] },
+          { title: "Confirm", fields: [{ label: "Dry run first", value: "No" }] },
+        ],
+      }),
+    ).toBe("Target\nEnvironment: staging\n\nConfirm\nDry run first: No");
   });
 });
