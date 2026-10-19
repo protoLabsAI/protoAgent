@@ -280,7 +280,7 @@
               "link": "/guides/phone-access"
             },
             {
-              "text": "Pair devices & agents",
+              "text": "Manage paired devices",
               "link": "/guides/pairing"
             },
             {
@@ -363,12 +363,12 @@
       "routes": [
         "/guides/automate-work",
         "/tutorials/first-skill",
+        "/tutorials/first-schedule",
         "/tutorials/two-agents-over-a2a",
         "/guides/skills",
         "/guides/scheduler",
         "/guides/watches",
         "/guides/goal-mode",
-        "/guides/lifecycle-events",
         "/guides/delegates",
         "/guides/coding-agents",
         "/guides/rooms",
@@ -401,6 +401,10 @@
               "link": "/tutorials/first-skill"
             },
             {
+              "text": "Run your first recurring task",
+              "link": "/tutorials/first-schedule"
+            },
+            {
               "text": "Two agents over A2A",
               "link": "/tutorials/two-agents-over-a2a"
             }
@@ -425,10 +429,6 @@
             {
               "text": "Goal mode",
               "link": "/guides/goal-mode"
-            },
-            {
-              "text": "System lifecycle events",
-              "link": "/guides/lifecycle-events"
             }
           ]
         },
@@ -541,6 +541,7 @@
         "/guides/bundles",
         "/guides/middleware",
         "/guides/add-a-skill",
+        "/guides/lifecycle-events",
         "/guides/build-console",
         "/guides/developer-flags",
         "/guides/fork-the-template",
@@ -614,6 +615,10 @@
             {
               "text": "Advertise a capability (A2A card)",
               "link": "/guides/add-a-skill"
+            },
+            {
+              "text": "System lifecycle events",
+              "link": "/guides/lifecycle-events"
             }
           ]
         },
@@ -901,6 +906,7 @@
         "/reference/extensions",
         "/reference/mcp",
         "/reference/plugin-manifest",
+        "/reference/plugin-settings",
         "/reference/plugin-registry-api",
         "/reference/plugin-sdk-api",
         "/reference/plugin-testkit",
@@ -954,11 +960,11 @@
               "link": "/reference/ingestion"
             },
             {
-              "text": "Memory storage and delivery",
+              "text": "Memory storage and delivery internals",
               "link": "/reference/memory-delivery"
             },
             {
-              "text": "Browser automation settings",
+              "text": "Browser automation settings and internals",
               "link": "/reference/browser-automation"
             },
             {
@@ -1012,6 +1018,10 @@
             {
               "text": "Plugin manifest",
               "link": "/reference/plugin-manifest"
+            },
+            {
+              "text": "Plugin settings and setup contracts",
+              "link": "/reference/plugin-settings"
             },
             {
               "text": "Plugin registry API",

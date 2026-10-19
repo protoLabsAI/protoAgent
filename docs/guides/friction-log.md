@@ -196,32 +196,22 @@ lists open friction.
 
 Use [Fleet friction triage](/guides/operating-a-fleet#fleet-friction-triage) for per-agent CLI inspection and resolution.
 
-## How it affects the agent
-
-<a id="the-knobs"></a>
-<a id="when-to-turn-projection-off"></a>
-
-See [Friction reference](/reference/friction) for capture, projection, configuration, and older-version cleanup.
-
-## What auto-capture logs
-
-<a id="silencing-a-tool-entirely"></a>
-
-See [Friction reference](/reference/friction) for capture, projection, configuration, and older-version cleanup.
-
-## Clear noise from older versions {#worked-example-a-coding-agent-drowning-in-escape-hatch-noise}
-
-See [Friction reference](/reference/friction) for capture, projection, configuration, and older-version cleanup.
-
-## Configuration reference
-
-<a id="the-ledger"></a>
-
-See [Friction reference](/reference/friction) for capture, projection, configuration, and older-version cleanup.
-
 ## Related
 
 - [`plugins/friction/README.md`](https://github.com/protoLabsAI/protoAgent/blob/main/plugins/friction/README.md): the plugin's own summary
 - [Starter tools ▸ plugins](/reference/starter-tools): every first-party plugin and its default
 - [Build out your agent with a coding agent](/guides/build-with-a-coding-agent): where friction fits in the build loop
 - [Plugins ▸ Config, secrets & settings](/guides/plugins#config-secrets-settings): how a plugin's `friction:` section and Settings group work
+
+<span id="how-it-affects-the-agent"></span>
+<a id="the-knobs"></a>
+<a id="when-to-turn-projection-off"></a>
+<span id="what-auto-capture-logs"></span>
+<a id="silencing-a-tool-entirely"></a>
+<span id="worked-example-a-coding-agent-drowning-in-escape-hatch-noise"></span>
+<span id="configuration-reference"></span>
+<a id="the-ledger"></a>
+
+## Related reference
+
+See [Friction reference](/reference/friction) for capture, projection, configuration, and older-version cleanup.

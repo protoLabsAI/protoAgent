@@ -1,5 +1,7 @@
 # Fork the template
 
+Use this checklist when you already know the changes your fork needs. For a worked example, follow [Customize and deploy](/guides/customize-and-deploy); for a portfolio-monitor persona, use the [operator-fork example](/guides/operator-fork).
+
 This is the canonical fork checklist; `TEMPLATE.md` points here. For a full
 walkthrough, see [Customize and deploy](/guides/customize-and-deploy).
 

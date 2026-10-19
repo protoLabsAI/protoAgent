@@ -13,12 +13,11 @@ The steps, in order:
 4. [Add it to the home screen](#_3-add-to-home-screen).
 5. [Use it on a tablet](#on-a-tablet).
 6. [Move between networks](#move-between-networks).
-7. [Know when tokens expire and rotate](#expiry-and-rotation).
-8. [Remove or limit a device](#remove-or-limit), and [what to do if a phone is lost](#lost-phone).
-9. [Troubleshooting](#troubleshooting).
+7. [Manage access](#expiry-and-rotation), including [a lost phone](#lost-phone).
+8. [Troubleshooting](#troubleshooting).
 
 How pairing works underneath (codes, the claim limits, where the phone keeps its token) is in
-[Pair devices and agents](/guides/pairing). The security model is in
+[Manage paired devices](/guides/pairing). The security model is in
 [Security & the trust model](/explanation/security-and-trust#device-tokens).
 
 ## 1. Choose how the phone reaches the agent {#choose-a-route}
@@ -147,10 +146,11 @@ Pairing gives the phone its own token, so you never type the agent's auth token 
 whichever is easiest:
 
 - **Scan the QR.** On the agent, open **Settings ▸ Devices ▸ Add a device** and scan the QR
-  with the phone's camera. See [Pair a phone (QR)](/guides/pairing#pair-a-phone-qr).
+  with the phone's camera. The console claims the code and removes it from the address bar.
 - **Type the code.** On the phone, open the URL shown beside the QR, tap
-  **Have a pairing code?**, and type the ten-character code (`XXXXX-XXXXX`). See
-  [Pair a phone by typing the code](/guides/pairing#pair-a-phone-by-typing-the-code).
+  **Have a pairing code?**, type the ten-character code (`XXXXX-XXXXX`), and tap
+  **Pair this device**. Case and the dash do not matter; O, I and L are read as
+  0, 1 and 1.
 - **No screen on the agent machine?** Run `protoagent pair --device` there. It prints the QR,
   the code and the URLs in the terminal. See
   [Pair a phone from a headless box](/guides/pairing#pair-a-phone-from-a-headless-box).
@@ -189,21 +189,13 @@ Open **Settings ▸ Devices** on the phone to see its row:
   guessed name ([Rename a device](/guides/pairing#rename-a-device)).
 - **Limited** is the phone's access. Every phone or tablet you pair is Limited.
 - **expires in 30 days if unused** says how long the pairing lasts without use
-  ([step 7](#expiry-and-rotation)).
+  ([Manage access](#expiry-and-rotation)).
 - **active** means it made a request in the last few minutes.
 
-**What Limited means.** A Limited phone can use the whole console: chat, goals, knowledge,
-plugins and most settings. It can rename or remove itself. It can't pair other devices or
-agents, change or remove another device, install or change plugins or MCP servers, use the
-secrets manager or provider sign-ins, restart the agent, or change the auth token or network
-settings. Those attempts say **This device can't change pairing or credentials — use a
-full-access device.** The full list is in
-[Full access and Limited](/guides/pairing#full-access-and-limited).
-
-Limited is not a sandbox: a chat turn from the phone runs the agent's tools the same as one from
-your desktop. What it guarantees is that removing the phone is final. To give a phone full
-access, **Promote** it from a full-access device, such as the desktop app
-([step 8](#remove-or-limit)).
+A Limited phone can chat and use the agent's tools, but cannot change credentials,
+install integrations, or pair other devices. It is not a sandbox for chat tools.
+Use [device access controls](/guides/pairing#full-access-and-limited) to inspect
+or change access from your desktop.
 
 ## 4. Add it to the home screen {#_3-add-to-home-screen}
 
@@ -289,33 +281,20 @@ Opening one of those links means pairing the phone again at that address, becaus
 stays with the home address. To avoid that, [move the phone](#move-this-phone) while you're
 still at home. The banner clears when the home address answers again.
 
-## 7. Tokens expire and rotate {#expiry-and-rotation}
+<span id="expiry-and-rotation"></span>
+<span id="remove-or-limit"></span>
 
-- **Expiry.** A Limited phone that goes unused for 30 days stops working. Its row shows
-  **Expired**, and the phone is asked for a token on its next request. To use it again, remove
-  the expired row, then pair the phone again. An operator can change the number of days, or
-  turn expiry off, with [`devices.idle_ttl_days`](/reference/configuration#devices).
-  Full-access devices never expire.
-- **Weekly rotation.** While you use the phone, it swaps its token for a new one about once a
-  week. Nothing changes on screen.
-- **A copied token gets the phone removed.** If an old, rotated-out copy of the token is used
-  after the phone has switched to the new one, someone else has a copy. The agent removes the
-  device, and the phone asks for a token on its next request; pair it again.
+## 7. Manage access
 
-Details: [Expired](/guides/pairing#expired), [Weekly token rotation](/guides/pairing#weekly-token-rotation)
-and [Device token lifetime](/explanation/security-and-trust#device-token-lifetime).
+A Limited phone expires after 30 days without use by default. If it asks you to
+sign in again, check its row in **Settings → Devices** on the desktop. Follow
+[device recovery](/guides/pairing#expired) for expiry and
+[token rotation](/guides/pairing#weekly-token-rotation) for copied-token detection.
 
-## 8. Remove or limit a device {#remove-or-limit}
-
-Do this in **Settings ▸ Devices** on a full-access device, such as the desktop app or a browser
-signed in with the auth token. A Limited phone can only rename or remove itself.
-
-- **Remove** (the trash icon): the device's token stops working at once, and anything it has
-  open closes within about 15 seconds. Nothing else is signed out. Removing the row marked
-  **This device** asks first. See [Revoke](/guides/pairing#revoke).
-- **Limit** on a **Full access** row takes full access away. **Promote** on a **Limited** row
-  gives it. Phones paired before Limited existed show **Full access**; limit any you don't need
-  that for.
+Use [Manage paired devices](/guides/pairing#manage-devices) for renaming,
+[access levels](/guides/pairing#full-access-and-limited), and
+[removing a device](/guides/pairing#revoke). The desktop can manage every row;
+a Limited phone can rename or remove only itself.
 
 ### If a phone is lost {#lost-phone}
 
@@ -330,7 +309,7 @@ signed in with the auth token. A Limited phone can only rename or remove itself.
 
 Don't wait for expiry: 30 days unused is a backstop, not a lock.
 
-## 9. Troubleshooting {#troubleshooting}
+## 8. Troubleshooting {#troubleshooting}
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
@@ -356,7 +335,7 @@ More: [Troubleshooting](/guides/troubleshooting) for failed connections and task
 
 ## See also
 
-- [Pair devices and agents](/guides/pairing): pairing mechanics, the Devices list, revocation.
+- [Manage paired devices](/guides/pairing): pairing mechanics, the Devices list, revocation.
 - [Expose to the world](/guides/exposing-protoagent): public A2A and the console hostname.
 - [Security & the trust model](/explanation/security-and-trust#device-tokens): device scope
   and token lifetime.

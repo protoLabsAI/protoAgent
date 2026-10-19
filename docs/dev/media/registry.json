@@ -163,7 +163,7 @@
       "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
     },
     "guides/lifecycle-events.md": {
-      "journey": "automate",
+      "journey": "build",
       "decision": "text",
       "reason": "No first-wave asset justified by the structural screen; retain executable steps and cross-links. Reassess with reader feedback."
     },
@@ -576,6 +576,16 @@
       "journey": "reference",
       "decision": "text",
       "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
+    },
+    "tutorials/first-schedule.md": {
+      "journey": "automate",
+      "decision": "reuse",
+      "reason": "The scheduler guide owns the schedule-state asset; link to it instead of duplicating the same UI capture."
+    },
+    "reference/plugin-settings.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Exact settings contracts use code examples; the plugin-view guide owns interface visuals."
     }
   },
   "media": {

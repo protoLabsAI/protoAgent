@@ -55,7 +55,7 @@ return-address and retention details, see [Discord reference](/reference/discord
 For two operators’ agents talking in a channel, follow
 [Discord peer channels](/guides/discord-peer-channels).
 
-## Earlier section links
+<span id="earlier-section-links"></span>
 
 <a id="discord-surface"></a>
 <a id="conversation-model"></a>

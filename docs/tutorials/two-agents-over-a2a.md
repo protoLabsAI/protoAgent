@@ -1,8 +1,8 @@
 # Two agents talking over A2A
 
-Learning-oriented. In about ten minutes you'll run a second agent, verify it's a
-conforming A2A 1.0 peer, have your first agent delegate real work to it over the
-protocol, and then read the whole cross-agent exchange as one trace.
+Run a second agent, register a peer, and get a delegated reply over A2A.
+The reply is the completion check. Protocol conformance and distributed tracing
+are optional follow-ups for builders and operators.
 
 The output excerpts illustrate an earlier successful run; model text, identifiers,
 and trace URLs will differ. This is a source-checkout tutorial for macOS/Linux
@@ -62,48 +62,7 @@ The fields that matter for interop:
 - `capabilities.extensions[]` — the [extensions](/reference/extensions) this agent emits.
 - `securitySchemes` — `bearer` appears only when a token is actually configured.
 
-## 3. Verify it's genuinely conformant
-
-Don't take the card's word for it. Point the prober at it:
-
-```bash
-uv run python scripts/a2a_conformance.py --url http://127.0.0.1:7891 --token demo-agent-token
-```
-
-```
-card
-  ✓ interface           JSONRPC v1.0 → http://127.0.0.1:7891/a2a
-  ✓ extensions          3 declared
-version
-  ✓ without header      -32009 — header is load-bearing; its absence is read as 0.3
-methods
-  ✓ SendMessage         served  (0.3: message/send)
-  … 11 methods
-stream
-  ✓ oneof (not `kind`)  1.0 oneof shape
-  ✓ terminal replace    authoritative full-text replace sent
-ext
-  ✓ cost-v1             declared and emitted
-lifecycle
-  ✓ GetTask             retrievable after terminal (state=TASK_STATE_COMPLETED)
-  ✓ SubscribeToTask     HTTP 200 + frames
-```
-
-Two of those lines are worth pausing on.
-
-**`without header → -32009`.** The `A2A-Version: 1.0` header is load-bearing. Omit
-it and an SDK ≥1.0 peer reads you as a 0.3 client and refuses. This is the single
-most common A2A integration failure, and it's invisible — the request looks
-perfectly well-formed. See [the version gate](/explanation/a2a-protocol).
-
-**`cost-v1 declared and emitted`.** The prober compares what the card *claims*
-against what actually appeared on the wire, in both directions. A declared-but-never-emitted
-extension is a broken promise a consumer can't detect except by waiting forever.
-
-Add `--push-url https://example.com/hook` to also exercise the push-notification
-config lifecycle and assert the SSRF guard. It cleans up after itself.
-
-## 4. Introduce the two agents
+## 3. Introduce the two agents {#_4-introduce-the-two-agents}
 
 Delegation is configured, not coded. Register your *first* agent as a delegate of
 the new one:
@@ -146,7 +105,7 @@ curl -s -X POST http://127.0.0.1:7891/api/delegates/test \
 That pre-flight fetches the peer's card and compares versions, so a mismatch fails
 with a legible message instead of an opaque `-32009` mid-dispatch.
 
-## 5. Make them talk
+## 4. Make them talk {#_5-make-them-talk}
 
 Save the following as a temporary Python file outside the tracked source, then run
 it with `uv run python <path-to-file>` from this checkout.
@@ -177,7 +136,56 @@ Underneath, agent B sent `SendMessage` to agent A's `/a2a` with an
 `A2A-Version: 1.0` header and a bearer token, polled `GetTask` until terminal,
 and pulled the answer text out of the terminal artifact.
 
-## 6. Read it as one trace
+## Optional: inspect the protocol and trace
+
+The delegated reply above completes the tutorial. Use these checks when debugging
+interop or distributed tracing; they are not prerequisites for a first exchange.
+
+::: details Check A2A conformance
+<span id="_3-verify-it-s-genuinely-conformant"></span>
+
+Don't take the card's word for it. Point the prober at it:
+
+```bash
+uv run python scripts/a2a_conformance.py --url http://127.0.0.1:7891 --token demo-agent-token
+```
+
+```
+card
+  ✓ interface           JSONRPC v1.0 → http://127.0.0.1:7891/a2a
+  ✓ extensions          3 declared
+version
+  ✓ without header      -32009 — header is load-bearing; its absence is read as 0.3
+methods
+  ✓ SendMessage         served  (0.3: message/send)
+  … 11 methods
+stream
+  ✓ oneof (not `kind`)  1.0 oneof shape
+  ✓ terminal replace    authoritative full-text replace sent
+ext
+  ✓ cost-v1             declared and emitted
+lifecycle
+  ✓ GetTask             retrievable after terminal (state=TASK_STATE_COMPLETED)
+  ✓ SubscribeToTask     HTTP 200 + frames
+```
+
+Two of those lines are worth pausing on.
+
+**`without header → -32009`.** The `A2A-Version: 1.0` header is load-bearing. Omit
+it and an SDK ≥1.0 peer reads you as a 0.3 client and refuses. This is the single
+most common A2A integration failure, and it's invisible — the request looks
+perfectly well-formed. See [the version gate](/explanation/a2a-protocol).
+
+**`cost-v1 declared and emitted`.** The prober compares what the card *claims*
+against what actually appeared on the wire, in both directions. A declared-but-never-emitted
+extension is a broken promise a consumer can't detect except by waiting forever.
+
+Add `--push-url https://example.com/hook` to also exercise the push-notification
+config lifecycle and assert the SSRF guard. It cleans up after itself.
+
+:::
+
+### Read it as one trace {#_6-read-it-as-one-trace}
 
 This is the part that makes a fleet debuggable instead of mysterious.
 

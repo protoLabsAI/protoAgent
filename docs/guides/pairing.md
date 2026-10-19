@@ -1,24 +1,14 @@
-# Pair devices and agents
+# Manage paired devices
 
-Pairing gives a phone, a tablet or another protoAgent **its own token** for this agent,
-without you typing or pasting the shared operator bearer anywhere. The agent shows a
-short-lived, single-use code; the other side claims it; the claim mints a per-client token
-that this agent stores only as a hash and that you can revoke on its own, from
-**Settings ▸ Devices**, without signing anything else out.
+<span id="pair-devices-and-agents"></span>
 
-This page is the reference for how pairing works. To set up a phone or tablet from start
-to finish (choosing Wi-Fi, Tailscale or a public URL, installing it, moving between networks),
-follow [Use protoAgent on your phone or tablet](/guides/phone-access).
+Use **Settings → Devices** to inspect, rename, limit, or revoke a phone, tablet,
+or agent hub that already has access. Start with a full-access device, such as
+the desktop app. A Limited phone can rename or remove only itself.
 
-For a phone or tablet, open **Settings ▸ Devices ▸ Add a device** and either scan the
-QR or type the short code shown beside it (`XXXXX-XXXXX`). On a box with no screen,
-`protoagent pair --device` prints the same code and QR in the terminal. A code expires
-after five minutes and works once; restarting clears pending codes. A paired phone is
-[Limited](#full-access-and-limited): it can use the whole console, but it can't pair other
-devices or change credentials. Its chat turns still run the agent's tools, so pair only
-devices you trust with that.
-
-To add another agent to a fleet, use [Pair a remote fleet member](/guides/pair-an-agent).
+For a new connection, choose [phone or tablet setup](/guides/phone-access) or
+[pair a remote fleet member](/guides/pair-an-agent). This guide owns reachability
+controls, pairing recovery, and the existing-device lifecycle.
 
 ## Before you pair: make this agent reachable
 
@@ -91,41 +81,13 @@ replace `protoagent serve` with `uv run python -m server`.
 Never turn on `PROTOAGENT_ALLOW_OPEN=1` to make pairing work. Pairing adds clients to a
 *secured* instance; it is not a way to open one up.
 
-## Pair a phone (QR)
+<span id="pair-a-phone-qr"></span>
+<span id="pair-a-phone-by-typing-the-code"></span>
 
-1. On the agent: **Settings ▸ Devices ▸ Add a device**. A QR appears with a countdown, and
-   a choice of address if the agent has more than one, best first: **Tailnet HTTPS**,
-   **Phone without Tailscale** (your [public URL](./phone-access.md#without-tailscale), when
-   set), the **Tailnet name**, a **Tailnet** IP, then **Wi-Fi**. The line under the QR says
-   what the phone needs for the selected one; the
-   [address table](./phone-access.md#_2-reach-it-from-the-phone) compares them.
-2. On the phone: scan it. The link opens the console at `…/app/#pair=<code>`; the console
-   claims the code, stores the device token in that browser, and strips the code from the
-   address bar and history. The code travels in the `#fragment`, so it never reaches a
-   server log.
-3. The phone shows **Paired as &lt;name&gt;**, the name it now has in the agent's Devices list
-   (a guess from the browser, such as `iPhone` or `Android phone`; you can
-   [rename it](#rename-a-device)). On the agent, the device appears in the Devices list and
-   a **Device paired** notice names it.
+## Recover a pairing attempt
 
-## Pair a phone by typing the code
-
-Use this when the phone can't scan the QR (no camera access, a broken camera, the code
-is on a terminal or a screen share), or when you'd rather not.
-
-1. On the agent: **Settings ▸ Devices ▸ Add a device**. Beside the QR, the panel shows a
-   ten-character code such as `3HV8T-QW6RN`, the console URL to open on the phone, and
-   the countdown. On a headless box, run [`protoagent pair --device`](#pair-a-phone-from-a-headless-box)
-   instead.
-2. On the phone: open that URL in the browser, for example `http://100.64.0.5:7870/app/`.
-   The console asks for authentication.
-3. Tap **Have a pairing code?**, type the code and tap **Pair this device**. Case doesn't
-   matter, the dash is optional, and the letters O, I and L are read as 0, 1 and 1, so a
-   misread look-alike still works.
-4. The console opens and shows **Paired as &lt;name&gt;**. The phone appears in
-   **Settings ▸ Devices** on the agent with its own token.
-
-The QR and the typed code are the same code. Using either one spends it.
+For QR and typed-code steps, follow [Pair the phone](/guides/phone-access#_2-reach-it-from-the-phone).
+A code lasts five minutes and works once; QR and typing spend the same code.
 
 ### If the code doesn't work {#if-the-code-doesnt-work}
 
@@ -190,13 +152,11 @@ making a code. Pairing another agent doesn't need the console.
 To install the console on the phone's home screen, and for the Tailscale and public URL
 setup, see [Use protoAgent on your phone or tablet](./phone-access.md).
 
-## Pair another agent
+<span id="pair-another-agent"></span>
 
-See [Pair a remote fleet member](/guides/pair-an-agent) for this operator procedure.
 
-## Plaintext: tailnet yes, LAN only if you say so
+<span id="plaintext-tailnet-yes-lan-only-if-you-say-so"></span>
 
-See [Pair a remote fleet member](/guides/pair-an-agent) for this operator procedure.
 
 ## Manage devices
 
@@ -302,10 +262,11 @@ that stopped working.
 Phones paired before this change kept their device token in `protoagent.authToken`. The
 console moves it to the new key the next time it loads, without signing the phone out.
 
-## The `auth` badge
+<span id="the-auth-badge"></span>
 
-See [Pair a remote fleet member](/guides/pair-an-agent) for this operator procedure.
 
-## Delegate to a paired remote
+<span id="delegate-to-a-paired-remote"></span>
+
+## Related reference
 
 See [Pair a remote fleet member](/guides/pair-an-agent) for this operator procedure.

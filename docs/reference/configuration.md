@@ -10,6 +10,22 @@ protoagent config explain
 uv run python -m server config explain
 ```
 
+## Find a setting
+
+| Change | Fields |
+| --- | --- |
+| Connect models and choose routing | [providers](#providers), [model](#model), [routing](#routing) |
+| Find files or resolve overrides | [File locations](#file-locations), [environment variables](/reference/environment-variables) |
+| Control tools and file access | [tools](#tools), [filesystem](#filesystem), [projects](#projects) |
+| Tune memory and context | [knowledge](#knowledge), [memory](#memory), [context](#context), [compaction](#compaction) |
+| Schedule or repeat work | [Scheduler](#scheduler), [goal](#goal), [watches](#watches), [workflows](#workflows) |
+| Secure remote access | [network](#network), [devices](#devices), [security](#security), [Secrets](#secrets) |
+| Configure extensions | [plugins](#plugins), [mcp](#mcp), [skills](#skills) |
+| Diagnose runs | [telemetry](#telemetry), [tracing](#tracing) |
+
+The full example is illustrative; change only the fields you need. Field sections
+below are the canonical lookup; task guides explain when to change them.
+
 ## File locations
 
 | Installation | Instance root | Live config |

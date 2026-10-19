@@ -1,4 +1,6 @@
-# Fleet — many agents on one host
+# Create and manage a fleet
+
+<span id="fleet-—-many-agents-on-one-host"></span>
 
 Run several agents from one console. Each has its own config, chats, memory, and
 stores; the hub starts and stops local members and routes you to their consoles.

@@ -1,4 +1,6 @@
-# Operate the model in-flight limiter
+# Manage model concurrency
+
+<span id="operate-the-model-in-flight-limiter"></span>
 
 The in-flight limiter caps concurrent chat-model calls and queues extra callers.
 It is disabled by default (`model.max_inflight: 0`). Enable it when concurrent

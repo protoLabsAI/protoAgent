@@ -152,11 +152,7 @@ To create office documents, install the
 [managed Python runtime](/guides/python-runtime) from **Settings → Tools**.
 For Windows installation and recovery, see [Windows desktop](/guides/windows-desktop).
 
-## Testing the console
-
-Developer build, packaging, API, and testing details are in
-[Build and test the console](/guides/build-console) and the
-[operator API reference](/reference/operator-api).
+<span id="testing-the-console"></span>
 
 ## Protect your data and resolve problems
 

@@ -1,4 +1,6 @@
-# Building a plugin view
+# Plugin view integration
+
+<span id="building-a-plugin-view"></span>
 
 A plugin serves its own page, and the console displays it in an iframe. Declare a
 rail view for a dashboard or editor, or `slot: "chat"` to replace the chat panel.
@@ -41,28 +43,46 @@ views:
 
 ```python
 # __init__.py
-def _build_router():
-    from fastapi import APIRouter
-    from fastapi.responses import HTMLResponse
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse
+
+_PAGE = """<!doctype html>
+<html lang="en"><title>My chart</title>
+<body><h1>My chart</h1><pre id="result">Connecting…</pre>
+<script type="module">
+  const base = location.pathname.split('/plugins/')[0];
+  const kit = await import(base + '/_ds/plugin-kit.js');
+  kit.initPluginView(async () => {
+    const response = await kit.apiFetch('/api/plugins/mychart/data');
+    document.querySelector('#result').textContent = response.ok
+      ? JSON.stringify(await response.json()) : 'Data request failed: ' + response.status;
+  });
+</script></body></html>"""
+
+def _data_router():
     router = APIRouter()
 
-    @router.get("/data")          # RULE 2: a DATA route — gate it under /api/plugins/<id>
-    async def _data() -> dict:
+    @router.get("/data")
+    async def data() -> dict:
         return {"points": [1, 2, 3]}
 
-    @router.get("/view")          # the page the console iframes (public chrome — see below)
-    async def _view():
+    return router
+
+def _view_router():
+    router = APIRouter()
+
+    @router.get("/view")
+    async def view():
         return HTMLResponse(_PAGE)
 
     return router
 
 def register(registry):
-    # RULE 1 + 2: serve the page on the path you declared. Data routes go under /api/.
-    registry.register_router(_data_router(), prefix="/api/plugins/mychart")   # gated data
-    registry.register_router(_build_router(), prefix="/plugins/mychart")      # public page
+    registry.register_router(_data_router(), prefix="/api/plugins/mychart")
+    registry.register_router(_view_router(), prefix="/plugins/mychart")
 ```
 
-That's it. Drop the directory in `plugins/` (or `git`-install it) → the router mounts, the rail icon
+Install in the instance's plugins directory and enable it (see the [quickstart](/guides/build-a-plugin-view)) → the router mounts, the rail icon
 appears, the iframe loads your page. **No host rebuild.**
 
 `icon` is **any** [lucide](https://lucide.dev) icon name — PascalCase (`LineChart`) or kebab-case
@@ -177,31 +197,13 @@ it overrides the slot ahead of plugin claims, with full React context.
 
 ## The init handshake (bearer + theme) {#the-init-handshake-bearer--theme}
 
-After the iframe loads, the console **posts a message** to it — so your page gets the operator bearer
-(for its own API calls) and the console theme tokens (to match the look) **without a token in the
-URL**. There are two messages:
+Call `kit.initPluginView()` once when the page loads. The host supplies the bearer
+and theme through the iframe handshake; never put a token in the view URL.
+Use `kit.apiFetch` for data requests and the kit CSS variables for colors. An
+optional callback runs on initialization and theme changes; keep it safe to repeat.
 
-- **`protoagent:init`** — sent once after load, carrying `{ token, theme }`.
-- **`protoagent:theme`** — sent on every live operator theme switch, carrying the new `{ theme }`, so
-  your page re-skins without a reload.
-
-```js
-window.addEventListener("message", (e) => {
-  const m = e.data || {};
-  if (m.type === "protoagent:init") {
-    // m.token — operator bearer (or null when none is configured). Use it as
-    //           `Authorization: Bearer <token>` on your /api/plugins/<id>/... calls.
-    // m.theme — { bg, bgPanel, fg, fgMuted, brand, border } from the console.
-    if (m.theme?.bg) document.body.style.background = m.theme.bg;
-  } else if (m.type === "protoagent:theme") {
-    // live re-theme — re-apply m.theme
-  }
-});
-```
-
-The message is sent same-origin and targeted at your page's origin. In practice you don't hand-write
-this — [the DS kit](#the-kit-helpers-plugin-kitjs) wires it for you and maps `theme` onto its `--pl-*`
-tokens.
+The [view bridge reference](/reference/plugin-view-bridge#the-handshake-—-init-ready)
+owns message payloads and origin checks. The kit handles these for ordinary views.
 
 ## The kit helpers (`plugin-kit.js`) {#the-kit-helpers-plugin-kitjs}
 
@@ -353,108 +355,32 @@ if you need to support them, keep a poll fallback and disarm it the first time a
 
 ## Keyboard shortcuts (#1457)
 
-Your view is an iframe, so keys pressed inside it never reach the console's keydown host —
-without this bridge, **every** host shortcut is dead while your view has focus, and you have
-no way to declare your own. Two messages fix both directions.
+An iframe receives its own key events. To make a view work with the console:
 
-**Declare chords.** They show up in Settings ▸ Keyboard, rebindable like any core shortcut,
-and fire back into your page when pressed:
+1. Declare the view's default chords with `protoagent:keybindings`.
+2. Handle the returned `protoagent:keybinding` message by local binding ID.
+3. Forward unhandled chords with `protoagent:keydown`, including whether focus
+   is in an editable field, so global commands such as ⌘⇧K remain available.
+4. Test a user override in **Settings → Keyboard** and repeat inside an input.
 
-```js
-parent.postMessage({
-  type: "protoagent:keybindings",
-  bindings: [
-    { id: "toggle", label: "Toggle docs panel", keys: "mod+shift+d" },
-    { id: "search", label: "Search docs", keys: "mod+shift+f", group: "Docs" },
-  ],
-}, "*");
+The host namespaces IDs, preserves user overrides, and replaces your previous
+set when you register again. Send an empty set to clear it. Configure tabs get
+separate namespaces from the same plugin's rail view.
 
-addEventListener("message", (e) => {
-  if (e.data?.type === "protoagent:keybinding" && e.data.id === "toggle") togglePanel();
-});
-```
-
-The `keys` you name is a **default**; an operator override always wins. Re-posting
-`protoagent:keybindings` **replaces** your previous set (post `bindings: []` to clear).
-Your ids are namespaced to `plugin.<your-id>.<id>` by the host, so you can't register,
-replace, or shadow a core binding — or collide with another plugin. In a custom Configure
-tab, the host inserts `.settings.<tab-id>` before your local id so opening the dialog cannot
-replace a shortcut owned by your still-mounted rail/background view. The id posted back to
-the page remains your original local id in both contexts.
-
-**Let host chords through.** Forward anything you didn't handle yourself, so ⌘⇧K still
-opens the palette while your view has focus:
-
-```js
-addEventListener("keydown", (e) => {
-  if (handledLocally(e)) return;
-  const combo = [
-    e.metaKey || e.ctrlKey ? "mod" : "", e.shiftKey ? "shift" : "",
-    e.altKey ? "alt" : "", e.key.toLowerCase(),
-  ].filter(Boolean).join("+");
-  const el = document.activeElement;
-  const editable = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-  parent.postMessage({ type: "protoagent:keydown", combo, editable }, "*");
-});
-```
-
-Pass `editable: true` when focus is in one of your own text fields and the host will
-respect the same typing gate it applies to its own inputs. A forwarded chord reaches only
-**global** bindings — the host can't see inside your iframe, so it can't know which of its
-panels is focused, and firing another panel's scoped chord would be worse than not firing.
+Use the [keybinding examples and wire contract](/reference/plugin-view-bridge#keybindings-—-keybindings-keybinding-keydown)
+for message shapes, forwarding code, and limits.
 
 ## Context menus (#3030)
 
-Right-click inside your view and the operator gets the **browser's** menu, not the console's
-— that event fires in your document and never reaches the host (and under the desktop app
-your frame is cross-origin, so the host can't listen on it either). You're the only party
-that sees the click, so you hand it over: suppress the native menu and post the position.
+A right-click inside an iframe cannot reach the console's menu handler. Handle
+`contextmenu` in your page, suppress the browser menu, and send
+`protoagent:contextmenu:open` with the click coordinates and your menu items.
+Handle the returned action by item ID.
 
-```js
-document.getElementById("card").addEventListener("contextmenu", (e) => {
-  e.preventDefault();                                  // your document, your event
-  parent.postMessage({
-    type: "protoagent:contextmenu:open",
-    x: e.clientX, y: e.clientY,                        // YOUR viewport — the host translates
-    items: [
-      { id: "copy-id", label: "Copy ID", icon: "clipboard" },
-      { id: "open-pr", label: "Open PR", icon: "external-link" },
-      { divider: true },
-      { id: "delete", label: "Delete…", danger: true },
-    ],
-  }, "*");
-});
-
-addEventListener("message", (e) => {
-  if (e.data?.type === "protoagent:contextmenu:action") act(e.data.itemId); // "copy-id"
-});
-```
-
-The menu is the console's own (ADR 0036) — same styling, same keyboard behaviour, and it
-closes when you click back into your page. Because you build the items at right-click time,
-they can describe **whatever is under the cursor**: a card, a row, a selection.
-
-**Or declare a set once** and post a bare open for a menu that doesn't change:
-
-```js
-parent.postMessage({
-  type: "protoagent:contextmenu:register",
-  items: [{ id: "refresh", label: "Refresh board", icon: "refresh-cw" }],
-}, "*");
-parent.postMessage({ type: "protoagent:contextmenu:open", x: e.clientX, y: e.clientY }, "*");
-```
-
-Re-posting `protoagent:contextmenu:register` **replaces** your previous set (post
-`items: []` to clear). An `:open` that carries `items` uses those instead, for that menu only.
-
-An item is **data**, never code: `id`, `label`, an optional `icon` NAME (any lucide icon,
-`PascalCase` or `kebab-case`, resolved against the console's own icon set — markup and URLs
-are dropped), plus `danger` (destructive styling) and `disabled`. `{ divider: true }`
-separates groups; leading, trailing and repeated dividers are collapsed for you. Up to 32
-entries. Like chords, your ids are namespaced to `plugin.<your-id>.<id>` by the host — you
-can't shadow a core menu item or collide with another plugin — and the action fires back
-with **your** id. The console appends its own **Configure…** below your items, so a view
-that suppressed the native menu never leaves the operator with an empty one.
+The host translates coordinates and applies the console's menu styling. Verify
+that the menu opens beside the clicked element in both a local and fleet view.
+Use the [context-menu wire contract](/reference/plugin-view-bridge#context-menus-—-contextmenu-register-open-action)
+for registration, payloads, action replies, and cleanup.
 
 ## Ask the agent — draft a chat message
 

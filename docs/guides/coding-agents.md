@@ -1,4 +1,8 @@
-# CLI coding agents over ACP
+# Delegate coding work
+
+Start here to connect a coding CLI and verify one delegated task. The [delegate guide](/guides/delegates) owns the shared roster and connection fields. After the first task succeeds, follow [Build with a coding agent](/guides/build-with-a-coding-agent) for a project-board delivery loop. [Verify coding outcomes](/guides/coder) covers the optional verifier-backed solver, not the CLI connection.
+
+<span id="cli-coding-agents-over-acp"></span>
 
 Hand a coding job to a CLI agent such as Claude Code, Codex, or protoCLI, then
 read its result in chat. protoAgent launches the coder as an `acp` delegate over

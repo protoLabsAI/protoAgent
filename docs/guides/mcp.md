@@ -61,7 +61,7 @@ or its configuration, otherwise the plugin can contribute them again.
 - [Deprecated ACP runtime](/guides/acp-runtime) — existing configurations only;
   use [coding delegates](/guides/coding-agents) for new coding work.
 
-## Earlier section links
+<span id="earlier-section-links"></span>
 
 <a id="mcp-model-context-protocol"></a>
 <a id="enabling-it"></a>

@@ -16,6 +16,7 @@ Work through a first example. Start with [your first agent](/tutorials/first-age
 ## Automate work
 
 - [Write your first skill](/tutorials/first-skill)
+- [Run your first recurring task](/tutorials/first-schedule)
 - [Two agents over A2A](/tutorials/two-agents-over-a2a)
 
 ## Build & extend

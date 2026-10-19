@@ -22,8 +22,8 @@ Use [configuration](/reference/configuration) for saved settings, [environment v
 - [Agent snapshots](/reference/agent-snapshots)
 - [Starter tools](/reference/starter-tools)
 - [Ingestion and document runtime APIs](/reference/ingestion)
-- [Memory storage and delivery](/reference/memory-delivery)
-- [Browser automation settings](/reference/browser-automation)
+- [Memory storage and delivery internals](/reference/memory-delivery)
+- [Browser automation settings and internals](/reference/browser-automation)
 - [Discord configuration and delivery](/reference/discord)
 - [Friction capture and configuration](/reference/friction)
 
@@ -40,6 +40,7 @@ Use [configuration](/reference/configuration) for saved settings, [environment v
 ## Plugin development
 
 - [Plugin manifest](/reference/plugin-manifest)
+- [Plugin settings and setup contracts](/reference/plugin-settings)
 - [Plugin registry API](/reference/plugin-registry-api)
 - [Plugin SDK (graph.sdk)](/reference/plugin-sdk-api)
 - [Plugin testkit](/reference/plugin-testkit)
