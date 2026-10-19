@@ -10,6 +10,7 @@ import {
   isCompleteAgentCode,
   isInsecureRefusal,
   needsInsecureOptIn,
+  newlyPaired,
   normalizeAgentCode,
   remoteAuthBadge,
   secondsLeft,
@@ -245,5 +246,32 @@ describe("D10 plaintext opt-in (mirrors the hub's credential rule)", () => {
     expect(isInsecureRefusal(expired)).toBe(false);
     const unreachable = Object.assign(new Error("http://x is unreachable (ConnectError)"), { status: 502 });
     expect(isInsecureRefusal(unreachable)).toBe(false);
+  });
+});
+
+// The Devices panel's pairing poll confirms a claim by device id, not by list length: a
+// revoke that lands while a code is live shrinks the list, and a count compare would then
+// miss the phone that claimed the code.
+describe("newly paired devices", () => {
+  const rows = (...ids: string[]) => ids.map((id) => ({ id, kind: "device" }));
+
+  it("finds the device that wasn't there when the code was minted", () => {
+    expect(newlyPaired(new Set(["a", "b"]), rows("a", "b", "c"))).toEqual(rows("c"));
+  });
+
+  it("still finds it when another device was revoked meanwhile (same count)", () => {
+    expect(newlyPaired(new Set(["a", "b"]), rows("a", "c"))).toEqual(rows("c"));
+  });
+
+  it("finds nothing when the list only shrank or is unchanged", () => {
+    expect(newlyPaired(new Set(["a", "b"]), rows("a"))).toEqual([]);
+    expect(newlyPaired(new Set(["a", "b"]), rows("b", "a"))).toEqual([]);
+    expect(newlyPaired(new Set(), [])).toEqual([]);
+  });
+
+  it("is what the panel's poll uses, snapshotting ids from a ref", () => {
+    expect(devicesSrc).toMatch(/newlyPaired\(before, /);
+    expect(devicesSrc).toMatch(/new Set\(devicesRef\.current\.map/);
+    expect(devicesSrc).not.toMatch(/\.length > before/);
   });
 });

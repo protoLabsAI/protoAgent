@@ -19,9 +19,10 @@ KEY at the config write path (``graph.settings_schema.credential_plane_keys``), 
 servers (commands the server runs) are on the ceiling for that reason.
 
 Matching is by SUFFIX — the bare path and every proxied form (``/agents/<slug>/…``,
-``/active/<slug>/…``) — the way ``auth._is_sse_query_token_path`` matches. Over-matching
-(some unrelated path that happens to END in a ceiling path) only ever refuses a device-scope
-caller, which is the fail-safe direction.
+``/active/<slug>/…``). Over-matching (some unrelated path that happens to END in a ceiling
+path) only ever refuses a device-scope caller, which is the fail-safe direction. (The SSE
+query-token paths in ``auth`` are matched the opposite way, anchored: there an over-match
+would ADMIT a request, the unsafe direction.)
 
 Both ``a2a_impl.auth`` (the middleware) and ``graph.fleet.proxy`` (the WS proxy, which runs
 outside HTTP middleware) import this module; it lives here because ``graph`` may not import

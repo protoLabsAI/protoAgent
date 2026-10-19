@@ -644,3 +644,107 @@ def test_agent_pairing_still_works_without_a_console(client, monkeypatch):
 def test_device_start_works_on_the_console_tier(client, monkeypatch, ui):
     monkeypatch.setenv("PROTOAGENT_UI", ui)
     assert client.post("/api/pairing/start").status_code == 200
+
+
+# ── The unauthenticated claim route: every refusal is a 403 that changes nothing ─────────
+
+
+@pytest.fixture
+def claim_http(client, devices):
+    """``client`` with fresh claim-throttle buckets, so these misses never meet a 429."""
+    from security import claim_throttle
+
+    claim_throttle.reset()
+    yield client
+    claim_throttle.reset()
+
+
+def _state(devices):
+    return devices._registry_path().read_text("utf-8") if devices._registry_path().exists() else None, dict(
+        devices._PENDING
+    )
+
+
+_REFUSED = {"ok": False, "error": "invalid or expired pairing code"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"name": "phone"},  # no code
+        {"code": "", "name": "phone"},
+        {"code": None, "name": "phone"},
+        {"code": "A" * 10_000, "name": "phone"},  # oversized
+        {"code": 1234567890, "name": "phone"},  # not a string
+        {"code": {"code": "x"}, "name": "phone"},
+        {"code": "WRONG-CODE0", "name": "phone"},  # well-formed, not pending
+    ],
+)
+def test_a_bad_code_is_403_and_changes_nothing(claim_http, devices, body):
+    shown = claim_http.post("/api/pairing/start").json()["code"]
+    before = _state(devices)
+    resp = claim_http.post("/api/pairing/claim", json=body)
+    assert resp.status_code == 403 and resp.json() == _REFUSED
+    assert _state(devices) == before
+    # The real code is still claimable — a bad claim cancels nothing (ADR 0121 D3).
+    assert claim_http.post("/api/pairing/claim", json={"code": shown, "name": "phone"}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "raw, content_type",
+    [
+        ("this is not json", "application/json"),
+        ("{", "application/json"),
+        ('["code", "name"]', "application/json"),  # JSON, but not an object
+        ("code=ABCDE-FGHJK", "application/x-www-form-urlencoded"),
+        ("", "application/json"),
+    ],
+)
+def test_a_non_json_or_non_object_body_is_403_and_changes_nothing(claim_http, devices, raw, content_type):
+    claim_http.post("/api/pairing/start")
+    before = _state(devices)
+    resp = claim_http.post("/api/pairing/claim", content=raw, headers={"Content-Type": content_type})
+    assert resp.status_code == 403 and resp.json() == _REFUSED
+    assert _state(devices) == before
+
+
+def test_an_expired_code_is_403_at_the_route_and_mints_nothing(claim_http, devices, monkeypatch):
+    shown = claim_http.post("/api/pairing/start").json()["code"]
+    real_time = time.time
+    monkeypatch.setattr(devices.time, "time", lambda: real_time() + devices.PAIRING_TTL_SECONDS + 1)
+    resp = claim_http.post("/api/pairing/claim", json={"code": shown, "name": "late"})
+    assert resp.status_code == 403 and resp.json() == _REFUSED
+    assert devices.list_devices() == []
+
+
+def test_an_already_consumed_device_code_is_403_and_mints_nothing_more(claim_http, devices):
+    shown = claim_http.post("/api/pairing/start").json()["code"]
+    first = claim_http.post("/api/pairing/claim", json={"code": shown, "name": "first"})
+    assert first.status_code == 200
+    before = _state(devices)
+    resp = claim_http.post("/api/pairing/claim", json={"code": shown, "name": "second"})
+    assert resp.status_code == 403 and resp.json() == _REFUSED and "token" not in resp.json()
+    assert _state(devices) == before
+    assert [d["name"] for d in devices.list_devices()] == ["first"]
+
+
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        (None, "Unnamed device"),  # missing
+        ("", "Unnamed device"),
+        ("   ", "Unnamed device"),
+        ("N" * 500, "N" * 64),  # oversized: trimmed to MAX_NAME_LEN, not refused
+        ("evil‮name\nhere", "evilname here"),  # bidi override dropped, newline → space
+        (12345, "12345"),
+    ],
+)
+def test_the_claim_name_is_cleaned_never_refused(claim_http, devices, name, expected):
+    """The name is an unauthenticated user-agent sniff: an odd one is repaired, and the code
+    still pairs (``security.devices._register``)."""
+    shown = claim_http.post("/api/pairing/start").json()["code"]
+    body = {"code": shown} if name is None else {"code": shown, "name": name}
+    resp = claim_http.post("/api/pairing/claim", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["device"]["name"] == expected
+    assert [d["name"] for d in devices.list_devices()] == [expected]

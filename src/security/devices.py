@@ -311,6 +311,9 @@ def _opt_float(value: object) -> float | None:
 
 
 def _save(devices: list[Device]) -> None:
+    """Replace the registry. Every caller holds ``_LOCK`` across the `_load` it modified and
+    this write — rename, scope, revoke, register, rotate, rebind and `verify_token`'s
+    transitions alike — so no two read-modify-writes interleave and lose one of them."""
     path = _registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
@@ -395,14 +398,70 @@ def verify_token(token: str) -> Device | None:
     * the **previous** token is accepted until then and through the grace — and presented
       after it, it **revokes the device** and writes an audit entry (two parties hold one
       token: the theft signal rotation exists to surface).
+
+    Concurrency: every state transition (starting the grace, stamping last-seen, the reuse
+    revocation) is decided AND written under ``_LOCK`` from a registry read under that same
+    lock, so it can't interleave with a rotate, revoke, rename, handoff or another verify.
+    Only a request that changes nothing — the common case: a current token already confirmed
+    and stamped within ``_LAST_SEEN_THROTTLE_SECONDS`` — is answered without the lock. That is
+    safe because ``_save`` is an atomic rename: the lock-free read is the whole registry as of
+    one instant, so answering from it is the same as this request having arrived just before
+    whatever write is in flight. A lock-free decision is never acted on.
     """
     if not token:
         return None
     digest = _hash(token)
     now = _now()
+    device, actions = _verify_decision(_load(), digest, now)
+    if not actions & _WRITES:
+        if _HANDED_OFF in actions:
+            _log_handed_off(device)
+            return None
+        return device
+    revoked: Device | None = None
+    with _LOCK:
+        devices = _load()
+        device, actions = _verify_decision(devices, digest, now)  # re-decided against the locked read
+        if _REVOKE in actions and device is not None:
+            _save([d for d in devices if d.id != device.id])
+            revoked, device = device, None
+        elif device is not None and actions & _WRITES:
+            if _CONFIRM in actions:
+                device.prev_retired_at = now
+            if _TOUCH in actions:
+                device.last_seen_at = now
+            try:
+                _save(devices)
+            except OSError:
+                if _CONFIRM in actions:
+                    logger.warning("[devices] could not record first use of %s's new token", device.id)
+                else:
+                    logger.debug("[devices] could not record last-seen for %s", device.id)
+    if revoked is not None:
+        _report_reuse_revocation(revoked, now)
+        return None
+    if _HANDED_OFF in actions:
+        _log_handed_off(device)
+        return None
+    return device
+
+
+# What a verify does to the registry (`_verify_decision`). ``_HANDED_OFF`` writes nothing: it
+# only marks a refusal worth logging.
+_CONFIRM = "confirm"  # the new token's first use: start the previous token's grace
+_TOUCH = "touch"  # stamp last-seen (throttled)
+_REVOKE = "revoke"  # a retired token came back after its grace
+_HANDED_OFF = "handed_off"
+_WRITES = frozenset({_CONFIRM, _TOUCH, _REVOKE})
+
+
+def _verify_decision(devices: list[Device], digest: str, now: float) -> tuple[Device | None, frozenset[str]]:
+    """What presenting ``digest`` at ``now`` means against ``devices``: the device it
+    authenticates as (or, for ``_REVOKE``/``_HANDED_OFF``, the device it is refused for) and
+    the actions it implies. Pure — `verify_token` decides the locking."""
     current: Device | None = None
     previous: Device | None = None
-    for device in _load():
+    for device in devices:
         # Both compares on every row, no early exit: timing stays uniform across the registry.
         if hmac.compare_digest(device.token_sha256, digest) and current is None:
             current = device
@@ -410,25 +469,28 @@ def verify_token(token: str) -> Device | None:
             previous = device
     if current is not None:
         if current.is_expired(now):
-            return None
+            return None, frozenset()
+        actions = set()
         if current.prev_token_sha256 and current.prev_retired_at is None:
-            _confirm_rotation(current.id, digest, now)
-        _touch(current.id)
-        return current
+            actions.add(_CONFIRM)
+        if _touch_due(current, now):
+            actions.add(_TOUCH)
+        return current, frozenset(actions)
     if previous is not None:
         if previous.prev_retired_at is not None and now >= previous.prev_retired_at + ROTATION_GRACE_SECONDS:
-            if previous.prev_handed_off:
-                # The origin this phone moved AWAY from (ADR 0121 D1): its storage still holds
-                # the handed-off token. Refused, never a reuse revocation — see `_rebind`.
-                logger.info("[devices] %s: the token handed off to another origin was presented; refused", previous.id)
-                return None
-            _revoke_on_reuse(previous, digest, now)
-            return None
+            # The origin this phone moved AWAY from (ADR 0121 D1) still holds the handed-off
+            # token: refused, never a reuse revocation — see `_rebind`.
+            return previous, frozenset({_HANDED_OFF if previous.prev_handed_off else _REVOKE})
         if previous.is_expired(now):
-            return None
-        _touch(previous.id)
-        return previous
-    return None
+            return None, frozenset()
+        return previous, frozenset({_TOUCH}) if _touch_due(previous, now) else frozenset()
+    return None, frozenset()
+
+
+def _log_handed_off(device: Device | None) -> None:
+    logger.info(
+        "[devices] %s: the token handed off to another origin was presented; refused", device.id if device else "?"
+    )
 
 
 def is_live(device_id: str | None) -> bool:
@@ -539,28 +601,8 @@ def rotate_device(device_id: str, presented_token: str) -> tuple[dict, str] | No
     return view, token
 
 
-def _confirm_rotation(device_id: str, digest: str, now: float) -> None:
-    """The new token was presented: start the previous token's grace."""
-    with _LOCK:
-        devices = _load()
-        for device in devices:
-            if device.id == device_id and device.token_sha256 == digest and device.prev_retired_at is None:
-                device.prev_retired_at = now
-                try:
-                    _save(devices)
-                except OSError:
-                    logger.warning("[devices] could not record first use of %s's new token", device_id)
-                return
-
-
-def _revoke_on_reuse(device: Device, digest: str, now: float) -> None:
-    """A retired token came back after its grace: revoke the device and audit it."""
-    with _LOCK:
-        devices = _load()
-        remaining = [d for d in devices if not (d.id == device.id and d.prev_token_sha256 == digest)]
-        if len(remaining) == len(devices):
-            return  # already revoked (or rotated again) by a racing request
-        _save(remaining)
+def _report_reuse_revocation(device: Device, now: float) -> None:
+    """Log + audit a reuse revocation `verify_token` has just written (outside ``_LOCK``)."""
     logger.warning(
         "[devices] REVOKED %s (%s): a rotated-out token was presented %ds after its grace — two parties held one token",
         device.id,
@@ -610,21 +652,9 @@ def is_active(last_seen_at: float | None, now: float | None = None) -> bool:
     return ((_now() if now is None else now) - last_seen_at) < ACTIVE_WINDOW_SECONDS
 
 
-def _touch(device_id: str) -> None:
-    now = _now()
-    with _LOCK:  # the same read-modify-rename as a rotation: one at a time, or one is lost
-        devices = _load()
-        for device in devices:
-            if device.id != device_id:
-                continue
-            if device.last_seen_at and now - device.last_seen_at < _LAST_SEEN_THROTTLE_SECONDS:
-                return  # recently recorded — skip the write
-            device.last_seen_at = now
-            try:
-                _save(devices)
-            except OSError:
-                logger.debug("[devices] could not record last-seen for %s", device_id)
-            return
+def _touch_due(device: Device, now: float) -> bool:
+    """Is ``device``'s last-seen stamp old enough to rewrite (see the throttle above)?"""
+    return not (device.last_seen_at and now - device.last_seen_at < _LAST_SEEN_THROTTLE_SECONDS)
 
 
 def _register(name: str, kind: str = KIND_DEVICE) -> tuple[Device, str]:
@@ -642,9 +672,10 @@ def _register(name: str, kind: str = KIND_DEVICE) -> tuple[Device, str]:
         # ``device`` scope; an agent (a hub) is ``full``.
         scope=SCOPE_FULL if kind == KIND_AGENT else SCOPE_DEVICE,
     )
-    devices = _load()
-    devices.append(device)
-    _save(devices)
+    with _LOCK:
+        devices = _load()
+        devices.append(device)
+        _save(devices)
     logger.info("[devices] paired %s %s (%s)", device.kind, device.name, device.id)
     return device, token
 
@@ -798,10 +829,8 @@ def claim_pairing(
             # name and scope, a rotated token. A device revoked (or expired) since the code was
             # minted yields nothing, with the one failure message every bad code gets.
             return _rebind(*handoff)
-        # Minted under the lock too, so two CLAIMS can't interleave their load→append→save of
-        # devices.json. This does not make the registry lock-protected in general: `_touch`
-        # and `revoke_device` don't take `_LOCK` — in practice the event loop serializes them
-        # (every caller is a sync call on the loop).
+        # Minted under the lock too, like every read-modify-write of devices.json (see
+        # `_save`), so a claim can't interleave with a verify, rotate, revoke or rename.
         device, token = _register(device_name, kind)
     return device.public(), token
 
@@ -856,7 +885,7 @@ def start_handoff(device_id: str | None, presented_token: str) -> tuple[str, flo
 
 def _rebind(device_id: str, digest: str) -> tuple[dict, str] | None:
     """Claim side of a handoff: rotate ``device_id``'s token (ADR 0121 D5 semantics) and mark
-    the token that asked as HANDED OFF. Caller holds ``_LOCK``.
+    the token that asked as HANDED OFF. Called under ``_LOCK`` (`claim_pairing`).
 
     The token that asked for the handoff (``digest``) becomes the previous token. As with any
     rotation it stays valid until the NEW token is first presented, then for the 120 s grace —
@@ -865,6 +894,11 @@ def _rebind(device_id: str, digest: str) -> tuple[dict, str] | None:
     (``prev_handed_off``): the old origin's storage still holds it by design, and the phone
     going back there must not cost it its pairing. The old origin's console drops the token
     as soon as the server says it was handed off (``self_view``'s ``handed_off``)."""
+    with _LOCK:  # re-entrant: `claim_pairing` already holds it; taken here so no path can skip it
+        return _rebind_locked(device_id, digest)
+
+
+def _rebind_locked(device_id: str, digest: str) -> tuple[dict, str] | None:
     devices = _load()
     device = next((d for d in devices if d.id == device_id), None)
     now = _now()

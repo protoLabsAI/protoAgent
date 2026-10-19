@@ -56,6 +56,14 @@ async function call(method: "GET" | "POST", path: string, token: string): Promis
   return { status: res.status, body };
 }
 
+/** The phone's move away from this origin completed (ADR 0121 D1): forget `token` here —
+ *  only if it is still the stored one (another tab may have re-paired meanwhile) — and, when
+ *  no operator token is left to keep this console signed in, send it to the AuthGate. */
+function finishMove(token: string): RotationOutcome {
+  if (deviceToken() === token && !completeDeviceMove()) notifyAuthRequired();
+  return "moved";
+}
+
 async function rotateOnce(): Promise<RotationOutcome> {
   const token = deviceToken();
   if (!token) return "not-a-device";
@@ -63,8 +71,7 @@ async function rotateOnce(): Promise<RotationOutcome> {
   if (self.status === 401 && deviceMovePending()) {
     // This origin recorded a move away and its token is now refused: the handed-off token's
     // grace is over (ADR 0121 D1). Forget it so the AuthGate points at the new home.
-    if (deviceToken() === token && !completeDeviceMove()) notifyAuthRequired();
-    return "moved";
+    return finishMove(token);
   }
   if (self.status === 404) return "unsupported";
   if (self.status !== 200) return "error";
@@ -75,8 +82,7 @@ async function rotateOnce(): Promise<RotationOutcome> {
     // The phone moved to another of the agent's origins and arrived there (ADR 0121 D1). This
     // origin's token rides out a short grace and is then refused, so stop presenting it now —
     // and never trip anything with it later. The "moved to" pointer stays for the AuthGate.
-    if (deviceToken() === token && !completeDeviceMove()) notifyAuthRequired();
-    return "moved";
+    return finishMove(token);
   }
   // Still this device's own token here: a recorded move never completed (the new address
   // didn't load, or never stored its token), so this origin is still the home.

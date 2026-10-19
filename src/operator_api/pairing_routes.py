@@ -47,6 +47,7 @@ import io
 import ipaddress
 import logging
 import socket
+import threading
 import time
 
 from fastapi import Request  # module-level so the stringized `request: Request` annotations
@@ -159,9 +160,23 @@ _PROBE_TARGETS = (
 )
 
 # Interfaces change on the order of minutes (joining Wi-Fi, tailnet up/down), so a short
-# cache makes repeated "Add a device" clicks instant without going stale in practice.
-_ADDR_CACHE: dict[str, object] = {"at": 0.0, "addrs": []}
+# cache makes repeated "Add a device" clicks instant without going stale in practice. An EMPTY
+# answer is cached too, for a shorter `_ADDR_EMPTY_TTL_SECONDS`: a box with no reachable
+# address must not re-probe on every request, but joining a network should show up within a
+# few seconds. ``at`` is None until the first probe.
+_ADDR_CACHE: dict[str, object] = {"at": None, "addrs": []}
 _ADDR_TTL_SECONDS = 15.0
+_ADDR_EMPTY_TTL_SECONDS = 5.0
+# Single-flight: `_offer_hosts` runs in worker threads, so requests arriving together after
+# the TTL would each run the full probe set. The lock is held across the probe, so one thread
+# probes and the rest wait for (and read) its answer. A probe is six routing-table lookups,
+# microseconds each and bounded at 0.2 s apiece, so waiting on it costs no more than running it.
+_ADDR_LOCK = threading.Lock()
+
+
+def _monotonic() -> float:
+    """The address cache's clock — one seam for tests to move time."""
+    return time.monotonic()
 
 
 def _local_addresses() -> list[str]:
@@ -173,19 +188,21 @@ def _local_addresses() -> list[str]:
     The routing-table probes below answer the same question in microseconds and are what
     actually found the tailnet address.
     """
-    now = time.monotonic()
-    cached = _ADDR_CACHE.get("addrs")
-    if cached and now - float(_ADDR_CACHE["at"]) < _ADDR_TTL_SECONDS:  # type: ignore[arg-type]
-        return list(cached)  # type: ignore[arg-type]
+    with _ADDR_LOCK:
+        at = _ADDR_CACHE.get("at")
+        cached = list(_ADDR_CACHE.get("addrs") or [])  # type: ignore[call-overload]
+        ttl = _ADDR_TTL_SECONDS if cached else _ADDR_EMPTY_TTL_SECONDS
+        if at is not None and _monotonic() - float(at) < ttl:  # type: ignore[arg-type]
+            return cached
 
-    found: list[str] = []
-    for target in _PROBE_TARGETS:
-        ip = _source_ip_for(target)
-        if ip and ip not in found:
-            found.append(ip)
-    _ADDR_CACHE["at"] = now
-    _ADDR_CACHE["addrs"] = found
-    return found
+        found: list[str] = []
+        for target in _PROBE_TARGETS:
+            ip = _source_ip_for(target)
+            if ip and ip not in found:
+                found.append(ip)
+        _ADDR_CACHE["at"] = _monotonic()
+        _ADDR_CACHE["addrs"] = found
+        return list(found)
 
 
 def _qr_svg(url: str) -> str | None:
