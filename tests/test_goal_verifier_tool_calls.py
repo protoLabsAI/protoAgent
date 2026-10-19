@@ -50,6 +50,8 @@ def test_summary_pairs_each_call_with_its_result_for_the_current_turn_only():
     assert "saved shared note (3 lines)" in lines[0]
     assert lines[1].startswith("- read_note()") and "coffee, then more logs" in lines[1]
     assert "stale_tool" not in out  # a previous turn's calls are not this turn's evidence
+    # line breaks stay visible (escaped), so "exactly three lines" is judgeable from the digest
+    assert "Servers hum awake\\nthe launch post climbs the front page\\ncoffee, then more logs" in lines[1]
 
 
 def test_mid_turn_injected_human_messages_do_not_end_the_turn():

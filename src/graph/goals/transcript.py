@@ -31,7 +31,10 @@ _STEERING_PREFIX = "[User message received while you were working"  # graph.midd
 
 
 def _clip(text: str, cap: int) -> str:
-    text = " ".join((text or "").split())
+    """One line per call, but line breaks stay VISIBLE as ``\\n`` — a goal like "the note
+    has exactly three lines" is judged on them; collapsing them hid the evidence."""
+    text = (text or "").replace("\r\n", "\n").strip().replace("\n", "\\n")
+    text = " ".join(text.split())
     return text if len(text) <= cap else text[: cap - 1] + "…"
 
 
