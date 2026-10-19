@@ -19,7 +19,7 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 ## Shipped
 
 - **Remote device improvements** — pair a phone or tablet by QR or a typed code (or `protoagent pair --device` on a headless box), reach it over Wi-Fi, Tailscale HTTPS or your own public URL, and move it between networks in one tap. Phones get limited access, expire when unused and rotate their tokens weekly, and tablets get their own layout. (#4336)
-- **Phone access and device pairing** — connect a phone browser to a reachable agent over LAN or a private network, pair with a QR code, and manage paired devices. Offline access and the next device-polish work remain planned.
+- **Phone access and device pairing** — connect a phone browser to a reachable agent over LAN or a private network, pair with a QR code, and manage paired devices.
 - **App-first documentation** — task paths for setup, everyday use, automation, building, and operation, with commands and UI instructions checked against current source. (#4329)
 
 - **Interactive answers** — tables, charts and artifacts render inline in the transcript, with previews that stream in while the agent writes them. (v0.201.0)
