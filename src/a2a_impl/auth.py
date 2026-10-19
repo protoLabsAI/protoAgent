@@ -68,16 +68,17 @@ _ALLOWED_ORIGINS: list[list[str] | None] = [None]
 # Public allowlist — paths/prefixes that pass WITHOUT auth.
 # Everything else requires bearer / X-API-Key (default-deny).
 # ---------------------------------------------------------------------------
+# Directory trees only, each ending in "/": a bare "/app" prefix also admitted "/apple",
+# "/apps-…" and any future route that merely starts with the same letters.
 _PUBLIC_PREFIXES = (
-    "/healthz",
     "/.well-known/",
-    "/app",
-    "/manifest.json",
-    "/favicon.svg",
-    "/favicon.ico",
+    "/app/",
     "/static/",
     "/_ds/",
 )
+
+# Single public files and the SPA root, matched exactly (see the prefix note above).
+_PUBLIC_FILES = frozenset({"/healthz", "/app", "/manifest.json", "/favicon.svg", "/favicon.ico"})
 
 # Public paths matched EXACTLY, not by prefix. Kept separate from _PUBLIC_PREFIXES because
 # prefix-matching a credential-minting route would also exempt any sibling that happens to
@@ -87,10 +88,10 @@ _PUBLIC_EXACT = frozenset(
     {
         # Device pairing claim (ADR 0087 D4) — UNAUTHENTICATED BY NECESSITY: obtaining auth
         # is its entire purpose, so it cannot require it. The only credential-minting path
-        # on the allowlist, guarded in `security.devices` instead: ~190-bit codes, a 120s
-        # TTL, single-use consumption, an immediate reject when nothing is pending, and a
-        # failed-attempt counter that drops all pending codes rather than allowing
-        # indefinite probing. The operator-only pairing/device routes beside it stay authed.
+        # on the allowlist, guarded in `security.devices` instead: high-entropy short-lived
+        # codes, single-use consumption, an immediate reject when nothing is pending, and the
+        # ADR 0121 D3 claim throttle (`security.claim_throttle`) on failed attempts. The
+        # operator-only pairing/device routes beside it stay authed.
         "/api/pairing/claim",
     }
 )
@@ -307,7 +308,7 @@ def _metrics_public() -> bool:
 
 def _is_public(path: str) -> bool:
     """Return True when ``path`` is on the public allowlist (no auth needed)."""
-    if path in _PUBLIC_EXACT:
+    if path in _PUBLIC_EXACT or path in _PUBLIC_FILES:
         return True
     if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
         return True
@@ -319,7 +320,7 @@ def _is_public(path: str) -> bool:
     # ``_PUBLIC_PREFIXES`` are lifted this way (never ``/agents/<slug>/api/…`` — those stay gated,
     # then get the fleet-token swap); the #1890 member_public resolver covers plugin NAMESPACES.
     m = _AGENTS_RE.match(path)
-    if m and any(m.group(2).startswith(p) for p in _PUBLIC_PREFIXES):
+    if m and (m.group(2) in _PUBLIC_FILES or any(m.group(2).startswith(p) for p in _PUBLIC_PREFIXES)):
         return True
     if any(path.startswith(p) for p in _PLUGIN_PUBLIC) and not is_core_plugin_route(path):
         return True
