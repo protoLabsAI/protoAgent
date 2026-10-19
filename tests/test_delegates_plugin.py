@@ -517,8 +517,9 @@ async def test_delegate_to_background_threads_timeout(monkeypatch):
     monkeypatch.setattr(rs.STATE, "background_mgr", fake, raising=False)
     seen: dict = {}
 
-    async def _dispatch(self, name, query, *, item_id=None, resume_task_id=None, timeout=None):
+    async def _dispatch(self, name, query, *, item_id=None, resume_task_id=None, timeout=None, fresh_session=False):
         seen["timeout"] = timeout
+        seen["fresh_session"] = fresh_session
         return f"dispatched:{query}"
 
     monkeypatch.setattr(DelegateRegistry, "dispatch", _dispatch)
@@ -527,6 +528,7 @@ async def test_delegate_to_background_threads_timeout(monkeypatch):
     # The queued work carries the override down to dispatch.
     assert await fake.calls[0]["work"]() == "dispatched:big job"
     assert seen["timeout"] == 1200.0
+    assert seen["fresh_session"] is True
 
 
 async def _fake_dispatch(self, name, query, *, item_id=None, resume_task_id=None, timeout=None):

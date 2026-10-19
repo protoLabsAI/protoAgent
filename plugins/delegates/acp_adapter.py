@@ -240,14 +240,17 @@ class AcpAdapter(Adapter):
         timeout: float | None = None,
         item_id: str | None = None,
         resume_task_id: str | None = None,
+        fresh_session: bool = False,
     ) -> str:
         if d.manage_git:
-            return await self._dispatch_managed(d, query, timeout=timeout, item_id=item_id)
+            return await self._dispatch_managed(d, query, timeout=timeout, item_id=item_id, fresh_session=fresh_session)
         if d.capture_diff:
-            return await self._prompt_with_changes(d, query, timeout=timeout)
-        return await self._prompt(d, query, timeout=timeout)
+            return await self._prompt_with_changes(d, query, timeout=timeout, fresh_session=fresh_session)
+        return await self._prompt(d, query, timeout=timeout, **({"fresh_session": True} if fresh_session else {}))
 
-    async def _prompt_with_changes(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
+    async def _prompt_with_changes(
+        self, d: Delegate, query: str, *, timeout: float | None = None, fresh_session: bool = False
+    ) -> str:
         """Unmanaged dispatch that hands back what the coder changed (``return_diff``).
 
         Snapshots the workdir's git tree before and after the turn and appends the
@@ -258,16 +261,16 @@ class AcpAdapter(Adapter):
 
         root = os.path.expanduser(d.workdir)
         if not await asyncio.to_thread(cs.is_git_worktree, root):
-            reply = await self._prompt(d, query, timeout=timeout)
+            reply = await self._prompt(d, query, timeout=timeout, **({"fresh_session": True} if fresh_session else {}))
             return f"{reply}\n\n[no change summary — {root} is not a git repository]"
         try:
             before = await asyncio.to_thread(cs.snapshot, root)
         except (cs.ChangeCaptureError, OSError) as exc:
-            reply = await self._prompt(d, query, timeout=timeout)
+            reply = await self._prompt(d, query, timeout=timeout, **({"fresh_session": True} if fresh_session else {}))
             return f"{reply}\n\n[no change summary — pre-dispatch snapshot failed: {exc}]"
         token = cs.begin(root)
         try:
-            reply = await self._prompt(d, query, timeout=timeout)
+            reply = await self._prompt(d, query, timeout=timeout, **({"fresh_session": True} if fresh_session else {}))
         finally:
             overlapped = cs.end(root, token)
         try:
@@ -278,7 +281,9 @@ class AcpAdapter(Adapter):
             summary = f"[no change summary — post-dispatch snapshot failed: {exc}]"
         return f"{reply}\n\n{summary}"
 
-    async def _prompt(self, d: Delegate, query: str, *, timeout: float | None = None) -> str:
+    async def _prompt(
+        self, d: Delegate, query: str, *, timeout: float | None = None, fresh_session: bool = False
+    ) -> str:
         # Reuse the ADR 0024 ACP client + by-kind permission policy.
         from plugins.coding_agent import _client_for, _drop_client, _make_permission
         from plugins.coding_agent.acp_client import AcpError
@@ -301,7 +306,9 @@ class AcpAdapter(Adapter):
         )
         callbacks = tracker.acp_prompt_callbacks() if tracker is not None else {}
         try:
-            reply = await client.prompt(query, timeout=timeout or d.timeout_s, **callbacks)
+            reply = await client.prompt(
+                query, timeout=timeout or d.timeout_s, **({"fresh_session": True} if fresh_session else {}), **callbacks
+            )
             # A blank reply whose turn ended NORMALLY (end_turn, or no stop reason) is a
             # FAILED delegation, not a silent success (#4371): the background drain would
             # otherwise book it `completed` and deliver a successful `(replied with
@@ -386,7 +393,13 @@ class AcpAdapter(Adapter):
             raise DelegateError(f"delegate {d.name!r} ({d.command}): {exc}") from exc
 
     async def _dispatch_managed(
-        self, d: Delegate, query: str, *, timeout: float | None = None, item_id: str | None = None
+        self,
+        d: Delegate,
+        query: str,
+        *,
+        timeout: float | None = None,
+        item_id: str | None = None,
+        fresh_session: bool = False,
     ) -> str:
         """Managed-git dispatch (ADR 0076): claim → PR pre-flight → branch setup →
         edit-only coder run → framework-owned commit/rebase/push/PR. The claim dedups
@@ -416,7 +429,12 @@ class AcpAdapter(Adapter):
             prep = await harness.prepare(workdir, base=d.base_branch, branch=branch)
             if prep.error:
                 return f"Error: managed-git setup for {d.name!r} failed: {prep.error}"
-            reply = await self._prompt(d, query + harness.edit_only_directive(branch), timeout=timeout)
+            reply = await self._prompt(
+                d,
+                query + harness.edit_only_directive(branch),
+                timeout=timeout,
+                **({"fresh_session": True} if fresh_session else {}),
+            )
             outcome = await harness.finish(
                 workdir, base=d.base_branch, branch=branch, item_id=iid, title=title, draft=d.draft_pr
             )

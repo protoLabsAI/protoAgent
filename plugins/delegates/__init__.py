@@ -44,6 +44,7 @@ def _build_delegate_to(registry: DelegateRegistry):
         resume_task_id: str = "",
         timeout: int = 0,
         project: str = "",
+        fresh_session: bool | None = None,
         state: Annotated[Any, InjectedState] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
     ) -> str | Command:
@@ -79,6 +80,9 @@ def _build_delegate_to(registry: DelegateRegistry):
                 instead of the full query, which stays one click away. Always set it.
             background: run the delegation detached and get the reply back on
                 completion, instead of waiting inline (default False).
+            fresh_session: ACP session policy for this dispatch. Defaults to fresh for
+                background jobs and reuse for foreground calls. False continues the
+                current conversation. Explicit task resumes always keep their task.
             item_id: stable work-item id for a coding task on a managed-git coding
                 agent — one PR per id, and a second dispatch of an in-flight id is
                 refused instead of duplicating the work. Use the issue/board id when
@@ -152,6 +156,7 @@ def _build_delegate_to(registry: DelegateRegistry):
                 timeout=timeout_s,
                 summary=summary,
                 project=scope,
+                fresh_session=fresh_session,
             )
         from graph.delegate_progress import progress_sink
 
@@ -171,6 +176,7 @@ def _build_delegate_to(registry: DelegateRegistry):
                     resume_task_id=resume_task_id or None,
                     timeout=timeout_s,
                     project=scope,
+                    fresh_session=bool(fresh_session),
                 )
         except DelegateError as exc:
             # A stopped member of THIS box's fleet is recoverable: ask, start, retry.
@@ -337,6 +343,7 @@ async def _dispatch_into_room(
     resume_task_id: str | None = None,
     timeout: float | None = None,
     project=None,
+    fresh_session: bool = False,
 ) -> str | Command:
     """Dispatch a foreground delegation and atomically add it to the room (#3102).
 
@@ -357,17 +364,18 @@ async def _dispatch_into_room(
     with no key and therefore open a conversation of their own.
     """
     async def plain() -> str:
+        extra = {"fresh_session": True} if fresh_session and not resume_task_id else {}
         if project is not None:
             return await registry.dispatch(
-                target, query, item_id=item_id, resume_task_id=resume_task_id, timeout=timeout, project=project
+                target, query, item_id=item_id, resume_task_id=resume_task_id, timeout=timeout, project=project, **extra
             )
         return await registry.dispatch(
-            target, query, item_id=item_id, resume_task_id=resume_task_id, timeout=timeout
+            target, query, item_id=item_id, resume_task_id=resume_task_id, timeout=timeout, **extra
         )
 
     # These identities have dispatch semantics the room helper deliberately does not
     # own. Preserve the managed-git claim and parked-task continuation exactly.
-    if item_id or resume_task_id:
+    if item_id or resume_task_id or fresh_session:
         return await plain()
     try:
         from graph.mention_op import catchup_caps, dispatch_into_room
@@ -466,6 +474,7 @@ async def _spawn_background_delegation(
     timeout: float | None = None,
     summary: str = "",
     project=None,
+    fresh_session: bool | None = None,
 ) -> str:
     """Run a delegation as a detached background job (ADR 0050): return a handle now and
     drain the delegate's reply back into the spawning session on completion — the same
@@ -487,6 +496,9 @@ async def _spawn_background_delegation(
     except Exception:  # noqa: BLE001 — no runtime state (e.g. a unit test) → inline
         mgr = None
     extra = {"project": project} if project is not None else {}
+    # Only ACP consumes this policy; explicit task resumes retain their identity.
+    if registry.get(target).type == "acp" and not resume_task_id:
+        extra["fresh_session"] = True if fresh_session is None else fresh_session
     if mgr is None:
         return await registry.dispatch(
             target, query, item_id=item_id or None, resume_task_id=resume_task_id or None, timeout=timeout, **extra
