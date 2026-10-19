@@ -1,9 +1,9 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { ToastProvider } from "@protolabsai/ui/overlays";
 import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./app/App";
+import { AppToasts } from "./app/AppToasts";
 import { PairingConfirmation } from "./app/PairingConfirmation";
 import { PairingRecovery } from "./app/PairingRecovery";
 import { Launcher } from "./app/Launcher";
@@ -64,13 +64,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       {/* Inert unless the e2e/QA hook is set (ADR 0114) — reaches AppCrash's quota path. */}
       <ForcedQuotaCrash />
       <QueryClientProvider client={queryClient}>
-        {/* Toasts anchor TOP-right (app-level notifications; clear of the bottom utility
-            bar / composer) via the DS prop — no `.pl-toast-stack` CSS override needed
-            since @protolabsai/ui 0.49 (ToastProvider `position`). */}
-        <ToastProvider position="top-right">
+        <AppToasts>
           <PairingConfirmation />
           <PairingRecovery error={pairingError}>{launcher ? <Launcher /> : <App />}</PairingRecovery>
-        </ToastProvider>
+        </AppToasts>
       </QueryClientProvider>
     </ErrorBoundary>
   </React.StrictMode>,
