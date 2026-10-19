@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import type { ChatMessage } from "../lib/types";
+import type { ChatMessage, FormResponseDisplay, FormResponseField, FormResponseGroup } from "../lib/types";
 import { rendersText, textRuns } from "./parts";
 import {
   applyCanonicalTurnText,
@@ -345,8 +345,12 @@ export function sanitizePersisted(parsed: unknown): PersistedChatState | null {
       // Two one-time repairs, both self-limiting: a split turn handed the whole
       // canonical answer (#3387), and an ADDRESSED turn whose answer was drawn once
       // under the participant's byline and once again as the lead's (#3449 — the
-      // shape v0.164.0 persisted, which nothing else heals).
-      const messages = repairAddressedTurnEcho(repairDuplicatedTurnText(dedupeMessages(s.messages)));
+      // shape v0.164.0 persisted, which nothing else heals). `normalizeFormResponses`
+      // additionally drops a corrupt HITL form-response label map (#4259) so it can't
+      // reach the card renderer; all return the same array when nothing changed.
+      const messages = repairAddressedTurnEcho(
+        repairDuplicatedTurnText(dedupeMessages(normalizeFormResponses(s.messages))),
+      );
       return messages === s.messages ? s : { ...s, messages };
     });
   if (!sessions.length) return null;
@@ -497,6 +501,50 @@ export function mergeHydratedSessions(current: ChatState, incoming: ChatSession[
     else if (last?.status === "error") sessionStatusMap[session.id] = "error";
   }
   return { ...current, sessions, currentSessionId, activeSessions, sessionStatusMap };
+}
+
+/** Validate a persisted `formResponse` (#4259) from a possibly hand-edited / older blob: keep a
+ *  well-formed display (optional string title + groups of string label/value pairs) and return
+ *  `undefined` for anything else, so a corrupt entry degrades to the message's legacy text
+ *  instead of rendering a broken card or throwing past the panel boundary (same defensive stance
+ *  as `isValidSession`). Presentation-only — it never touches `content`, the resume value. */
+export function sanitizeFormResponse(value: unknown): FormResponseDisplay | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const d = value as { title?: unknown; groups?: unknown };
+  if (!Array.isArray(d.groups)) return undefined;
+  const groups: FormResponseGroup[] = [];
+  for (const g of d.groups) {
+    const rawFields = (g as { fields?: unknown } | null)?.fields;
+    if (!g || typeof g !== "object" || !Array.isArray(rawFields)) continue;
+    const fields: FormResponseField[] = [];
+    for (const f of rawFields) {
+      const field = f as { label?: unknown; value?: unknown };
+      if (f && typeof f === "object" && typeof field.label === "string" && typeof field.value === "string") {
+        fields.push({ label: field.label, value: field.value });
+      }
+    }
+    if (!fields.length) continue;
+    const title = (g as { title?: unknown }).title;
+    groups.push(typeof title === "string" ? { title, fields } : { fields });
+  }
+  if (!groups.length) return undefined;
+  return typeof d.title === "string" ? { title: d.title, groups } : { groups };
+}
+
+/** Drop a structurally-invalid `formResponse` off any message that carries one (#4259),
+ *  returning the SAME array when every message is already clean so a healthy session is never
+ *  rewritten on load. A valid display is kept as-is (it already round-trips as JSON). */
+function normalizeFormResponses(messages: ChatMessage[]): ChatMessage[] {
+  if (!messages.some((m) => m.formResponse !== undefined)) return messages;
+  let changed = false;
+  const next = messages.map((m) => {
+    if (m.formResponse === undefined) return m;
+    if (sanitizeFormResponse(m.formResponse)) return m; // well-formed — keep the original object
+    changed = true;
+    const { formResponse: _dropped, ...rest } = m;
+    return rest;
+  });
+  return changed ? next : messages;
 }
 
 /** Collapse duplicate message entries by id, keeping the LAST occurrence (the

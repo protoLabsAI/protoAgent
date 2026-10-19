@@ -294,6 +294,17 @@ def test_the_chart_frame_runs_under_a_nonce_csp_with_no_network(monkeypatch, tmp
     assert "</" not in ctl and "<!" not in ctl  # rides a srcdoc <script>
 
 
+def test_the_chart_csp_admits_the_vendored_embed_stylesheet(monkeypatch, tmp_path):
+    """Launch bug B3: base() links the vendored DS sheet (pl-embed.css) into every frame, but the
+    chart CSP was ``style-src 'unsafe-inline'`` — the sheet was refused on every chart, its
+    ``error`` event read as "Script error", and a chart that drew fine failed check_artifact.
+    style-src now names exactly that one vendored file (no host-wide grant)."""
+    art = _load(monkeypatch, tmp_path)
+    src = _js_function(art._SHELL_JS, "vegaDoc")
+    assert "style-src 'unsafe-inline' \"+ORIGIN+\"/plugins/artifact/vendor/pl-embed.css;" in src
+    assert '/plugins/artifact/vendor/pl-embed.css' in _js_function(art._SHELL_JS, "base")
+
+
 def test_the_error_boot_waits_for_the_embed_not_the_load_event(monkeypatch, tmp_path):
     """A chart draws after `load` and can still fail then — so `load` must not report OK."""
     art = _load(monkeypatch, tmp_path)

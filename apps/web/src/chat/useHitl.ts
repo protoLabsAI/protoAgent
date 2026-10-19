@@ -1,13 +1,91 @@
 import { useRef, useState } from "react";
 
 import { api } from "../lib/api";
-import type { HitlPayload, SystemNoteTone } from "../lib/types";
+import type {
+  FormResponseDisplay,
+  FormResponseField,
+  FormResponseGroup,
+  HitlPayload,
+  SystemNoteTone,
+} from "../lib/types";
+import { fieldsOf, isMultiChoice, optionsOf, type FieldSchema } from "./hitl-form";
 
-/** The slot's `runTurn` signature, narrowed to the options a HITL answer sends. */
+/** The slot's `runTurn` signature, narrowed to the options a HITL answer sends. `formResponse`
+ *  is the presentation-only label map (#4259): it rides the resume turn so the user bubble can
+ *  render a card, and never alters `content` (the byte-identical resume JSON). */
 export type HitlRunTurn = (
   content: string,
-  opts?: { hidden?: boolean; resumeMessageId?: string; hitlResume?: boolean },
+  opts?: {
+    hidden?: boolean;
+    resumeMessageId?: string;
+    hitlResume?: boolean;
+    formResponse?: FormResponseDisplay;
+  },
 ) => Promise<void>;
+
+const EM_DASH = "—";
+
+/** Human display string for one submitted field value, honoring the field's JSON Schema:
+ *  `oneOf`/`enum` option titles (single-select and multi-select arrays), "Yes"/"No" for a
+ *  boolean, an em dash for an empty/skipped answer, and `String()` for everything else. Pure —
+ *  derives ONLY from the schema + the value, never from the resume JSON it accompanies, so it
+ *  can't change what gets sent (#4259). Exported for direct unit testing. */
+export function displayFieldValue(schema: FieldSchema | undefined, value: unknown): string {
+  // Multi-select: map each selected value through its option label, joined; empty ⇒ em dash.
+  if (schema && isMultiChoice(schema)) {
+    const arr = Array.isArray(value) ? value : [];
+    if (!arr.length) return EM_DASH;
+    const opts = optionsOf(schema);
+    return arr.map((v) => opts.find((o) => o.value === String(v))?.label ?? String(v)).join(", ");
+  }
+  if (schema?.type === "boolean") return value ? "Yes" : "No";
+  if (value === undefined || value === null || value === "") return EM_DASH;
+  if (Array.isArray(value)) return value.length ? value.map(String).join(", ") : EM_DASH;
+  // Single-choice (oneOf cards / enum dropdown): show the option's human title, not its const.
+  const opts = schema ? optionsOf(schema) : [];
+  return opts.find((o) => o.value === String(value))?.label ?? String(value);
+}
+
+/** Derive the PRESENTATION-ONLY label map for a submitted form response (#4259) from the HITL
+ *  payload's schema + the answers object. Fields are grouped by wizard step (step title shown
+ *  only for multi-step forms), labelled by each field's schema `title` and falling back to the
+ *  raw property key when a schema is absent; answer keys with no matching schema field are
+ *  appended last, raw-key labelled, so a schema-less or partial form still reads safely.
+ *  Returns `undefined` when there is nothing to show (an empty object, a string answer) so the
+ *  caller leaves the turn's legacy text untouched. NEVER mutates or re-serializes the answers —
+ *  the resume JSON is produced separately and stays byte-identical. */
+export function describeFormResponse(
+  payload: HitlPayload | null | undefined,
+  response: Record<string, unknown> | string,
+): FormResponseDisplay | undefined {
+  if (!response || typeof response !== "object") return undefined;
+  const steps = payload?.steps ?? [];
+  // Only a real `request_user_input` form (one with steps) submits an object worth labelling;
+  // an `ask_human` question — even one tagged `kind: "form"` — has no steps and submits a plain
+  // string, so it keeps its legacy text (and the string-answer guard above covers it anyway).
+  if (!steps.length) return undefined;
+  const multiStep = steps.length > 1;
+  const claimed = new Set<string>();
+  const groups: FormResponseGroup[] = [];
+
+  for (const step of steps) {
+    const fields: FormResponseField[] = [];
+    for (const [key, schema] of fieldsOf(step)) {
+      if (!(key in response)) continue;
+      claimed.add(key);
+      fields.push({ label: schema.title || key, value: displayFieldValue(schema, response[key]) });
+    }
+    if (fields.length) groups.push(multiStep && step.title ? { title: step.title, fields } : { fields });
+  }
+  // Answer keys the schema never declared (no schema at all, or a partial one): label each by
+  // its raw key so the provenance is still safely readable rather than raw JSON.
+  const orphans = Object.keys(response).filter((key) => !claimed.has(key));
+  if (orphans.length) {
+    groups.push({ fields: orphans.map((key) => ({ label: key, value: displayFieldValue(undefined, response[key]) })) });
+  }
+  if (!groups.some((group) => group.fields.length)) return undefined;
+  return payload?.title ? { title: payload.title, groups } : { groups };
+}
 
 export type UseHitlOptions = {
   /** The session this slot renders (`null` before hydration). Only its id is read. */
@@ -75,6 +153,11 @@ export function useHitl({ sessionId, runTurn, noteToThread, lastAssistantId }: U
     // the tool card itself (running → done on approve, error on deny), so the bubble is
     // just noise. A form/question answer IS meaningful content, so those stay visible.
     const silent = hitl?.kind === "approval";
+    // Capture presentation-only labels for a VISIBLE form answer (#4259) BEFORE clearing the
+    // payload — the user bubble renders them as a card instead of the raw resume JSON. Only a
+    // form/question answer is visible; an approval is silent (no bubble), and a string answer
+    // (`ask_human` free text / an approval option) has no schema to label, so both skip it.
+    const formResponse = silent ? undefined : describeFormResponse(hitl, response);
     updateHitl(null);
     // For an approval resume, CONTINUE the original assistant message (the one that paused) so the
     // pre- and post-approval tool cards live in ONE bubble / one WorkBlock — otherwise they split
@@ -85,7 +168,9 @@ export function useHitl({ sessionId, runTurn, noteToThread, lastAssistantId }: U
     // and folds in right after.
     void runTurn(
       typeof response === "string" ? response : JSON.stringify(response),
-      silent ? { hidden: true, resumeMessageId: lastAssistantId(), hitlResume: true } : { hitlResume: true },
+      silent
+        ? { hidden: true, resumeMessageId: lastAssistantId(), hitlResume: true }
+        : { hitlResume: true, ...(formResponse ? { formResponse } : {}) },
     );
   }
 

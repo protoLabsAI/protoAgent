@@ -29,6 +29,9 @@ Where the device id comes from:
   gated HTTP mint route) and, on redeeming it, calls ``bind_device(ws, device_id)``. The guard
   picks the binding up at its next tick, so binding after ``accept`` (an in-band ticket frame)
   works too.
+  For supported hub-proxied tickets, ``graph.fleet.proxy`` retains the authenticated
+  device in a single-use hub-owned association and binds the hub socket on redemption;
+  the member receives only its original ticket, never a hub device assertion.
 
 Only device credentials are checked. The shared bearer, an API key, the fleet token, a
 federation token and open mode carry no device id, so their sockets are never closed by this.
@@ -182,7 +185,17 @@ class DeviceSocketGuard:
         async def guarded_receive():
             if closed.is_set():
                 return {"type": "websocket.disconnect", "code": POLICY_VIOLATION}
-            message = await receive()
+            pending = asyncio.ensure_future(receive())
+            revoked = asyncio.create_task(closed.wait())
+            try:
+                await asyncio.wait({pending, revoked}, return_when=asyncio.FIRST_COMPLETED)
+                if closed.is_set():
+                    return {"type": "websocket.disconnect", "code": POLICY_VIOLATION}
+                message = pending.result()
+            finally:
+                for task in (pending, revoked):
+                    task.cancel()
+                await asyncio.gather(pending, revoked, return_exceptions=True)
             if closed.is_set() and message.get("type") != "websocket.connect":
                 return {"type": "websocket.disconnect", "code": POLICY_VIOLATION}
             return message

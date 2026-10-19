@@ -265,9 +265,24 @@ and fleet-proxied streams. Each re-checks the device at a keepalive tick it alre
 stream token minted by a device (`/api/sse-token`) carries the device's id, so a revoked phone
 can't open a new stream in the 30 seconds that token is valid. Open WebSockets close too, within
 about 12 seconds, when the phone opened them with its own token or with a ticket it minted on
-this agent, such as agent_browser's viewport. A plugin that mints its own tickets, such as the
-terminal, must record the minting phone for this; until it does, removing the phone only stops
-the socket reconnecting.
+this agent, such as agent_browser's viewport. Direct terminal tickets require terminal
+**0.9.3 or newer and core 0.210.0 or newer**; older terminal versions only stop reconnecting
+after revocation.
+
+For hub-proxied terminal and agent_browser tickets, the hub replaces the member's ticket
+with a random, single-use handle valid for at most 30 seconds. A bounded, in-memory hub
+record binds that handle to the authenticated minting device, member URL and slug, exact
+socket route, and original ticket. Redemption burns the handle, checks device liveness,
+binds the hub socket, and restores the member ticket. Revocation or idle expiry then closes
+both proxy legs at the socket guard tick. Terminal handles remain in the first auth frame;
+agent_browser retains its existing query-ticket protocol. No device proof, device identity,
+phone token or service credential is added to plugin pages or URLs.
+
+This is a hub-owned association, not a member assertion: browser-supplied device headers
+never establish identity, and members neither share the hub's device registry nor learn the
+phone credential. Unknown, expired, replayed or substituted handles fail closed, including
+after a hub restart or capacity eviction (mint a fresh ticket). Other plugins' ticket
+protocols still need explicit integration; their proxied ticket sockets are not covered.
 
 ## See also
 
