@@ -2669,6 +2669,102 @@ def test_save_file_artifact_project_path_cannot_escape_the_fence(monkeypatch, tm
     assert "escapes" in out and _arts(art) == []
 
 
+# ── #4326: an absolute path together with `project` ────────────────────────────────────
+
+
+def test_save_file_artifact_absolute_path_inside_the_named_project(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    (ws / "sources").mkdir(parents=True)
+    f = ws / "sources" / "rules.txt"
+    f.write_text("inside", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=ws)
+    out = art.save_file_artifact.invoke({"path": str(f), "project": "workspace"})
+    assert "Saved file artifact" in out and "inside" in _arts(art)[0]["versions"][0]["code"]
+
+
+def test_save_file_artifact_absolute_path_with_dotdot_back_inside_is_fine(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    (ws / "a").mkdir(parents=True)
+    (ws / "x.txt").write_text("x", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=ws)
+    out = art.save_file_artifact.invoke({"path": str(ws / "a" / ".." / "x.txt"), "project": "workspace"})
+    assert "Saved file artifact" in out
+
+
+def test_save_file_artifact_absolute_path_outside_the_project_is_refused(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    f = b / "x.txt"
+    f.write_text("in b", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=a, other=b)
+    out = art.save_file_artifact.invoke({"path": str(f), "project": "workspace"})
+    # refused, names the root, never silently resolved against the other project
+    assert "outside project 'workspace'" in out and str(a.resolve()) in out and "drop `project`" in out
+    assert _arts(art) == []
+    dotdot = art.save_file_artifact.invoke({"path": str(a / ".." / "b" / "x.txt"), "project": "workspace"})
+    assert "outside project" in dotdot and _arts(art) == []
+
+
+def test_save_file_artifact_absolute_symlink_escape_is_refused(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("nope", encoding="utf-8")
+    try:
+        (ws / "link.txt").symlink_to(secret)
+        (ws / "dirlink").symlink_to(tmp_path, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    _fence(monkeypatch, art, workspace=ws)
+    for path in (ws / "link.txt", ws / "dirlink" / "secret.txt"):
+        out = art.save_file_artifact.invoke({"path": str(path), "project": "workspace"})
+        assert "outside project" in out, out
+    assert _arts(art) == []
+
+
+def test_save_file_artifact_absolute_path_case_variant_cannot_escape(monkeypatch, tmp_path):
+    """On a case-insensitive volume (macOS) a case-variant of the root is the same folder and
+    resolves inside it; on a case-sensitive one it's a different (missing) path. Either way a
+    case trick never reaches a file outside the fence."""
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "x.txt").write_text("x", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("nope", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=ws)
+    out = art.save_file_artifact.invoke({"path": str(tmp_path / "WS" / "x.txt"), "project": "workspace"})
+    case_insensitive = (tmp_path / "WS").exists()
+    assert ("Saved file artifact" in out) if case_insensitive else ("outside project" in out)
+    esc = art.save_file_artifact.invoke({"path": str(tmp_path / "WS" / ".." / "secret.txt"), "project": "workspace"})
+    assert "outside project" in esc
+    assert all("nope" not in a["versions"][0]["code"] for a in _arts(art))
+
+
+def test_save_file_artifact_relative_path_with_project_unchanged(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    (ws / "d").mkdir(parents=True)
+    (ws / "d" / "r.txt").write_text("rel", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=ws)
+    assert "Saved file artifact" in art.save_file_artifact.invoke({"path": "d/r.txt", "project": "workspace"})
+    assert "escapes" in art.save_file_artifact.invoke({"path": "../x", "project": "workspace"})
+
+
+def test_save_file_artifact_absolute_path_without_project_unchanged(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    f = tmp_path / "elsewhere.txt"
+    f.write_text("free", encoding="utf-8")
+    _fence(monkeypatch, art, workspace=ws)
+    assert "Saved file artifact" in art.save_file_artifact.invoke({"path": str(f)})
+
+
 def test_save_file_artifact_not_found_names_where_it_looked(monkeypatch, tmp_path):
     art = _load(monkeypatch, tmp_path)
     ws = tmp_path / "ws"
