@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.211.0",
+    "date": "2026-10-19",
+    "changes": [
+      "Readable HITL form-response cards (#4259).",
+      "Plugin deps install in a uv sync venv (#4263).",
+      "A delegation card's live narration reads as prose (#4266).",
+      "Settled assistant Markdown (#4268).",
+      "Keep completion toasts clear of rails (#4341).",
+      "Close revoked phones' member ticket sockets (#4362).",
+      "Paired phones on Windows survive a concurrent registry write (#4366 follow-up).",
+      "fetch_url truncation marker now reports how much was cut (#4383).",
+      "Fresh installs keep a langfuse SDK that talks to self-hosted Langfuse v3 (#4391).",
+      "A plugin's HITL card in an unrecognised shape reads as prose (careercoach#34).",
+      "Clearer docs paths and executable plugin-view examples (#4388).",
+      "Visual walkthroughs and same-page image zoom in the docs (#4390)."
+    ]
+  },
+  {
     "version": "v0.210.0",
     "date": "2026-10-19",
     "changes": [

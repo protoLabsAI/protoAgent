@@ -15,6 +15,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.211.0] - 2026-10-19
+
+### Added
+- **Readable HITL form-response cards (#4259).** Answering an agent's `request_user_input`
+  form now shows a compact, labelled card in the chat — schema field titles, option labels for
+  single/multi choice, Yes/No for booleans, an em dash for skipped answers, grouped by wizard
+  step — instead of the raw resume JSON. The labels are presentation-only and keyed to the
+  message, so the value sent to the agent and the stored payload are byte-identical to before,
+  and the card persists across reload and session switch. Older answers without the captured
+  labels, `ask_human` free-text replies, approvals, and plugin forms are unchanged.
+
+### Fixed
+- **Plugin deps install in a `uv sync` venv (#4263).** Those venvs ship without pip, so every optional dep was reported failed. Installs now go through `uv pip install --python <this interpreter>` when pip is missing and uv is on PATH; with neither, the error names the fix.
+
+- **A delegation card's live narration reads as prose (#4266).** Task boxes, code ticks and bold marks are stripped, lines that ran together are kept apart, and a cut lands on a word boundary.
+
+- **Settled assistant Markdown (#4268).** Disable incomplete-marker repair after an answer finishes, preventing stray trailing asterisks when code contains Markdown markers while preserving partial formatting during streaming.
+
+- **Keep completion toasts clear of rails (#4341).** Fit notifications between the rendered desktop and tablet rails and within phone safe areas, preserving distinct goal alerts, announcements, and dismissal.
+
+- **Close revoked phones' member ticket sockets (#4362).** The hub binds terminal and agent_browser tickets to their authenticated minting device without sharing device registries or credentials with members. Revocation and idle expiry close both proxy legs at the socket guard tick; scoped, short-lived hub handles reject replay and member/route substitution.
+
+- **Paired phones on Windows survive a concurrent registry write (#4366 follow-up).** A rename, rotate or revoke that collided with a phone's request failed with "Access is denied", and that request could read the registry as empty and be refused. Both sides now retry briefly, as file edits already did.
+
+- **`fetch_url` truncation marker now reports how much was cut (#4383).** It appended a bare `…[truncated]`, so a model could not tell a capped page from an empty one (a weekly digest run reported a server-rendered GitHub trending page as "JS-rendered" when the 8000-char cap had cut off the repo list). The marker now reads `…[truncated: showing N of M chars — re-call with a larger max_chars to read the rest]`.
+
+- **Fresh installs keep a langfuse SDK that talks to self-hosted Langfuse v3 (#4391).** `langfuse` is capped below 5: SDK v5 needs a Langfuse server at v4.59 or later, so a new `pip install protoagent` resolved 5.0.2 and its traces would no longer land on a v3 server.
+
+- **A plugin's HITL card in an unrecognised shape reads as prose (careercoach#34).** Its `prompt`/`message`/`text` becomes the question and its `title` the heading, instead of the whole dict's Python repr with escaped newlines; a dict with no text shows as JSON.
+
+### Docs
+- **Clearer docs paths and executable plugin-view examples (#4388).**
+  Separate phone setup from device management, explain the coding workflow sequence,
+  add a recurring-task tutorial and update/recovery chooser, align page labels,
+  preserve old anchors without repetitive outline entries, and fix public/data
+  router separation and fleet-aware fetch instructions in the plugin-view guides.
+
+- **Visual walkthroughs and same-page image zoom in the docs (#4390).**
+  Publish all 28 first-wave media slots with reviewed diagrams, real demo captures,
+  video text alternatives, and reproducible source notes. Enlarge images in place
+  on the website and in-app reader, including keyboard and actual-size controls.
+  Correct plugin discovery and workflow navigation steps found during capture.
+
 ## [0.210.0] - 2026-10-19
 
 ### Fixed
