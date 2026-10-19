@@ -140,4 +140,7 @@ test("after a reload the reply to a form answer renders once, under the answer",
   await page.waitForTimeout(1000);
   await expect(slot.locator(".pl-message--assistant").filter({ hasText: REPLY })).toHaveCount(1);
   await expect(slot.locator(".pl-message--assistant").last()).toContainText(REPLY);
+  // Nothing about this healthy session asks for a durable repair, so boot never re-reads its
+  // turns (on main the question bubble flagged it on every boot).
+  expect(turnReads).toHaveLength(0);
 });
