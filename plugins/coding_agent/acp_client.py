@@ -611,6 +611,8 @@ class AcpClient:
         # Tool calls started this turn → their card name, so a later refinement can be
         # sent as an ``update`` for a call the UI actually has a card for (#3691).
         self._turn_open_tools: dict[str, str] = {}
+        self._transcript_path: str | None = None
+        self._reset_timeout_evidence()
         # Why the last turn ended, straight from ACP's `session/prompt` result (#2279).
         # `prompt()` is typed -> str and cannot carry it; an orchestrator reads it here
         # (or via `dead_end()`) to tell "declined" from "ran out of room" from "done".
@@ -906,6 +908,81 @@ class AcpClient:
         lines = list(self._stderr_tail)[-max(1, limit) :]
         return "\n".join(lines)
 
+    def _reset_timeout_evidence(self) -> None:
+        self._last_tool: tuple[str, float] | None = None
+        self._edit_tool_ids: set[str] = set()
+        self._observed_edit_paths: list[str] = []
+        self._edit_paths_truncated = False
+        self._pending_permission = False
+
+    @staticmethod
+    def _evidence_text(value: str, limit: int, *, tail: bool = False) -> str:
+        from graph.middleware.redaction import redact
+
+        # Redact before truncating so a credential crossing the cut stays hidden.
+        clean = redact(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value))
+        clean = "".join(c if c.isprintable() else " " for c in clean)
+        return clean[-limit:] if tail else clean[:limit]
+
+    def _observe_tool(self, update: dict) -> None:
+        if not hasattr(self, "_last_tool"):
+            self._reset_timeout_evidence()
+        tool_id = str(update.get("toolCallId") or "")
+        title = update.get("title") or self._turn_open_tools.get(tool_id) or update.get("kind")
+        # Titles can contain shell commands or inline arguments. Keep only the name
+        # token, never the free-form title, rawInput, output, or diff contents.
+        name = re.match(r"[\w.-]+", _short_tool_name(str(title or "unknown")))
+        self._last_tool = (name.group() if name else "unknown", time.monotonic())
+        if update.get("kind") == "edit" and len(self._edit_tool_ids) < 128:
+            self._edit_tool_ids.add(tool_id)
+        paths = []
+        if update.get("kind") == "edit" or tool_id in self._edit_tool_ids:
+            paths.extend(loc.get("path") for loc in (update.get("locations") or []) if isinstance(loc, dict))
+        # ACP diff blocks explicitly identify edit targets, even without a kind.
+        paths.extend(
+            block.get("path") for block in (update.get("content") or [])
+            if isinstance(block, dict) and block.get("type") == "diff"
+        )
+        for path in paths:
+            if not isinstance(path, str) or not path:
+                continue
+            path = self._evidence_text(path, 240)
+            if path in self._observed_edit_paths:
+                continue
+            if len(self._observed_edit_paths) >= 8:
+                self._edit_paths_truncated = True
+                continue
+            self._observed_edit_paths.append(path)
+
+    def _note_transcript(self, result: Any) -> None:
+        # ACP has no standard transcript filename/layout. Only use an explicit
+        # agent extension, scoped to this session; never construct one from cwd/id.
+        meta = result.get("_meta") if isinstance(result, dict) else None
+        path = meta.get("transcriptPath") if isinstance(meta, dict) else None
+        self._transcript_path = path if isinstance(path, str) and path else None
+
+    def _timeout_evidence(self) -> str:
+        session = self._evidence_text(str(self._turn_session_id or "unknown"), 160)
+        transcript = (
+            self._evidence_text(self._transcript_path, 400)
+            if self._turn_session_id and self._transcript_path else "unavailable"
+        )
+        tool = "unknown (age unknown)"
+        if self._last_tool is not None:
+            name, started = self._last_tool
+            tool = f"{self._evidence_text(name, 80)} (age {max(0, time.monotonic() - started):.1f}s since last tool event)"
+        paths = json.dumps(self._observed_edit_paths, ensure_ascii=False)
+        if self._edit_paths_truncated:
+            paths += " (additional paths omitted)"
+        # Keep stderr in its own budget: hook spam cannot crowd out turn evidence.
+        tail = self._evidence_text(self.stderr_tail(), 2000, tail=True)
+        return (
+            f"; session_id={session}; transcript={transcript}; last_tool={tool}"
+            f"; pending_permission={'yes' if self._pending_permission else 'no'}"
+            f"; observed_edit_paths (unverified)={paths}"
+            + (f"; last stderr: {tail}" if tail else "; no stderr output")
+        )
+
     def _exit_detail(self) -> str:
         """How the subprocess died, plus its parting words — appended to the errors
         raised when the read loop ends or an in-flight request is orphaned."""
@@ -1024,6 +1101,8 @@ class AcpClient:
             return  # replaying history during session/load — reattaching silently
         update = params.get("update") or {}
         kind = update.get("sessionUpdate")
+        if kind in ("tool_call", "tool_call_update"):
+            self._observe_tool(update)
         if kind == "agent_message_chunk":
             text = _content_text(update.get("content"))
             if text:
@@ -1249,6 +1328,7 @@ class AcpClient:
         method = msg.get("method")
         rid = msg.get("id")
         if method == "session/request_permission":
+            self._pending_permission = True
             params = msg.get("params") or {}
             resolver = self._permission or self._auto_allow
             option_id = resolver(params)
@@ -1263,6 +1343,7 @@ class AcpClient:
             )
             outcome = {"outcome": "selected", "optionId": option_id} if option_id else {"outcome": "cancelled"}
             await self._respond(rid, {"outcome": outcome})
+            self._pending_permission = False
         else:
             # We didn't advertise fs/terminal; decline anything else cleanly so
             # the agent falls back to its own capabilities instead of hanging.
@@ -1428,9 +1509,9 @@ class AcpClient:
             # "timed out" alone can't distinguish a wedged agent from a working one that
             # needs a longer budget. Its stderr usually can — a rate-limit notice, an auth
             # prompt it is blocked on, a retry loop — so hand that to whoever reads this.
-            tail = self.stderr_tail()
-            hint = f"; last stderr:\n{tail}" if tail else ""
-            raise AcpError(f"{method} timed out after {timeout}s{hint}") from exc
+            error = AcpError(f"{method} timed out after {timeout}s{self._timeout_evidence()}")
+            error._has_turn_evidence = True
+            raise error from exc
 
     async def _respond(self, rid, result: dict) -> None:
         await self._send({"jsonrpc": "2.0", "id": rid, "result": result})
@@ -1557,6 +1638,7 @@ class AcpClient:
         finally:
             self._loading = False
         self._session_id = session_id
+        self._note_transcript(result)
         self._session_cost_seen = None  # a resumed total: baseline on the first reading
         self._note_model(result)
 
@@ -1624,6 +1706,7 @@ class AcpClient:
                 ) from exc
             raise
         self._session_id = (result or {}).get("sessionId")
+        self._note_transcript(result)
         self._session_cost_seen = 0.0
         self._note_model(result)
         if not self._session_id:
@@ -2031,6 +2114,7 @@ class AcpClient:
         # handshake timeout, a protocol mismatch. Reset it afterwards and a run that dies
         # there books the last successful run's tool calls and session id as its own
         # (#3040); the clearing has to happen before the first await that can fail.
+        self._reset_timeout_evidence()
         self._answer = ""
         self._text_after_tool = False
         self._last_chunk = ""
@@ -2085,6 +2169,9 @@ class AcpClient:
                 # the respawn opens a fresh `session/new`, silently dropping the
                 # conversation thread the pooling exists to keep.
                 if not (isinstance(exc, AcpError) and exc.reported_by_agent):
+                    if isinstance(exc, AcpError) and not getattr(exc, "_has_turn_evidence", False):
+                        # Preserve the original exception and its code/data contract.
+                        exc.args = (self._evidence_text(str(exc), 2000) + self._timeout_evidence(),)
                     self._fence_stream()
                 await self._cancel_session()
                 raise
