@@ -6,7 +6,8 @@ running throughout this exercise; a saved schedule cannot run while it is off.
 
 ## 1. Create a short test
 
-Open **Schedule** from the command palette and choose **New schedule**.
+Open **Work** on the right rail, select the **Schedule** card heading, then
+choose **New schedule**.
 Select **Cron** and enter `*/2 * * * *` to run every two minutes. Check the
 **Timezone** field and the preview before saving.
 
@@ -21,7 +22,8 @@ one so you can identify and remove this exercise's job.
 
 ## 2. Verify a run
 
-Wait until the next fire time, then open **Activity**. Find the run containing
+Wait until the next fire time, then open **Feed** from the bottom-left
+activity icon. Find the run containing
 the test prompt and confirm it completed with a reply. The exact wording can
 vary with the model. A saved row or a **Last fire** timestamp alone does not
 prove the model answered successfully.

@@ -10,11 +10,11 @@ Ask the agent to run a task later or on a recurring schedule:
 
 Open **Schedule** to confirm the saved prompt, timezone, and next fire time.
 The server must be running to execute the job. Recurring runs appear in
-**Activity**; chat-created schedules also report back to their originating chat.
+**Feed**; chat-created schedules also report back to their originating chat.
 
 ## Manage from the console
 
-Open **Schedule** to create, inspect, edit, or cancel a job. Use a named timezone
+Open **Work → Schedule** to create, inspect, edit, or cancel a job. Use a named timezone
 for recurring local times; the new-schedule dialog starts with your browser’s local timezone; API calls
 without a timezone use UTC. One-shot ISO timestamps use their
 own offset, so include one when specifying local time.
@@ -22,7 +22,7 @@ own offset, so include one when specifying local time.
 Write a self-contained prompt with the sources, action, and expected output.
 Recurring runs do not inherit the conversation that created them. An agent-tool
 one-shot resumes its originating session; jobs created outside chat normally
-run in Activity.
+appear in **Feed**.
 
 <!-- docs-media: schedule-state -->
 

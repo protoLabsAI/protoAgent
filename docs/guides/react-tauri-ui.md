@@ -12,9 +12,14 @@ walkthrough uses `uvx`; it does not require a globally installed `protoagent` co
 
 ## Layout
 
-Use the rail to open **Chat**, **Activity**, **Knowledge**, and **Settings**.
-Enabled plugins add their own views. Goals, tasks, schedules, and notes provide
-views of the agent's ongoing work.
+1. **Agent switcher** (top left): choose the agent you are working with.
+2. **Left rail**: open Chat, Knowledge, Memory, Docs, and installed plugin views.
+3. **Chat workspace**: switch conversation tabs, read tool results, and send messages.
+4. **Right rail**: open Work for goals, watches, tasks, and schedules, or inspect
+   artifacts and notes beside the conversation.
+
+**Settings**, **Search commands**, and **Feed** are in the bottom-left toolbar.
+Feed combines pending inbox items and completed agent-initiated work.
 
 Press **⌘⇧K** / **Ctrl-Shift-K** for the
 [command palette](/guides/command-palette), or click the search icon, to jump to a
@@ -70,13 +75,15 @@ or the **Artifact** panel.
 
 ## Activity and inbox {#reactive-surfaces-adr-0003}
 
-**Activity** holds agent-initiated work, including scheduled tasks. Open it to
-read results or reply in the Activity conversation. The unread badge counts new
-items while you are elsewhere; the live dot shows the event connection.
+Open **Feed** from the bottom-left activity icon. It combines pending inbound
+messages with completed agent-initiated turns, including scheduled tasks.
+Completed entries show what triggered them; use **Open in reader** for the full
+result. The badge counts unread items.
 
-**Inbox** holds messages from webhooks, scripts, and other agents. A `now` item
-starts an Activity turn immediately; `next` and `later` items wait for the agent
-to check them. Read or dismiss items here.
+Inbox messages can come from webhooks, scripts, or other agents. A `now` item
+starts a turn immediately; `next` and `later` items wait for the agent to check
+them. Feed exposes pending items for inspection or dismissal. A failed immediate
+delivery remains visible as an **undelivered page**.
 
 ## Change settings {#agent-settings-telemetry}
 
