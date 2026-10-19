@@ -172,6 +172,41 @@ def test_connection_test_preserves_opaque_credential_whitespace(config_file, mon
     assert seen == [' opaque credential ']
 
 
+@pytest.mark.parametrize('form,sent', [
+    ({'host': 'https://elsewhere.example'}, False),
+    ({'provider': 'other'}, False),
+    ({'host': 'https://elsewhere.example', 'client_secret': 'typed-now'}, True),
+    ({'host': 'https://vault.example'}, True),
+    ({'project_id': 'p2'}, True),
+])
+def test_connection_test_never_sends_the_saved_secret_to_a_new_destination(config_file, monkeypatch, form, sent):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from infra.secrets import FetchResult
+    from operator_api.secrets_routes import register_secrets_routes
+    config_file.write_text(
+        'secrets_manager:\n  host: https://vault.example\n  client_id: id\n  client_secret: SAVED_SECRET\n'
+    )
+    seen = []
+    def fetch(cfg):
+        seen.append((cfg.host, cfg.client_secret))
+        return FetchResult(values={})
+    monkeypatch.setattr('infra.secrets.get_provider', lambda _: SimpleNamespace(fetch=fetch))
+    app = FastAPI()
+    register_secrets_routes(app)
+    with TestClient(app) as client:
+        response = client.post('/api/secrets/test', json=form)
+    assert response.status_code == 200
+    if sent:
+        assert response.json()['ok'] is True
+        assert len(seen) == 1
+    else:
+        assert response.json()['ok'] is False
+        assert 'enter the client secret' in response.json()['error']
+        assert seen == []
+    assert 'SAVED_SECRET' not in response.text
+
+
 @pytest.mark.parametrize('route,seam', [
     ('sync', 'infra.secrets.hydrate_from_docs'),
     ('test', 'infra.secrets.source_from_docs'),
