@@ -36,6 +36,7 @@ instance state. Frozen: it is a record of a turn that already happened.
 | `plan` | `list \| None` | The coder's own live plan (its todo list: {content, status, priority} entries) from the last `plan` update, or None — not every coder plans. |
 | `stop_reason` | `str \| None` | Why the turn ended, straight from ACP's `session/prompt` result (`end_turn`, `refusal`, `max_tokens`, …), or None when the agent reported none. |
 | `dead_end` | `str \| None` | Why the turn is NOT worth retrying (`refusal` / `cancelled`), or None when a retry is sane — `AcpClient.dead_end()`'s answer, precomputed so the caller doesn't re-derive the classification ([#2279](https://github.com/protoLabsAI/protoAgent/issues/2279)). |
+| `empty_reply` | `str \| None` | A one-line `empty_reply` diagnostic when the turn ended normally (`end_turn` or no stop reason) yet produced no text — `AcpClient.empty_reply_failure()`'s answer, None otherwise. The board reads THIS rather than `reply`'s emptiness so its same-tier retry on silent coder turns ([#2991](https://github.com/protoLabsAI/protoAgent/issues/2991)) keeps the raw reply contract while still seeing why the turn said nothing (stop reason, tool-call count, stderr tail). |
 
 ## Functions
 

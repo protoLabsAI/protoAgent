@@ -74,6 +74,15 @@ _DEAD_END_STOP_REASONS = frozenset({"refusal", "cancelled"})
 #: the orchestrator re-dispatches it) AND is worth retrying at a bigger tier. Reading the
 #: retry classifier as the outcome booked every truncated run as a success (#3015).
 _UNFINISHED_STOP_REASONS = frozenset({"refusal", "cancelled", "max_tokens"})
+
+#: The outcome marker for a turn that ended on NORMAL terms (``end_turn``, or no stop
+#: reason at all) and yet delivered no text (#4371). Not a ``stopReason`` — the wire
+#: reports one of those, this is protoAgent's reading of a blank-but-finished turn. A run
+#: like that is booked ``failed`` (not ``completed``) and the delegate surface raises on
+#: it, because the reply alone can't tell a coder that did its work silently from one that
+#: never started (a cwd it can't write, a sandbox denial, a crashed preflight) — both
+#: arrive as ``""`` and used to read as a successful ``(replied with nothing)``.
+_EMPTY_REPLY_SIGNAL = "empty_reply"
 ToolCallback = Callable[[dict], Awaitable[None]]  # structured tool start/end events
 
 
@@ -104,6 +113,12 @@ class TappedResult:
     # retry is sane — ``AcpClient.dead_end()``'s answer, precomputed so the caller
     # doesn't re-derive the classification (#2279).
     dead_end: str | None
+    # A one-line ``empty_reply`` diagnostic when the turn ended normally (``end_turn`` or
+    # no stop reason) yet produced no text — ``AcpClient.empty_reply_failure()``'s answer,
+    # None otherwise. The board reads THIS rather than ``reply``'s emptiness so its
+    # same-tier retry on silent coder turns (#2991) keeps the raw reply contract while
+    # still seeing why the turn said nothing (stop reason, tool-call count, stderr tail).
+    empty_reply: str | None = None
 
 
 def _tool_output_preview(update: dict, limit: int = 300) -> str:
@@ -1658,6 +1673,11 @@ class AcpClient:
         session_id = ""
         reply = ""
         stop_reason: str | None = None
+        # The ``empty_reply`` diagnostic (#4371) when this turn ended normally yet said
+        # nothing — set once the turn returns, read from the `finally` for the trace
+        # output. None when the run never returned a reply (an exception path) or the
+        # reply had text / already classified itself (max_tokens/refusal/cancelled).
+        empty_reply: str | None = None
         # Per-turn signals, read while the lock is held (see the finally below) and
         # traced after it is released. None/empty when the run never got the lock.
         usage: dict | None = None
@@ -1745,10 +1765,21 @@ class AcpClient:
                 # retryable and unsuccessful, so reusing it booked every truncated run as a
                 # success while the delegate surface was telling the orchestrator the same
                 # reply was cut off (#2279, #2352, #3015).
-                state = "completed" if self.unfinished_reason() is None else "failed"
                 # Only a turn that returned owns ``last_stop_reason`` — it is not reset
                 # per turn, so a failed one would report the previous run's.
                 reply, stop_reason = answer, self.last_stop_reason
+                # A blank reply whose turn ended NORMALLY (end_turn, or no stop reason) is
+                # a failed run too (#4371), not a silent success — otherwise an empty
+                # `end_turn` booked `completed`/`success=1` and the lead saw a successful
+                # `(replied with nothing)`. The retryable/truncated reasons
+                # (max_tokens/refusal/cancelled) already classify themselves via
+                # `unfinished_reason()` and carry their own markers, so they are excluded.
+                empty_reply = (
+                    self._empty_reply_note(stop_reason, tool_calls)
+                    if not reply.strip() and self.unfinished_reason() is None
+                    else None
+                )
+                state = "completed" if (self.unfinished_reason() is None and empty_reply is None) else "failed"
                 return answer
             except BaseException as exc:
                 failure = exc
@@ -1765,8 +1796,9 @@ class AcpClient:
                 output = reply
                 if state != "completed":
                     # A failed run has no reply, so without this its trace had no output
-                    # at all: say why it failed (timeout, agent error, cancel, cut off).
-                    output = f"[{state}] {self._failure_reason(failure, stop_reason)}" + (
+                    # at all: say why it failed (timeout, agent error, cancel, cut off, or
+                    # an empty normal-ended turn — #4371).
+                    output = f"[{state}] {self._failure_reason(failure, stop_reason, empty_reply)}" + (
                         f"\n\n{reply}" if reply else ""
                     )
                 metadata = {
@@ -1858,14 +1890,56 @@ class AcpClient:
             },
         )
 
-    def _failure_reason(self, failure: BaseException | None, stop_reason: str | None) -> str:
-        """Why a run failed, in a line: the exception, else the wire stop reason."""
+    def _failure_reason(
+        self, failure: BaseException | None, stop_reason: str | None, empty_reply: str | None = None
+    ) -> str:
+        """Why a run failed, in a line: the exception, else the empty-reply diagnostic
+        (#4371), else the wire stop reason."""
         if isinstance(failure, asyncio.CancelledError):
             return "cancelled"
         if failure is not None:
             text = str(failure).strip()
             return f"{type(failure).__name__}: {text}" if text else type(failure).__name__
+        if empty_reply:
+            return empty_reply
         return self.unfinished_reason() or (f"stop reason {stop_reason}" if stop_reason else "no reply")
+
+    def _empty_reply_note(self, stop_reason: str | None, tool_calls: int) -> str:
+        """The ``empty_reply`` diagnostic line (#4371): the stop reason (``none`` when the
+        agent sent none), the turn's tool-call count, and a bounded sanitized tail of the
+        agent's stderr — the three signals a lead needs to tell a coder that did its work
+        and said nothing from one that never started. ``stderr_tail`` is already ring-
+        buffered (bounded) and callers cap it; the stop reason and count are trivially safe.
+        """
+        reason = (stop_reason or "").strip() or "none"
+        tail = self.stderr_tail()
+        stderr_note = f"; last stderr:\n{tail}" if tail else "; no stderr output"
+        return (
+            f"{_EMPTY_REPLY_SIGNAL} — the turn ended with stop reason {reason} and "
+            f"{tool_calls} tool call(s) but produced no text{stderr_note}"
+        )
+
+    def empty_reply_failure(self, reply: str) -> str | None:
+        """The ``empty_reply`` diagnostic (#4371) when the last turn ended NORMALLY yet said
+        nothing — or ``None`` when it didn't.
+
+        An empty reply whose stop reason is a normal end (``end_turn``, or none at all) is a
+        failed run that reads as a success from the reply alone: the lead cannot tell a
+        coder that did its work silently from one that never started (bad cwd, sandbox
+        denial, crashed preflight). The delegate surface raises on this so the background
+        drain books ``ok:false`` instead of a successful ``(replied with nothing)``.
+
+        Returns ``None`` (not this failure) when the reply has text, or when the turn
+        already carries its own classification — ``max_tokens``/``refusal``/``cancelled``
+        keep the markers ``_mark_incomplete`` / ``dead_end`` give them.
+
+        Read immediately after the caller's own ``await client.prompt(...)`` returns — the
+        same per-client, single-flight contract as ``last_stop_reason`` and
+        ``_mark_incomplete`` (the next queued turn resets these only once it holds the lock).
+        """
+        if reply.strip() or self.unfinished_reason() is not None:
+            return None
+        return self._empty_reply_note(self.last_stop_reason, self._turn_tool_calls)
 
     def _record_run_telemetry(self, state: str, started: float, tool_calls: int, session_id: str) -> None:
         """One durable telemetry row per coder run (#3015). Best-effort; never raises.
@@ -2104,4 +2178,8 @@ class AcpClient:
             plan=self.last_plan,
             stop_reason=self.last_stop_reason,
             dead_end=self.dead_end(),
+            # Expose the empty-reply signal HERE rather than by changing what ``reply`` is,
+            # so the board's same-tier retry on silent coder turns (#2991) still reads the
+            # raw reply yet learns why it was blank (#4371).
+            empty_reply=self.empty_reply_failure(reply),
         )

@@ -302,11 +302,25 @@ class AcpAdapter(Adapter):
         callbacks = tracker.acp_prompt_callbacks() if tracker is not None else {}
         try:
             reply = await client.prompt(query, timeout=timeout or d.timeout_s, **callbacks)
+            # A blank reply whose turn ended NORMALLY (end_turn, or no stop reason) is a
+            # FAILED delegation, not a silent success (#4371): the background drain would
+            # otherwise book it `completed` and deliver a successful `(replied with
+            # nothing)`, with no way to tell a coder that did its work and said nothing
+            # from one that never started. Raise so the drain records `ok:false` with a
+            # diagnostic that names the stop reason, the turn's tool-call count, and the
+            # stderr tail. getattr: a pooled client missing the seam degrades to 'no
+            # failure', never to an AttributeError that fails a working delegate.
+            empty = getattr(client, "empty_reply_failure", lambda _r: None)(reply)
+            if empty is not None:
+                if tracker is not None:
+                    await tracker.finish(ok=False)
+                raise DelegateError(f"delegate {d.name!r} ({d.command}): no reply — {empty}")
             if tracker is not None:
                 await tracker.finish(ok=True)
             # getattr: the pool hands back whatever client the spec resolves to, and a
             # missing stop reason must degrade to 'no marker', never to an AttributeError
-            # that turns a working delegate into a hard dispatch failure.
+            # that turns a working delegate into a hard dispatch failure. ``max_tokens`` /
+            # ``refusal`` (the non-empty-but-cut-off reasons) still ride this marker.
             return _mark_incomplete(reply, getattr(client, "last_stop_reason", None))
         except asyncio.CancelledError:
             if tracker is not None:
