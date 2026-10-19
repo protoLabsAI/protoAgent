@@ -248,7 +248,7 @@ Show the desktop-to-phone handoff without making a usable credential public.
 
 **Capture / drawing brief:** Two-panel capture of Devices and the connected phone. Replace the QR/token area with an explicit non-scannable DEMO block in the editable source. Show reachable URL shape without real addresses.
 
-**Placement:** [guides/phone-access.md](../guides/phone-access.md) → 2. Open it on the phone {#_2-reach-it-from-the-phone}
+**Placement:** [guides/phone-access.md](../guides/phone-access.md) → 2. Pair the phone {#_2-reach-it-from-the-phone}
 
 **Caption:** Show the desktop-to-phone handoff without making a usable credential public.
 

@@ -117,7 +117,7 @@ export function describePairingError(res: { status?: number; error: string; retr
     );
   }
   if (res.status === undefined && /abort|timeout|timed out|failed to fetch|network|offline|load failed/i.test(res.error)) {
-    return "Couldn't reach this agent. Check the phone is on the same Wi-Fi (or tailnet) and try again.";
+    return "Couldn't reach this agent. Check you're on the same Wi-Fi or tailnet, or open the agent's public address.";
   }
   return res.error;
 }

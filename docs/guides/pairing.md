@@ -6,12 +6,17 @@ short-lived, single-use code; the other side claims it; the claim mints a per-cl
 that this agent stores only as a hash and that you can revoke on its own, from
 **Settings ▸ Devices**, without signing anything else out.
 
-For a phone or tablet, open **Settings → Devices → Add a device** and either scan the
+This page is the reference for how pairing works. To set up a phone or tablet from start
+to finish (choosing Wi-Fi, Tailscale or a public URL, installing it, moving between networks),
+follow [Use protoAgent on your phone or tablet](/guides/phone-access).
+
+For a phone or tablet, open **Settings ▸ Devices ▸ Add a device** and either scan the
 QR or type the short code shown beside it (`XXXXX-XXXXX`). On a box with no screen,
 `protoagent pair --device` prints the same code and QR in the terminal. A code expires
-after five minutes and works once; restarting clears pending codes. The resulting token
-grants operator access to this agent, so pair only devices you intend to give that
-control.
+after five minutes and works once; restarting clears pending codes. A paired phone is
+[Limited](#full-access-and-limited): it can use the whole console, but it can't pair other
+devices or change credentials. Its chat turns still run the agent's tools, so pair only
+devices you trust with that.
 
 To add another agent to a fleet, use [Pair a remote fleet member](/guides/pair-an-agent).
 
@@ -89,11 +94,11 @@ Never turn on `PROTOAGENT_ALLOW_OPEN=1` to make pairing work. Pairing adds clien
 ## Pair a phone (QR)
 
 1. On the agent: **Settings ▸ Devices ▸ Add a device**. A QR appears with a countdown, and
-   a choice of address if the agent has more than one, best first: **Tailnet HTTPS**, the
-   **Tailnet name**, a **Tailnet** IP, then **Wi-Fi**. Each tailnet address works from any
-   network, but only if the phone has the Tailscale app signed in to the same tailnet. A
-   Wi-Fi address works only while both are on that Wi-Fi. The line under the QR says which
-   applies.
+   a choice of address if the agent has more than one, best first: **Tailnet HTTPS**,
+   **Phone without Tailscale** (your [public URL](./phone-access.md#without-tailscale), when
+   set), the **Tailnet name**, a **Tailnet** IP, then **Wi-Fi**. The line under the QR says
+   what the phone needs for the selected one; the
+   [address table](./phone-access.md#_2-reach-it-from-the-phone) compares them.
 2. On the phone: scan it. The link opens the console at `…/app/#pair=<code>`; the console
    claims the code, stores the device token in that browser, and strips the code from the
    address bar and history. The code travels in the `#fragment`, so it never reaches a
@@ -122,7 +127,7 @@ is on a terminal or a screen share), or when you'd rather not.
 
 The QR and the typed code are the same code. Using either one spends it.
 
-### If the code doesn't work
+### If the code doesn't work {#if-the-code-doesnt-work}
 
 The agent answers every bad code the same way, on purpose: it never tells a guesser which
 codes exist. The phone shows **That code didn't work** and names the possible causes.
@@ -157,7 +162,7 @@ the proxy. Set [`network.trusted_proxies`](../reference/configuration.md#network
 proxy's address.
 
 If the phone says **Couldn't reach this agent**, the problem is the network, not the
-code. See [Access from your phone](./phone-access.md#tailscale-reach-it-from-anywhere).
+code. See [Troubleshooting](./phone-access.md#troubleshooting).
 
 ## Pair a phone from a headless box
 
@@ -170,8 +175,8 @@ protoagent pair --device
 
 It finds the running instance the same way `protoagent pair` does, starts a phone
 pairing, and prints a QR in the terminal, the code, and the console URL for each address
-the phone can use, best first (tailnet HTTPS, then the tailnet name, a tailnet IP, and
-Wi-Fi), with what each one needs. The QR uses the first one. Scan the QR, or open a URL on the phone and type the
+the phone can use, best first (tailnet HTTPS, your public URL when set, the tailnet name, a
+tailnet IP, then Wi-Fi), with what each one needs. The QR uses the first one. Scan the QR, or open a URL on the phone and type the
 code as described above. `--no-qr` skips the drawing, `--light` draws it for a
 light-background terminal, and `--json` prints the raw response. See the
 [CLI reference](./cli.md#pairing-a-phone-from-the-terminal-protoagent-pair-device) for
@@ -182,8 +187,8 @@ token, as in [Before you pair](#before-you-pair-make-this-agent-reachable). On a
 `--ui none` agent the command says to restart it with `--ui console` and exits 1, without
 making a code. Pairing another agent doesn't need the console.
 
-To install the console on the phone's home screen and for the Tailscale setup, see
-[Access from your phone](./phone-access.md).
+To install the console on the phone's home screen, and for the Tailscale and public URL
+setup, see [Use protoAgent on your phone or tablet](./phone-access.md).
 
 ## Pair another agent
 

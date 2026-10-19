@@ -208,7 +208,7 @@ instance that may run its own fleet, and registration is one-sided on the hub.
 by URL and it becomes a **switchable member** — a slug window like any peer, with the hub
 reverse-proxying its console + A2A. The remote runs fully headless; this console is its UI.
 The end-to-end walkthrough (making the remote reachable, pairing it by code, revoking,
-the `auth` badges and delegating through the hub) is [Pair devices and agents](./pairing.md).
+the `auth` badges and delegating through the hub) is [Pair a remote fleet member](./pair-an-agent.md).
 
 On the other machine:
 

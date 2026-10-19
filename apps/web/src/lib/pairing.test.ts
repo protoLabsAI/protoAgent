@@ -299,6 +299,8 @@ describe("describePairingError", () => {
 
   it("explains a network failure as reachability", () => {
     expect(describePairingError({ error: "Failed to fetch" })).toMatch(/Couldn't reach this agent/);
+    // All three routes: Wi-Fi, the tailnet, and the operator's own public URL (ADR 0121 D2).
+    expect(describePairingError({ error: "Failed to fetch" })).toMatch(/Wi-Fi or tailnet, or open the agent's public address/);
     expect(describePairingError({ error: "The operation was aborted due to timeout" })).toMatch(/Couldn't reach/);
   });
 

@@ -276,7 +276,7 @@
           "collapsed": false,
           "items": [
             {
-              "text": "Access from your phone (LAN / Tailscale)",
+              "text": "Use protoAgent on your phone or tablet",
               "link": "/guides/phone-access"
             },
             {
