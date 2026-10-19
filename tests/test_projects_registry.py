@@ -162,7 +162,10 @@ def test_explicit_filesystem_projects_win_over_the_registry():
 
 def test_registry_projects_onto_the_fence_when_no_explicit_list():
     cfg = _cfg(projects=[{"name": "a", "path": "/tmp/a", "write": False}])
-    assert cfg.effective_filesystem_projects() == [{"name": "a", "path": _r("/tmp/a"), "write": False}]
+    projects = cfg.effective_filesystem_projects()
+    assert projects[0] == {"name": "a", "path": _r("/tmp/a"), "write": False}
+    assert projects[1]["name"] == "workspace"
+    assert projects[1]["write"] is True
 
 
 def test_filesystem_disabled_yields_no_fence_even_with_a_registry():

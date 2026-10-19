@@ -64,7 +64,7 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -414,6 +414,7 @@ class _Registration:
 
     status: str
     mirrored: bool = False
+    implicit_workspace: bool = False
     error: str = ""
 
 
@@ -510,11 +511,22 @@ async def _register(
     if not ok:
         return _Registration("error", error=f"registration failed: {'; '.join(messages) or 'unknown error'}")
     status = "promoted" if in_fence and not in_registry else "registered"
-    return _Registration(status, mirrored=bool(fence) and not in_fence)
+    from graph.config import LangGraphConfig
+
+    implicit_workspace = isinstance(source, LangGraphConfig) and replace(
+        source,
+        projects=updates.get("projects", registry),
+        filesystem_enabled=(updates.get("filesystem") or {}).get("enabled", source.filesystem_enabled),
+    ).filesystem_workspace_is_implicit
+    return _Registration(status, mirrored=bool(fence) and not in_fence, implicit_workspace=implicit_workspace)
 
 
 def _where(reg: _Registration) -> str:
-    return "the managed-projects registry" + (" + the explicit filesystem.projects override" if reg.mirrored else "")
+    return (
+        "the managed-projects registry"
+        + (" + the explicit filesystem.projects override" if reg.mirrored else "")
+        + (" (implicit workspace remains available read-write)" if reg.implicit_workspace else "")
+    )
 
 
 _ROOT_UNSET = (
