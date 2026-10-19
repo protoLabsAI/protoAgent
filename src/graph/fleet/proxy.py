@@ -19,8 +19,10 @@ the socket forever — see the read-timeout lanes below (#2590).
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import re
+import secrets
 import time
 
 import httpx
@@ -155,6 +157,51 @@ def _timeout_for(request, path: str) -> httpx.Timeout:
 # ``_timeout_for``.
 _client: httpx.AsyncClient | None = None
 
+# Hub-owned capability indirection (#4362). Only authenticated device mints on these
+# known protocols are wrapped. The member ticket never reaches the phone, so dropping
+# the handle cannot bypass its binding. No registry/key/proof is sent to the member.
+_TICKET_ROUTES = {
+    "api/plugins/terminal/ticket": "plugins/terminal/ws",
+    "api/plugins/agent_browser/stream-ticket": "api/plugins/agent_browser/stream",
+}
+_TICKET_PREFIX = "hub-ticket."
+_TICKET_LIMIT = 4096
+_TICKET_TTL = 30.0
+_ticket_bindings: dict[str, tuple[float, str, str, str, str, str]] = {}
+
+
+def _remember_ticket(slug: str, base: str, route: str, ticket: str, device: str) -> str:
+    now = time.monotonic()
+    for key, record in list(_ticket_bindings.items()):
+        if record[0] <= now:
+            del _ticket_bindings[key]
+    while len(_ticket_bindings) >= _TICKET_LIMIT:
+        del _ticket_bindings[next(iter(_ticket_bindings))]
+    handle = _TICKET_PREFIX + secrets.token_urlsafe(32)
+    _ticket_bindings[handle] = (now + _TICKET_TTL, slug, base, route, ticket, device)
+    return handle
+
+
+def _redeem_proxy_ticket(ticket: str, slug: str, base: str, path: str, ws) -> str:
+    """Burn a hub handle before any await/dial; ordinary member tickets stay unchanged."""
+    if not ticket.startswith(_TICKET_PREFIX):
+        return ticket
+    from a2a_impl.auth import device_is_live
+    from a2a_impl.socket_guard import bind_device
+
+    record = _ticket_bindings.pop(ticket, None)
+    if record is None:
+        raise ValueError("invalid hub ticket")
+    expires, member, target, route, original, device = record
+    if expires <= time.monotonic() or (member, target, route) != (slug, base, path) or not device_is_live(device):
+        raise ValueError("invalid hub ticket")
+    scope = ws if isinstance(ws, dict) else ws.scope
+    bound = (scope.get("state") or {}).get("device_id")
+    if bound and bound != device:
+        raise ValueError("conflicting ticket device")
+    bind_device(ws, device)
+    return original
+
 
 def _get_client() -> httpx.AsyncClient:
     global _client
@@ -226,7 +273,8 @@ _SSE_KEEPALIVE_S = 30.0
 
 
 async def _forward_to_base(
-    base: str, request, path: str, extra_headers: dict | None = None, *, drop_params: frozenset[str] = frozenset()
+    base: str, request, path: str, extra_headers: dict | None = None, *, drop_params: frozenset[str] = frozenset(),
+    ticket_binding: tuple[str, str, str] | None = None,
 ):
     """Stream-proxy ``request`` to ``<base>/<path>`` (SSE-safe). ``drop_params`` names query
     params that must not ride upstream (a remote never gets the hub-signed ``?token=``)."""
@@ -261,6 +309,27 @@ async def _forward_to_base(
         # cap and freeze the console (#2590). 504 so the panel can render a real error.
         log.warning("[fleet] proxied %s %s timed out waiting for the agent to respond", request.method, url)
         return JSONResponse({"detail": "agent did not respond in time"}, status_code=504)
+
+    if ticket_binding is not None and 200 <= upstream.status_code < 300:
+        # These two mint endpoints return small JSON objects, never streams. Bound the
+        # read even for a broken remote; never fall back to exposing an unbound ticket.
+        try:
+            data = bytearray()
+            async for chunk in upstream.aiter_bytes():
+                data.extend(chunk)
+                if len(data) > 16384:
+                    raise ValueError("oversized ticket response")
+            payload = json.loads(data)
+            ticket = payload.get("ticket") if isinstance(payload, dict) else None
+            if not isinstance(ticket, str) or not ticket or len(ticket) > 4096:
+                raise ValueError("invalid ticket response")
+            slug, route, device = ticket_binding
+            payload["ticket"] = _remember_ticket(slug, base, route, ticket, device)
+            return JSONResponse(payload, status_code=upstream.status_code, headers={"Cache-Control": "no-store"})
+        except (ValueError, httpx.HTTPError):
+            return JSONResponse({"detail": "invalid member ticket response"}, status_code=502)
+        finally:
+            await upstream.aclose()
 
     # A swapped-away client is only DETECTED on the next downstream write, and the
     # unbounded stream lanes (a2a / api/events) can sit silent for minutes inside a
@@ -440,27 +509,52 @@ async def _forward_member(slug: str, request, path: str, raw_path: str, target):
         # covers agents that are WORKING, not just ones the operator clicked.
         with contextlib.suppress(Exception):
             supervisor.touch(slug)
+    from a2a_impl.socket_guard import request_device_id
+
+    device = request_device_id(request)
+    # Match the member's decoded HTTP destination, including harmless percent-encoded
+    # letters and httpx's literal-dot normalization. Neither spelling may bypass wrapping.
+    route = _TICKET_ROUTES.get(httpx.URL(f"{base}/{raw_path}").path.removeprefix("/"))
+    if device and tier == "operator" and not member_public and request.method == "POST" and route:
+        return await _forward_to_base(
+            base, request, raw_path, extra, drop_params=drop_params, ticket_binding=(slug, route, device)
+        )
     if drop_params:
         return await _forward_to_base(base, request, raw_path, extra, drop_params=drop_params)
     return await _forward_to_base(base, request, raw_path, extra)
 
 
-async def _pump_ws(client_ws, upstream) -> None:
+async def _pump_ws(client_ws, upstream, *, ticket_target: tuple[str, str, str] | None = None) -> None:
     """Relay frames between the browser-side Starlette ``WebSocket`` and the upstream
     ``websockets`` client until either side closes. First-to-finish wins; the other
     direction is cancelled and both ends are closed."""
     import asyncio
 
     async def client_to_upstream():
+        first = True
         try:
             while True:
                 msg = await client_ws.receive()
                 if msg.get("type") == "websocket.disconnect":
                     return
                 if (t := msg.get("text")) is not None:
+                    if first and ticket_target is not None and _TICKET_PREFIX in t:
+                        # Terminal authenticates in its first JSON frame. Inspect only
+                        # that frame; all later terminal input remains an opaque relay.
+                        with contextlib.suppress(ValueError, RecursionError):
+                            hello = json.loads(t)
+                            ticket = hello.get("ticket") if isinstance(hello, dict) else None
+                            if isinstance(ticket, str) and ticket.startswith(_TICKET_PREFIX):
+                                try:
+                                    hello["ticket"] = _redeem_proxy_ticket(ticket, *ticket_target, client_ws)
+                                except ValueError:
+                                    await client_ws.close(code=1008, reason="invalid hub ticket")
+                                    return
+                                t = json.dumps(hello)
                     await upstream.send(t)
                 elif (b := msg.get("bytes")) is not None:
                     await upstream.send(b)
+                first = False
         except Exception:  # noqa: BLE001 — a closed/erroring side just ends the relay
             return
 
@@ -480,6 +574,7 @@ async def _pump_ws(client_ws, upstream) -> None:
     finally:
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _scope_refuses(scope: str | None, method: str | None, path: str) -> bool:
@@ -749,6 +844,18 @@ async def forward_ws(slug: str, ws, path: str) -> None:
             await ws.close(code=1008, reason="unauthorized")
             return
         headers = {"authorization": auth} if auth else {}
+    from urllib.parse import parse_qsl, urlencode
+
+    pairs = parse_qsl(query, keep_blank_values=True)
+    if any(k == "ticket" and v.startswith(_TICKET_PREFIX) for k, v in pairs):
+        try:
+            if sum(k == "ticket" for k, _ in pairs) != 1:
+                raise ValueError("ambiguous ticket")
+            pairs = [(k, _redeem_proxy_ticket(v, slug, base, path, ws) if k == "ticket" else v) for k, v in pairs]
+        except ValueError:
+            await ws.close(code=1008, reason="invalid hub ticket")
+            return
+        query = urlencode(pairs)
     # Forward the RAW sub-path (already percent-encoded, query stripped) rather than re-quoting
     # the decoded route param: the member then decodes it exactly once, as it would for a direct
     # caller, and a caller can't turn path bytes into a fragment or a second query. Ambiguous
@@ -775,7 +882,7 @@ async def forward_ws(slug: str, ws, path: str) -> None:
         return
     try:
         await ws.accept(subprotocol=upstream.subprotocol)
-        await _pump_ws(ws, upstream)
+        await _pump_ws(ws, upstream, ticket_target=(slug, base, path))
     finally:
         try:
             await upstream.close()
