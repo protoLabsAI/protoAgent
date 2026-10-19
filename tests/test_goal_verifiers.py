@@ -261,6 +261,28 @@ async def test_llm_verifier_parses_json(monkeypatch):
     assert res.reason == "done"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        # content BLOCKS (launch bug B2: str() of this list made every judgment a JSONDecodeError)
+        [{"type": "thinking", "thinking": "hmm {not json}"}, {"type": "text", "text": '{"met": true, "reason": "ok"}'}],
+        # prose with braces around the verdict
+        'The note {as written} passes.\n```json\n{"met": true, "reason": "ok"}\n```',
+    ],
+)
+async def test_llm_verifier_reads_block_content_and_tolerates_braces(monkeypatch, content):
+    class _LLM:
+        async def ainvoke(self, msgs, config=None):
+            from langchain_core.messages import AIMessage
+
+            return AIMessage(content=content)
+
+    monkeypatch.setattr("graph.llm.create_llm", lambda config, model_name=None: _LLM())
+    res = await run_verifier({"type": "llm"}, VerifyContext(config=object(), condition="c", last_text="t"))
+    assert (res.met, res.reason) == (True, "ok")
+
+
 # ── plugin-contributed verifiers (ADR 0028, PR1) ─────────────────────────────
 
 from graph.goals.types import VerifyResult  # noqa: E402

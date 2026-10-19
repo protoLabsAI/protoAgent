@@ -35,7 +35,7 @@ def _clip(text: str, cap: int) -> str:
     return text if len(text) <= cap else text[: cap - 1] + "…"
 
 
-def _text_of(content: Any) -> str:
+def message_text(content: Any) -> str:
     """A message content (str, or a list of content blocks) as plain text."""
     if isinstance(content, str):
         return content
@@ -56,7 +56,7 @@ def _is_turn_boundary(msg: BaseMessage) -> bool:
         return False
     if (msg.additional_kwargs or {}).get(_GUARD_NOTE_KWARG):
         return False
-    return not _text_of(msg.content).startswith(_STEERING_PREFIX)
+    return not message_text(msg.content).startswith(_STEERING_PREFIX)
 
 
 def _calls_of(msg: AIMessage) -> list[tuple[str, str, Any]]:
@@ -107,7 +107,7 @@ def summarize_tool_calls(messages: list | None) -> str:
                 line += " → (no result)"
             else:
                 status = " [error]" if getattr(res, "status", "") == "error" else ""
-                line += f" →{status} {_clip(_text_of(res.content), _RESULT_CAP) or '(empty)'}"
+                line += f" →{status} {_clip(message_text(res.content), _RESULT_CAP) or '(empty)'}"
             lines.append(line)
     dropped = max(0, len(lines) - _MAX_CALLS)
     lines = lines[dropped:]
