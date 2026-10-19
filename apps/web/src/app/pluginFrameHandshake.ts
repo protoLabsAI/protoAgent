@@ -13,6 +13,7 @@ import designTokens from "@protolabsai/design/tokens.json";
 import { useEffect, type RefObject } from "react";
 
 import { apiUrl, authToken } from "../lib/api";
+import { CREDENTIAL_CHANGED_EVENT, DEVICE_TOKEN_KEY } from "../lib/credentials";
 
 // The Permissions-Policy a plugin page's frame is granted: clipboard (no sandbox token exists
 // for it) and fullscreen (#4286). Both default to 'self', and in the desktop app the plugin frame
@@ -157,5 +158,27 @@ export function usePluginFrameThemeSync(
     };
     window.addEventListener("protoagent:theme", onThemeChange);
     return () => window.removeEventListener("protoagent:theme", onThemeChange);
+  }, [frameRef, src, navigatedRef]);
+
+  // A rotated device token (ADR 0121 D5) must reach a frame that's already open: the kit
+  // keeps the bearer from its last `protoagent:init`, and a view still sending the OLD token
+  // two minutes after the console switched would read as token reuse and revoke the device.
+  // Re-posting init swaps the kit's token in place (it's idempotent). Same tab: the
+  // credential event; another tab's rotation: the `storage` event on the device-token key.
+  useEffect(() => {
+    const repost = () => {
+      const win = frameRef.current?.contentWindow;
+      if (!win || !navigatedRef.current) return;
+      postInit(win, src);
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === DEVICE_TOKEN_KEY) repost();
+    };
+    window.addEventListener(CREDENTIAL_CHANGED_EVENT, repost);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(CREDENTIAL_CHANGED_EVENT, repost);
+      window.removeEventListener("storage", onStorage);
+    };
   }, [frameRef, src, navigatedRef]);
 }

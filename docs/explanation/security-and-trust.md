@@ -219,6 +219,47 @@ the way out. To contain tools, use tool policy (`filesystem.allow_run: false`) a
 internet-facing console, an identity-aware proxy in front of it. A narrower tool policy for
 `device`-scope turns is possible future work, not something this release does.
 
+### Device token lifetime {#device-token-lifetime}
+
+([ADR 0121](../adr/0121-device-pairing-over-an-operator-supplied-public-url.md) D5.) A Limited
+(`device`-scope) token expires when it goes unused, rotates while it is used, and revokes the
+device if a rotated-out copy turns up later. Full-access tokens do none of this.
+
+**Idle expiry.** A Limited token stops working after
+[`devices.idle_ttl_days`](../reference/configuration.md#devices) (default 30, `0` = never)
+without use. Use is the device's last-seen stamp, which is refreshed at most every five
+minutes, or the pairing time if it was never used. An expired device stays in Settings ▸
+Devices as **Expired** until you remove it. A phone left in a drawer pairs again.
+
+**Weekly rotation.** While a phone is in use, the console asks the server about its own device
+(`GET /api/devices/self`) when it starts and once a day while it stays open. When a week has
+passed since the last rotation (or the pairing), the server says `rotate_due`, and the console
+asks for a new token (`POST /api/devices/self/rotate`) and stores it with a strict write. The
+server keeps the old token valid **until the new one is first presented**, then for 120
+seconds more for requests already in flight. Open plugin views, in this tab and others, are
+handed the new token as soon as it's stored, so nothing in the console keeps sending the old
+one. If the browser can't store the new token, it
+keeps sending the old one, and that keeps working, so a failed write never signs the phone
+out. A second rotation that presents the old token within two minutes of an unused one is
+refused (`409`), so two tabs racing a rotation can't leave the browser holding the token that
+lost. A rotation that was never used is replaced by the next one.
+
+**Reuse detection.** A rotated-out token presented **after** its grace means two parties hold
+one token: the phone moved on, and someone else still has the old copy. The server revokes
+the device, which stops the new token too, and writes a `device.revoked_token_reuse` entry to
+the audit log (`audit/audit.jsonl` under the instance root). It's the standard refresh-token
+reuse rule. The phone pairs again; the copy someone else holds is dead.
+
+**Revocation reaches open streams.** A new request is refused as soon as a device is removed,
+expires or is reuse-revoked, because every request reads the device registry. Streams that
+were already open are closed too, within one keepalive (about 15 seconds): the event bus
+(`/api/events`), the attendance stream (`/api/chat/attend`), A2A `message/stream`, chat turns
+and fleet-proxied streams. Each re-checks the device at a keepalive tick it already sends. A
+stream token minted by a device (`/api/sse-token`) carries the device's id, so a revoked phone
+can't open a new stream in the 30 seconds that token is valid. Plugin WebSockets that
+authenticate once at open, such as the terminal, are not closed by this yet; removing the
+device stops them from reconnecting.
+
 ## See also
 
 - [Building a plugin view](../guides/building-react-plugin-views.md) — the sandboxed-iframe plugin UI model.

@@ -1291,11 +1291,13 @@ def _main():
     # callers that already carry an Authorization header are unaffected.
     # The token carries the MINTING caller's credential scope (ADR 0121 D4), so a stream a
     # paired phone opens is still ``device`` scope when it comes back. No scope stamped (an
-    # app assembled without the middleware) mints the narrow one.
+    # app assembled without the middleware) mints the narrow one. A paired device's id rides
+    # along too (ADR 0121 D5), so the stream re-verifies that device and closes on revoke.
     @fastapi_app.get("/api/sse-token", include_in_schema=False)
     async def _sse_token(request: Request):
         scope = getattr(request.state, "credential_scope", None) or "device"
-        return {"token": auth.generate_sse_token(scope=scope)}
+        device_id = getattr(request.state, "device_id", None)
+        return {"token": auth.generate_sse_token(scope=scope, device_id=device_id)}
 
     # Live ACP coding-agent sessions (#2889): the per-thread runtime registry in
     # server/chat.py had no read surface, leaving coding-delegation triage blind.

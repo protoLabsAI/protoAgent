@@ -24,6 +24,7 @@ import { activateSlugAgent } from "./lib/api";
 import { queryClient } from "./lib/queryClient";
 import { watchThemeChanges } from "./lib/agentTheme";
 import { migrateLegacyDeviceToken, redeemPairingFromUrl } from "./lib/pairing";
+import { startDeviceTokenRotation } from "./lib/deviceRotation";
 
 // A phone paired before #4336 S3 holds its device token in the OPERATOR key. Move it to its
 // own key before anything sends a request. Copy-then-remove, so a failed write leaves the
@@ -74,4 +75,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </ErrorBoundary>
   </React.StrictMode>,
 );
+// A paired phone rotates its token weekly (ADR 0121 D5): asked on boot — after any `#pair=`
+// claim above has stored the token — and daily while open. Not in the launcher window.
+if (!launcher) startDeviceTokenRotation();
 });

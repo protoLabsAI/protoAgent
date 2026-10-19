@@ -451,3 +451,75 @@ test("public URL set: a persistent warning, and 'Phone without Tailscale' points
   // The warning stays while the code is live.
   await expect(warning).toBeVisible();
 });
+
+// ── #4336 S7.3: lifetime — weekly rotation and idle expiry (ADR 0121 D5) ─────────────────
+
+test("a due phone rotates its token on boot; the next request carries the new one", async ({ page }) => {
+  await page.addInitScript(() => {
+    if (window.sessionStorage.getItem("seeded")) return;
+    window.sessionStorage.setItem("seeded", "1");
+    window.localStorage.setItem("protoagent.deviceToken", "old-device-token");
+    window.localStorage.setItem("protoagent.deviceId", "dev-phone1");
+  });
+  const rotations = [];
+  // Due only for the OLD token — once rotated, the server would say it isn't.
+  await page.route("**/api/devices/self", (route) => {
+    const due = route.request().headers()["authorization"] === "Bearer old-device-token";
+    return route.fulfill({
+      json: { device: { id: "dev-phone1", name: "Josh's iPhone", kind: "device", scope: "device", rotate_due: due, created_at: 1, last_seen_at: null } },
+    });
+  });
+  await page.route("**/api/devices/self/rotate", (route) => {
+    rotations.push(route.request().headers()["authorization"]);
+    return route.fulfill({ json: { ok: true, token: "rotated-device-token", device: { id: "dev-phone1" } } });
+  });
+  await openDevices(page);
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("protoagent.deviceToken"))).toBe("rotated-device-token");
+  expect(rotations).toEqual(["Bearer old-device-token"]);
+
+  // From here every request sends the rotated token — and it isn't rotated again.
+  const bearers = new Set();
+  page.on("request", (r) => {
+    if (r.url().includes("/api/")) bearers.add(r.headers()["authorization"] || "");
+  });
+  await openDevices(page);
+  await expect(page.locator(".subagent-row", { hasText: "Josh's iPhone" })).toBeVisible();
+  expect([...bearers].filter(Boolean)).toEqual(["Bearer rotated-device-token"]);
+  expect(rotations).toHaveLength(1);
+});
+
+test("a browser holding only the shared bearer never asks /api/devices/self", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("protoagent.authToken", "e2e-operator-token"));
+  const selfCalls = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/devices/self")) selfCalls.push(r.url());
+  });
+  await openDevices(page);
+  await expect(page.locator(".subagent-row", { hasText: "Josh's iPhone" })).toBeVisible();
+  expect(selfCalls).toEqual([]); // no device token here: nothing to rotate, nothing asked
+});
+
+test("an expired phone shows Expired with remove-and-re-pair guidance; a limited one shows its expiry", async ({ page }) => {
+  const now = Math.floor(Date.now() / 1000);
+  await page.route("**/api/devices", (route) =>
+    route.fulfill({
+      json: {
+        devices: [
+          { id: "x1", name: "Drawer phone", kind: "device", scope: "device", created_at: now - 40 * 86400, last_seen_at: now - 31 * 86400, expired: true, expires_at: now - 86400 },
+          { id: "x2", name: "Daily phone", kind: "device", scope: "device", created_at: now - 9000, last_seen_at: now - 3 * 3600, expired: false, expires_at: now - 3 * 3600 + 30 * 86400 },
+          { id: "x3", name: "Old iPad", kind: "device", scope: "full", created_at: now - 9000, last_seen_at: now - 3 * 3600, expired: false, expires_at: null },
+        ],
+        caller: { scope: "full", device_id: null },
+      },
+    }),
+  );
+  await openDevices(page);
+  const drawer = page.locator(".subagent-row", { hasText: "Drawer phone" });
+  await expect(drawer.getByText("Expired", { exact: true })).toBeVisible();
+  await expect(drawer).toContainText("remove it, then pair the phone again");
+  await expect(drawer.getByRole("button", { name: "Remove Drawer phone" })).toBeVisible();
+  const daily = page.locator(".subagent-row", { hasText: "Daily phone" });
+  await expect(daily.getByText("Expired", { exact: true })).toHaveCount(0);
+  await expect(daily.getByTestId("device-expiry-x2")).toHaveText(/expires in 30 days if unused/);
+  await expect(page.getByTestId("device-expiry-x3")).toHaveCount(0); // full access never expires
+});

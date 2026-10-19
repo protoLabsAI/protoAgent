@@ -25,6 +25,9 @@ import { readKey, removeKey, writeKeyStrict } from "./storage";
 export const OPERATOR_TOKEN_KEY = "protoagent.authToken";
 export const DEVICE_TOKEN_KEY = "protoagent.deviceToken";
 export const DEVICE_ID_KEY = "protoagent.deviceId";
+/** Fired on `window` when this tab swaps in a rotated device token, so anything holding a
+ *  copy of the bearer (an open plugin frame) can pick up the new one. */
+export const CREDENTIAL_CHANGED_EVENT = "protoagent:credential";
 
 function read(key: string): string {
   try {
@@ -94,4 +97,37 @@ export function migrateLegacyDeviceToken(): MigrationResult {
   }
   removeKey("local", OPERATOR_TOKEN_KEY);
   return "migrated";
+}
+
+/** This browser's device token, or "" when it isn't a paired device. */
+export function deviceToken(): string {
+  return read(DEVICE_TOKEN_KEY);
+}
+
+export type ReplaceResult = "replaced" | "store-failed" | "changed";
+
+/** Swap in a ROTATED device token (ADR 0121 D5) — strictly, and only over the token it
+ *  replaces.
+ *
+ *  - `store-failed`: the strict write threw, so the stored (old) token is untouched and is
+ *    what the next request sends. That is safe by design: the server keeps the old token
+ *    valid until the NEW one is first presented, and a token this browser never stored is
+ *    never presented.
+ *  - `changed`: storage no longer holds `previous` (another tab rotated, or the device was
+ *    re-paired meanwhile). Writing now would clobber a newer token, so nothing is written.
+ *  - `replaced`: stored. `effectiveToken()` reads storage per call, so the very next request
+ *    carries the new token. */
+export function replaceDeviceToken(previous: string, next: string): ReplaceResult {
+  if (!previous || read(DEVICE_TOKEN_KEY) !== previous) return "changed";
+  try {
+    writeKeyStrict("local", DEVICE_TOKEN_KEY, next);
+  } catch {
+    return "store-failed";
+  }
+  try {
+    window.dispatchEvent(new Event(CREDENTIAL_CHANGED_EVENT));
+  } catch {
+    /* no window (a worker) — nothing to tell */
+  }
+  return "replaced";
 }

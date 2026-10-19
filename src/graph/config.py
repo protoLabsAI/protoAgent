@@ -632,6 +632,19 @@ def _public_console_url(value) -> str:
     return normalize_public_console_url(value)
 
 
+def _non_negative_int(value, default: int) -> int:
+    """A whole number ≥ 0, else ``default``. ``devices.idle_ttl_days`` (ADR 0121 D2): a
+    hand-edited negative, fractional-string or junk value falls back to the default rather
+    than becoming "never expire" by accident (only an explicit ``0`` means never)."""
+    if isinstance(value, bool):
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return n if n >= 0 else default
+
+
 @dataclass
 class LangGraphConfig:
     # Model settings — route through the LiteLLM gateway by default
@@ -1503,6 +1516,11 @@ class LangGraphConfig:
     # pairs through it. Agent-scoped (each agent on a box has its own URL). Validated at load
     # (https, origin only, not loopback); "" = nothing public. env: PROTOAGENT_PUBLIC_CONSOLE_URL.
     public_console_url: str = ""
+    # Idle expiry for ``device``-scope tokens (ADR 0121 D2/D5): a paired phone unused for longer
+    # than this many days stops authenticating and shows "Expired" in Devices. ``0`` = never.
+    # Full-scope and legacy device rows never expire. Read per request by
+    # ``security.devices`` (hot-reloads with the config). No env fallback.
+    device_idle_ttl_days: int = 30
     fleet_port_base: int = 7870  # workspace agents get port_base+1, +2, …
     discovery_port_min: int = 7860  # fleet discovery scan window (inclusive)
     discovery_port_max: int = 7910
@@ -1972,6 +1990,7 @@ class LangGraphConfig:
         # Box runtime (Host layer, ADR 0047 D8) — `or {}` because a present-but-empty
         # section parses to None.
         network = data.get("network", {}) or {}
+        devices_cfg = data.get("devices", {}) or {}
         fleet = data.get("fleet", {}) or {}
         discovery = fleet.get("discovery", {}) or {}
         warm = fleet.get("warm", {}) or {}
@@ -2305,6 +2324,9 @@ class LangGraphConfig:
             ),
             public_console_url=_public_console_url(
                 network.get("public_console_url", _env_default("PROTOAGENT_PUBLIC_CONSOLE_URL", ""))
+            ),
+            device_idle_ttl_days=_non_negative_int(
+                devices_cfg.get("idle_ttl_days", cls.device_idle_ttl_days), cls.device_idle_ttl_days
             ),
             fleet_port_base=fleet.get("port_base", cls.fleet_port_base),
             discovery_port_min=discovery.get("port_min", cls.discovery_port_min),

@@ -208,7 +208,7 @@ A paired phone or tablet has **`device` scope** ([ADR 0121](../adr/0121-device-p
 |---|---|
 | `auth.*` — `auth.token`, `auth.federation_token` | The credentials themselves |
 | `network.*` — `network.bind` and any `network.` key added later (such as `network.trusted_proxies` and `network.public_console_url`) | Where the agent listens and how it's reached. Matched by prefix, so a new key is covered the day it lands |
-| `devices.*` | Device-pairing policy |
+| `devices.*` — `devices.idle_ttl_days` | Device-pairing policy. A phone that could lengthen its own idle expiry would never expire |
 | `egress.*` — `egress.allowed_hosts` | The outbound half of the tool sandbox |
 | `filesystem.allow_run` | Whether the agent can run shell commands at all |
 | `secrets_manager.*` | Where secrets (the auth token's environment fallback among them) are loaded from; the config side of `/api/secrets/*` |
@@ -624,6 +624,21 @@ egress:
 | `allowed_hosts` | `[]` | Hosts `fetch_url` may reach. **Empty = permissive** (off, with a built-in SSRF guard still blocking private / loopback / cloud-metadata addresses). When set, any other host is denied. `*.host` matches subdomains + apex; case-insensitive, port-agnostic. Hot-reloads. |
 
 When the allowlist **is** set, your configured model gateway (`model.api_base`) host is permitted **automatically** — you don't have to list it, and the connection-test / "Get models" probes for a custom base URL won't be blocked. (With an empty allowlist this auto-add is a no-op; adding one host there would flip the guard into deny-by-default for every other host.) Covers `fetch_url` only; `execute_code`/`run_command` process-level egress is fenced by running under OpenShell (see [Sandboxing & egress](../guides/sandboxing.md)).
+
+## `devices` {#devices}
+
+How long a paired phone or tablet keeps working without being used ([ADR 0121](../adr/0121-device-pairing-over-an-operator-supplied-public-url.md) D5). Edit it in **Settings ▸ Behavior ▸ Security**. Changes apply on the next request, with no restart. It is a [credential-plane key](#credential-plane-keys), so a Limited device can't change it.
+
+```yaml
+devices:
+  idle_ttl_days: 30
+```
+
+| Key | Default | What |
+|---|---|---|
+| `idle_ttl_days` | `30` | Days a **Limited** (`device`-scope) pairing may go unused before its token stops working. Measured from the device's last use, or from the pairing if it was never used. `0` means never expire. An expired device stays in **Settings ▸ Devices** marked **Expired** until you remove it, and the phone pairs again to get back in. Full-access devices (an agent's hub, a promoted phone, a pairing made before ADR 0121) never expire. Raising the value brings an expired device back, because nothing is deleted. A negative or non-numeric value falls back to `30`. No environment fallback. |
+
+Tokens also rotate once a week while a phone is in use, and that interval is fixed rather than configurable. See [Device tokens](../explanation/security-and-trust.md#device-token-lifetime).
 
 ## `security`
 

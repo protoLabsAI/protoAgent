@@ -63,6 +63,36 @@ KIND_DEVICE = "device"
 KIND_AGENT = "agent"
 _KINDS = frozenset({KIND_DEVICE, KIND_AGENT})
 
+# Lifetime (ADR 0121 D5). Rotation cadence and grace are constants, not settings; only the
+# idle expiry is configurable (``devices.idle_ttl_days``, `idle_ttl_days`).
+ROTATION_INTERVAL_SECONDS = 7 * 86400
+# How long a rotated-out token keeps working AFTER the new one is first presented — requests
+# already in flight with the old token when the browser switched.
+ROTATION_GRACE_SECONDS = 120
+# A second rotate that presents the previous token within this long of an unused rotation
+# is refused (409) rather than replacing it: two tabs racing the same rotation.
+ROTATION_SETTLE_SECONDS = 120
+DEFAULT_IDLE_TTL_DAYS = 30
+
+
+def _now() -> float:
+    """The registry's clock — one seam for tests to move time."""
+    return time.time()
+
+
+def idle_ttl_days() -> int:
+    """``devices.idle_ttl_days`` from the live config (``0`` = never expire), read per call
+    so a Settings save applies without a restart. No config loaded ⇒ the default."""
+    try:
+        from runtime.state import STATE
+
+        value = getattr(STATE.graph_config, "device_idle_ttl_days", DEFAULT_IDLE_TTL_DAYS)
+        days = int(value)
+    except Exception:  # noqa: BLE001 — a missing/odd config reads as the default
+        return DEFAULT_IDLE_TTL_DAYS
+    return days if days >= 0 else DEFAULT_IDLE_TTL_DAYS
+
+
 # Credential scope (ADR 0121 D4) — orthogonal to the trust TIER, which stays "operator" for
 # every device. ``device`` scope can use the whole product but can't change who can get in
 # (the credential-plane ceiling, ``a2a_impl.credential_scope``). Mirrors that module's
@@ -102,6 +132,14 @@ class Device:
     # `_register`. Read through `effective_scope`, never directly: an agent device is always
     # full, whatever its row says.
     scope: str = SCOPE_FULL
+    # Rotation (ADR 0121 D5). ``prev_token_sha256`` is the token this device held before its
+    # last rotation: it stays valid until the NEW token is first presented
+    # (``prev_retired_at`` records when), then for ``ROTATION_GRACE_SECONDS`` more, and after
+    # that presenting it REVOKES the device (reuse detection). ``rotated_at`` is when the
+    # current token was minted by a rotation (``None`` = the pairing's own token).
+    prev_token_sha256: str | None = None
+    rotated_at: float | None = None
+    prev_retired_at: float | None = None
 
     def effective_scope(self) -> str:
         """The scope this device's token earns. An agent (another protoAgent's hub, ADR 0113)
@@ -109,6 +147,33 @@ class Device:
         if self.kind == KIND_AGENT:
             return SCOPE_FULL
         return self.scope if self.scope in _SCOPES else SCOPE_DEVICE
+
+    def idle_since(self) -> float:
+        """What idle expiry is measured from: the last use, or the pairing if never used."""
+        return self.last_seen_at or self.created_at
+
+    def expires_at(self) -> float | None:
+        """When this device's token dies of idleness (ADR 0121 D5), or None if it never does:
+        ``full`` scope (agents, legacy rows, promoted phones) and ``idle_ttl_days: 0``."""
+        if self.effective_scope() != SCOPE_DEVICE:
+            return None
+        days = idle_ttl_days()
+        if days <= 0:
+            return None
+        return self.idle_since() + days * 86400
+
+    def is_expired(self, now: float | None = None) -> bool:
+        exp = self.expires_at()
+        return exp is not None and (_now() if now is None else now) >= exp
+
+    def rotate_due(self, now: float | None = None) -> bool:
+        """At most once per ``ROTATION_INTERVAL_SECONDS`` (a constant, D5): measured from the
+        last rotation, or the pairing if never rotated. Only a ``device``-scope credential
+        rotates; a full-access token (an agent hub, a legacy row) keeps its token."""
+        if self.effective_scope() != SCOPE_DEVICE:
+            return False
+        since = self.rotated_at or self.created_at
+        return ((_now() if now is None else now) - since) >= ROTATION_INTERVAL_SECONDS
 
     def public(self) -> dict:
         """The shape safe to hand the console — everything except the hash.
@@ -126,6 +191,10 @@ class Device:
             "created_at": self.created_at,
             "last_seen_at": self.last_seen_at,
             "active": is_active(self.last_seen_at),
+            # ADR 0121 D5: an expired device stays listed ("Expired") until it is removed.
+            "expired": self.is_expired(),
+            "expires_at": self.expires_at(),
+            "rotated_at": self.rotated_at,
         }
 
 
@@ -209,11 +278,26 @@ def _load() -> list[Device]:
                     # unknown value reads as ``device`` — the narrower scope is the safe
                     # default for anything we can't vouch for. Nothing is rewritten here.
                     scope=(raw_scope if isinstance(raw_scope, str) and raw_scope in _SCOPES else SCOPE_DEVICE),
+                    # ADR 0121 D5 rotation state. Absent on every row written before it: no
+                    # previous token, never rotated.
+                    prev_token_sha256=_opt_str(item.get("prev_token_sha256")),
+                    rotated_at=_opt_float(item.get("rotated_at")),
+                    prev_retired_at=_opt_float(item.get("prev_retired_at")),
                 )
             )
         except (AttributeError, KeyError, TypeError, ValueError):  # AttributeError: a non-dict entry
             continue  # skip a hand-edited/partial entry rather than failing the whole load
     return out
+
+
+def _opt_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _opt_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value:
+        return None
+    return float(value)
 
 
 def _save(devices: list[Device]) -> None:
@@ -271,12 +355,14 @@ def set_device_scope(device_id: str, scope: object) -> dict | None:
 
 
 def revoke_device(device_id: str) -> bool:
-    """Drop a device. Its token stops authenticating on the next request."""
-    devices = _load()
-    remaining = [d for d in devices if d.id != device_id]
-    if len(remaining) == len(devices):
-        return False
-    _save(remaining)
+    """Drop a device. Its token stops authenticating on the next request, and any stream it
+    holds open closes within one keepalive (``is_live``, ADR 0121 D5)."""
+    with _LOCK:
+        devices = _load()
+        remaining = [d for d in devices if d.id != device_id]
+        if len(remaining) == len(devices):
+            return False
+        _save(remaining)
     logger.info("[devices] revoked %s", device_id)
     return True
 
@@ -288,15 +374,190 @@ def verify_token(token: str) -> Device | None:
     each candidate keeps the comparison constant-time; a plain dict lookup would leak
     nothing useful here (the input is already hashed) but the explicit compare keeps the
     intent obvious next to the rest of the auth code.
+
+    Lifetime (ADR 0121 D5), decided here so every caller (the HTTP middleware, the fleet WS
+    proxy's ``bearer_tier``/``bearer_scope``) gets the same answer:
+
+    * an **expired** device (idle past ``devices.idle_ttl_days``) is refused, but stays listed;
+    * the **current** token's first presentation after a rotation starts the previous
+      token's ``ROTATION_GRACE_SECONDS`` grace;
+    * the **previous** token is accepted until then and through the grace — and presented
+      after it, it **revokes the device** and writes an audit entry (two parties hold one
+      token: the theft signal rotation exists to surface).
     """
     if not token:
         return None
     digest = _hash(token)
+    now = _now()
+    current: Device | None = None
+    previous: Device | None = None
     for device in _load():
-        if hmac.compare_digest(device.token_sha256, digest):
-            _touch(device.id)
+        # Both compares on every row, no early exit: timing stays uniform across the registry.
+        if hmac.compare_digest(device.token_sha256, digest) and current is None:
+            current = device
+        if device.prev_token_sha256 and hmac.compare_digest(device.prev_token_sha256, digest) and previous is None:
+            previous = device
+    if current is not None:
+        if current.is_expired(now):
+            return None
+        if current.prev_token_sha256 and current.prev_retired_at is None:
+            _confirm_rotation(current.id, digest, now)
+        _touch(current.id)
+        return current
+    if previous is not None:
+        if previous.prev_retired_at is not None and now >= previous.prev_retired_at + ROTATION_GRACE_SECONDS:
+            _revoke_on_reuse(previous, digest, now)
+            return None
+        if previous.is_expired(now):
+            return None
+        _touch(previous.id)
+        return previous
+    return None
+
+
+def is_live(device_id: str | None) -> bool:
+    """Does ``device_id`` still authenticate — paired, not revoked, not idle-expired?
+
+    What long-lived streams re-check at their keepalive (ADR 0121 D5): a stream holds no
+    token to re-present (an SSE stream was opened with a 30 s query token, and re-presenting
+    a rotated-out token would trip reuse detection), so it re-verifies the DEVICE the
+    middleware stamped on it. Read-only: never touches last-seen."""
+    if not device_id:
+        return False
+    for device in _load():
+        if device.id == device_id:
+            return not device.is_expired()
+    return False
+
+
+def get_device(device_id: str | None) -> Device | None:
+    if not device_id:
+        return None
+    for device in _load():
+        if device.id == device_id:
             return device
     return None
+
+
+def self_view(device_id: str | None) -> dict | None:
+    """``GET /api/devices/self`` for the caller's device id, or None if there is none."""
+    device = get_device(device_id)
+    if device is None:
+        return None
+    out = device.public()
+    out["rotate_due"] = device.rotate_due()
+    return out
+
+
+class RotationInProgress(Exception):
+    """A rotation minted moments ago hasn't been presented yet (see `rotate_device`)."""
+
+
+def rotate_device(device_id: str, presented_token: str) -> tuple[dict, str] | None:
+    """Mint this device a new token (ADR 0121 D5); returns ``(self_view, token)`` once, or
+    None when there is no such (live, ``device``-scope) device or the presented token isn't
+    one of its own.
+
+    The registry ends up with the new hash as current and the PRESENTED token as previous —
+    the one the caller provably holds — so a rotate never leaves the browser without a
+    working token, whatever happens to its storage write:
+
+    * **Presented the current token** (the normal case): previous ← current, current ← new.
+      A previous token still inside its grace is dropped (it 401s from now on).
+    * **Presented the previous token while the current one was never used** (a rotate whose
+      response the browser failed to store): the never-presented current is discarded and
+      replaced — nobody can be relying on a token nobody has used — and the previous stays.
+      Inside ``ROTATION_SETTLE_SECONDS`` of that unused rotation this raises
+      :class:`RotationInProgress` instead, so two tabs racing one rotation can't each mint
+      a token and leave storage holding the loser's.
+    * **Presented the previous token after the current one was used**: not a rotation the
+      caller may make — the previous token is retired. (Past its grace, `verify_token` has
+      already revoked the device before any route runs.)
+    """
+    if not presented_token:
+        return None
+    digest = _hash(presented_token)
+    now = _now()
+    with _LOCK:
+        devices = _load()
+        device = next((d for d in devices if d.id == device_id), None)
+        # Only a ``device``-scope token rotates (D5): a hub stores its token in fleet config and
+        # never rotates, and a full-access row doesn't expire either.
+        if device is None or device.is_expired(now) or device.effective_scope() != SCOPE_DEVICE:
+            return None
+        if hmac.compare_digest(device.token_sha256, digest):
+            prev = device.token_sha256
+        elif device.prev_token_sha256 and hmac.compare_digest(device.prev_token_sha256, digest):
+            if device.prev_retired_at is not None:
+                return None
+            if device.rotated_at and now - device.rotated_at < ROTATION_SETTLE_SECONDS:
+                raise RotationInProgress()
+            prev = device.prev_token_sha256
+        else:
+            return None
+        token = secrets.token_urlsafe(_TOKEN_BYTES)
+        device.prev_token_sha256 = prev
+        device.token_sha256 = _hash(token)
+        device.rotated_at = now
+        device.prev_retired_at = None
+        _save(devices)
+        view = device.public()
+        view["rotate_due"] = device.rotate_due(now)
+    logger.info("[devices] rotated the token of %s", device_id)
+    return view, token
+
+
+def _confirm_rotation(device_id: str, digest: str, now: float) -> None:
+    """The new token was presented: start the previous token's grace."""
+    with _LOCK:
+        devices = _load()
+        for device in devices:
+            if device.id == device_id and device.token_sha256 == digest and device.prev_retired_at is None:
+                device.prev_retired_at = now
+                try:
+                    _save(devices)
+                except OSError:
+                    logger.warning("[devices] could not record first use of %s's new token", device_id)
+                return
+
+
+def _revoke_on_reuse(device: Device, digest: str, now: float) -> None:
+    """A retired token came back after its grace: revoke the device and audit it."""
+    with _LOCK:
+        devices = _load()
+        remaining = [d for d in devices if not (d.id == device.id and d.prev_token_sha256 == digest)]
+        if len(remaining) == len(devices):
+            return  # already revoked (or rotated again) by a racing request
+        _save(remaining)
+    logger.warning(
+        "[devices] REVOKED %s (%s): a rotated-out token was presented %ds after its grace — two parties held one token",
+        device.id,
+        device.name,
+        int(now - (device.prev_retired_at or now) - ROTATION_GRACE_SECONDS),
+    )
+    _audit(
+        "device.revoked_token_reuse",
+        {"device_id": device.id, "name": device.name, "retired_at": device.prev_retired_at},
+        "a rotated-out device token was presented after its grace; the device was revoked",
+        success=False,
+    )
+
+
+def _audit(action: str, args: dict, summary: str, *, success: bool = True) -> None:
+    """The shared audit log (``observability.audit``, ``instance_root/audit/audit.jsonl``)."""
+    try:
+        from observability.audit import audit_logger
+
+        audit_logger.log(
+            session_id="devices",
+            tool=action,
+            args=args,
+            result_summary=summary,
+            duration_ms=0,
+            success=success,
+        )
+    except Exception:  # noqa: BLE001 — auditing must never break auth
+        logger.debug("[devices] audit log failed for %s", action, exc_info=True)
 
 
 # Writing on every request would be a disk write per API call, so last-seen is coarse.
@@ -314,23 +575,24 @@ def is_active(last_seen_at: float | None, now: float | None = None) -> bool:
     """Was this device used recently enough that its last-seen stamp can't tell us more?"""
     if not last_seen_at:
         return False
-    return ((time.time() if now is None else now) - last_seen_at) < ACTIVE_WINDOW_SECONDS
+    return ((_now() if now is None else now) - last_seen_at) < ACTIVE_WINDOW_SECONDS
 
 
 def _touch(device_id: str) -> None:
-    devices = _load()
-    now = time.time()
-    for device in devices:
-        if device.id != device_id:
-            continue
-        if device.last_seen_at and now - device.last_seen_at < _LAST_SEEN_THROTTLE_SECONDS:
-            return  # recently recorded — skip the write
-        device.last_seen_at = now
-        try:
-            _save(devices)
-        except OSError:
-            logger.debug("[devices] could not record last-seen for %s", device_id)
-        return
+    now = _now()
+    with _LOCK:  # the same read-modify-rename as a rotation: one at a time, or one is lost
+        devices = _load()
+        for device in devices:
+            if device.id != device_id:
+                continue
+            if device.last_seen_at and now - device.last_seen_at < _LAST_SEEN_THROTTLE_SECONDS:
+                return  # recently recorded — skip the write
+            device.last_seen_at = now
+            try:
+                _save(devices)
+            except OSError:
+                logger.debug("[devices] could not record last-seen for %s", device_id)
+            return
 
 
 def _register(name: str, kind: str = KIND_DEVICE) -> tuple[Device, str]:
@@ -342,7 +604,7 @@ def _register(name: str, kind: str = KIND_DEVICE) -> tuple[Device, str]:
         # so an odd one is repaired rather than failing the pairing.
         name=_clean_name(name)[:MAX_NAME_LEN].strip() or ("Unnamed agent" if kind == KIND_AGENT else "Unnamed device"),
         token_sha256=_hash(token),
-        created_at=time.time(),
+        created_at=_now(),
         kind=kind,
         # ADR 0121 D4: every new phone/tablet pairing — LAN, tailnet or public — is
         # ``device`` scope; an agent (a hub) is ``full``.

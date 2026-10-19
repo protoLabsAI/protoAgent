@@ -246,7 +246,8 @@ replace a guessed name like `iPhone`.
 
 On the agent that was paired **to**: **Settings ▸ Devices**, then the trash icon on the
 phone's or hub's row. The token stops working at once, and nothing else is signed out: the
-shared bearer, the desktop app and every other device keep working.
+shared bearer, the desktop app and every other device keep working. Anything the phone has
+open, such as the live event stream or a running chat, closes within about 15 seconds.
 
 - A revoked **phone** is asked for a token again on its next request.
 - A revoked **hub** sees its next proxied call to that remote answer `401`, and its fleet
@@ -259,6 +260,30 @@ shared bearer, the desktop app and every other device keep working.
 
 Removing the remote from the hub's fleet only unregisters it on the hub; revoke it on the
 remote too if the hub shouldn't hold a working token.
+
+The agent can also revoke a phone by itself. Its token rotates every week (below), and if an
+old copy of the token is used after the phone has switched to the new one, someone else is
+holding a copy. The agent removes the device and writes the event to its audit log. The
+phone is asked for a token on its next request; pair it again.
+
+### Expired {#expired}
+
+A **Limited** phone that goes unused for 30 days stops working: its row shows **Expired**,
+and the phone is asked for a token on its next request. Change the number of days, or set it
+to `0` to never expire, with
+[`devices.idle_ttl_days`](../reference/configuration.md#devices). Full-access devices and
+agent hubs never expire. A Limited row that hasn't expired says how long it has left, for
+example **expires in 30 days if unused**.
+
+An expired row stays in the list until you remove it, so you can see which phone it was. To
+use that phone again, remove its row with the trash icon, then pair it again.
+
+### Weekly token rotation
+
+A paired phone swaps its token for a new one about once a week, on its own, while you use
+it. Nothing changes on screen and you don't need to do anything. If the browser can't store
+the new token (its storage is full, for example), the phone keeps using the old one, which
+keeps working. See [Device token lifetime](../explanation/security-and-trust.md#device-token-lifetime).
 
 ### Where the phone keeps its token
 

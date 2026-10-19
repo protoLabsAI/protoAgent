@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ACTIVE_WINDOW_SECONDS, canManage, isActive, lastSeenLabel, scopeAction, scopeBadge } from "./DeviceList";
+import { ACTIVE_WINDOW_SECONDS, canManage, expiryLabel, isActive, lastSeenLabel, scopeAction, scopeBadge } from "./DeviceList";
 
 // #4336 S3 — the badge follows the server's last-seen throttle (300 s), not a 60 s window
 // that a device in constant use could only satisfy one minute in five.
@@ -53,5 +53,24 @@ describe("device scope", () => {
     expect(canManage("b", "a", true)).toBe(false);
     expect(canManage("b", "", true)).toBe(false);
     expect(canManage("b", "a", false)).toBe(true);
+  });
+});
+
+// ADR 0121 D5 (#4336 S7.3) — idle expiry.
+describe("expiry label", () => {
+  const now = 2_000_000;
+
+  it("says an expired device must be removed and paired again", () => {
+    expect(expiryLabel({ expired: true, expires_at: now - 10 }, now)).toMatch(/remove it, then pair the phone again/);
+  });
+
+  it("counts the days left, rounding up", () => {
+    expect(expiryLabel({ expired: false, expires_at: now + 29 * 86400 + 5 }, now)).toBe("expires in 30 days if unused");
+    expect(expiryLabel({ expired: false, expires_at: now + 3600 }, now)).toBe("expires within a day if unused");
+  });
+
+  it("says nothing for a device that never expires, or an older server", () => {
+    expect(expiryLabel({ expired: false, expires_at: null }, now)).toBeNull();
+    expect(expiryLabel({}, now)).toBeNull();
   });
 });
