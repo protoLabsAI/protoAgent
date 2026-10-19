@@ -240,6 +240,7 @@ class FakeGoals:
         self.decisions = list(decisions)
         self.forever = forever  # a decision tuple returned on every evaluate
         self.evals: list[str] = []
+        self.tool_summaries: list[str] = []
         self.kickoffs: list[str] = []
         self.active = True
 
@@ -256,8 +257,9 @@ class FakeGoals:
         self.kickoffs.append(user_message)
         return f"KICKOFF<{user_message}>"
 
-    async def evaluate(self, session_id, last_text=""):
+    async def evaluate(self, session_id, last_text="", tool_summary=""):
         self.evals.append(last_text)
+        self.tool_summaries.append(tool_summary)
         d = self.forever or (self.decisions.pop(0) if self.decisions else None)
         if d is None:
             return None

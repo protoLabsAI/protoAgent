@@ -306,6 +306,26 @@ class GoalDrive:
         if notice:
             self.text = f"{self.text}\n\n{notice}"
 
+    async def _tool_summary(self) -> str:
+        """The tool calls (and results) of the pass just run, read from its checkpointed
+        thread — the evidence the ``llm`` verifier judges on alongside the final text.
+        Without it the judge saw ``(none)`` on every iteration and a goal proven by tool
+        results (write a note, read it back) could never pass. Best-effort: ``""``."""
+        graph = STATE.graph
+        if graph is None:
+            return ""
+        try:
+            from graph.goals.transcript import summarize_tool_calls
+
+            snap = await graph.aget_state(self.last_pass_config or self.config)
+            values = getattr(snap, "values", None) if snap is not None else None
+            return summarize_tool_calls((values or {}).get("messages") if isinstance(values, dict) else None)
+        except Exception:  # noqa: BLE001 — the verifier still runs on the text alone
+            import logging
+
+            logging.getLogger(__name__).warning("[goal] could not read the pass's tool calls", exc_info=True)
+            return ""
+
     def _met_mid_turn(self) -> str:
         """The terminal note when the pass just run already met — and recorded — the goal
         mid-turn (``graph.middleware.goal_checkpoint``); ``""`` otherwise."""
@@ -324,7 +344,9 @@ class GoalDrive:
         note = ""
         while guard < hard_cap:
             guard += 1
-            decision = await STATE.goal_controller.evaluate(self.session_id, last_text=self.text)
+            decision = await STATE.goal_controller.evaluate(
+                self.session_id, last_text=self.text, tool_summary=await self._tool_summary()
+            )
             if decision is None:
                 break
             note = decision.note
