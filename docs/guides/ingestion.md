@@ -53,10 +53,6 @@ durable background machinery as `task(run_in_background=true)`: concurrency-capp
 and it survives past the turn. (With the background subsystem disabled via `BACKGROUND_DISABLED`,
 the tool falls back to inline/blocking ingestion.)
 
-## From the API
-
-See [Ingestion API](/reference/ingestion#from-the-api) for multipart requests and responses.
-
 ## What's supported
 
 | Source | How it's handled | Needs |
@@ -85,6 +81,11 @@ by a burst of them.
 Audio/video always transcribe **through the gateway** (no local ASR); leave
 `transcribe_model` blank to disable media ingestion.
 
-## Chunking & enrichment (config)
+<span id="from-the-api"></span>
+<span id="chunking-enrichment-config"></span>
+
+## Related reference
+
+See [Ingestion API](/reference/ingestion#from-the-api) for multipart requests and responses.
 
 See [Ingestion configuration](/reference/ingestion#chunking-enrichment-config) for chunk sizes, enrichment, and media settings.

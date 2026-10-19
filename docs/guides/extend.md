@@ -29,6 +29,7 @@ Choose [First plugin](/tutorials/first-plugin) for a minimal extension, or [Firs
 - [Bundles (plugin sets)](/guides/bundles)
 - [Middleware](/guides/middleware)
 - [Advertise a capability (A2A card)](/guides/add-a-skill)
+- [System lifecycle events](/guides/lifecycle-events)
 
 ## Develop the app or a fork
 

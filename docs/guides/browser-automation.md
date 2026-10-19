@@ -57,7 +57,7 @@ The [settings reference](/reference/browser-automation#settings) lists every fie
 For tool schemas, capture behavior, and panel transport/auth details, use the
 [browser reference](/reference/browser-automation).
 
-## Earlier section links
+<span id="earlier-section-links"></span>
 
 <a id="browser-automation"></a>
 <a id="the-cli-and-its-chrome"></a>

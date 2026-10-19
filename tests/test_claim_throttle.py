@@ -22,6 +22,9 @@ import pytest
 
 from security import claim_throttle
 
+# Imports security.devices, whose registry I/O branches on os.name (Windows share retries).
+pytestmark = pytest.mark.platform_sensitive
+
 
 class _Clock:
     def __init__(self) -> None:

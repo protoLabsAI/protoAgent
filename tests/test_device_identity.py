@@ -12,6 +12,9 @@ import time
 
 import pytest
 
+# Imports security.devices, whose registry I/O branches on os.name (Windows share retries).
+pytestmark = pytest.mark.platform_sensitive
+
 
 @pytest.fixture
 def devices(tmp_path, monkeypatch):

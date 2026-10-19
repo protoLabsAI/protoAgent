@@ -1,5 +1,7 @@
 # Memory storage and delivery internals
 
+<span id="memory-storage-and-delivery-internals"></span>
+
 For the user-facing model and controls, start with [Memory and knowledge](/explanation/memory-and-knowledge). This page describes storage, provenance, and prompt delivery; settings are owned by [Knowledge reference](/reference/knowledge).
 
 ## The store

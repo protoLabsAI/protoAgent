@@ -32,9 +32,11 @@ check the plugin status, server log, and browser console for errors.
 2. **Gate by default** — mount data routes under `prefix="/api/plugins/<id>"` so they inherit the
    operator bearer gate. Use the ungated `/plugins/<id>` prefix only for genuinely public assets (the
    page itself — an iframe page-load can't carry an `Authorization` header).
-3. **Same-origin, slug-aware, never hardcode** — derive `base = location.pathname.split("/plugins/")[0]`
-   and prefix every fetch/asset. Never hardcode `/api/.../`, `/plugins/.../`, or `http://localhost:PORT`
-   — it breaks the `/agents/<slug>/` fleet proxy and the same-origin token handshake.
+3. **Use the kit for data requests** — pass a bare `/api/...` path to `kit.apiFetch`;
+   it adds the active agent's fleet prefix and bearer token. Derive
+   `base = location.pathname.split("/plugins/")[0]` only to load the kit's own
+   assets before it is available. Do not add that prefix again to `apiFetch` calls
+   or hardcode a host/port.
 4. **Link the DS kit** — `<base>/_ds/plugin-kit.css` + `<base>/_ds/plugin-kit.js` instead of
    hardcoding hex or a CDN. The kit's `--pl-*` tokens re-skin to the operator's live theme.
 

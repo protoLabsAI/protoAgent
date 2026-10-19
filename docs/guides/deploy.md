@@ -1,4 +1,6 @@
-# Deploy via GHCR
+# Publish images to GHCR
+
+<span id="deploy-via-ghcr"></span>
 
 Publish your fork's container image, then deploy it using the
 [Docker guide](/guides/deploy-docker). You need GitHub Actions enabled on the fork

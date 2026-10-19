@@ -3,7 +3,7 @@ import { Spinner } from "@protolabsai/ui/data";
 import { Check, Circle, CircleDot, X } from "lucide-react";
 
 import type { DelegateProgress, DelegatePlanEntry, DelegateTool } from "../lib/types";
-import { planProgress, toolLine } from "./delegateProgress";
+import { narrationTail, planProgress, toolLine } from "./delegateProgress";
 
 // A coding delegate's live view on its delegation card (#3979): its own plan as a
 // checklist, the tool it is running now, the last few it ran, and the tail of what it is
@@ -96,7 +96,7 @@ export function DelegateProgressView({
   const plan = progress.plan ?? [];
   const planLabel = planProgress(progress);
   const text = running ? (progress.text ?? "").trim() : "";
-  const tail = text.length > TEXT_SHOWN ? `…${text.slice(-TEXT_SHOWN)}` : text;
+  const tail = narrationTail(text, TEXT_SHOWN);
   // Settled and empty renders nothing (today's behaviour). While live the view keeps a
   // fixed footprint, so it stays mounted even before the first tool/plan/word lands.
   if (!running && !plan.length && !current && !recent.length && !tail) return null;

@@ -87,12 +87,13 @@
       "label": "Automate work",
       "nav_label": "Automate",
       "landing": "guides/automate-work.md",
-      "intro": "Teach reusable procedures, schedule work, and delegate tasks. Choose the smallest mechanism that fits:\n\n| What you need | Start here |\n| --- | --- |\n| Instructions for a recurring task, chosen by you or the agent | [Skill](/tutorials/first-skill) |\n| Run at a time or on a calendar cadence | [Schedule](/guides/scheduler) |\n| React when an external condition changes | [Watch](/guides/watches) |\n| Keep working until a completion check passes | [Goal](/guides/goal-mode) |\n| Run a saved sequence of specialist steps | [Workflow](/guides/workflows) |\n| Give a focused task to a local specialist | [Subagent](/guides/subagents) |\n| Use another agent or coding CLI | [Delegate](/guides/delegates) |\n\nVerify one small task before making it recurring or expanding to multiple agents. The individual guides explain permissions, stopping conditions, and where results appear.",
+      "intro": "Teach reusable procedures, schedule work, and delegate tasks. Choose the smallest mechanism that fits:\n\n| What you need | Start here |\n| --- | --- |\n| Instructions for a recurring task, chosen by you or the agent | [Skill](/tutorials/first-skill) |\n| Run at a time or on a calendar cadence | [Schedule](/guides/scheduler) |\n| React when an external condition changes | [Watch](/guides/watches) |\n| Keep working until a completion check passes | [Goal](/guides/goal-mode) |\n| Run a saved sequence of specialist steps | [Workflow](/guides/workflows) |\n| Give a focused task to a local specialist | [Subagent](/guides/subagents) |\n| Use another agent or coding CLI | [Delegate](/guides/delegates) |\n\nVerify one small task before making it recurring or expanding to multiple agents. The individual guides explain permissions, stopping conditions, and where results appear.\n\nFor coding work, [connect and test a coding delegate](/guides/coding-agents), then [build a first feature](/guides/build-with-a-coding-agent). Use [coding verification](/guides/coder) when you need a completion check, and [portfolio coordination](/guides/portfolio) only when managing multiple project boards. Plugin authors can [react to lifecycle events](/guides/lifecycle-events).",
       "groups": [
         {
           "label": "Learn with an example",
           "pages": [
             "tutorials/first-skill.md",
+            "tutorials/first-schedule.md",
             "tutorials/two-agents-over-a2a.md"
           ]
         },
@@ -102,8 +103,7 @@
             "guides/skills.md",
             "guides/scheduler.md",
             "guides/watches.md",
-            "guides/goal-mode.md",
-            "guides/lifecycle-events.md"
+            "guides/goal-mode.md"
           ]
         },
         {
@@ -158,7 +158,8 @@
             "guides/publish-a-plugin.md",
             "guides/bundles.md",
             "guides/middleware.md",
-            "guides/add-a-skill.md"
+            "guides/add-a-skill.md",
+            "guides/lifecycle-events.md"
           ]
         },
         {
@@ -190,7 +191,7 @@
       "label": "Deploy & operate",
       "nav_label": "Operate",
       "landing": "guides/deploy-and-operate.md",
-      "intro": "Run an agent as a service, manage multiple instances, and monitor deployments.\n\n| Deployment task | Start here |\n| --- | --- |\n| Run the installed agent without a desktop | [Headless service](/guides/headless) |\n| Run the published container with persistent data | [Docker](/guides/deploy-docker) |\n| Provision a Proxmox LXC | [Proxmox](/guides/deploy-proxmox) |\n| Publish and deploy your own fork's image | [GHCR deployment](/guides/deploy) |\n| Run independent instances on one machine | [Multiple instances](/guides/multi-instance) |\n| Manage local and remote agents through a hub | [Fleet](/guides/fleet) |\n\nFollow each deployment's health and authentication checks before adding work. [Back up your data](/guides/backup-and-restore) before upgrades or recovery; container operators use [Docker backups](/guides/backup-and-restore#docker-backups). Start diagnosis with [local telemetry and logs](/guides/observability).",
+      "intro": "Run an agent as a service, manage multiple instances, and monitor deployments.\n\n| Deployment task | Start here |\n| --- | --- |\n| Run the installed agent without a desktop | [Headless service](/guides/headless) |\n| Run the published container with persistent data | [Docker](/guides/deploy-docker) |\n| Provision a Proxmox LXC | [Proxmox](/guides/deploy-proxmox) |\n| Publish and deploy your own fork's image | [GHCR deployment](/guides/deploy) |\n| Run independent instances on one machine | [Multiple instances](/guides/multi-instance) |\n| Manage local and remote agents through a hub | [Fleet](/guides/fleet) |\n\nFollow each deployment's health and authentication checks before adding work. [Back up your data](/guides/backup-and-restore) before upgrades or recovery; container operators use [Docker backups](/guides/backup-and-restore#docker-backups). Start diagnosis with [local telemetry and logs](/guides/observability).\n\n## Update or recover\n\n| Situation | Procedure owner |\n| --- | --- |\n| Update the desktop app | [Desktop controls](/guides/react-tauri-ui#desktop-app-tauri) |\n| Update a container | [Docker day-2 operations](/guides/deploy-docker#day-2) |\n| Choose an image update policy for a fork | [GHCR update policy](/guides/deploy#_6-point-watchtower-at-latest) |\n| Roll out or roll back fleet members | [Fleet upgrade and recovery](/guides/operating-a-fleet) |\n| Recover chats, settings, or a lost machine | [Back up and restore](/guides/backup-and-restore) |\n\nVerify health after updating before resuming scheduled work. A snapshot copies an agent definition; it does not replace a data backup.",
       "groups": [
         {
           "label": "Run a service",
@@ -272,6 +273,7 @@
           "label": "Plugin development",
           "pages": [
             "reference/plugin-manifest.md",
+            "reference/plugin-settings.md",
             "reference/plugin-registry-api.md",
             "reference/plugin-sdk-api.md",
             "reference/plugin-testkit.md",
@@ -347,7 +349,7 @@
       "status": "current"
     },
     "guides/pairing.md": {
-      "title": "Pair devices & agents",
+      "title": "Manage paired devices",
       "status": "current"
     },
     "guides/agent-snapshots.md": {
@@ -728,7 +730,7 @@
       "status": "current"
     },
     "reference/memory-delivery.md": {
-      "title": "Memory storage and delivery",
+      "title": "Memory storage and delivery internals",
       "status": "current"
     },
     "reference/mcp.md": {
@@ -736,7 +738,7 @@
       "status": "current"
     },
     "reference/browser-automation.md": {
-      "title": "Browser automation settings",
+      "title": "Browser automation settings and internals",
       "status": "current"
     },
     "reference/discord.md": {
@@ -753,6 +755,14 @@
     },
     "reference/friction.md": {
       "title": "Friction capture and configuration",
+      "status": "current"
+    },
+    "tutorials/first-schedule.md": {
+      "title": "Run your first recurring task",
+      "status": "current"
+    },
+    "reference/plugin-settings.md": {
+      "title": "Plugin settings and setup contracts",
       "status": "current"
     }
   },

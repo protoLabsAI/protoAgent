@@ -15,6 +15,18 @@ Run an agent as a service, manage multiple instances, and monitor deployments.
 
 Follow each deployment's health and authentication checks before adding work. [Back up your data](/guides/backup-and-restore) before upgrades or recovery; container operators use [Docker backups](/guides/backup-and-restore#docker-backups). Start diagnosis with [local telemetry and logs](/guides/observability).
 
+## Update or recover
+
+| Situation | Procedure owner |
+| --- | --- |
+| Update the desktop app | [Desktop controls](/guides/react-tauri-ui#desktop-app-tauri) |
+| Update a container | [Docker day-2 operations](/guides/deploy-docker#day-2) |
+| Choose an image update policy for a fork | [GHCR update policy](/guides/deploy#_6-point-watchtower-at-latest) |
+| Roll out or roll back fleet members | [Fleet upgrade and recovery](/guides/operating-a-fleet) |
+| Recover chats, settings, or a lost machine | [Back up and restore](/guides/backup-and-restore) |
+
+Verify health after updating before resuming scheduled work. A snapshot copies an agent definition; it does not replace a data backup.
+
 ## Run a service
 
 - [Use the command line](/guides/cli)

@@ -1,4 +1,6 @@
-# Wire Langfuse + Prometheus
+# Monitor traces, metrics, and logs
+
+<span id="wire-langfuse-prometheus"></span>
 
 Use local telemetry for turn history, Langfuse for distributed traces,
 Prometheus for monitoring, and the audit log for tool-call details. Start with a

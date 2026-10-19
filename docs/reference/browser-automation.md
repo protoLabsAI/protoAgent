@@ -1,5 +1,7 @@
 # Browser automation settings and internals
 
+<span id="browser-automation-settings-and-internals"></span>
+
 For setup and everyday use, follow [Browser automation](/guides/browser-automation). This page owns provisioning, capture limits, launch settings, and the panel’s implementation.
 
 ## The CLI and its Chrome

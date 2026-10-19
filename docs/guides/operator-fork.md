@@ -1,5 +1,7 @@
 # Build an operator fork (like "Roxy")
 
+This specialized example builds a portfolio-monitor agent. Complete the [fork checklist](/guides/fork-the-template) first; this page owns the monitoring persona and capabilities, while [Customize and deploy](/guides/customize-and-deploy) owns the general deployment walkthrough.
+
 This is an optional worked example after the [fork checklist](/guides/fork-the-template), not a prerequisite for operating a fleet.
 
 protoAgent ships the **primitives** for a multi-project operator agent — a
