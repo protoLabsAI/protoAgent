@@ -1,0 +1,14 @@
+{
+  "privacy_review": "Isolated demo, synthetic conversations and localhost paths only. No usable pairing codes, tokens, or personal paths.",
+  "backend": "docs-local-otlp-v1; Langfuse SDK 4.17.0; OpenTelemetry protobuf 1.45.0.",
+  "steps": [
+    "Run the retained local OTLP collector; it stores actual SDK exports, no synthetic spans.",
+    "Configure the isolated host and two members with tracing enabled, local collector host, and demo-only local collector keys; restart all three.",
+    "Run the synthetic two-delegate room request.",
+    "Select the six exported spans sharing a trace ID. Render each caller \u2192 receiving A2A stream \u2192 turn relationship from the actual parent/span IDs.",
+    "Publish the evidence view with an explicit label distinguishing it from Langfuse UI."
+  ],
+  "editable_source": "trace-correlation.html",
+  "evidence": "trace-correlation-spans.json",
+  "collector": "trace_collector.py"
+}

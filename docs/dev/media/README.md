@@ -98,6 +98,23 @@ the PR because they increase desktop and wheel download sizes.
 
 6. Preview the target page on the website and in the app. Test both supported
    site bases (`/protoAgent/` and `/docs/`) when changing media rendering.
+   The reusable browser check runs asset decoding, video playback, same-page image
+   zoom, keyboard dismissal, and focus-return checks in Chromium and WebKit:
+
+   ```bash
+   node scripts/check_docs_media_browser.mjs http://localhost:4188/protoAgent/ http://localhost:7898
+   ```
+
+   Start a built-site preview and a fully isolated app from the same checkout first.
+   Repeat with the `/docs/` base when changing media rendering. Images enlarge in
+   the current page; Escape or Close returns focus to the image.
+
+   On macOS, check actual native WKWebView decoding against the running app:
+
+   ```bash
+   swift scripts/check_docs_media_wkwebview.swift http://localhost:7898
+   ```
+
    Check desktop playback when adding/changing video codecs: a successful site
    build does not prove WKWebView/WebView2 playback. Verify the transcript works
    even if the clip cannot play. Follow the normal repository gate/PR workflow.

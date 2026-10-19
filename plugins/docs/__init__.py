@@ -92,6 +92,12 @@ def _build_view_router():
 
     router = APIRouter()
 
+    @router.get("/image-viewer.js")
+    async def _image_viewer():
+        from pathlib import Path
+
+        return FileResponse(Path(__file__).with_name("image-viewer.js"), media_type="text/javascript")
+
     @router.get("/media/{name:path}")
     async def _media(name: str):
         path = media_file(name)
@@ -257,6 +263,8 @@ catch(e){
 }
 if (new URLSearchParams(location.search).get("mode")==="search") document.body.classList.add("mode-search");
 const $list=document.getElementById("list"), $reader=document.getElementById("reader"), $q=document.getElementById("q"), $back=document.getElementById("back");
+const { installImageViewer } = await import(base+"/plugins/docs/image-viewer.js");
+installImageViewer($reader);
 // On phones the view is master-detail: opening a doc swaps the list out for the reader.
 const isPhone=()=>matchMedia("(max-width:767px)").matches;
 $back.onclick=()=>{ document.body.classList.remove("reading"); $reader.scrollTop=0; };

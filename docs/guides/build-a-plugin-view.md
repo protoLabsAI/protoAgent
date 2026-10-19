@@ -15,13 +15,14 @@ plugins directory. Copy the example into it:
 cp -r examples/plugins/chat_example <instance_root>/plugins/
 ```
 
-Open **Settings → Plugins → Installed** and enable **Chat panel (example)**. Save, then
-open the Chat surface to see the plugin's greeting and composer. The example
+Restart the demo server after copying files so the loader discovers the new plugin.
+Open **Settings → Plugins → Installed** and enable **Chat panel (example)**.
+Enabling applies live; open the Chat surface to see the plugin's greeting and composer. The example
 claims the chat slot; a normal view adds a rail icon instead. If it does not load,
 check the plugin status, server log, and browser console for errors.
 
 <!-- docs-media: plugin-view-result -->
-
+<figure class="docs-media"><img src="/media/plugin-view-result/v1.png" alt="The example plugin replaces the Chat surface and returns a real greeting through its composer." loading="lazy" style="max-width:100%;height:auto"><figcaption>The chat_example view claims the Chat slot. Its composer calls the running agent; disabling the plugin restores the built-in chat.</figcaption></figure>
 <!-- /docs-media -->
 
 ## The four rules

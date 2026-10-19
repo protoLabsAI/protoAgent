@@ -12,13 +12,13 @@ Use one for a repeatable process such as research → review → write a brief.
 3. Run it and follow the step timeline. Inspect the final output and any failed
    or timed-out steps before relying on the result.
 4. If it pauses for approval, review the pending step and prior outputs in
-   **Pending Gates**, then approve, edit, or reject that step.
+   **Studio → Pending**, then approve, edit, or reject that step.
 
 The plugin supplies the tools, API, and console surface. `workflows.enabled`
 is not an enable switch; use `plugins.enabled`.
 
 <!-- docs-media: workflow-gate -->
-
+<figure class="docs-media"><img src="/media/workflow-gate/v1.png" alt="The synthetic review workflow is paused with its rendered prompt and Approve, Edit, and Reject controls." loading="lazy" style="max-width:100%;height:auto"><figcaption>A human gate pauses before the next step runs. Review the prior output in the rendered prompt, then approve, edit, or reject.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Skills vs Workflows
@@ -101,7 +101,7 @@ instructions instead.
 **Workflows** lists recipes, inputs, and their step graph. Use **New workflow**
 to author a recipe or edit an existing one. Saving validates its dependencies,
 subagents, and templates. Run history records outputs and per-step progress;
-**Pending Gates** shows runs awaiting a decision. Resuming keeps completed step
+**Studio → Pending** shows runs awaiting a decision. Resuming keeps completed step
 outputs instead of running them again.
 
 All routes below are beneath `/api/plugins/workflows`:

@@ -642,7 +642,7 @@
       "transcript": null,
       "source": "docs/dev/media/sources/first-reply.json",
       "verified_on": "2026-10-19",
-      "verified_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+      "verified_commit": "7731620e0d6ff3cbf645dc7b00178051bae9e412",
       "reviewer": "Codex"
     },
     "app-layout": {
@@ -723,11 +723,11 @@
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
       "asset": "attach-and-download/v1.mp4",
-      "poster": "attach-and-download/v1-poster.png",
+      "poster": "attach-and-download/v1-poster.webp",
       "transcript": "attach-and-download/v1-steps.txt",
       "source": "docs/dev/media/sources/attach-and-download.json",
       "verified_on": "2026-10-19",
-      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "verified_commit": "7731620e0d6ff3cbf645dc7b00178051bae9e412",
       "reviewer": "Codex",
       "has_audio": false
     },
@@ -790,12 +790,12 @@
     "plugin-install-result": {
       "priority": "P1",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Recognize installation status and the enabled plugin.",
-      "brief": "Review docs/public/readme/install-plugin.webp as a reuse candidate. Recapture if controls differ. Show a first-party sample plugin installed and enabled, with dependency/restart state visible.",
-      "alt": "Recognize installation status and the enabled plugin.",
-      "caption": "Recognize installation status and the enabled plugin.",
+      "brief": "Capture the actual copied chat_example plugin after discovery and enablement, with its loaded state and working view; clearly identify local installation.",
+      "alt": "The Installed list shows Chat panel (example) loaded with one view and a Disable control.",
+      "caption": "Confirm the plugin is loaded and inspect what it contributes. This example was copied locally and enabled; it was not installed from a remote URL.",
       "placements": [
         {
           "page": "guides/plugin-registry.md",
@@ -807,13 +807,13 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "plugin-install-result/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/plugin-install-result.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "mcp-connect-test": {
       "priority": "P1",
@@ -846,12 +846,12 @@
     "browser-control": {
       "priority": "P2",
       "kind": "video",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Show when the agent acts and when the user can intervene.",
       "brief": "A 20–40 second silent demo on a public example page: open Browser, request navigation, intervene manually, save a screenshot. Exclude real logins; show capture expiry text if visible.",
-      "alt": "Show when the agent acts and when the user can intervene.",
-      "caption": "Show when the agent acts and when the user can intervene.",
+      "alt": "Navigate public example pages in the live Browser panel, then ask the agent to save a screenshot.",
+      "caption": "The Browser panel and agent share the same session. This silent recording shows manual navigation and a real saved screenshot; no login is required.",
       "placements": [
         {
           "page": "guides/browser-automation.md",
@@ -862,23 +862,24 @@
         "plugins/agent_browser"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
-      "poster": null,
-      "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "asset": "browser-control/v1.mp4",
+      "poster": "browser-control/v1-poster.png",
+      "transcript": "browser-control/v1-steps.txt",
+      "source": "docs/dev/media/sources/browser-control.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex",
+      "has_audio": false
     },
     "phone-pairing": {
       "priority": "P2",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Show the desktop-to-phone handoff without making a usable credential public.",
-      "brief": "Two-panel capture of Devices and the connected phone. Replace the QR/token area with an explicit non-scannable DEMO block in the editable source. Show reachable URL shape without real addresses.",
-      "alt": "Show the desktop-to-phone handoff without making a usable credential public.",
-      "caption": "Show the desktop-to-phone handoff without making a usable credential public.",
+      "brief": "Capture the real post-pairing Devices list and connected mobile layout. Avoid the QR/code state entirely; identify phone emulation and revoke the demo device after capture.",
+      "alt": "The desktop lists an active limited-scope iPhone device, beside an emulated phone console confirming successful pairing.",
+      "caption": "Confirm the device on both sides. This actual pairing uses an emulated phone viewport; a physical phone needs its own reachable agent URL.",
       "placements": [
         {
           "page": "guides/phone-access.md",
@@ -890,13 +891,13 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "phone-pairing/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/phone-pairing.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "memory-lifecycle": {
       "priority": "P2",
@@ -985,12 +986,12 @@
     "goal-progress": {
       "priority": "P1",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Identify progress, verifier evidence, and the stop/extend controls.",
-      "brief": "Capture a demo goal with iteration timeline, verifier result, and Add iterations control visible. Use harmless sample work and a clear running or completed state, never a fabricated pass.",
-      "alt": "Identify progress, verifier evidence, and the stop/extend controls.",
-      "caption": "Identify progress, verifier evidence, and the stop/extend controls.",
+      "brief": "Show a real completed goal with verifier evidence, iteration count, plan, and timeline. Add iterations is an active-goal control; do not fabricate it on a terminal goal.",
+      "alt": "An achieved goal shows the data verifier, found substring result, file contents, saved plan, and iteration timeline.",
+      "caption": "Read the verifier evidence as well as the status. This goal finished on iteration 0 after the file contained the required text.",
       "placements": [
         {
           "page": "guides/goal-mode.md",
@@ -1002,13 +1003,13 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "goal-progress/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/goal-progress.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "watch-goal-schedule": {
       "priority": "P2",
@@ -1040,12 +1041,12 @@
     "delegate-room-round": {
       "priority": "P2",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Recognize participant selection and replies from different agents.",
-      "brief": "Capture a room with two synthetic delegates and one completed round. Annotate member picker, broadcast/send behavior, and author labels. Exclude long output.",
-      "alt": "Recognize participant selection and replies from different agents.",
-      "caption": "Recognize participant selection and replies from different agents.",
+      "brief": "Show actual participant chips, leading @names and named replies after a completed synthetic round. Do not describe this console flow as a separate room-creation or broadcast UI.",
+      "alt": "Researcher and editor reply under their own names to the same leading @researcher @editor message.",
+      "caption": "Leading @names address the delegates in order. The named replies and participant chips show who took part in this completed demo round.",
       "placements": [
         {
           "page": "guides/rooms.md",
@@ -1057,23 +1058,23 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "delegate-room-round/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/delegate-room-round.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7731620e0d6ff3cbf645dc7b00178051bae9e412",
+      "reviewer": "Codex"
     },
     "workflow-gate": {
       "priority": "P2",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Show where a workflow waits for a human decision.",
       "brief": "Capture a demo recipe paused at an approval gate with preceding step result and approve/reject controls. Caption that the workflow has not advanced yet.",
-      "alt": "Show where a workflow waits for a human decision.",
-      "caption": "Show where a workflow waits for a human decision.",
+      "alt": "The synthetic review workflow is paused with its rendered prompt and Approve, Edit, and Reject controls.",
+      "caption": "A human gate pauses before the next step runs. Review the prior output in the rendered prompt, then approve, edit, or reject.",
       "placements": [
         {
           "page": "guides/workflows.md",
@@ -1086,23 +1087,23 @@
         "plugins/workflows"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "workflow-gate/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/workflow-gate.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7731620e0d6ff3cbf645dc7b00178051bae9e412",
+      "reviewer": "Codex"
     },
     "plugin-view-result": {
       "priority": "P2",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Give builders a concrete success state for the quickstart.",
-      "brief": "Capture the copied chat_example plugin enabled in the chat slot, with its greeting, composer, and one functioning interaction. Keep the example code editable in the existing source.",
-      "alt": "Give builders a concrete success state for the quickstart.",
-      "caption": "Give builders a concrete success state for the quickstart.",
+      "brief": "Capture the actual copied chat_example plugin after discovery and enablement, with its loaded state and working view; clearly identify local installation.",
+      "alt": "The example plugin replaces the Chat surface and returns a real greeting through its composer.",
+      "caption": "The chat_example view claims the Chat slot. Its composer calls the running agent; disabling the plugin restores the built-in chat.",
       "placements": [
         {
           "page": "guides/build-a-plugin-view.md",
@@ -1113,13 +1114,13 @@
         "examples/plugins/chat_example"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "plugin-view-result/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/plugin-view-result.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "plugin-boundaries": {
       "priority": "P2",
@@ -1205,12 +1206,12 @@
     "fleet-create-result": {
       "priority": "P2",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Recognize a newly created, reachable fleet member.",
       "brief": "Capture the Create agent flow result with two demo agents and a successful first reply from the new member. Label active member; do not expose real machine names.",
-      "alt": "Recognize a newly created, reachable fleet member.",
-      "caption": "Recognize a newly created, reachable fleet member.",
+      "alt": "The new research-demo agent has answered its first message; the switcher shows both agents and checks the active member.",
+      "caption": "Confirm a reply from the new member. The switcher’s checkmark identifies the active agent; the two workspaces keep separate chats.",
       "placements": [
         {
           "page": "guides/fleet.md",
@@ -1222,23 +1223,23 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "fleet-create-result/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/fleet-create-result.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7731620e0d6ff3cbf645dc7b00178051bae9e412",
+      "reviewer": "Codex"
     },
     "fleet-deck-overview": {
       "priority": "P2",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Explain the terminal roster and selected-member details.",
-      "brief": "Capture a fixed-size terminal with two demo members, one healthy and one waiting for input. Annotate roster, detail pane, and key hints; preserve monospaced legibility.",
-      "alt": "Explain the terminal roster and selected-member details.",
-      "caption": "Explain the terminal roster and selected-member details.",
+      "brief": "Show a compact actual terminal roster with two online members, a host waiting at a real human-input question, and keyboard hints. Keep process status separate from turn state.",
+      "alt": "The live terminal roster shows two online idle members and a host marked needs you, with one turn parked at a question and keyboard hints.",
+      "caption": "Online describes process reachability. The separate turn column shows that the host needs input while both demo members are idle.",
       "placements": [
         {
           "page": "guides/fleet-deck.md",
@@ -1249,13 +1250,13 @@
         "src/deck"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "fleet-deck-overview/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/fleet-deck-overview.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "exposure-boundaries": {
       "priority": "P1",
@@ -1287,12 +1288,12 @@
     "trace-correlation": {
       "priority": "P3",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Show what a joined trace looks like during diagnosis.",
-      "brief": "Use synthetic traffic with two agents; capture a local or Langfuse trace view and annotate parent/child correlation. Record backend version. If no working backend is available, keep planned.",
-      "alt": "Show what a joined trace looks like during diagnosis.",
-      "caption": "Show what a joined trace looks like during diagnosis.",
+      "brief": "Visualize actual spans received by a local OTLP collector from the host and two demo agents. Display shared trace ID and exact parent/child IDs; retain evidence and backend versions. Label this as a local evidence view, not Langfuse UI.",
+      "alt": "Six actual exported spans share one trace ID; each caller span links to its receiving agent through matching parent span IDs.",
+      "caption": "Actual spans from the local OTLP collector show cross-agent correlation. This evidence visualization is not a screenshot of the Langfuse interface.",
       "placements": [
         {
           "page": "guides/observability.md",
@@ -1303,13 +1304,13 @@
         "src/observability"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "trace-correlation/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/trace-correlation.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "config-precedence": {
       "priority": "P2",

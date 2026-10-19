@@ -89,6 +89,32 @@ def test_publish_replace_and_retire(media_repo):
     assert "Text stays useful" in out["docs/guides/example.md"]
 
 
+def test_one_replacement_updates_every_placement(media_repo):
+    root, data, item = media_repo
+    second = "guides/another.md"
+    (root / "docs" / second).write_text(
+        "# Another task\n\n<!-- docs-media: example -->\n\n<!-- /docs-media -->\n", encoding="utf-8"
+    )
+    catalog = root / "plugins/docs/catalog.json"
+    catalog.write_text(
+        json.dumps({"journeys": [{"landing": "guides/example.md", "groups": []}, {"landing": second, "groups": []}]}),
+        encoding="utf-8",
+    )
+    data["pages"][second] = {"decision": "media", "reason": "Reuse the same control"}
+    item["placements"].append({"page": second, "heading": "# Another task"})
+    publish(root, item)
+    initial = API["outputs"](save(root, data), root)
+    for page in ("docs/guides/example.md", "docs/" + second):
+        (root / page).write_text(initial[page], encoding="utf-8")
+    item["asset"] = "example/v2.webp"
+    (root / "docs/public/media/example/v1.webp").rename(root / "docs/public/media/example/v2.webp")
+    updated = API["outputs"](save(root, data), root)
+    for page in ("docs/guides/example.md", "docs/" + second):
+        assert 'src="/media/example/v2.webp"' in updated[page]
+        assert "v1.webp" not in updated[page]
+    assert json.loads(updated[API["ASSETS"]])["files"] == ["example/v2.webp"]
+
+
 @pytest.mark.parametrize(
     "change,match",
     [
@@ -201,11 +227,18 @@ def test_media_route_exact_allowlist_and_containment(media_repo, monkeypatch):
     assert client.get("/plugins/docs/media/draft.webp").status_code == 404
     # Media types cannot depend on the host OS MIME registry (notably Windows).
     import mimetypes
+
     monkeypatch.setattr(mimetypes, "guess_type", lambda *a, **kw: (None, None))
     for suffix, expected in (
-        ("vtt", "text/vtt"), ("mp4", "video/mp4"), ("webm", "video/webm"),
-        ("webp", "image/webp"), ("svg", "image/svg+xml"), ("png", "image/png"),
-        ("jpg", "image/jpeg"), ("gif", "image/gif"), ("txt", "text/plain"),
+        ("vtt", "text/vtt"),
+        ("mp4", "video/mp4"),
+        ("webm", "video/webm"),
+        ("webp", "image/webp"),
+        ("svg", "image/svg+xml"),
+        ("png", "image/png"),
+        ("jpg", "image/jpeg"),
+        ("gif", "image/gif"),
+        ("txt", "text/plain"),
     ):
         name = f"approved.{suffix}"
         (base / name).write_bytes(b"test fixture")
@@ -266,7 +299,7 @@ def test_reader_media_links_open_locally_for_root_and_fleet():
     view = _load_docs()._VIEW_HTML
     helper = re.search(r"function localMediaHtml\(html\)\{.*?\n\}", view, re.S)[0]
     handler = re.search(r'\$reader.addEventListener\("click", async \(e\)=>\{(.*?)\n\}\);', view, re.S)[1]
-    script = '''
+    script = """
 const assert = require("node:assert/strict");
 for (const base of ["", "/agents/demo"]) {
   HELPER
@@ -285,5 +318,7 @@ for (const base of ["", "/agents/demo"]) {
   assert.ok(prevented);
   assert.deepEqual(opened, [["http://127.0.0.1:7870"+href, "_blank", "noopener,noreferrer"]]);
 }
-'''.replace("HELPER", helper).replace("HANDLER", handler)
-    subprocess.run([node, "-e", "(async()=>{" + script + "})().catch(e=>{console.error(e);process.exit(1)})"], check=True)
+""".replace("HELPER", helper).replace("HANDLER", handler)
+    subprocess.run(
+        [node, "-e", "(async()=>{" + script + "})().catch(e=>{console.error(e);process.exit(1)})"], check=True
+    )

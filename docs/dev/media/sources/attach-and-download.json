@@ -6,5 +6,15 @@
     "capture_commit": "cd99084a79d375a45f5714286fc06d8735c25c7e",
     "review": "Reviewed source changes since capture: chat changes settle background-delegation tool cards; they do not change this single-agent attachment/artifact flow. The recording shows Download available, not a completed local save. Prior capture evidence verifies actual Markdown download bytes."
   },
-  "privacy_review": "Synthetic demo material; no live credentials, pairing codes, or personal paths."
+  "privacy_review": "Synthetic demo material; no live credentials, pairing codes, or personal paths.",
+  "poster_encoding": "Lossless WebP conversion from the reviewed PNG; decoded RGBA pixels compared equal. Reduces poster below 500 KB.",
+  "capture_source_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+  "freshness_review": {
+    "reviewed_against": "7731620e0d6ff3cbf645dc7b00178051bae9e412",
+    "changed_files": [
+      "apps/web/src/chat/DelegateProgressView.tsx",
+      "apps/web/src/chat/delegateProgress.ts"
+    ],
+    "finding": "Only live coding-delegate narration formatting changed (strip Markdown and preserve word boundaries). These assets show ordinary chat, completed room replies, or workflow controls, not live coding narration; exported content remains accurate."
+  }
 }

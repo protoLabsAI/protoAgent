@@ -35,7 +35,7 @@ the selected model. For a document collection you want to manage as reference
 material, use [Knowledge → Store → Add source](/guides/ingestion).
 
 <!-- docs-media: attach-and-download -->
-<figure class="docs-media"><video controls playsinline preload="none" poster="/media/attach-and-download/v1-poster.png" aria-label="A public README is attached, summarized, and returned as a downloadable Markdown artifact." style="max-width:100%"><source src="/media/attach-and-download/v1.mp4"><a href="/media/attach-and-download/v1.mp4">Download video</a></video><p><a href="/media/attach-and-download/v1.mp4">Open video</a> · <a href="/media/attach-and-download/v1-steps.txt">Read the text walkthrough</a></p><figcaption>Attach a public document and inspect the generated result. This 54-second silent recording shows real model wait time; select Download to save your own copy.</figcaption></figure>
+<figure class="docs-media"><video controls playsinline preload="none" poster="/media/attach-and-download/v1-poster.webp" aria-label="A public README is attached, summarized, and returned as a downloadable Markdown artifact." style="max-width:100%"><source src="/media/attach-and-download/v1.mp4"><a href="/media/attach-and-download/v1.mp4">Download video</a></video><p><a href="/media/attach-and-download/v1.mp4">Open video</a> · <a href="/media/attach-and-download/v1-steps.txt">Read the text walkthrough</a></p><figcaption>Attach a public document and inspect the generated result. This 54-second silent recording shows real model wait time; select Download to save your own copy.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Create a document

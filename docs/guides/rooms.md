@@ -29,7 +29,7 @@ If the first name is unknown, the chat shows the available delegates. Check the
 spelling against that list.
 
 <!-- docs-media: delegate-room-round -->
-
+<figure class="docs-media"><img src="/media/delegate-room-round/v1.png" alt="Researcher and editor reply under their own names to the same leading @researcher @editor message." loading="lazy" style="max-width:100%;height:auto"><figcaption>Leading @names address the delegates in order. The named replies and participant chips show who took part in this completed demo round.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Continue the discussion {#multi-round-rooms}

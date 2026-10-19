@@ -1,0 +1,47 @@
+{
+  "viewport": "1440x1000 Chromium",
+  "privacy_review": "Synthetic isolated demo. The /tmp paths are disposable demo paths, not private user paths.",
+  "steps": [
+    "Work \u2192 Goals \u2192 New goal.",
+    "Condition: create demo-goal-result.txt in the configured workspace containing exactly Docs goal complete; change no other files.",
+    "Data verifier: absolute path in the isolated demo workspace, contains Docs goal complete.",
+    "Submit; wait for actual achieved status; open the goal detail."
+  ],
+  "verification": {
+    "session_id": "chat-1792440102852-5hzv74",
+    "condition": "Create demo-goal-result.txt in the configured workspace containing exactly Docs goal complete. Do not change any other files.",
+    "verifier": {
+      "type": "data",
+      "workspace_relative": true,
+      "path": "/tmp/pa-docs-final-demo/docs-demo/workspace/demo-goal-result.txt",
+      "contains": "Docs goal complete"
+    },
+    "outcome": "",
+    "constraints": [],
+    "boundaries": [],
+    "stop_when": "",
+    "status": "achieved",
+    "fresh_context": false,
+    "abandon_reason": "",
+    "iteration": 0,
+    "max_iterations": 8,
+    "no_progress_limit": null,
+    "no_progress_streak": 0,
+    "last_progress_signature": "",
+    "last_reason": "found substring",
+    "last_evidence": "Docs goal complete",
+    "history": [
+      {
+        "iteration": 0,
+        "at": 1792440106.017986,
+        "status": "achieved",
+        "reason": "found substring",
+        "evidence": "Docs goal complete"
+      }
+    ],
+    "fence": [],
+    "model": "",
+    "started_at": 1792440102.887347,
+    "finished_at": 1792440106.017985
+  }
+}

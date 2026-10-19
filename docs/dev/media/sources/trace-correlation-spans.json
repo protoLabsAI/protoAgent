@@ -1,0 +1,62 @@
+[
+  {
+    "name": "a2a:researcher",
+    "trace_id": "eb13bcb9e9e4331132f6e06440248ceb",
+    "span_id": "d9a5ed95537f7c72",
+    "parent_span_id": "cfadc01733e7388b",
+    "service": "Docs demo",
+    "start": "1792440611692880000",
+    "duration_ms": 1764.2,
+    "status": 0
+  },
+  {
+    "name": "a2a-stream",
+    "trace_id": "eb13bcb9e9e4331132f6e06440248ceb",
+    "span_id": "305b79fa22db1d71",
+    "parent_span_id": "d9a5ed95537f7c72",
+    "service": "research-demo",
+    "start": "1792440611724899000",
+    "duration_ms": 1706.1,
+    "status": 0
+  },
+  {
+    "name": "research-demo-turn",
+    "trace_id": "eb13bcb9e9e4331132f6e06440248ceb",
+    "span_id": "f87e59a004abd4d0",
+    "parent_span_id": "305b79fa22db1d71",
+    "service": "research-demo",
+    "start": "1792440613412933000",
+    "duration_ms": 0.3,
+    "status": 0
+  },
+  {
+    "name": "a2a:editor",
+    "trace_id": "eb13bcb9e9e4331132f6e06440248ceb",
+    "span_id": "72a79816169f5b4a",
+    "parent_span_id": "cfadc01733e7388b",
+    "service": "Docs demo",
+    "start": "1792440613473961000",
+    "duration_ms": 3242.8,
+    "status": 0
+  },
+  {
+    "name": "a2a-stream",
+    "trace_id": "eb13bcb9e9e4331132f6e06440248ceb",
+    "span_id": "27f663a66dded4ee",
+    "parent_span_id": "72a79816169f5b4a",
+    "service": "editor-demo",
+    "start": "1792440613495979000",
+    "duration_ms": 3197.0,
+    "status": 0
+  },
+  {
+    "name": "editor-demo-turn",
+    "trace_id": "eb13bcb9e9e4331132f6e06440248ceb",
+    "span_id": "4427a9477140fa6b",
+    "parent_span_id": "27f663a66dded4ee",
+    "service": "editor-demo",
+    "start": "1792440616671860000",
+    "duration_ms": 0.3,
+    "status": 0
+  }
+]

@@ -23,7 +23,7 @@ URL, access to it, and the required app version before retrying. Do not reinstal
 repeatedly to fix missing packages; use [Install dependencies](#installing-a-plugin-s-deps-from-the-console).
 
 <!-- docs-media: plugin-install-result -->
-
+<figure class="docs-media"><img src="/media/plugin-install-result/v1.png" alt="The Installed list shows Chat panel (example) loaded with one view and a Disable control." loading="lazy" style="max-width:100%;height:auto"><figcaption>Confirm the plugin is loaded and inspect what it contributes. This example was copied locally and enabled; it was not installed from a remote URL.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Enable or disable

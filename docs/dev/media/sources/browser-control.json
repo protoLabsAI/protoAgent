@@ -1,0 +1,18 @@
+{
+  "viewport": "1440x1000 Chromium",
+  "steps": [
+    "Control the browser \u2014 silent recording.",
+    "",
+    "1. Open Browser after enabling Agent Browser.",
+    "2. Enter https://example.org and choose Go; wait for the live page.",
+    "3. Manually change the URL to https://example.com and choose Go.",
+    "4. Return to Chat, open a new chat, and ask browser_screenshot to capture the current page without navigating.",
+    "5. The actual tool saves a PNG under the isolated instance capture directory. The recording shows its returned path, not a downloaded local copy.",
+    "",
+    "No logins, forms, or private websites are used. The public example pages may change."
+  ],
+  "encoding": "H.264 yuv420p CRF24 faststart, no audio",
+  "verification": "Live page inspected; browser_screenshot completed in 473ms and wrote an actual PNG.",
+  "capture_notes": "Discarded initial cold-start take with blank live frame. Final take waits for live status and successful navigation responses before holding each page.",
+  "privacy_review": "Public example domains and synthetic demo chat only."
+}
