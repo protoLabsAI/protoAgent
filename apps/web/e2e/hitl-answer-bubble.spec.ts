@@ -3,8 +3,8 @@ import { expect, test, type Request } from "@playwright/test";
 // B4: answering a request_user_input form.
 //
 // 1. The operator's answer bubble showed the raw JSON the graph resumes with — `{"plan":"C"}`.
-//    It now reads as what they picked ("Plan: Plan C"); the agent still receives the JSON, and
-//    the bubble text rides as the send's `display` so a rebuilt chat draws the same bubble.
+//    It renders as a labelled card (#4259); the agent still receives the JSON, and the card's
+//    text rides as the send's `display` so a chat rebuilt from the server reads the same.
 // 2. A HITL answer continues the task that parked (#3930) as a NEW rendered turn: the question
 //    bubble, the answer, then the reply — all on one task id. On reload, boot hydration matched
 //    the server's recovered answer by task id and wrote it onto the prose-less question bubble
@@ -41,7 +41,7 @@ test("a submitted form reads as the picked labels, and the agent gets the JSON",
   await card.getByRole("button", { name: "Submit" }).click();
 
   const answer = page.locator(`${SLOT} .pl-message--user`).last();
-  await expect(answer).toHaveText(/Plan: Plan C/);
+  await expect(answer).toContainText("Plan C");
   await expect(answer).not.toContainText("{");
   await expect.poll(() => sends.find((s) => s.hitlResume)).toBeTruthy();
   const resume = sends.find((s) => s.hitlResume)!;
@@ -73,7 +73,13 @@ test("after a reload the reply to a form answer renders once, under the answer",
             messages: [
               { id: "u1", role: "user", content: "Ask me which plan", status: "done" },
               { id: "q1", role: "assistant", content: "", status: "done", taskId: task, parts: [{ kind: "tools", ids: ["c1"] }], toolCalls: [tool] },
-              { id: "u2", role: "user", content: "Plan: Plan C", status: "done" },
+              {
+                id: "u2",
+                role: "user",
+                content: '{"plan":"C"}',
+                status: "done",
+                formResponse: { title: "Pick a plan", groups: [{ fields: [{ label: "Plan", value: "Plan C" }] }] },
+              },
               {
                 id: "a1",
                 role: "assistant",
@@ -125,12 +131,12 @@ test("after a reload the reply to a form answer renders once, under the answer",
 
   await page.goto("/app/", { waitUntil: "load" });
   const slot = page.locator(SLOT);
-  await expect(slot.locator(".pl-message--user")).toHaveText([/Ask me which plan/, /Plan: Plan C/]);
+  await expect(slot.locator(".pl-message--user")).toHaveText([/Ask me which plan/, /Plan C/]);
   // Give boot hydration its chance to (wrongly) repair the question bubble, then reload once
   // more: the reply stays under the answer only.
   await page.waitForTimeout(1000);
   await page.reload({ waitUntil: "load" });
-  await expect(slot.locator(".pl-message--user")).toHaveText([/Ask me which plan/, /Plan: Plan C/]);
+  await expect(slot.locator(".pl-message--user")).toHaveText([/Ask me which plan/, /Plan C/]);
   await page.waitForTimeout(1000);
   await expect(slot.locator(".pl-message--assistant").filter({ hasText: REPLY })).toHaveCount(1);
   await expect(slot.locator(".pl-message--assistant").last()).toContainText(REPLY);
