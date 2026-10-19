@@ -21,7 +21,10 @@ from graph.plugins import installer
 
 PID = "uvdemo"
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the uv stand-in is a POSIX script")
+pytestmark = [
+    pytest.mark.platform_sensitive,
+    pytest.mark.skipif(sys.platform == "win32", reason="the uv stand-in is a POSIX script"),
+]
 
 
 @pytest.fixture
