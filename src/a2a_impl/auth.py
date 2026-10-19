@@ -937,19 +937,39 @@ def _credential_error() -> str:
     return "Unauthorized: expected " + " or ".join(accepted)
 
 
+def _ceiling_spellings(request, path: str) -> list[str]:
+    """Every spelling of the request path the credential-plane ceiling must check.
+
+    ``request.url.path`` (what the rest of this middleware keys on) and the ASGI
+    ``scope["path"]`` the router dispatches on differ when a percent-encoded ``?``/``#``
+    (``%3F``/``%23``) is in the path, and HOW they differ moved upstream: Starlette <= 1.8
+    rebuilt ``url.path`` from the decoded path, so a decoded ``?``/``#`` cut it short
+    (``/api/plugins/install%3Fx`` -> ``/api/plugins/install``); Starlette 1.9 builds it from
+    ``raw_path``, so it stays encoded (``…/install%3Fx``) and neither spelling ends on the
+    ceiling route any more (#4367). So the cut is made HERE, not inherited from Starlette:
+    each spelling is checked whole AND truncated at its first ``?``/``#`` — the path a
+    downstream hop (the fleet proxy, a URL rebuild) would see once that character is read as
+    a query or fragment delimiter. Checking every form means none can slip a ceiling route
+    past the others, on any Starlette."""
+    scope_path = (getattr(request, "scope", None) or {}).get("path") or path
+    out: list[str] = []
+    for p in (path, scope_path):
+        for form in (p, re.split(r"[?#]", p, maxsplit=1)[0]):
+            if form and form not in out:
+                out.append(form)
+    return out
+
+
 def _credential_plane_refusal(request, path: str, scope: str, device_id: str | None) -> JSONResponse | None:
     """The ADR 0121 D4 credential-plane ceiling: a 403 when a non-``full`` credential asks for
     a route that changes who can get in (``a2a_impl.credential_scope.CEILING``), else None."""
     if scope == SCOPE_FULL:
         return None
-    # Both spellings of the path: ``request.url.path`` (what the rest of this middleware
-    # keys on) and the ASGI ``scope["path"]`` the router dispatches on. They differ when a
-    # percent-decoded ``?``/``#`` lands in the path; checking both means neither can be used
-    # to slip a ceiling route past the other.
-    raw = (getattr(request, "scope", None) or {}).get("path") or path
-    rule = ceiling_rule(request.method, path, device_id)
-    if rule is None and raw != path:
-        rule = ceiling_rule(request.method, raw, device_id)
+    rule = None
+    for spelling in _ceiling_spellings(request, path):
+        rule = ceiling_rule(request.method, spelling, device_id)
+        if rule is not None:
+            break
     if rule is None:
         return None
     logger.info("[auth] device-scope credential refused %s %s (%s)", request.method, path, rule.why)
