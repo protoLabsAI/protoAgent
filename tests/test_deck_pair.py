@@ -112,7 +112,7 @@ def test_pair_on_a_loopback_instance_explains_the_fix_and_never_suggests_open_mo
     assert pair.run_pair_cli([]) == 1
     err = capsys.readouterr().err
     assert "100.64.1.2 (tailnet)" in err
-    assert "--host 0.0.0.0" in err
+    assert "--host <that address>" in err
     assert "no auth token" in err
     # ADR 0087 D6: the fix is a reachable bind WITH a token, never an open instance.
     assert "ALLOW_OPEN" not in err
@@ -286,5 +286,58 @@ def test_pair_device_on_a_ui_none_instance_says_to_run_the_console(monkeypatch, 
     assert pair.run_pair_cli(["--device"]) == 1
     captured = capsys.readouterr()
     assert "--ui console" in captured.err
-    assert "--host 0.0.0.0" not in captured.err
+    assert "--host" not in captured.err
     assert "Pairing code" not in captured.out
+
+
+def test_pair_on_a_loopback_instance_with_tailscale_points_at_serve(monkeypatch, capsys):
+    """#4336 S4: on Tailscale, the localhost-friendly fix (tailscale serve) is named first."""
+    body = {
+        "ok": False,
+        "error": "This agent only listens on localhost, so a phone can't reach it.",
+        "available": [{"host": "100.64.1.2", "kind": "tailnet"}],
+        "bind": "127.0.0.1",
+        "auth_configured": True,
+        "reach": {"tailscale": {"running": True, "dns_name": "box.tail1234.ts.net"}},
+    }
+    _connect_to(monkeypatch, lambda r: httpx.Response(409, json=body))
+    assert pair.run_pair_cli(["--device"]) == 1
+    err = capsys.readouterr().err
+    assert "box.tail1234.ts.net" in err and "HTTPS via Tailscale" in err
+
+
+def test_pair_device_qr_uses_the_best_address_and_says_what_each_needs(monkeypatch, capsys):
+    """The QR encodes hosts[0] — the tailnet HTTPS name when served — and every address says
+    plainly that a tailnet one needs Tailscale on the phone."""
+    body = {
+        "ok": True,
+        "kind": "device",
+        "code": "3HV8T-QW6RN",
+        "expires_at": 9999999999,
+        "ttl": 300,
+        "hosts": [
+            {
+                "host": "box.tail1234.ts.net",
+                "kind": "tailnet",
+                "via": "serve",
+                "secure": True,
+                "base_url": "https://box.tail1234.ts.net/app/",
+                "url": "https://box.tail1234.ts.net/app/#pair=3HV8T-QW6RN",
+            },
+            {
+                "host": "192.168.1.20",
+                "kind": "lan",
+                "via": "ip",
+                "base_url": "http://192.168.1.20:7870/app/",
+                "url": "http://192.168.1.20:7870/app/#pair=3HV8T-QW6RN",
+            },
+        ],
+    }
+    seen = []
+    monkeypatch.setattr(pair, "_terminal_qr", lambda url, light: seen.append(url) or "QR\n")
+    _connect_to(monkeypatch, lambda r: httpx.Response(200, json=body))
+    assert pair.run_pair_cli(["--device"]) == 0
+    out = capsys.readouterr().out
+    assert seen == ["https://box.tail1234.ts.net/app/#pair=3HV8T-QW6RN"]
+    assert "https://box.tail1234.ts.net/app/   (HTTPS from any network; the phone needs the Tailscale app" in out
+    assert "http://192.168.1.20:7870/app/   (same Wi-Fi only)" in out

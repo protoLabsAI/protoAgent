@@ -1477,24 +1477,13 @@ def _main():
     # otherwise take the cascade-resolved network.bind (leaf > host-config.yaml > env
     # PROTOAGENT_HOST > 127.0.0.1). STATE.graph_config is loaded by now (agent_init);
     # the env read is a defensive fallback for the degenerate no-config path.
+    host_from_flag = bool(args.host)
     if not args.host:
         args.host = (
             STATE.graph_config.bind_host if STATE.graph_config else os.environ.get("PROTOAGENT_HOST", "127.0.0.1")
         ) or "127.0.0.1"
 
     log.info("Starting %s (ui=%s) on http://%s:%d", agent_name(), ui, args.host, args.port)
-
-    # Tell the pairing routes what we actually bound to (ADR 0087 D6). Enumerating the
-    # host's interfaces isn't enough: a loopback-bound server still HAS a LAN address, and
-    # offering it as a pairing target produces a QR that silently can't work.
-    from a2a_impl.hosts import set_bind_host as set_trusted_bind_host
-    from operator_api.pairing_routes import set_bind_host
-
-    set_bind_host(args.host)
-    STATE.bind_host = args.host
-    # The open-mode Host allowlist (#3668, and the fleet proxy's remote gate #3662) admits a
-    # named bind. Set before uvicorn serves the first request.
-    set_trusted_bind_host(args.host)
 
     # Boot gate: a non-loopback bind with no A2A auth token exposes the full
     # operator API (plugin install+enable = code execution, config/SOUL
@@ -1513,12 +1502,34 @@ def _main():
     if gate_msg:
         log.warning("%s", gate_msg)
 
-    # Reachability guardrail (#2147): a single-IP bind silently stops serving loopback,
-    # which is how the desktop app's own webview reaches its sidecar — so it locks the
-    # operator out of the console with nothing to say why. Warn (don't refuse: a
-    # headless box legitimately binds one interface, and refusing to boot would replace
-    # a reachable-elsewhere server with no server at all).
-    reach_msg = auth.evaluate_bind_reachability(args.host)
+    # Listen on the picked interface AND loopback (server/bind.py, #4336 S4): uvicorn binds
+    # one host, and a single-IP bind used to drop 127.0.0.1 — the desktop webview's way to its
+    # own sidecar (#2147). An IP that's gone from this machine falls back to loopback only.
+    from server.bind import plan_listen
+
+    requested_host = args.host
+    listen = plan_listen(args.host, args.port)
+    for msg in listen.warnings:
+        log.warning("%s", msg)
+    args.host = listen.host
+
+    # Tell the pairing routes what we actually bound to (ADR 0087 D6). Enumerating the
+    # host's interfaces isn't enough: a loopback-bound server still HAS a LAN address, and
+    # offering it as a pairing target produces a QR that silently can't work.
+    from a2a_impl.hosts import set_bind_host as set_trusted_bind_host
+    from operator_api.pairing_routes import set_bind_host
+
+    set_bind_host(args.host, extra=listen.extra, pinned_by_flag=host_from_flag, requested=requested_host)
+    STATE.bind_host = args.host
+    # The open-mode Host allowlist (#3668, and the fleet proxy's remote gate #3662) admits a
+    # named bind. Set before uvicorn serves the first request.
+    set_trusted_bind_host(args.host)
+
+    # Reachability guardrail (#2147): when loopback still ISN'T served (a hostname bind, or
+    # 127.0.0.1:<port> was taken), the desktop webview is locked out of its own console with
+    # nothing to say why. Warn (don't refuse: a headless box legitimately binds one
+    # interface, and refusing to boot would replace a reachable-elsewhere server with none).
+    reach_msg = None if listen.loopback_served else auth.evaluate_bind_reachability(args.host)
     if reach_msg:
         log.warning("%s", reach_msg)
     # A non-loopback bind with no A2A_PUBLIC_URL advertises a loopback card URL and loopback
@@ -1548,7 +1559,11 @@ def _main():
     uvicorn_config = uvicorn.Config(app, host=args.host, port=args.port, timeout_graceful_shutdown=5)
     uvicorn_server = build_uvicorn_server(uvicorn_config)
     STATE.uvicorn_server = uvicorn_server
-    uvicorn_server.run()
+    try:
+        # Our own sockets when bind.py opened them (picked IP + loopback); else uvicorn binds.
+        uvicorn_server.run(sockets=listen.sockets or None)
+    finally:
+        listen.close()  # before a restart's execv, so the new process can rebind the port
 
     # uvicorn.run() returns once the server has fully drained and released the port —
     # either a real shutdown (Ctrl-C) or an operator restart (POST /api/restart set the

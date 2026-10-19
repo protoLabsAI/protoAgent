@@ -19,45 +19,69 @@ To add another agent to a fleet, use [Pair a remote fleet member](/guides/pair-a
 
 A phone or a hub on another machine can't reach an agent bound to loopback (`127.0.0.1`),
 which is the default for a desktop or local run. Open **Settings ▸ Devices ▸ Add a
-device** (or **Pair an agent**). If the agent is loopback-bound, the reachability
-notice lists addresses; choose **Tailnet** or **Wi-Fi** to allow access. Tailnet
-addresses come first. Access depends on your tailnet membership and ACLs; a LAN
-address can be reachable by other devices on that network. Check the applicable
-network rules before pairing.
+device** (or **Pair an agent**). If the agent is loopback-bound, the reachability notice
+offers two fixes.
 
-Picking an address does two things:
+**If this machine is on Tailscale, use HTTPS via Tailscale.** Select **Use HTTPS via
+Tailscale**. The agent stays on localhost, and Tailscale serves it at
+`https://<machine>.<tailnet>.ts.net`. No restart is needed. The phone needs the Tailscale
+app, signed in to the same tailnet. A token is required. For setup, including turning on
+HTTPS certificates for your tailnet, see
+[HTTPS via Tailscale](./phone-access.md#https-via-tailscale).
+
+**Otherwise, pick an address.** The notice lists this machine's **Tailnet** and **Wi-Fi**
+addresses, tailnet first. A tailnet address works from any network, but only for devices
+on your tailnet that its access rules (ACLs) allow. A Wi-Fi address works only on that
+Wi-Fi, and anything else on the network can reach it too.
+
+Picking an address does three things:
 
 1. **It makes sure the agent has a token.** A non-loopback bind with no token refuses to
    start, so if this agent has none, one is generated, saved as its `auth.token`, and shown
    **once**. Save it: the desktop app after the restart, the CLI and any other browser will
    ask for it. (If the agent already has a token, nothing changes.)
-2. **It sets the bind interface (`network.bind`) to `0.0.0.0`**, not to the address you
-   picked. The server listens on a single host, and a single non-loopback address would
-   drop loopback, which is how the desktop app reaches its own server. `0.0.0.0` keeps
-   loopback and adds every other interface; the address you picked is only the one put in
-   the QR or next to the code. The token is what gates access, and a tailnet ACL or a
-   firewall is how you narrow reach further.
+2. **It sets the bind interface (`network.bind`) to the address you picked.** The agent
+   listens on that address **and** on `127.0.0.1`, so the desktop app keeps working (it
+   reaches its own server over loopback). Nothing else is exposed: a tailnet pick isn't
+   reachable from your Wi-Fi.
+   - If the address is gone at startup, the agent serves `127.0.0.1` only and logs a
+     warning instead of failing to start. This happens when the Wi-Fi lease changed, or
+     when Tailscale wasn't connected yet. Pick the address again, or use Tailscale HTTPS,
+     which doesn't depend on an IP.
+   - An agent older than this release listens on one address only. Binding one address
+     would drop loopback there, so the panel writes `0.0.0.0` (every interface) for it.
+3. **It offers Restart now.** The bind only takes effect at startup. **Restart now**
+   restarts the server with the same command line (`POST /api/restart`). The console waits
+   for it to come back and reopens the dialog. The panel shows instructions instead of the
+   button in these cases:
 
-The bind only takes effect at startup, so the panel ends on **Restart protoAgent to
-finish**. After the restart, open Settings ▸ Devices again and pair.
+   | Launched as | What to do |
+   | --- | --- |
+   | Desktop app, `protoagent serve`, or `python -m server` | **Restart now** works. |
+   | With `--host` on the command line | `--host` overrides `network.bind`, and a restart keeps it. Start the agent again without `--host`, or with the address you want. |
+   | In a container | Phones reach the ports the container publishes, not the bind inside it. Publish the port in your compose file. |
+   | A fleet member's Devices, opened from the hub | Restart that member from its own console or the Fleet panel. |
 
 **To undo it**, set **Bind interface** back to `127.0.0.1` and restart. It is one of the
 box-runtime knobs on **Settings ▸ Fleet** (the command palette finds it under `network`);
-in YAML it is `network.bind` in the host config. The
-agent is loopback-only again. The token stays; clear or rotate it under **Settings ▸
-Operator & access** if you no longer want one. Revoke any paired devices you don't need
-first, since they stop being reachable anyway.
+in YAML it is `network.bind` in the host config. The agent is loopback-only again. The
+token stays; clear or rotate it under **Settings ▸ Operator & access** if you no longer
+want one. Revoke any paired devices you don't need first, since they stop being reachable
+anyway.
 
 On a headless server, skip the panel and start it reachable, with a token:
 
 ```bash
 PROTOAGENT_PAIR_TOKEN=$(openssl rand -hex 24)
 printf '%s\n' "$PROTOAGENT_PAIR_TOKEN"
-A2A_AUTH_TOKEN="$PROTOAGENT_PAIR_TOKEN" protoagent serve --host 0.0.0.0 --port 7870
+A2A_AUTH_TOKEN="$PROTOAGENT_PAIR_TOKEN" protoagent serve --host 100.64.0.5 --port 7870
 ```
 
-Keep the displayed token for any client that needs the shared operator login.
-In a source checkout, replace `protoagent serve` with `uv run python -m server`.
+Use the address you want to serve (it also listens on `127.0.0.1`), or `0.0.0.0` for every
+interface. Or keep the default loopback bind and put
+[`tailscale serve`](./phone-access.md#https-via-tailscale) in front of it. Keep the
+displayed token for any client that needs the shared operator login. In a source checkout,
+replace `protoagent serve` with `uv run python -m server`.
 
 Never turn on `PROTOAGENT_ALLOW_OPEN=1` to make pairing work. Pairing adds clients to a
 *secured* instance; it is not a way to open one up.
@@ -65,8 +89,11 @@ Never turn on `PROTOAGENT_ALLOW_OPEN=1` to make pairing work. Pairing adds clien
 ## Pair a phone (QR)
 
 1. On the agent: **Settings ▸ Devices ▸ Add a device**. A QR appears with a countdown, and
-   a choice of address if the agent has more than one (Tailnet works from any network the
-   phone is on; Wi-Fi only while both are on that Wi-Fi).
+   a choice of address if the agent has more than one, best first: **Tailnet HTTPS**, the
+   **Tailnet name**, a **Tailnet** IP, then **Wi-Fi**. Each tailnet address works from any
+   network, but only if the phone has the Tailscale app signed in to the same tailnet. A
+   Wi-Fi address works only while both are on that Wi-Fi. The line under the QR says which
+   applies.
 2. On the phone: scan it. The link opens the console at `…/app/#pair=<code>`; the console
    claims the code, stores the device token in that browser, and strips the code from the
    address bar and history. The code travels in the `#fragment`, so it never reaches a
@@ -121,7 +148,8 @@ protoagent pair --device
 
 It finds the running instance the same way `protoagent pair` does, starts a phone
 pairing, and prints a QR in the terminal, the code, and the console URL for each address
-the phone can use (tailnet first). Scan the QR, or open a URL on the phone and type the
+the phone can use, best first (tailnet HTTPS, then the tailnet name, a tailnet IP, and
+Wi-Fi), with what each one needs. The QR uses the first one. Scan the QR, or open a URL on the phone and type the
 code as described above. `--no-qr` skips the drawing, `--light` draws it for a
 light-background terminal, and `--json` prints the raw response. See the
 [CLI reference](./cli.md#pairing-a-phone-from-the-terminal-protoagent-pair-device) for

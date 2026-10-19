@@ -61,6 +61,12 @@ def _isolate_instance_roots(tmp_path, monkeypatch):
     # developer's real desktop fleet (its members' recorded ports) leaks into every test
     # that allocates a port. A test that wants one patches it back.
     monkeypatch.setattr(_paths, "desktop_box_roots", lambda: [])
+    # Never probe the developer's real Tailscale (#4336 S4): an empty override disables the
+    # CLI lookup, so pairing answers are deterministic. Tailscale tests patch `_run` instead.
+    monkeypatch.setenv("PROTOAGENT_TAILSCALE_BIN", "")
+    from infra import tailscale as _tailscale
+
+    _tailscale.clear_cache()
 
 
 @pytest.fixture(autouse=True)

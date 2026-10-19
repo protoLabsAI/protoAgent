@@ -1882,9 +1882,32 @@ const server = createServer(async (req, res) => {
     }
     // Agent pairing (ADR 0113) — the remote's half. `x-e2e-pairing: loopback` drives the 409
     // "only listens on localhost" answer so the shared reachability step renders.
+    // `x-e2e-pairing: tailscale` (#4336 S4): loopback-bound on a tailnet with HTTPS certs on;
+    // POST /api/pairing/tailscale/serve flips this scope to "served", after which start
+    // answers with the https name first. `x-e2e-restart: pinned` reports a `--host` launch.
+    const tsMode = req.headers["x-e2e-pairing"] === "tailscale";
+    const reachFor = () => ({
+      tailscale: tsMode
+        ? {
+            available: true, running: true, dns_name: "box.tail1234.ts.net", magicdns: true, https: true,
+            ips: ["100.64.0.5"], error: "",
+            served: fleet.tsServed ? { url: "https://box.tail1234.ts.net", https_port: 443, funnel: false } : null,
+            https_admin_url: "https://login.tailscale.com/admin/dns",
+          }
+        : { available: false, running: false, dns_name: "", magicdns: false, https: false, ips: [], error: "Tailscale isn't installed on this machine", served: null, https_admin_url: "https://login.tailscale.com/admin/dns" },
+      restart: req.headers["x-e2e-restart"] === "pinned"
+        ? { supported: true, bind_pinned: "127.0.0.1", container: false, pending: false, hint: "This agent was started with --host 127.0.0.1, which overrides the bind setting. Start it again without --host (or with the address you want) for a new bind to apply." }
+        : { supported: true, bind_pinned: "", container: false, pending: false, hint: "" },
+      auth_configured: true,
+      bind_interface: true,
+    });
+    if (pathname === "/api/pairing/tailscale/serve" && (req.method === "POST" || req.method === "DELETE")) {
+      fleet.tsServed = req.method === "POST";
+      return sendJson(res, req.method === "POST" ? { ok: true, url: "https://box.tail1234.ts.net" } : { ok: true });
+    }
     if (pathname === "/api/pairing/start" && req.method === "POST") {
       const kind = body?.kind === "agent" ? "agent" : "device";
-      if (req.headers["x-e2e-pairing"] === "loopback") {
+      if (req.headers["x-e2e-pairing"] === "loopback" || (tsMode && !fleet.tsServed)) {
         return sendJson(res, {
           ok: false,
           error: kind === "agent"
@@ -1894,7 +1917,21 @@ const server = createServer(async (req, res) => {
           available: [{ host: "100.64.0.5", kind: "tailnet" }, { host: "192.168.5.20", kind: "lan" }],
           bind: "127.0.0.1",
           auth_configured: true,
+          reach: reachFor(),
         }, 409);
+      }
+      if (tsMode && kind === "device") {
+        const ttl = 300;
+        const expires_at = Math.floor(nowFor(req) / 1000) + ttl;
+        return sendJson(res, {
+          ok: true, kind, code: "3HV8T-QW6RN", expires_at, ttl, reach: reachFor(),
+          hosts: [{
+            host: "box.tail1234.ts.net", kind: "tailnet", via: "serve", secure: true, funnel: false,
+            origin: "https://box.tail1234.ts.net",
+            base_url: "https://box.tail1234.ts.net/app/",
+            url: "https://box.tail1234.ts.net/app/#pair=3HV8T-QW6RN", qr: null,
+          }],
+        });
       }
       const ttl = 300; // both kinds since the ADR 0087 D3 amendment: the device code is typeable too
       const expires_at = Math.floor(nowFor(req) / 1000) + ttl;

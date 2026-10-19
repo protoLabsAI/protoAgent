@@ -171,11 +171,14 @@ under every root; a claim removes them all), 120 s TTL, one-shot.
 | POST | `/api/fleet/{name}/{start,stop,activate}` · `/api/fleet/down` | Lifecycle control |
 | GET | `/api/fleet/discover` | Discover agents (LAN mDNS + tailnet) |
 | POST · DELETE | `/api/fleet/remotes[/{ident}]` | Register / remove a remote member |
-| POST | `/api/pairing/start` · `/api/pairing/cancel` | Mint a short-lived pairing code (`{kind: "device" \| "agent"}`, default `device`) and the addresses it works on / drop pending codes of that kind (ADR 0087, ADR 0113) |
+| POST | `/api/pairing/start` · `/api/pairing/cancel` | Mint a phone (default) or agent (`{"kind": "agent"}`) pairing code with the addresses it works on, best first (`hosts[].via`: `serve` → `magicdns` → `ip`), plus `reach` (Tailscale status, restart facts) / drop pending codes of that kind (ADR 0087, ADR 0113). `409` when nothing is reachable yet |
 | POST | `/api/pairing/claim` | Redeem a code for a per-device token (`{code, name}` → `{ok, device, token}`). The **only** unauthenticated `/api/*` route; one `403` for every bad code |
 | GET | `/api/devices` | Paired devices and hubs: `id`, `name`, `kind`, `created_at`, `last_seen_at`, and `active` (used within the last-seen write throttle, about 6 minutes). Never the token or its hash |
 | PATCH | `/api/devices/{id}` | Rename (`{name}`: 1–64 printable characters on one line). `400` with the reason for an unusable name, `404` for an unknown id. The token is untouched |
 | DELETE | `/api/devices/{id}` | Revoke one device; its token stops working on the next request |
+| GET | `/api/pairing/reach` | How this agent can be reached: bind, listening port, offered and bindable addresses, `auth_configured`, `tailscale` (`dns_name`, `https`, `served`), `restart` (`supported`, `bind_pinned`, `container`, `pending`, `hint`) |
+| POST · DELETE | `/api/pairing/tailscale/serve` | Serve this agent over tailnet HTTPS with `tailscale serve --bg` / turn off only its own handler. POST is `409 no_token` until an auth token is set; `409 https_disabled` carries `enable_url` |
+| POST | `/api/restart` | Graceful self-restart: drain, then re-exec with the same command line (`202`) |
 | POST | `/api/fleet/remotes/pair` | Pair with a remote by claiming a code minted on it (`{url, code, name?}`); stores the per-device token, adds or re-tokens the member (ADR 0113) |
 | GET | `/api/archetypes` | Starter agent types (catalog + installed bundles); `?include_held=1` adds the catalog's `held` preview entries (`held: true`) |
 | GET | `/api/archetypes/{id}/preview` | Peek a bundle archetype's members/MCP/secrets before install |

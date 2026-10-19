@@ -168,6 +168,25 @@ Two properties this must keep:
 `network.bind` is restart-gated, so the flow ends on an explicit restart notice rather than
 pretending to have finished, and it names how to undo it (set the bind back to `127.0.0.1`).
 
+**Amended 2026-10-18 (#4336 S4).** Three changes, all within the two properties above:
+
+- **The picked address is the bind.** The server now opens its listening sockets itself
+  (`src/server/bind.py`) and hands them to `uvicorn.Server.run(sockets=…)`. A non-loopback IP
+  bind listens on that IP **and** `127.0.0.1`. That is the "loopback plus tailnet, nothing
+  else" posture the original D6 couldn't express, so the panel writes the picked IP. It
+  writes `0.0.0.0` only for an older server, one that doesn't report `bind_interface`. If the
+  IP is gone at boot, the server serves loopback only and warns; it does not refuse to start.
+- **Tailnet HTTPS is preferred** (ADR 0121 D1). When `tailscale serve` proxies HTTPS to this
+  instance, the offer leads with `https://<machine>.<tailnet>.ts.net`. Then come the MagicDNS
+  name over http, the tailnet IP and the LAN IP. The panel can turn serve on (`POST
+  /api/pairing/tailscale/serve`), and that path needs no bind change at all. Serve forwards
+  from `127.0.0.1`, and auth never trusts loopback (`a2a_impl/auth.py`). So enabling is
+  **refused until a token is set**, and a tokenless instance refuses every `*.ts.net` Host
+  unless `PROTOAGENT_ALLOW_OPEN=1` (`a2a_impl/hosts.py` `tailnet_proxy_refusal`).
+- **Restart from the panel.** The restart notice offers **Restart now** (`POST /api/restart`).
+  It is replaced by instructions when a re-exec can't apply the bind: a `--host` launch or a
+  container.
+
 ## Consequences
 
 - The unauthenticated surface grows by one endpoint. It is the only one, it is rate-limited
