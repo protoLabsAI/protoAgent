@@ -267,7 +267,7 @@ export function ChatMessageView({
             return !text.trim() ? null : message.role === "user" ? (
               renderUserText(text, key)
             ) : (
-              <Markdown key={key}>{text}</Markdown>
+              <Markdown key={key} streaming={part === live}>{text}</Markdown>
             );
           };
           // Every part is keyed by its index in `parts` (foldPlan keeps the part objects), and
@@ -334,9 +334,9 @@ export function ChatMessageView({
             ) : revealing ? (
               // Mid-reveal (#4247): show the grown-so-far prefix, hiding any dangling marker
               // its leading edge lands on — exactly as a live stream does.
-              <Markdown>{hideDanglingMarker(revealShown)}</Markdown>
+              <Markdown streaming>{hideDanglingMarker(revealShown)}</Markdown>
             ) : (
-              <Markdown>{streaming ? hideDanglingMarker(message.content) : message.content}</Markdown>
+              <Markdown streaming={streaming}>{streaming ? hideDanglingMarker(message.content) : message.content}</Markdown>
             )
           ) : null}
         </>

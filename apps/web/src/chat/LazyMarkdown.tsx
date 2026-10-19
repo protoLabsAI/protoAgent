@@ -1,5 +1,7 @@
 import { lazy, Suspense, type ComponentType } from "react";
 
+import type { MarkdownProps } from "./Markdown";
+
 // The markdown pipeline (the DS `<Markdown>` over streamdown — Shiki + KaTeX + mermaid) is
 // the heaviest dependency in the app. Load it lazily so it isn't in the initial chunk.
 //
@@ -16,7 +18,7 @@ import { lazy, Suspense, type ComponentType } from "react";
 //      never suspends at all;
 //   3. if text does arrive before the module (a slow split chunk), the fallback is an EMPTY
 //      markdown scope — the text appears rendered a beat later, never as raw source.
-type MarkdownComponent = ComponentType<{ children: string }>;
+type MarkdownComponent = ComponentType<MarkdownProps>;
 
 let loaded: { default: MarkdownComponent } | null = null;
 let loading: Promise<{ default: MarkdownComponent }> | null = null;
@@ -46,10 +48,10 @@ const MarkdownImpl = lazy(() =>
 // Warm it now: by the time any message renders, the lazy factory takes the synchronous path.
 void preloadMarkdown().catch(() => {});
 
-export function Markdown({ children }: { children: string }) {
+export function Markdown({ children, streaming = false }: MarkdownProps) {
   return (
     <Suspense fallback={<div className="pl-markdown markdown" aria-busy="true" data-markdown-pending="" />}>
-      <MarkdownImpl>{children}</MarkdownImpl>
+      <MarkdownImpl streaming={streaming}>{children}</MarkdownImpl>
     </Suspense>
   );
 }
