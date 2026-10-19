@@ -570,6 +570,23 @@ land under it.)
 
 git receives the clone URL exactly as given, so the host's ssh keys and credential helpers apply; a credential embedded in an https URL is masked in everything the tool reports (git itself still stores the URL in the checkout's `.git/config`, so prefer a credential helper). Refused before git runs: local paths and `file://`, remote-helper transports such as `ext::`, and anything starting with `-`.
 
+## `network`
+
+How this server listens, and which reverse proxies it believes. Host-scoped: edit it in
+**Settings ▸ Box ▸ Network**, or in `host-config.yaml`. A restart applies changes.
+
+```yaml
+network:
+  bind: 0.0.0.0
+  trusted_proxies:
+    - 172.18.0.0/16   # the Docker network your proxy container is on
+```
+
+| Key | Default | What |
+|---|---|---|
+| `bind` | `127.0.0.1` | The interface the server listens on. An explicit `--host` wins. Env fallback: `PROTOAGENT_HOST` (see [environment variables](./environment-variables.md)). |
+| `trusted_proxies` | `[]` | IPs or CIDRs of reverse proxies allowed to set `X-Forwarded-For` and `X-Forwarded-Proto`. Loopback (`127.0.0.1`, `::1`) is always trusted, so a proxy on the same machine (`tailscale serve`, `cloudflared`, nginx on the host) needs nothing here. Add a proxy that reaches you from **another** address, such as a container on a Docker network or a separate box. The list goes to uvicorn (`forwarded_allow_ips`), and it decides which client the [pairing-claim throttle](../explanation/security-and-trust.md#the-pairing-claim-endpoint) counts a wrong code against: from an untrusted proxy, every client looks like the proxy and they share one budget. A header from anyone not on the list is ignored. `*` trusts every peer, which is only safe when nothing but your proxy can reach the port. Env fallback: `FORWARDED_ALLOW_IPS` (comma-separated, uvicorn's own variable). |
+
 ## `egress`
 
 Deny-by-default outbound-host allowlist ([ADR 0008](../adr/0008-sandboxing-and-openshell.md)) enforced in `fetch_url` — the tool where the model picks an arbitrary host (the in-process exfiltration / SSRF vector). Also the single source of truth the OpenShell network policy is generated from (`scripts/gen_openshell_policy.py`). Editable in the console at **Settings ▸ Box ▸ Network** (host-scoped, hot-reloads).

@@ -22,10 +22,11 @@ TOKEN = "dev-tok-SECRET-9f8e7d"  # the minted device token — must never leak a
 
 
 class _Resp:
-    def __init__(self, status: int, body=None, text: str | None = None):
+    def __init__(self, status: int, body=None, text: str | None = None, headers: dict | None = None):
         self.status_code = status
         self._body = body
         self._text = text
+        self.headers = headers or {}
 
     def json(self):
         if self._text is not None:
@@ -175,6 +176,17 @@ def test_pair_explicit_name_collision_is_refused_before_the_code_is_spent(remote
     with pytest.raises(supervisor.PairingError):
         supervisor.pair_remote(URL, "c", name="has spaces")
     assert remote.posts == []  # nothing claimed — the single-use code is still good
+
+
+def test_pair_throttled_by_the_remote_says_wait_not_regenerate(remote):
+    """A 429 from the remote's claim throttle (ADR 0121 D3): the code was never tried and is
+    still pending, so the operator is told to retry it, not to make a new one."""
+    remote.claim = _Resp(
+        429, {"ok": False, "error": "too many pairing attempts — try again in 42 s"}, headers={"retry-after": "42"}
+    )
+    with pytest.raises(supervisor.PairingError, match="try the same code again in 42 s") as ei:
+        supervisor.pair_remote(URL, "ABCDE-12345")
+    assert ei.value.status == 429
 
 
 def test_pair_invalid_or_expired_code(remote):

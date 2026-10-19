@@ -59,7 +59,7 @@ export function AuthGate() {
 
   const pair = async () => {
     // The server is authoritative, but an incomplete code is a guaranteed miss — and every
-    // miss spends one of the 5 the lockout allows (ADR 0087 D4). Don't send it.
+    // miss spends one of the 5 per 5 minutes the claim throttle allows (ADR 0121 D3).
     if (!isCompletePairingCode(code) || claiming) return;
     setClaiming(true);
     setSaveError(null);

@@ -1509,6 +1509,22 @@ FIELDS: list[Field] = [
         restart=True,
         scope="host",
     ),
+    # Which reverse proxies' X-Forwarded-* headers to believe (ADR 0121 D3). Passed to uvicorn
+    # at boot, and it keys the pairing-claim throttle on the real client, not the proxy.
+    Field(
+        "network.trusted_proxies",
+        "network_trusted_proxies",
+        "Trusted reverse proxies",
+        "string_list",
+        "Network",
+        "IPs or CIDRs of reverse proxies in front of this server, one per line. Only these "
+        "(plus loopback, always) may set X-Forwarded-For / X-Forwarded-Proto. Leave empty "
+        "unless a proxy on ANOTHER address (a Docker network, a separate box) forwards to "
+        "you: without it every client behind that proxy looks like the proxy, and they "
+        "share one pairing-attempt budget. Env fallback: FORWARDED_ALLOW_IPS.",
+        restart=True,
+        scope="host",
+    ),
     # Outbound counterpart to the inbound bind interface (ADR 0008). Host-scoped +
     # hot-reloaded (egress.set_allowed_hosts runs on save). string_list → the generic
     # one-per-line editor; no bespoke console code.

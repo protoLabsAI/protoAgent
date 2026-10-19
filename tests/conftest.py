@@ -117,6 +117,22 @@ def _reset_surface_reconcile_state(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_claim_throttle():
+    """The pairing-claim buckets (ADR 0121 D3) are process-global, and every TestClient is
+    the same "testclient" peer: one test's misses must not throttle the next test's claims.
+    Trusted proxies and the public origin are reset with them (loopback only, unset)."""
+    from security import claim_throttle
+
+    claim_throttle.reset()
+    claim_throttle.set_trusted_proxies(None)
+    claim_throttle.set_public_origin(None)
+    yield
+    claim_throttle.reset()
+    claim_throttle.set_trusted_proxies(None)
+    claim_throttle.set_public_origin(None)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_prompt_snapshots(tmp_path, monkeypatch):
     """Point the prompt snapshot store (#2243) at a per-test temp DB.
 

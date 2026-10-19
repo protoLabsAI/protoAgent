@@ -260,6 +260,17 @@ async def _sweep_orphaned_trees_forever(interval: float = ORPHAN_SWEEP_INTERVAL_
         await _sweep_orphaned_trees_once()
 
 
+def _trusted_proxies(graph_config: Any) -> list[str]:
+    """``network.trusted_proxies`` plus loopback, recorded for the claim throttle and returned
+    for uvicorn's ``forwarded_allow_ips`` (ADR 0121 D3). Loopback stays trusted because it was
+    uvicorn's default, and a same-machine proxy (tailscale serve, cloudflared) relies on it."""
+    from security import claim_throttle
+
+    configured = getattr(graph_config, "network_trusted_proxies", None) or []
+    claim_throttle.set_trusted_proxies(configured)
+    return claim_throttle.trusted_proxies()
+
+
 def build_uvicorn_server(config: "uvicorn.Config") -> "uvicorn.Server":
     """The ``uvicorn.Server`` this process runs, with one change: an exit signal
     starts tearing down the process trees this process owns (#3428) BEFORE the
@@ -1524,6 +1535,9 @@ def _main():
     # The open-mode Host allowlist (#3668, and the fleet proxy's remote gate #3662) admits a
     # named bind. Set before uvicorn serves the first request.
     set_trusted_bind_host(args.host)
+    # Which proxies' X-Forwarded-* to believe (ADR 0121 D3): uvicorn rewrites the client from
+    # them, and the pairing-claim throttle keys on that client. One list for both.
+    trusted_proxies = _trusted_proxies(STATE.graph_config)
 
     # Reachability guardrail (#2147): when loopback still ISN'T served (a hostname bind, or
     # 127.0.0.1:<port> was taken), the desktop webview is locked out of its own console with
@@ -1556,7 +1570,14 @@ def _main():
     # self-signal was fatal on Windows — os.kill turns anything but CTRL_C_EVENT into
     # TerminateProcess, so the server died where it should have drained and the re-exec
     # below never ran (#2585). Same drain semantics on every platform now.
-    uvicorn_config = uvicorn.Config(app, host=args.host, port=args.port, timeout_graceful_shutdown=5)
+    uvicorn_config = uvicorn.Config(
+        app,
+        host=args.host,
+        port=args.port,
+        timeout_graceful_shutdown=5,
+        proxy_headers=True,
+        forwarded_allow_ips=trusted_proxies,
+    )
     uvicorn_server = build_uvicorn_server(uvicorn_config)
     STATE.uvicorn_server = uvicorn_server
     try:

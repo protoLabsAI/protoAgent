@@ -132,7 +132,29 @@ codes exist. The phone shows **That code didn't work** and names the possible ca
 | Mistyped | A character is wrong. The **Pair this device** button stays disabled until all ten characters are entered, so a short code never spends a try. | Check it against the agent's screen and try again. |
 | Expired | Codes last five minutes. Restarting the agent, or closing the Add a device card, also cancels the code. | Make a new code. |
 | Already used | Each code works once, by QR or by typing. | Make a new code if this phone isn't in the Devices list. |
-| Locked out | After five wrong codes in a row, the agent cancels **every** pending code, including agent-pairing codes. This stops anyone from guessing their way in. | Make a new code. A new code starts with five fresh tries. |
+
+Wrong guesses never cancel a code. A code stays valid until it expires, is used, or you
+close the card, however many wrong codes anyone sends.
+
+### Too many attempts
+
+If the phone shows **Too many attempts — try again in N s**, the agent has paused pairing
+attempts for a while. It did not check your code, so the code still works once the wait is
+over (as long as it hasn't expired). This happens when:
+
+- **This device sent five wrong codes in five minutes.** It gets one more try each minute,
+  and all five back after five minutes.
+- **Thirty wrong codes arrived from anywhere in one minute.** That usually means someone is
+  guessing. Pairing resumes within a couple of seconds once the guessing stops.
+
+Only wrong codes count. A code that works never uses up a try. The same limits apply to
+[agent pairing](#pair-another-agent) codes, and a hub reports them as "try the same code
+again in N s". See [Security & the trust model](../explanation/security-and-trust.md#the-pairing-claim-endpoint)
+for why the limits look like this.
+
+If every device behind a reverse proxy hits the limit together, the agent sees them all as
+the proxy. Set [`network.trusted_proxies`](../reference/configuration.md#network) to the
+proxy's address.
 
 If the phone says **Couldn't reach this agent**, the problem is the network, not the
 code. See [Access from your phone](./phone-access.md#tailscale-reach-it-from-anywhere).

@@ -17,8 +17,10 @@
 Every route here is behind the ``/api/*`` operator bearer (a2a_impl/auth.py) EXCEPT
 ``claim``, which is on the auth allowlist by necessity — obtaining auth is its purpose. Its
 guards live in ``security.devices``: ~50-bit typeable codes of either kind (300s),
-single-use consumption, and one failed-attempt counter shared by both kinds. See ADR 0087 D4
-(and its 2026-10-18 amendment) and ADR 0113 D2 for the residual risk that buys.
+single-use consumption, and the claim throttle (``security.claim_throttle``, ADR 0121 D3):
+misses draw from a per-client and a per-ingress-class bucket, an empty bucket is a ``429``
+with ``Retry-After`` that never evaluates the code, and nothing a claimer sends can cancel a
+pending code. ADR 0087 D4 and ADR 0113 D2 (both amended by ADR 0121) cover the residual risk.
 
 ``operator_api`` may import ``security``/``infra`` but never ``server`` (import-linter).
 """
@@ -615,6 +617,7 @@ def register_pairing_routes(app, agent_name=None) -> None:
     @router.post("/api/pairing/claim")
     async def _claim(request: Request):  # noqa: ANN202
         """UNAUTHENTICATED (allowlisted in a2a_impl/auth.py). See the module docstring."""
+        from security import claim_throttle
         from security.devices import claim_pairing
 
         body = await _json_body(request)
@@ -622,7 +625,24 @@ def register_pairing_routes(app, agent_name=None) -> None:
         # when the operator minted it — a claimer can't relabel itself (ADR 0113 D2).
         code = str(body.get("code") or "")
         name = str(body.get("name") or "")
-        result = claim_pairing(code, name)
+        # Keyed on the client as resolved through network.trusted_proxies: X-Forwarded-For
+        # counts only from a trusted peer (uvicorn applies the same list; re-resolving an
+        # already-rewritten client is a no-op).
+        client = claim_throttle.resolve_client_ip(
+            request.client.host if request.client else "", request.headers.getlist("x-forwarded-for")
+        )
+        ingress = claim_throttle.ingress_class(request.headers.get("host"))
+        try:
+            result = claim_pairing(code, name, client=client, ingress=ingress)
+        except claim_throttle.ClaimThrottled as exc:
+            # Not evaluated: the code (right or wrong) was never compared, and every pending
+            # code is still pending. Say when to come back.
+            msg = f"too many pairing attempts — try again in {exc.retry_after} s"
+            return JSONResponse(
+                {"ok": False, "error": msg, "retry_after": exc.retry_after},
+                status_code=429,
+                headers={"Retry-After": str(exc.retry_after)},
+            )
         if result is None:
             # One message for every failure mode (unknown / expired / already used) — an
             # attacker learns nothing about which codes exist.

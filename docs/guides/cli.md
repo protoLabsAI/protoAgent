@@ -190,7 +190,8 @@ The QR encodes the first address with the code in its `#pair=` fragment. The ord
 tailnet HTTPS (when [`tailscale serve`](./phone-access.md#https-via-tailscale) serves this
 agent), the tailnet name, a tailnet IP, then Wi-Fi.
 The code follows the same rules as an agent code: ten characters, case-insensitive, works
-once, expires after five minutes, and five wrong tries cancel every pending code.
+once, and expires after five minutes. Wrong tries never cancel it; too many in a row only
+make the agent wait before checking more ([Too many attempts](./pairing.md#too-many-attempts)).
 
 | Flag | Effect |
 | --- | --- |
