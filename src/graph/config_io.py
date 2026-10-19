@@ -1334,15 +1334,21 @@ def sync_host_model_layer(config) -> bool:
     # and mirroring that stamped a host that does not exist into the Host layer, where
     # every legacy-route reader on the box then inherited it. The App default itself is
     # never written either: an absent key inherits exactly that value, so writing it says
-    # nothing except "this is a real endpoint", which it is not.
+    # nothing except "this is a real endpoint", which it is not. Instead a previously
+    # mirrored value is REMOVED, so the Host layer still tracks what the box runs (absent
+    # inherits the App default) rather than keeping an endpoint the box moved off.
     from graph.llm import resolve_gateway_route  # lazy — graph.llm is the heavier import
 
     route = resolve_gateway_route(config)
-    if route.connection or route.base_url != LangGraphConfig.api_base:
+    mirror_base = bool(route.connection) or route.base_url != LangGraphConfig.api_base
+    if mirror_base:
         desired["api_base"] = route.base_url
-    if all(model.get(k) == v for k, v in desired.items()):
+    stale_base = not mirror_base and "api_base" in model
+    if not stale_base and all(model.get(k) == v for k, v in desired.items()):
         return False
     model.update(desired)
+    if stale_base:
+        model.pop("api_base", None)
     atomic_write(hp, _y.safe_dump(doc, sort_keys=False))
     log.info("[config] host model group mirrored to the Host layer (%s)", hp)
     return True

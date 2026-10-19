@@ -684,6 +684,29 @@ def test_b1_host_mirror_never_writes_the_app_default_placeholder(tmp_path, monke
     )
     assert sync_host_model_layer(cfg) is True
     assert "api_base" not in yaml.safe_load(hp.read_text(encoding="utf-8"))["model"]
+    assert sync_host_model_layer(cfg) is False  # in step → no write
+
+
+def test_b1_host_mirror_drops_an_endpoint_the_box_moved_off(tmp_path, monkeypatch):
+    """A box that ran on a wizard connection, then moved to a lead on the App-default
+    route: the previously mirrored endpoint is removed, not left behind (absent = default)."""
+    import yaml
+
+    from graph.config_io import sync_host_model_layer
+
+    hp = tmp_path / "host-config.yaml"
+    monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(hp))
+    monkeypatch.setattr("graph.workspaces.manager.is_workspace_member", lambda: False)
+    assert sync_host_model_layer(_wizard(monkeypatch)) is True
+    assert yaml.safe_load(hp.read_text(encoding="utf-8"))["model"]["api_base"] == _WIZARD_BASE
+
+    native = _load({"providers": [{"id": "anthropic-oauth", "type": "anthropic-oauth"}], "model": {"name": "anthropic-oauth:claude-x"}}, None, monkeypatch)
+    native.api_base = APP_DEFAULT_BASE  # what the agent resolves once the host value is gone
+    assert sync_host_model_layer(native) is True
+    model = yaml.safe_load(hp.read_text(encoding="utf-8"))["model"]
+    assert "api_base" not in model
+    assert model["name"] == "anthropic-oauth:claude-x"
+    assert sync_host_model_layer(native) is False
 
 
 def test_b1_native_lead_beside_a_declared_gateway_uses_that_gateway(monkeypatch):
