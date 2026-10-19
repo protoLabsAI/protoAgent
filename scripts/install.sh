@@ -26,7 +26,10 @@
 #   PROTOAGENT_DEFAULT_API_BASE / _DEFAULT_MODEL   wizard defaults
 #   PROTOAGENT_INSTALL_URL         configure an already-running instance; skip Docker
 #   PROTOAGENT_INSTALL_NONINTERACTIVE=1   never prompt (start only; finish in browser)
-#   A2A_AUTH_TOKEN         bearer for a non-loopback bind (see docs)
+#   A2A_AUTH_TOKEN         operator bearer token: required for a non-loopback
+#                          bind; passed to the container and sent (never printed)
+#                          as `Authorization: Bearer` on every setup request,
+#                          including against PROTOAGENT_INSTALL_URL
 
 set -eu
 
@@ -101,7 +104,7 @@ ask_secret() {
   stty -echo < "$TTY" 2>/dev/null || true
   IFS= read -r _sec < "$TTY" || _sec=
   stty echo < "$TTY" 2>/dev/null || true
-  trap - INT TERM
+  base_traps
   printf '\n' > "$TTY"
   _sec=$(printf '%s' "$_sec" | tr -d '\r')  # drop a stray CR from a CRLF paste
   eval "$1=\$_sec"
@@ -117,11 +120,55 @@ json_models() {
     | tr ',' '\n' | sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//' | sed '/^$/d'
 }
 
+# ── Operator token ────────────────────────────────────────────────────────
+# A protected instance (A2A_AUTH_TOKEN set) answers 401 on /api/config/* without
+# a bearer, so every setup request carries it. The token never goes on a command
+# line (argv is visible in `ps`) or into a `set -x` trace: it's written once, via
+# a heredoc (heredoc bodies aren't traced), to a 0600 temp file that curl reads
+# with `-H @file`, and removed on exit. Checks use ${A2A_AUTH_TOKEN:+1} so a trace
+# shows `1`, never the value.
+AUTH_HDR=""
+cleanup() { [ -n "$AUTH_HDR" ] && rm -f "$AUTH_HDR"; return 0; }
+base_traps() { trap 'exit 130' INT; trap 'exit 143' TERM; }
+trap cleanup EXIT
+base_traps
+has_token() { [ -n "${A2A_AUTH_TOKEN:+1}" ]; }
+setup_auth() {
+  has_token || return 0
+  _cr=$(printf '\r')
+  case "$A2A_AUTH_TOKEN" in
+    *"$_cr"*|*'
+'*) die "A2A_AUTH_TOKEN must be a single line." ;;
+  esac
+  AUTH_HDR=$(umask 077 && mktemp "${TMPDIR:-/tmp}/protoagent-auth.XXXXXX") \
+    || die "Could not create a private temp file for the operator token."
+  cat > "$AUTH_HDR" <<EOF
+Authorization: Bearer ${A2A_AUTH_TOKEN}
+EOF
+}
+# curl, plus the bearer header when a token was supplied.
+acurl() {
+  if [ -n "$AUTH_HDR" ]; then curl -H "@${AUTH_HDR}" "$@"; else curl "$@"; fi
+}
+
+# A 401/403 means the server IS up but refused us — say so, don't time out.
+auth_fail() {
+  if has_token; then
+    die "${BASE_URL} rejected the operator token (HTTP ${HTTP_CODE}) on $1. Check A2A_AUTH_TOKEN matches the instance's token (env A2A_AUTH_TOKEN or auth.token in its config)."
+  else
+    die "${BASE_URL} requires an operator token (HTTP ${HTTP_CODE}) on $1. Re-run with A2A_AUTH_TOKEN set to the instance's token — don't remove the token to get past this."
+  fi
+}
+check_auth() {
+  case "$HTTP_CODE" in 401|403) auth_fail "$1" ;; esac
+  return 0
+}
+
 # HTTP: never return nonzero (would trip `set -e`); status lands in HTTP_CODE.
 HTTP_CODE=000
 HTTP_BODY=""
 http_get() {
-  if _r=$(curl -sS -m "${2:-20}" -w '\n%{http_code}' "$1" 2>/dev/null); then
+  if _r=$(acurl -sS -m "${2:-20}" -w '\n%{http_code}' "$1" 2>/dev/null); then
     HTTP_CODE=$(printf '%s' "$_r" | tail -n1)
     HTTP_BODY=$(printf '%s' "$_r" | sed '$d')
   else
@@ -130,7 +177,7 @@ http_get() {
   return 0
 }
 http_post_json() {
-  if _r=$(printf '%s' "$2" | curl -sS -m "${3:-60}" -H 'Content-Type: application/json' \
+  if _r=$(printf '%s' "$2" | acurl -sS -m "${3:-60}" -H 'Content-Type: application/json' \
             --data-binary @- -w '\n%{http_code}' "$1" 2>/dev/null); then
     HTTP_CODE=$(printf '%s' "$_r" | tail -n1)
     HTTP_BODY=$(printf '%s' "$_r" | sed '$d')
@@ -155,6 +202,9 @@ run_container() {
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
   fi
   info "Starting '${CONTAINER}' on ${BIND}:${PORT} …"
+  # `-e A2A_AUTH_TOKEN` (no `=value`) copies it from our environment, keeping the
+  # token off docker's argv (and out of `set -x`). Unset stays unset: no token.
+  export A2A_AUTH_TOKEN
   # PROTOAGENT_UI=console flips the baked headless image to serve the console
   # (assets always ship). ALLOW_OPEN=1: the in-container 0.0.0.0 bind is fenced
   # by the loopback port publish — same posture as the bundled docker-compose.
@@ -166,7 +216,7 @@ run_container() {
     -v "${VOLUME}:/sandbox" \
     -e PROTOAGENT_UI=console \
     -e PROTOAGENT_ALLOW_OPEN=1 \
-    -e "A2A_AUTH_TOKEN=${A2A_AUTH_TOKEN:-}" \
+    -e A2A_AUTH_TOKEN \
     --security-opt no-new-privileges:true \
     "$IMAGE" >/dev/null || die "docker run failed — see: docker logs ${CONTAINER}"
 }
@@ -179,6 +229,7 @@ wait_ready() {
     # setup (the graph compiles then), so it's the wrong readiness signal here.
     http_get "${BASE_URL}/api/config/setup-status" 5
     [ "$HTTP_CODE" = 200 ] && { good "Server is up."; return 0; }
+    check_auth "the readiness probe (/api/config/setup-status)"
     _i=$((_i + 1)); sleep 2
   done
   die "protoAgent did not come up in time. Inspect: docker logs ${CONTAINER}"
@@ -187,6 +238,7 @@ wait_ready() {
 # ── Wizard (mirrors apps/web SetupWizard over the same endpoints) ──────────
 wizard() {
   http_get "${BASE_URL}/api/config/setup-status" 10
+  check_auth "/api/config/setup-status"
   [ "$HTTP_CODE" = 200 ] || die "Cannot reach ${BASE_URL} (HTTP ${HTTP_CODE})."
 
   if json_true "$HTTP_BODY" setup_complete; then
@@ -217,6 +269,7 @@ wizard() {
   info "Fetching available models …"
   http_post_json "${BASE_URL}/api/config/models" \
     "{\"api_base\":\"$(json_escape "$API_BASE")\",\"api_key\":\"$(json_escape "$API_KEY")\"}" 30
+  check_auth "/api/config/models"
   MODELS=$(json_models "$HTTP_BODY")
   MODEL=""
   if [ -n "$MODELS" ]; then
@@ -241,6 +294,7 @@ wizard() {
   info "Testing '${MODEL}' …"
   http_post_json "${BASE_URL}/api/config/test-model" \
     "{\"api_base\":\"$(json_escape "$API_BASE")\",\"api_key\":\"$(json_escape "$API_KEY")\",\"model\":\"$(json_escape "$MODEL")\"}" 60
+  check_auth "/api/config/test-model"
   if json_true "$HTTP_BODY" ok; then
     good "Connection OK."
   else
@@ -258,6 +312,7 @@ wizard() {
   [ -n "$API_KEY" ] && _key=",\"api_key\":\"$(json_escape "$API_KEY")\""
   _cfg="{\"config\":{\"agent_runtime\":\"native\",\"model\":{\"provider\":\"openai\",\"name\":\"$(json_escape "$MODEL")\",\"api_base\":\"$(json_escape "$API_BASE")\"${_key}},\"identity\":{\"name\":\"$(json_escape "$AGENT_NAME")\"}}}"
   http_post_json "${BASE_URL}/api/config/setup" "$_cfg" 120
+  check_auth "/api/config/setup"
   if json_true "$HTTP_BODY" ok; then
     good "Setup complete."
   else
@@ -290,6 +345,7 @@ main() {
     -h|--help) sed -n '2,40p' "$0" 2>/dev/null || say "See the header of scripts/install.sh."; exit 0 ;;
   esac
   need curl "Install curl and re-run."
+  setup_auth
   if [ -n "$TARGET_URL" ]; then
     BASE_URL=$TARGET_URL
     info "Configuring the protoAgent already running at ${BASE_URL} (skipping Docker)."
@@ -301,7 +357,7 @@ main() {
     # otherwise it's open + unauthenticated.
     case "$BIND" in
       127.0.0.1|localhost) : ;;
-      *) [ -n "${A2A_AUTH_TOKEN:-}" ] || die "PROTOAGENT_BIND=${BIND} publishes the agent on the network. Set A2A_AUTH_TOKEN (e.g. A2A_AUTH_TOKEN=\$(openssl rand -hex 24)) and re-run, or keep the default loopback bind." ;;
+      *) has_token || die "PROTOAGENT_BIND=${BIND} publishes the agent on the network. Set A2A_AUTH_TOKEN (e.g. A2A_AUTH_TOKEN=\$(openssl rand -hex 24)) and re-run, or keep the default loopback bind." ;;
     esac
     run_container
     wait_ready

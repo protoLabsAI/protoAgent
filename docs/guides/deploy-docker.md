@@ -38,14 +38,15 @@ Re-running replaces the container and preserves the selected volume. Re-supply
 any image, bind, port, volume, and token overrides on each run; the script does
 not recover them from the old container.
 
-**Token-protected installations:** the installer's HTTP helpers currently omit
-the bearer header ([tracked in #4315](https://github.com/protoLabsAI/protoAgent/issues/4315)),
-so its setup-status probe returns `401` and eventually reports
-“did not come up in time,” even if the container started. The wizard cannot
-configure a protected instance either. Use the Compose example above for a
-protected deployment. If the installer already started it, inspect `docker logs
-protoagent` and finish setup through `/app` with your token. Do not remove the
-token to make the probe pass.
+**Token-protected installations:** set `A2A_AUTH_TOKEN` when you run the
+installer. It passes the token to the container and sends it as
+`Authorization: Bearer` on the readiness probe and every setup-wizard request,
+including against `PROTOAGENT_INSTALL_URL`. The token stays out of the
+installer's output and command lines: it is read from a private temporary file
+that is removed on exit. If the instance answers `401`/`403`, the installer stops
+with an authentication error (missing or rejected token) rather than reporting
+that the server did not come up. Do not remove the token to get past that error.
+Fix the token value instead.
 
 **Overrides** (all optional env vars):
 
@@ -57,7 +58,7 @@ token to make the probe pass.
 | `PROTOAGENT_IMAGE` | `ghcr.io/protolabsai/protoagent:latest` | Image ref |
 | `PROTOAGENT_INSTALL_URL` | — | Configure an **already-running** instance (skips Docker) |
 | `PROTOAGENT_INSTALL_NONINTERACTIVE` | — | `1` = start only, never prompt |
-| `A2A_AUTH_TOKEN` | — | Bearer required to widen the bind past loopback |
+| `A2A_AUTH_TOKEN` | — | Operator token: required to widen the bind past loopback; sent as the bearer on setup requests |
 
 > **Architecture note.** The published image is currently **linux/amd64**. On
 > Apple Silicon / arm64 the installer targets amd64 explicitly so Docker Desktop
