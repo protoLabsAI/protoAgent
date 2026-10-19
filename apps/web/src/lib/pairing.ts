@@ -19,7 +19,7 @@
 
 import { AGENT_CODE_LENGTH, formatAgentCode, isCompleteAgentCode, normalizeAgentCode } from "./agentPairing";
 import { apiUrl } from "./api/routing";
-import { storeDeviceCredential } from "./credentials";
+import { storeDeviceAddresses, storeDeviceCredential } from "./credentials";
 
 /** A pairing code — device or agent — is 10 Crockford chars shown as `XXXXX-XXXXX`. The
  *  shape is shared with agent codes (one minting path server-side), so are the helpers. */
@@ -30,8 +30,9 @@ export const isCompletePairingCode = isCompleteAgentCode;
 
 export { migrateLegacyDeviceToken } from "./credentials";
 
-/** What the phone is told after a successful claim. */
-export type PairedNotice = { id: string; name: string };
+/** What the phone is told after a successful claim. `moved`: the code was a HANDOFF (ADR 0121
+ *  D1) — the same device arrived from another of the agent's addresses. */
+export type PairedNotice = { id: string; name: string; moved?: boolean };
 
 let pairedNotice: PairedNotice | null = null;
 const pairedListeners = new Set<() => void>();
@@ -156,8 +157,10 @@ export async function claimPairingCode(code: string): Promise<ClaimResult> {
     // Its own key, never the operator's (#4336 S3).
     const id = typeof data?.device?.id === "string" ? data.device.id : undefined;
     storeDeviceCredential(data.token, id);
+    // The agent's other origins (ADR 0121 D1), for the offline notice and "Move this phone to…".
+    storeDeviceAddresses(data?.addresses);
     const name = typeof data?.device?.name === "string" && data.device.name ? data.device.name : deviceName();
-    announcePaired({ id: id ?? "", name });
+    announcePaired({ id: id ?? "", name, ...(data?.moved === true ? { moved: true } : {}) });
 
     return { ok: true };
   } catch (err) {

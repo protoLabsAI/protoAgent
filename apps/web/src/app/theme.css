@@ -1776,3 +1776,18 @@ textarea {
   scrollbar-width: thin;
 }
 .mcp-catalog-controls .pl-tabs--segmented > * { flex: 0 0 auto; }
+
+/* A paired phone's other addresses when its home origin stops answering (ADR 0121 D1). */
+.home-origin-notice p {
+  margin: 0 0 var(--pl-space-1);
+}
+.home-origin-list {
+  margin: 0 0 var(--pl-space-1);
+  padding-left: 1.25em;
+}
+.home-origin-list a {
+  word-break: break-all;
+}
+.home-origin-answering {
+  color: var(--pl-color-status-success);
+}

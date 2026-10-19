@@ -307,3 +307,29 @@ test("mobile: AuthGate pairs this phone from a typed code (16px input, 44px targ
   expect(await page.evaluate(() => window.localStorage.getItem("protoagent.authToken"))).toBeNull();
   expect(claims.length).toBe(2);
 });
+
+// ── #4336 S7.5: the home origin's offline notice on the phone shell (ADR 0121 D1) ────────
+test("mobile shell: a paired phone whose home stops answering is shown its other addresses", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("protoagent.deviceToken", "e2e-device-token");
+    window.localStorage.setItem("protoagent.deviceId", "dev-phone1");
+    window.localStorage.setItem(
+      "protoagent.deviceAddresses",
+      JSON.stringify([
+        { kind: "tailnet_https", origin: "https://box.tail1234.ts.net", requirement: "tailscale" },
+        { kind: "lan", origin: window.location.origin, requirement: "same_network" },
+      ]),
+    );
+  });
+  await page.route("**/api/devices/self", (route) =>
+    route.fulfill({ json: { device: { id: "dev-phone1", name: "iPhone", kind: "device", scope: "device", rotate_due: false, created_at: 1, last_seen_at: null } } }),
+  );
+  await page.goto("/app/", { waitUntil: "load" });
+  await expect(page.locator(".mshell")).toBeVisible();
+  await page.route("**/healthz", (route) => route.abort("internetdisconnected"));
+  for (let i = 0; i < 2; i++) await page.evaluate(() => window.dispatchEvent(new Event("offline")));
+  const notice = page.getByTestId("home-origin-notice");
+  await expect(notice).toBeVisible();
+  await expect(notice.getByRole("link")).toHaveText(["Tailnet HTTPS · box.tail1234.ts.net"]);
+  await expect(notice).toContainText("Opening one means pairing this phone again there.");
+});

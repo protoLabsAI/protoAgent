@@ -129,6 +129,31 @@ Rejected:
 Reachability probes (`fetch(origin + "/healthz", {mode: "no-cors"})`) are navigation hints only.
 **CORS is not widened.**
 
+**Amended in implementation (S7.5).**
+
+- Each address is `{kind, origin, requirement?}`. `kind` is `tailnet_https`, `public`, `tailnet`
+  (the MagicDNS name or the IP over http) or `lan`; `requirement` is `tailscale` or
+  `same_network`, and is absent for `public` and for a Funnel-served tailnet HTTPS origin. The
+  set is built from the same list `/api/pairing/start` offers, so the two can't disagree.
+- The handoff's `origin` must equal an offered origin after one normalisation applied to both
+  sides (scheme and host lowercased, default port and one trailing `/` dropped; userinfo, path,
+  query, fragment, whitespace and backslashes refused). The returned URL is built from the
+  offered origin, never from the input.
+- **The handed-off token is retired without reuse detection.** The token that asked for the
+  handoff becomes the device's previous token, with D5's rules: valid until the new token is
+  first presented (so a new origin that fails to store its token strands nothing), then for the
+  120 s grace. Past the grace it is refused, but it does **not** revoke the device: the old
+  origin's storage holds it by design, and the phone going back there must not cost it its
+  pairing. `GET /api/devices/self` reports `handed_off: true` to a caller presenting that token
+  once the move has completed, and the console forgets it there and points at the new origin.
+  The next plain rotation restores reuse detection for the token it retires.
+- A handoff code shares the pending store, `_match` and the claim throttle with pairing codes,
+  but closing the operator's pairing dialog (`/api/pairing/cancel`) never cancels it, and a
+  device has at most one pending at a time. The claim answers `moved: true` for it.
+- The offline notice is a banner in the open console. The console has no service worker, so a
+  page from an origin that doesn't answer can't load at all; the notice covers the common case
+  of a phone that leaves the network with the console open.
+
 ### D2 — `network.public_console_url`: an operator-declared, HTTPS-only origin
 
 | YAML key | `LangGraphConfig` field | Default | Scope | Env fallback |

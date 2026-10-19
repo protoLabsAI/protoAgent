@@ -16,12 +16,21 @@ export function PairingConfirmation() {
     const show = () => {
       const n = takePairedNotice();
       if (!n) return;
-      toast({
-        tone: "success",
-        title: `Paired as ${n.name}`,
-        message: "This device has its own token. Rename or remove it in Settings ▸ Devices.",
-        duration: 10_000,
-      });
+      toast(
+        n.moved
+          ? {
+              tone: "success",
+              title: `Moved ${n.name} here`,
+              message: "Open the console at this address from now on. It's the same device in Settings ▸ Devices.",
+              duration: 10_000,
+            }
+          : {
+              tone: "success",
+              title: `Paired as ${n.name}`,
+              message: "This device has its own token. Rename or remove it in Settings ▸ Devices.",
+              duration: 10_000,
+            },
+      );
     };
     show();
     return subscribePaired(show);

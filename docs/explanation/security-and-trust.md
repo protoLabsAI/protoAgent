@@ -250,6 +250,13 @@ the device, which stops the new token too, and writes a `device.revoked_token_re
 the audit log (`audit/audit.jsonl` under the instance root). It's the standard refresh-token
 reuse rule. The phone pairs again; the copy someone else holds is dead.
 
+One exception: a token retired by [moving the phone to another address](/guides/phone-access#move-this-phone)
+is refused after its grace, but doesn't revoke the device. The address the phone moved away
+from still holds that token in its storage, so presenting it there is expected, not a sign of a
+copy. The token stops working all the same, and the console there forgets it. The next weekly
+rotation brings reuse detection back for the token it retires. A handoff code lasts 60 seconds,
+works once, and only carries the phone to an address this agent offers.
+
 **Revocation reaches open streams.** A new request is refused as soon as a device is removed,
 expires or is reuse-revoked, because every request reads the device registry. Streams that
 were already open are closed too, within one keepalive (about 15 seconds): the event bus

@@ -229,6 +229,10 @@ _ALLOWED_WRITES = {
     # A device rotating its OWN token (ADR 0121 D5) — it changes nothing about who can get in,
     # and a ceiling here would stop every phone from ever rotating.
     ("POST", "/api/devices/self/rotate"),
+    # A device moving ITSELF to another of this agent's origins (ADR 0121 D1, #4336 S7.5): the
+    # code it mints rebinds the same row (same id, name and scope) — it adds nobody — and the
+    # route refuses every origin this instance doesn't offer.
+    ("POST", "/api/devices/self/handoff"),
 }
 
 
