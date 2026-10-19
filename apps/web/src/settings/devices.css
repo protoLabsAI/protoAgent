@@ -194,3 +194,9 @@
 .devices-list .subagent-row .pl-badge--info {
   color: var(--pl-color-status-info);
 }
+
+/* The persistent "anyone on the internet can reach this console's sign-in" warning (ADR 0121
+   D6) — a DS Alert; this only spaces it from the panel description. */
+.devices-public {
+  margin: var(--pl-space-2_5) 0;
+}

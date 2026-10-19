@@ -19,14 +19,16 @@ import { tauriCore } from "./desktop";
  *  AGENT code (ADR 0113) `url` is the bare base URL a hub pairs against and there is no QR. */
 export type PairHost = {
   host: string;
-  kind: "tailnet" | "lan";
+  /** `public` = the operator's own HTTPS origin, `network.public_console_url` (ADR 0121 D2):
+   *  the way a phone WITHOUT Tailscale pairs. Never discovered; only ever declared. */
+  kind: "tailnet" | "lan" | "public";
   url: string;
   qr?: string | null;
   base_url?: string;
   /** How the address reaches this agent (#4336 S4): `serve` = tailnet HTTPS through
    *  `tailscale serve`, `magicdns` = the tailnet NAME over http, `ip` = a raw address.
    *  Absent from older servers (read as `ip`). */
-  via?: "serve" | "magicdns" | "ip";
+  via?: "serve" | "magicdns" | "ip" | "public";
   /** https — a secure context on the phone. */
   secure?: boolean;
   /** The serve handler is ALSO public through Tailscale Funnel. */
@@ -57,6 +59,8 @@ export type PairReach = {
   auth_configured: boolean;
   /** This server listens on a picked interface AND loopback, so binding the picked IP is safe. */
   bind_interface?: boolean;
+  /** The declared public console origin (ADR 0121 D2), "" when unset. Absent from older servers. */
+  public_console_url?: string;
 };
 export type ServeResult = { ok: boolean; url?: string; reason?: string; error?: string; enable_url?: string };
 /** A row of `GET /api/devices`. `kind` says whether the client is a phone/tablet or another
@@ -115,7 +119,8 @@ export const runtimeApi = {
   // The CLAIM half deliberately lives outside this object (lib/pairing.ts): `request`
   // attaches the operator bearer, and claiming runs precisely when there isn't one.
   devices(opts: { host?: boolean } = {}) {
-    return request<{ devices: PairedDevice[]; caller?: DeviceCaller }>("/api/devices", opts);
+    // `public_console_url` (ADR 0121 D2): "" when unset; absent from older servers.
+    return request<{ devices: PairedDevice[]; caller?: DeviceCaller; public_console_url?: string }>("/api/devices", opts);
   },
   /** Promote (`full`) or limit (`device`) a paired phone (ADR 0121 D4). The server refuses
    *  it unless THIS credential is full scope — so a phone can't promote itself. */

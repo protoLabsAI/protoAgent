@@ -56,9 +56,10 @@ live runtime paths. See [Run multiple instances](/guides/multi-instance).
 |---|---|---|
 | `PROTOAGENT_UI` | `console` | UI deployment tier (or `--ui`): `console` (React console at `/app` + API/A2A), `none` (API + A2A + `/metrics` only — the lean headless stack). `full` is a **deprecated alias for `console`** (the Gradio tier was removed; it logs a warning). The Docker image defaults to `none`. |
 | `PROTOAGENT_HOST` | `127.0.0.1` | Bind address (or `--host`). **Defaults to loopback** so a local/desktop run isn't exposed on all interfaces — the operator/console API (`/api/*`, `/api/chat`, `/v1/*`) is otherwise reachable by anything that can hit the port. The container entrypoint + deploy manifests set `0.0.0.0` because their boundary is the published port + network policy, not the in-container bind. A single non-loopback IP (say, the tailnet address) is served **together with** `127.0.0.1`, so the local console keeps working; if that IP isn't on the machine at startup, only `127.0.0.1` is served, with a warning. Binding non-loopback **without** an A2A auth token **refuses to start** unless `PROTOAGENT_ALLOW_OPEN=1`. |
+| `PROTOAGENT_PUBLIC_CONSOLE_URL` | unset | Fallback for [`network.public_console_url`](./configuration.md#network) when the config doesn't set it: your own `https://` origin for the console, for pairing a phone without Tailscale ([guide](/guides/phone-access#without-tailscale)). Validated at load (https, origin only, not loopback). With it set and no auth token the agent **refuses to start**, even with `PROTOAGENT_ALLOW_OPEN=1`. A hub doesn't pass it to the fleet members it spawns. |
 | `FORWARDED_ALLOW_IPS` | unset | Fallback for [`network.trusted_proxies`](./configuration.md#network) when the config doesn't set it: comma-separated proxy IPs/CIDRs whose `X-Forwarded-*` headers are believed. Loopback is always trusted. |
 | `PROTOAGENT_TAILSCALE_BIN` | (auto) | Path to the `tailscale` CLI used for pairing addresses and **Use HTTPS via Tailscale** ([phone access](/guides/phone-access#https-via-tailscale)). Found on `PATH`, or inside `Tailscale.app` on macOS. Set it to an empty value to turn Tailscale discovery off. |
-| `PROTOAGENT_ALLOW_OPEN` | (unset) | Set `1` to allow a **non-loopback bind with no auth token** — the boot gate otherwise refuses it, because the open operator API includes plugin install+enable (code execution) and config rewrite. Only opt in when a network boundary fences the port (the bundled compose publishes to `127.0.0.1` only and sets this; a k8s NetworkPolicy is the other intended case). The startup log still carries a security WARNING. |
+| `PROTOAGENT_ALLOW_OPEN` | (unset) | Set `1` to allow a **non-loopback bind with no auth token** — the boot gate otherwise refuses it, because the open operator API includes plugin install+enable (code execution) and config rewrite. Only opt in when a network boundary fences the port (the bundled compose publishes to `127.0.0.1` only and sets this; a k8s NetworkPolicy is the other intended case). The startup log still carries a security WARNING. It never allows a [public console URL](./configuration.md#network) without a token. |
 | `PROTOAGENT_HEADLESS` | (unset) | **Deprecated** alias for `PROTOAGENT_UI=console` (or `--headless`) — it still serves the React console; for no UI use `PROTOAGENT_UI=none`. |
 | `PROTOAGENT_HEADLESS_SETUP` | (unset) | Set `1`/`true` to auto-complete setup from a validated config even outside the `none` tier (no wizard). The `none` tier implies this. |
 
@@ -189,8 +190,10 @@ The template configures logging at startup (`observability/logging_config.py`) �
 When unset, this allowlist check is disabled and a WARNING is logged at startup.
 On requests checked by the HTTP auth middleware, a present `Origin` outside the
 configured allowlist receives `403 Forbidden`; a missing header is allowed so
-server-to-server callers continue to work. Include a public console's origin
-when using a proxy. Open instances also enforce separate
+server-to-server callers continue to work. A console origin declared in
+[`network.public_console_url`](./configuration.md#network) is added to the
+allowlist automatically when the allowlist is set, so you don't list it twice.
+Include any other public console origin when using a proxy. Open instances also enforce separate
 [host and browser-request checks](/explanation/security-and-trust#an-instance-with-no-token);
 disabling this allowlist does not remove those protections.
 

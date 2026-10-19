@@ -1069,6 +1069,26 @@ def _reload_for_soul_edit() -> tuple[bool, str]:
     return _reload_langgraph_agent(reload_plugins=False)
 
 
+def _public_console_reload_refusal(new_config) -> str | None:  # noqa: ANN001
+    """Why a reload must not commit ``new_config``: it declares a public console URL while the
+    bearer it resolves to (``auth.token``, else ``A2A_AUTH_TOKEN``, the rule the commit below
+    applies) is empty and no X-API-Key is set. None = fine."""
+    from security import public_console
+
+    url = str(getattr(new_config, "public_console_url", "") or "")
+    if not url:
+        return None
+    token = new_config.auth_token if new_config.auth_token is not None else os.environ.get("A2A_AUTH_TOKEN")
+    try:
+        from a2a_impl import auth
+
+        api_key = auth.enforced_schemes()[1]
+    except Exception:  # noqa: BLE001 — unknown reads as "no key": the safe answer
+        api_key = False
+    open_mode = not (token or "").strip() and not api_key
+    return public_console.open_mode_refusal(url, open_mode=open_mode)
+
+
 @_serialized_config_write
 def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     """Rebuild the compiled graph from the latest config YAML.
@@ -1103,6 +1123,14 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     except Exception as e:
         log.exception("[reload] config load failed")
         return False, f"config load failed: {e}"
+
+    # ADR 0121 D2: a public console URL on an instance with no credential is never a state the
+    # agent runs in — refuse the reload (the caller rolls the write back) rather than commit an
+    # open, internet-reachable console. Same rule as the boot gate, against the NEW config.
+    public_refusal = _public_console_reload_refusal(new_config)
+    if public_refusal:
+        log.error("%s", public_refusal)
+        return False, public_refusal
 
     # Fork tool denylist — apply the new config's denylist before the rebuild's
     # get_all_tools() calls (live-reloadable like the rest of the config).
@@ -1326,6 +1354,14 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         # a2a_impl.auth not yet imported (e.g. during early-boot reload before
         # _main wires routes) — harmless.
         pass
+    try:
+        from security import public_console
+
+        # The public console origin hot-reloads (ADR 0121 D2): the allowlist fold, the trusted
+        # Host names and the claim throttle's `public` class all read this one value.
+        public_console.set_public_console_url(getattr(new_config, "public_console_url", ""))
+    except Exception:  # noqa: BLE001 — never fail a committed reload on this
+        log.exception("[reload] could not apply network.public_console_url")
     STATE.graph = new_graph
     if new_graph is not None:
         # A committed graph proves the credential resolved — clear the signed-out

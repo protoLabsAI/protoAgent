@@ -137,6 +137,9 @@ def _host_note(h: dict) -> str:
         return f"any network; {need}"
     if kind == "lan":
         return "same Wi-Fi only"
+    if kind == "public":
+        # The operator's own public URL (ADR 0121 D2): no Tailscale needed on the phone.
+        return "HTTPS from any network, no Tailscale needed (your public URL)"
     return kind
 
 

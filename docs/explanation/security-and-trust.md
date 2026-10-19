@@ -132,6 +132,39 @@ looks like the proxy and shares its 5 tries.
 
 The buckets live in memory. A restart empties them, and it also clears every pending code.
 
+## A console on the internet {#a-console-on-the-internet}
+
+By default the console is never offered on a public address: pairing only offers tailnet and
+LAN addresses it discovers on this machine. The one exception is an address **you** declare in
+[`network.public_console_url`](../reference/configuration.md#network), served by a proxy you
+run, so a phone without Tailscale can pair
+([ADR 0121](../adr/0121-device-pairing-over-an-operator-supplied-public-url.md) D2, D6).
+
+The agent holds a few lines on its own once that is set:
+
+- **Never open.** It refuses to start with a public URL and no token, and refuses a settings
+  save that would leave it that way. `PROTOAGENT_ALLOW_OPEN=1` means "a network boundary fences
+  this port", which a public URL contradicts, so it doesn't override this.
+- **HTTPS only.** The URL must be `https://`. A pairing claim addressed to the public hostname
+  must have been https at the proxy, as `X-Forwarded-Proto` from a
+  [trusted proxy](../reference/configuration.md#network) says. That catches a proxy serving
+  plain http, and a proxy whose headers the agent doesn't believe.
+- **Its own throttle bucket.** Wrong codes on the public hostname drain the `public` bucket
+  only (see above), so an internet flood can't stop LAN or tailnet pairing.
+- **Phones get `device` scope** wherever they pair, so a stolen phone can't mint new tokens or
+  change these settings ([Device tokens](#device-tokens)).
+
+**Access in front, or token only.** The recommended setup puts an identity-aware proxy, such as
+Cloudflare Access, in front of the whole console hostname
+([recipe](../guides/exposing-protoagent.md#console-hostname)). An anonymous caller then can't
+reach the sign-in, the pairing claim or anything else. Access decides who reaches the console,
+and the token decides what they can do. **Token only** is supported, and weaker: anyone can load
+the sign-in and try codes, with the code's entropy, the throttle and the device scope as the
+only defences, and every console route is exposed to whatever bug an attacker finds first. The
+Devices panel warns for as long as the URL is set: "Anyone on the internet can reach this
+console's sign-in. Put Cloudflare Access (or another identity-aware proxy) in front of it."
+Neither posture sandboxes the agent's tools; a paired phone's chat turns run them like yours.
+
 ## Device tokens
 
 Each paired phone, tablet or agent hub has its own token

@@ -121,15 +121,15 @@ def _reset_claim_throttle():
     """The pairing-claim buckets (ADR 0121 D3) are process-global, and every TestClient is
     the same "testclient" peer: one test's misses must not throttle the next test's claims.
     Trusted proxies and the public origin are reset with them (loopback only, unset)."""
-    from security import claim_throttle
+    from security import claim_throttle, public_console
 
     claim_throttle.reset()
     claim_throttle.set_trusted_proxies(None)
-    claim_throttle.set_public_origin(None)
+    public_console.set_public_console_url(None)  # clears the throttle's public origin too
     yield
     claim_throttle.reset()
     claim_throttle.set_trusted_proxies(None)
-    claim_throttle.set_public_origin(None)
+    public_console.set_public_console_url(None)
 
 
 @pytest.fixture(autouse=True)

@@ -206,6 +206,14 @@ def test_field_scope_assignment_matches_adr_0047():
 FROM_DICT_UNCONSUMED_KEYS: set[str] = set()
 
 
+# Keys whose value from_dict VALIDATES (and refuses), so the generic sentinel would raise
+# rather than round-trip. Each maps to a valid, non-default value in its canonical form.
+_VALIDATED_SENTINELS: dict[str, object] = {
+    # ADR 0121 D2: https origin only.
+    "network.public_console_url": "https://drift.example.com",
+}
+
+
 def _sentinel_for(field) -> object:
     """A guaranteed NON-default value of the right shape for ``field``.
 
@@ -214,6 +222,8 @@ def _sentinel_for(field) -> object:
     default is ``None``. Using the default as the base means the sentinel can
     never accidentally equal it.
     """
+    if field.key in _VALIDATED_SENTINELS:
+        return _VALIDATED_SENTINELS[field.key]
     default = getattr(_DEFAULT_CFG, field.attr)
     if isinstance(default, bool):
         return not default

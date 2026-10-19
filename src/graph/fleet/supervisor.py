@@ -284,6 +284,12 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
         # explicit per-workspace value still wins (mirrors the pair above).
         if "AGENT_NAME" not in env:
             full_env["AGENT_NAME"] = name
+        # The public console URL is per AGENT (ADR 0121 D2): the hub's origin is the hub's.
+        # A member inheriting it would offer the HUB's hostname in its own pairing answers
+        # and class claims against it. Members are reached through the hub's proxy; one with
+        # its own public URL sets it in its own config or workspace env.
+        if "PROTOAGENT_PUBLIC_CONSOLE_URL" not in env:
+            full_env.pop("PROTOAGENT_PUBLIC_CONSOLE_URL", None)
         log_path = _log_path(ws)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_offset = log_path.stat().st_size if log_path.exists() else 0

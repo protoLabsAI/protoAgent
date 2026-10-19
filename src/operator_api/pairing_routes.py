@@ -6,7 +6,8 @@
                                   ``{"kind": …}`` scopes it to that dialog's kind)
     POST   /api/pairing/claim   → redeem a code for a device token  ← UNAUTHENTICATED
     GET    /api/pairing/reach   → how this instance can be reached: bind, token, Tailscale,
-                                  and whether the panel can restart it (#4336 S4)
+                                  the public console URL (ADR 0121 D2), and whether the
+                                  panel can restart it (#4336 S4)
     POST   /api/pairing/tailscale/serve    → serve this instance over tailnet HTTPS
                                              (refused unless a token is configured)
     DELETE /api/pairing/tailscale/serve    → stop serving it (only OUR handler)
@@ -300,13 +301,39 @@ def _tailscale_offers(port: int, ip_hosts: list[dict]) -> tuple[list[dict], dict
     return out, info
 
 
+def _public_offer() -> dict | None:
+    """The operator's declared public console origin as a pairing address (ADR 0121 D1/D2), or
+    None when ``network.public_console_url`` is unset.
+
+    This is the ONLY public address ever offered, and it is never discovered: it comes from the
+    operator's config, already validated (https, origin only, not loopback). Nothing about the
+    bind gates it — the operator's proxy (cloudflared, nginx) forwards to this machine."""
+    from security.public_console import public_host, public_origin
+
+    origin = public_origin()
+    if not origin:
+        return None
+    return {"host": public_host(), "kind": "public", "via": "public", "secure": True, "origin": origin}
+
+
 def _offer_hosts(port: int) -> tuple[list[dict], dict]:
-    """Every address to offer, in ADR 0121 D1 order: tailnet HTTPS → tailnet MagicDNS
-    name → tailnet IP → LAN IP. Each carries ``origin`` (scheme://host[:port]); the
-    second value is the Tailscale status for the panel. Blocking — run in a thread."""
+    """Every address to offer, in ADR 0121 D1 order: tailnet HTTPS → the declared public
+    URL → tailnet MagicDNS name → tailnet IP → LAN IP. Each carries ``origin``
+    (scheme://host[:port]); the second value is the Tailscale status for the panel.
+    Blocking — run in a thread."""
     ips = [dict(h, via="ip", origin=f"http://{h['host']}:{port}") for h in _candidate_hosts()]
     names, ts_info = _tailscale_offers(port, ips)
-    return names + ips, ts_info
+    served = [h for h in names if h.get("via") == "serve"]
+    rest = [h for h in names if h.get("via") != "serve"]
+    public = _public_offer()
+    return served + ([public] if public else []) + rest + ips, ts_info
+
+
+def _public_console_url() -> str:
+    """The live declared public console origin, or "" (for the panel's warning / hint)."""
+    from security.public_console import public_origin
+
+    return public_origin()
 
 
 def _restart_info() -> dict:
@@ -478,6 +505,9 @@ def register_pairing_routes(app, agent_name=None) -> None:
             # This server co-binds loopback beside a picked interface (server/bind.py), so the
             # panel may write that IP rather than 0.0.0.0. An older server omits it.
             "bind_interface": True,
+            # ADR 0121 D2: the operator's public console origin, "" when unset. The panel shows
+            # the "anyone on the internet can reach this console's sign-in" warning from it.
+            "public_console_url": _public_console_url(),
         }
         if not hosts:
             # Nothing to encode — but don't dead-end. Same answer for BOTH kinds: a hub on
@@ -572,6 +602,7 @@ def register_pairing_routes(app, agent_name=None) -> None:
                 "tailscale": ts_info,
                 "restart": _restart_info(),
                 "bind_interface": True,
+                "public_console_url": _public_console_url(),
             }
         )
 
@@ -647,6 +678,28 @@ def register_pairing_routes(app, agent_name=None) -> None:
             request.client.host if request.client else "", request.headers.getlist("x-forwarded-for")
         )
         ingress = claim_throttle.ingress_class(request.headers.get("host"))
+        if ingress == claim_throttle.INGRESS_PUBLIC:
+            # HTTPS on the public path (ADR 0121 D3): a claim addressed to the public console
+            # must have been https AT THE EDGE, as X-Forwarded-Proto from a trusted proxy says.
+            # Catches a proxy serving plain http publicly, and a proxy whose forwarded headers
+            # aren't believed (a Docker network missing from trusted_proxies). Refused before
+            # the throttle and before any code is looked at, so it draws nothing and says
+            # nothing about what is pending.
+            scheme = claim_throttle.resolve_scheme(
+                request.client.host if request.client else "",
+                request.url.scheme,
+                request.headers.getlist("x-forwarded-proto"),
+            )
+            if scheme != "https":
+                msg = (
+                    "pairing refused: this request reached the public console address over plain "
+                    "http, or through a proxy this agent doesn't trust. Serve the public URL over "
+                    "https, and list the proxy's address in network.trusted_proxies so its "
+                    "X-Forwarded-Proto header counts."
+                )
+                return JSONResponse(
+                    {"ok": False, "reason": "public_not_https", "error": msg, "detail": msg}, status_code=400
+                )
         try:
             result = claim_pairing(code, name, client=client, ingress=ingress)
         except claim_throttle.ClaimThrottled as exc:
@@ -673,7 +726,11 @@ def register_pairing_routes(app, agent_name=None) -> None:
         # ``caller`` is THIS request's credential (ADR 0121 D4), so the panel can hide the
         # Promote / Limit actions a device-scope caller would only be refused. The server stays
         # the authority — the middleware and `_update` below enforce it either way.
-        return JSONResponse({"devices": list_devices(), "caller": _caller(request)})
+        # ``public_console_url`` (ADR 0121 D2) rides along so the panel's "anyone on the internet
+        # can reach this console's sign-in" warning shows the moment Devices opens.
+        return JSONResponse(
+            {"devices": list_devices(), "caller": _caller(request), "public_console_url": _public_console_url()}
+        )
 
     @router.patch("/api/devices/{device_id}")
     async def _update(device_id: str, request: Request):  # noqa: ANN202

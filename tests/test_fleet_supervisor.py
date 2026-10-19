@@ -1295,3 +1295,32 @@ def test_hub_startup_does_not_wait_for_the_fleet():
     down = _src(shutdown)
     assert down.index("_FLEET_BOOT_STOP.set()") < down.index("_sup.shutdown_all")
     assert down.index("_FLEET_BOOT_TASK.cancel()") < down.index("_sup.shutdown_all")
+
+
+def test_member_does_not_inherit_the_hubs_public_console_url(tmp_path, monkeypatch):
+    """ADR 0121 D2: the public console URL is per agent. A member inheriting the hub's would
+    offer the HUB's hostname as its own pairing address."""
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("PROTOAGENT_PUBLIC_CONSOLE_URL", "https://hub.example.com")
+    manager.create("theta", port=7897)
+
+    supervisor.start("theta")
+
+    assert "PROTOAGENT_PUBLIC_CONSOLE_URL" not in captured["env"]
+
+
+def test_member_keeps_its_own_public_console_url(tmp_path, monkeypatch):
+    captured = _env_capturing_fleet(tmp_path, monkeypatch)
+    monkeypatch.setenv("PROTOAGENT_PUBLIC_CONSOLE_URL", "https://hub.example.com")
+    manager.create("iota", port=7898)
+    real_run_exec = manager.run_exec
+
+    def run_exec_with_url(wid, extra):
+        env, argv = real_run_exec(wid, extra)
+        env["PROTOAGENT_PUBLIC_CONSOLE_URL"] = "https://iota.example.com"
+        return env, argv
+
+    monkeypatch.setattr(supervisor.manager, "run_exec", run_exec_with_url)
+    supervisor.start("iota")
+
+    assert captured["env"]["PROTOAGENT_PUBLIC_CONSOLE_URL"] == "https://iota.example.com"

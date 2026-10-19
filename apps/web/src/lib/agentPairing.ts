@@ -64,17 +64,28 @@ export function cancelBody(kind: PairKind): { kind: PairKind } {
   return { kind };
 }
 
-/** Reachable base URLs, tailnet first — the address that works from any network the other
- *  hub is on beats one that only works on this Wi-Fi. Stable within a kind. */
-export function tailnetFirst<T extends { kind: string }>(hosts: readonly T[]): T[] {
+/** ADR 0121 D1 order: tailnet HTTPS, the operator's public URL, any other tailnet address,
+ *  then LAN. Everything that works from any network beats an address that only works on this
+ *  Wi-Fi. */
+function reachRank(h: { kind: string; via?: string }): number {
+  if (h.kind === "tailnet" && h.via === "serve") return 0;
+  if (h.kind === "public") return 1;
+  if (h.kind === "tailnet") return 2;
+  return 3;
+}
+
+/** Reachable base URLs, best first (`reachRank`). The server already orders them; sorting
+ *  again keeps the promise for an older server. Stable within a rank. */
+export function tailnetFirst<T extends { kind: string; via?: string }>(hosts: readonly T[]): T[] {
   return hosts
     .map((h, i) => ({ h, i }))
-    .sort((a, b) => (a.h.kind === "tailnet" ? 0 : 1) - (b.h.kind === "tailnet" ? 0 : 1) || a.i - b.i)
+    .sort((a, b) => reachRank(a.h) - reachRank(b.h) || a.i - b.i)
     .map(({ h }) => h);
 }
 
 /** Label for a reachable-address kind. */
 export function hostKindLabel(kind: string): string {
+  if (kind === "public") return "Public";
   return kind === "tailnet" ? "Tailnet" : "LAN";
 }
 

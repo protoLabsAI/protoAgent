@@ -749,3 +749,20 @@ def test_device_scope_cannot_add_commands_through_config(config_client):
         "/api/settings", headers={"x-test-scope": "device"}, json={"updates": {"filesystem.editor_command": "sh -c x"}}
     )
     assert resp.status_code == 403 and resp.json()["keys"] == ["filesystem.editor_command"]
+
+
+def test_device_scope_cannot_set_the_public_console_url(config_client):
+    """S7.4: declaring the console public decides who can reach the sign-in — a phone can't."""
+    resp = config_client.post(
+        "/api/settings",
+        headers={"x-test-scope": "device"},
+        json={"updates": {"network.public_console_url": "https://agent.example.com"}},
+    )
+    assert resp.status_code == 403 and resp.json()["keys"] == ["network.public_console_url"]
+    resp = config_client.post(
+        "/api/config",
+        headers={"x-test-scope": "device"},
+        json={"config": {"network": {"public_console_url": "https://agent.example.com"}}},
+    )
+    assert resp.status_code == 403 and resp.json()["keys"] == ["network.public_console_url"]
+    assert config_client.writes == []

@@ -1179,6 +1179,14 @@ def validate_config_dict(updates: dict[str, Any]) -> tuple[bool, str]:
             if top_k < 1:
                 return False, f"knowledge.top_k must be >= 1, got {top_k}"
 
+        network = updates.get("network") or {}
+        if isinstance(network, dict) and "public_console_url" in network:
+            # ADR 0121 D2 — refuse a bad public URL before it reaches disk (the load would
+            # refuse it anyway, and roll the write back, with a vaguer message).
+            from security.public_console import normalize_public_console_url
+
+            normalize_public_console_url(network.get("public_console_url"))
+
         operator = updates.get("operator", {})
         if operator:
             allowed = operator.get("allowed_dirs", [])

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { reachKey, reachLabel, reachRequirement, waitForRestart } from "./deviceReach";
+import {
+  PUBLIC_CONSOLE_WARNING,
+  publicConsoleUrl,
+  reachKey,
+  reachLabel,
+  reachRequirement,
+  waitForRestart,
+} from "./deviceReach";
 
 describe("reachLabel", () => {
   it("names each way in", () => {
@@ -22,6 +29,30 @@ describe("reachRequirement", () => {
   });
   it("warns loudly about Funnel", () => {
     expect(reachRequirement({ kind: "tailnet", via: "serve", secure: true, funnel: true })).toMatch(/public on the internet/);
+  });
+});
+
+describe("the public URL (ADR 0121 D2)", () => {
+  it("is the 'Phone without Tailscale' option", () => {
+    expect(reachLabel({ kind: "public", via: "public", host: "agent.example.com" })).toBe(
+      "Phone without Tailscale · agent.example.com",
+    );
+  });
+  it("says it needs no Tailscale and works from any network over HTTPS", () => {
+    const req = reachRequirement({ kind: "public", via: "public", secure: true });
+    expect(req).toMatch(/any network over HTTPS/);
+    expect(req).toMatch(/no Tailscale needed/);
+  });
+  it("carries the exact warning wording", () => {
+    expect(PUBLIC_CONSOLE_WARNING).toBe(
+      "Anyone on the internet can reach this console's sign-in. Put Cloudflare Access (or another identity-aware proxy) in front of it.",
+    );
+  });
+  it("reads the server's value defensively", () => {
+    expect(publicConsoleUrl(" https://agent.example.com ")).toBe("https://agent.example.com");
+    expect(publicConsoleUrl("")).toBe("");
+    expect(publicConsoleUrl(undefined)).toBe("");
+    expect(publicConsoleUrl(42)).toBe("");
   });
 });
 
