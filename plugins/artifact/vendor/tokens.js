@@ -1,5 +1,5 @@
 /**
- * VENDORED — @protolabsai/design@0.12.0, the token tree (src/tokens.js), byte-for-byte.
+ * VENDORED — @protolabsai/design@0.13.0, the token tree (src/tokens.js), byte-for-byte.
  *
  * The relative dependency of the vendored `./embed` module (pl-design-embed.mjs), which does
  * `import { tokens, flatten } from "./tokens.js"`. The browser resolves that specifier against
@@ -10,7 +10,6 @@
  * this file is byte-identical to the installed @protolabsai/design (header aside) when present.
  * Refs protoLabsAI/protoContent#577, protoLabsAI/protoContent#578.
  */
-
 /**
  * @protolabsai/design — canonical brand tokens. THE single source of truth.
  *
@@ -115,7 +114,7 @@ export const tokens = {
     // Theme-invariant type scale. Size doesn't vary by theme, so it lives here only
     // (never in `light`). Emitted as --pl-font-size-<step> (3xs/2xs stay digit-leading).
     // size.base MUST stay equal to baseSize above — base is the anchor, not a new value.
-    size: { "3xs": "10px", "2xs": "11px", xs: "12px", sm: "13px", base: "14px", lg: "16px", xl: "18px" },
+    size: { "3xs": "10px", "2xs": "11px", xs: "12px", sm: "13px", base: "14px", lg: "16px", xl: "18px", display: "28px" },
     lineHeightBody: "1.6",
     lineHeightHeading: "1.2",
     weight: { body: "440", medium: "500", semibold: "600" }, // Geist 400 reads thin on dark — a subtle lift, not bold

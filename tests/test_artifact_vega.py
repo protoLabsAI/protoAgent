@@ -423,7 +423,7 @@ def test_the_config_is_the_ds_builder_output(monkeypatch, tmp_path):
     lg = cfg["legend"]
     assert lg["orient"] == "bottom" and lg["direction"] == "horizontal" and lg["columns"] == 4
     assert lg["symbolLimit"] == 0 and lg["labelLimit"] == 200
-    assert cfg["axis"]["labelLimit"] == 180
+    assert cfg["axis"]["labelLimit"] == 120  # design 0.13.0: one budget for single and composed views
     rng = cfg["range"]
     assert rng["category"] == [f"#a{i}a{i}a{i}" for i in range(1, 9)]
     for k in ("ramp", "heatmap", "diverging"):

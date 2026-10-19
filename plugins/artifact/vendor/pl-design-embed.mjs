@@ -1,5 +1,5 @@
 /**
- * VENDORED — @protolabsai/design@0.12.0, the `./embed` entry (src/embed.js), byte-for-byte.
+ * VENDORED — @protolabsai/design@0.13.0, the `./embed` entry (src/embed.js), byte-for-byte.
  *
  * The artifact shell serves this file as-is from /plugins/artifact/vendor and loads it as a
  * same-origin module (there is no bundler / node_modules at runtime). Its `./tokens.js` import
@@ -12,7 +12,6 @@
  * this module is byte-identical to the installed @protolabsai/design (header aside) when present.
  * Refs protoLabsAI/protoContent#577, protoLabsAI/protoContent#578.
  */
-
 /**
  * @protolabsai/design/embed — hand the active theme to a sandboxed frame as literal values.
  *
