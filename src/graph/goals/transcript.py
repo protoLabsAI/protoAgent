@@ -7,7 +7,8 @@ the turn's final TEXT: nothing built ``tool_summary``, so every judgment saw
 iteration budget and was marked unachievable.
 
 :func:`summarize_tool_calls` renders the CURRENT turn's tool calls — each call's name and
-arguments paired with its result — from the thread's real LangChain messages. "Current
+arguments paired with its result — from the thread's real LangChain messages, walked through
+``graph.message_blocks`` (calls exactly once; text parts only). "Current
 turn" is everything after the last operator/kickoff/continuation ``HumanMessage``; the
 mid-turn human messages middleware injects (guard notes, steering interjections) don't
 end it. Bounded: each argument/result is clipped, and only the most recent calls are kept.
@@ -19,6 +20,8 @@ import json
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+
+from graph.message_blocks import text_of, tool_calls_of
 
 # Per-call clip lengths and the overall budget (most recent calls win).
 _ARGS_CAP = 300
@@ -38,42 +41,13 @@ def _clip(text: str, cap: int) -> str:
     return text if len(text) <= cap else text[: cap - 1] + "…"
 
 
-def message_text(content: Any) -> str:
-    """A message content (str, or a list of content blocks) as plain text."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict) and isinstance(block.get("text"), str):
-                parts.append(block["text"])
-        return "\n".join(parts)
-    return "" if content is None else str(content)
-
-
 def _is_turn_boundary(msg: BaseMessage) -> bool:
     """A human message that starts a turn (not one middleware injected mid-turn)."""
     if not isinstance(msg, HumanMessage):
         return False
     if (msg.additional_kwargs or {}).get(_GUARD_NOTE_KWARG):
         return False
-    return not message_text(msg.content).startswith(_STEERING_PREFIX)
-
-
-def _calls_of(msg: AIMessage) -> list[tuple[str, str, Any]]:
-    """``(id, name, args)`` for each tool call on an AI message — ``tool_calls`` first,
-    else provider content blocks (``tool_use`` / ``function_call``) a provider left there."""
-    calls = [(str(c.get("id") or ""), str(c.get("name") or "?"), c.get("args")) for c in (msg.tool_calls or [])]
-    if calls:
-        return calls
-    if isinstance(msg.content, list):
-        for block in msg.content:
-            if isinstance(block, dict) and block.get("type") in ("tool_use", "tool_call", "function_call"):
-                args = block.get("input", block.get("args", block.get("arguments")))
-                calls.append((str(block.get("id") or block.get("call_id") or ""), str(block.get("name") or "?"), args))
-    return calls
+    return not text_of(msg).startswith(_STEERING_PREFIX)
 
 
 def _render_args(args: Any) -> str:
@@ -103,14 +77,15 @@ def summarize_tool_calls(messages: list | None) -> str:
     for msg in turn:
         if not isinstance(msg, AIMessage):
             continue
-        for call_id, name, args in _calls_of(msg):
+        for call in tool_calls_of(msg):
+            name, args = str(call.get("name") or "?"), call.get("args")
             line = f"- {name}({_clip(_render_args(args), _ARGS_CAP)})"
-            res = results.get(call_id)
+            res = results.get(str(call.get("id") or ""))
             if res is None:
                 line += " → (no result)"
             else:
                 status = " [error]" if getattr(res, "status", "") == "error" else ""
-                line += f" →{status} {_clip(message_text(res.content), _RESULT_CAP) or '(empty)'}"
+                line += f" →{status} {_clip(text_of(res), _RESULT_CAP) or '(empty)'}"
             lines.append(line)
     dropped = max(0, len(lines) - _MAX_CALLS)
     lines = lines[dropped:]

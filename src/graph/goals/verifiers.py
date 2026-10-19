@@ -334,7 +334,7 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        from graph.goals.transcript import message_text
+        from graph.message_blocks import text_of
         from graph.llm import create_llm
 
         # Goal verification is classification, not the main reasoning task:
@@ -353,7 +353,7 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
         # A provider may answer with content BLOCKS (text + thinking), not a string: read the
         # text blocks — str() of the list is a Python repr whose first "{" is a block dict,
         # which failed every judgment with JSONDecodeError.
-        content = message_text(resp.content)
+        content = text_of(resp)
         parsed = _first_verdict(content)
         if parsed is None:
             return VerifyResult(False, "evaluator returned no JSON", _tail(content))

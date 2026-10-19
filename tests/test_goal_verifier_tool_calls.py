@@ -65,14 +65,24 @@ def test_mid_turn_injected_human_messages_do_not_end_the_turn():
     assert "write_note" in out and "read_note" in out
 
 
-def test_content_block_tool_calls_and_errors_and_missing_results():
+def test_block_content_results_errors_and_missing_results():
+    """An Anthropic-shaped turn: the AI message's content is a block list carrying the tool_use
+    (``tool_calls`` mirrors it) — the call renders exactly once; a block-list tool result
+    renders its text; an error status and a call with no result yet are marked."""
     msgs = [
         HumanMessage(content="go"),
-        AIMessage(content=[{"type": "tool_use", "id": "t1", "name": "run", "input": {"cmd": "ls"}}]),
+        AIMessage(
+            content=[
+                {"type": "text", "text": "running"},
+                {"type": "tool_use", "id": "t1", "name": "run", "input": {"cmd": "ls"}},
+            ],
+            tool_calls=[{"id": "t1", "name": "run", "args": {"cmd": "ls"}}],
+        ),
         ToolMessage(content=[{"type": "text", "text": "boom"}], tool_call_id="t1", status="error"),
         AIMessage(content="", tool_calls=[{"id": "t2", "name": "slow", "args": {}}]),
     ]
     out = summarize_tool_calls(msgs)
+    assert out.count("- run(") == 1
     assert '- run({"cmd": "ls"}) → [error] boom' in out
     assert "- slow() → (no result)" in out
 
