@@ -388,8 +388,18 @@ select:disabled {
   text-transform: uppercase;
 }
 
-/* Toast top-right anchoring now comes from the DS prop (`<ToastProvider position="top-right">`,
-   @protolabsai/ui ≥ 0.49) — the `.pl-toast-stack` override that used to live here is retired. */
+/* DS 0.68 has only a vertical toast offset, with no horizontal/container API.
+   Scope this integration to our provider's direct stack (as with the AppShell frame
+   above); measured rail bounds follow the actual DS responsive layout, not a width copy. */
+.app-toast-layout {
+  display: contents;
+  --app-toast-start: max(var(--app-toast-left, 0px), env(safe-area-inset-left, 0px));
+  --app-toast-end: max(var(--app-toast-right, 0px), env(safe-area-inset-right, 0px));
+}
+.app-toast-layout > .pl-toast-stack[data-position="top-right"] {
+  right: calc(var(--app-toast-end) + var(--pl-space-4));
+  max-width: min(360px, calc(100vw - var(--app-toast-start) - var(--app-toast-end) - 2 * var(--pl-space-4)));
+}
 
 /* MCP catalog quick-add (McpCatalogDialog) — a curated directory of common servers,
    self-contained styles so the dialog doesn't depend on the Plugins surface CSS. */
