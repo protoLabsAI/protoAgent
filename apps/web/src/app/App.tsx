@@ -41,6 +41,7 @@ import { ActivityWidget } from "../activity/ActivityWidget";
 import { ConfirmDialog, Tooltip } from "@protolabsai/ui/overlays";
 import { StorageWarning } from "./StorageWarning";
 import { AgentDownBanner } from "./AgentDownBanner";
+import { HomeOriginNotice } from "./HomeOriginNotice";
 import { SignedOutBanner } from "./SignedOutBanner";
 import {
   SetupGapBanner,
@@ -1020,6 +1021,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
               ))}
               <StorageWarning />
               <AgentDownBanner />
+              <HomeOriginNotice />
               <SignedOutBanner runtime={runtime} />
             </>
           }
@@ -1072,6 +1074,8 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
           strip with a hub-routed Start; renders nothing on the host or a running agent. */}
       <StorageWarning />
       <AgentDownBanner />
+      {/* A paired phone whose home origin stopped answering: its other addresses (ADR 0121 D1). */}
+      <HomeOriginNotice />
 
       {/* Deliberate OAuth signed-out state (#2513) — visible status + the reconnect
           control in view, instead of reading as a failed boot. */}

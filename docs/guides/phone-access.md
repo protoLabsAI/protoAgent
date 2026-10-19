@@ -130,6 +130,53 @@ token.
 
 <!-- /docs-media -->
 
+## Move between networks {#move-between-networks}
+
+A phone has one **home address**: the one it was paired on. Its token, its chat history and
+its home-screen icon all belong to that address, so the phone always opens the console there.
+Pick a home that works wherever you take the phone:
+
+| The phone has | Make its home | Works |
+| --- | --- | --- |
+| Tailscale | **Tailnet HTTPS** | On any network |
+| No Tailscale, and you've set a [public URL](#without-tailscale) | **Phone without Tailscale** | On any network, home Wi-Fi included |
+| Neither | **Wi-Fi** | On the agent's Wi-Fi only |
+
+With a home that works on any network, the phone never needs moving.
+
+### Move this phone to another address {#move-this-phone}
+
+A phone paired on the Wi-Fi address works only at home. To give it a home that works away
+too, move it while it can still reach the agent:
+
+1. On the phone, open **Settings ▸ Devices**.
+2. On the row marked **This device**, tap **Move…**. The list shows the agent's other
+   addresses, each with what the phone needs for it, such as "needs the Tailscale app on
+   this phone".
+3. Pick one, check the confirmation, and tap **Move**.
+
+The phone opens the console at the new address and shows **Moved &lt;name&gt; here**. It stays
+the same device in Devices, with the same name and access. Its token is replaced, and the old
+address stops working for it: opening the old address afterwards says
+**This phone moved to &lt;address&gt;**. Add the new address to the Home Screen and remove the
+old icon. If the move fails partway, for example because the new address doesn't load, the
+old address keeps working.
+
+The **Move…** button appears only on the phone itself, and only when the agent has another
+address to offer. The list follows the agent's current setup: turn on tailnet HTTPS or set a
+public URL, and the phone sees the new address the next time it opens the console.
+
+### When the home address stops answering {#when-home-stops-answering}
+
+If the phone loses its home address while the console is open, for example because you left
+the Wi-Fi it was paired on, a **can't reach this agent here** notice lists the agent's other
+addresses as links, each with what it needs. An address that answered a quick check is marked
+**answering**. The check is only a hint: a phone browser can't always check an address.
+
+Opening one of those links means pairing the phone again at that address, because the token
+stays with the home address. To avoid that, [move the phone](#move-this-phone) while you're
+still at home. The notice clears when the home address answers again.
+
 ## 3. Add to Home Screen {#_3-add-to-home-screen}
 
 Once the console opens, use the phone browser's **Add to Home Screen** action:
@@ -162,7 +209,9 @@ portrait closed.
 
 The home-screen shortcut still connects to the live agent. The console does
 not cache an offline copy through a service worker. If the agent stops or the
-network disconnects, reconnect before continuing the task.
+network disconnects, reconnect before continuing the task. A paired phone that
+loses its home address with the console open lists the agent's other addresses
+([details](#when-home-stops-answering)).
 
 ## Without Tailscale: your own public URL {#without-tailscale}
 
@@ -211,7 +260,8 @@ console's sign-in. To make the console private again, clear the setting.
 
 The phone uses this address at home too, through your proxy, so it doesn't need moving between
 networks. Pick the address that fits the phone when you pair it: a phone paired on its tailnet
-address keeps using that address.
+address keeps using that address. A phone already paired on another address can
+[move to this one](#move-this-phone) without pairing again.
 
 ## See also
 

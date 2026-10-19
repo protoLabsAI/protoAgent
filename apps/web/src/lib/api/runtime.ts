@@ -86,7 +86,12 @@ export type PairedDevice = {
   rotated_at?: number | null;
 };
 /** `GET /api/devices/self` — the caller's own device, or null for a non-device credential. */
-export type DeviceSelf = PairedDevice & { rotate_due: boolean };
+export type DeviceSelf = PairedDevice & {
+  rotate_due: boolean;
+  /** The token that asked was handed off to another origin and the move completed (ADR 0121
+   *  D1): this origin should forget it. Absent from servers before S7.5. */
+  handed_off?: boolean;
+};
 export type DeviceScope = "full" | "device";
 /** Who is ASKING — the credential this request used, as the server classified it. */
 export type DeviceCaller = { scope: DeviceScope; device_id: string | null };

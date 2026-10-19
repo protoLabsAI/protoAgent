@@ -2,16 +2,18 @@ import { Spinner } from "@protolabsai/ui/data";
 import { Input } from "@protolabsai/ui/forms";
 import { useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { Pencil, ShieldCheck, ShieldMinus, Smartphone, Trash2 } from "lucide-react";
+import { ArrowRightLeft, Pencil, ShieldCheck, ShieldMinus, Smartphone, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { StatusPill } from "../app/StatusPill";
 import { api } from "../lib/api";
 import { notifyAuthRequired } from "../lib/auth";
-import { currentDeviceId, forgetDeviceCredential } from "../lib/credentials";
+import { currentDeviceId, deviceToken, forgetDeviceCredential, otherDeviceAddresses } from "../lib/credentials";
+import { addressHost, addressLabel, goToHandoff, requestHandoff, requirementText } from "../lib/deviceHandoff";
 import "./device-list.css";
 
 import type { DeviceScope, PairedDevice } from "../lib/api";
+import type { DeviceAddress } from "../lib/credentials";
 
 /** Matches the server's `ACTIVE_WINDOW_SECONDS` (last-seen throttle 300 s + 60 s margin) —
  *  used only when an older server's rows carry no `active` field. */
@@ -107,6 +109,32 @@ export function DeviceList({
   // tab without a reload.
   const thisId = currentDeviceId() || callerDeviceId || "";
   const [scoping, setScoping] = useState<string | null>(null);
+  // "Move this phone to…" (ADR 0121 D1): the picker, then a confirm step, then the handoff.
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveTarget, setMoveTarget] = useState<DeviceAddress | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  // Only a browser that holds THIS row's device token can move it, and only somewhere else.
+  const moveTargets = thisId && deviceToken() ? otherDeviceAddresses() : [];
+
+  function closeMove() {
+    setMoveOpen(false);
+    setMoveTarget(null);
+    setMoveError(null);
+  }
+
+  async function move(target: DeviceAddress) {
+    setMoving(true);
+    setMoveError(null);
+    const res = await requestHandoff(target.origin);
+    if (!res.ok) {
+      setMoving(false);
+      setMoveError(res.error);
+      return;
+    }
+    // Navigating away; the new origin claims the code and becomes this phone's home.
+    goToHandoff(target.origin, res.url);
+  }
 
   async function changeScope(d: PairedDevice, to: DeviceScope) {
     setScoping(d.id);
@@ -275,6 +303,51 @@ export function DeviceList({
                 {lastSeenLabel(d)}
                 {expiry ? <span data-testid={`device-expiry-${d.id}`}> · {expiry}</span> : null}
               </span>
+              {self && moveOpen && (
+                <div className="devices-confirm" role="group" aria-label="Move this phone">
+                  {moveTarget ? (
+                    <>
+                      <p className="devices-pair-hint" data-testid="device-move-confirm">
+                        Move this phone to <strong>{addressHost(moveTarget.origin)}</strong>? It opens the console
+                        there from now on, as the same device — {requirementText(moveTarget)}. This address stops
+                        working for it.
+                      </p>
+                      <div className="devices-hosts">
+                        <Button type="button" onClick={() => void move(moveTarget)} loading={moving} disabled={moving}>
+                          Move
+                        </Button>
+                        <Button type="button" variant="ghost" onClick={() => setMoveTarget(null)} disabled={moving}>
+                          Back
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="devices-pair-hint">Move this phone to another of this agent&apos;s addresses:</p>
+                      <ul className="devices-move-list">
+                        {moveTargets.map((a) => (
+                          <li key={a.origin}>
+                            <Button type="button" variant="ghost" onClick={() => setMoveTarget(a)}>
+                              {addressLabel(a)} · {addressHost(a.origin)}
+                            </Button>
+                            <span className="devices-move-req">{requirementText(a)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="devices-hosts">
+                        <Button type="button" variant="ghost" onClick={closeMove}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                  {moveError && (
+                    <p className="devices-rename-error" role="alert">
+                      {moveError}
+                    </p>
+                  )}
+                </div>
+              )}
               {confirmSelf === d.id && (
                 <div className="devices-confirm" role="group" aria-label="Remove this device">
                   <p className="devices-pair-hint">
@@ -310,6 +383,24 @@ export function DeviceList({
                   >
                     {action.label === "Limit" ? <ShieldMinus size={15} aria-hidden /> : <ShieldCheck size={15} aria-hidden />}{" "}
                     {action.label}
+                  </Button>
+                )}
+                {self && moveTargets.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    title="Move this phone to another of this agent's addresses"
+                    aria-label="Move this phone to…"
+                    disabled={revoking != null || moving}
+                    onClick={() => {
+                      setEditing(null);
+                      setConfirmSelf(null);
+                      setMoveTarget(null);
+                      setMoveError(null);
+                      setMoveOpen(true);
+                    }}
+                  >
+                    <ArrowRightLeft size={15} aria-hidden /> Move…
                   </Button>
                 )}
                 {manage && (

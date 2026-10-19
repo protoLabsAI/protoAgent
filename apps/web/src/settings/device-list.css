@@ -30,3 +30,22 @@
   gap: var(--pl-space-2);
   margin-top: var(--pl-space-1);
 }
+/* "Move this phone to…" (ADR 0121 D1): one row per other address, with what it needs. */
+.devices-move-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.devices-move-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pl-space-2);
+}
+.devices-move-req {
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-muted);
+}

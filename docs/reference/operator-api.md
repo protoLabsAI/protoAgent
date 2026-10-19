@@ -51,8 +51,9 @@ before it swaps in the fleet credential. Refused for `device` scope:
 | POST · PUT · PATCH · DELETE | `/api/mcp/servers/…` (`{name}`, `/promote`, `/forget`) |
 | any | `/api/plugin-setup/…` · `/api/secrets/…` · `/api/config/oauth/…` |
 
-A device's own lifetime routes, `GET /api/devices/self` and `POST /api/devices/self/rotate`,
-are not on the list: rotating your own token changes nothing about who can get in.
+A device's own routes, `GET /api/devices/self`, `POST /api/devices/self/rotate` and
+`POST /api/devices/self/handoff`, are not on the list: rotating your own token, or moving
+yourself to another of the agent's addresses, changes nothing about who can get in.
 
 Plugin lifecycle and MCP servers are on the list because each is host code the server runs: a
 phone that installed a plugin or added an MCP server would leave it running after its token was
@@ -214,12 +215,13 @@ under every root; a claim removes them all), 120 s TTL, one-shot.
 | GET | `/api/fleet/discover` | Discover agents (LAN mDNS + tailnet) |
 | POST · DELETE | `/api/fleet/remotes[/{ident}]` | Register / remove a remote member |
 | POST | `/api/pairing/start` · `/api/pairing/cancel` | Mint a phone (default) or agent (`{"kind": "agent"}`) pairing code with the addresses it works on, best first (`hosts[].via`: `serve` → `magicdns` → `ip`), plus `reach` (Tailscale status, restart facts) / drop pending codes of that kind (ADR 0087, ADR 0113). `409` when nothing is reachable yet |
-| POST | `/api/pairing/claim` | Redeem a code for a per-device token (`{code, name}` → `{ok, device, token}`). The **only** unauthenticated `/api/*` route; one `403` for every bad code. `429` with `Retry-After` (seconds) and `{ok: false, error, retry_after}` when the claim throttle is empty (5 wrong codes per client per 5 min, 30 per ingress class per min; ADR 0121 D3). A `429` claim is never compared with any code, and no claim cancels a pending code |
+| POST | `/api/pairing/claim` | Redeem a code for a per-device token (`{code, name}` → `{ok, device, token, moved, addresses}`, `Cache-Control: no-store`). `addresses` is the phone's [address set](#device-address-set) (absent for an agent code). `moved` is true for a handoff code: it rebinds the device that minted it, with the same `id`, name and scope and a new token, instead of adding a device. The **only** unauthenticated `/api/*` route; one `403` for every bad code. `429` with `Retry-After` (seconds) and `{ok: false, error, retry_after}` when the claim throttle is empty (5 wrong codes per client per 5 min, 30 per ingress class per min; ADR 0121 D3). A `429` claim is never compared with any code, and no claim cancels a pending code |
 | GET | `/api/devices` | Paired devices and hubs: `id`, `name`, `kind`, `scope` (`full` or `device`, ADR 0121 D4; agents are always `full`), `created_at`, `last_seen_at`, `active` (used within the last-seen write throttle, about 6 minutes), `expired` and `expires_at` (idle expiry, ADR 0121 D5: `expires_at` is epoch seconds, or null for a device that never expires), and `rotated_at`. Never the token or its hash. `caller` is the credential that asked: `{scope, device_id}` (`device_id` is null unless a device token was used) |
 | PATCH | `/api/devices/{id}` | Rename (`{name}`: 1–64 printable characters on one line) and/or promote or limit (`{scope: "full" \| "device"}`). Changing `scope` needs a full-scope caller (`403 device_scope` otherwise, so a phone can't promote itself); limiting an agent is a `400`. `400` with the reason for an unusable name or scope, `404` for an unknown id. The token is untouched |
 | DELETE | `/api/devices/{id}` | Revoke one device; its token stops working on the next request, and its open streams close within one keepalive |
-| GET | `/api/devices/self` | The caller's own device (ADR 0121 D5): `{device: {id, name, kind, scope, created_at, last_seen_at, active, expired, expires_at, rotated_at, rotate_due}}`. `rotate_due` is true for a `device`-scope token 7 days after its last rotation (or its pairing). A credential that isn't a paired device (the auth token, `X-API-Key`, open mode) gets `200 {"device": null}`, which a client can tell apart from an older server's `404` |
+| GET | `/api/devices/self` | The caller's own device (ADR 0121 D5): `{device: {id, name, kind, scope, created_at, last_seen_at, active, expired, expires_at, rotated_at, rotate_due, handed_off}, addresses}`. `rotate_due` is true for a `device`-scope token 7 days after its last rotation (or its pairing). `handed_off` is true when the presented token was handed off to another address and the new address has used its token: the caller should forget the token. `addresses` is the [address set](#device-address-set). A credential that isn't a paired device (the auth token, `X-API-Key`, open mode) gets `200 {"device": null}`, which a client can tell apart from an older server's `404` |
 | POST | `/api/devices/self/rotate` | A new token for the caller's device, returned once: `{ok, device, token}` with `Cache-Control: no-store`. The presented token stays valid until the new one is first used, then for 120 seconds; presented after that, it revokes the device and writes a `device.revoked_token_reuse` audit entry. `409 rotation_in_progress` when the presented token is the previous one and an unused rotation is under two minutes old (keep the stored token); `409 not_rotatable` for a previous token whose successor is already in use, or a full-access device (only Limited tokens rotate); `404 not_a_device` (and no token) for a non-device credential |
+| POST | `/api/devices/self/handoff` | Move the caller's device to another of this agent's addresses (ADR 0121 D1). `{origin}` → `{ok, code, expires_at, ttl, origin, url}` with `Cache-Control: no-store`: a 60-second, single-use code in the pairing-code format, bound to the caller's device, and `url` = `<origin>/app/#pair=<code>`. `origin` must equal one of the [address set](#device-address-set)'s origins after normalisation (scheme and host lowercased, default port and one trailing `/` dropped); anything else is `400 origin_not_offered`, and `url` is always built from the offered origin. A newer handoff replaces the device's pending one. Claiming the code rotates the device's token: the old token stays valid until the new one is first used, then for 120 seconds, then is refused **without** revoking the device. `404 not_a_device` for a credential that isn't a paired device; `409 not_movable` for an agent pairing, an expired device, or a token already rotated out |
 | GET | `/api/pairing/reach` | How this agent can be reached: bind, listening port, offered and bindable addresses, `auth_configured`, `tailscale` (`dns_name`, `https`, `served`), `restart` (`supported`, `bind_pinned`, `container`, `pending`, `hint`) |
 | POST · DELETE | `/api/pairing/tailscale/serve` | Serve this agent over tailnet HTTPS with `tailscale serve --bg` / turn off only its own handler. POST is `409 no_token` until an auth token is set; `409 https_disabled` carries `enable_url` |
 | POST | `/api/restart` | Graceful self-restart: drain, then re-exec with the same command line (`202`) |
@@ -227,6 +229,22 @@ under every root; a claim removes them all), 120 s TTL, one-shot.
 | GET | `/api/archetypes` | Starter agent types (catalog + installed bundles); `?include_held=1` adds the catalog's `held` preview entries (`held: true`) |
 | GET | `/api/archetypes/{id}/preview` | Peek a bundle archetype's members/MCP/secrets before install |
 | GET | `/api/archetypes/from-url?url=&ref=` | Peek an uncatalogued bundle by git URL (+ optional ref): its archetype row, the bundle peek, and whether the source is `trusted` |
+
+### Device address set {#device-address-set}
+
+A phone's claim and `GET /api/devices/self` carry `addresses`: the origins this agent offers
+right now, best first, in the order `/api/pairing/start` lists its hosts (ADR 0121 D1).
+
+| `kind` | Example `origin` | `requirement` |
+| --- | --- | --- |
+| `tailnet_https` | `https://box.tail1234.ts.net` | `tailscale` (omitted when Tailscale Funnel makes it public) |
+| `public` | `https://console.example.com` | none. Present only when `network.public_console_url` is set |
+| `tailnet` | `http://box.tail1234.ts.net:7870`, `http://100.64.0.5:7870` | `tailscale` |
+| `lan` | `http://192.168.1.20:7870` | `same_network` |
+
+Every entry is an origin (`scheme://host[:port]`). The only public origin is the declared
+`network.public_console_url`; discovered addresses are tailnet or private only. The console
+keeps the set beside the device token for its offline notice and **Move this phone to…**.
 
 ## Plugins & MCP
 

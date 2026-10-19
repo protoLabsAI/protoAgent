@@ -523,3 +523,153 @@ test("an expired phone shows Expired with remove-and-re-pair guidance; a limited
   await expect(daily.getByTestId("device-expiry-x2")).toHaveText(/expires in 30 days if unused/);
   await expect(page.getByTestId("device-expiry-x3")).toHaveCount(0); // full access never expires
 });
+
+// ── #4336 S7.5: the address set and "Move this phone to…" (ADR 0121 D1) ─────────────────
+
+const TS_HTTPS = "https://box.tail1234.ts.net";
+const PUBLIC_URL = "https://agent.example.com";
+
+/** A paired phone whose home is this page's origin, with the agent's other addresses stored
+ *  — and the boot /self call answering with the same set. */
+async function asPairedPhone(page) {
+  await page.addInitScript(
+    ([tsHttps, publicUrl]) => {
+      if (window.sessionStorage.getItem("seeded")) return;
+      window.sessionStorage.setItem("seeded", "1");
+      window.localStorage.setItem("protoagent.deviceToken", "e2e-device-token");
+      window.localStorage.setItem("protoagent.deviceId", "dev-phone1");
+      window.localStorage.setItem(
+        "protoagent.deviceAddresses",
+        JSON.stringify([
+          { kind: "tailnet_https", origin: tsHttps, requirement: "tailscale" },
+          { kind: "public", origin: publicUrl },
+          { kind: "lan", origin: window.location.origin, requirement: "same_network" },
+        ]),
+      );
+    },
+    [TS_HTTPS, PUBLIC_URL],
+  );
+  await page.route("**/api/devices/self", (route) =>
+    route.fulfill({
+      json: {
+        device: { id: "dev-phone1", name: "Josh's iPhone", kind: "device", scope: "device", rotate_due: false, created_at: 1, last_seen_at: null },
+        addresses: [
+          { kind: "tailnet_https", origin: TS_HTTPS, requirement: "tailscale" },
+          { kind: "public", origin: PUBLIC_URL },
+          { kind: "lan", origin: new URL(route.request().url()).origin, requirement: "same_network" },
+        ],
+      },
+    }),
+  );
+}
+
+test("Move this phone to…: pick another address, confirm, and the console hands off to it", async ({ page }) => {
+  await asPairedPhone(page);
+  const handoffs = [];
+  await page.route("**/api/devices/self/handoff", (route) => {
+    handoffs.push([route.request().headers()["authorization"], route.request().postDataJSON()]);
+    return route.fulfill({ json: { ok: true, code: "K7QM2-XPA4F", ttl: 60, origin: TS_HTTPS, url: `${TS_HTTPS}/app/#pair=K7QM2-XPA4F` } });
+  });
+  // The new home, stubbed: the test only needs to see the navigation land there.
+  await page.route(`${TS_HTTPS}/**`, (route) => route.fulfill({ contentType: "text/html", body: "<title>new home</title>" }));
+  await openDevices(page);
+
+  const mine = page.locator(".subagent-row", { hasText: "Josh's iPhone" });
+  await expect(page.locator(".subagent-row", { hasText: "studio-hub" }).getByRole("button", { name: "Move this phone to…" })).toHaveCount(0);
+  await mine.getByRole("button", { name: "Move this phone to…" }).click();
+  const picker = mine.getByRole("group", { name: "Move this phone" });
+  // The other addresses only — never the one this phone is on — each with what it needs.
+  await expect(picker.getByRole("button")).toHaveText(["Tailnet HTTPS · box.tail1234.ts.net", "Public URL · agent.example.com", "Cancel"]);
+  await expect(picker).toContainText("needs the Tailscale app on this phone");
+  await expect(picker).toContainText("works from any network");
+
+  // Picking is not moving: a confirm step first, and Back returns to the list.
+  await picker.getByRole("button", { name: "Tailnet HTTPS · box.tail1234.ts.net" }).click();
+  await expect(picker.getByTestId("device-move-confirm")).toContainText("Move this phone to box.tail1234.ts.net?");
+  expect(handoffs).toEqual([]);
+  await picker.getByRole("button", { name: "Back" }).click();
+  await picker.getByRole("button", { name: "Tailnet HTTPS · box.tail1234.ts.net" }).click();
+  await picker.getByRole("button", { name: "Move", exact: true }).click();
+
+  await page.waitForURL(`${TS_HTTPS}/app/#pair=K7QM2-XPA4F`);
+  expect(handoffs).toEqual([["Bearer e2e-device-token", { origin: TS_HTTPS }]]);
+});
+
+test("a refused move stays put and says why", async ({ page }) => {
+  await asPairedPhone(page);
+  await page.route("**/api/devices/self/handoff", (route) =>
+    route.fulfill({ status: 400, json: { ok: false, error: "origin_not_offered", detail: "that address isn't one this agent offers" } }),
+  );
+  await openDevices(page);
+  const mine = page.locator(".subagent-row", { hasText: "Josh's iPhone" });
+  await mine.getByRole("button", { name: "Move this phone to…" }).click();
+  const picker = mine.getByRole("group", { name: "Move this phone" });
+  await picker.getByRole("button", { name: "Public URL · agent.example.com" }).click();
+  await picker.getByRole("button", { name: "Move", exact: true }).click();
+  await expect(picker.getByRole("alert")).toHaveText("That address isn't one this agent offers.");
+  await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
+});
+
+test("a browser holding only the shared bearer is offered no move", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("protoagent.authToken", "e2e-operator-token"));
+  await openDevices(page);
+  await expect(page.locator(".subagent-row", { hasText: "Josh's iPhone" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Move this phone to…" })).toHaveCount(0);
+});
+
+test("the offline notice lists the phone's other addresses when its home stops answering", async ({ page }) => {
+  await asPairedPhone(page);
+  await page.goto("/app/", { waitUntil: "load" });
+  await expect(page.locator(".app-shell-main")).toBeVisible();
+  await expect(page.getByTestId("home-origin-notice")).toHaveCount(0);
+
+  // The home goes away (the phone left the Wi-Fi it was paired on).
+  await page.route("**/healthz", (route) => route.abort("internetdisconnected"));
+  for (let i = 0; i < 2; i++) await page.evaluate(() => window.dispatchEvent(new Event("offline")));
+  const notice = page.getByTestId("home-origin-notice");
+  await expect(notice).toBeVisible();
+  await expect(notice.getByRole("link")).toHaveText(["Tailnet HTTPS · box.tail1234.ts.net", "Public URL · agent.example.com"]);
+  await expect(notice.getByRole("link").first()).toHaveAttribute("href", `${TS_HTTPS}/app/`);
+  await expect(notice).toContainText("needs the Tailscale app on this phone");
+  await expect(notice).toContainText("Opening one means pairing this phone again there.");
+
+  // Back in range: it clears.
+  await page.unroute("**/healthz");
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await expect(notice).toHaveCount(0);
+});
+
+test("the origin a phone moved away from points at its new home once the move completed", async ({ page }) => {
+  await page.addInitScript((tsHttps) => {
+    if (window.sessionStorage.getItem("seeded")) return;
+    window.sessionStorage.setItem("seeded", "1");
+    window.localStorage.setItem("protoagent.deviceToken", "e2e-device-token");
+    window.localStorage.setItem("protoagent.deviceId", "dev-phone1");
+    window.localStorage.setItem("protoagent.deviceMovedTo", tsHttps);
+  }, TS_HTTPS);
+  await page.route("**/api/devices/self", (route) =>
+    route.fulfill({
+      json: { device: { id: "dev-phone1", name: "Josh's iPhone", kind: "device", scope: "device", rotate_due: false, handed_off: true, created_at: 1, last_seen_at: null } },
+    }),
+  );
+  await page.goto("/app/", { waitUntil: "load" });
+  const gate = page.getByRole("dialog", { name: "Authentication required" });
+  await expect(gate.getByTestId("auth-moved")).toContainText("This phone moved to box.tail1234.ts.net");
+  await expect(gate.getByRole("link", { name: "box.tail1234.ts.net" })).toHaveAttribute("href", `${TS_HTTPS}/app/`);
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.deviceToken"))).toBeNull();
+});
+
+test("past the grace, the old origin's refused token is dropped and the gate points at the new home", async ({ page }) => {
+  await page.addInitScript((tsHttps) => {
+    if (window.sessionStorage.getItem("seeded")) return;
+    window.sessionStorage.setItem("seeded", "1");
+    window.localStorage.setItem("protoagent.deviceToken", "e2e-device-token");
+    window.localStorage.setItem("protoagent.deviceId", "dev-phone1");
+    window.localStorage.setItem("protoagent.deviceMovedTo", tsHttps);
+  }, TS_HTTPS);
+  await page.route("**/api/devices/self", (route) => route.fulfill({ status: 401, json: { detail: "unauthorized" } }));
+  await page.goto("/app/", { waitUntil: "load" });
+  const gate = page.getByRole("dialog", { name: "Authentication required" });
+  await expect(gate.getByTestId("auth-moved")).toContainText("This phone moved to box.tail1234.ts.net");
+  expect(await page.evaluate(() => window.localStorage.getItem("protoagent.deviceToken"))).toBeNull();
+});

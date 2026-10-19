@@ -18,6 +18,12 @@
     GET    /api/devices/self    → the caller's own device + ``rotate_due`` (ADR 0121 D5;
                                   ``{"device": null}`` for a non-device credential)
     POST   /api/devices/self/rotate → a new token for the caller's device, returned once
+    POST   /api/devices/self/handoff → a 60 s code that moves the caller's device to another
+                                  of this instance's origins (ADR 0121 D1, #4336 S7.5)
+
+The claim response and ``GET /api/devices/self`` carry ``addresses`` — this instance's own
+origins in ADR 0121 D1 order (`_address_set`) — which a phone keeps for its offline notice and
+its "Move this phone to…" menu.
 
 A ``device``-scope credential (a paired phone, ADR 0121 D4) is refused start/cancel/serve and
 PATCH/DELETE of any device but its own by the credential-plane ceiling in
@@ -332,6 +338,85 @@ def _offer_hosts(port: int) -> tuple[list[dict], dict]:
     return served + ([public] if public else []) + rest + ips, ts_info
 
 
+# What a phone needs for an address to work, by address kind (ADR 0121 D1). The console
+# words it; a public origin needs nothing but the internet, so it carries no requirement.
+REQUIRES_TAILSCALE = "tailscale"
+REQUIRES_SAME_NETWORK = "same_network"
+
+
+def _address_set(port: int) -> list[dict]:
+    """This instance's own origins as ``[{kind, origin, requirement?}]``, best first — the
+    ``addresses`` of a claim and of ``GET /api/devices/self`` (ADR 0121 D1).
+
+    Built from `_offer_hosts`, the same list ``/api/pairing/start`` offers, so the two can't
+    disagree: tailnet HTTPS → the declared public URL → the tailnet name/IP over http → LAN.
+    Nothing here is discovered from outside: the only public origin is the operator's own
+    ``network.public_console_url``. ``kind`` is ``tailnet_https``, ``public``, ``tailnet`` or
+    ``lan``. Blocking — run in a thread."""
+    hosts, _ts = _offer_hosts(port)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for h in hosts:
+        origin = normalize_origin(h.get("origin"))
+        if not origin or origin in seen:
+            continue
+        seen.add(origin)
+        if h.get("via") == "serve":
+            entry = {"kind": "tailnet_https", "origin": origin}
+            if not h.get("funnel"):  # Funnel makes it public on the internet, Tailscale or not
+                entry["requirement"] = REQUIRES_TAILSCALE
+        elif h.get("kind") == "public":
+            entry = {"kind": "public", "origin": origin}
+        elif h.get("kind") == "tailnet":
+            entry = {"kind": "tailnet", "origin": origin, "requirement": REQUIRES_TAILSCALE}
+        else:
+            entry = {"kind": "lan", "origin": origin, "requirement": REQUIRES_SAME_NETWORK}
+        out.append(entry)
+    return out
+
+
+_MAX_ORIGIN_LEN = 512
+
+
+def normalize_origin(value: object) -> str:
+    """``scheme://host[:port]`` for an http(s) ORIGIN, lowercased, default port dropped — or
+    ``""`` for anything else (a path, query, fragment, userinfo, another scheme, junk).
+
+    Used on BOTH sides of the handoff comparison, so an offered origin and the one a caller
+    sends compare like with like. It never makes a near-miss match: a trailing dot, an extra
+    label or a different scheme stays different, and the handoff URL is built from the
+    OFFERED origin, never from what the caller sent."""
+    from urllib.parse import urlsplit
+
+    if not isinstance(value, str) or not value or len(value) > _MAX_ORIGIN_LEN:
+        return ""
+    # No surrounding whitespace, backslashes or control characters: browsers and urlsplit
+    # disagree about those, and an origin a caller sends is a string the console built.
+    if value != value.strip() or "\\" in value or any(ord(c) < 0x21 or ord(c) == 0x7F for c in value):
+        return ""
+    # One trailing "/" is the bare root path (`https://host/`); anything more is a path.
+    raw = value[:-1] if value.endswith("/") and value.count("/") == 3 else value
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        return ""
+    scheme = parts.scheme.lower()
+    if scheme not in ("http", "https"):
+        return ""
+    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+        return ""
+    if parts.path or parts.query or parts.fragment or raw.endswith(("?", "#")):
+        return ""
+    host = (parts.hostname or "").lower()
+    if not host:
+        return ""
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None and port != (443 if scheme == "https" else 80):
+        netloc = f"{netloc}:{port}"
+    return f"{scheme}://{netloc}"
+
+
 def _public_console_url() -> str:
     """The live declared public console origin, or "" (for the panel's warning / hint)."""
     from security.public_console import public_origin
@@ -457,6 +542,12 @@ def _caller(request) -> dict:
         "scope": getattr(state, "credential_scope", None) or "device",
         "device_id": getattr(state, "device_id", None),
     }
+
+
+def _presented_bearer(request) -> str:
+    """The ``Authorization: Bearer`` token this request presented, or ``""``."""
+    header = request.headers.get("Authorization", "")
+    return header[len("Bearer ") :] if header.startswith("Bearer ") else ""
 
 
 def register_pairing_routes(app, agent_name=None) -> None:
@@ -719,8 +810,14 @@ def register_pairing_routes(app, agent_name=None) -> None:
             # attacker learns nothing about which codes exist.
             return JSONResponse({"ok": False, "error": "invalid or expired pairing code"}, status_code=403)
         device, token = result
-        log.info("[pairing] %s %s claimed a pairing code", device["kind"], device["id"])
-        return JSONResponse({"ok": True, "device": device, "token": token})
+        moved = bool(device.pop("moved", False))  # a handoff code rebound an existing device
+        log.info("[pairing] %s %s %s", device["kind"], device["id"], "moved here" if moved else "claimed a pairing code")
+        body = {"ok": True, "device": device, "token": token, "moved": moved}
+        if device.get("kind") == "device":
+            # The phone's address set (ADR 0121 D1), authenticated by the claim itself. An
+            # agent (a hub) pairs against one base URL and keeps nothing of this.
+            body["addresses"] = await asyncio.to_thread(_address_set, _server_port(request))
+        return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
     @router.get("/api/devices")
     async def _list(request: Request):  # noqa: ANN202
@@ -744,7 +841,64 @@ def register_pairing_routes(app, agent_name=None) -> None:
         (``404``)."""
         from security.devices import self_view
 
-        return JSONResponse({"device": self_view(getattr(request.state, "device_id", None))})
+        me = self_view(getattr(request.state, "device_id", None), _presented_bearer(request))
+        if me is None:
+            return JSONResponse({"device": None})
+        # ``addresses`` (ADR 0121 D1): refreshed on every boot, so a phone's offline notice and
+        # "Move this phone to…" follow the operator's current setup (a new public URL, serve
+        # turned on) without re-pairing.
+        addresses = await asyncio.to_thread(_address_set, _server_port(request))
+        return JSONResponse({"device": me, "addresses": addresses})
+
+    @router.post("/api/devices/self/handoff")
+    async def _handoff_self(request: Request):  # noqa: ANN202
+        """Move the caller's device to another of this instance's origins (ADR 0121 D1).
+
+        ``{"origin": "https://box.tail1234.ts.net"}`` → ``{code, url, expires_at}``: a 60 s,
+        single-use code bound to the caller's EXISTING device, and ``<origin>/app/#pair=<code>``
+        for the console to navigate to. Claiming it there rotates this device's token instead
+        of adding a row (``security.devices._rebind``).
+
+        SECURITY: ``origin`` must be EXACTLY one of the origins this instance offers right now
+        (`_address_set`, compared after `normalize_origin`), and the URL is built from the
+        offered value, never from the input — so this can't be turned into an open redirect
+        or a way to post a live code to someone else's host. Only a paired device may ask:
+        the shared bearer has no device to move."""
+        from security.devices import HANDOFF_TTL_SECONDS, start_handoff
+
+        device_id = getattr(request.state, "device_id", None)
+        presented = _presented_bearer(request)
+        if not device_id or not presented:
+            msg = (
+                "this credential isn't a paired device, so there is no device to move — "
+                "pair the phone at the other address instead"
+            )
+            return JSONResponse({"ok": False, "error": "not_a_device", "detail": msg}, status_code=404)
+        body = await _json_body(request)
+        wanted = normalize_origin(body.get("origin"))
+        offered = await asyncio.to_thread(_address_set, _server_port(request))
+        target = next((a["origin"] for a in offered if wanted and a["origin"] == wanted), None)
+        if target is None:
+            msg = "that address isn't one this agent offers — pick one from this phone's list of addresses"
+            return JSONResponse({"ok": False, "error": "origin_not_offered", "detail": msg}, status_code=400)
+        minted = start_handoff(device_id, presented)
+        if minted is None:
+            msg = "this device can't move right now — reload the console and try again, or pair at the other address"
+            return JSONResponse({"ok": False, "error": "not_movable", "detail": msg}, status_code=409)
+        code, expires_at = minted
+        log.info("[pairing] device %s is moving to %s", device_id, target)
+        return JSONResponse(
+            {
+                "ok": True,
+                "code": code,
+                "expires_at": expires_at,
+                "ttl": HANDOFF_TTL_SECONDS,
+                "origin": target,
+                # Fragment, not query (ADR 0087 D5): the code never reaches a log or Referer.
+                "url": f"{target}/app/#pair={code}",
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     @router.post("/api/devices/self/rotate")
     async def _rotate_self(request: Request):  # noqa: ANN202
@@ -755,8 +909,7 @@ def register_pairing_routes(app, agent_name=None) -> None:
         from security.devices import RotationInProgress, rotate_device
 
         device_id = getattr(request.state, "device_id", None)
-        header = request.headers.get("Authorization", "")
-        presented = header[len("Bearer ") :] if header.startswith("Bearer ") else ""
+        presented = _presented_bearer(request)
         if not device_id or not presented:
             msg = "this credential isn't a paired device, so it has no token to rotate"
             return JSONResponse({"ok": False, "error": "not_a_device", "detail": msg}, status_code=404)

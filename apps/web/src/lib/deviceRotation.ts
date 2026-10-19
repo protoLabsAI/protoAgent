@@ -15,7 +15,15 @@
  * the hub's registry that knows this device, whichever fleet member is focused. */
 
 import { apiUrl } from "./api/routing";
-import { deviceToken, replaceDeviceToken } from "./credentials";
+import {
+  cancelDeviceMove,
+  completeDeviceMove,
+  deviceMovePending,
+  deviceToken,
+  replaceDeviceToken,
+  storeDeviceAddresses,
+} from "./credentials";
+import { notifyAuthRequired } from "./auth";
 
 import type { DeviceSelf } from "./api/runtime";
 
@@ -26,6 +34,7 @@ export type RotationOutcome =
   | "rotated"
   | "store-failed" // the strict write failed — still on the old (valid) token
   | "busy" // another tab is rotating, or storage changed under us
+  | "moved" // this origin's token was handed off to another origin (ADR 0121 D1): forgotten here
   | "error";
 
 /** Re-check cadence while the console stays open; rotation itself is at most weekly. */
@@ -51,10 +60,30 @@ async function rotateOnce(): Promise<RotationOutcome> {
   const token = deviceToken();
   if (!token) return "not-a-device";
   const self = await call("GET", "/api/devices/self", token);
+  if (self.status === 401 && deviceMovePending()) {
+    // This origin recorded a move away and its token is now refused: the handed-off token's
+    // grace is over (ADR 0121 D1). Forget it so the AuthGate points at the new home.
+    if (deviceToken() === token && !completeDeviceMove()) notifyAuthRequired();
+    return "moved";
+  }
   if (self.status === 404) return "unsupported";
   if (self.status !== 200) return "error";
-  const device = (self.body as { device?: DeviceSelf | null } | null)?.device;
+  const answer = self.body as { device?: DeviceSelf | null; addresses?: unknown } | null;
+  const device = answer?.device;
   if (!device) return "not-a-device";
+  if (device.handed_off) {
+    // The phone moved to another of the agent's origins and arrived there (ADR 0121 D1). This
+    // origin's token rides out a short grace and is then refused, so stop presenting it now —
+    // and never trip anything with it later. The "moved to" pointer stays for the AuthGate.
+    if (deviceToken() === token && !completeDeviceMove()) notifyAuthRequired();
+    return "moved";
+  }
+  // Still this device's own token here: a recorded move never completed (the new address
+  // didn't load, or never stored its token), so this origin is still the home.
+  if (deviceMovePending()) cancelDeviceMove();
+  // The same boot call refreshes the address set (ADR 0121 D1): a new public URL or tailnet
+  // HTTPS reaches the phone's offline notice without re-pairing.
+  storeDeviceAddresses(answer?.addresses);
   if (!device.rotate_due) return "not-due";
   const rotated = await call("POST", "/api/devices/self/rotate", token);
   if (rotated.status === 409) return "busy";

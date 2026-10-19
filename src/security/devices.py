@@ -27,6 +27,10 @@ it off a QR, or types it into the console's "Have a pairing code?") and an **age
 base32 chars shown as ``XXXXX-XXXXX``, 300s (ADR 0087 D3 as amended 2026-10-18). The kind is fixed when the code is MINTED and copied onto the device it
 yields, so a claimer can never relabel what it is.
 
+A third use of the same store: a **handoff** code (ADR 0121 D1), minted by a paired phone for
+itself, moves that phone to another of this instance's origins. Claiming it rotates the
+existing device's token rather than adding a row (`start_handoff` / `_rebind`).
+
 The registry lives at the INSTANCE tier, not ``config_dir`` — config is the tier that gets
 seeded/shared between instances, and a device paired to the dev sandbox must never
 authenticate against prod.
@@ -140,6 +144,11 @@ class Device:
     prev_token_sha256: str | None = None
     rotated_at: float | None = None
     prev_retired_at: float | None = None
+    # The previous token was retired by a HANDOFF (ADR 0121 D1, #4336 S7.5), not a rotation:
+    # the phone moved to another origin, and the old origin's storage still holds that token.
+    # Presented after its grace it is refused WITHOUT revoking the device — the old origin is
+    # the expected late presenter, not a second party. Cleared by the next rotation.
+    prev_handed_off: bool = False
 
     def effective_scope(self) -> str:
         """The scope this device's token earns. An agent (another protoAgent's hub, ADR 0113)
@@ -283,6 +292,7 @@ def _load() -> list[Device]:
                     prev_token_sha256=_opt_str(item.get("prev_token_sha256")),
                     rotated_at=_opt_float(item.get("rotated_at")),
                     prev_retired_at=_opt_float(item.get("prev_retired_at")),
+                    prev_handed_off=item.get("prev_handed_off") is True,
                 )
             )
         except (AttributeError, KeyError, TypeError, ValueError):  # AttributeError: a non-dict entry
@@ -363,6 +373,7 @@ def revoke_device(device_id: str) -> bool:
         if len(remaining) == len(devices):
             return False
         _save(remaining)
+        _drop_handoffs(device_id)
     logger.info("[devices] revoked %s", device_id)
     return True
 
@@ -406,6 +417,11 @@ def verify_token(token: str) -> Device | None:
         return current
     if previous is not None:
         if previous.prev_retired_at is not None and now >= previous.prev_retired_at + ROTATION_GRACE_SECONDS:
+            if previous.prev_handed_off:
+                # The origin this phone moved AWAY from (ADR 0121 D1): its storage still holds
+                # the handed-off token. Refused, never a reuse revocation — see `_rebind`.
+                logger.info("[devices] %s: the token handed off to another origin was presented; refused", previous.id)
+                return None
             _revoke_on_reuse(previous, digest, now)
             return None
         if previous.is_expired(now):
@@ -439,13 +455,26 @@ def get_device(device_id: str | None) -> Device | None:
     return None
 
 
-def self_view(device_id: str | None) -> dict | None:
-    """``GET /api/devices/self`` for the caller's device id, or None if there is none."""
+def self_view(device_id: str | None, presented_token: str = "") -> dict | None:
+    """``GET /api/devices/self`` for the caller's device id, or None if there is none.
+
+    ``handed_off`` is true when ``presented_token`` is the token this device handed off to
+    another origin (ADR 0121 D1) AND the new origin has used its token — the move completed,
+    and the caller is the origin the phone moved AWAY from, still inside the grace. Its
+    console forgets the token rather than keep presenting it. Before the new token is used
+    (its storage write failed, say) this stays false: the old origin is still the phone's."""
     device = get_device(device_id)
     if device is None:
         return None
     out = device.public()
     out["rotate_due"] = device.rotate_due()
+    out["handed_off"] = bool(
+        presented_token
+        and device.prev_handed_off
+        and device.prev_retired_at is not None
+        and device.prev_token_sha256
+        and hmac.compare_digest(device.prev_token_sha256, _hash(presented_token))
+    )
     return out
 
 
@@ -500,6 +529,9 @@ def rotate_device(device_id: str, presented_token: str) -> tuple[dict, str] | No
         device.token_sha256 = _hash(token)
         device.rotated_at = now
         device.prev_retired_at = None
+        # A plain rotation: the previous token is held by THIS origin's own storage, so a late
+        # presentation of it is the theft signal again.
+        device.prev_handed_off = False
         _save(devices)
         view = device.public()
         view["rotate_due"] = device.rotate_due(now)
@@ -621,6 +653,10 @@ def _register(name: str, kind: str = KIND_DEVICE) -> tuple[Device, str]:
 # normalized code -> (expiry timestamp, kind). Every code is stored normalized (no dash,
 # uppercase) so claim compares like with like.
 _PENDING: dict[str, tuple[float, str]] = {}
+# Pending HANDOFF codes (ADR 0121 D1, #4336 S7.5): the subset of `_PENDING` keys that rebind
+# an EXISTING device instead of minting one → (device id, sha256 of the token that asked).
+# Same store, same `_match`, same throttle; only what a claim does differs.
+_HANDOFF: dict[str, tuple[str, str]] = {}
 # Claims arrive on the event loop today, but nothing stops a sync caller on a worker thread
 # (the CLI, a test). The lock makes "find + consume" one step, so single-use holds under any
 # concurrency, not just the event loop's.
@@ -631,6 +667,16 @@ def _prune(now: float) -> None:
     for code, (expires, _kind) in list(_PENDING.items()):
         if expires <= now:
             del _PENDING[code]
+            _HANDOFF.pop(code, None)
+
+
+def _drop_handoffs(device_id: str) -> None:
+    """Forget every pending handoff code for ``device_id`` (a revoke, or a newer handoff)."""
+    with _LOCK:
+        for code, (bound_id, _digest) in list(_HANDOFF.items()):
+            if bound_id == device_id:
+                _HANDOFF.pop(code, None)
+                _PENDING.pop(code, None)
 
 
 def _new_code() -> str:
@@ -685,12 +731,13 @@ def cancel_pairings(kind: str | None = None) -> None:
     argument, every pending code goes — the pre-ADR-0113 behaviour. The console always sends
     its dialog's kind (``agentPairing.cancelBody``).
     """
+    # Handoff codes are never cancelled here: they belong to a phone moving itself, not to
+    # the operator's dialog, and closing "Add a device" must not strand a move in flight.
     with _LOCK:
-        if kind is None:
-            _PENDING.clear()
-            return
         for code, (_expires, code_kind) in list(_PENDING.items()):
-            if code_kind == kind:
+            if code in _HANDOFF:
+                continue
+            if kind is None or code_kind == kind:
                 del _PENDING[code]
 
 
@@ -717,7 +764,9 @@ def claim_pairing(
     """Redeem a code for a fresh device token, or None if it isn't valid.
 
     Single-use: the code is removed before the device is created, so two racing claims
-    cannot both succeed. The minted device's kind is the CODE's kind.
+    cannot both succeed. The minted device's kind is the CODE's kind. A HANDOFF code
+    (`start_handoff`, ADR 0121 D1) mints no device: it rebinds the one it was minted for
+    (`_rebind`) and the returned view carries ``moved: True``.
 
     Throttled, not locked out (ADR 0121 D3, amending ADR 0087 D4 and ADR 0113 D2): a claim
     from a ``client`` or ``ingress`` class whose bucket is empty raises
@@ -743,9 +792,105 @@ def claim_pairing(
             return None
 
         _expires, kind = _PENDING.pop(matched)  # consume BEFORE minting, so a race can't double-issue
+        handoff = _HANDOFF.pop(matched, None)
+        if handoff is not None:
+            # A handoff code (ADR 0121 D1): rebind the EXISTING device — no new row, same id,
+            # name and scope, a rotated token. A device revoked (or expired) since the code was
+            # minted yields nothing, with the one failure message every bad code gets.
+            return _rebind(*handoff)
         # Minted under the lock too, so two CLAIMS can't interleave their load→append→save of
         # devices.json. This does not make the registry lock-protected in general: `_touch`
         # and `revoke_device` don't take `_LOCK` — in practice the event loop serializes them
         # (every caller is a sync call on the loop).
         device, token = _register(device_name, kind)
     return device.public(), token
+
+
+# ── Handoff: move a device to another of this instance's origins (ADR 0121 D1) ───────────
+# A phone's token, transcripts and home-screen icon live on ONE origin. Moving it (LAN →
+# tailnet, tailnet → the public URL) is a fresh claim on the new origin of a short-lived code
+# bound to the existing device, so the registry keeps one row per phone and the token never
+# travels in a URL.
+HANDOFF_TTL_SECONDS = 60
+
+
+def start_handoff(device_id: str | None, presented_token: str) -> tuple[str, float] | None:
+    """Mint a 60 s, single-use handoff code for ``device_id`` — the caller's own device, proved
+    by ``presented_token`` — or None when it can't move: no such device, an agent (a hub has no
+    console origin), expired, or the token isn't one the device currently honours as its own.
+
+    Same alphabet, length and display form as a pairing code (``XXXXX-XXXXX``), in the same
+    pending store, so a claim goes through the same throttle. At most one per device: a newer
+    handoff replaces an older one. WHICH origin it's for is the route's check — the code itself
+    works on any origin of this instance, which is fine: every origin is the same registry."""
+    if not device_id or not presented_token:
+        return None
+    digest = _hash(presented_token)
+    with _LOCK:
+        device = get_device(device_id)
+        if device is None or device.kind != KIND_DEVICE or device.is_expired(_now()):
+            return None
+        holds_current = hmac.compare_digest(device.token_sha256, digest)
+        # The previous token counts only while it is still the one in use (the new token was
+        # never presented — a rotation whose storage write failed). In its grace it's on the
+        # way out, and moving with it would hand off a token this browser has already replaced.
+        holds_unretired_prev = bool(
+            device.prev_token_sha256
+            and device.prev_retired_at is None
+            and hmac.compare_digest(device.prev_token_sha256, digest)
+        )
+        if not (holds_current or holds_unretired_prev):
+            return None
+        _drop_handoffs(device_id)
+        now = time.time()
+        _prune(now)
+        stored = _new_agent_code()
+        while stored in _PENDING:
+            stored = _new_agent_code()
+        expires_at = now + HANDOFF_TTL_SECONDS
+        _PENDING[stored] = (expires_at, KIND_DEVICE)
+        _HANDOFF[stored] = (device_id, digest)
+    logger.info("[devices] %s asked to move to another origin", device_id)
+    return format_code(stored), expires_at
+
+
+def _rebind(device_id: str, digest: str) -> tuple[dict, str] | None:
+    """Claim side of a handoff: rotate ``device_id``'s token (ADR 0121 D5 semantics) and mark
+    the token that asked as HANDED OFF. Caller holds ``_LOCK``.
+
+    The token that asked for the handoff (``digest``) becomes the previous token. As with any
+    rotation it stays valid until the NEW token is first presented, then for the 120 s grace —
+    so a new origin that fails to store its token leaves the old origin working. Unlike a
+    rotation, presenting it after the grace is refused WITHOUT revoking the device
+    (``prev_handed_off``): the old origin's storage still holds it by design, and the phone
+    going back there must not cost it its pairing. The old origin's console drops the token
+    as soon as the server says it was handed off (``self_view``'s ``handed_off``)."""
+    devices = _load()
+    device = next((d for d in devices if d.id == device_id), None)
+    now = _now()
+    if device is None or device.kind != KIND_DEVICE or device.is_expired(now):
+        return None
+    if hmac.compare_digest(device.token_sha256, digest):
+        prev = device.token_sha256
+    elif device.prev_token_sha256 and device.prev_retired_at is None and hmac.compare_digest(device.prev_token_sha256, digest):
+        # The asker held the previous token of a rotation nobody ever used; that rotation's
+        # token is discarded (nobody can be relying on it) — the same rule as `rotate_device`.
+        prev = device.prev_token_sha256
+    else:
+        return None  # the asker's token was rotated out meanwhile: it can't hand off any more
+    token = secrets.token_urlsafe(_TOKEN_BYTES)
+    device.prev_token_sha256 = prev
+    device.token_sha256 = _hash(token)
+    device.rotated_at = now
+    device.prev_retired_at = None
+    device.prev_handed_off = True
+    _save(devices)
+    logger.info("[devices] %s (%s) moved to another origin; its token was rotated", device.id, device.name)
+    _audit(
+        "device.handed_off",
+        {"device_id": device.id, "name": device.name},
+        "a paired device moved to another of this agent's addresses; its token was rotated",
+    )
+    view = device.public()
+    view["moved"] = True  # the claim route reports it as `moved`, outside the device shape
+    return view, token

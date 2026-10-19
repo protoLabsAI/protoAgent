@@ -5,6 +5,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useId, useState, useSyncExternalStore } from "react";
 
 import { authRequired, clearAuthRequired, saveAuthToken, subscribeAuth } from "../lib/auth";
+import { deviceMovedTo } from "../lib/credentials";
+import { addressHost, consoleUrl } from "../lib/deviceHandoff";
 import {
   claimPairingCode,
   describePairingError,
@@ -51,6 +53,7 @@ export function AuthGate() {
   const codeHintId = useId();
 
   if (!needed) return null;
+  const movedTo = deviceMovedTo();
 
   const switchMode = (next: Mode) => {
     setMode(next);
@@ -116,6 +119,14 @@ export function AuthGate() {
         )
       }
     >
+      {movedTo ? (
+        // This phone moved to another of the agent's addresses (ADR 0121 D1) and this origin
+        // forgot its token — point at the new home before offering to sign in here again.
+        <p className="auth-gate-moved" data-testid="auth-moved">
+          This phone moved to <a href={consoleUrl(movedTo)}>{addressHost(movedTo)}</a>. Open the console there, or
+          sign in again here.
+        </p>
+      ) : null}
       {mode === "code" ? (
         <form
           onSubmit={(e) => {
