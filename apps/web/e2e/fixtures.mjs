@@ -1103,6 +1103,36 @@ function scenarioFor(prompt) {
       answer: "I need one detail before I continue.",
       hitl: { question: "Which environment should I deploy to — staging or production?" },
     };
+  if (t.includes("HITL_PLAN"))
+    // B4: a one-question choice form (request_user_input). The answer must read as what the
+    // operator picked ("Plan: Plan C"), never the raw JSON the graph resumes with.
+    return {
+      events: [],
+      answer: "Which plan do you want?",
+      hitl: {
+        kind: "form",
+        title: "Pick a plan",
+        steps: [
+          {
+            schema: {
+              type: "object",
+              required: ["plan"],
+              properties: {
+                plan: {
+                  type: "string",
+                  title: "Plan",
+                  oneOf: [
+                    { const: "A", title: "Plan A" },
+                    { const: "B", title: "Plan B" },
+                    { const: "C", title: "Plan C" },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
   if (t.includes("HITL_FORM_PREFILL"))
     // #1978: an agent form whose schemas carry `default`s — the card opens prefilled
     // (a default IS an answer, so required-with-default doesn't gate), the proposed

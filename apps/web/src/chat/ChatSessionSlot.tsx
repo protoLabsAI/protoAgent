@@ -43,7 +43,7 @@ import { GoalRunStrip } from "./GoalRunStrip";
 import { messageId } from "./messageId";
 import { useAttachments } from "./useAttachments";
 import { useSlashAutocomplete } from "./useSlashAutocomplete";
-import { useHitl } from "./useHitl";
+import { formResponseText, useHitl } from "./useHitl";
 import { useSteerQueue } from "./useSteerQueue";
 import { inputHistory, pushInputHistory } from "./inputHistory";
 import { dismissedToolCallSet, rememberDismissedToolCall } from "./dismissedToolCalls";
@@ -1557,7 +1557,16 @@ export function ChatSessionSlot({
         // a rebuilt chat (ADR 0104) draws the same user bubble — none for a hidden send,
         // the typed text + 📎 list rather than the prepended attachment context.
         hidden: opts.hidden,
-        display: !opts.hidden && content !== sent ? content : undefined,
+        // A form answer's bubble is its labelled card (#4259) while `content` stays the resume
+        // JSON; the durable transcript keeps the card's text, so a rebuilt chat (another
+        // browser, a cleared cache) reads `Plan: Plan C` rather than `{"plan":"C"}`.
+        display: opts.hidden
+          ? undefined
+          : opts.formResponse
+            ? formResponseText(opts.formResponse)
+            : content !== sent
+              ? content
+              : undefined,
       });
       // Stream returned: reveal any withheld tail NOW, before the reconcile
       // below — flushing after it would append the tail on top of the

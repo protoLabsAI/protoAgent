@@ -198,7 +198,29 @@ function messageNeedsDurableHydration(message: ChatMessage): boolean {
  *  (#3340 review) — is load-bearing: a healthy later reply must not mask an earlier
  *  stale turn, which would otherwise stay permanently stripped of its answer text. */
 export function needsDurableHydration(session: ChatSession): boolean {
-  return session.messages.some(messageNeedsDurableHydration);
+  const lastTurn = lastTurnOfTask(session.messages);
+  return session.messages.some(
+    (message) =>
+      messageNeedsDurableHydration(message) &&
+      // An earlier turn of a task a HITL answer continued has no prose of its own to be
+      // missing — the reply belongs to the turn after the answer (see lastTurnOfTask).
+      lastTurn.get(message.taskId as string) === (message.splitOf ?? message.id),
+  );
+}
+
+/** Each task's LAST local turn, as taskId → the turn's anchor id (a split bubble's
+ *  `splitOf`, else its own id). A HITL answer (a form, an `ask_human` reply) continues the
+ *  task that parked (#3930) as a NEW rendered turn — the question bubble, the operator's
+ *  answer, then the reply bubble, all on one taskId and linked by no `splitOf`. The task's
+ *  recovered answer is the reply, which the turn after the operator's answer owns; writing
+ *  it onto the question bubble too rendered the reply twice after a reload. */
+function lastTurnOfTask(messages: ChatMessage[]): Map<string, string | undefined> {
+  const last = new Map<string, string | undefined>();
+  for (const message of messages) {
+    if (message.role !== "assistant" || !message.taskId || message.author) continue;
+    last.set(message.taskId, message.splitOf ?? message.id);
+  }
+  return last;
 }
 
 function repairHydratedMessages(local: ChatMessage[], recovered: ChatMessage[]): ChatMessage[] | null {
@@ -216,6 +238,8 @@ function repairHydratedMessages(local: ChatMessage[], recovered: ChatMessage[]):
   // taskId, which this repair used to do, renders the earlier bubbles' prose twice.
   const turns: { anchorId: string; taskId: string }[] = [];
   const seen = new Set<string>();
+  // Only a task's LAST local turn takes its recovered answer (see lastTurnOfTask).
+  const lastTurn = lastTurnOfTask(local);
   for (const message of local) {
     if (message.role !== "assistant" || !message.taskId || !message.id || message.author) continue;
     const anchorId = message.splitOf ?? message.id; // the turn's continuation owns it
@@ -226,6 +250,7 @@ function repairHydratedMessages(local: ChatMessage[], recovered: ChatMessage[]):
   let messages = local;
   let changed = false;
   for (const { anchorId, taskId } of turns) {
+    if (lastTurn.get(taskId) !== anchorId) continue;
     const recoveredMessage = recoveredByTask.get(taskId);
     if (!recoveredMessage) continue;
     const indexes = turnBubbleIndexes(messages, anchorId);

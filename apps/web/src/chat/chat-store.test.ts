@@ -5,6 +5,7 @@ import {
   ensureActiveSessions,
   mergeHydratedSessions,
   mergeSessions,
+  needsDurableHydration,
   sanitizePersisted,
   MAX_ACTIVE_SESSIONS,
   MAX_SESSIONS,
@@ -888,5 +889,75 @@ describe("server-turn control state (#3092)", () => {
     expect(chatStore.getSnapshot().serverTurnControls["s1"]?.taskId).toBe("task-new");
     chatStore.clearServerTurnControl("s1", "task-new");
     expect(chatStore.getSnapshot().serverTurnControls["s1"]).toBeUndefined();
+  });
+});
+
+// B4: a HITL form answer continues the task that parked (#3930) as a NEW rendered turn — the
+// question bubble, the operator's answer, then the reply bubble, all on ONE taskId and linked
+// by no `splitOf`. Boot hydration matched recovered text by taskId and wrote the reply onto
+// the (prose-less) question bubble too, so after a reload the reply showed twice.
+describe("a HITL-answered turn (question → answer → reply on one task)", () => {
+  const reply = "You chose Plan C.";
+  const local: ChatMessage[] = [
+    { id: "u1", role: "user", content: "ask me which plan", status: "done" },
+    {
+      id: "q1",
+      role: "assistant",
+      content: "",
+      status: "done",
+      taskId: "task-x",
+      parts: [{ kind: "tools", ids: ["c1"] }],
+      toolCalls: [{ id: "c1", name: "request_user_input", status: "done" }],
+    } as ChatMessage,
+    { id: "u2", role: "user", content: "Plan: Plan C", status: "done" },
+    {
+      id: "a1",
+      role: "assistant",
+      content: reply,
+      status: "done",
+      taskId: "task-x",
+      parts: [{ kind: "tools", ids: ["c1"] }, { kind: "text", text: reply }],
+      toolCalls: [{ id: "c1", name: "request_user_input", status: "done" }],
+    } as ChatMessage,
+  ];
+  // What durable hydration rebuilds for that task (sessionHydration.messagesFromDurableTurn).
+  const recovered: ChatMessage[] = [
+    { id: "durable-task-x-user", role: "user", content: "ask me which plan", status: "done" },
+    { id: "durable-task-x-assistant-0", role: "assistant", content: "", status: "done", taskId: "task-x", splitOf: "durable-task-x-assistant" },
+    { id: "durable-task-x-assistant-answer-1", role: "user", content: "Plan: Plan C", status: "done" },
+    { id: "durable-task-x-assistant", role: "assistant", content: reply, status: "done", taskId: "task-x" },
+  ];
+  const chat = (messages: ChatMessage[]): ChatSession => ({ id: "chat-h", title: "t", createdAt: 1, updatedAt: 1, messages });
+  const state = (messages: ChatMessage[]) => ({
+    ...mkState(["chat-h"]),
+    version: 1,
+    sessions: [chat(messages)],
+    currentSessionId: "chat-h",
+    pendingDeleteRequest: null,
+    pendingClearRequest: null,
+    serverTurnControls: {},
+  });
+
+  it("does not ask for a durable repair just because the question bubble has no prose", () => {
+    expect(needsDurableHydration(chat(local))).toBe(false);
+  });
+
+  it("never writes the reply onto the question bubble on reload", () => {
+    const current = state(local);
+    const next = mergeHydratedSessions(current, [{ ...chat(recovered), updatedAt: 20 }]);
+    expect(next.sessions[0].messages.find((m) => m.id === "q1")?.content).toBe("");
+    const shown = next.sessions[0].messages
+      .filter((m) => m.role === "assistant")
+      .flatMap((m) => (m.parts ?? []).filter((p) => p.kind === "text").map((p) => (p as { text: string }).text));
+    expect(shown).toEqual([reply]);
+  });
+
+  it("still repairs the reply bubble when IT is the one missing its prose (#3340)", () => {
+    const stripped = local.map((m) => (m.id === "a1" ? { ...m, parts: [{ kind: "tools" as const, ids: ["c1"] }] } : m));
+    expect(needsDurableHydration(chat(stripped))).toBe(true);
+    const next = mergeHydratedSessions(state(stripped), [{ ...chat(recovered), updatedAt: 20 }]);
+    const byId = (id: string) => next.sessions[0].messages.find((m) => m.id === id);
+    expect(byId("q1")?.content).toBe("");
+    expect(byId("a1")?.parts?.some((p) => p.kind === "text" && p.text === reply)).toBe(true);
   });
 });

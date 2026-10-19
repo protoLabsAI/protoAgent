@@ -87,6 +87,15 @@ export function describeFormResponse(
   return payload?.title ? { title: payload.title, groups } : { groups };
 }
 
+/** A submitted form's labelled card as plain text — one `Label: value` line per field, under
+ *  its step title when the card groups by step. The send's `display` (the durable transcript's
+ *  bubble text), so a chat rebuilt from the server reads like the card, never the resume JSON. */
+export function formResponseText(display: FormResponseDisplay): string {
+  return display.groups
+    .map((group) => [group.title, ...group.fields.map((field) => `${field.label}: ${field.value}`)].filter(Boolean).join("\n"))
+    .join("\n\n");
+}
+
 export type UseHitlOptions = {
   /** The session this slot renders (`null` before hydration). Only its id is read. */
   sessionId: string | null;
