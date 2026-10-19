@@ -233,3 +233,22 @@ async def test_current_time_survives_a_missing_tz_database(monkeypatch):
     assert not named.startswith("Error:")
     assert "(UTC)" in named
     assert "no IANA timezone database" in named
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_truncation_marker_reports_total_and_remedy(monkeypatch):
+    """A bare "[truncated]" let the model blame the page ("JS-rendered") when the cap
+    cut real content; the marker must say how much was shown and how to read the rest."""
+    import httpx
+
+    from tools.lg_tools import fetch_url
+
+    body = "<html><body><main>" + "x" * 500 + "</main></body></html>"
+    _mock_httpx(monkeypatch, lambda request: httpx.Response(200, headers={"content-type": "text/html"}, text=body))
+
+    cut = await fetch_url.ainvoke({"url": "https://example.com/", "max_chars": 100})
+    assert "…[truncated: showing 100 of 500 chars" in cut
+    assert "larger max_chars" in cut
+
+    full = await fetch_url.ainvoke({"url": "https://example.com/", "max_chars": 1000})
+    assert "truncated" not in full
