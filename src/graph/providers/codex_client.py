@@ -45,6 +45,11 @@ Outbound rules, applied to every Responses ``input``:
   items (written before this landed) are still replayed.
 - **Otherwise keep the blob, drop the ``id``.** An item id only resolves against
   stored state that ``store=false`` never wrote; the blob is self-contained.
+
+**Function-call arguments (#4368).** The same wrapper also delivers tool-call
+arguments that the Codex backend sends only on ``function_call_arguments.done`` /
+``output_item.done`` (no deltas — the shape of every expanded parallel batch),
+which langchain-openai ignores. See ``_route_function_call``.
 """
 
 from __future__ import annotations
@@ -53,6 +58,7 @@ import contextvars
 import functools
 import hashlib
 import logging
+from types import SimpleNamespace
 from typing import Any
 
 from graph.llm import _ReasoningChatOpenAI
@@ -67,6 +73,16 @@ ISSUER_KEY = f"{_PRIVATE_PREFIX}issuer"
 # Set by this module's client for the duration of ITS stream; the capture wrapper
 # is a no-op for every other caller of the shared converter.
 _CAPTURE_ISSUER: contextvars.ContextVar[str] = contextvars.ContextVar("protoagent_codex_issuer", default="")
+
+# Per-stream bookkeeping for function_call items, keyed by the item id (``fc_…``):
+# the content index the item's ``.added`` event opened, its ``output_index``, and
+# whether any argument text has reached that index yet. Set fresh by this
+# module's client for each stream (and created lazily when a caller drives the
+# converter directly); entries are dropped when the item's ``output_item.done``
+# arrives. See ``_route_function_call`` (#4368).
+_FC_STATE: contextvars.ContextVar[dict[str, dict[str, Any]] | None] = contextvars.ContextVar(
+    "protoagent_codex_fc_state", default=None
+)
 
 # One warning per process per cause: a long thread carries many affected items and
 # re-sends them every turn, so un-throttled logs would drown the turn's output.
@@ -140,6 +156,131 @@ def sanitize_responses_input(items: Any, *, issuer: str = "") -> Any:
     return cleaned
 
 
+_FC_EVENTS = (
+    "response.output_item.added",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.done",
+    "response.output_item.done",
+)
+
+
+def _fc_state() -> dict[str, dict[str, Any]]:
+    state = _FC_STATE.get()
+    if state is None:
+        state = {}
+        _FC_STATE.set(state)
+    return state
+
+
+def _strip_args(generation: Any) -> Any:
+    """``generation`` with every argument fragment removed (#4368 double-count guard)."""
+    message = generation.message
+    chunks = [{**c, "args": ""} if c.get("args") else c for c in (message.tool_call_chunks or [])]
+    content = message.content
+    if isinstance(content, list):
+        content = [
+            {k: v for k, v in b.items() if k != "arguments"}
+            if isinstance(b, dict) and b.get("type") == "function_call"
+            else b
+            for b in content
+        ]
+    from langchain_core.outputs import ChatGenerationChunk
+
+    return ChatGenerationChunk(
+        message=message.model_copy(update={"content": content, "tool_call_chunks": chunks}),
+        generation_info=generation.generation_info,
+    )
+
+
+def _route_function_call(original, chunk, current_index, current_output_index, current_sub_index, args, kwargs):
+    """Deliver a function_call's arguments wherever the stream put them (#4368).
+
+    langchain-openai builds a streamed tool call from ``output_item.added`` (whose
+    ``arguments`` is ``""``) plus ``function_call_arguments.delta`` events, and
+    ignores both ``function_call_arguments.done`` and ``output_item.done`` for
+    function calls. The ChatGPT/Codex backend — confirmed against a live
+    ``gpt-6.1-sol`` stream of a parallel batch — sends NO deltas at all: each
+    call's arguments arrive only on those two done events. Every call in the
+    batch therefore reached its tool as ``{}``.
+
+    So, per item: if no argument text has reached the item's block by the time a
+    done event arrives, the done event's arguments are re-dispatched through the
+    upstream converter as one synthetic delta. Whichever done event comes first
+    supplies them; the other is then a no-op, as are both when deltas already
+    streamed — nothing is ever doubled. If a future langchain handles a done event
+    itself, its output wins and is passed through (args stripped only when we
+    already delivered them).
+
+    Deltas are routed to the block their own ``.added`` opened, by item id, rather
+    than through upstream's "advance on any output_index change" cursor, which
+    would split interleaved parallel calls into nameless fragments.
+
+    Returns the converter's 4-tuple when it handled ``chunk``; ``None`` to let the
+    caller run the plain upstream path.
+    """
+    kind = getattr(chunk, "type", "")
+    if kind not in _FC_EVENTS:
+        return None
+    item = getattr(chunk, "item", None)
+    if kind.startswith("response.output_item.") and getattr(item, "type", "") != "function_call":
+        return None
+    state = _fc_state()
+
+    if kind == "response.output_item.added":
+        result = original(chunk, current_index, current_output_index, current_sub_index, *args, **kwargs)
+        item_id = getattr(item, "id", None)
+        if item_id:
+            state[item_id] = {
+                "index": result[0],
+                "output_index": getattr(chunk, "output_index", result[1]),
+                "has_args": bool(getattr(item, "arguments", "") or ""),
+            }
+        return result
+
+    item_id = getattr(item, "id", None) if item is not None else getattr(chunk, "item_id", None)
+    entry = state.get(item_id) if item_id else None
+    if entry is None:
+        return None  # an item we never saw open — leave it to upstream
+
+    def _emit(text: str):
+        # Fed through upstream as a delta so the block/tool_call_chunk shapes (and
+        # any output_version conversion) stay upstream's own. Passing the item's own
+        # index pair means upstream's cursor does not advance; the caller's cursor
+        # is returned unchanged, so later items still open new blocks.
+        synthetic = SimpleNamespace(
+            type="response.function_call_arguments.delta",
+            output_index=entry["output_index"],
+            item_id=item_id,
+            delta=text,
+        )
+        _, _, _, generation = original(
+            synthetic, entry["index"], entry["output_index"], current_sub_index, *args, **kwargs
+        )
+        return current_index, current_output_index, current_sub_index, generation
+
+    if kind == "response.function_call_arguments.delta":
+        delta = getattr(chunk, "delta", "") or ""
+        if delta:
+            entry["has_args"] = True
+        return _emit(delta)
+
+    # A done event: arguments.done carries `.arguments`; output_item.done carries `.item.arguments`.
+    full = (getattr(item, "arguments", None) if item is not None else getattr(chunk, "arguments", None)) or ""
+    if kind == "response.output_item.done":
+        state.pop(item_id, None)
+    result = original(chunk, current_index, current_output_index, current_sub_index, *args, **kwargs)
+    if result[3] is not None:
+        # The installed langchain handles this event itself.
+        if entry["has_args"]:
+            return result[:3] + (_strip_args(result[3]),)
+        entry["has_args"] = True
+        return result
+    if entry["has_args"] or not full:
+        return result
+    entry["has_args"] = True
+    return _emit(full)
+
+
 def _install_reasoning_capture() -> None:
     """Teach the shared Responses chunk converter to surface ``encrypted_content``.
 
@@ -160,8 +301,14 @@ def _install_reasoning_capture() -> None:
 
     @functools.wraps(original)
     def _capture(chunk, current_index, current_output_index, current_sub_index, *args, **kwargs):
-        result = original(chunk, current_index, current_output_index, current_sub_index, *args, **kwargs)
         issuer = _CAPTURE_ISSUER.get()
+        if issuer:
+            routed = _route_function_call(
+                original, chunk, current_index, current_output_index, current_sub_index, args, kwargs
+            )
+            if routed is not None:
+                return routed
+        result = original(chunk, current_index, current_output_index, current_sub_index, *args, **kwargs)
         if not issuer or getattr(chunk, "type", "") != "response.output_item.done":
             return result
         item = getattr(chunk, "item", None)
@@ -231,17 +378,21 @@ class CodexChatOpenAI(_ReasoningChatOpenAI):
     # seam that actually runs.
     def _stream(self, *args, **kwargs):
         token = _CAPTURE_ISSUER.set(self._issuer)
+        fc_token = _FC_STATE.set({})
         try:
             yield from super()._stream(*args, **kwargs)
         finally:
+            _FC_STATE.reset(fc_token)
             _CAPTURE_ISSUER.reset(token)
 
     async def _astream(self, *args, **kwargs):
         token = _CAPTURE_ISSUER.set(self._issuer)
+        fc_token = _FC_STATE.set({})
         try:
             async for chunk in super()._astream(*args, **kwargs):
                 yield chunk
         finally:
+            _FC_STATE.reset(fc_token)
             _CAPTURE_ISSUER.reset(token)
 
 
