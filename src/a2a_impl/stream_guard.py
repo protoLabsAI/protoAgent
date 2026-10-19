@@ -23,9 +23,8 @@ device token at all (it was opened with a 30 s query token carrying the device i
 Only device credentials are checked. The shared bearer, an API key, the fleet token and open
 mode carry no device id, so their streams pass through untouched.
 
-WebSockets are not HTTP responses and are not covered here: a plugin WebSocket that
-authenticates at open (the terminal's in-band ticket) must re-check
-``a2a_impl.auth.device_is_live`` at its own ping tick.
+WebSockets are not HTTP responses and are not covered here: ``a2a_impl.socket_guard`` closes
+a revoked device's open WebSockets.
 """
 
 from __future__ import annotations

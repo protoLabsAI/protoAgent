@@ -42,13 +42,34 @@ import subprocess
 
 # Module-scope fastapi imports (the host always provides fastapi; __init__.py catches
 # ImportError so the tools still serve if the panel can't import).
-from fastapi import APIRouter, Body, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Body, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import browser_stream, preflight
 from .runtime import bad_operand, flag, launch_flags, number
 
 log = logging.getLogger("protoagent.plugins.agent_browser")
+
+
+def _minting_device(request) -> str | None:
+    """The paired device behind the gated ticket-mint call (ADR 0121 D5), or None."""
+    try:
+        from a2a_impl.socket_guard import request_device_id
+    except ImportError:  # host-free tests / an older host: no device to record
+        return None
+    return request_device_id(request)
+
+
+def _bind_device(ws, device_id: str | None) -> None:
+    """Tie the redeemed socket to the device that minted its ticket, so the host's
+    ``DeviceSocketGuard`` closes it when that device is revoked or expires."""
+    if not device_id:
+        return
+    try:
+        from a2a_impl.socket_guard import bind_device
+    except ImportError:
+        return
+    bind_device(ws, device_id)
 
 
 def build_panel_router(cfg: dict | None):
@@ -105,10 +126,11 @@ def build_panel_data_router(cfg: dict | None):
 
     # ── interactive stream: a single-use ticket (gated) + the WS bridge (self-gated) ──
     @router.post("/stream-ticket")
-    async def _stream_ticket():
+    async def _stream_ticket(request: Request):
         """Mint a single-use ticket for the interactive WS. HTTP, so it rides the
-        host's operator-bearer gate — only an authenticated console reaches it."""
-        return JSONResponse({"ticket": browser_stream.mint_ticket()})
+        host's operator-bearer gate — only an authenticated console reaches it. The
+        minting phone (if it is one) rides along, so the socket closes when it's revoked."""
+        return JSONResponse({"ticket": browser_stream.mint_ticket(_minting_device(request))})
 
     @router.websocket("/stream")
     async def _stream(ws: WebSocket):
@@ -116,9 +138,11 @@ def build_panel_data_router(cfg: dict | None):
         input in (JSON → ``Input.dispatch*``). Ticket-gated (the host doesn't gate
         WS). One sender only — ``on_frame`` — while the loop just receives, so the two
         directions never race on the socket."""
-        if not browser_stream.consume_ticket(ws.query_params.get("ticket", "")):
+        ok, device_id = browser_stream.redeem_ticket(ws.query_params.get("ticket", ""))
+        if not ok:
             await ws.close(code=1008)  # policy violation: missing/replayed/expired ticket
             return
+        _bind_device(ws, device_id)  # ADR 0121 D5: a revoked phone's viewport closes too
         await ws.accept()
         page_ws, note = await asyncio.to_thread(
             lambda: browser_stream.resolve_page_target(preflight.effective_binary(binary), timeout))

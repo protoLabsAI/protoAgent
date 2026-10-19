@@ -41,30 +41,41 @@ log = logging.getLogger("protoagent.plugins.agent_browser")
 # own SSE-token escape hatch for `/api/events`. Short-lived + single-use so a ticket
 # leaked into a proxy/access log is near-worthless.
 _TICKET_TTL = 30.0
-_tickets: dict[str, float] = {}
+# ticket → (expiry, minting device id or None). The device id (ADR 0121 D5) is the paired
+# phone whose authenticated HTTP call minted the ticket; the socket that redeems it is bound
+# to that device, so revoking the phone closes the open viewport too.
+_tickets: dict[str, tuple[float, str | None]] = {}
 
 
 def _prune_tickets(now: float) -> None:
-    for k in [k for k, exp in _tickets.items() if exp < now]:
+    for k in [k for k, (exp, _did) in _tickets.items() if exp < now]:
         _tickets.pop(k, None)
 
 
-def mint_ticket() -> str:
+def mint_ticket(device_id: str | None = None) -> str:
     """Issue a single-use ticket good for ~30s. Called only from the gated HTTP
-    route, so possession of a ticket proves the caller cleared the operator gate."""
+    route, so possession of a ticket proves the caller cleared the operator gate.
+    ``device_id`` is the minting caller's paired device (None for a full-scope caller)."""
     now = time.monotonic()
     _prune_tickets(now)
     t = secrets.token_urlsafe(24)
-    _tickets[t] = now + _TICKET_TTL
+    _tickets[t] = (now + _TICKET_TTL, device_id or None)
     return t
+
+
+def redeem_ticket(ticket: str) -> tuple[bool, str | None]:
+    """Validate + burn a ticket: ``(valid, minting device id)``."""
+    now = time.monotonic()
+    _prune_tickets(now)
+    entry = _tickets.pop(ticket, None) if ticket else None
+    if entry is None or entry[0] < now:
+        return False, None
+    return True, entry[1]
 
 
 def consume_ticket(ticket: str) -> bool:
     """Validate + burn a ticket. False if unknown/expired (→ reject the WS)."""
-    now = time.monotonic()
-    _prune_tickets(now)
-    exp = _tickets.pop(ticket, None) if ticket else None
-    return exp is not None and exp >= now
+    return redeem_ticket(ticket)[0]
 
 
 # ── pure helpers (host-free-testable — no IO) ──────────────────────────────────
