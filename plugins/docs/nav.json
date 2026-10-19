@@ -119,7 +119,7 @@
             },
             {
               "path": "guides/pairing.md",
-              "title": "Pair devices & agents"
+              "title": "Manage paired devices"
             },
             {
               "path": "guides/agent-snapshots.md",
@@ -184,6 +184,10 @@
               "title": "Write your first skill"
             },
             {
+              "path": "tutorials/first-schedule.md",
+              "title": "Run your first recurring task"
+            },
+            {
               "path": "tutorials/two-agents-over-a2a.md",
               "title": "Two agents over A2A"
             }
@@ -207,10 +211,6 @@
             {
               "path": "guides/goal-mode.md",
               "title": "Goal mode"
-            },
-            {
-              "path": "guides/lifecycle-events.md",
-              "title": "System lifecycle events"
             }
           ]
         },
@@ -335,6 +335,10 @@
             {
               "path": "guides/add-a-skill.md",
               "title": "Advertise a capability (A2A card)"
+            },
+            {
+              "path": "guides/lifecycle-events.md",
+              "title": "System lifecycle events"
             }
           ]
         },
@@ -555,11 +559,11 @@
             },
             {
               "path": "reference/memory-delivery.md",
-              "title": "Memory storage and delivery"
+              "title": "Memory storage and delivery internals"
             },
             {
               "path": "reference/browser-automation.md",
-              "title": "Browser automation settings"
+              "title": "Browser automation settings and internals"
             },
             {
               "path": "reference/discord.md",
@@ -610,6 +614,10 @@
             {
               "path": "reference/plugin-manifest.md",
               "title": "Plugin manifest"
+            },
+            {
+              "path": "reference/plugin-settings.md",
+              "title": "Plugin settings and setup contracts"
             },
             {
               "path": "reference/plugin-registry-api.md",

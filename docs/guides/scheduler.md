@@ -1,5 +1,8 @@
 # Schedule future work
 
+For a first example with a completion check and cleanup, follow
+[Run your first recurring task](/tutorials/first-schedule).
+
 Ask the agent to run a task later or on a recurring schedule:
 
 > Every Monday at 9am in America/Los_Angeles for the next month, summarize the
@@ -7,18 +10,19 @@ Ask the agent to run a task later or on a recurring schedule:
 
 Open **Schedule** to confirm the saved prompt, timezone, and next fire time.
 The server must be running to execute the job. Recurring runs appear in
-**Activity**; chat-created schedules also report back to their originating chat.
+**Feed**; chat-created schedules also report back to their originating chat.
 
 ## Manage from the console
 
-Open **Schedule** to create, inspect, edit, or cancel a job. Use a named timezone
-for recurring local times; the default is UTC. One-shot ISO timestamps use their
+Open **Work → Schedule** to create, inspect, edit, or cancel a job. Use a named timezone
+for recurring local times; the new-schedule dialog starts with your browser’s local timezone; API calls
+without a timezone use UTC. One-shot ISO timestamps use their
 own offset, so include one when specifying local time.
 
 Write a self-contained prompt with the sources, action, and expected output.
 Recurring runs do not inherit the conversation that created them. An agent-tool
 one-shot resumes its originating session; jobs created outside chat normally
-run in Activity.
+appear in **Feed**.
 
 <!-- docs-media: schedule-state -->
 
@@ -45,14 +49,6 @@ and its jobs do not acquire the tool's default TTL.
 Scheduling is on by default. Set `middleware.scheduler: false` to disable it,
 or use `SCHEDULER_DISABLED=1` for a process-level override. The tools are
 unavailable while disabled. See [scheduler configuration](/reference/configuration#scheduler).
-
-## Operator API
-
-See [Automation integration](/reference/automation) for scheduler endpoints and plugin-owned jobs.
-
-## Plugin-owned recurring jobs
-
-See [Automation integration](/reference/automation) for scheduler endpoints and plugin-owned jobs.
 
 ## Multi-agent isolation
 
@@ -101,3 +97,10 @@ not establish that the later task executed. See [Evals](/guides/evals).
 - [Watch an external condition](/guides/watches)
 - [Goal mode](/guides/goal-mode)
 - [Reusable workflows](/guides/workflows)
+
+<span id="operator-api"></span>
+<span id="plugin-owned-recurring-jobs"></span>
+
+## Related reference
+
+See [Automation integration](/reference/automation) for scheduler endpoints and plugin-owned jobs.

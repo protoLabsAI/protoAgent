@@ -9,6 +9,18 @@ show different tool lists.
 - **A tool you expected isn't there** → [Why a tool isn't bound](#missing)
 - **The exact shape of one tool** → the [reference sections](#general) below
 
+## Find a tool group
+
+| Need | Detailed signatures |
+| --- | --- |
+| Search, fetch, calculate, or read time | [General](#general) |
+| Ask the user or render structured output | [Asking the operator](#asking-the-operator), [Rendering](#rendering) |
+| Teach or update a reusable procedure | [Skills and curation](#skills-curation) |
+| Save, recall, inspect, or forget information | [Memory and knowledge](#memory-knowledge) |
+| Schedule, track, or continue work | [Scheduling](#scheduling), [Tasks](#tasks), [Goals and watches](#goals-watches) |
+| Register a project or inspect configuration | [Introspection and onboarding](#introspection-onboarding) |
+| Find tools supplied by integrations | [Plugin tools](#plugin-tools), [Progressive disclosure](#progressive-disclosure) |
+
 ## Where the agent's tools come from
 
 `get_all_tools()` is one of five sources. The final toolset is assembled in

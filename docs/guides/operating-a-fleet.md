@@ -1,4 +1,6 @@
-# Operating a fleet
+# Operate and recover a fleet
+
+<span id="operating-a-fleet"></span>
 
 Check fleet health, roll out an update, investigate failures, and recover members.
 Start with a [running fleet](./fleet.md). The telemetry rollup is read-only;
@@ -69,8 +71,6 @@ Every mutating step below is an explicit operator procedure. Do not proceed to t
 
 Before upgrading any member, capture the baseline so you have a before/after comparison:
 
-**Approval required before proceeding.**
-
 ```bash
 # Capture the current fleet health state
 curl -s -H "Authorization: Bearer $OPERATOR_TOKEN" \
@@ -87,8 +87,6 @@ cat /tmp/fleet-before.json
 **Verify it worked:** All members you expect to be running show `reachable: true`.
 
 ### Upgrade a member
-
-**Approval required before proceeding.**
 
 Upgrade the target member using your deployment method (Docker pull + restart, package update, etc.). The hub's reverse proxy will continue serving other members while this one restarts.
 
@@ -124,8 +122,6 @@ diff /tmp/fleet-before.json /tmp/fleet-after.json
 ### Roll back a member
 
 If the upgrade produces a degraded `success_rate`, new flags, or a member that stays unreachable, roll back by reverting to the previous image/package.
-
-**Approval required before proceeding.**
 
 **Verify it worked:** Same poll loop as above. Confirm that:
 1. The member returns to `reachable: true`.
@@ -197,7 +193,7 @@ A single member with elevated flags and degraded `success_rate` points to a memb
 
 ## 4. Recovery planning
 
-Recovery procedures are explicit operator actions. Each one below names the approval gate and the verification step that closes it.
+Recovery procedures are explicit operator actions. Each procedure names the change and how to verify it.
 
 ### Member is unreachable after restart
 
@@ -214,7 +210,7 @@ Recovery procedures are explicit operator actions. Each one below names the appr
 **Runbook — unreachable member:**
 
 1. **Read-only first:** Capture current fleet state (see §1).
-2. **Approval required:** Decide to restart the member.
+2. Decide to restart the member.
 3. **Act:** Restart the member using your deployment method.
 4. **Verify it worked:** Poll until `reachable: true` (poll loop in §2). If it stays unreachable after 60 s, check the member's process logs before retrying.
 5. **Re-read the fleet:** Confirm `success_rate` and `flags` are at or below pre-incident levels.
@@ -228,7 +224,7 @@ port — whichever starts second exits with `EADDRINUSE`.
 
 1. **Read-only first:** find the duplicate — the `port:` in each member's
    `<instance root>/workspaces/<id>/workspace.yaml`, across instances.
-2. **Approval required:** pick the member to move (a test instance's, usually) and a port that
+2. pick the member to move (a test instance's, usually) and a port that
    is free and recorded by no member of any instance.
 3. **Act:** with that member **stopped**, change the `port:` line in its `workspace.yaml`.
 4. **Verify it worked:** start it; it binds the new port, and the other member starts too.
@@ -236,7 +232,7 @@ port — whichever starts second exits with `EADDRINUSE`.
 ### Elevated flags on one member
 
 1. **Read-only first:** Fetch the flag evidence (§3). Note `trace_url`, `turn` fields, `reasons`, and `timestamp`.
-2. **Approval required:** Decide on the remediation (config change, model swap, rollback).
+2. Decide on the remediation (config change, model swap, rollback).
 3. **Act:** Apply the change to the member only.
 4. **Verify it worked:** Re-read the fleet rollup after the next turn completes. Confirm that `flags` length has decreased and `success_rate` has recovered.
 
@@ -245,7 +241,7 @@ port — whichever starts second exits with `EADDRINUSE`.
 If all members show elevated flags or degraded `success_rate`:
 
 1. **Read-only first:** Compare `rollup.success_rate` across all members. Check whether the Langfuse trace URLs (from `evidence.trace_url`) point to a common failure mode.
-2. **Approval required:** Confirm the shared dependency is the cause (gateway, embedding endpoint, knowledge store).
+2. Confirm the shared dependency is the cause (gateway, embedding endpoint, knowledge store).
 3. **Act:** Remediate the shared dependency — do not touch individual members until the shared root cause is resolved.
 4. **Verify it worked:** Re-read the fleet rollup. All members should show recovery in `success_rate` before you close the incident.
 

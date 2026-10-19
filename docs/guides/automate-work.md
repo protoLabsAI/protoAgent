@@ -16,9 +16,12 @@ Teach reusable procedures, schedule work, and delegate tasks. Choose the smalles
 
 Verify one small task before making it recurring or expanding to multiple agents. The individual guides explain permissions, stopping conditions, and where results appear.
 
+For coding work, [connect and test a coding delegate](/guides/coding-agents), then [build a first feature](/guides/build-with-a-coding-agent). Use [coding verification](/guides/coder) when you need a completion check, and [portfolio coordination](/guides/portfolio) only when managing multiple project boards. Plugin authors can [react to lifecycle events](/guides/lifecycle-events).
+
 ## Learn with an example
 
 - [Write your first skill](/tutorials/first-skill)
+- [Run your first recurring task](/tutorials/first-schedule)
 - [Two agents over A2A](/tutorials/two-agents-over-a2a)
 
 ## Skills and scheduled work
@@ -27,7 +30,6 @@ Verify one small task before making it recurring or expanding to multiple agents
 - [Schedule future work](/guides/scheduler)
 - [Watches](/guides/watches)
 - [Goal mode](/guides/goal-mode)
-- [System lifecycle events](/guides/lifecycle-events)
 
 ## Delegation and workflows
 

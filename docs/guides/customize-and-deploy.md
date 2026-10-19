@@ -1,5 +1,7 @@
 # Customize & deploy
 
+This walkthrough takes a fork from identity and tools to a published container. Use the [fork checklist](/guides/fork-the-template) for a compact repeatable checklist, or the [operator-fork example](/guides/operator-fork) for a specialized monitoring agent.
+
 Create your own repository from the template, configure its identity, and ship a
 Docker image. For a running agent's persona or model, use
 [Settings](/guides/react-tauri-ui#agent-settings-telemetry).

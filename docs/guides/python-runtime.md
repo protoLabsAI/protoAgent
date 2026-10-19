@@ -53,6 +53,8 @@ libraries as well as office-document writers.
 For the packaging design, see [Managed Python runtime](/adr/0094-managed-python-runtime)
 and [Document artifacts](/adr/0092-desktop-document-baseline-and-versioned-file-artifacts).
 
-## Status & API
+<span id="status-api"></span>
+
+## Related reference
 
 See [Managed Python API](/reference/ingestion#managed-python-api) for provisioning and status fields.

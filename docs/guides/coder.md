@@ -1,4 +1,8 @@
-# Verifier-grounded coder (`coder_solve`)
+# Verify coding outcomes
+
+Use this guide for the optional `coder_solve` verification loop. To connect Claude Code, Codex, or another CLI, start with [Delegate coding work](/guides/coding-agents). A tested CLI connection and a verified coding outcome are separate checks.
+
+<span id="verifier-grounded-coder-coder-solve"></span>
 
 Use the `coder` plugin for a coding task with an executable completion check.
 It runs candidate solutions against the verifier and escalates to another model
