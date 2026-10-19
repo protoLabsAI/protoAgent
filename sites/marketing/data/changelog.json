@@ -1,5 +1,24 @@
 [
   {
+    "version": "v0.210.0",
+    "date": "2026-10-19",
+    "changes": [
+      "A tool row no longer spins forever beside background delegations (#4300).",
+      "Workflow eval cases reach the workflows plugin again (#4310).",
+      "The one-command installer works against token-protected instances (#4315).",
+      "Fresh ACP background sessions (#4319).",
+      "ACP timeout evidence identifies interrupted work (#4319).",
+      "save_file_artifact accepts an absolute path together with project when it lies inside that project's root (#4326).",
+      "Only the console tree and exact public files skip authentication (#4365).",
+      "Device pairing hardening (#4366).",
+      "A device-scope credential stays refused an encoded ?/# ceiling path on Starlette 1.9 (#4367).",
+      "The auth gate decides public / federation / signed-media on the path the router dispatches (#4372).",
+      "Parallel tool calls on openai-codex keep their arguments (#4368).",
+      "Keep the writable workspace after reference registration (#4369).",
+      "An ACP delegate's empty reply now fails instead of booking a silent success (#4371)."
+    ]
+  },
+  {
     "version": "v0.209.0",
     "date": "2026-10-19",
     "changes": [

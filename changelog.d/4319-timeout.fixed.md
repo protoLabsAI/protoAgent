@@ -1,1 +1,0 @@
-- **ACP timeout evidence identifies interrupted work (#4319).** Timeout and abandoned-turn errors now include the session, an explicitly reported transcript path when available, last tool activity, pending permission state, bounded unverified edit paths, and sanitized stderr. Evidence resets each turn without changing session resume behavior.
