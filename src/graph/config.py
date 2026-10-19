@@ -613,6 +613,16 @@ def _media_ttl(value) -> int:
     return clamp_remote_link_ttl(value)
 
 
+def _string_list(value) -> list[str]:
+    """A list of non-empty strings from a YAML list or a comma string (the env form).
+    ``network.trusted_proxies`` (ADR 0121 D3); a null or scalar junk value reads as empty."""
+    if isinstance(value, str):
+        value = value.split(",")
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [s for s in (str(v).strip() for v in value if v is not None) if s]
+
+
 @dataclass
 class LangGraphConfig:
     # Model settings — route through the LiteLLM gateway by default
@@ -1476,6 +1486,10 @@ class LangGraphConfig:
     # supervisor) — a workspace leaf override is a silent no-op (the host process
     # reads its own config), see ADR §5.
     bind_host: str = "127.0.0.1"  # uvicorn bind interface; env: PROTOAGENT_HOST
+    # Reverse proxies whose X-Forwarded-For / -Proto this server believes (IPs or CIDRs),
+    # passed to uvicorn and used to key the pairing-claim throttle (ADR 0121 D3). Loopback
+    # is always trusted on top of these. env: FORWARDED_ALLOW_IPS (uvicorn's own, comma list).
+    network_trusted_proxies: list[str] = field(default_factory=list)
     fleet_port_base: int = 7870  # workspace agents get port_base+1, +2, …
     discovery_port_min: int = 7860  # fleet discovery scan window (inclusive)
     discovery_port_max: int = 7910
@@ -2273,6 +2287,9 @@ class LangGraphConfig:
             # Box runtime (Host layer, ADR 0047 D8) — file > env > default. The env
             # fallback only fires when the merged dict omits the key (zero-migration).
             bind_host=network.get("bind", _env_default("PROTOAGENT_HOST", cls.bind_host)),
+            network_trusted_proxies=_string_list(
+                network.get("trusted_proxies", _env_default("FORWARDED_ALLOW_IPS", []))
+            ),
             fleet_port_base=fleet.get("port_base", cls.fleet_port_base),
             discovery_port_min=discovery.get("port_min", cls.discovery_port_min),
             discovery_port_max=discovery.get("port_max", cls.discovery_port_max),

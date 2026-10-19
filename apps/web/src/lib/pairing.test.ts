@@ -6,6 +6,7 @@ import {
   formatPairingCode,
   isCompletePairingCode,
   redeemPairingFromUrl,
+  retryAfterSeconds,
   subscribePaired,
   takePairedNotice,
 } from "./pairing";
@@ -60,6 +61,21 @@ describe("redeemPairingFromUrl", () => {
     );
     await redeemPairingFromUrl();
     expect(window.location.hash).toBe("");
+  });
+
+  it("a throttled QR claim (429) reads as a wait, with Retry-After", async () => {
+    setHash("#pair=K7QM2-XPRT4");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 429,
+        headers: new Headers({ "Retry-After": "60" }),
+        json: async () => ({ ok: false, error: "too many pairing attempts — try again in 60 s", retry_after: 60 }),
+      })),
+    );
+    const res = await redeemPairingFromUrl();
+    expect(res).toEqual({ ok: false, error: expect.stringMatching(/^Too many attempts — try again in 60 s\./) });
   });
 
   it("strips the code from the URL even when the claim FAILS", async () => {
@@ -255,13 +271,30 @@ describe("claimPairingCode (#4336 S3)", () => {
   });
 });
 
+describe("retryAfterSeconds", () => {
+  it("reads the header, falls back to the body, and ignores junk", () => {
+    expect(retryAfterSeconds("60", 5)).toBe(60);
+    expect(retryAfterSeconds(null, 12)).toBe(12);
+    expect(retryAfterSeconds("Wed, 21 Oct 2026 07:28:00 GMT", undefined)).toBeUndefined();
+    expect(retryAfterSeconds("0", "x")).toBeUndefined();
+  });
+});
+
 describe("describePairingError", () => {
   it("turns the one 403 into words naming every cause and the fix", () => {
     const msg = describePairingError({ status: 403, error: "HTTP 403: invalid or expired pairing code" });
     expect(msg).toMatch(/didn't work/);
     expect(msg).toMatch(/expired/);
-    expect(msg).toMatch(/wrong tries/);
     expect(msg).toMatch(/Add a device/);
+    // Wrong guesses no longer cancel codes (ADR 0121 D3), so the message mustn't claim they do.
+    expect(msg).not.toMatch(/wrong tries|cancelled/);
+  });
+
+  it("turns a 429 into a wait, with the server's Retry-After", () => {
+    const msg = describePairingError({ status: 429, error: "HTTP 429: too many", retryAfter: 37 });
+    expect(msg).toMatch(/^Too many attempts — try again in 37 s\./);
+    expect(msg).not.toMatch(/didn't work|invalid/);
+    expect(describePairingError({ status: 429, error: "HTTP 429" })).toMatch(/try again in a minute/);
   });
 
   it("explains a network failure as reachability", () => {

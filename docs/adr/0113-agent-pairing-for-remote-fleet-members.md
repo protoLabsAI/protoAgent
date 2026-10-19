@@ -65,6 +65,8 @@ someone must be watching the remote's console when the request lands.
 
 ### D2 — Agent codes are short and typeable
 
+> **Amended by [ADR 0121](./0121-device-pairing-over-an-operator-supplied-public-url.md) D3:** the shared 5-miss counter is replaced by the claim throttle's buckets; agent codes keep their entropy and TTL.
+
 A phone scans its code; an agent code is read off one screen and typed into another,
 usually on a different machine. So an agent code is:
 

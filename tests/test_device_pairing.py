@@ -83,13 +83,13 @@ def test_revoking_one_device_leaves_the_others(devices):
     assert devices.verify_token(a_token) is not None  # untouched
 
 
-def test_repeated_bad_claims_drop_pending_codes(devices):
-    """An unauthenticated endpoint must not allow indefinite probing (ADR 0087 D4)."""
+def test_repeated_bad_claims_never_drop_pending_codes(devices):
+    """The inverse of the retired ADR 0087 D4 lockout (ADR 0121 D3): misses are throttled per
+    client, but no number of them, from any number of clients, cancels a pending code."""
     code, _ = devices.start_pairing()
-    for _ in range(devices._MAX_FAILED_CLAIMS):
-        assert devices.claim_pairing("wrong-code", "attacker") is None
-    # The real code is collateral — deliberately. The operator re-opens the dialog.
-    assert devices.claim_pairing(code, "legit") is None
+    for i in range(29):  # under the 30/min class budget, from 29 distinct clients
+        assert devices.claim_pairing("wrong-code", "attacker", client=f"10.0.0.{i}") is None
+    assert devices.claim_pairing(code, "legit", client="10.9.9.9") is not None
 
 
 def test_claim_with_no_pending_pairing_is_refused(devices):
@@ -245,7 +245,7 @@ def test_pairable_ignores_the_bind_but_candidates_do_not(monkeypatch):
 
 # ── Agent codes (ADR 0113 D2/D3) ────────────────────────────────────────────────────────
 # A second code kind for pairing a hub with a remote protoAgent. The properties that matter:
-# typeable (short, forgiving), still single-use and time-boxed, under the SAME lockout as
+# typeable (short, forgiving), still single-use and time-boxed, under the SAME throttle as
 # phone codes, and the device's kind comes from the code — never from the claimer.
 
 _CROCKFORD = set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
@@ -290,10 +290,12 @@ def test_device_code_still_expires(devices, monkeypatch):
 
 def test_a_pre_amendment_long_link_code_is_a_plain_miss(devices):
     """An old `#pair=<32 url-safe chars>` link can't still be pending (memory-only codes), and
-    folding it never equals a 10-char code — it's a miss that counts toward the lockout."""
+    folding it never equals a 10-char code — it's a miss that the throttle counts."""
+    from security import claim_throttle
+
     code, _ = devices.start_pairing()
     assert devices.claim_pairing("EULO7xFnwvv4EupKwYwBSwYuxJKMJWXM", "old link") is None
-    assert devices._failed_claims[0] == 1
+    assert len(claim_throttle.throttle().per_client) == 1
     assert devices.claim_pairing(code, "phone") is not None
 
 
@@ -388,14 +390,16 @@ def test_racing_claims_mint_exactly_one_device(devices, monkeypatch):
     errors: list = []
     barrier = threading.Barrier(8)
 
-    def claim():
+    def claim(i: int):
         barrier.wait()
         try:
-            results.append(devices.claim_pairing(code, "racer"))
+            # One client each: seven losers from one address would trip its 5-miss bucket,
+            # and this test is about the lock, not the throttle.
+            results.append(devices.claim_pairing(code, "racer", client=f"10.0.1.{i}"))
         except Exception as exc:  # noqa: BLE001 — a loser must get a clean None, not a 500
             errors.append(exc)
 
-    threads = [threading.Thread(target=claim) for _ in range(8)]
+    threads = [threading.Thread(target=claim, args=(i,)) for i in range(8)]
     for t in threads:
         t.start()
     for t in threads:
@@ -408,38 +412,21 @@ def test_racing_claims_mint_exactly_one_device(devices, monkeypatch):
     assert len(devices.list_devices()) == 1
 
 
-def test_typed_device_claims_share_the_lockout(devices):
-    """Typed device claims spend the SAME 5-miss budget: five wrong phone codes drop a pending
-    agent code too, and a typed device code is collateral of agent-code probing."""
+def test_misses_at_either_kind_spend_one_budget(devices):
+    """Device and agent codes share the claim path, so they share the throttle: wrong phone
+    codes and wrong agent codes come out of the same per-client bucket (ADR 0121 D3)."""
+    from security import claim_throttle
+
     phone, _ = devices.start_pairing()
     agent, _ = devices.start_pairing("agent")
-    for _ in range(devices._MAX_FAILED_CLAIMS):
-        assert devices.claim_pairing("ZZZZZ-ZZZZZ", "attacker") is None
-    assert devices._PENDING == {}
-    assert devices.claim_pairing(phone.lower(), "legit phone") is None
-    assert devices.claim_pairing(agent, "legit hub") is None
-
-
-def test_lockout_is_shared_across_kinds(devices):
-    """Misses aimed at either kind count toward ONE counter, and the lockout drops BOTH kinds —
-    otherwise each kind would be a separate 5-guess budget."""
-    phone, _ = devices.start_pairing()
-    agent, _ = devices.start_pairing("agent")
-    for i in range(devices._MAX_FAILED_CLAIMS):
+    for i in range(claim_throttle.PER_CLIENT_BUDGET[0]):
         guess = "ZZZZZ-ZZZZZ" if i % 2 else "not-a-device-code"
-        assert devices.claim_pairing(guess, "attacker") is None
-    assert devices.claim_pairing(phone, "legit phone") is None
-    assert devices.claim_pairing(agent, "legit hub") is None
-
-
-def test_a_success_resets_the_shared_counter(devices):
-    for _ in range(devices._MAX_FAILED_CLAIMS - 1):
-        devices.claim_pairing("nope", "attacker")
-    code, _ = devices.start_pairing("agent")
-    assert devices.claim_pairing(code, "hub") is not None
-    later, _ = devices.start_pairing()
-    devices.claim_pairing("nope", "attacker")  # one miss after a reset must not trip it
-    assert devices.claim_pairing(later, "phone") is not None
+        assert devices.claim_pairing(guess, "attacker", client="10.0.0.1") is None
+    with pytest.raises(claim_throttle.ClaimThrottled):
+        devices.claim_pairing(agent, "attacker", client="10.0.0.1")
+    # …and both codes are still pending for an honest claimer elsewhere.
+    assert devices.claim_pairing(phone.lower(), "legit phone", client="10.0.0.2") is not None
+    assert devices.claim_pairing(agent, "legit hub", client="10.0.0.2") is not None
 
 
 @pytest.mark.parametrize("bad_kind", [["agent"], {"k": "agent"}, 7, None])
@@ -451,16 +438,6 @@ def test_a_malformed_kind_keeps_the_device(devices, bad_kind):
     entry = {"id": "c3", "name": "edited", "token_sha256": devices._hash("t"), "created_at": 1.0, "kind": bad_kind}
     path.write_text(json.dumps(["not-an-object", entry]), "utf-8")  # a stray non-dict too
     assert [(d["id"], d["kind"]) for d in devices.list_devices()] == [("c3", "device")]
-
-
-def test_a_new_code_gets_a_fresh_miss_budget(devices):
-    """Four stale misses + one honest typo of a NEW code must not lock the operator out."""
-    devices.start_pairing("agent")  # an old code — misses only count while one is pending
-    for _ in range(devices._MAX_FAILED_CLAIMS - 1):
-        assert devices.claim_pairing("stale-guess", "x") is None
-    code, _ = devices.start_pairing("agent")
-    assert devices.claim_pairing("ZZZZZ-ZZZZ0", "typo") is None  # the typo
-    assert devices.claim_pairing(code, "hub") is not None
 
 
 def test_legacy_registry_without_kind_loads_as_device(devices):

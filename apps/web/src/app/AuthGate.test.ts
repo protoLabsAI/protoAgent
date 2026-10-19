@@ -239,7 +239,27 @@ describe("AuthGate — typed pairing code", () => {
     expect(window.localStorage.getItem("protoagent.authToken")).toBeNull();
   });
 
-  it("never sends an incomplete code (each miss spends a lockout guess)", async () => {
+  it("a throttled claim (429) says how long to wait, not that the code is invalid", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 429,
+        headers: new Headers({ "Retry-After": "42" }),
+        json: async () => ({ ok: false, error: "too many pairing attempts — try again in 42 s", retry_after: 42 }),
+      })),
+    );
+    mountGate();
+    await click("Have a pairing code?");
+    type(codeInput(), "K7QM2XPRT4");
+    await click("Pair this device");
+    const alert = inPortal('[role="alert"]');
+    expect(alert?.textContent).toMatch(/Too many attempts — try again in 42 s/);
+    expect(alert?.textContent).not.toMatch(/didn't work|HTTP 429/);
+    expect(authRequired()).toBe(true);
+  });
+
+  it("never sends an incomplete code (each miss spends a throttle attempt)", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     mountGate();

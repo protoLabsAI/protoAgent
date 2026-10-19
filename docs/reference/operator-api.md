@@ -172,7 +172,7 @@ under every root; a claim removes them all), 120 s TTL, one-shot.
 | GET | `/api/fleet/discover` | Discover agents (LAN mDNS + tailnet) |
 | POST · DELETE | `/api/fleet/remotes[/{ident}]` | Register / remove a remote member |
 | POST | `/api/pairing/start` · `/api/pairing/cancel` | Mint a phone (default) or agent (`{"kind": "agent"}`) pairing code with the addresses it works on, best first (`hosts[].via`: `serve` → `magicdns` → `ip`), plus `reach` (Tailscale status, restart facts) / drop pending codes of that kind (ADR 0087, ADR 0113). `409` when nothing is reachable yet |
-| POST | `/api/pairing/claim` | Redeem a code for a per-device token (`{code, name}` → `{ok, device, token}`). The **only** unauthenticated `/api/*` route; one `403` for every bad code |
+| POST | `/api/pairing/claim` | Redeem a code for a per-device token (`{code, name}` → `{ok, device, token}`). The **only** unauthenticated `/api/*` route; one `403` for every bad code. `429` with `Retry-After` (seconds) and `{ok: false, error, retry_after}` when the claim throttle is empty (5 wrong codes per client per 5 min, 30 per ingress class per min; ADR 0121 D3). A `429` claim is never compared with any code, and no claim cancels a pending code |
 | GET | `/api/devices` | Paired devices and hubs: `id`, `name`, `kind`, `created_at`, `last_seen_at`, and `active` (used within the last-seen write throttle, about 6 minutes). Never the token or its hash |
 | PATCH | `/api/devices/{id}` | Rename (`{name}`: 1–64 printable characters on one line). `400` with the reason for an unusable name, `404` for an unknown id. The token is untouched |
 | DELETE | `/api/devices/{id}` | Revoke one device; its token stops working on the next request |

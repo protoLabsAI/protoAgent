@@ -103,6 +103,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "aux_model": "",
     "background_auto_resume": True,
     "bind_host": "127.0.0.1",
+    "network_trusted_proxies": [],
     "cache_warming_enabled": False,
     "cache_warming_interval_seconds": 3300,
     "chat_template_kwargs": None,

@@ -951,8 +951,9 @@ def _record_remote_version(rid: str, version: str) -> None:
 
 class PairingError(FleetError):
     """A pairing attempt failed. ``status`` is the HTTP status the route should answer:
-    400 when the operator's input is wrong (bad url/name, invalid or expired code), 502
-    when the remote didn't answer like a protoAgent that supports pairing."""
+    400 when the operator's input is wrong (bad url/name, invalid or expired code), 429 when
+    the remote's claim throttle refused the attempt (ADR 0121 D3), 502 when the remote didn't
+    answer like a protoAgent that supports pairing."""
 
     def __init__(self, message: str, status: int = 400) -> None:
         super().__init__(message)
@@ -1120,6 +1121,15 @@ def pair_remote(
     # code, and telling the operator to generate a new one would send them in circles.
     if r.status_code == 403 and isinstance(body, dict) and body.get("ok") is False:
         raise PairingError("that code is invalid or expired — generate a new one on the remote", 400)
+    # The remote's claim throttle (ADR 0121 D3): the code was NOT tried and is still pending,
+    # so the fix is to wait, not to generate a new one.
+    if r.status_code == 429 and isinstance(body, dict) and body.get("ok") is False:
+        wait = _clean_remote_text(r.headers.get("retry-after")) or "a minute"
+        wait = f"{wait} s" if wait.isdigit() else wait
+        raise PairingError(
+            f"{url} is refusing pairing attempts for now (too many wrong codes) — try the same code again in {wait}",
+            429,
+        )
     if not isinstance(body, dict) or r.status_code in (403, 404):
         raise PairingError(not_protoagent, 502)
     if r.status_code != 200 or not body.get("ok"):

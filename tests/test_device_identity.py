@@ -1,6 +1,6 @@
 """Device identity polish (#4336 S3, ADR 0087): rename, the active window, name hygiene.
 
-Kept apart from ``test_device_pairing.py`` (the claim/lockout/address contract) so the two
+Kept apart from ``test_device_pairing.py`` (the claim/throttle/address contract) so the two
 evolve without stepping on each other.
 """
 

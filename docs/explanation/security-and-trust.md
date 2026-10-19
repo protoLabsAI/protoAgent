@@ -90,6 +90,48 @@ skips these rules: its credential is a header the client attaches (never a cooki
 on another origin has nothing to send. The server refuses a non-loopback open bind unless
 `PROTOAGENT_ALLOW_OPEN=1`.
 
+## The pairing-claim endpoint
+
+`POST /api/pairing/claim` is the one `/api/*` route that takes no token. It can't: it is how a
+phone or another agent gets a token in the first place ([pairing](../guides/pairing.md)). So
+anyone who can reach the port can send it codes, and the question is what that buys them.
+
+**The code does the work.** A pairing code is 10 Crockford base32 characters, about 50 bits,
+and it lives for 300 seconds. QR links carry the same code. Each code works once.
+
+**The throttle caps the guessing.** Only *wrong* codes count. They draw from two token buckets
+([ADR 0121 D3](../adr/0121-device-pairing-over-an-operator-supplied-public-url.md)):
+
+| Bucket | Keyed on | Budget |
+| --- | --- | --- |
+| Per client | The client IP, resolved through [`network.trusted_proxies`](../reference/configuration.md#network) | 5 wrong codes per 5 minutes |
+| Per ingress class | `public` (the request's Host is the public console URL) or `private` (everything else) | 30 wrong codes per minute |
+
+When either bucket is empty, the claim gets `429` with `Retry-After`, and **the code isn't
+compared with anything**. A throttled request is not a guess. A claim that arrives when no code
+is pending is rejected before any comparison. It draws from the per-client bucket only, so a
+prober stays throttled without spending the shared budget. A code that works never draws.
+
+**The math.** A code's 300 seconds at the full 30-per-minute ceiling admit at most
+30 × 5 = 150 evaluated guesses. Against 2^50 codes that is a success chance of about
+1.3 × 10⁻¹³ per code. Even a code that stayed pending all year with the ceiling saturated the
+whole time would stay below 2 × 10⁻⁸. The entropy keeps the codes safe. The throttle exists to
+cap cost and log noise, so its ceiling can be generous.
+
+**No request can cancel a code.** Before ADR 0121, five wrong codes in a row cancelled every
+pending code. That made the guard itself the attack: anyone who could reach the port could keep
+the operator from ever pairing. Now a flood can, at worst, hold a bucket empty while it lasts.
+A flood on the `public` class makes public pairing wait. It can't touch the `private` class, so
+LAN and tailnet pairing keep working. Forging the public Host only drains the public bucket.
+Until a public console URL is configured, every claim is `private`.
+
+**Who counts as one client.** `X-Forwarded-For` counts only when the TCP peer is loopback or on
+`network.trusted_proxies`. Otherwise a guesser could name a fresh address on every request and
+never run out. The flip side: behind a proxy on another address that isn't listed, every client
+looks like the proxy and shares its 5 tries.
+
+The buckets live in memory. A restart empties them, and it also clears every pending code.
+
 ## See also
 
 - [Building a plugin view](../guides/building-react-plugin-views.md) — the sandboxed-iframe plugin UI model.

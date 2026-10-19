@@ -98,6 +98,8 @@ simply a miss against the new store. The `#pair=` mechanism itself is unchanged.
 
 ### D4 — The claim endpoint is unauthenticated, and that is the sensitive part
 
+> **Amended by [ADR 0121](./0121-device-pairing-over-an-operator-supplied-public-url.md) D3:** the five-miss lockout that drops every pending code is replaced by a claim throttle (two token buckets, `429` with `Retry-After`); no request can cancel a pending code.
+
 `POST /api/pairing/claim` cannot require auth — obtaining auth is its entire purpose. It is
 therefore on the public allowlist, which widens the unauthenticated surface and deserves to
 be called out rather than buried.

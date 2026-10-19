@@ -92,8 +92,8 @@ Pair the phone so it gets its own token. Pick whichever is easier:
   QR, the code and the URL in the terminal. See
   [Pair a phone from a headless box](/guides/pairing#pair-a-phone-from-a-headless-box).
 
-Codes last five minutes and work once. Five wrong codes in a row cancel every pending
-code; make a new one. The phone shows **Paired as &lt;name&gt;** when it worked, and appears in
+Codes last five minutes and work once. Wrong codes never cancel a code; after too many,
+the phone says **Too many attempts** and you wait a minute ([details](/guides/pairing#too-many-attempts)). The phone shows **Paired as &lt;name&gt;** when it worked, and appears in
 Devices on the agent, where the row for the phone you're holding is marked **This device**.
 To rename or revoke it, see [Manage devices](/guides/pairing#manage-devices).
 

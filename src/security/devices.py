@@ -18,11 +18,11 @@ Two halves, deliberately different in durability:
 * **Pending pairings** are memory-only. A restart invalidates them, which is the desired
   behavior: a code nobody claimed within its window should not survive anything.
 
-Two KINDS of pending code share that one store and its one failed-claim counter (ADR 0113
-D2): a **device** code (a phone scans it off a QR, or types it into the console's "Have a
-pairing code?") and an **agent** code (typed into another machine's "Pair…" dialog). Both are
-the same shape — 10 Crockford base32 chars shown as ``XXXXX-XXXXX``, 300s (ADR 0087 D3 as
-amended 2026-10-18). The kind is fixed when the code is MINTED and copied onto the device it
+Two KINDS of pending code share that one store and one claim throttle (ADR 0113 D2, as
+amended by ADR 0121 D3 — see ``security.claim_throttle``): a **device** code (a phone scans
+it off a QR, or types it into the console's "Have a pairing code?") and an **agent** code
+(typed into another machine's "Pair…" dialog). Both are the same shape — 10 Crockford
+base32 chars shown as ``XXXXX-XXXXX``, 300s (ADR 0087 D3 as amended 2026-10-18). The kind is fixed when the code is MINTED and copied onto the device it
 yields, so a claimer can never relabel what it is.
 
 The registry lives at the INSTANCE tier, not ``config_dir`` — config is the tier that gets
@@ -45,20 +45,17 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from infra.paths import instance_paths
+from security import claim_throttle
 
 logger = logging.getLogger(__name__)
 
 # A pairing code is displayed on screen (as a QR AND as text) and is claimable by anyone who
-# can read it, so its safety comes from being short-lived, single-use and lockout-guarded
-# rather than secret. 300s, not the original 120s: since ADR 0087's 2026-10-18 amendment the
-# one device code is also TYPED on the phone, and typing takes longer than scanning — the
-# same reasoning that gave agent codes 300s.
+# can read it, so its safety comes from being short-lived, single-use, high-entropy and
+# throttle-guarded (ADR 0121 D3) rather than secret. 300s, not the original 120s: since
+# ADR 0087's 2026-10-18 amendment the one device code is also TYPED on the phone, and typing
+# takes longer than scanning — the same reasoning that gave agent codes 300s.
 PAIRING_TTL_SECONDS = 300
 _TOKEN_BYTES = 32
-# Consecutive failed claims before every pending code is dropped. A legitimate scanner gets
-# the code right first time; repeated misses mean someone is probing. SHARED across code
-# kinds: a separate agent-code counter would hand a prober 5 more guesses per kind.
-_MAX_FAILED_CLAIMS = 5
 
 KIND_DEVICE = "device"
 KIND_AGENT = "agent"
@@ -66,10 +63,10 @@ _KINDS = frozenset({KIND_DEVICE, KIND_AGENT})
 
 # Every code is TYPEABLE (agent codes per ADR 0113 D2; device codes since ADR 0087's
 # 2026-10-18 amendment): short, unambiguous, with a window long enough to read it off one
-# screen and type it into another. 10 chars of Crockford base32 = 50 bits; with the shared
-# 5-miss lockout a prober's odds per issued code are ~5/2^50. Crockford drops I, L, O and U so
-# what's shown can't be misread — and claim folds the look-alikes back (O→0, I/L→1) in case
-# it is anyway. One alphabet, one length, one fold for both kinds: what differs is only the
+# screen and type it into another. 10 chars of Crockford base32 = 50 bits; under the claim
+# throttle (ADR 0121 D3) a code's 300 s admit at most ~150 evaluated guesses, ~1.3e-13
+# odds. Crockford drops I, L, O and U so what's shown can't be misread — and claim folds the
+# look-alikes back (O→0, I/L→1) in case it is anyway. One alphabet, one length, one fold for both kinds: what differs is only the
 # kind stamped on the device the code yields.
 AGENT_PAIRING_TTL_SECONDS = 300
 _TTL_BY_KIND = {KIND_DEVICE: PAIRING_TTL_SECONDS, KIND_AGENT: AGENT_PAIRING_TTL_SECONDS}
@@ -309,7 +306,6 @@ def _register(name: str, kind: str = KIND_DEVICE) -> tuple[Device, str]:
 # normalized code -> (expiry timestamp, kind). Every code is stored normalized (no dash,
 # uppercase) so claim compares like with like.
 _PENDING: dict[str, tuple[float, str]] = {}
-_failed_claims = [0]
 # Claims arrive on the event loop today, but nothing stops a sync caller on a worker thread
 # (the CLI, a test). The lock makes "find + consume" one step, so single-use holds under any
 # concurrency, not just the event loop's.
@@ -363,10 +359,6 @@ def start_pairing(kind: str = KIND_DEVICE) -> tuple[str, float]:
         shown = format_code(stored)
         expires_at = now + _TTL_BY_KIND[kind]
         _PENDING[stored] = (expires_at, kind)
-        # A fresh code gets a fresh 5-miss budget (ADR 0113 D2: "5 guesses per code the
-        # operator issues"). Without this the counter never decays: four stale misses, then
-        # one honest typo of a NEW typed code, would lock the legitimate claimer out.
-        _failed_claims[0] = 0
     return shown, expires_at
 
 
@@ -404,31 +396,38 @@ def _match(code: str) -> str | None:
     return matched
 
 
-def claim_pairing(code: str, device_name: str) -> tuple[dict, str] | None:
+def claim_pairing(
+    code: str, device_name: str, *, client: str = "", ingress: str = claim_throttle.INGRESS_PRIVATE
+) -> tuple[dict, str] | None:
     """Redeem a code for a fresh device token, or None if it isn't valid.
 
     Single-use: the code is removed before the device is created, so two racing claims
-    cannot both succeed. Repeated failures drop every pending code — of BOTH kinds — rather
-    than allowing indefinite probing of an open endpoint (this is reachable unauthenticated
-    by necessity — ADR 0087 D4, ADR 0113 D2). The minted device's kind is the CODE's kind.
+    cannot both succeed. The minted device's kind is the CODE's kind.
+
+    Throttled, not locked out (ADR 0121 D3, amending ADR 0087 D4 and ADR 0113 D2): a claim
+    from a ``client`` or ``ingress`` class whose bucket is empty raises
+    :class:`~security.claim_throttle.ClaimThrottled` WITHOUT being compared to any code —
+    even the right one. Only misses draw; nothing a claimer sends can cancel a pending code.
+    ``client`` defaults to ``""``: an in-process caller shares one bucket rather than going
+    unthrottled.
     """
     now = time.time()
     with _LOCK:
+        gate = claim_throttle.throttle()
+        gate.check(client, ingress)  # before ANY look at the codes: a throttled claim isn't a guess
         _prune(now)
         if not code or not _PENDING:
+            # Rejected before any comparison, as ever. It still spends the client's budget so
+            # probers stay throttled, but not the class budget: nothing was compared.
+            gate.miss(client, ingress, anything_pending=False)
             return None
 
         matched = _match(code)
         if matched is None:
-            _failed_claims[0] += 1
-            if _failed_claims[0] >= _MAX_FAILED_CLAIMS:
-                logger.warning("[devices] %d failed pairing claims — dropping pending codes", _failed_claims[0])
-                _PENDING.clear()
-                _failed_claims[0] = 0
+            gate.miss(client, ingress, anything_pending=True)
             return None
 
         _expires, kind = _PENDING.pop(matched)  # consume BEFORE minting, so a race can't double-issue
-        _failed_claims[0] = 0
         # Minted under the lock too, so two CLAIMS can't interleave their load→append→save of
         # devices.json. This does not make the registry lock-protected in general: `_touch`
         # and `revoke_device` don't take `_LOCK` — in practice the event loop serializes them

@@ -159,6 +159,7 @@ HOST_SCOPED_KEYS = {
     "commons.path",
     # Box runtime (ADR 0047 D8) — env/CLI knobs promoted into the Host layer.
     "network.bind",
+    "network.trusted_proxies",
     # Egress allowlist (ADR 0008) — a box-wide outbound security policy, so it lives
     # at the Host layer alongside the inbound bind interface.
     "egress.allowed_hosts",

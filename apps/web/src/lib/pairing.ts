@@ -91,20 +91,28 @@ function deviceName(): string {
 }
 
 export type PairResult = { ok: true } | { ok: false; error: string } | null;
-export type ClaimResult = { ok: true } | { ok: false; error: string; status?: number };
+export type ClaimResult = { ok: true } | { ok: false; error: string; status?: number; retryAfter?: number };
 
 /** What a failed claim means, in words a person holding a phone can act on.
  *
- *  The server answers every bad code with ONE 403 (unknown / expired / already used / the
- *  pending codes were just dropped by the 5-miss lockout) — deliberately, so a prober learns
- *  nothing about which codes exist (ADR 0087 D4). The console can't tell those apart either,
- *  so it names all three causes and the one fix that covers them: a fresh code. */
-export function describePairingError(res: { status?: number; error: string }): string {
+ *  The server answers every bad code with ONE 403 (unknown / expired / already used) —
+ *  deliberately, so a prober learns nothing about which codes exist (ADR 0087 D4). The
+ *  console can't tell those apart either, so it names the causes and the fix that covers
+ *  them: a fresh code.
+ *
+ *  A 429 is different: the claim throttle (ADR 0121 D3) refused the attempt WITHOUT trying
+ *  the code, after too many wrong ones. The code is still good, so the fix is to wait —
+ *  telling them to make a new one (or that the code was wrong) would be false. */
+export function describePairingError(res: { status?: number; error: string; retryAfter?: number }): string {
+  if (res.status === 429) {
+    const wait = res.retryAfter && res.retryAfter > 0 ? `${res.retryAfter} s` : "a minute";
+    return `Too many attempts — try again in ${wait}. Your code wasn't checked, so it still works if it hasn't expired.`;
+  }
   if (res.status === 403) {
     return (
       "That code didn't work. Check it against the screen it's shown on — or, if it expired " +
-      "(codes last 5 minutes and work once) or several wrong tries cancelled it, make a new " +
-      "one under Settings ▸ Devices ▸ Add a device, or with protoagent pair --device."
+      "(codes last 5 minutes and work once), make a new one under Settings ▸ Devices ▸ Add " +
+      "a device, or with protoagent pair --device."
     );
   }
   if (res.status === undefined && /abort|timeout|timed out|failed to fetch|network|offline|load failed/i.test(res.error)) {
@@ -135,7 +143,13 @@ export async function claimPairingCode(code: string): Promise<ClaimResult> {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data?.token) {
-      return { ok: false, status: res.status, error: `HTTP ${res.status}: ${String(data?.error || "pairing failed")}` };
+      const failed: ClaimResult = {
+        ok: false,
+        status: res.status,
+        error: `HTTP ${res.status}: ${String(data?.error || "pairing failed")}`,
+      };
+      if (res.status === 429) failed.retryAfter = retryAfterSeconds(res.headers.get("Retry-After"), data?.retry_after);
+      return failed;
     }
     // Strict (ADR 0114 D1): a token the browser failed to keep must not report success —
     // the throw lands in the catch below and comes back as { ok: false }.
@@ -151,6 +165,17 @@ export async function claimPairingCode(code: string): Promise<ClaimResult> {
   }
 }
 
+/** Whole seconds from a `Retry-After` header (delta-seconds form; the claim route never
+ *  sends an HTTP date), falling back to the body's `retry_after`. Undefined when neither is
+ *  a positive number. */
+export function retryAfterSeconds(header: string | null, body?: unknown): number | undefined {
+  for (const raw of [header, body]) {
+    const n = typeof raw === "number" ? raw : typeof raw === "string" && /^\s*\d+\s*$/.test(raw) ? Number(raw) : NaN;
+    if (Number.isFinite(n) && n > 0) return Math.ceil(n);
+  }
+  return undefined;
+}
+
 /**
  * Claim a pairing code if the URL carries one. Returns null when there's nothing to do.
  */
@@ -158,5 +183,7 @@ export async function redeemPairingFromUrl(): Promise<PairResult> {
   const code = takePairingCode();
   if (!code) return null;
   const res = await claimPairingCode(code);
-  return res.ok ? res : { ok: false, error: res.error };
+  if (res.ok) return res;
+  // A throttled QR scan reads as "wait", not as a raw "HTTP 429" (ADR 0121 D3).
+  return { ok: false, error: res.status === 429 ? describePairingError(res) : res.error };
 }
