@@ -504,7 +504,14 @@ async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
 
     text = text.strip()
     if len(text) > max_chars:
-        text = text[:max_chars].rstrip() + "\n…[truncated]"
+        # Say how much was cut and how to get the rest. A bare "[truncated]" lets the
+        # model blame the page (e.g. "JS-rendered") when the cap cut off real content.
+        total = len(text)
+        text = (
+            text[:max_chars].rstrip()
+            + f"\n…[truncated: showing {max_chars} of {total} chars — "
+            "re-call with a larger max_chars to read the rest]"
+        )
 
     return f"[{resp.status_code}] {url}\n\n{text}"
 
