@@ -1699,6 +1699,10 @@ const server = createServer(async (req, res) => {
           req.headers["x-e2e-fleet-telemetry"] === "multi" ? FLEET_TELEMETRY : FLEET_TELEMETRY_SINGLE,
         );
       }
+      // ADR 0121 D2 (S7.4): `x-e2e-pairing: public` reports a declared public console URL.
+      if (pathname === "/api/devices" && req.headers["x-e2e-pairing"] === "public") {
+        return sendJson(res, { devices: fleetFor(req).devices ?? [], public_console_url: "https://agent.example.com" });
+      }
       const payload = handleApiGet(
         pathname,
         fleetFor(req),
@@ -1919,6 +1923,30 @@ const server = createServer(async (req, res) => {
           auth_configured: true,
           reach: reachFor(),
         }, 409);
+      }
+      if (req.headers["x-e2e-pairing"] === "public" && kind === "device") {
+        // ADR 0121 D1/D2: the public URL is offered after tailnet HTTPS (none here) and
+        // before every other address; the console preselects it.
+        const ttl = 300;
+        const expires_at = Math.floor(nowFor(req) / 1000) + ttl;
+        const code = "3HV8T-QW6RN";
+        return sendJson(res, {
+          ok: true, kind, code, expires_at, ttl,
+          reach: { ...reachFor(), public_console_url: "https://agent.example.com" },
+          hosts: [
+            {
+              host: "agent.example.com", kind: "public", via: "public", secure: true,
+              origin: "https://agent.example.com",
+              base_url: "https://agent.example.com/app/",
+              url: `https://agent.example.com/app/#pair=${code}`, qr: null,
+            },
+            {
+              host: "100.64.0.5", kind: "tailnet", via: "ip", origin: "http://100.64.0.5:7871",
+              base_url: "http://100.64.0.5:7871/app/",
+              url: `http://100.64.0.5:7871/app/#pair=${code}`, qr: null,
+            },
+          ],
+        });
       }
       if (tsMode && kind === "device") {
         const ttl = 300;

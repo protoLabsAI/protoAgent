@@ -207,7 +207,7 @@ A paired phone or tablet has **`device` scope** ([ADR 0121](../adr/0121-device-p
 | Key | Why |
 |---|---|
 | `auth.*` — `auth.token`, `auth.federation_token` | The credentials themselves |
-| `network.*` — `network.bind` and any `network.` key added later (such as `network.trusted_proxies`) | Where the agent listens and how it's reached. Matched by prefix, so a new key is covered the day it lands |
+| `network.*` — `network.bind` and any `network.` key added later (such as `network.trusted_proxies` and `network.public_console_url`) | Where the agent listens and how it's reached. Matched by prefix, so a new key is covered the day it lands |
 | `devices.*` | Device-pairing policy |
 | `egress.*` — `egress.allowed_hosts` | The outbound half of the tool sandbox |
 | `filesystem.allow_run` | Whether the agent can run shell commands at all |
@@ -589,20 +589,24 @@ git receives the clone URL exactly as given, so the host's ssh keys and credenti
 
 ## `network`
 
-How this server listens, and which reverse proxies it believes. Host-scoped: edit it in
-**Settings ▸ Box ▸ Network**, or in `host-config.yaml`. A restart applies changes.
+How this server listens, which reverse proxies it believes, and the public console address,
+if you run one. Edit them in **Settings ▸ Box ▸ Network**. `bind` and `trusted_proxies` are
+host-scoped (`host-config.yaml`) and a restart applies them. `public_console_url` is per agent
+(`langgraph-config.yaml`) and applies on save.
 
 ```yaml
 network:
   bind: 0.0.0.0
   trusted_proxies:
     - 172.18.0.0/16   # the Docker network your proxy container is on
+  public_console_url: https://console.example.com   # per agent; see below
 ```
 
 | Key | Default | What |
 |---|---|---|
 | `bind` | `127.0.0.1` | The interface the server listens on. An explicit `--host` wins. Env fallback: `PROTOAGENT_HOST` (see [environment variables](./environment-variables.md)). |
 | `trusted_proxies` | `[]` | IPs or CIDRs of reverse proxies allowed to set `X-Forwarded-For` and `X-Forwarded-Proto`. Loopback (`127.0.0.1`, `::1`) is always trusted, so a proxy on the same machine (`tailscale serve`, `cloudflared`, nginx on the host) needs nothing here. Add a proxy that reaches you from **another** address, such as a container on a Docker network or a separate box. The list goes to uvicorn (`forwarded_allow_ips`), and it decides which client the [pairing-claim throttle](../explanation/security-and-trust.md#the-pairing-claim-endpoint) counts a wrong code against: from an untrusted proxy, every client looks like the proxy and they share one budget. A header from anyone not on the list is ignored. `*` trusts every peer, which is only safe when nothing but your proxy can reach the port. Env fallback: `FORWARDED_ALLOW_IPS` (comma-separated, uvicorn's own variable). |
+| `public_console_url` | `""` | Your own HTTPS origin for this agent's console, such as `https://console.example.com`, served by a proxy you run ([ADR 0121](../adr/0121-device-pairing-over-an-operator-supplied-public-url.md) D2). Set, it is offered in **Settings ▸ Devices** as **Phone without Tailscale**, so a phone can pair without Tailscale ([guide](../guides/phone-access.md#without-tailscale)). Rules, checked when the config loads (a bad value names this key and fails the load or the save): `https://` only; an origin only, with no path, query or fragment (a trailing `/` and an explicit `:443` are dropped); not loopback. The agent **refuses to start** with it set and no auth token, and `PROTOAGENT_ALLOW_OPEN=1` doesn't override that. The origin is added to `A2A_ALLOWED_ORIGINS` when that allowlist is set, and to the trusted Host names. A pairing claim through this hostname must be `https` at your proxy (via `X-Forwarded-Proto` from a trusted proxy). It is never discovered: other offered addresses stay tailnet and LAN only. Per agent, so a fleet member doesn't inherit the hub's environment value. On the [credential plane](#credential-plane-keys). Env fallback: `PROTOAGENT_PUBLIC_CONSOLE_URL`. Proxy setup: [the console on its own hostname](../guides/exposing-protoagent.md#console-hostname). |
 
 ## `egress`
 

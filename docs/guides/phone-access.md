@@ -7,7 +7,8 @@ screen, but it has no offline mode.
 ## 1. Make the agent reachable {#_1-bind-to-the-network-set-a-token}
 
 A phone can't reach an agent that only listens on `127.0.0.1`, which is the default. There
-are two ways to fix that. Use the first one if you have Tailscale.
+are two ways to fix that on your own networks. Use the first one if you have Tailscale. For a
+phone without Tailscale, away from home, see [your own public URL](#without-tailscale).
 
 ### Recommended: HTTPS via Tailscale {#https-via-tailscale}
 
@@ -106,6 +107,7 @@ The panel lists addresses best first. The QR uses the one you select.
 | Address | Example | Requirement |
 | --- | --- | --- |
 | Tailnet HTTPS | `https://my-mac.tail1234.ts.net` | Tailscale app on the phone, signed in to the same tailnet. Works from any network. |
+| Phone without Tailscale | `https://console.example.com` | Your own [public URL](#without-tailscale). No Tailscale on the phone. Works from any network. Listed only when you've set one. |
 | Tailnet name | `http://my-mac.tail1234.ts.net:7870` | The same, over plain http. Offered when the agent listens on its tailnet address. |
 | Tailnet IP | `http://100.64.0.5:7870` | The same. Breaks if the machine's tailnet IP changes. |
 | Wi-Fi (LAN) | `http://192.168.1.20:7870` | Same Wi-Fi only. |
@@ -162,13 +164,54 @@ The home-screen shortcut still connects to the live agent. The console does
 not cache an offline copy through a service worker. If the agent stops or the
 network disconnects, reconnect before continuing the task.
 
-## Use a public URL {#going-further-a-public-url}
+## Without Tailscale: your own public URL {#without-tailscale}
 
-The [public A2A proxy guide](/guides/exposing-protoagent) deliberately hides the
-console and cannot be used for phone access as written. Prefer the private
-connection above. If a public console hostname is required, use a separate
-identity-protected hostname covering both the console and its backend routes,
-with the application token still enabled.
+<span id="going-further-a-public-url"></span>
+
+A phone that doesn't have Tailscale can still pair and work from any network, through an HTTPS
+address **you** run in front of the agent: Cloudflare Tunnel, nginx or Caddy. protoAgent
+doesn't host one for you.
+
+**Pick the posture first.** With Cloudflare Access (or another identity-aware proxy) in front,
+nobody on the internet reaches the console until they sign in to Access. Without it, anyone can
+load the sign-in and try pairing codes; only the agent's token, the
+[claim throttle](/explanation/security-and-trust#the-pairing-claim-endpoint) and the phone's
+[limited scope](/explanation/security-and-trust#device-tokens) protect it. Use Access unless you
+have a reason not to.
+
+1. **Set an auth token** on the agent if it doesn't have one. The agent refuses to start with a
+   public URL and no token, and `PROTOAGENT_ALLOW_OPEN=1` doesn't change that.
+2. **Give the console its own hostname**, such as `console.example.com`, and point your proxy
+   at the agent for the **whole** hostname. Don't reuse the hostname that serves A2A to the
+   public: that one keeps `/app` and `/api` blocked. The
+   [console hostname recipe](/guides/exposing-protoagent#console-hostname) has a Cloudflare
+   Tunnel and Access setup, plus nginx and Caddy blocks.
+3. **Declare it.** Set `network.public_console_url` to the origin, with no path:
+
+   ```yaml
+   network:
+     public_console_url: https://console.example.com
+   ```
+
+   Or set `PROTOAGENT_PUBLIC_CONSOLE_URL`, or edit **Settings ▸ Box ▸ Network ▸ Public console URL**.
+   It must start with `https://`. It applies on save.
+4. **Trust the proxy**, if it reaches the agent from another address (a container on a Docker
+   network, another machine). List that address in
+   [`network.trusted_proxies`](/reference/configuration#network) and restart. A proxy on the same
+   machine needs nothing. Without this, the agent can't see that the phone used https, and
+   refuses its pairing claim with a message naming `network.trusted_proxies`.
+5. **Pair the phone.** Open **Settings ▸ Devices ▸ Add a device** and select
+   **Phone without Tailscale**. The panel picks it for you when there's no tailnet HTTPS
+   address. The QR and the URL to type the code into both use
+   `https://console.example.com/app/`. If Access is on, the phone signs in to Access first,
+   then pairs.
+
+While the URL is set, Devices shows a warning that anyone on the internet can reach the
+console's sign-in. To make the console private again, clear the setting.
+
+The phone uses this address at home too, through your proxy, so it doesn't need moving between
+networks. Pick the address that fits the phone when you pair it: a phone paired on its tailnet
+address keeps using that address.
 
 ## See also
 

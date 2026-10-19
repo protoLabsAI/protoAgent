@@ -128,6 +128,8 @@ A query string would be simpler and is rejected for exactly those reasons.
 
 ### D6 — Pairing requires a reachable bind address, and says so when there isn't one
 
+> **Amended by [ADR 0121](./0121-device-pairing-over-an-operator-supplied-public-url.md) D2/D6:** "never a public address" still holds for *discovered* addresses; the operator-declared `network.public_console_url` (https, on an instance with a token) is the only exception.
+
 Pairing is meaningless when the server is bound to loopback: the phone cannot reach the port
 no matter what it scans. The start endpoint enumerates candidate addresses (tailnet first,
 then LAN) and reports them; with none it returns a clear error rather than a QR that cannot

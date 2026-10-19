@@ -623,6 +623,15 @@ def _string_list(value) -> list[str]:
     return [s for s in (str(v).strip() for v in value if v is not None) if s]
 
 
+def _public_console_url(value) -> str:
+    """``network.public_console_url`` normalised to ``https://host[:port]`` (ADR 0121 D2).
+    Raises ``ValueError`` naming the key for http, a path/query/fragment, or loopback: a bad
+    public URL must fail loudly at load, not half-work at the edge."""
+    from security.public_console import normalize_public_console_url
+
+    return normalize_public_console_url(value)
+
+
 @dataclass
 class LangGraphConfig:
     # Model settings — route through the LiteLLM gateway by default
@@ -1490,6 +1499,10 @@ class LangGraphConfig:
     # passed to uvicorn and used to key the pairing-claim throttle (ADR 0121 D3). Loopback
     # is always trusted on top of these. env: FORWARDED_ALLOW_IPS (uvicorn's own, comma list).
     network_trusted_proxies: list[str] = field(default_factory=list)
+    # The operator's own HTTPS origin for the console (ADR 0121 D2): a phone without Tailscale
+    # pairs through it. Agent-scoped (each agent on a box has its own URL). Validated at load
+    # (https, origin only, not loopback); "" = nothing public. env: PROTOAGENT_PUBLIC_CONSOLE_URL.
+    public_console_url: str = ""
     fleet_port_base: int = 7870  # workspace agents get port_base+1, +2, …
     discovery_port_min: int = 7860  # fleet discovery scan window (inclusive)
     discovery_port_max: int = 7910
@@ -2289,6 +2302,9 @@ class LangGraphConfig:
             bind_host=network.get("bind", _env_default("PROTOAGENT_HOST", cls.bind_host)),
             network_trusted_proxies=_string_list(
                 network.get("trusted_proxies", _env_default("FORWARDED_ALLOW_IPS", []))
+            ),
+            public_console_url=_public_console_url(
+                network.get("public_console_url", _env_default("PROTOAGENT_PUBLIC_CONSOLE_URL", ""))
             ),
             fleet_port_base=fleet.get("port_base", cls.fleet_port_base),
             discovery_port_min=discovery.get("port_min", cls.discovery_port_min),

@@ -1535,6 +1535,23 @@ FIELDS: list[Field] = [
         restart=True,
         scope="host",
     ),
+    # The operator's own HTTPS origin for the console (ADR 0121 D2): how a phone WITHOUT
+    # Tailscale pairs. Agent-scoped (each agent on a box has its own), hot-reloaded, and on the
+    # credential plane (it decides who can reach the sign-in). Validated in `validate_flat`.
+    Field(
+        "network.public_console_url",
+        "public_console_url",
+        "Public console URL",
+        "string",
+        "Network",
+        "Your own HTTPS address for this agent's console, such as https://agent.example.com, "
+        "served by a proxy you run (Cloudflare Tunnel, nginx, Caddy). Set it and Devices can "
+        "pair a phone that has no Tailscale. It must be https and a bare origin (no path), and "
+        "it needs an auth token: anyone on the internet can reach the sign-in, so put "
+        "Cloudflare Access or another identity-aware proxy in front. Leave empty to keep the "
+        "console private. Env fallback: PROTOAGENT_PUBLIC_CONSOLE_URL.",
+        credential_plane=True,
+    ),
     # Outbound counterpart to the inbound bind interface (ADR 0008). Host-scoped +
     # hot-reloaded (egress.set_allowed_hosts runs on save). string_list → the generic
     # one-per-line editor; no bespoke console code.
@@ -2502,6 +2519,13 @@ def validate_flat(updates: dict[str, Any], hidden: list[str] | None = None) -> t
         # of writing a dict into the YAML.
         if f.type == "path" and not isinstance(val, str):
             return False, f"{key} must be a string path"
+        if key == "network.public_console_url":
+            from security.public_console import normalize_public_console_url
+
+            try:
+                normalize_public_console_url(val)
+            except ValueError as exc:
+                return False, str(exc)
     return True, None
 
 

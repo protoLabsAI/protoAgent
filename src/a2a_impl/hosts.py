@@ -83,11 +83,16 @@ def _trusted_host_names() -> set[str]:
     """Operator-declared names the instance is served under: ``PROTOAGENT_TRUSTED_HOSTS``
     (comma-separated — a reverse proxy that forwards its own public name, or a container
     network's service name) plus the host of every ``A2A_ALLOWED_ORIGINS`` entry (an origin you
-    trust to CALL the instance names a host that serves it). Read per call — both are cheap and
-    an env change must not need a cache flush."""
+    trust to CALL the instance names a host that serves it), plus the declared public console
+    host (ADR 0121 D2, ``network.public_console_url``) — for consistency only: the guard acts in
+    open mode, which that key forbids. Read per call — all are cheap and an env change must not
+    need a cache flush."""
     from a2a_impl.auth import allowed_origins
+    from security.public_console import public_host
 
     names = {host_name(n) for n in os.environ.get("PROTOAGENT_TRUSTED_HOSTS", "").split(",") if n.strip()}
+    if public_host():
+        names.add(host_name(public_host()))
     for o in allowed_origins() or []:
         try:
             netloc = urlsplit(o).netloc
@@ -113,7 +118,8 @@ def host_allowed(host: str | None) -> bool:
       still refuses these unless ``PROTOAGENT_ALLOW_OPEN=1`` (``tailnet_proxy_refusal``).
     - This machine's ``<short>.local`` mDNS name (see ``_own_names`` for why not the bare or
       DNS hostname), and the bind address when it is a name.
-    - ``PROTOAGENT_TRUSTED_HOSTS`` and the hosts of ``A2A_ALLOWED_ORIGINS``.
+    - ``PROTOAGENT_TRUSTED_HOSTS``, the hosts of ``A2A_ALLOWED_ORIGINS``, and the declared
+      public console host (``network.public_console_url``).
 
     Deliberately NOT auto-trusted: a container network's bare service name (``agent`` in
     ``http://agent:7870``), even under ``PROTOAGENT_ALLOW_OPEN=1``. That opt-in's documented

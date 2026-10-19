@@ -430,8 +430,18 @@ def credential_tier(token: str) -> str | None:
 def allowed_origins() -> list[str] | None:
     """The configured ``A2A_ALLOWED_ORIGINS`` allowlist (lowercased), or None when origin
     verification is disabled (unset or ``*``). For scopes the HTTP middleware skips — the
-    fleet WS proxy."""
-    return _ALLOWED_ORIGINS[0]
+    fleet WS proxy.
+
+    The declared public console origin (ADR 0121 D2, ``network.public_console_url``) is folded
+    in whenever an allowlist IS set — otherwise every console call from the public origin would
+    be a 403. With no allowlist nothing is added: verification stays off, as configured."""
+    base = _ALLOWED_ORIGINS[0]
+    if base is None:
+        return None
+    from security.public_console import public_origin
+
+    origin = public_origin()
+    return [*base, origin] if origin and origin not in base else base
 
 
 def _bearer_tier_for(token: str) -> str | None:
@@ -824,7 +834,7 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         # present. Origin is a browser-only header; server-to-server callers
         # (the hub, the LocalScheduler loopback) send none and must not be
         # rejected for it.
-        allowed = _ALLOWED_ORIGINS[0]
+        allowed = allowed_origins()
         if allowed is not None:
             origin = request.headers.get("Origin")
             if origin is not None and origin.lower() not in allowed:

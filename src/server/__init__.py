@@ -271,6 +271,30 @@ def _trusted_proxies(graph_config: Any) -> list[str]:
     return claim_throttle.trusted_proxies()
 
 
+def _public_console_gate(graph_config: Any) -> None:
+    """Refuse to start with ``network.public_console_url`` set on an OPEN instance (no bearer,
+    no X-API-Key), else record the origin (ADR 0121 D2). Deliberately blind to
+    ``PROTOAGENT_ALLOW_OPEN``: that opt-in means "a network boundary fences this port", and a
+    public URL is the opposite. Runs after ``auth.install`` so ``open_mode`` is the guard's own
+    answer."""
+    from a2a_impl import auth as _auth
+    from security import public_console
+
+    url = str(getattr(graph_config, "public_console_url", "") or "") if graph_config is not None else ""
+    refusal = public_console.open_mode_refusal(url, open_mode=_auth.open_mode())
+    if refusal:
+        log.error("%s", refusal)
+        raise SystemExit(2)
+    public_console.set_public_console_url(url)
+    if public_console.public_origin():
+        log.warning(
+            "[security] the console is declared public at %s (network.public_console_url): anyone "
+            "who can reach that hostname reaches the sign-in. Put Cloudflare Access (or another "
+            "identity-aware proxy) in front of it.",
+            public_console.public_origin(),
+        )
+
+
 def build_uvicorn_server(config: "uvicorn.Config") -> "uvicorn.Server":
     """The ``uvicorn.Server`` this process runs, with one change: an exit signal
     starts tearing down the process trees this process owns (#3428) BEFORE the
@@ -1516,6 +1540,10 @@ def _main():
         raise SystemExit(2)
     if gate_msg:
         log.warning("%s", gate_msg)
+    # Boot gate 2 (ADR 0121 D2): a declared public console URL with no credential is never a
+    # state the agent runs in — refused even under PROTOAGENT_ALLOW_OPEN=1. Then publish the
+    # origin to the allowlists and the claim throttle's `public` ingress class.
+    _public_console_gate(STATE.graph_config)
 
     # Listen on the picked interface AND loopback (server/bind.py, #4336 S4): uvicorn binds
     # one host, and a single-IP bind used to drop 127.0.0.1 — the desktop webview's way to its

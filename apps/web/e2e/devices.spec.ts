@@ -409,3 +409,45 @@ test("a device-scope refusal from the server reads as a sentence, not a code", a
   await expect(page.getByText("This device can't change pairing or credentials — use a full-access device.")).toBeVisible();
   await expect(page.getByText("device_scope")).toHaveCount(0);
 });
+
+// ── ADR 0121 S7.4: a phone without Tailscale, through your own public URL ──────────────────
+
+test("no public URL: the panel says how to set one up, and nothing warns", async ({ page }) => {
+  await openDevices(page);
+  const hint = page.getByTestId("public-console-hint");
+  await expect(hint).toContainText("network.public_console_url");
+  await expect(hint.getByRole("link", { name: "Set up a public URL" })).toHaveAttribute(
+    "href",
+    /guides\/phone-access#without-tailscale$/,
+  );
+  await expect(page.getByTestId("public-console-warning")).toHaveCount(0);
+});
+
+test("public URL set: a persistent warning, and 'Phone without Tailscale' points the QR and URL at it", async ({ page }) => {
+  await page.setExtraHTTPHeaders({ "x-e2e-fleet": scope(test.info()), "x-e2e-pairing": "public" });
+  await openDevices(page);
+  // Persistent: shown as soon as the panel opens, before any pairing starts.
+  const warning = page.getByTestId("public-console-warning");
+  await expect(warning).toContainText(
+    "Anyone on the internet can reach this console's sign-in. Put Cloudflare Access (or another identity-aware proxy) in front of it.",
+  );
+  await expect(warning).toContainText("https://agent.example.com");
+  await expect(warning.getByRole("link", { name: "How to put Access in front of it" })).toHaveAttribute(
+    "href",
+    /guides\/exposing-protoagent#console-hostname$/,
+  );
+  await expect(page.getByTestId("public-console-hint")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Add a device" }).click();
+  const card = page.getByRole("region", { name: "Pair a new device" });
+  // Preselected (the best path when there's no tailnet HTTPS).
+  await expect(card.getByTestId("device-pair-url")).toHaveText("https://agent.example.com/app/");
+  await expect(card.getByTestId("device-pair-requirement")).toContainText("no Tailscale needed");
+  // Switch to the tailnet address and back: the option drives the typed-code URL.
+  await card.getByRole("button", { name: "Tailnet · 100.64.0.5" }).click();
+  await expect(card.getByTestId("device-pair-url")).toHaveText("http://100.64.0.5:7871/app/");
+  await card.getByRole("button", { name: "Phone without Tailscale · agent.example.com" }).click();
+  await expect(card.getByTestId("device-pair-url")).toHaveText("https://agent.example.com/app/");
+  // The warning stays while the code is live.
+  await expect(warning).toBeVisible();
+});

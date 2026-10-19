@@ -96,6 +96,24 @@ describe("reachable addresses", () => {
     expect(hostKindLabel("tailnet")).toBe("Tailnet");
     expect(hostKindLabel("lan")).toBe("LAN");
   });
+
+  it("puts the public URL after tailnet HTTPS and before every other address (ADR 0121 D1)", () => {
+    const hosts = [
+      { host: "192.168.1.5", kind: "lan", via: "ip" },
+      { host: "100.64.0.2", kind: "tailnet", via: "ip" },
+      { host: "box.ts.net", kind: "tailnet", via: "magicdns" },
+      { host: "agent.example.com", kind: "public", via: "public" },
+      { host: "box.ts.net", kind: "tailnet", via: "serve" },
+    ];
+    expect(tailnetFirst(hosts).map((h) => `${h.kind}/${h.via}`)).toEqual([
+      "tailnet/serve",
+      "public/public",
+      "tailnet/ip",
+      "tailnet/magicdns",
+      "lan/ip",
+    ]);
+    expect(hostKindLabel("public")).toBe("Public");
+  });
 });
 
 describe("remote auth badge", () => {

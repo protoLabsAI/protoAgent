@@ -1,3 +1,4 @@
+import { Alert } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button } from "@protolabsai/ui/primitives";
 import { Copy, Network, QrCode, RefreshCw } from "lucide-react";
@@ -6,7 +7,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { formatCountdown, hostKindLabel, secondsLeft, tailnetFirst, type PairKind } from "../lib/agentPairing";
 import { api, DEVICE_SCOPE_MESSAGE } from "../lib/api";
 import { currentSlug } from "../lib/api/routing";
-import { reachKey, reachLabel, reachRequirement, waitForRestart } from "../lib/deviceReach";
+import {
+  PUBLIC_CONSOLE_DOCS,
+  PUBLIC_CONSOLE_WARNING,
+  PUBLIC_URL_GUIDE,
+  publicConsoleUrl,
+  reachKey,
+  reachLabel,
+  reachRequirement,
+  waitForRestart,
+} from "../lib/deviceReach";
 import { DeviceList } from "./DeviceList";
 import { PairingTokenRecoveryError, savePairingToken } from "./pairingToken";
 import { SettingsSubPanel } from "./SettingsSubPanel";
@@ -57,6 +67,10 @@ export function DevicesPanel() {
   // How this agent is reachable (#4336 S4): Tailscale, restart ability, token — from the
   // latest pairing-start answer, so the reach section renders from server facts.
   const [reach, setReach] = useState<PairReach | null>(null);
+  // The operator's declared public console origin (ADR 0121 D2, `network.public_console_url`),
+  // "" when unset. From the device list (so the warning shows the moment the panel opens) and
+  // refreshed by every pairing-start answer.
+  const [publicUrl, setPublicUrl] = useState("");
   const [serving, setServing] = useState(false);
   const [serveProblem, setServeProblem] = useState<ServeProblem | null>(null);
   const [restarting, setRestarting] = useState(false);
@@ -80,6 +94,7 @@ export function DevicesPanel() {
     try {
       const res = await api.devices();
       setDevices(res.devices || []);
+      setPublicUrl(publicConsoleUrl(res.public_console_url));
       let lim = res.caller?.scope === "device";
       if (!lim && currentSlug() !== "host") {
         // A member's list is answered for the HUB's fleet token (always full): what this
@@ -186,6 +201,7 @@ export function DevicesPanel() {
     try {
       const res = await api.pairingStart(kind);
       setReach(res.reach ?? null);
+      if (res.reach && "public_console_url" in res.reach) setPublicUrl(publicConsoleUrl(res.reach.public_console_url));
       if (res.ok) {
         setPairing({
           kind,
@@ -383,6 +399,26 @@ export function DevicesPanel() {
         Phones, tablets and other agents&apos; hubs paired to this agent. Each holds its own
         token, so removing one here doesn&apos;t sign out anything else.
       </p>
+      {publicUrl ? (
+        // Persistent while the console is declared public (ADR 0121 D6): the token-only posture
+        // is supported, but the operator must know who can reach the sign-in.
+        <div className="devices-public" data-testid="public-console-warning">
+          <Alert status="warning" title={PUBLIC_CONSOLE_WARNING}>
+            This console is public at <code>{publicUrl}</code>.{" "}
+            <a href={PUBLIC_CONSOLE_DOCS} target="_blank" rel="noreferrer">
+              How to put Access in front of it
+            </a>
+          </Alert>
+        </div>
+      ) : (
+        <p className="setting-desc" data-testid="public-console-hint">
+          No Tailscale on the phone? Put this console behind your own HTTPS address (Cloudflare
+          Tunnel, nginx or Caddy) and set it as <code>network.public_console_url</code>.{" "}
+          <a href={PUBLIC_URL_GUIDE} target="_blank" rel="noreferrer">
+            Set up a public URL
+          </a>
+        </p>
+      )}
       {limited && (
         <p className="setting-desc" data-testid="devices-limited-note">
           <strong>This device has limited access.</strong> It can rename or remove itself, but
@@ -584,7 +620,9 @@ export function DevicesPanel() {
                 <ul className="devices-agent-hosts">
                   {pairing.hosts.map((h) => (
                     <li key={reachKey(h)}>
-                      <Badge status={h.kind === "tailnet" ? "info" : "neutral"}>{hostKindLabel(h.kind)}</Badge>
+                      <Badge status={h.kind === "tailnet" ? "info" : h.kind === "public" ? "warning" : "neutral"}>
+                        {hostKindLabel(h.kind)}
+                      </Badge>
                       <code>{h.url}</code>
                     </li>
                   ))}

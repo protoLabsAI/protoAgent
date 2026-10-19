@@ -155,9 +155,9 @@ def reset(clock: Callable[[], float] | None = None) -> ClaimThrottle:
 
 
 # ── Ingress class ──────────────────────────────────────────────────────────────────────
-# The public console origin (ADR 0121 D2, ``network.public_console_url``) arrives in S7.4.
-# Until then nothing sets it and every claim is `private`; the hook exists so the class
-# bucket is keyed correctly the day it does.
+# The public console origin (ADR 0121 D2, ``network.public_console_url``), set by
+# ``security.public_console.set_public_console_url`` at boot and on every config reload.
+# Unset (the default), every claim is `private`.
 _PUBLIC_HOST: list[str] = [""]
 
 
@@ -175,11 +175,27 @@ def ingress_class(host_header: str | None) -> str:
     """``public`` when the request's Host is the configured public origin, else ``private``.
 
     A forged Host only moves a request INTO the public bucket — it can drain that one, never
-    the private bucket LAN and tailnet pairing use (D3)."""
-    public = _PUBLIC_HOST[0]
-    if public and (host_header or "").strip().lower() == public:
+    the private bucket LAN and tailnet pairing use (D3).
+
+    Compared by NAME, port ignored: a proxy that rewrites Host to the bare name (nginx's
+    ``$host``) in front of an ``https://name:8443`` origin must still land here, or its flood
+    would drain the private bucket and its claims would skip the public-path https check.
+    Matching more requests as public can only narrow what they reach, never widen it."""
+    public = _host_name(_PUBLIC_HOST[0])
+    if public and _host_name(host_header or "") == public:
         return INGRESS_PUBLIC
     return INGRESS_PRIVATE
+
+
+def _host_name(host: str) -> str:
+    """The name part of a Host value: lowercased, port and IPv6 brackets dropped, trailing dot
+    removed (``Agent.Example.com.:8443`` → ``agent.example.com``)."""
+    h = host.strip().lower()
+    if h.startswith("["):
+        h = h[1 : h.find("]")] if "]" in h else h[1:]
+    elif h.count(":") == 1:
+        h = h.split(":", 1)[0]
+    return h.rstrip(".")
 
 
 # ── Client IP through trusted proxies ──────────────────────────────────────────────────
@@ -253,3 +269,25 @@ def resolve_client_ip(peer: str | None, forwarded_for: Iterable[str], trusted: I
         if not ok(hop):
             return hop
     return hops[0]
+
+
+def resolve_scheme(
+    peer: str | None, scheme: str | None, forwarded_proto: Iterable[str], trusted: Iterable[str] | None = None
+) -> str:
+    """The scheme a request ARRIVED with at the edge, as ``trusted_proxies`` lets us know it.
+
+    ``X-Forwarded-Proto`` counts only when the TCP peer is a trusted proxy, exactly as uvicorn's
+    ``ProxyHeadersMiddleware`` applies it (last header wins; only ``http``/``https`` change
+    anything). On a request uvicorn already rewrote, the peer is the real client, so this
+    returns the rewritten scheme unchanged. Used for ADR 0121 D3's "HTTPS on the public path"
+    rule: a claim through the public console must have been https at the edge."""
+    entries = trusted_proxies() if trusted is None else effective_trusted_proxies(trusted)
+    trust_all = "*" in entries
+    nets = _networks(e for e in entries if e != "*")
+    current = (scheme or "").strip().lower()
+    peer = (peer or "").strip()
+    values = [str(v) for v in forwarded_proto]
+    if not values or not peer or not (trust_all or _is_trusted(peer, nets)):
+        return current
+    proto = values[-1].strip().lower()
+    return proto if proto in ("http", "https") else current
