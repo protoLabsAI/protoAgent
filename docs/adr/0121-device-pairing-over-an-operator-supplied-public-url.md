@@ -325,6 +325,22 @@ Rejected:
 - **A fixed absolute lifetime.** It forces periodic re-pairing of a phone in daily use, which
   people work around with the shared bearer.
 
+**Amended in implementation (S7.3, #4358).**
+
+- `Device` has a fourth field, `prev_retired_at`. It records when the new token was first
+  presented, which is when the previous token's 120 s grace starts. While it is unset, the
+  previous token stays valid.
+- A rotate that presents the **previous** token while the current one has never been used is
+  refused with `409 rotation_in_progress` if that rotation is less than 120 s old. Two tabs
+  racing one rotation can therefore mint only one token. An unused rotation older than that,
+  which is what a failed storage write leaves behind, is replaced, and the presented token stays
+  the previous one.
+- Only `device`-scope tokens rotate. `GET /api/devices/self` answers `{"device": null}` for a
+  credential that isn't a paired device.
+- Streams re-verify the **device** (it still exists and hasn't expired), not the token. This
+  happens through one ASGI layer at the streams' existing keepalive chunks, so re-presenting a
+  rotated-out token can't trip reuse detection.
+
 ### D6 — Amending the rule that the console is never public
 
 The new rule, replacing "keep the console private" in `exposing-protoagent.md` and
