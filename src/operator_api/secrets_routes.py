@@ -110,6 +110,18 @@ def register_secrets_routes(app) -> None:
                 }.items()
                 if v not in ("", None)
             }
+            # The saved credential belongs to the saved destination. Pointing the test at
+            # another host or provider must bring its own secret, or the saved one would be
+            # sent to wherever the form says.
+            moved = any(k in overrides and overrides[k] != getattr(cfg, k) for k in ("host", "provider"))
+            if moved and "client_secret" not in overrides and cfg.client_secret:
+                return {
+                    "ok": False,
+                    "error": "enter the client secret to test against a different host or provider",
+                    "error_kind": "not_configured",
+                    "count": 0,
+                    "names": [],
+                }
             cfg = dataclasses.replace(cfg, **overrides)
             provider = get_provider(cfg.provider)
             if provider is None:
