@@ -1841,35 +1841,39 @@ class LangGraphConfig:
             fenced.append(projected)
         return fenced
 
+    @property
+    def filesystem_workspace_is_implicit(self) -> bool:
+        """Whether the fence includes the synthesized, tool-owned workspace.
+
+        A named workspace entry is an override even when opted out or malformed.
+        An empty projection of a configured registry stays empty (#2251).
+        """
+        if self.filesystem_projects or not self.filesystem_enabled:
+            return False
+        if any(
+            isinstance(entry, dict) and str(entry.get("name") or "").strip() == "workspace"
+            for entry in self.projects or []
+        ):
+            return False
+        return not self.projects or bool(self.fenced_projects(quiet=True))
+
     def effective_filesystem_projects(self, *, create: bool = False, quiet: bool = False) -> list[dict]:
-        """The fs project registry the agent actually gets. Explicit
-        ``filesystem_projects`` win; then the ADR 0095 ``projects:`` registry
-        projected onto the fence; otherwise (when filesystem is enabled) a
-        single default ``workspace`` project so the on-by-default fs toolset has a
-        fenced place to work. ``create=True`` mkdirs the workspace dir;
-        ``quiet`` is passed to :meth:`fenced_projects` (polled callers)."""
+        """The fs fence, with the implicit writable workspace alongside registry projects.
+
+        Explicit ``filesystem_projects`` win unchanged. Registry workspace overrides
+        and empty projections (including all ``fs: false``) suppress synthesis.
+        ``create=True`` creates only the synthesized workspace directory.
+        """
         if self.filesystem_projects:
             return self.filesystem_projects
         if not self.filesystem_enabled:
             return []
-        # A CONFIGURED registry is the answer, even when it projects to nothing.
-        # ``fs: false`` on every entry means "registered, but NOT in the fence at all"
-        # (D3) and is honoured literally — substituting the workspace default would
-        # grant read-write on a directory the operator just said they didn't want.
-        #
-        # This used to fall through to that default, on the grounds that an empty fence
-        # unbinds the whole toolset with no visible cause (#2251). That reason is gone:
-        # every dropped entry now WARNs by name, and ``/api/projects`` reports
-        # ``fence_source: "unbound"`` with a console banner. The failure is loud, so it
-        # no longer has to be papered over with access nobody asked for.
-        #
-        # An ABSENT registry still gets the workspace default below — that's the
-        # default-install path and it is deliberately unchanged.
-        if self.projects:
-            return self.fenced_projects(quiet=quiet)
-        from infra.paths import workspace_dir
+        projects = self.fenced_projects(quiet=quiet) if self.projects else []
+        if self.filesystem_workspace_is_implicit:
+            from infra.paths import workspace_dir
 
-        return [{"name": "workspace", "path": str(workspace_dir(create=create)), "write": True}]
+            projects.append({"name": "workspace", "path": str(workspace_dir(create=create)), "write": True})
+        return projects
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "LangGraphConfig":

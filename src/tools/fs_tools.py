@@ -325,7 +325,7 @@ class Project:
     #   write:true,  no_delete:true  → read-write-no-delete (create/edit, never delete)
     # ``no_delete`` only bites on ``delete_file``; a read-only project already refuses it.
     no_delete: bool = False
-    # Only the agent's OWN implicit default workspace (nothing configured) sets this: the
+    # Only the agent's OWN synthesized default workspace sets this: the
     # tools created that folder, so they may create it again if it's deleted mid-session
     # (#3643 review). A configured / onboarded root NEVER does — a vanished checkout must
     # stay missing rather than be mkdir'd back as an empty directory.
@@ -432,7 +432,7 @@ def _approved(decision) -> bool:
 def _configured_entries(config, *, create: bool = False, quiet: bool = False) -> list[dict]:
     """The fence entries this config actually asks for — explicit
     ``filesystem.projects``, else the ADR 0095 ``projects:`` registry projected
-    onto the fence, else the default workspace. The warning path below reports
+    onto the fence with the implicit workspace where allowed. The warning path below reports
     against this same list, so a bad *explicit* entry is named here.
 
     Registry entries are NOT all visible here: ``fenced_projects`` drops the
@@ -626,16 +626,9 @@ def open_in_host_editor(
 def _registry_from_config(config, *, create: bool = True, quiet: bool = False) -> ProjectRegistry:
     projects: list[Project] = []
     missing: dict[str, Path] = {}
-    # Explicit projects, or the default workspace dir (created) when none are
-    # configured — the on-by-default fenced workspace.
     entries = _configured_entries(config, create=create, quiet=quiet)
-    # The implicit default: a real config with nothing configured gets the single
-    # `workspace` entry from effective_filesystem_projects — the only root the tools own.
-    implicit_default = (
-        hasattr(config, "effective_filesystem_projects")
-        and not getattr(config, "filesystem_projects", None)
-        and not getattr(config, "projects", None)
-    )
+    # Only the synthesized workspace is tool-owned, even alongside registry entries.
+    implicit_default = getattr(config, "filesystem_workspace_is_implicit", False)
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -699,7 +692,7 @@ def project_roots(config) -> dict[str, str]:
     """``{project name: absolute root}`` for the fence the fs tools resolve against.
 
     The same ``_registry_from_config`` projection the tools use (explicit
-    ``filesystem.projects`` → ADR 0095 registry → workspace default, minus any root
+    ``filesystem.projects`` or ADR 0095 registry plus implicit workspace, minus any root
     that isn't a directory), so a console turning a tool's project-relative path
     back into an absolute one can't disagree with where the tool actually read it.
     Empty when the filesystem primitive is off — the tools aren't bound then.

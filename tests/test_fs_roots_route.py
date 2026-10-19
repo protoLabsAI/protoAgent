@@ -67,7 +67,11 @@ def test_registry_projection_feeds_the_fence(client, tmp_path: Path):
     )
     roots = client(cfg).get("/api/fs/roots").json()["roots"]
     assert roots == {"repo": str((tmp_path / "repo").resolve())}
-    assert roots == _tools_view(cfg)
+    # Tool construction creates the implicit workspace; the read-only route then
+    # includes it alongside the registry project without creating it itself.
+    tools_roots = _tools_view(cfg)
+    assert set(tools_roots) == {"repo", "workspace"}
+    assert client(cfg).get("/api/fs/roots").json()["roots"] == tools_roots
 
 
 def test_workspace_default_when_nothing_configured(client, tmp_path: Path, monkeypatch):
