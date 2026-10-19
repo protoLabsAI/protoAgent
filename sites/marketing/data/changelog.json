@@ -1,5 +1,43 @@
 [
   {
+    "version": "v0.209.0",
+    "date": "2026-10-19",
+    "changes": [
+      "Technical Writer archetype turns a codebase into maintained documentation (#4338).",
+      "Pair a phone by typing a short code (#4345).",
+      "Device identity: rename, \"This device\", pairing confirmation (#4350).",
+      "Reach your agent from anywhere with Tailscale HTTPS (#4351).",
+      "Limited scope for paired phones (#4355).",
+      "Pair a phone without Tailscale (#4357).",
+      "Phone tokens expire and rotate (#4358).",
+      "Move a phone between networks in one tap (#4359).",
+      "Chat session switcher adopts the DS Menu collapse (#4318).",
+      "Remove the unused service worker (#4337).",
+      "Tablet layout for the console (#4340).",
+      "The marketing site now introduces the current app and practical workflows (#4343).",
+      "The desktop app opens right away, even with a fleet to start (#4348).",
+      "Add real product captures to the marketing site (#4349).",
+      "Pairing codes can't be locked out by wrong guesses (#4354).",
+      "Find current task instructions in documentation search (#4322).",
+      "Opening the Friction log no longer polls the whole fleet (#4344).",
+      "Zoom marketing screenshots without leaving the page (#4352).",
+      "Make enlarged marketing screenshots keyboard-scrollable (#4353).",
+      "The secrets connection test no longer sends the saved secret to a new host (#4356).",
+      "Removing a phone also closes its open live connections (#4361).",
+      "Chart artifacts use the design system 0.13.0 theme (#4363).",
+      "Deployment and operations guides are shorter and match current behavior (#4316).",
+      "Public console guidance retains the origin-allowlist setup step (#4317).",
+      "Organize documentation around app-user tasks (#4321).",
+      "Simplify first-time setup and Windows installation help (#4323).",
+      "Clarify everyday chat, files, and memory documentation (#4328).",
+      "Clarify automation choices and setup contracts (#4329).",
+      "Align builder, operator, and reference documentation (#4330).",
+      "Make integration setup and device help task-first (#4331).",
+      "Track and maintain documentation visuals (#4333).",
+      "The README's Atlas plugin tile no longer shows the React Flow badge (#4347)."
+    ]
+  },
+  {
     "version": "v0.208.0",
     "date": "2026-10-17",
     "changes": [

@@ -15,6 +15,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.209.0] - 2026-10-19
+
+### Added
+- **Technical Writer archetype turns a codebase into maintained documentation (#4338).**
+  Adds an opt-in persona and six retrievable skills for source-grounded writing,
+  section audits, reader paths, media planning, and verified delivery. A companion
+  bundle enables the pack with project filesystem tools and command approvals.
+
+- **Pair a phone by typing a short code (#4345).** Settings ▸ Devices now shows a ten-character code beside the QR, which a phone can type under "Have a pairing code?" instead of scanning. `protoagent pair --device` prints the same code, URLs and a terminal QR so a headless box can pair a phone.
+
+- **Device identity: rename, "This device", pairing confirmation (#4350).** Paired devices can be renamed inline in Settings ▸ Devices, the browser you are using is marked "This device" (removing it confirms first and signs you out cleanly), a phone now confirms "Paired as <name>" after pairing, and device tokens live under their own key so pairing never overwrites the operator token.
+
+- **Reach your agent from anywhere with Tailscale HTTPS (#4351).** Settings ▸ Devices can now serve the agent at `https://<machine>.<tailnet>.ts.net` with `tailscale serve`, keeping it on localhost; it requires an auth token first, and pairing QRs and codes lead with that address, then the MagicDNS name, tailnet IP and LAN IP. Picking an address now binds that interface plus loopback instead of every interface, and **Restart now** applies it from the panel.
+
+- **Limited scope for paired phones (#4355).** New phone and tablet pairings can use the whole console but can no longer pair devices, manage plugins, use secrets or change auth and network settings; promote one from a full-access device in Settings ▸ Devices.
+
+- **Pair a phone without Tailscale (#4357).** Set `network.public_console_url` to your own HTTPS address (Cloudflare Tunnel, nginx or Caddy) and Settings ▸ Devices offers "Phone without Tailscale", with a standing warning to put Cloudflare Access in front; the agent refuses to run that public console without a token.
+
+- **Phone tokens expire and rotate (#4358).** A paired phone with Limited access stops working after `devices.idle_ttl_days` (default 30, `0` = never) unused days and shows Expired in Devices; while in use it swaps its token weekly, a stolen old copy used later revokes the device and is audited, and removing a device closes its open streams within one keepalive.
+
+- **Move a phone between networks in one tap (#4359).** A paired phone keeps the agent's other addresses: Settings ▸ Devices ▸ **Move…** hands it to tailnet HTTPS or your public URL as the same device with a fresh token, and when its home address stops answering the console lists the others and what each needs.
+
+### Changed
+- **Chat session switcher adopts the DS Menu collapse (#4318).** When the chat rail is narrow enough for the `responsive` TabBar to collapse, the session switcher now opens a themed Design System `Menu` — a radio row per chat (each showing its status dot) to switch sessions, plus a rename/close section — in place of the old native `<select>`. Bumps `@protolabsai/ui` and `@protolabsai/ui-css` to 0.68.2. Scope is TabBar only; `Tabs` and `SideNav` still collapse to `<select>` until DS card ds-o0k ships.
+
+- **Remove the unused service worker (#4337).** The server no longer serves `/sw.js`, an offline page nothing ever registered. The console stays installable to the home screen.
+
+- **Tablet layout for the console (#4340).** On a touch tablet in portrait, the right panel floats over a dimmed chat instead of squeezing it to phone width and, as on a phone, never opens by itself; the desktop shell's tabs, small buttons and divider get finger-sized hit areas.
+
+- **The marketing site now introduces the current app and practical workflows (#4343).**
+  Refreshes the homepage, feature coverage, setup guidance, navigation, and social
+  card; adds use cases for documents, codebase work, automation, and fleet operation.
+  Corrects outdated platform, memory, and sandbox claims and records a media backlog.
+
+- **The desktop app opens right away, even with a fleet to start (#4348).** The hub used to wait for every autostart member to boot, one at a time, before it served anything: about a minute of blank window on an 8-member hub. It now serves immediately and boots members in the background, three at a time. `app.loaded` still fires once they are up, and quitting mid-boot leaves no member running.
+
+- **Add real product captures to the marketing site (#4349).** Show document work, inspectable memory, and completed agent handoffs with a controlled video, text walkthrough, and maintained capture provenance.
+
+- **Pairing codes can't be locked out by wrong guesses (#4354).** Wrong pairing codes are now throttled per client and per network class (a `429` with `Retry-After` that never checks the code) instead of cancelling every pending code, and the new `network.trusted_proxies` key tells the server which reverse proxies' forwarded client addresses to believe.
+
+### Fixed
+- **Find current task instructions in documentation search (#4322).** In-app and website search prefer relevant current guides over incidental references and decision history. Moved aliases no longer displace their destinations; historical and deprecated material remains readable and discoverable. Search previews omit generator comments, and search-result links preserve existing heading anchors.
+
+- **Opening the Friction log no longer polls the whole fleet (#4344).** The view decided whether to show its Fleet tab by running the full fleet rollup, which fetches every member's ledger, on open and on every 30-second live reload. It now asks a new `/api/plugins/friction/fleet/roster` endpoint once, answered from the local roster without contacting any member. The rollup runs only when you pick Fleet.
+
+- **Zoom marketing screenshots without leaving the page (#4352).** Image clicks open an accessible overlay with actual-size inspection, fit-to-screen controls, keyboard dismissal, and restored focus.
+
+- **Make enlarged marketing screenshots keyboard-scrollable (#4353).** The screenshot viewport is an explicitly named keyboard target, and zoom controls announce their next action without a conflicting pressed state.
+
+- **The secrets connection test no longer sends the saved secret to a new host (#4356).** Changing the host or provider in a test now requires typing the client secret.
+
+- **Removing a phone also closes its open live connections (#4361).** WebSockets a revoked or expired phone opened (core, plugin, the browser view and the hub's fleet proxy) now close within about 12 seconds instead of running until they drop.
+
+- **Chart artifacts use the design system 0.13.0 theme (#4363).** Axis labels in vega-lite charts truncate at 120 px, matching the console; the vendored design files match the version the console ships.
+
+### Docs
+- **Deployment and operations guides are shorter and match current behavior (#4316).** Correct fork publishing, Docker updates and shutdown, Proxmox clone credentials, public route allowlists, authenticated monitoring, trace collection, and release verification while preserving existing links. Document the authenticated installer's known limitation.
+
+- **Public console guidance retains the origin-allowlist setup step (#4317).** Restore the proxy troubleshooting caveat and clarify that the HTTP origin check permits header-less server-to-server requests.
+
+- **Organize documentation around app-user tasks (#4321).** The website and in-app help share Get started, Use, Automate, Build, Operate, and Reference journeys. A shared catalog keeps navigation and landing pages aligned while preserving existing links and access to architecture history.
+
+- **Simplify first-time setup and Windows installation help (#4323).** Recommend the desktop route, verify a first model reply before optional tools, keep package commands consistent, and link to shared troubleshooting and backup procedures.
+
+- **Clarify everyday chat, files, and memory documentation (#4328).** Add task-first guidance and distinguish attachments, saved knowledge, and downloads; move API and storage internals to reference while preserving existing links.
+
+- **Clarify automation choices and setup contracts (#4329).** Lead with app-authored skills, correct skill and subagent configuration guidance, separate integration APIs, and keep the A2A tutorial's launch and cleanup on the same instance.
+
+- **Align builder, operator, and reference documentation (#4330).** Add task and deployment routing, correct plugin paths and protocol claims, make gateway deployment optional, and consolidate view and fork setup guidance.
+
+- **Make integration setup and device help task-first (#4331).** Add clear MCP, browser, and Discord setup checks and recovery; separate remote fleet pairing and advanced contracts from everyday app guides while preserving old links.
+
+- **Track and maintain documentation visuals (#4333).** Add a prioritized media inventory and reusable slots for screenshots, diagrams, and clips. Approved assets can be replaced centrally and delivered on the website or through bundled in-app help; planned visuals stay invisible.
+
+- **The README's Atlas plugin tile no longer shows the React Flow badge (#4347).** The "protoAgent explains its own
+  plugin system" loop was re-shot on Atlas v0.2.7, which hides the attribution badge that covered the diagram's step
+  controls.
+
 ## [0.208.0] - 2026-10-17
 
 ### Added
