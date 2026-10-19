@@ -253,10 +253,41 @@ def _registry_path() -> Path:
     return instance_paths().instance_root / "devices.json"
 
 
+# Windows only: a rename over a file another thread has open (Python opens without
+# FILE_SHARE_DELETE) fails with PermissionError, and an open that lands mid-rename does too,
+# for the moment the other side lasts. POSIX renames over open files, so it tries once.
+_SHARE_RETRIES = 10 if os.name == "nt" else 1
+
+
+def _read_registry(path: Path) -> str:
+    """The registry's text, retried briefly on Windows while a ``_save`` is renaming over it.
+    Without the retry, a lock-free ``verify_token`` read that collides with a write read as
+    an unreadable registry, so a valid phone was refused for that one request."""
+    for i in range(_SHARE_RETRIES - 1):
+        try:
+            return path.read_text("utf-8")
+        except PermissionError:
+            time.sleep(0.02 * (i + 1))
+    return path.read_text("utf-8")
+
+
+def _replace_with_retry(src: Path, dst: Path) -> None:
+    """``os.replace``, retried briefly on Windows while a lock-free reader holds ``dst``
+    open (the same fix as ``tools.fs_tools._replace_with_retry``). Without it, a rename,
+    rotate or revoke that collided with a verify failed with "Access is denied"."""
+    for i in range(_SHARE_RETRIES - 1):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            time.sleep(0.02 * (i + 1))
+    os.replace(src, dst)
+
+
 def _load() -> list[Device]:
     path = _registry_path()
     try:
-        raw = json.loads(path.read_text("utf-8"))
+        raw = json.loads(_read_registry(path))
     except FileNotFoundError:
         return []
     except (OSError, ValueError):
@@ -321,7 +352,7 @@ def _save(devices: list[Device]) -> None:
     # 0600 before the rename: hashes aren't replayable, but the device list is still a map of
     # who can reach this instance.
     os.chmod(tmp, 0o600)
-    os.replace(tmp, path)  # atomic — a crash mid-write can't truncate the registry
+    _replace_with_retry(tmp, path)  # atomic — a crash mid-write can't truncate the registry
 
 
 def list_devices() -> list[dict]:

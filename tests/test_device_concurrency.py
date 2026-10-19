@@ -367,3 +367,48 @@ def test_callers_get_a_copy_of_the_cache(probes):
     pr, _now, _state = probes
     pr._local_addresses().append("10.9.9.9")
     assert "10.9.9.9" not in pr._local_addresses()
+
+
+# ── Windows file sharing ──────────────────────────────────────────────────────────────────
+# On Windows a rename over a file another thread has open fails with PermissionError, and an
+# open that lands mid-rename does too, for as long as the other side lasts. The concurrency
+# test above hit both on the Windows CI lane: a rename failed with "Access is denied", and a
+# lock-free verify read the registry as unreadable (so as empty, refusing a valid phone).
+# Here the OS's transient refusals are injected so the retry runs on every platform.
+
+
+def _flaky(real, failures: int):
+    left = {"n": failures}
+
+    def call(*args, **kwargs):
+        if left["n"]:
+            left["n"] -= 1
+            raise PermissionError(13, "Access is denied")
+        return real(*args, **kwargs)
+
+    return call
+
+
+def test_a_rename_that_collides_with_an_open_reader_retries_instead_of_failing(devices, monkeypatch):
+    phone, _token = _phone(devices)
+    monkeypatch.setattr(devices, "_SHARE_RETRIES", 10)
+    monkeypatch.setattr(devices.os, "replace", _flaky(devices.os.replace, 3))
+    assert devices.rename_device(phone["id"], "renamed") is not None
+    assert _row(devices, phone["id"]).name == "renamed"
+
+
+def test_a_verify_read_that_collides_with_a_rename_still_finds_the_phone(devices, monkeypatch):
+    phone, token = _phone(devices)
+    monkeypatch.setattr(devices, "_SHARE_RETRIES", 10)
+    monkeypatch.setattr(devices.Path, "read_text", _flaky(devices.Path.read_text, 3))
+    found = devices.verify_token(token)
+    assert found is not None and found.id == phone["id"]
+
+
+def test_a_refusal_that_outlasts_the_retries_still_surfaces(devices, monkeypatch):
+    phone, _token = _phone(devices)
+    monkeypatch.setattr(devices, "_SHARE_RETRIES", 3)
+    monkeypatch.setattr(devices.os, "replace", _flaky(devices.os.replace, 3))
+    with pytest.raises(PermissionError):
+        devices.rename_device(phone["id"], "renamed")
+    assert _row(devices, phone["id"]).name == "phone"
