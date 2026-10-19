@@ -59,10 +59,11 @@ import {
   applyComponent,
   applyReasoning,
   applyText,
-  applyToolEvent,
+  applyToolEventToTurn,
   createParkTracker,
   createToolArgsTracker,
   settleBubbleFromTask,
+  settleSplitHalves,
   settleStreamEnd,
   stopBubble,
 } from "./turnReducers";
@@ -1287,14 +1288,17 @@ export function ChatSessionSlot({
           if (evt.name === "show_component") return;
           const latest = chatStore.getSnapshot().sessions.find((item) => item.id === session.id);
           if (!latest) return;
-          const next = latest.messages.map((message) =>
-            message.id === assistantId ? applyToolEvent(message, evt) : message,
-          );
+          // To the TURN, not just the live bubble: a parallel sibling of a background
+          // delegate_to started before the delegation split the bubble, so its end
+          // belongs to the frozen half that holds its card (#4300).
+          const next = applyToolEventToTurn(latest.messages, assistantId, evt);
           chatStore.updateMessages(session.id, next);
           // Follow mode (ADR 0112) — the LIVE path only. The args live on the card (the
           // second start frame carries them); the end frame need not repeat them.
           if (evt.phase === "end") {
-            const card = next.find((m) => m.id === assistantId)?.toolCalls?.find((c) => c.id === evt.id);
+            const card = next
+              .find((m) => (m.id === assistantId || m.splitOf === assistantId) && m.toolCalls?.some((c) => c.id === evt.id))
+              ?.toolCalls?.find((c) => c.id === evt.id);
             onLiveToolEvent(evt, card?.input, session.id);
           }
         },
@@ -1510,14 +1514,20 @@ export function ChatSessionSlot({
             // settleStreamEnd flips any lingering `running` card to `done`.
             // …and a delegation row whose delegate never sent its final snapshot (a
             // stopped turn) stops reading as live (#3979).
+            // …and a card still running in a FROZEN half of a split turn (a sibling
+            // whose end frame never reached it) settles too — the turn is over (#4300).
             settleTurnBubbles(
               settleDelegateProgress(
-                latest.messages.map((message) =>
-                  message.id !== assistantId
-                    ? message
-                    : canceledByServer
-                      ? stopBubble(message, { at: Date.now() })
-                      : settleStreamEnd(message, { parked: false }),
+                settleSplitHalves(
+                  latest.messages.map((message) =>
+                    message.id !== assistantId
+                      ? message
+                      : canceledByServer
+                        ? stopBubble(message, { at: Date.now() })
+                        : settleStreamEnd(message, { parked: false }),
+                  ),
+                  assistantId,
+                  { stopped: canceledByServer },
                 ),
               ),
               assistantId,

@@ -46,9 +46,10 @@ import {
   applyComponent,
   applyReasoning,
   applyText,
-  applyToolEvent,
+  applyToolEventToTurn,
   applyUsage,
   pauseBubble,
+  settleSplitHalves,
   stopBubble,
 } from "./turnReducers";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskStateUnknown, isTaskTerminal } from "./taskState";
@@ -216,22 +217,27 @@ function finalize(sessionId: string, assistantId: string, state: string, text: s
     chatStore.updateMessages(
       sessionId,
       settleTurnBubbles(
-        reconciled.map((m) => {
-          if (m.id !== assistantId) return m;
-          // A stopped turn settles neutral, its unfinished cards STOPPED (#4076).
-          if (canceled) return { ...stopBubble(m, { at }), durableSnapshotFallback: undefined };
-          const toolCalls = m.toolCalls?.map((c) =>
-            c.status === "running" ? { ...c, status: "done" as const, paused: undefined } : c,
-          );
-          return {
-            ...m,
-            status: failed ? "error" : "done",
-            paused: undefined,
-            toolCalls,
-            createdAt: at,
-            durableSnapshotFallback: undefined,
-          };
-        }),
+        // A frozen half's card still running settles too — the turn is over (#4300).
+        settleSplitHalves(
+          reconciled.map((m) => {
+            if (m.id !== assistantId) return m;
+            // A stopped turn settles neutral, its unfinished cards STOPPED (#4076).
+            if (canceled) return { ...stopBubble(m, { at }), durableSnapshotFallback: undefined };
+            const toolCalls = m.toolCalls?.map((c) =>
+              c.status === "running" ? { ...c, status: "done" as const, paused: undefined } : c,
+            );
+            return {
+              ...m,
+              status: failed ? "error" : "done",
+              paused: undefined,
+              toolCalls,
+              createdAt: at,
+              durableSnapshotFallback: undefined,
+            };
+          }),
+          assistantId,
+          { stopped: canceled, now: at },
+        ),
         assistantId,
       ),
     );
@@ -363,7 +369,9 @@ export function reattachTurn(sessionId: string, assistantId: string, taskId: str
     onReasoning: (delta) => updateMessage(sessionId, assistantId, (m) => applyReasoning(m, delta)),
     onToolCall: (evt) => {
       if (evt.name === "show_component") return; // rendered via onComponent — no card noise
-      updateMessage(sessionId, assistantId, (m) => applyToolEvent(m, evt));
+      // The turn, not just the live bubble — a split may have frozen the card (#4300).
+      const cur = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
+      if (cur) chatStore.updateMessages(sessionId, applyToolEventToTurn(cur.messages, assistantId, evt));
     },
     onComponent: (spec) => updateMessage(sessionId, assistantId, (m) => applyComponent(m, spec)),
     // A coding delegate's live state (#3979) — on its mention card or ask row, wherever it is.
