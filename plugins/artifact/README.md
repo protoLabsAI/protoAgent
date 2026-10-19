@@ -215,7 +215,9 @@ makes a chart fast to produce. The panel draws it with the vendored `vega` 6.4.0
 `save_file_artifact(path, title?, artifact_id?, project?)` stores a generated file's bytes as a
 versioned artifact (Download button, version history) and previews it by type. `path` takes the
 fs tools' form: a project-relative path (pass `project`, or omit it when one project has the file)
-or an absolute path. Every version also keeps a **text projection** in `code`, so history stays
+or an absolute path. An absolute path given *with* `project` must lie inside that project's root
+(it is made project-relative and fenced like any other); one outside is refused with a message
+naming the root — leave `project` empty to save a file from elsewhere. Every version also keeps a **text projection** in `code`, so history stays
 diffable and screen readers / a failed render still have the content.
 
 | File | Preview | Safety gate |

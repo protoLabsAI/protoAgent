@@ -274,7 +274,8 @@ a **versioned download artifact** with a Download button and a preview by type:
 - `.md` → rendered prose; `.json` → pretty-printed; images → a thumbnail; other text → plain text.
 
 `path` can be relative to a filesystem project (as `find_files`/`read_file` report it — pass
-`project` if more than one has it) or absolute. Re-saving the same document as a new revision? Pass the prior
+`project` if more than one has it) or absolute. An absolute path with `project` must be inside that
+project's root; for a file anywhere else, leave `project` empty. Re-saving the same document as a new revision? Pass the prior
 `artifact_id` so it becomes v2, v3… of the same artifact instead of a new panel entry.
 
 ```text

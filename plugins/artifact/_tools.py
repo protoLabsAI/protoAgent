@@ -205,14 +205,43 @@ def _save_nudge(art_id: str) -> str:
     )
 
 
+def _project_relative(registry, project: str, raw: str) -> str:
+    """``raw`` as a path relative to ``project``'s root (#4326).
+
+    A relative path passes through untouched. An absolute (or ``~``) path is resolved —
+    symlinks and ``..`` included — and must land inside the project's root, matched by
+    file identity so a case-insensitive volume (macOS) can't make an inside path look
+    outside; the result is project-relative and still goes through ``registry.resolve``'s
+    fence. Raises ``ValueError`` (naming the root) for an absolute path outside the project.
+    """
+    expanded = os.path.expanduser(raw)
+    if not Path(expanded).is_absolute():
+        return raw
+    root = registry.resolve(project, ".")  # unknown project / missing root raise here
+    target = Path(expanded).resolve()
+    for base in (target, *target.parents):
+        try:
+            if base == root or base.samefile(root):
+                return str(target.relative_to(base)) if base != target else "."
+        except OSError:
+            continue
+    raise ValueError(
+        f"{raw!r} is outside project {project!r} (root: {root}) — pass a path inside that root, "
+        f"a path relative to it, or drop `project` to save a file from elsewhere"
+    )
+
+
 def _resolve_file(path: str, project: str = "") -> tuple[Path | None, str]:
     """``path`` (+ optional fs ``project``) → the file to save, or ``(None, why)``.
 
     Speaks the fs tools' path language, so a file the agent just found with
     ``find_files``/``read_file`` (a project + a relative path) saves as-is:
 
-    * ``project`` given → resolved inside that project's fence (``..`` can't escape it);
-    * an absolute or ``~`` path → used as-is (unchanged behaviour);
+    * ``project`` given → resolved inside that project's fence (``..`` can't escape it). An
+      absolute or ``~`` path with a project is accepted only when it lies inside that
+      project's root (it becomes project-relative and goes through the same fence); one
+      outside is refused, naming the root (#4326);
+    * an absolute or ``~`` path with no project → used as-is (unchanged behaviour);
     * a relative path with no project → looked up in every registered project. Exactly one
       hit wins; more than one is ambiguous (the agent must name the project); none falls back
       to the old cwd-relative lookup before giving up.
@@ -223,7 +252,8 @@ def _resolve_file(path: str, project: str = "") -> tuple[Path | None, str]:
         if registry is None:
             return None, f"project {project!r} given, but this agent has no filesystem projects — pass an absolute path."
         try:
-            p = registry.resolve(project, raw)
+            rel = _project_relative(registry, project, raw)
+            p = registry.resolve(project, rel)
         except ValueError as e:
             return None, f"{e}."
         if not p.is_file():
@@ -287,7 +317,8 @@ def save_file_artifact(
 
     ``path`` takes the same form as the fs tools: a path relative to a filesystem project
     (pass ``project``, or omit it when only one project has that file — the default
-    ``workspace`` included), or an absolute path.
+    ``workspace`` included), or an absolute path. An absolute path together with ``project``
+    must lie inside that project's root; for a file anywhere else, leave ``project`` empty.
 
     This is for FILES on disk. To render HTML/SVG/React/Markdown/charts, use ``show_artifact``.
     """
