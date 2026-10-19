@@ -15,6 +15,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.210.0] - 2026-10-19
+
+### Fixed
+- **A tool row no longer spins forever beside background delegations (#4300).**
+  When one step made parallel calls (a plugin tool next to `delegate_to(background=True)`),
+  the delegation's room bubble split the turn and froze the sibling's card in the earlier
+  half; its result then landed on the live bubble as a duplicate row, leaving the original
+  running. Tool frames now go to the turn bubble that holds the card, and a turn's end
+  settles any card still running in a frozen half.
+
+- **Workflow eval cases reach the workflows plugin again (#4310).**
+  The eval client posted to the retired `/api/workflows/{name}/run`, so every
+  `kind: "workflow"` case failed without running a recipe. It now calls
+  `/api/plugins/workflows/{name}/run`, and a 404 there reports that the
+  `workflows` plugin is not enabled on the agent under test.
+
+- **The one-command installer works against token-protected instances (#4315).**
+  `scripts/install.sh` now sends `A2A_AUTH_TOKEN` as `Authorization: Bearer` on the
+  readiness probe and every setup-wizard request, including `PROTOAGENT_INSTALL_URL`,
+  without printing it or putting it on a command line. A `401`/`403` now stops with an
+  authentication error (missing or rejected token) instead of "did not come up in time".
+
+- **Fresh ACP background sessions (#4319).** Independent background delegations now open a new session even when reusing a pooled client, while explicit task resumes and foreground/board continuations retain their existing behavior.
+
+- **ACP timeout evidence identifies interrupted work (#4319).** Timeout and abandoned-turn errors now include the session, an explicitly reported transcript path when available, last tool activity, pending permission state, bounded unverified edit paths, and sanitized stderr. Evidence resets each turn without changing session resume behavior.
+
+- **`save_file_artifact` accepts an absolute path together with `project` when it lies inside that project's root (#4326).**
+  The path is made project-relative and goes through the same fence (symlinks and `..` resolved,
+  root matched by file identity so macOS case can't confuse it). An absolute path outside the
+  project is refused with a message naming the root and telling the agent to drop `project`.
+
+- **Only the console tree and exact public files skip authentication (#4365).** Paths that merely start with `/app`, `/healthz`, `/manifest.json` or a favicon name (for example `/apple`) now require a credential; nothing was exposed, but a future route with such a name would have been public.
+
+- **Device pairing hardening (#4366).** Concurrent requests can no longer lose a device update or spuriously revoke a paired phone, a failed device removal is shown instead of silently doing nothing, and the Devices panel reliably confirms a new pairing even if a device is removed meanwhile.
+
+- **A device-scope credential stays refused an encoded `?`/`#` ceiling path on Starlette 1.9 (#4367).**
+  Starlette 1.9 builds `request.url.path` from the raw (still percent-encoded) path instead of
+  cutting it at a decoded `?`/`#`, so `/api/plugins/install%3Fx` no longer matched the
+  credential-plane ceiling in either spelling. The ceiling now checks each spelling whole and
+  cut at its first `?`/`#` itself, so it holds on every Starlette version.
+- **The auth gate decides public / federation / signed-media on the path the router dispatches (#4372).**
+  `request.url.path` drops a decoded tab/CR/LF on every Starlette (and 1.7 cut it at a decoded
+  `?`/`#`), so `/api/plugins/<id>/ho%09ok/x` read as a plugin's public `…/hook/` prefix while the
+  plugin's catch-all route ran ungated. An admit decision now has to hold on both `url.path` and
+  `scope["path"]`; the operator ceiling refuses on either.
+
+- **Parallel tool calls on `openai-codex` keep their arguments (#4368).**
+  The ChatGPT/Codex backend sends each call of a batched (`multi_tool_use.parallel`)
+  turn with its arguments only on the done events, and langchain-openai read them
+  only from deltas, so every call in the batch reached its tool as `{}`. The Codex
+  client now picks the arguments up from whichever event carries them, without
+  doubling ones that already streamed.
+
+- **Keep the writable workspace after reference registration (#4369).** Registering a read-only project preserves the implicit workspace. Explicit workspace overrides and filesystem opt-outs remain authoritative, and only the implicit workspace can be recreated automatically.
+
+- **An ACP delegate's empty reply now fails instead of booking a silent success (#4371).** A `delegate_to(..., background=True)` to a coding agent that ends its turn with no text and a normal stop reason (`end_turn`, or none at all) used to drain back as a completed `(replied with nothing)` — indistinguishable from a coder that never started (a cwd it can't write, a sandbox denial, a crashed preflight). The adapter now raises a `DelegateError` so the background job records `ok: false`, and the diagnostic names the stop reason (`none` when absent), the turn's tool-call count, and a bounded stderr tail. The run is booked `failed` in telemetry and its trace. A `max_tokens` cut-off keeps its existing `[no reply — …]` marker, and the board's `TappedResult` still carries the raw reply plus the new empty-reply signal so its same-tier retry (#2991) is unaffected.
+
 ## [0.209.0] - 2026-10-19
 
 ### Added
