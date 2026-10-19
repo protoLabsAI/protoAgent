@@ -509,7 +509,7 @@ def _check_rubric(case: dict, text: str) -> list[str]:
 
 
 async def _run_workflow_case(client: AgentClient, case: dict) -> CaseResult:
-    """Drive a workflow recipe end-to-end via ``POST /api/workflows/{name}/run``
+    """Drive a workflow recipe end-to-end via ``POST /api/plugins/workflows/{name}/run``
     and assert on its synthesized output (patterns + optional rubric).
 
     Case schema: ``workflow`` (recipe name), ``inputs`` (dict),
