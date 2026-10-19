@@ -14,7 +14,14 @@ import { delegationFromFrame } from "../lib/delegation";
 import type { ChatMessage, DelegatePlanEntry, DelegateProgress, DelegateProgressEvent, ToolCall } from "../lib/types";
 import { DelegateProgressView } from "./DelegateProgressView";
 import { ToolCalls } from "./ToolCalls";
-import { applyDelegateProgress, planProgress, settleDelegateProgress, shortLocation, toolLine } from "./delegateProgress";
+import {
+  applyDelegateProgress,
+  narrationTail,
+  planProgress,
+  settleDelegateProgress,
+  shortLocation,
+  toolLine,
+} from "./delegateProgress";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -382,5 +389,53 @@ describe("the @ mention card", () => {
     await act(async () => toggle.click());
     expect(el.querySelector(".delegate-progress")).not.toBeNull();
     expect(el.querySelector(".delegate-progress--live")).toBeNull();
+  });
+});
+
+describe("narrationTail (#4266)", () => {
+  // What a coding delegate actually streams: a markdown checklist, code spans and
+  // paragraph breaks. Rendered raw in one <p>, it read as "…d add `test_power` in
+  // `test_calc.py` - [ ] Run the tests with pytest Now executing the edits: …".
+  const streamed = [
+    "Plan:",
+    "",
+    "- [x] Add `power(a, b)` to `calc.py`",
+    "- [ ] Add `test_power` in `test_calc.py`",
+    "- [ ] Run the tests with **pytest**",
+    "",
+    "Now executing the edits:",
+    "",
+    "The calc.py edit landed. I need to Read `test_calc.py` next",
+  ].join("\n");
+
+  it("reads as prose: no task boxes, ticks or bold marks, and lines kept apart", () => {
+    const tail = narrationTail(streamed, 1000);
+    expect(tail).toBe(
+      "Plan: Add power(a, b) to calc.py · Add test_power in test_calc.py · Run the tests with pytest · " +
+        "Now executing the edits: The calc.py edit landed. I need to Read test_calc.py next",
+    );
+    expect(tail).not.toMatch(/\[[ x]\]|`|\*\*/);
+  });
+
+  it("keeps identifiers with underscores intact", () => {
+    expect(narrationTail("calling `snake_case_name` and __init__ now", 100)).toBe("calling snake_case_name and __init__ now");
+  });
+
+  it("cuts on a word boundary and keeps the newest words", () => {
+    const tail = narrationTail(streamed, 60);
+    expect(tail.startsWith("…")).toBe(true);
+    expect(tail.endsWith("I need to Read test_calc.py next")).toBe(true);
+    expect(tail.length).toBeLessThanOrEqual(61);
+    // the first word after the ellipsis is whole, not the end of a cut-off one
+    const first = tail.slice(1).split(" ")[0];
+    expect(streamed.replace(/`/g, "")).toMatch(new RegExp(`(^|\\s)${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  });
+
+  it("still shows something for one unbroken run of characters", () => {
+    expect(narrationTail("z".repeat(400), 220)).toBe(`…${"z".repeat(220)}`);
+  });
+
+  it("links read as their text", () => {
+    expect(narrationTail("see [the docs](https://example.com/x) for more", 100)).toBe("see the docs for more");
   });
 });

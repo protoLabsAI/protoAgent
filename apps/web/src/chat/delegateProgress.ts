@@ -85,3 +85,35 @@ export function planProgress(p: DelegateProgress): string | null {
   const done = p.plan.filter((e) => e.status === "completed").length;
   return `${done}/${p.plan.length}`;
 }
+
+/** One markdown line as plain prose: block markers (heading, quote, list bullet, task box)
+ *  and inline marks (code ticks, `**` bold, strike, link syntax) gone, the words kept. */
+function plainLine(line: string): string {
+  return line
+    .replace(/^\s*(?:#{1,6}\s+|>\s*)+/, "")
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?/, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/`+/g, "")
+    .replace(/\*\*|~~/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** The narration tail a live delegation card shows (#4266): the newest `max` characters
+ *  of what the delegate is saying, read as prose. Markdown is stripped rather than shown
+ *  raw, and lines that ran together under normal white-space are kept apart: a line that
+ *  doesn't end a sentence is followed by " · ". A cut lands on a word boundary and is
+ *  marked with a leading "…". The newest words are always the ones kept. */
+export function narrationTail(text: string, max: number): string {
+  const lines = text.split(/\r?\n/).map(plainLine).filter(Boolean);
+  let out = "";
+  for (const line of lines) {
+    if (out) out += /[.!?:;,…]$/.test(out) ? " " : " · ";
+    out += line;
+  }
+  if (out.length <= max) return out;
+  let cut = out.slice(-max);
+  const space = cut.indexOf(" ");
+  if (space > 0 && space < max / 2) cut = cut.slice(space + 1);
+  return `…${cut.replace(/^· /, "")}`;
+}
