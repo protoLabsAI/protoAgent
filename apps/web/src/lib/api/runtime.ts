@@ -78,7 +78,15 @@ export type PairedDevice = {
    *  secrets or credential-plane settings); `full` = "Full access". Agents are always `full`.
    *  Absent from servers before ADR 0121. */
   scope?: DeviceScope;
+  /** Idle expiry (ADR 0121 D5): a Limited device unused past `devices.idle_ttl_days` stops
+   *  working and stays listed as Expired until removed. Absent from servers before S7.3. */
+  expired?: boolean;
+  /** When it expires if left idle (epoch seconds); null = never (full access, or ttl 0). */
+  expires_at?: number | null;
+  rotated_at?: number | null;
 };
+/** `GET /api/devices/self` — the caller's own device, or null for a non-device credential. */
+export type DeviceSelf = PairedDevice & { rotate_due: boolean };
 export type DeviceScope = "full" | "device";
 /** Who is ASKING — the credential this request used, as the server classified it. */
 export type DeviceCaller = { scope: DeviceScope; device_id: string | null };

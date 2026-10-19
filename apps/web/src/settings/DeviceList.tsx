@@ -36,6 +36,20 @@ export function lastSeenLabel(d: Pick<PairedDevice, "active" | "last_seen_at">, 
   return `last seen ${Math.floor(secs / 86400)}d ago`;
 }
 
+/** Idle-expiry copy for a row (ADR 0121 D5), or null when it never expires (full access, an
+ *  agent, `devices.idle_ttl_days: 0`, or a server before S7.3). An expired device stays
+ *  listed until it's removed; it can't be revived from here — the phone pairs again. */
+export function expiryLabel(
+  d: Pick<PairedDevice, "expired" | "expires_at">,
+  nowSecs = Date.now() / 1000,
+): string | null {
+  if (d.expired) return "Expired after going unused — remove it, then pair the phone again";
+  if (d.expires_at == null) return null;
+  const days = Math.ceil((d.expires_at - nowSecs) / 86400);
+  if (days <= 1) return "expires within a day if unused";
+  return `expires in ${days} days if unused`;
+}
+
 /** The scope badge for a row (ADR 0121 D4), or null when there is none to show: an agent is
  *  always full access (its "Agent" badge says enough), and a pre-ADR-0121 server sends no
  *  scope. */
@@ -201,6 +215,7 @@ export function DeviceList({
         const badge = scopeBadge(d);
         const action = scopeAction(d, callerLimited);
         const manage = canManage(d.id, thisId, callerLimited);
+        const expiry = expiryLabel(d);
         return (
           <div className={`subagent-row${self ? " devices-row--self" : ""}`} key={d.id} data-testid={`device-row-${d.id}`}>
             <div className="devices-row-main">
@@ -251,11 +266,15 @@ export function DeviceList({
                       {badge.label}
                     </Badge>
                   ) : null}
+                  {d.expired ? <Badge status="error">Expired</Badge> : null}
                   {self ? <Badge status="success">This device</Badge> : null}
                   {isActive(d) ? <StatusPill label="active" tone="success" /> : null}
                 </strong>
               )}
-              <span>{lastSeenLabel(d)}</span>
+              <span>
+                {lastSeenLabel(d)}
+                {expiry ? <span data-testid={`device-expiry-${d.id}`}> · {expiry}</span> : null}
+              </span>
               {confirmSelf === d.id && (
                 <div className="devices-confirm" role="group" aria-label="Remove this device">
                   <p className="devices-pair-hint">

@@ -12,6 +12,8 @@ import { act, createElement as h, type RefObject } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { replaceDeviceToken } from "../lib/credentials";
+
 // apiUrl is the identity here so an absolute src resolves to its own origin and a relative
 // one resolves against the console origin; authToken is driven off a hoisted handle so a
 // test can model "no bearer yet".
@@ -207,6 +209,43 @@ describe("usePluginFrameThemeSync — re-posting theme on a theme change", () =>
       window.dispatchEvent(new Event("protoagent:theme"));
     });
     expect(themePosts(post)).toHaveLength(0);
+  });
+
+  // ADR 0121 D5: a frame still holding the old token after a rotation would revoke the device.
+  const initPosts = (post: ReturnType<typeof vi.fn>) =>
+    post.mock.calls.filter((c) => (c[0] as { type?: string })?.type === "protoagent:init");
+
+  it("re-posts init with the CURRENT token when this tab rotates the device token", async () => {
+    window.localStorage.setItem("protoagent.deviceToken", "old-tok");
+    const post = vi.fn();
+    const frameRef: RefObject<HTMLIFrameElement | null> = { current: fakeFrame(post) };
+    const navigatedRef: RefObject<boolean> = { current: true };
+    await act(async () => {
+      root.render(h(Harness, { frameRef, navigatedRef, src: PLUGIN_SRC }));
+    });
+    act(() => {
+      api.token = "new-tok"; // what authToken() reads once storage holds the rotated token
+      expect(replaceDeviceToken("old-tok", "new-tok")).toBe("replaced");
+    });
+    const inits = initPosts(post);
+    expect(inits).toHaveLength(1);
+    expect(inits[0][0].token).toBe("new-tok");
+    expect(inits[0][1]).toBe(PLUGIN_ORIGIN);
+    window.localStorage.clear();
+  });
+
+  it("re-posts init when ANOTHER tab rotates it (the storage event)", async () => {
+    const post = vi.fn();
+    const frameRef: RefObject<HTMLIFrameElement | null> = { current: fakeFrame(post) };
+    const navigatedRef: RefObject<boolean> = { current: true };
+    await act(async () => {
+      root.render(h(Harness, { frameRef, navigatedRef, src: PLUGIN_SRC }));
+    });
+    act(() => {
+      window.dispatchEvent(new StorageEvent("storage", { key: "protoagent.someOtherKey" }));
+      window.dispatchEvent(new StorageEvent("storage", { key: "protoagent.deviceToken" }));
+    });
+    expect(initPosts(post)).toHaveLength(1);
   });
 });
 

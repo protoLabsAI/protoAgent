@@ -222,9 +222,13 @@ _PLANE_FAMILIES = (
     "/api/config/oauth/",
     "/api/plugins/",
     "/api/mcp/servers",
+    "/api/devices/",
 )
 _ALLOWED_WRITES = {
     ("POST", "/api/pairing/claim"),  # unauthenticated by necessity (ADR 0087 D4) — no scope at all
+    # A device rotating its OWN token (ADR 0121 D5) — it changes nothing about who can get in,
+    # and a ceiling here would stop every phone from ever rotating.
+    ("POST", "/api/devices/self/rotate"),
 }
 
 
@@ -476,7 +480,7 @@ def test_the_sse_token_route_stamps_the_minters_scope(auth, devices):
     """``/api/sse-token`` is served by the server bootstrap; mirror its handler exactly."""
     src = (Path(__file__).resolve().parents[1] / "src/server/__init__.py").read_text("utf-8")
     block = src[src.index('"/api/sse-token"') : src.index('"/api/sse-token"') + 400]
-    assert "credential_scope" in block and "generate_sse_token(scope=scope)" in block
+    assert "credential_scope" in block and "generate_sse_token(scope=scope, device_id=device_id)" in block
 
 
 # ── Config writes ─────────────────────────────────────────────────────────────────────────

@@ -588,7 +588,7 @@ def configure(
 # ---------------------------------------------------------------------------
 
 
-def generate_sse_token(session_id: str = "", scope: str = SCOPE_DEVICE) -> str:
+def generate_sse_token(session_id: str = "", scope: str = SCOPE_DEVICE, device_id: str | None = None) -> str:
     """Return a base64url-encoded, HMAC-signed token valid for ``_SSE_TOKEN_LIFETIME`` seconds.
 
     The token is a JSON payload ``{sid, exp, scope}`` concatenated with an
@@ -599,14 +599,20 @@ def generate_sse_token(session_id: str = "", scope: str = SCOPE_DEVICE) -> str:
     ``scope`` (ADR 0121 D4) is the MINTING caller's credential scope, signed into the payload
     so an EventSource stream a device opened doesn't come back as ``full``. It defaults to the
     NARROW scope: a caller that forgets to pass it gets a token that can do less, never more.
+
+    ``device_id`` (ADR 0121 D5) is the minting caller's paired device, when it is one. The
+    stream it opens is stamped with it, so the stream re-verifies that device at its
+    keepalive and closes when it is revoked or expires — and a revoked device can't open a
+    new stream with a token it minted in the 30 s before the revoke.
     """
     key = _BEARER[0]
     if not key:
         return ""
     scope = scope if scope in SCOPES else SCOPE_DEVICE
-    payload = json.dumps(
-        {"sid": session_id, "exp": int(time.time()) + _SSE_TOKEN_LIFETIME, "scope": scope}, separators=(",", ":")
-    )
+    claims: dict = {"sid": session_id, "exp": int(time.time()) + _SSE_TOKEN_LIFETIME, "scope": scope}
+    if device_id:
+        claims["did"] = str(device_id)
+    payload = json.dumps(claims, separators=(",", ":"))
     sig = hmac.new(key.encode(), payload.encode(), hashlib.sha256).digest()
     return base64.urlsafe_b64encode(payload.encode() + b"." + sig).decode()
 
@@ -617,7 +623,17 @@ def _validate_sse_token(token: str) -> bool:
 
 
 def _sse_token_scope(token: str) -> str | None:
-    """The credential scope a valid query-string SSE token carries, or None when invalid.
+    """The credential scope a valid query-string SSE token carries, or None when invalid."""
+    claims = _sse_token_claims(token)
+    return claims[0] if claims is not None else None
+
+
+def _sse_token_claims(token: str) -> tuple[str, str | None] | None:
+    """``(scope, device_id)`` a valid query-string SSE token carries, or None when invalid.
+
+    A token minted by a paired device carries its id (``did``, ADR 0121 D5); one whose device
+    has since been revoked or idle-expired is INVALID, so the 30 s token lifetime is no window
+    to open a fresh stream after a revoke.
 
     A token with NO ``scope`` field (minted before ADR 0121, at most ``_SSE_TOKEN_LIFETIME``
     seconds before an upgrade) or an unknown value reads as ``device``: the old format can't say
@@ -626,7 +642,7 @@ def _sse_token_scope(token: str) -> str | None:
     ceiling — so no format version bump is needed. Open mode ⇒ ``full`` (nothing is checked)."""
     key = _BEARER[0]
     if not key:
-        return SCOPE_FULL  # open mode — no bearer ⇒ no token needed
+        return SCOPE_FULL, None  # open mode — no bearer ⇒ no token needed
     if not token:
         return None
     try:
@@ -654,7 +670,28 @@ def _sse_token_scope(token: str) -> str | None:
     if not isinstance(exp, (int, float)) or time.time() > exp:
         return None
     scope = data.get("scope")
-    return scope if isinstance(scope, str) and scope in SCOPES else SCOPE_DEVICE
+    scope = scope if isinstance(scope, str) and scope in SCOPES else SCOPE_DEVICE
+    did = data.get("did")
+    if did is None:
+        return scope, None
+    if not isinstance(did, str) or not did or not device_is_live(did):
+        return None
+    return scope, did
+
+
+def device_is_live(device_id: str | None) -> bool:
+    """Does the paired device ``device_id`` still authenticate (not revoked, not expired)?
+
+    The re-verification a long-lived stream runs at its keepalive (ADR 0121 D5). Failed
+    closed: a registry error reads as "not live", which closes a device's stream — never the
+    shared bearer's, which has no device id and is never asked."""
+    try:
+        from security.devices import is_live
+
+        return is_live(device_id)
+    except Exception:  # noqa: BLE001 — a registry problem must not keep a revoked stream open
+        logger.exception("[auth] device liveness check failed; treating %s as revoked", device_id)
+        return False
 
 
 def _unauthorized(detail: str) -> JSONResponse:
@@ -779,8 +816,9 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         # (the event bus AND the session-attendance stream — see _SSE_QUERY_TOKEN_PATHS).
         if _is_sse_query_token_path(path):
             sse_token = request.query_params.get("token", "")
-            sse_scope = _sse_token_scope(sse_token)
-            if sse_scope is not None:
+            sse_claims = _sse_token_claims(sse_token)
+            if sse_claims is not None:
+                sse_scope, sse_device = sse_claims
                 # A valid SSE token proves the caller held the operator bearer — it's HMAC-signed
                 # with it and mintable only via the operator-gated /api/sse-token. Mark the tier so
                 # the fleet proxy swaps in the MEMBER's credential (ADR 0089) for a proxied
@@ -791,6 +829,8 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                 request.state.trust_tier = "operator"
                 # The scope the MINTER held (ADR 0121 D4), restored from the signed payload.
                 request.state.credential_scope = sse_scope
+                # The minting device (ADR 0121 D5), so `DeviceStreamGuard` re-verifies it.
+                request.state.device_id = sse_device
                 denied = _credential_plane_refusal(request, path, sse_scope, None)
                 if denied is not None:
                     return denied
@@ -1007,8 +1047,10 @@ def install(
     last-added middleware outermost): ``A2AAuthMiddleware`` (credentials, HTTP only), then
     ``a2a_impl.hosts.HostGuardMiddleware`` — the open-mode Host allowlist + JSON content-type
     rule (#3668), pure ASGI so it also covers WebSocket routes, and outermost so a refused
-    request reaches nothing."""
+    request reaches nothing. Between them, ``a2a_impl.stream_guard.DeviceStreamGuard`` closes
+    a paired device's streamed responses within one keepalive of a revoke (ADR 0121 D5)."""
     from a2a_impl.hosts import HostGuardMiddleware
+    from a2a_impl.stream_guard import DeviceStreamGuard
 
     configure(
         bearer_token=bearer_token,
@@ -1018,6 +1060,7 @@ def install(
         fleet_token=fleet_token,
     )
     app.add_middleware(A2AAuthMiddleware)
+    app.add_middleware(DeviceStreamGuard)
     app.add_middleware(HostGuardMiddleware)
 
 

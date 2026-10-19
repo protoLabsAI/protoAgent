@@ -15,6 +15,9 @@
     PATCH  /api/devices/{id}    → rename one (``{"name": …}``) and/or promote/limit it
                                   (``{"scope": "full"|"device"}`` — full-scope callers only)
     DELETE /api/devices/{id}    → revoke one
+    GET    /api/devices/self    → the caller's own device + ``rotate_due`` (ADR 0121 D5;
+                                  ``{"device": null}`` for a non-device credential)
+    POST   /api/devices/self/rotate → a new token for the caller's device, returned once
 
 A ``device``-scope credential (a paired phone, ADR 0121 D4) is refused start/cancel/serve and
 PATCH/DELETE of any device but its own by the credential-plane ceiling in
@@ -731,6 +734,42 @@ def register_pairing_routes(app, agent_name=None) -> None:
         return JSONResponse(
             {"devices": list_devices(), "caller": _caller(request), "public_console_url": _public_console_url()}
         )
+
+    @router.get("/api/devices/self")
+    async def _self(request: Request):  # noqa: ANN202
+        """The CALLER's own device (ADR 0121 D5): id, name, scope, ``expires_at`` and
+        ``rotate_due``. A credential that isn't a paired device (the shared bearer, an API
+        key, open mode) gets ``200 {"device": null}`` — a real answer ("you aren't a device"),
+        not an error, so the console can tell it from an older server without the route
+        (``404``)."""
+        from security.devices import self_view
+
+        return JSONResponse({"device": self_view(getattr(request.state, "device_id", None))})
+
+    @router.post("/api/devices/self/rotate")
+    async def _rotate_self(request: Request):  # noqa: ANN202
+        """Swap the caller's device token for a new one, returned ONCE (ADR 0121 D5). The
+        presented token stays valid until the new one is first used, then for a 120 s grace;
+        presented after that, it revokes the device. Only a device credential rotates: the
+        shared bearer gets ``404`` and no token."""
+        from security.devices import RotationInProgress, rotate_device
+
+        device_id = getattr(request.state, "device_id", None)
+        header = request.headers.get("Authorization", "")
+        presented = header[len("Bearer ") :] if header.startswith("Bearer ") else ""
+        if not device_id or not presented:
+            msg = "this credential isn't a paired device, so it has no token to rotate"
+            return JSONResponse({"ok": False, "error": "not_a_device", "detail": msg}, status_code=404)
+        try:
+            result = rotate_device(device_id, presented)
+        except RotationInProgress:
+            msg = "a rotation for this device is already in progress — keep using the stored token"
+            return JSONResponse({"ok": False, "error": "rotation_in_progress", "detail": msg}, status_code=409)
+        if result is None:
+            msg = "this token can't be rotated: only a Limited device's current token rotates"
+            return JSONResponse({"ok": False, "error": "not_rotatable", "detail": msg}, status_code=409)
+        device, token = result
+        return JSONResponse({"ok": True, "device": device, "token": token}, headers={"Cache-Control": "no-store"})
 
     @router.patch("/api/devices/{device_id}")
     async def _update(device_id: str, request: Request):  # noqa: ANN202

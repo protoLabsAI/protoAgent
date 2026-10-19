@@ -1552,6 +1552,19 @@ FIELDS: list[Field] = [
         "console private. Env fallback: PROTOAGENT_PUBLIC_CONSOLE_URL.",
         credential_plane=True,
     ),
+    # Idle expiry for paired phones (ADR 0121 D2/D5). On the credential plane by section
+    # (``devices.*``), so a device-scope caller can't lengthen its own lifetime.
+    Field(
+        "devices.idle_ttl_days",
+        "device_idle_ttl_days",
+        "Paired phone idle expiry (days)",
+        "number",
+        "Security",
+        "A paired phone or tablet (Limited access) that hasn't been used for this many days "
+        "stops working and shows Expired in Devices; re-pair it to use it again. 0 = never "
+        "expire. Full-access devices never expire.",
+        minimum=0,
+    ),
     # Outbound counterpart to the inbound bind interface (ADR 0008). Host-scoped +
     # hot-reloaded (egress.set_allowed_hosts runs on save). string_list → the generic
     # one-per-line editor; no bespoke console code.
