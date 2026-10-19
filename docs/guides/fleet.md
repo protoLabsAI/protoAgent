@@ -20,7 +20,7 @@ default. If the agent cannot start, inspect the roster's error and verify its
 model connection and required tools.
 
 <!-- docs-media: fleet-create-result -->
-
+<figure class="docs-media"><img src="/media/fleet-create-result/v1.png" alt="The new research-demo agent has answered its first message; the switcher shows both agents and checks the active member." loading="lazy" style="max-width:100%;height:auto"><figcaption>Confirm a reply from the new member. The switcher’s checkmark identifies the active agent; the two workspaces keep separate chats.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Quick start

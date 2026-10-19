@@ -13,34 +13,34 @@ Production tracker: https://github.com/protoLabsAI/protoAgent/issues/4332
 
 | ID | Priority | Format | Status | Owner | Verified |
 | --- | --- | --- | --- | --- | --- |
-| [app-layout](#app-layout) | P1 | image | planned | Docs maintainers | — |
-| [attach-and-download](#attach-and-download) | P1 | video | planned | Docs maintainers | — |
-| [box-instance-paths](#box-instance-paths) | P1 | diagram | planned | Docs maintainers | — |
-| [exposure-boundaries](#exposure-boundaries) | P1 | diagram | planned | Docs maintainers | — |
-| [first-reply](#first-reply) | P1 | image | planned | Docs maintainers | — |
-| [goal-progress](#goal-progress) | P1 | image | planned | Docs maintainers | — |
-| [knowledge-import-result](#knowledge-import-result) | P1 | image | planned | Docs maintainers | — |
-| [mcp-connect-test](#mcp-connect-test) | P1 | image | planned | Docs maintainers | — |
-| [memory-inspector](#memory-inspector) | P1 | image | planned | Docs maintainers | — |
-| [model-select-and-test](#model-select-and-test) | P1 | video | planned | Docs maintainers | — |
-| [plugin-install-result](#plugin-install-result) | P1 | image | planned | Docs maintainers | — |
-| [schedule-state](#schedule-state) | P1 | image | planned | Docs maintainers | — |
-| [setup-model-test](#setup-model-test) | P1 | image | planned | Docs maintainers | — |
-| [skill-create-run](#skill-create-run) | P1 | video | planned | Docs maintainers | — |
-| [browser-control](#browser-control) | P2 | video | planned | Docs maintainers | — |
-| [config-precedence](#config-precedence) | P2 | diagram | planned | Docs maintainers | — |
-| [delegate-room-round](#delegate-room-round) | P2 | image | planned | Docs maintainers | — |
-| [deployment-topology](#deployment-topology) | P2 | diagram | planned | Docs maintainers | — |
-| [fleet-create-result](#fleet-create-result) | P2 | image | planned | Docs maintainers | — |
-| [fleet-deck-overview](#fleet-deck-overview) | P2 | image | planned | Docs maintainers | — |
-| [memory-lifecycle](#memory-lifecycle) | P2 | diagram | planned | Docs maintainers | — |
-| [phone-pairing](#phone-pairing) | P2 | image | planned | Docs maintainers | — |
-| [plugin-boundaries](#plugin-boundaries) | P2 | diagram | planned | Docs maintainers | — |
-| [plugin-view-result](#plugin-view-result) | P2 | image | planned | Docs maintainers | — |
-| [watch-goal-schedule](#watch-goal-schedule) | P2 | diagram | planned | Docs maintainers | — |
-| [workflow-gate](#workflow-gate) | P2 | image | planned | Docs maintainers | — |
-| [a2a-task-lifecycle](#a2a-task-lifecycle) | P3 | diagram | planned | Docs maintainers | — |
-| [trace-correlation](#trace-correlation) | P3 | image | planned | Docs maintainers | — |
+| [app-layout](#app-layout) | P1 | image | ready | Codex | 2026-10-19 |
+| [attach-and-download](#attach-and-download) | P1 | video | ready | Codex | 2026-10-19 |
+| [box-instance-paths](#box-instance-paths) | P1 | diagram | ready | Codex | 2026-10-19 |
+| [exposure-boundaries](#exposure-boundaries) | P1 | diagram | ready | Codex | 2026-10-19 |
+| [first-reply](#first-reply) | P1 | image | ready | Codex | 2026-10-19 |
+| [goal-progress](#goal-progress) | P1 | image | ready | Codex | 2026-10-19 |
+| [knowledge-import-result](#knowledge-import-result) | P1 | image | ready | Codex | 2026-10-19 |
+| [mcp-connect-test](#mcp-connect-test) | P1 | image | ready | Codex | 2026-10-19 |
+| [memory-inspector](#memory-inspector) | P1 | image | ready | Codex | 2026-10-19 |
+| [model-select-and-test](#model-select-and-test) | P1 | video | ready | Codex | 2026-10-19 |
+| [plugin-install-result](#plugin-install-result) | P1 | image | ready | Codex | 2026-10-19 |
+| [schedule-state](#schedule-state) | P1 | image | ready | Codex | 2026-10-19 |
+| [setup-model-test](#setup-model-test) | P1 | image | ready | Codex | 2026-10-19 |
+| [skill-create-run](#skill-create-run) | P1 | video | ready | Codex | 2026-10-19 |
+| [browser-control](#browser-control) | P2 | video | ready | Codex | 2026-10-19 |
+| [config-precedence](#config-precedence) | P2 | diagram | ready | Codex | 2026-10-19 |
+| [delegate-room-round](#delegate-room-round) | P2 | image | ready | Codex | 2026-10-19 |
+| [deployment-topology](#deployment-topology) | P2 | diagram | ready | Codex | 2026-10-19 |
+| [fleet-create-result](#fleet-create-result) | P2 | image | ready | Codex | 2026-10-19 |
+| [fleet-deck-overview](#fleet-deck-overview) | P2 | image | ready | Codex | 2026-10-19 |
+| [memory-lifecycle](#memory-lifecycle) | P2 | diagram | ready | Codex | 2026-10-19 |
+| [phone-pairing](#phone-pairing) | P2 | image | ready | Codex | 2026-10-19 |
+| [plugin-boundaries](#plugin-boundaries) | P2 | diagram | ready | Codex | 2026-10-19 |
+| [plugin-view-result](#plugin-view-result) | P2 | image | ready | Codex | 2026-10-19 |
+| [watch-goal-schedule](#watch-goal-schedule) | P2 | diagram | ready | Codex | 2026-10-19 |
+| [workflow-gate](#workflow-gate) | P2 | image | ready | Codex | 2026-10-19 |
+| [a2a-task-lifecycle](#a2a-task-lifecycle) | P3 | diagram | ready | Codex | 2026-10-19 |
+| [trace-correlation](#trace-correlation) | P3 | image | ready | Codex | 2026-10-19 |
 
 ## setup-model-test
 
@@ -50,17 +50,17 @@ Recognize a successful model test before finishing setup.
 
 **Placement:** [tutorials/first-agent.md](../tutorials/first-agent.md) → 3. Connect a model
 
-**Caption:** Recognize a successful model test before finishing setup.
+**Caption:** Run Test connection before continuing. This example uses a Claude subscription; gateway setup uses the same test step.
 
-**Alt text draft:** Recognize a successful model test before finishing setup.
+**Alt text draft:** The setup wizard shows Claude subscription selected, a model name, and a successful real connection test.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/setup/SetupWizard.tsx`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `setup-model-test/v1.png` · **Source:** docs/dev/media/sources/setup-model-test.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## first-reply
 
@@ -70,17 +70,17 @@ Show the observable endpoint of onboarding.
 
 **Placement:** [tutorials/first-agent.md](../tutorials/first-agent.md) → 4. Finish and chat
 
-**Caption:** Show the observable endpoint of onboarding.
+**Caption:** A completed model reply confirms that the connection can answer. This capture uses an isolated demo agent.
 
-**Alt text draft:** Show the observable endpoint of onboarding.
+**Alt text draft:** Docs demo answers “Say hello in one sentence.” The completed reply appears above the chat composer.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/chat`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `first-reply/v1.png` · **Source:** docs/dev/media/sources/first-reply.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7731620e0d6ff3cbf645dc7b00178051bae9e412`
 
 ## app-layout
 
@@ -90,57 +90,57 @@ Locate the rail, conversation tabs, composer, and tool result.
 
 **Placement:** [guides/react-tauri-ui.md](../guides/react-tauri-ui.md) → Layout
 
-**Caption:** Locate the rail, conversation tabs, composer, and tool result.
+**Caption:** The numbered callouts match the four layout areas described above.
 
-**Alt text draft:** Locate the rail, conversation tabs, composer, and tool result.
+**Alt text draft:** Four numbered callouts mark the agent switcher, left navigation rail, chat workspace, and right work rail.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/app`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `app-layout/v1.png` · **Source:** docs/dev/media/sources/app-layout.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## model-select-and-test
 
 Distinguish adding a connection, testing its model list, and selecting the primary model.
 
-**Capture / drawing brief:** A 20–40 second silent capture: add a demo endpoint, Test, choose Primary model, Save & apply, send a short chat. Hold each success state. Supply a poster and numbered text walkthrough.
+**Capture / drawing brief:** Record a real connected subscription: Test model discovery, choose Primary model, Save & apply, and verify a new-chat reply. Connection creation and sign-in remain in the text; never record credentials.
 
 **Placement:** [guides/model-connections.md](../guides/model-connections.md) → Add a gateway or local endpoint
 
-**Caption:** Distinguish adding a connection, testing its model list, and selecting the primary model.
+**Caption:** Test lists models; a new chat verifies a reply. This silent example uses an already-connected Claude subscription.
 
-**Alt text draft:** Distinguish adding a connection, testing its model list, and selecting the primary model.
+**Alt text draft:** Test an existing subscription connection, select a primary model, save, and verify a real reply in a new chat.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/settings`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `model-select-and-test/v1.mp4` · **Source:** docs/dev/media/sources/model-select-and-test.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## attach-and-download
 
 Show the difference between an input attachment and a downloadable output.
 
-**Capture / drawing brief:** Two short scenes in one 20–40 second silent clip: attach a small public sample and ask about it; request a document and download its artifact. Use a poster with both states and a text walkthrough.
+**Capture / drawing brief:** Reuse the reviewed real public-README attachment and Markdown-artifact recording. Retain the actual model wait, poster, and text alternative. Caption clearly distinguishes an available Download action from a completed local save.
 
 **Placement:** [guides/documents-and-files.md](../guides/documents-and-files.md) → Attach a file and ask a question
 
-**Caption:** Show the difference between an input attachment and a downloadable output.
+**Caption:** Attach a public document and inspect the generated result. This 54-second silent recording shows real model wait time; select Download to save your own copy.
 
-**Alt text draft:** Show the difference between an input attachment and a downloadable output.
+**Alt text draft:** A public README is attached, summarized, and returned as a downloadable Markdown artifact.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/chat`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `attach-and-download/v1.mp4` · **Source:** docs/dev/media/sources/attach-and-download.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7731620e0d6ff3cbf645dc7b00178051bae9e412`
 
 ## memory-inspector
 
@@ -150,17 +150,17 @@ Help readers find the evidence behind a reply.
 
 **Placement:** [guides/manage-memory.md](../guides/manage-memory.md) → See what the agent used {#inspect-a-turn}
 
-**Caption:** Help readers find the evidence behind a reply.
+**Caption:** Inspect the sources this turn actually received. Saving a fact does not guarantee that every turn receives it.
 
-**Alt text draft:** Help readers find the evidence behind a reply.
+**Alt text draft:** The injection inspector shows the saved demo preference for three short bullet points among the memories used by one turn.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/memory`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `memory-inspector/v1.png` · **Source:** docs/dev/media/sources/memory-inspector.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## knowledge-import-result
 
@@ -170,37 +170,37 @@ Show what successful ingestion and later retrieval look like.
 
 **Placement:** [guides/ingestion.md](../guides/ingestion.md) → From the console
 
-**Caption:** Show what successful ingestion and later retrieval look like.
+**Caption:** Search for a distinctive term to verify the imported content. Pending review means the entry still needs review.
 
-**Alt text draft:** Show what successful ingestion and later retrieval look like.
+**Alt text draft:** A search for transcription returns the imported Demo launch notes with its source filename and pending review status.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/knowledge`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `knowledge-import-result/v1.png` · **Source:** docs/dev/media/sources/knowledge-import-result.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## plugin-install-result
 
 Recognize installation status and the enabled plugin.
 
-**Capture / drawing brief:** Review docs/public/readme/install-plugin.webp as a reuse candidate. Recapture if controls differ. Show a first-party sample plugin installed and enabled, with dependency/restart state visible.
+**Capture / drawing brief:** Capture the actual copied chat_example plugin after discovery and enablement, with its loaded state and working view; clearly identify local installation.
 
 **Placement:** [guides/plugin-registry.md](../guides/plugin-registry.md) → Install one
 
-**Caption:** Recognize installation status and the enabled plugin.
+**Caption:** Confirm the plugin is loaded and inspect what it contributes. This example was copied locally and enabled; it was not installed from a remote URL.
 
-**Alt text draft:** Recognize installation status and the enabled plugin.
+**Alt text draft:** The Installed list shows Chat panel (example) loaded with one view and a Disable control.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/plugins`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `plugin-install-result/v1.png` · **Source:** docs/dev/media/sources/plugin-install-result.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## mcp-connect-test
 
@@ -210,17 +210,17 @@ Locate the MCP connection controls and success state.
 
 **Placement:** [guides/mcp.md](../guides/mcp.md) → Add a server
 
-**Caption:** Locate the MCP connection controls and success state.
+**Caption:** A connected server lists its discovered tools. Verify a small read-only call separately; discovery alone does not prove a tool works.
 
-**Alt text draft:** Locate the MCP connection controls and success state.
+**Alt text draft:** Settings shows the demo stdio MCP server connected with one discovered tool.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/app/McpPanel.tsx`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `mcp-connect-test/v1.png` · **Source:** docs/dev/media/sources/mcp-connect-test.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## browser-control
 
@@ -230,37 +230,37 @@ Show when the agent acts and when the user can intervene.
 
 **Placement:** [guides/browser-automation.md](../guides/browser-automation.md) → Interact with a page
 
-**Caption:** Show when the agent acts and when the user can intervene.
+**Caption:** The Browser panel and agent share the same session. This silent recording shows manual navigation and a real saved screenshot; no login is required.
 
-**Alt text draft:** Show when the agent acts and when the user can intervene.
+**Alt text draft:** Navigate public example pages in the live Browser panel, then ask the agent to save a screenshot.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `plugins/agent_browser`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `browser-control/v1.mp4` · **Source:** docs/dev/media/sources/browser-control.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## phone-pairing
 
 Show the desktop-to-phone handoff without making a usable credential public.
 
-**Capture / drawing brief:** Two-panel capture of Devices and the connected phone. Replace the QR/token area with an explicit non-scannable DEMO block in the editable source. Show reachable URL shape without real addresses.
+**Capture / drawing brief:** Capture the real post-pairing Devices list and connected mobile layout. Avoid the QR/code state entirely; identify phone emulation and revoke the demo device after capture.
 
 **Placement:** [guides/phone-access.md](../guides/phone-access.md) → 2. Pair the phone {#_2-reach-it-from-the-phone}
 
-**Caption:** Show the desktop-to-phone handoff without making a usable credential public.
+**Caption:** Confirm the device on both sides. This actual pairing uses an emulated phone viewport; a physical phone needs its own reachable agent URL.
 
-**Alt text draft:** Show the desktop-to-phone handoff without making a usable credential public.
+**Alt text draft:** The desktop lists an active limited-scope iPhone device, beside an emulated phone console confirming successful pairing.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/settings/DevicesPanel.tsx`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `phone-pairing/v1.png` · **Source:** docs/dev/media/sources/phone-pairing.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## memory-lifecycle
 
@@ -270,17 +270,17 @@ Explain attachment, stored knowledge, and recalled context as different lifetime
 
 **Placement:** [explanation/memory-and-knowledge.md](../explanation/memory-and-knowledge.md) → What the agent remembers
 
-**Caption:** Explain attachment, stored knowledge, and recalled context as different lifetimes.
+**Caption:** Inspect, correct, or remove saved material in Memory and Knowledge. Saving does not guarantee delivery.
 
-**Alt text draft:** Explain attachment, stored knowledge, and recalled context as different lifetimes.
+**Alt text draft:** Current-chat material, saved references, and memory have different controls. Attach a file → Use in this conversation → Inspect chat + tool cards; Ingest a source → Save in Knowledge → Store → Retrieve relevant passages; Save a memory → Eligible for later turns → Inspect Memory → Injections
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `src/knowledge`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `memory-lifecycle/v1.svg` · **Source:** docs/dev/media/sources/memory-lifecycle.svg
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7d90560d1f3656790e65d81e0c1e16829afd1324`
 
 ## skill-create-run
 
@@ -290,57 +290,57 @@ Make the first app-authored skill concrete.
 
 **Placement:** [tutorials/first-skill.md](../tutorials/first-skill.md) → 1. Create the skill
 
-**Caption:** Make the first app-authored skill concrete.
+**Caption:** Create a skill and invoke it with /tldr. This silent recording enables the slash command during creation; it can also be enabled later by editing the skill.
 
-**Alt text draft:** Make the first app-authored skill concrete.
+**Alt text draft:** Create the tldr skill, enable its slash command, and receive a real three-bullet summary in chat.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/settings`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `skill-create-run/v1.mp4` · **Source:** docs/dev/media/sources/skill-create-run.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## schedule-state
 
 Recognize a saved schedule and its next firing time.
 
-**Capture / drawing brief:** Capture a synthetic one-time task in the Schedule view with timezone, enabled state, and next run visible. Add a small second crop showing the Activity result; use fixed sample dates.
+**Capture / drawing brief:** Capture a real sample job with its saved timezone, prompt, next and last fire times. Verify a completed Feed result separately; a Last fire timestamp alone is not proof of a successful reply.
 
 **Placement:** [guides/scheduler.md](../guides/scheduler.md) → Manage from the console
 
-**Caption:** Recognize a saved schedule and its next firing time.
+**Caption:** Inspect the saved timezone and next fire. Last fire records dispatch; confirm the completed reply in Feed.
 
-**Alt text draft:** Recognize a saved schedule and its next firing time.
+**Alt text draft:** The sample job shows a daily schedule in America/Los_Angeles, next and last fire times, its prompt, and Edit and Delete controls.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/schedule`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `schedule-state/v1.png` · **Source:** docs/dev/media/sources/schedule-state.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## goal-progress
 
 Identify progress, verifier evidence, and the stop/extend controls.
 
-**Capture / drawing brief:** Capture a demo goal with iteration timeline, verifier result, and Add iterations control visible. Use harmless sample work and a clear running or completed state, never a fabricated pass.
+**Capture / drawing brief:** Show a real completed goal with verifier evidence, iteration count, plan, and timeline. Add iterations is an active-goal control; do not fabricate it on a terminal goal.
 
 **Placement:** [guides/goal-mode.md](../guides/goal-mode.md) → Manage from the console
 
-**Caption:** Identify progress, verifier evidence, and the stop/extend controls.
+**Caption:** Read the verifier evidence as well as the status. This goal finished on iteration 0 after the file contained the required text.
 
-**Alt text draft:** Identify progress, verifier evidence, and the stop/extend controls.
+**Alt text draft:** An achieved goal shows the data verifier, found substring result, file contents, saved plan, and iteration timeline.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/app/GoalsPanel.tsx`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `goal-progress/v1.png` · **Source:** docs/dev/media/sources/goal-progress.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## watch-goal-schedule
 
@@ -350,37 +350,37 @@ Explain the different triggers and stopping conditions.
 
 **Placement:** [guides/watches.md](../guides/watches.md) → Watch vs goal — which?
 
-**Caption:** Explain the different triggers and stopping conditions.
+**Caption:** The server must be running. Check schedule recovery and goal iteration limits in the linked guides.
 
-**Alt text draft:** Explain the different triggers and stopping conditions.
+**Alt text draft:** Use the smallest mechanism that fits the task. Schedule → A time becomes due → Run the saved prompt; Watch → An external condition changes → Notify or act on the change; Goal → Work → verify → repeat → Stop on completion or a limit
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `src/scheduler`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `watch-goal-schedule/v1.svg` · **Source:** docs/dev/media/sources/watch-goal-schedule.svg
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7d90560d1f3656790e65d81e0c1e16829afd1324`
 
 ## delegate-room-round
 
 Recognize participant selection and replies from different agents.
 
-**Capture / drawing brief:** Capture a room with two synthetic delegates and one completed round. Annotate member picker, broadcast/send behavior, and author labels. Exclude long output.
+**Capture / drawing brief:** Show actual participant chips, leading @names and named replies after a completed synthetic round. Do not describe this console flow as a separate room-creation or broadcast UI.
 
 **Placement:** [guides/rooms.md](../guides/rooms.md) → Set up and send a message {#what-name-does}
 
-**Caption:** Recognize participant selection and replies from different agents.
+**Caption:** Leading @names address the delegates in order. The named replies and participant chips show who took part in this completed demo round.
 
-**Alt text draft:** Recognize participant selection and replies from different agents.
+**Alt text draft:** Researcher and editor reply under their own names to the same leading @researcher @editor message.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src/chat`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `delegate-room-round/v1.png` · **Source:** docs/dev/media/sources/delegate-room-round.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7731620e0d6ff3cbf645dc7b00178051bae9e412`
 
 ## workflow-gate
 
@@ -390,37 +390,37 @@ Show where a workflow waits for a human decision.
 
 **Placement:** [guides/workflows.md](../guides/workflows.md) → Run one (the short path)
 
-**Caption:** Show where a workflow waits for a human decision.
+**Caption:** A human gate pauses before the next step runs. Review the prior output in the rendered prompt, then approve, edit, or reject.
 
-**Alt text draft:** Show where a workflow waits for a human decision.
+**Alt text draft:** The synthetic review workflow is paused with its rendered prompt and Approve, Edit, and Reject controls.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src`, `package-lock.json`, `plugins/workflows`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `workflow-gate/v1.png` · **Source:** docs/dev/media/sources/workflow-gate.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7731620e0d6ff3cbf645dc7b00178051bae9e412`
 
 ## plugin-view-result
 
 Give builders a concrete success state for the quickstart.
 
-**Capture / drawing brief:** Capture the copied chat_example plugin enabled in the chat slot, with its greeting, composer, and one functioning interaction. Keep the example code editable in the existing source.
+**Capture / drawing brief:** Capture the actual copied chat_example plugin after discovery and enablement, with its loaded state and working view; clearly identify local installation.
 
 **Placement:** [guides/build-a-plugin-view.md](../guides/build-a-plugin-view.md) → Copy the example
 
-**Caption:** Give builders a concrete success state for the quickstart.
+**Caption:** The chat_example view claims the Chat slot. Its composer calls the running agent; disabling the plugin restores the built-in chat.
 
-**Alt text draft:** Give builders a concrete success state for the quickstart.
+**Alt text draft:** The example plugin replaces the Chat surface and returns a real greeting through its composer.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `examples/plugins/chat_example`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `plugin-view-result/v1.png` · **Source:** docs/dev/media/sources/plugin-view-result.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## plugin-boundaries
 
@@ -430,17 +430,17 @@ Explain the plugin boundary and supported communication paths.
 
 **Placement:** [explanation/plugin-architecture.md](../explanation/plugin-architecture.md) → Two planes, two trust levels
 
-**Caption:** Explain the plugin boundary and supported communication paths.
+**Caption:** Python plugins run with server privileges. An iframe boundary does not sandbox the plugin backend.
 
-**Alt text draft:** Explain the plugin boundary and supported communication paths.
+**Alt text draft:** Backend Python is trusted server code; the view uses the iframe bridge. Host loads the manifest → register(registry) → Tools, routes, background work; Public iframe page → Bridge supplies bearer + theme → Authenticated /api/plugins data; Plugin-to-plugin work → Event bus or optional service → No imports of plugin internals
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `src/graph/plugins`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `plugin-boundaries/v1.svg` · **Source:** docs/dev/media/sources/plugin-boundaries.svg
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7d90560d1f3656790e65d81e0c1e16829afd1324`
 
 ## deployment-topology
 
@@ -450,17 +450,17 @@ Help operators choose a topology and understand browser versus server location.
 
 **Placement:** [guides/headless.md](../guides/headless.md) → Run headless (API + A2A, no UI)
 
-**Caption:** Help operators choose a topology and understand browser versus server location.
+**Caption:** Protect remote access with authentication. Keep storage beside the server; back up its instance data.
 
-**Alt text draft:** Help operators choose a topology and understand browser versus server location.
+**Alt text draft:** Choose a deployment; the browser is a client in each case. Desktop app / local browser → Local server + instance data → Native or HTTP model connection; Browser via host port → Container + persistent volume → Native or HTTP model connection; Remote browser / A2A client → Private server behind auth + proxy → Native or HTTP model connection
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `src/infra/paths.py`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `deployment-topology/v1.svg` · **Source:** docs/dev/media/sources/deployment-topology.svg
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7d90560d1f3656790e65d81e0c1e16829afd1324`
 
 ## box-instance-paths
 
@@ -470,17 +470,17 @@ Explain what is shared and what is isolated across instances.
 
 **Placement:** [guides/multi-instance.md](../guides/multi-instance.md) → Choose explicit roots
 
-**Caption:** Explain what is shared and what is isolated across instances.
+**Caption:** commons/ is opt-in shared material. PROTOAGENT_HOME overrides the instance root; check store overrides too.
 
-**Alt text draft:** Explain what is shared and what is isolated across instances.
+**Alt text draft:** Example: PROTOAGENT_BOX_ROOT=/srv/agents with alice and bob instance IDs. /srv/agents/ → host-config.yaml → Shared machine defaults; /srv/agents/alice/ → config/ + workspace/ + stores → Alice’s private state; /srv/agents/bob/ → config/ + workspace/ + stores → Bob’s private state
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `src/infra/paths.py`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `box-instance-paths/v1.svg` · **Source:** docs/dev/media/sources/box-instance-paths.svg
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7d90560d1f3656790e65d81e0c1e16829afd1324`
 
 ## fleet-create-result
 
@@ -490,37 +490,37 @@ Recognize a newly created, reachable fleet member.
 
 **Placement:** [guides/fleet.md](../guides/fleet.md) → Create an agent in the console
 
-**Caption:** Recognize a newly created, reachable fleet member.
+**Caption:** Confirm a reply from the new member. The switcher’s checkmark identifies the active agent; the two workspaces keep separate chats.
 
-**Alt text draft:** Recognize a newly created, reachable fleet member.
+**Alt text draft:** The new research-demo agent has answered its first message; the switcher shows both agents and checks the active member.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `apps/web/src`, `package-lock.json`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `fleet-create-result/v1.png` · **Source:** docs/dev/media/sources/fleet-create-result.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7731620e0d6ff3cbf645dc7b00178051bae9e412`
 
 ## fleet-deck-overview
 
 Explain the terminal roster and selected-member details.
 
-**Capture / drawing brief:** Capture a fixed-size terminal with two demo members, one healthy and one waiting for input. Annotate roster, detail pane, and key hints; preserve monospaced legibility.
+**Capture / drawing brief:** Show a compact actual terminal roster with two online members, a host waiting at a real human-input question, and keyboard hints. Keep process status separate from turn state.
 
 **Placement:** [guides/fleet-deck.md](../guides/fleet-deck.md) → See what the fleet is doing
 
-**Caption:** Explain the terminal roster and selected-member details.
+**Caption:** Online describes process reachability. The separate turn column shows that the host needs input while both demo members are idle.
 
-**Alt text draft:** Explain the terminal roster and selected-member details.
+**Alt text draft:** The live terminal roster shows two online idle members and a host marked needs you, with one turn parked at a question and keyboard hints.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `src/deck`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `fleet-deck-overview/v1.png` · **Source:** docs/dev/media/sources/fleet-deck-overview.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## exposure-boundaries
 
@@ -530,37 +530,37 @@ Clarify which network surfaces require authentication before exposure.
 
 **Placement:** [guides/exposing-protoagent.md](../guides/exposing-protoagent.md) → The threat model — know what each surface is
 
-**Caption:** Clarify which network surfaces require authentication before exposure.
+**Caption:** Keep the agent privately bound. Public plugin routes are deliberate exceptions, not a reason to expose /api.
 
-**Alt text draft:** Clarify which network surfaces require authentication before exposure.
+**Alt text draft:** A proxy rule and an application credential solve different problems. Public A2A hostname → Card: discovery · /a2a: bearer → Block /app, /api, /metrics; Separate console hostname → HTTPS proxy / optional access gate → App + API still require credentials; Optional plugin webhook → Explicitly allow only its route → Plugin verifies its signature
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `src/security`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `exposure-boundaries/v1.svg` · **Source:** docs/dev/media/sources/exposure-boundaries.svg
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7d90560d1f3656790e65d81e0c1e16829afd1324`
 
 ## trace-correlation
 
 Show what a joined trace looks like during diagnosis.
 
-**Capture / drawing brief:** Use synthetic traffic with two agents; capture a local or Langfuse trace view and annotate parent/child correlation. Record backend version. If no working backend is available, keep planned.
+**Capture / drawing brief:** Visualize actual spans received by a local OTLP collector from the host and two demo agents. Display shared trace ID and exact parent/child IDs; retain evidence and backend versions. Label this as a local evidence view, not Langfuse UI.
 
 **Placement:** [guides/observability.md](../guides/observability.md) → Cross-agent trace propagation
 
-**Caption:** Show what a joined trace looks like during diagnosis.
+**Caption:** Actual spans from the local OTLP collector show cross-agent correlation. This evidence visualization is not a screenshot of the Langfuse interface.
 
-**Alt text draft:** Show what a joined trace looks like during diagnosis.
+**Alt text draft:** Six actual exported spans share one trace ID; each caller span links to its receiving agent through matching parent span IDs.
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `src/observability`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `trace-correlation/v1.png` · **Source:** docs/dev/media/sources/trace-correlation.json
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `29bdcf526a694f59fb8ae489e3d3e7119476102e`
 
 ## config-precedence
 
@@ -570,17 +570,17 @@ Make configuration precedence and file locations easier to scan.
 
 **Placement:** [reference/configuration.md](../reference/configuration.md) → File locations
 
-**Caption:** Make configuration precedence and file locations easier to scan.
+**Caption:** Environment rules are field-specific; they are not one universal final layer. Secrets use separate overlays.
 
-**Alt text draft:** Make configuration precedence and file locations easier to scan.
+**Alt text draft:** Later configured values override earlier layers; nested maps merge and lists replace. 1 · App defaults → 2 · Host configuration → 3 · Agent configuration; Built-in defaults → <box_root>/host-config.yaml → <instance_root>/config/langgraph-config.yaml; Inspect the effective result → protoagent config explain → Read each field’s provenance
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `src/infra/paths.py`, `src/graph/config.py`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `config-precedence/v1.svg` · **Source:** docs/dev/media/sources/config-precedence.svg
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7d90560d1f3656790e65d81e0c1e16829afd1324`
 
 ## a2a-task-lifecycle
 
@@ -590,17 +590,17 @@ Visualize task transitions without duplicating the full protocol reference.
 
 **Placement:** [explanation/a2a-protocol.md](../explanation/a2a-protocol.md) → Task lifecycle
 
-**Caption:** Visualize task transitions without duplicating the full protocol reference.
+**Caption:** Restart reconciliation fails interrupted work but preserves input/auth pauses. Terminal retention is 24 hours.
 
-**Alt text draft:** Visualize task transitions without duplicating the full protocol reference.
+**Alt text draft:** A paused task is not a completed result. SUBMITTED → WORKING → COMPLETED / FAILED / CANCELED; Input needed during work → INPUT_REQUIRED → Follow up in the same context; Reconnect while running → SubscribeToTask → For terminal results: GetTask
 
 **Refresh when:** The shown controls, labels, paths, or behavior change; review after changes to the watched source.
 
 **Watch:** `src/a2a_impl`
 
-**Published asset:** `not created` · **Source:** not created
+**Published asset:** `a2a-task-lifecycle/v1.svg` · **Source:** docs/dev/media/sources/a2a-task-lifecycle.svg
 
-**Review:** pending · not reviewed · commit `none`
+**Review:** Codex · 2026-10-19 · commit `7d90560d1f3656790e65d81e0c1e16829afd1324`
 
 ## Page dispositions
 

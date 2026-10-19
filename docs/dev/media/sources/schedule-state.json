@@ -1,0 +1,15 @@
+{
+  "reviewed_against": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+  "export_sha256": "14abef8154c90c26aaf2ca7f97a348b55ceae9928ca7bfdc0de263942f3926c3",
+  "steps": {
+    "viewport": "1440 × 900, Chromium",
+    "steps": [
+      "Work → Schedule → New schedule; Cron */2 * * * *; prompt: Reply with “Schedule check complete.” Do not use tools or change any files.; job id docs-schedule-check.",
+      "Observed completed real-model reply “Schedule check complete.” in Feed after the 2026-10-19T19:42:00Z firing.",
+      "Edited to Repeat → Every day at 09:00 America/Los_Angeles, saved, reopened and captured.",
+      "Deleted through the confirmation dialog; verified 0 JOBS and no scheduled jobs."
+    ],
+    "capture_note": "The first automation wait assumed Save left the detail open; it actually closes. Reopened to verify. Initial Close/Delete selectors matched two buttons; corrected selectors and completed cleanup."
+  },
+  "privacy_review": "Synthetic demo material; no live credentials, pairing codes, or personal paths."
+}

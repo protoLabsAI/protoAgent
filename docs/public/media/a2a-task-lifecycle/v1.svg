@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc"><title id="title">A task can finish or pause for input</title><desc id="desc">A paused task is not a completed result. Restart reconciliation fails interrupted work but preserves input/auth pauses. Terminal retention is 24 hours.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#5865cc" stroke-width="1.5"/></marker></defs>
+<rect width="1200" height="680" rx="20" fill="#f5f7fb"/><g font-family="Arial, Helvetica, sans-serif">
+<text x="48" y="57" fill="#182437" font-size="32" font-weight="700"><tspan x="48" dy="0">A task can finish or pause for input</tspan></text>
+<text x="48" y="103" fill="#4b5870" font-size="20" font-weight="400"><tspan x="48" dy="0">A paused task is not a completed result.</tspan></text>
+<rect x="48" y="180" width="240" height="86" rx="12" fill="#ffffff" stroke="#cdd4e3"/>
+<text x="66" y="215" fill="#182437" font-size="21" font-weight="400"><tspan x="66" dy="0">SUBMITTED</tspan></text>
+<rect x="378" y="180" width="240" height="86" rx="12" fill="#ffffff" stroke="#cdd4e3"/>
+<text x="396" y="215" fill="#182437" font-size="21" font-weight="400"><tspan x="396" dy="0">WORKING</tspan></text>
+<path d="M288 223 H370" fill="none" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="860" y="145" width="280" height="86" rx="12" fill="#ffffff" stroke="#cdd4e3"/>
+<text x="878" y="180" fill="#182437" font-size="21" font-weight="400"><tspan x="878" dy="0">COMPLETED</tspan></text>
+<path d="M618 223 H740 V188 H852" fill="none" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="860" y="275" width="280" height="86" rx="12" fill="#ffffff" stroke="#cdd4e3"/>
+<text x="878" y="310" fill="#182437" font-size="21" font-weight="400"><tspan x="878" dy="0">FAILED</tspan></text>
+<path d="M618 223 H740 V318 H852" fill="none" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="860" y="405" width="280" height="86" rx="12" fill="#ffffff" stroke="#cdd4e3"/>
+<text x="878" y="440" fill="#182437" font-size="21" font-weight="400"><tspan x="878" dy="0">CANCELED</tspan></text>
+<path d="M618 223 H740 V448 H852" fill="none" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="378" y="420" width="280" height="86" rx="12" fill="#edf0ff" stroke="#cdd4e3"/>
+<text x="396" y="455" fill="#182437" font-size="21" font-weight="400"><tspan x="396" dy="0">INPUT_REQUIRED</tspan></text>
+<path d="M498 266 V412" fill="none" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<text x="518" y="335" fill="#4b5870" font-size="18" font-weight="400"><tspan x="518" dy="0">needs input</tspan></text>
+<path d="M378 463 H320 V223 H370" fill="none" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="7 5"/>
+<text x="48" y="385" fill="#4b5870" font-size="18" font-weight="400"><tspan x="48" dy="0">Follow-up message in the</tspan><tspan x="48" dy="29">same context resumes work</tspan></text>
+<text x="48" y="594" fill="#4b5870" font-size="19" font-weight="400"><tspan x="48" dy="0">Restart reconciliation fails interrupted work but preserves input/auth pauses. Terminal retention is 24</tspan><tspan x="48" dy="29">hours.</tspan></text>
+</g></svg>

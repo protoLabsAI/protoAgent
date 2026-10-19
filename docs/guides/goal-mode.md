@@ -87,7 +87,7 @@ filed in that session's backlog.
 For authenticated endpoints, see [Goal API](/reference/automation#goal-api).
 
 <!-- docs-media: goal-progress -->
-
+<figure class="docs-media"><img src="/media/goal-progress/v1.png" alt="An achieved goal shows the data verifier, found substring result, file contents, saved plan, and iteration timeline." loading="lazy" style="max-width:100%;height:auto"><figcaption>Read the verifier evidence as well as the status. This goal finished on iteration 0 after the file contained the required text.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Reacting to a goal

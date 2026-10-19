@@ -1,0 +1,14 @@
+{
+  "privacy_review": "Isolated demo, synthetic conversations and localhost paths only. No usable pairing codes, tokens, or personal paths.",
+  "backend": "Actual LiveBackend connected to the isolated hub; Textual 8.2.8.",
+  "steps": [
+    "Create two running demo members.",
+    "In a new host chat, call ask_human with a synthetic summary-format question; wait for the actual interrupt.",
+    "Run the retained capture script against the hub; Textual run_test uses the real live backend at 132x16 terminal cells.",
+    "Export Rich SVG, remove external font declarations, use local Menlo monospace, and render to PNG at 1629x441."
+  ],
+  "editable_source": "fleet-deck-overview.svg",
+  "capture_script": "capture_fleet_deck.py",
+  "verification": "Actual roster says host needs you, both child members idle; footer reports one parked question.",
+  "cleanup": "Dismissed the synthetic human-input request after capture, then stopped the isolated hub and its demo members."
+}

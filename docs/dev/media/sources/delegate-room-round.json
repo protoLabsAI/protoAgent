@@ -1,0 +1,21 @@
+{
+  "privacy_review": "Isolated demo, synthetic conversations and localhost paths only. No usable pairing codes, tokens, or personal paths.",
+  "viewport": "1440x1000 Chromium",
+  "steps": [
+    "Create two Basic fleet members, research-demo and editor-demo.",
+    "Register A2A delegates researcher and editor through the local hub member proxies; both agent-card probes succeeded.",
+    "Set room.max_rounds to 1 in the isolated instance.",
+    "Send @researcher @editor Review these synthetic launch notes in one sentence each: text search and file import are ready; transcription needs a configured model. Do not use tools or browse.",
+    "Wait for both actual named replies and completed room tool card."
+  ],
+  "verification": "Completed in 5.0s. Researcher returned two bullets; editor confirmed the reading. Do not imply that one-sentence formatting was obeyed by both.",
+  "capture_source_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+  "freshness_review": {
+    "reviewed_against": "7731620e0d6ff3cbf645dc7b00178051bae9e412",
+    "changed_files": [
+      "apps/web/src/chat/DelegateProgressView.tsx",
+      "apps/web/src/chat/delegateProgress.ts"
+    ],
+    "finding": "Only live coding-delegate narration formatting changed (strip Markdown and preserve word boundaries). These assets show ordinary chat, completed room replies, or workflow controls, not live coding narration; exported content remains accurate."
+  }
+}

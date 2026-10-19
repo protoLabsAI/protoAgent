@@ -115,7 +115,7 @@ parent span. Invalid trace IDs start fresh traces; invalid span IDs are ignored.
 The caller IDs are also recorded as metadata for correlation.
 
 <!-- docs-media: trace-correlation -->
-
+<figure class="docs-media"><img src="/media/trace-correlation/v1.png" alt="Six actual exported spans share one trace ID; each caller span links to its receiving agent through matching parent span IDs." loading="lazy" style="max-width:100%;height:auto"><figcaption>Actual spans from the local OTLP collector show cross-agent correlation. This evidence visualization is not a screenshot of the Langfuse interface.</figcaption></figure>
 <!-- /docs-media -->
 
 ### If Langfuse isn't configured

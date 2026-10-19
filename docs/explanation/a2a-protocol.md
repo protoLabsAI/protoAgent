@@ -142,7 +142,7 @@ All terminal states fire push notifications (if configured). Terminal tasks are 
 **Restart survives.** Tasks are persisted to an instance-scoped SQLite `a2a-tasks.db` (push configs to `a2a-push.db`) via the SDK's `DatabaseTaskStore`. On boot, `reconcile_interrupted_tasks` flips tasks stranded in `SUBMITTED`/`WORKING` to failed — while deliberately **preserving** `INPUT_REQUIRED` and `AUTH_REQUIRED`, because those are waiting on a human, not on a dead process.
 
 <!-- docs-media: a2a-task-lifecycle -->
-
+<figure class="docs-media"><img src="/media/a2a-task-lifecycle/v1.svg" alt="A paused task is not a completed result. SUBMITTED → WORKING → COMPLETED / FAILED / CANCELED; Input needed during work → INPUT_REQUIRED → Follow up in the same context; Reconnect while running → SubscribeToTask → For terminal results: GetTask" loading="lazy" style="max-width:100%;height:auto"><figcaption>Restart reconciliation fails interrupted work but preserves input/auth pauses. Terminal retention is 24 hours.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Trace propagation — not in the spec

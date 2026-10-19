@@ -1,0 +1,27 @@
+{
+  "source_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+  "platform": "macOS Chromium via Playwright",
+  "viewport": {
+    "width": 1440,
+    "height": 1000,
+    "deviceScaleFactor": 1
+  },
+  "setup": "Fresh isolated box and instance, native Claude connection, no copied conversations or stores.",
+  "steps": [
+    "Open the console and wait for the composer.",
+    "Send: Say hello in one sentence.",
+    "Wait for the actual reply and completed turn.",
+    "Capture the viewport with active agent and composer visible."
+  ],
+  "result": "Actual model reply: Hello! I’m glad to help with whatever you need today.",
+  "privacy_review": "Synthetic agent name and public prompt; no tokens, QR codes, personal paths, or private source material.",
+  "capture_source_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+  "freshness_review": {
+    "reviewed_against": "7731620e0d6ff3cbf645dc7b00178051bae9e412",
+    "changed_files": [
+      "apps/web/src/chat/DelegateProgressView.tsx",
+      "apps/web/src/chat/delegateProgress.ts"
+    ],
+    "finding": "Only live coding-delegate narration formatting changed (strip Markdown and preserve word boundaries). These assets show ordinary chat, completed room replies, or workflow controls, not live coding narration; exported content remains accurate."
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "privacy_review": "Isolated demo, synthetic conversations and localhost paths only. No usable pairing codes, tokens, or personal paths.",
+  "viewport": "Desktop 1100x900; Playwright iPhone 13 emulation; composed at 1500px wide.",
+  "steps": [
+    "Start an isolated authenticated demo on a free port reachable through its bound interface.",
+    "Mint a real one-use device pairing code with the operator API.",
+    "Open /app/#pair=<code> in a fresh emulated phone context; wait for Paired as iPhone.",
+    "Capture the connected phone and actual Devices list after the code is consumed.",
+    "Compose the two unaltered screenshots with descriptive headings; no QR/token appears.",
+    "Revoke demo devices after capture and stop the isolated phone server."
+  ],
+  "composition": "Left column desktop, right column phone (360px), 24px gap, light background. The phone viewport is emulated, not a physical-device claim.",
+  "cleanup": "Revoked every paired demo device; verified zero remaining, then stopped the authenticated phone server."
+}

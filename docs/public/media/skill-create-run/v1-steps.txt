@@ -1,0 +1,10 @@
+Create and invoke a skill — silent recording, 15 seconds.
+
+1. Open Settings → Skills → New skill.
+2. Name it tldr, describe when to use it, and enter three instructions: read closely, return exactly three one-sentence bullets, and preserve consequential uncertainty.
+3. Enable Invokable as a /slash command with token tldr, then Create skill.
+4. Close Settings and open a new chat.
+5. Send /tldr followed by the synthetic launch notes.
+6. The actual reply contains three bullets: text search works; file import is ready; transcription requires a configured model and cannot yet be assumed ready.
+
+The recording enables slash invocation during creation. The tutorial also explains how to enable it later by editing the skill. No responses are mocked.

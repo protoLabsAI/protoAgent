@@ -1,0 +1,12 @@
+{
+  "steps": [
+    "Copy examples/plugins/chat_example to the isolated instance plugins directory.",
+    "Restart the demo server to rediscover manually copied files.",
+    "Settings \u2192 Plugins \u2192 Installed \u2192 Chat panel (example) \u2192 Enable.",
+    "Confirm loaded and 1 view; capture.",
+    "Close Settings, send Say hello in one sentence. Do not use tools. through the actual plugin iframe composer.",
+    "Wait for the actual response and capture the working view."
+  ],
+  "viewport": "1440x1000 for status; 1440x900 for view, Chromium",
+  "privacy_review": "Only synthetic conversation and local example. No credentials, account identifiers, or personal paths."
+}

@@ -26,7 +26,7 @@ For `npx` servers on desktop, install Node from the missing-runtime card when
 prompted, or use the [coding-agent runtime guidance](/guides/coding-agents).
 
 <!-- docs-media: mcp-connect-test -->
-
+<figure class="docs-media"><img src="/media/mcp-connect-test/v1.png" alt="Settings shows the demo stdio MCP server connected with one discovered tool." loading="lazy" style="max-width:100%;height:auto"><figcaption>A connected server lists its discovered tools. Verify a small read-only call separately; discovery alone does not prove a tool works.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Fix a connection or failed call

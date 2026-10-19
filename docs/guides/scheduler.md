@@ -25,7 +25,7 @@ one-shot resumes its originating session; jobs created outside chat normally
 appear in **Feed**.
 
 <!-- docs-media: schedule-state -->
-
+<figure class="docs-media"><img src="/media/schedule-state/v1.png" alt="The sample job shows a daily schedule in America/Los_Angeles, next and last fire times, its prompt, and Edit and Delete controls." loading="lazy" style="max-width:100%;height:auto"><figcaption>Inspect the saved timezone and next fire. Last fire records dispatch; confirm the completed reply in Feed.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Scheduling tools

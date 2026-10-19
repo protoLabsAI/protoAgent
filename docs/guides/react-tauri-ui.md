@@ -27,7 +27,7 @@ surface or Settings section. In a [fleet](/guides/fleet), switch agents or open
 separate windows to work with more than one at once.
 
 <!-- docs-media: app-layout -->
-
+<figure class="docs-media"><img src="/media/app-layout/v1.png" alt="Four numbered callouts mark the agent switcher, left navigation rail, chat workspace, and right work rail." loading="lazy" style="max-width:100%;height:auto"><figcaption>The numbered callouts match the four layout areas described above.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Chat
@@ -159,8 +159,6 @@ To create office documents, install the
 [managed Python runtime](/guides/python-runtime) from **Settings → Tools**.
 For Windows installation and recovery, see [Windows desktop](/guides/windows-desktop).
 
-<span id="testing-the-console"></span>
-
 ## Protect your data and resolve problems
 
 [Back up your app data](/guides/backup-and-restore) to preserve chats, memory,
@@ -170,3 +168,8 @@ for a fresh agent instead; it does not restore your history.
 If chat, a plugin, or a document task fails, start with
 [Troubleshooting](/guides/troubleshooting). It points from the error to the
 relevant setting and explains what to check before resetting anything.
+
+<span id="testing-the-console"></span>
+
+For developer setup and testing, see [Build and test the console](/guides/build-console)
+and the [operator API reference](/reference/operator-api).

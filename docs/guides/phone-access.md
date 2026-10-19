@@ -174,7 +174,7 @@ That browser then isn't a paired device: it has no row in Devices, and you can't
 without changing the token. Pairing is the better choice.
 
 <!-- docs-media: phone-pairing -->
-
+<figure class="docs-media"><img src="/media/phone-pairing/v1.png" alt="The desktop lists an active limited-scope iPhone device, beside an emulated phone console confirming successful pairing." loading="lazy" style="max-width:100%;height:auto"><figcaption>Confirm the device on both sides. This actual pairing uses an emulated phone viewport; a physical phone needs its own reachable agent URL.</figcaption></figure>
 <!-- /docs-media -->
 
 ## 3. After pairing: what you see {#after-pairing}

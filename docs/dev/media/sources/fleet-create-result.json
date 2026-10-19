@@ -1,0 +1,19 @@
+{
+  "viewport": "1440x1000 Chromium",
+  "steps": [
+    "Settings → Fleet → New agent → Basic → Next.",
+    "Name research-demo; Create agent. The UI switches to the new member.",
+    "Send a short greeting request with no tools and wait for the actual reply.",
+    "Open Switch agent to show the host and new member, with the active member checked."
+  ],
+  "verification": "Actual supervised member process and actual first model reply. No personal hostnames or paths.",
+  "capture_source_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+  "freshness_review": {
+    "reviewed_against": "7731620e0d6ff3cbf645dc7b00178051bae9e412",
+    "changed_files": [
+      "apps/web/src/chat/DelegateProgressView.tsx",
+      "apps/web/src/chat/delegateProgress.ts"
+    ],
+    "finding": "Only live coding-delegate narration formatting changed (strip Markdown and preserve word boundaries). These assets show ordinary chat, completed room replies, or workflow controls, not live coding narration; exported content remains accurate."
+  }
+}

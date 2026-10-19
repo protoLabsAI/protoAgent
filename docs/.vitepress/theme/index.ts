@@ -7,13 +7,14 @@ import DefaultTheme from "vitepress/theme";
 import type { Theme } from "vitepress";
 import { h } from "vue";
 import protoTheme from "@protolabsai/vitepress-theme";
+import ImageViewer from "./ImageViewer.vue";
 import StudioFooter from "./StudioFooter.vue";
 
 export default {
   ...protoTheme,
   Layout() {
     return h(DefaultTheme.Layout, null, {
-      "layout-bottom": () => h(StudioFooter),
+      "layout-bottom": () => [h(StudioFooter), h(ImageViewer)],
     });
   },
 } satisfies Theme;

@@ -126,5 +126,5 @@ Design history: [ADR 0067](/adr/0067-standalone-watch-primitive) and
 [ADR 0079](/adr/0079-autonomous-operating-model).
 
 <!-- docs-media: watch-goal-schedule -->
-
+<figure class="docs-media"><img src="/media/watch-goal-schedule/v1.svg" alt="Use the smallest mechanism that fits the task. Schedule → A time becomes due → Run the saved prompt; Watch → An external condition changes → Notify or act on the change; Goal → Work → verify → repeat → Stop on completion or a limit" loading="lazy" style="max-width:100%;height:auto"><figcaption>The server must be running. Check schedule recovery and goal iteration limits in the linked guides.</figcaption></figure>
 <!-- /docs-media -->

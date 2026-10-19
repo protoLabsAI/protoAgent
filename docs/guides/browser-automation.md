@@ -33,7 +33,7 @@ captures are temporary: the capture directory is pruned past its file/size limit
 PDF output is always US Letter; see [capture limits](/reference/browser-automation#screenshots-and-pdfs-are-fenced).
 
 <!-- docs-media: browser-control -->
-
+<figure class="docs-media"><video controls playsinline preload="none" poster="/media/browser-control/v1-poster.png" aria-label="Navigate public example pages in the live Browser panel, then ask the agent to save a screenshot." style="max-width:100%"><source src="/media/browser-control/v1.mp4"><a href="/media/browser-control/v1.mp4">Download video</a></video><p><a href="/media/browser-control/v1.mp4">Open video</a> · <a href="/media/browser-control/v1-steps.txt">Read the text walkthrough</a></p><figcaption>The Browser panel and agent share the same session. This silent recording shows manual navigation and a real saved screenshot; no login is required.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Change browser settings

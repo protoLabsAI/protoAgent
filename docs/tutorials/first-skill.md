@@ -45,7 +45,7 @@ decide whether to load the full procedure. State when the skill is useful.
 :::
 
 <!-- docs-media: skill-create-run -->
-
+<figure class="docs-media"><video controls playsinline preload="none" poster="/media/skill-create-run/v1-poster.png" aria-label="Create the tldr skill, enable its slash command, and receive a real three-bullet summary in chat." style="max-width:100%"><source src="/media/skill-create-run/v1.mp4"><a href="/media/skill-create-run/v1.mp4">Download video</a></video><p><a href="/media/skill-create-run/v1.mp4">Open video</a> · <a href="/media/skill-create-run/v1-steps.txt">Read the text walkthrough</a></p><figcaption>Create a skill and invoke it with /tldr. This silent recording enables the slash command during creation; it can also be enabled later by editing the skill.</figcaption></figure>
 <!-- /docs-media -->
 
 ## 2. Load it

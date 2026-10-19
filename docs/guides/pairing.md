@@ -152,12 +152,6 @@ making a code. Pairing another agent doesn't need the console.
 To install the console on the phone's home screen, and for the Tailscale and public URL
 setup, see [Use protoAgent on your phone or tablet](./phone-access.md).
 
-<span id="pair-another-agent"></span>
-
-
-<span id="plaintext-tailnet-yes-lan-only-if-you-say-so"></span>
-
-
 ## Manage devices
 
 **Settings ▸ Devices** lists every phone, tablet and hub paired to this agent. Each row
@@ -262,11 +256,12 @@ that stopped working.
 Phones paired before this change kept their device token in `protoagent.authToken`. The
 console moves it to the new key the next time it loads, without signing the phone out.
 
-<span id="the-auth-badge"></span>
-
-
-<span id="delegate-to-a-paired-remote"></span>
-
 ## Related reference
 
-See [Pair a remote fleet member](/guides/pair-an-agent) for this operator procedure.
+<span id="pair-another-agent"></span>
+<span id="plaintext-tailnet-yes-lan-only-if-you-say-so"></span>
+<span id="the-auth-badge"></span>
+<span id="delegate-to-a-paired-remote"></span>
+
+[Pair a remote fleet member](/guides/pair-an-agent) covers agent pairing,
+transport permissions, authentication status, and remote delegation.

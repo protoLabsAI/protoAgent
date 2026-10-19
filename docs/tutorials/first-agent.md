@@ -79,7 +79,7 @@ for a local endpoint, confirm its server is running.
 For sign-in or connection errors, see [Chat fails](/guides/troubleshooting#chat-fails).
 
 <!-- docs-media: setup-model-test -->
-
+<figure class="docs-media"><img src="/media/setup-model-test/v1.png" alt="The setup wizard shows Claude subscription selected, a model name, and a successful real connection test." loading="lazy" style="max-width:100%;height:auto"><figcaption>Run Test connection before continuing. This example uses a Claude subscription; gateway setup uses the same test step.</figcaption></figure>
 <!-- /docs-media -->
 
 ## 4. Finish and chat
@@ -98,7 +98,7 @@ error in chat, check **Settings → Tools**, and use
 [Troubleshooting](/guides/troubleshooting) for the matching symptom.
 
 <!-- docs-media: first-reply -->
-
+<figure class="docs-media"><img src="/media/first-reply/v1.png" alt="Docs demo answers “Say hello in one sentence.” The completed reply appears above the chat composer." loading="lazy" style="max-width:100%;height:auto"><figcaption>A completed model reply confirms that the connection can answer. This capture uses an isolated demo agent.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Find your configuration

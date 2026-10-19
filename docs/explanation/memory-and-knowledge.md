@@ -20,7 +20,7 @@ material for later recall. A work-folder file and a downloaded artifact are
 separate copies; neither is a complete backup of the agent.
 
 <!-- docs-media: memory-lifecycle -->
-
+<figure class="docs-media"><img src="/media/memory-lifecycle/v1.svg" alt="Current-chat material, saved references, and memory have different controls. Attach a file → Use in this conversation → Inspect chat + tool cards; Ingest a source → Save in Knowledge → Store → Retrieve relevant passages; Save a memory → Eligible for later turns → Inspect Memory → Injections" loading="lazy" style="max-width:100%;height:auto"><figcaption>Inspect, correct, or remove saved material in Memory and Knowledge. Saving does not guarantee delivery.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Why an answer used—or missed—a source

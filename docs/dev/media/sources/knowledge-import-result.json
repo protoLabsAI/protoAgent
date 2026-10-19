@@ -1,0 +1,13 @@
+{
+  "steps": [
+    "Open Knowledge \u2192 Add a source.",
+    "Upload a synthetic Markdown file about text search, file import, and transcription.",
+    "Inspect the preview, set the title, and confirm ingestion.",
+    "Search transcription and verify the actual imported entry and source filename."
+  ],
+  "viewport": "1440x900",
+  "browser": "Chromium",
+  "export_sha256": "f23b9b9a900b09229f5da088ed04ee6cea9dc861541cd5154bd470d7f29142ad",
+  "privacy_review": "Synthetic isolated instance; no credentials, email, personal paths, or live pairing codes.",
+  "result": "Actual backend result; no mocked network responses."
+}

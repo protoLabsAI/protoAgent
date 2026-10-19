@@ -45,7 +45,7 @@ PROTOAGENT_BOX_ROOT=/tmp/pa-review PROTOAGENT_INSTANCE=review \
 A fresh box root has no model connection; configure one before testing chat.
 
 <!-- docs-media: box-instance-paths -->
-
+<figure class="docs-media"><img src="/media/box-instance-paths/v1.svg" alt="Example: PROTOAGENT_BOX_ROOT=/srv/agents with alice and bob instance IDs. /srv/agents/ → host-config.yaml → Shared machine defaults; /srv/agents/alice/ → config/ + workspace/ + stores → Alice’s private state; /srv/agents/bob/ → config/ + workspace/ + stores → Bob’s private state" loading="lazy" style="max-width:100%;height:auto"><figcaption>commons/ is opt-in shared material. PROTOAGENT_HOME overrides the instance root; check store overrides too.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Containers

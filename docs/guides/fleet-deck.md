@@ -38,7 +38,7 @@ for you. The hub's own warnings show as a banner above the roster.
   in the browser console.
 
 <!-- docs-media: fleet-deck-overview -->
-
+<figure class="docs-media"><img src="/media/fleet-deck-overview/v1.png" alt="The live terminal roster shows two online idle members and a host marked needs you, with one turn parked at a question and keyboard hints." loading="lazy" style="max-width:100%;height:auto"><figcaption>Online describes process reachability. The separate turn column shows that the host needs input while both demo members are idle.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Talk to a member
