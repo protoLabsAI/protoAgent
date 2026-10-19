@@ -1143,6 +1143,7 @@ FIELDS: list[Field] = [
         "editor on THIS machine — fenced to the managed projects like every fs tool. Empty "
         "= the tool is not bound. Only useful when the agent runs on your own desktop.",
         depends_on={"key": "filesystem.enabled"},
+        credential_plane=True,
     ),
     Field(
         "filesystem.code_pane",
@@ -1951,9 +1952,24 @@ def host_keys() -> set[str]:
 #   secrets_manager — where secrets (the bearer's env fallback among them) are hydrated from:
 #     the config twin of the `/api/secrets/*` routes the middleware ceiling refuses;
 #   plugins — install/enable lists: the config twin of the plugin-lifecycle routes.
+#   mcp / delegates / lifecycle_hooks / acp — COMMANDS the server runs (MCP servers, delegate
+#     and ACP agent executables, event hooks): host code that outlives a revoke, the config
+#     twin of the `/api/mcp/servers*` routes. ``filesystem.editor_command`` is flagged on its
+#     Field for the same reason.
 # ``A2A_ALLOWED_ORIGINS`` / ``PROTOAGENT_TRUSTED_HOSTS`` are env-only today (no config key),
 # so the config write path can't reach them; S7.4 folds the public origin in via network.*.
-CREDENTIAL_PLANE_SECTIONS: tuple[str, ...] = ("auth", "network", "devices", "egress", "secrets_manager", "plugins")
+CREDENTIAL_PLANE_SECTIONS: tuple[str, ...] = (
+    "auth",
+    "network",
+    "devices",
+    "egress",
+    "secrets_manager",
+    "plugins",
+    "mcp",
+    "delegates",
+    "lifecycle_hooks",
+    "acp",
+)
 _CREDENTIAL_PLANE_KEYS = frozenset(f.key for f in FIELDS if f.credential_plane)
 
 

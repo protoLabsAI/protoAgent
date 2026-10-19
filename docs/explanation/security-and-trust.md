@@ -158,10 +158,15 @@ everything that would let it keep access after you revoke it, or hand access to 
 - restarting the agent;
 - renaming, removing or promoting any device except itself (it can rename and unpair itself);
 - plugin lifecycle: install, update, enable, remove, sync, bundles and plugin setup steps;
+- MCP servers: adding, importing, changing or removing one. Like a plugin, an MCP server is a
+  command the server runs, so a phone that added one would leave host code behind that keeps
+  running after you revoke it. The same goes for delegate and ACP agent commands, lifecycle
+  hooks and the editor command, which are refused as config writes;
 - the secrets manager and provider sign-ins (`/api/secrets/*`, `/api/config/oauth/*`);
 - [credential-plane settings](../reference/configuration.md#credential-plane-keys): auth tokens,
-  `network.*`, `devices.*`, egress, `filesystem.allow_run`, the secrets manager and the plugin
-  lists.
+  `network.*`, `devices.*`, egress, `filesystem.allow_run`, the secrets manager, the plugin
+  lists, and every setting that holds a command the server runs (`mcp.*`, `delegates`,
+  `lifecycle_hooks`, `acp.*`, `filesystem.editor_command`).
 
 The full route list is in the [operator API reference](../reference/operator-api.md#device-scope-refusals).
 The check runs in the auth middleware, matches the fleet-proxied form of each path

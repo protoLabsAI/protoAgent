@@ -214,7 +214,7 @@ Phone and tablet rows also show what the device may change
 - **Limited**: every phone or tablet you pair now, over Wi-Fi, a tailnet or anything else. It
   can use the whole console (chat, goals, knowledge, plugins and most settings) and rename or
   remove itself. It can't pair devices or agents, change or remove another device, install or
-  change plugins, use the secrets manager or provider sign-ins, restart the agent, or change
+  change plugins or MCP servers, use the secrets manager or provider sign-ins, restart the agent, or change
   [credential-plane settings](../reference/configuration.md#credential-plane-keys) such as the
   auth token and `network.bind`. Those attempts answer **This device can't change pairing or
   credentials — use a full-access device.**

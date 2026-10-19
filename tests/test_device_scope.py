@@ -215,7 +215,14 @@ def test_every_ceiling_rule_names_a_real_route():
 
 # Families where EVERY write route is on the credential plane. A new route here must either
 # land in CEILING or be added to the explicit allow list below with a reason.
-_PLANE_FAMILIES = ("/api/pairing/", "/api/plugin-setup/", "/api/secrets/", "/api/config/oauth/", "/api/plugins/")
+_PLANE_FAMILIES = (
+    "/api/pairing/",
+    "/api/plugin-setup/",
+    "/api/secrets/",
+    "/api/config/oauth/",
+    "/api/plugins/",
+    "/api/mcp/servers",
+)
 _ALLOWED_WRITES = {
     ("POST", "/api/pairing/claim"),  # unauthenticated by necessity (ADR 0087 D4) — no scope at all
 }
@@ -488,6 +495,13 @@ def test_the_sse_token_route_stamps_the_minters_scope(auth, devices):
         "filesystem.allow_run",
         "secrets_manager.host",
         "plugins.enabled",
+        # Commands the server runs — host code that outlives a revoke.
+        "mcp.servers",
+        "mcp.enabled",
+        "delegates",
+        "lifecycle_hooks",
+        "acp.agents",
+        "filesystem.editor_command",
     ],
 )
 def test_credential_plane_keys_are_flagged(key):
@@ -698,3 +712,40 @@ def test_an_encoded_query_or_fragment_char_cannot_hide_a_ceiling_path(echo, devi
     _, token = _phone(devices)
     for path in ("/agents/peer/api/plugins/install%3Fx", "/agents/peer/api/secrets/sync%23", "/api/plugin-setup/a%23/b"):
         assert echo.post(path, headers=_hdr(token)).status_code == 403, path
+
+
+def test_mcp_server_writes_are_on_the_ceiling(echo, devices):
+    """An MCP server is a command the server spawns: adding or changing one leaves host code
+    behind that outlives a revoke (the plugin-lifecycle reason)."""
+    from a2a_impl.credential_scope import ceiling_rule
+
+    _, token = _phone(devices)
+    for method, path in [
+        ("POST", "/api/mcp/servers"),
+        ("POST", "/api/mcp/servers/import"),
+        ("POST", "/api/mcp/servers/fs/promote"),
+        ("POST", "/api/mcp/servers/fs/forget"),
+        ("DELETE", "/api/mcp/servers/fs"),
+        ("PATCH", "/api/mcp/servers/fs"),
+        ("PUT", "/agents/peer/api/mcp/servers/fs"),
+    ]:
+        assert ceiling_rule(method, path) is not None, (method, path)
+        assert echo.request(method, path, headers=_hdr(token), json={}).status_code == 403, (method, path)
+    # Reads stay open.
+    for path in ("/api/mcp/catalog", "/api/mcp/exposed"):
+        assert echo.get(path, headers=_hdr(token)).status_code == 200
+
+
+def test_device_scope_cannot_add_commands_through_config(config_client):
+    for config, key in [
+        ({"mcp": {"servers": [{"name": "x", "command": "sh"}]}}, "mcp.servers"),
+        ({"delegates": [{"name": "d", "command": "sh"}]}, "delegates"),
+        ({"lifecycle_hooks": [{"event": "turn_end", "command": "sh"}]}, "lifecycle_hooks"),
+        ({"acp": {"agents": {"evil": {"command": "sh"}}}}, "acp.agents.evil.command"),
+    ]:
+        resp = config_client.post("/api/config", headers={"x-test-scope": "device"}, json={"config": config})
+        assert resp.status_code == 403 and resp.json()["keys"] == [key], config
+    resp = config_client.post(
+        "/api/settings", headers={"x-test-scope": "device"}, json={"updates": {"filesystem.editor_command": "sh -c x"}}
+    )
+    assert resp.status_code == 403 and resp.json()["keys"] == ["filesystem.editor_command"]

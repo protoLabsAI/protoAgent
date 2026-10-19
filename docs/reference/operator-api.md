@@ -47,7 +47,13 @@ before it swaps in the fleet credential. Refused for `device` scope:
 | POST | `/api/plugins/install` · `/sync` · `/install-deps` · `/ack` · `/api/plugins/{id}/update` · `/api/plugins/{id}/enabled` |
 | DELETE | `/api/plugins/{id}` |
 | POST · PUT · PATCH · DELETE | `/api/plugins/bundles/…` |
+| POST | `/api/mcp/servers` · `/api/mcp/servers/import` |
+| POST · PUT · PATCH · DELETE | `/api/mcp/servers/…` (`{name}`, `/promote`, `/forget`) |
 | any | `/api/plugin-setup/…` · `/api/secrets/…` · `/api/config/oauth/…` |
+
+Plugin lifecycle and MCP servers are on the list because each is host code the server runs: a
+phone that installed a plugin or added an MCP server would leave it running after its token was
+revoked.
 
 Config writes are checked by key instead of by path: `POST /api/settings`,
 `/api/settings/reset`, `/api/config` and `/api/config/setup` answer `403 device_scope` when

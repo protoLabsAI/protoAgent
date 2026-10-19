@@ -15,6 +15,9 @@ in**. The routes that do are listed ONCE, in ``CEILING`` below, and enforced in
 before the ADR 0089 D3 credential swap. Config writes are the other half: they are checked by
 KEY at the config write path (``graph.settings_schema.credential_plane_keys``), not here.
 
+"Who can get in" includes host code that would outlive a revoke: plugin lifecycle and MCP
+servers (commands the server runs) are on the ceiling for that reason.
+
 Matching is by SUFFIX — the bare path and every proxied form (``/agents/<slug>/…``,
 ``/active/<slug>/…``) — the way ``auth._is_sse_query_token_path`` matches. Over-matching
 (some unrelated path that happens to END in a ceiling path) only ever refuses a device-scope
@@ -85,6 +88,13 @@ CEILING: tuple[CeilingRule, ...] = (
     _rule({"DELETE"}, "/api/plugins/{id}", "remove a plugin"),
     _rule(_ANY - {"GET", "HEAD"}, "/api/plugins/bundles/**", "change a plugin bundle"),
     _rule(_ANY, "/api/plugin-setup/**", "run a plugin setup step"),
+    # MCP servers — each one is a COMMAND the server spawns (and respawns on every reload), so
+    # adding, importing or changing one leaves host code behind that outlives a revoke, the
+    # same reason plugin lifecycle is here. Their config twins (``mcp.*``, ``delegates``,
+    # ``lifecycle_hooks``, ``acp.*``, ``filesystem.editor_command``) are credential-plane keys.
+    _rule({"POST"}, "/api/mcp/servers", "add an MCP server"),
+    _rule({"POST"}, "/api/mcp/servers/import", "import MCP servers"),
+    _rule(_ANY - {"GET", "HEAD"}, "/api/mcp/servers/**", "change an MCP server"),
     # Secrets.
     _rule(_ANY, "/api/secrets/**", "use the secrets manager"),
     _rule(_ANY, "/api/config/oauth/**", "change a provider sign-in"),

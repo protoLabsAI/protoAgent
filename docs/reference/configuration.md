@@ -213,6 +213,7 @@ A paired phone or tablet has **`device` scope** ([ADR 0121](../adr/0121-device-p
 | `filesystem.allow_run` | Whether the agent can run shell commands at all |
 | `secrets_manager.*` | Where secrets (the auth token's environment fallback among them) are loaded from; the config side of `/api/secrets/*` |
 | `plugins.*` | The plugin install/enable lists; the config side of the plugin-lifecycle routes |
+| `mcp.*`, `delegates`, `lifecycle_hooks`, `acp.*`, `filesystem.editor_command` | Commands the server runs (MCP servers, delegate and ACP agent executables, event hooks, the open-in-editor command). A phone that set one would leave host code behind that outlives its revoke; the config side of the `/api/mcp/servers` routes |
 
 `A2A_ALLOWED_ORIGINS` and `PROTOAGENT_TRUSTED_HOSTS` are environment variables with no config key, so no config write can reach them. The Settings schema marks each of these fields with `credential_plane: true`.
 
