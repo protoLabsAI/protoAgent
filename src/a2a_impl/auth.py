@@ -694,6 +694,23 @@ def device_is_live(device_id: str | None) -> bool:
         return False
 
 
+def presented_device_id(token: str) -> str | None:
+    """The paired device a raw credential speaks for, or None (ADR 0121 D5).
+
+    For ``a2a_impl.socket_guard``, which classifies a WebSocket handshake's ``?token=`` or
+    bearer header the way the HTTP middleware classifies a request: a device token names its
+    device, and so does a stream token (``/api/sse-token``) a device minted. The shared bearer,
+    the fleet token, a federation token and anything that doesn't authenticate are None, so
+    nothing re-verifies them."""
+    if not token:
+        return None
+    cred = _classify_token(token)
+    if cred is not None:
+        return cred.device_id
+    claims = _sse_token_claims(token)
+    return claims[1] if claims is not None else None
+
+
 def _unauthorized(detail: str) -> JSONResponse:
     return JSONResponse({"detail": detail}, status_code=401)
 
@@ -1048,8 +1065,11 @@ def install(
     ``a2a_impl.hosts.HostGuardMiddleware`` — the open-mode Host allowlist + JSON content-type
     rule (#3668), pure ASGI so it also covers WebSocket routes, and outermost so a refused
     request reaches nothing. Between them, ``a2a_impl.stream_guard.DeviceStreamGuard`` closes
-    a paired device's streamed responses within one keepalive of a revoke (ADR 0121 D5)."""
+    a paired device's streamed responses within one keepalive of a revoke, and
+    ``a2a_impl.socket_guard.DeviceSocketGuard`` does the same for its open WebSockets
+    (ADR 0121 D5)."""
     from a2a_impl.hosts import HostGuardMiddleware
+    from a2a_impl.socket_guard import DeviceSocketGuard
     from a2a_impl.stream_guard import DeviceStreamGuard
 
     configure(
@@ -1060,6 +1080,7 @@ def install(
         fleet_token=fleet_token,
     )
     app.add_middleware(A2AAuthMiddleware)
+    app.add_middleware(DeviceSocketGuard)
     app.add_middleware(DeviceStreamGuard)
     app.add_middleware(HostGuardMiddleware)
 

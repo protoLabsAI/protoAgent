@@ -263,9 +263,11 @@ were already open are closed too, within one keepalive (about 15 seconds): the e
 (`/api/events`), the attendance stream (`/api/chat/attend`), A2A `message/stream`, chat turns
 and fleet-proxied streams. Each re-checks the device at a keepalive tick it already sends. A
 stream token minted by a device (`/api/sse-token`) carries the device's id, so a revoked phone
-can't open a new stream in the 30 seconds that token is valid. Plugin WebSockets that
-authenticate once at open, such as the terminal, are not closed by this yet; removing the
-device stops them from reconnecting.
+can't open a new stream in the 30 seconds that token is valid. Open WebSockets close too, within
+about 12 seconds, when the phone opened them with its own token or with a ticket it minted on
+this agent, such as agent_browser's viewport. A plugin that mints its own tickets, such as the
+terminal, must record the minting phone for this; until it does, removing the phone only stops
+the socket reconnecting.
 
 ## See also
 

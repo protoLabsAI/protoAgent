@@ -352,12 +352,14 @@ def test_console_websockets_still_open(tmp_path, origin):
 
 def test_host_guard_is_the_outermost_middleware(tmp_path):
     app = _app(tmp_path)
+    from a2a_impl.socket_guard import DeviceSocketGuard
     from a2a_impl.stream_guard import DeviceStreamGuard
 
     assert app.user_middleware[0].cls is hosts.HostGuardMiddleware
-    # ADR 0121 D5: the device stream guard sits between them, outside the credential check.
+    # ADR 0121 D5: the device stream + socket guards sit between them, outside the credential check.
     assert app.user_middleware[1].cls is DeviceStreamGuard
-    assert app.user_middleware[2].cls is auth.A2AAuthMiddleware
+    assert app.user_middleware[2].cls is DeviceSocketGuard
+    assert app.user_middleware[3].cls is auth.A2AAuthMiddleware
 
 
 # ── Gated instance: unchanged ─────────────────────────────────────────────────────────────
