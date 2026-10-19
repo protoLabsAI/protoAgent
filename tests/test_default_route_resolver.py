@@ -11,6 +11,13 @@ UNQUALIFIED default route reads the retired `model.api_base` / `model.api_key` (
 OPENAI_API_KEY) and never the registry. A registered connection is used only when a
 value names it (`gateway:…`, `local-vllm:…`), and then strictly from its own fields.
 Moving the unqualified route onto the registry is the removal slice's decision.
+
+The GATEWAY-ENDPOINT readers (embeddings, the shared gateway HTTP client that transcription
+and image plugins use, the host-layer mirror) are the exception: they follow the connection
+the LEAD model runs on (`graph.llm.resolve_gateway_route`). Reading the default route there
+is what broke every wizard-written config (B1): one declared connection, a qualified
+`model.name`, and `model.api_base` left on the App default — so image generation went to
+`http://gateway:4000/v1` and failed DNS while chat worked.
 """
 
 from __future__ import annotations
@@ -42,7 +49,8 @@ CASES = {
     "legacy-only": ({"model": {"api_base": LEGACY, "api_key": "legacy-key"}}, None, (LEGACY, "legacy-key")),
     # What the setup wizard writes (ADR 0106): one connection and a qualified model.name,
     # no legacy fields. The unqualified route does not consult the registry, so it falls
-    # to the dataclass default endpoint with no key. Pinned, not endorsed (#3128).
+    # to the dataclass default endpoint with no key. Pinned, not endorsed (#3128) — the
+    # gateway-endpoint readers resolve the lead's connection instead (`_gateway_route`).
     "registry-only": (
         {"providers": [dict(_GATEWAY)], "model": {"name": "gateway:m"}},
         None,
@@ -187,15 +195,22 @@ def test_the_runtime_client_default_route(case, monkeypatch):
     assert _runtime_client(cfg, monkeypatch) == expected
 
 
-def test_knowledge_embeddings(case, monkeypatch):
+def _gateway_route(request, default):
+    """What a gateway-endpoint reader resolves for this case: the lead's connection when the
+    lead names one, else the default route (which is then the chat model's own)."""
+    return _LEAD_CONNECTION_ROUTE.get(request.node.callspec.params["case"], default)
+
+
+def test_knowledge_embeddings(case, monkeypatch, request):
     cfg, expected = case
-    assert _embeddings(cfg, monkeypatch) == expected
+    assert _embeddings(cfg, monkeypatch) == _gateway_route(request, expected)
 
 
-def test_the_shared_gateway_http_client(case):
+def test_the_shared_gateway_http_client(case, request):
     from graph.llm import _gateway_client_kwargs
 
-    cfg, (base, key) = case
+    cfg, expected = case
+    base, key = _gateway_route(request, expected)
     kwargs = _gateway_client_kwargs(cfg, timeout=1.0)
     assert kwargs["base_url"] == base.rstrip("/")
     assert kwargs["headers"].get("Authorization", "") == (f"Bearer {key}" if key else "")
@@ -328,11 +343,11 @@ def test_a_qualified_value_prefers_the_registry_and_never_borrows(monkeypatch):
     assert _runtime_client(slot, monkeypatch, model_name=None) == (VLLM, "not-needed")  # the lead
 
 
-def test_a_qualified_build_still_sizes_its_window_on_the_default_route(monkeypatch):
-    """Pinned, not endorsed: `context_window_for` takes no connection, so a
-    `local-vllm:` build asks the DEFAULT route's gateway about the model. Nothing
-    crosses credentials (the default route's key goes to its own endpoint), but the
-    answer is for the wrong gateway. Left for the removal slice to decide."""
+def test_a_qualified_build_sizes_its_window_on_its_own_connection(monkeypatch):
+    """A `local-vllm:` build asks THAT connection's gateway about the model — the one the
+    client talks to. It used to ask the default route's, which for a wizard-written config
+    is the App-default host that does not exist: an unknown window for the process's life.
+    Nothing crosses credentials: the keyless connection is probed keyless."""
     import graph.llm as llm
     from graph import model_window
 
@@ -345,7 +360,7 @@ def test_a_qualified_build_still_sizes_its_window_on_the_default_route(monkeypat
         llm.create_llm(slot, model_name="local-vllm:qwen")
     finally:
         model_window.reset_window_cache()
-    assert seen == [(LEGACY, "legacy-key")]
+    assert seen == [(VLLM, "")]
 
 
 # ── a declared connection fails closed (#3128 ruling) ────────────────────────────────
@@ -554,6 +569,157 @@ def test_padded_legacy_values_are_trimmed_by_every_reader(monkeypatch, no_networ
     assert _window_probe(cfg, monkeypatch) == (LEGACY, "env-key")
 
 
+# ── B1: a wizard-written config reaches its gateway from every gateway-endpoint reader ──
+#
+# The setup wizard (ADR 0106) writes ONE connection and a qualified `model.name`; legacy
+# `model.api_base` stays on the App default. Chat worked, but image generation (a plugin's
+# `sdk.gateway_client()`), transcription and embeddings went to `http://gateway:4000/v1`
+# and died on DNS (`ConnectError [Errno 8]`), and the reload mirrored that dead host into
+# the Host layer for every member on the box.
+
+_WIZARD_BASE = "https://api.wizard.example/v1"
+_WIZARD = {
+    "providers": [{"id": "gateway", "type": "openai-compat", "label": "Gateway", "base_url": _WIZARD_BASE, "api_key": "sk-wizard"}],
+    "model": {"name": "gateway:protolabs/smart"},
+}  # fmt: skip
+
+
+def _wizard(monkeypatch, env: str | None = None) -> LangGraphConfig:
+    cfg = _load(_WIZARD, env, monkeypatch)
+    assert cfg.api_base == APP_DEFAULT_BASE, "the repro needs the legacy endpoint left on the App default"
+    return cfg
+
+
+def test_b1_wizard_config_gateway_client_posts_to_the_connection(monkeypatch):
+    """The protoBanana path: `sdk.gateway_client()` → POST /images/generations."""
+    import asyncio
+
+    import httpx
+
+    from graph import sdk
+    from graph.llm import gateway_client, gateway_sync_client
+    from runtime.state import STATE
+
+    cfg = _wizard(monkeypatch, env="env-key")  # an env key must not be borrowed either
+    seen: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("authorization", "")))
+        return httpx.Response(200, json={"data": [{"b64_json": "x"}]})
+
+    async def _post():
+        async with gateway_client(cfg, transport=httpx.MockTransport(handler)) as client:
+            await client.post("/images/generations", json={"model": "img", "prompt": "a cat"})
+
+    asyncio.run(_post())
+    with gateway_sync_client(cfg, transport=httpx.MockTransport(handler)) as client:  # transcription's client
+        client.post("/audio/transcriptions", files={"file": ("a.wav", b"x")})
+    assert seen == [
+        (f"{_WIZARD_BASE}/images/generations", "Bearer sk-wizard"),
+        (f"{_WIZARD_BASE}/audio/transcriptions", "Bearer sk-wizard"),
+    ]
+
+    monkeypatch.setattr(STATE, "graph_config", cfg, raising=False)
+
+    async def _sdk():
+        async with sdk.gateway_client() as client:
+            return str(client.base_url).rstrip("/"), client.headers["Authorization"]
+
+    assert asyncio.run(_sdk()) == (_WIZARD_BASE, "Bearer sk-wizard")
+
+
+def test_b1_wizard_config_embeddings_and_window_use_the_connection(monkeypatch):
+    import graph.llm as llm
+    from graph import model_window
+
+    cfg = _wizard(monkeypatch)
+    assert _embeddings(cfg, monkeypatch) == (_WIZARD_BASE, "sk-wizard")
+
+    seen: list[tuple[str, str]] = []
+    model_window.reset_window_cache()
+    monkeypatch.setattr(model_window, "_fetch_window_map", lambda base, key: seen.append((base, key)) or {})
+    monkeypatch.setattr(llm, "_ReasoningChatOpenAI", lambda **kw: SimpleNamespace(**kw))
+    try:
+        llm.create_llm(cfg)
+    finally:
+        model_window.reset_window_cache()
+    assert seen == [(_WIZARD_BASE, "sk-wizard")]
+    # …and the chat model itself runs on that same connection (stubs the window probe).
+    assert _runtime_client(cfg, monkeypatch, model_name=None) == (_WIZARD_BASE, "sk-wizard")
+
+
+def test_b1_wizard_config_host_mirror_writes_the_real_endpoint(tmp_path, monkeypatch):
+    """The reload mirrors the box's model group into host-config.yaml. It must mirror the
+    endpoint the chat model runs on — and heal a stale App-default value already there."""
+    import yaml
+
+    from graph.config_io import sync_host_model_layer
+
+    hp = tmp_path / "host-config.yaml"
+    monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(hp))
+    monkeypatch.setattr("graph.workspaces.manager.is_workspace_member", lambda: False)
+    hp.write_text(f"model:\n  api_base: {APP_DEFAULT_BASE}\n", encoding="utf-8")  # what B1 left behind
+
+    assert sync_host_model_layer(_wizard(monkeypatch)) is True
+    model = yaml.safe_load(hp.read_text(encoding="utf-8"))["model"]
+    assert model["api_base"] == _WIZARD_BASE
+    assert model["name"] == "gateway:protolabs/smart"
+    assert "api_key" not in model  # never a key in the Host layer
+
+
+def test_b1_host_mirror_never_writes_the_app_default_placeholder(tmp_path, monkeypatch):
+    """A native-OAuth lead with no gateway at all: nothing real to mirror, so the App
+    default is not stamped into the Host layer as if it were an endpoint."""
+    import yaml
+
+    from graph.config_io import sync_host_model_layer
+
+    hp = tmp_path / "host-config.yaml"
+    monkeypatch.setenv("PROTOAGENT_HOST_CONFIG", str(hp))
+    monkeypatch.setattr("graph.workspaces.manager.is_workspace_member", lambda: False)
+    cfg = _load(
+        {"providers": [{"id": "anthropic-oauth", "type": "anthropic-oauth"}], "model": {"name": "anthropic-oauth:claude-x"}},
+        None,
+        monkeypatch,
+    )
+    assert sync_host_model_layer(cfg) is True
+    assert "api_base" not in yaml.safe_load(hp.read_text(encoding="utf-8"))["model"]
+
+
+def test_b1_native_lead_beside_a_declared_gateway_uses_that_gateway(monkeypatch):
+    """A Claude-subscription lead has no gateway of its own; image/audio/embeddings go to
+    the declared `gateway` connection, not the App-default legacy endpoint."""
+    from graph.llm import resolve_gateway_route
+
+    doc = copy.deepcopy(_WIZARD)
+    doc["providers"].append({"id": "anthropic-oauth", "type": "anthropic-oauth"})
+    doc["model"]["name"] = "anthropic-oauth:claude-x"
+    route = resolve_gateway_route(_load(doc, None, monkeypatch))
+    assert (route.base_url, route.api_key, route.connection) == (_WIZARD_BASE, "sk-wizard", "gateway")
+
+
+def test_b1_an_unqualified_lead_keeps_the_default_route(monkeypatch):
+    """Nothing that worked moves: a bare lead's chat model runs on the legacy route, so the
+    gateway readers stay there too, even beside a declared connection (`both`)."""
+    from graph.llm import resolve_gateway_route
+
+    route = resolve_gateway_route(_load(CASES["both"][0], "env-key", monkeypatch))
+    assert (route.base_url, route.api_key) == (LEGACY, "legacy-key")
+
+
+def test_b1_egress_auto_allows_the_wizard_connection(monkeypatch):
+    from security import egress
+    from server.agent_init import apply_egress_allowlist
+
+    cfg = _wizard(monkeypatch)
+    cfg.egress_allowed_hosts = ["example.com"]
+    try:
+        apply_egress_allowlist(cfg)
+        assert urlparse(_WIZARD_BASE).hostname in egress.allowed_hosts()
+    finally:
+        egress.set_allowed_hosts([])
+
+
 # ── the ratchet: no new direct reads ──────────────────────────────────────────────────
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -572,7 +738,6 @@ _DIRECT_READ = re.compile(
 #: slice deletes these; nothing else may add one — resolve through `resolve_model_route`.
 _ALLOWED = {
     "graph/config.py": 2,  # resolve_model_route itself
-    "graph/config_io.py": 1,  # sync_host_model_layer: a WRITER mirroring into host-config.yaml
     "graph/providers/discovery.py": 2,  # available_model_lanes' synthesized lane (an ADR 0106 floor)
     "runtime/cli.py": 7,  # Hermes seeding: an EXPORT that must not write the env key to disk
     "operator_api/runtime.py": 2,  # /api/runtime status: display

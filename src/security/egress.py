@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 _allowed: list[str] = []  # lowercased host patterns; empty = permissive (off)
 
 
-def set_allowed_hosts(hosts, *, also_allow_url: str = "") -> None:
+def set_allowed_hosts(hosts, *, also_allow_url: str | list[str] | tuple[str, ...] = "") -> None:
     """Set the allowlist (called at startup / live-reload from config). Empty = off.
 
     ``also_allow_url`` — when an allowlist IS configured, the host of this URL (the
@@ -39,9 +39,13 @@ def set_allowed_hosts(hosts, *, also_allow_url: str = "") -> None:
     """
     global _allowed
     cleaned = [str(h).strip().lower() for h in (hosts or []) if h and str(h).strip()]
-    if cleaned and also_allow_url:
+    # One URL or several: the legacy default route AND the connection the chat model runs
+    # on can name different gateways (a wizard-written config, ADR 0106), and both are the
+    # operator's own.
+    urls = [also_allow_url] if isinstance(also_allow_url, str) else list(also_allow_url or ())
+    for url in urls if cleaned else ():
         try:
-            host = (urlparse(also_allow_url).hostname or "").lower()
+            host = (urlparse(url or "").hostname or "").lower()
         except ValueError:
             host = ""
         if host and host not in cleaned:

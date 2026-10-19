@@ -1327,8 +1327,19 @@ def sync_host_model_layer(config) -> bool:
     desired = {
         "name": getattr(config, "model_name", ""),
         "provider": getattr(config, "model_provider", ""),
-        "api_base": getattr(config, "api_base", ""),
     }
+    # The endpoint mirrored is the one the box's chat model actually runs on — the declared
+    # connection a wizard-written config names (ADR 0106) — never the legacy field read
+    # raw: the wizard leaves `model.api_base` on the App default `http://gateway:4000/v1`,
+    # and mirroring that stamped a host that does not exist into the Host layer, where
+    # every legacy-route reader on the box then inherited it. The App default itself is
+    # never written either: an absent key inherits exactly that value, so writing it says
+    # nothing except "this is a real endpoint", which it is not.
+    from graph.llm import resolve_gateway_route  # lazy — graph.llm is the heavier import
+
+    route = resolve_gateway_route(config)
+    if route.connection or route.base_url != LangGraphConfig.api_base:
+        desired["api_base"] = route.base_url
     if all(model.get(k) == v for k, v in desired.items()):
         return False
     model.update(desired)

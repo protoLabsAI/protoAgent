@@ -129,7 +129,8 @@ sdk.gateway_client(*, timeout: float | None = None) -> Any
 ```
 
 An `httpx.AsyncClient` pre-configured for the **model gateway** ([#1931](https://github.com/protoLabsAI/protoAgent/issues/1931)):
-`base_url` = the configured `api_base`, bearer auth, the allowlisted
+`base_url` = the gateway connection the chat model runs on (its key as the bearer —
+`graph.llm.resolve_gateway_route`), the allowlisted
 User-Agent (the gateway's WAF 403s default SDK UAs), and a sane timeout.
 
 For OpenAI-compatible endpoints the chat model doesn't cover —
