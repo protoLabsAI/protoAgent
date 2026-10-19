@@ -6,6 +6,8 @@ import { rehypeAbsolutizeServerUrls } from "./mediaUrls";
 // own defaults (GFM/sanitize/harden/KaTeX), so the URL rewrite sees the final tree.
 const REHYPE_PLUGINS = [rehypeAbsolutizeServerUrls];
 
+export type MarkdownProps = { children: string; streaming?: boolean };
+
 /**
  * Assistant message markdown — the DS `<Markdown>` (`@protolabsai/ui/markdown`, ≥0.48),
  * which owns the brand styling for streamdown's prose AND its interactive chrome (code /
@@ -31,10 +33,12 @@ const REHYPE_PLUGINS = [rehypeAbsolutizeServerUrls];
  * longer parses the span between two amounts as KaTeX math while real math (`$x^2$`, `$$…$$`)
  * survives. This replaces the console's old `escapeCurrencyDollars` pre-processing (#1983) —
  * the DS ported that exact guard on-by-default. Opt out per the DS `math` prop if ever needed.
+ *
+ * Only growing text needs repair; settled code markers must never synthesize closing tokens.
  */
-export function Markdown({ children }: { children: string }) {
+export function Markdown({ children, streaming = false }: MarkdownProps) {
   return (
-    <DSMarkdown className="markdown" rehypePlugins={REHYPE_PLUGINS}>
+    <DSMarkdown className="markdown" rehypePlugins={REHYPE_PLUGINS} parseIncompleteMarkdown={streaming}>
       {children}
     </DSMarkdown>
   );
