@@ -40,6 +40,10 @@ from dataclasses import dataclass, field
 
 import httpx
 
+# The bundled workflows plugin's run route (plugins/workflows registers its router
+# under /api/plugins/workflows). Core's old /api/workflows was retired (#4310).
+WORKFLOW_RUN_ROUTE = "/api/plugins/workflows/{name}/run"
+
 
 @dataclass
 class TaskResult:
@@ -131,16 +135,26 @@ class AgentClient:
     # ── workflows ─────────────────────────────────────────────────────────────
 
     async def run_workflow(self, name: str, inputs: dict, *, timeout_s: int = 300) -> dict:
-        """POST ``/api/workflows/{name}/run`` → the workflow result dict.
+        """POST ``/api/plugins/workflows/{name}/run`` → the workflow result dict.
 
         Used by ``kind: "workflow"`` eval cases to drive a recipe (e.g.
-        ``deep-research``) end-to-end and assert on its synthesized output."""
+        ``deep-research``) end-to-end and assert on its synthesized output.
+        Workflows are the bundled ``workflows`` plugin's surface; core no longer
+        serves ``/api/workflows`` (#4310). A 404 on the run route means the
+        plugin isn't enabled on the agent under test, so say that instead of
+        surfacing a bare HTTP error."""
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             r = await client.post(
-                f"{self.base_url}/api/workflows/{name}/run",
+                f"{self.base_url}{WORKFLOW_RUN_ROUTE.format(name=name)}",
                 headers=self.headers,
                 json={"inputs": inputs},
             )
+            if r.status_code == 404:  # an unknown recipe is a 400 from the plugin, never a 404
+                raise RuntimeError(
+                    f"POST {WORKFLOW_RUN_ROUTE.format(name=name)} returned 404 — the workflows "
+                    "plugin is not enabled on the agent under test. Enable it (Settings ▸ "
+                    "Plugins, or remove `workflows` from plugins.disabled) and rerun."
+                )
             r.raise_for_status()
             return r.json()
 
