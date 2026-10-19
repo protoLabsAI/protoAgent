@@ -583,9 +583,11 @@ def test_install_deps_runs_pip_with_declared_deps(env, monkeypatch):
     _fresh_env(monkeypatch)
     deps = installer.install_deps("demo_ext")
     assert deps == ["requests>=2", "rich"]
-    assert calls and calls[0][1:4] == ["-m", "pip", "install"]
+    # pip, or `uv pip install --python …` in a venv without pip (#4263).
+    prefix = installer._host_pip()
+    assert calls and calls[0][: len(prefix)] == prefix
     # `--` ends pip option parsing so a manifest dep can't be read as a flag.
-    assert calls[0][4:] == ["--", "requests>=2", "rich"]
+    assert calls[0][len(prefix) :] == ["--", "requests>=2", "rich"]
 
 
 _BAD_PIP_SPECS = [
@@ -648,7 +650,7 @@ def test_install_deps_includes_optional_in_own_pip_call(env, monkeypatch):
     deps = installer.install_deps("demo_ext")
     assert deps == ["requests>=2", "pillow>=10"]
     # hard deps first (fail-hard), then the optional tier best-effort — both behind `--`
-    assert [c[4:] for c in calls] == [["--", "requests>=2"], ["--", "pillow>=10"]]
+    assert [c[c.index("--") :] for c in calls] == [["--", "requests>=2"], ["--", "pillow>=10"]]
 
 
 def test_install_deps_optional_pip_failure_warns_not_fails(env, monkeypatch, caplog):
@@ -734,7 +736,7 @@ def test_install_deps_pips_only_what_is_missing(env, monkeypatch):
     monkeypatch.setattr(installer.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _PipResult())
     newly: list[str] = []
     assert installer.install_deps("demo_ext", newly_installed=newly) == ["packaging>=1", "nope-pkg-q"]
-    assert [c[4:] for c in calls] == [["--", "nope-pkg-q"]]  # packaging was already there
+    assert [c[c.index("--") :] for c in calls] == [["--", "nope-pkg-q"]]  # packaging was already there
     assert newly == ["nope-pkg-q"]
 
 

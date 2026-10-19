@@ -32,7 +32,7 @@ REPO = Path(__file__).resolve().parents[1]
 PID = "depdemo"
 
 # The pip stand-in. argv: <log> <marker> <hold> then what the installer passes
-# ("install -- <spec>"). <hold> is seconds, or a path: hold until that file exists (a test
+# ("-- <spec>"). <hold> is seconds, or a path: hold until that file exists (a test
 # releases it, so nothing depends on timing). One line per event, so the test can count
 # runs and overlaps.
 FAKE_PIP = """\
