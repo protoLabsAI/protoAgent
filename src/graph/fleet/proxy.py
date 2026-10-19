@@ -381,6 +381,17 @@ async def _forward_member(slug: str, request, path: str, raw_path: str, target):
             )
     tier = getattr(state, "trust_tier", None)
     member_public = getattr(state, "member_public", False)
+    # ADR 0121 D4: the credential-plane ceiling runs BEFORE any credential swap below. The
+    # auth middleware already refused this (it matches the proxied ``/agents/<slug>/…`` form
+    # by suffix); this is the proxy refusing on its own too, so the swap can never be what
+    # lends a device-scope caller the fleet token — or a remote's stored bearer — for a
+    # route that changes who can get in. Unstamped scope = no middleware ran (it's the
+    # authority); nothing to re-check.
+    scope = getattr(state, "credential_scope", None)
+    if scope is not None and _scope_refuses(scope, request.method, "/" + path.lstrip("/")):
+        from a2a_impl.credential_scope import refusal_body
+
+        return JSONResponse(refusal_body(), status_code=403)
     drop_params: frozenset[str] = frozenset()
     if is_remote:
         # A REMOTE is off this box and outside the hub's trust boundary: nothing the hub holds
@@ -471,7 +482,15 @@ async def _pump_ws(client_ws, upstream) -> None:
             t.cancel()
 
 
-def _member_ws_query(slug: str, raw_query: str) -> tuple[str, bool]:
+def _scope_refuses(scope: str | None, method: str | None, path: str) -> bool:
+    """ADR 0121 D4 ceiling for a proxied request (``method=None`` ⇒ a WS upgrade: any method).
+    Never a self-exception here — a device id names the HUB's registry, not the member's."""
+    from a2a_impl.credential_scope import refuses
+
+    return refuses(scope, method, path)
+
+
+def _member_ws_query(slug: str, raw_query: str, path: str = "") -> tuple[str, bool]:
     """Rewrite a WS handshake's query for a HOST or LOCAL-member target (ADR 0089).
 
     A member's plugin WS (terminal PTY, say) validates a ``?token=`` param against the member's
@@ -491,11 +510,15 @@ def _member_ws_query(slug: str, raw_query: str) -> tuple[str, bool]:
     from urllib.parse import parse_qsl, urlencode
 
     pairs = parse_qsl(raw_query, keep_blank_values=True)
-    if slug == "host":
-        return raw_query, True
-    from a2a_impl.auth import bearer_tier
+    from a2a_impl.auth import bearer_scope, bearer_tier
 
     tok = next((v for (k, v) in pairs if k == "token"), None)
+    # ADR 0121 D4, BEFORE the swap: a device-scope token never gets the fleet token (or the
+    # host's own socket) for a credential-plane path.
+    if tok is not None and _scope_refuses(bearer_scope(tok), None, "/" + path.lstrip("/")):
+        return raw_query, False
+    if slug == "host":
+        return raw_query, True
     if bearer_tier(tok or "") == "operator":
         from graph.fleet.service_token import resolve_service_token
 
@@ -570,7 +593,7 @@ def _remote_browser_refusal(method: str, headers) -> str | None:
 
 
 def _remote_ws_handshake(
-    raw_query: str, auth_header: str | None, stored_token: str | None
+    raw_query: str, auth_header: str | None, stored_token: str | None, path: str = ""
 ) -> tuple[str, dict, str | None]:
     """Authenticate + rewrite a WS handshake bound for a REMOTE member (ADR 0113 D6).
 
@@ -619,22 +642,27 @@ def _remote_ws_handshake(
     failed, so remote live views need terminal-plugin ≥0.9.2."""
     from urllib.parse import parse_qsl, urlencode
 
-    from a2a_impl.auth import credential_tier
+    from a2a_impl.auth import bearer_scope, credential_tier
 
     if not stored_token:
         return raw_query, {}, "remote member has no stored token; websocket proxying refused"
     pairs = parse_qsl(raw_query, keep_blank_values=True)
     headers: dict = {}
     tokens = [v for (k, v) in pairs if k == "token"]
+    sub = "/" + path.lstrip("/")
     if tokens:
         if any(credential_tier(t or "") != "operator" for t in tokens):
             return raw_query, {}, "unauthorized"
+        if any(_scope_refuses(bearer_scope(t or ""), None, sub) for t in tokens):
+            return raw_query, {}, "device_scope"  # ADR 0121 D4 — before the swap
         pairs = [(k, v) for (k, v) in pairs if k != "token"] + [("token", stored_token)]
         raw_query = urlencode(pairs)
     if auth_header is not None:
         scheme, _, cred = auth_header.strip().partition(" ")
         if scheme.lower() != "bearer" or credential_tier(cred.strip()) != "operator":
             return raw_query, {}, "unauthorized"
+        if _scope_refuses(bearer_scope(cred.strip()), None, sub):
+            return raw_query, {}, "device_scope"
         headers["authorization"] = f"Bearer {stored_token}"
     return raw_query, headers, None
 
@@ -706,7 +734,7 @@ async def forward_ws(slug: str, ws, path: str) -> None:
             log.info("[fleet] refusing WS to remote member %r — cross-origin handshake", slug)
             await ws.close(code=1008, reason="origin not allowed")
             return
-        query, headers, refusal = _remote_ws_handshake(raw_query, auth, stored)
+        query, headers, refusal = _remote_ws_handshake(raw_query, auth, stored, path)
         if refusal is not None:
             log.info("[fleet] refusing WS to remote member %r — %s", slug, refusal)
             await ws.close(code=1008, reason=refusal)
@@ -715,7 +743,7 @@ async def forward_ws(slug: str, ws, path: str) -> None:
         # Authenticate + swap the ?token= credential for a local member (ADR 0089): the member's
         # plugin WS validates it against the member's own (fleet) bearer, which the console's
         # operator bearer no longer matches. A presented-but-unauthenticated token is refused.
-        query, allowed = _member_ws_query(slug, raw_query)
+        query, allowed = _member_ws_query(slug, raw_query, path)
         if not allowed:
             log.info("[fleet] refusing WS to %r — presented token is not an operator credential", slug)
             await ws.close(code=1008, reason="unauthorized")

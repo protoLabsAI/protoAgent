@@ -37,10 +37,13 @@ import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+from a2a_impl.credential_scope import SCOPE_DEVICE, SCOPE_FULL, SCOPES, ceiling_rule, refusal_body
 
 logger = logging.getLogger(__name__)
 
@@ -344,8 +347,8 @@ def _requires_operator(path: str) -> bool:
     return "/api/" in path or path == "/api" or path.endswith("/api")
 
 
-def _device_token_ok(token: str) -> bool:
-    """True when ``token`` belongs to a paired, non-revoked device (ADR 0087).
+def _device_for_token(token: str):
+    """The paired, non-revoked device ``token`` belongs to (ADR 0087), else None.
 
     Imported lazily and failed-closed: the device registry is an optional, additive tier, and
     a broken/absent registry must never take down auth for the shared bearer — which is
@@ -354,10 +357,35 @@ def _device_token_ok(token: str) -> bool:
     try:
         from security.devices import verify_token
 
-        return verify_token(token) is not None
+        return verify_token(token)
     except Exception:  # noqa: BLE001 — registry problems must not become auth outages
         logger.exception("[auth] device-token check failed; denying this credential")
-        return False
+        return None
+
+
+@dataclass(frozen=True)
+class Credential:
+    """What a matched credential earns: its trust TIER (ADR 0066 — who the caller is for goal,
+    knowledge and chat trust) and its credential SCOPE (ADR 0121 D4 — whether it may change
+    who can get in). Orthogonal: a paired phone is ``operator`` tier with ``device`` scope.
+    ``device_id`` is set for a device token (self rename / unpair, stream re-verification)."""
+
+    tier: str
+    scope: str = SCOPE_FULL
+    device_id: str | None = None
+
+
+_OPEN_CREDENTIAL = Credential("operator", SCOPE_FULL)
+
+
+def bearer_scope(token: str) -> str | None:
+    """The credential scope a raw bearer earns (ADR 0121 D4), or None if it doesn't
+    authenticate. ``bearer_tier``'s twin, for the scopes the HTTP middleware skips (the fleet
+    WS proxy). Open mode ⇒ ``full``: nothing is checked, so there is nothing to narrow."""
+    if open_mode():
+        return SCOPE_FULL
+    cred = _classify_token(token)
+    return cred.scope if cred else None
 
 
 def bearer_tier(token: str) -> str | None:
@@ -407,7 +435,13 @@ def allowed_origins() -> list[str] | None:
 
 
 def _bearer_tier_for(token: str) -> str | None:
-    """The tier a raw bearer earns, or None. Open mode is the CALLER's concern.
+    """The tier a raw bearer earns, or None. Open mode is the CALLER's concern."""
+    cred = _classify_token(token)
+    return cred.tier if cred else None
+
+
+def _classify_token(token: str) -> Credential | None:
+    """The tier + scope a raw bearer earns, or None. Open mode is the CALLER's concern.
 
     One ladder, two callers — this function and the middleware's ``_classify_request``.
     Keeping a second copy in the dispatch path is the same "two derivations of one fact"
@@ -415,24 +449,32 @@ def _bearer_tier_for(token: str) -> str | None:
     copies drift, and the one that drifts is the one nobody reads.
 
     Order is load-bearing. The shared-bearer comparisons come first so the hot path is a
-    constant-time compare; ``_device_token_ok`` is last because it touches the device
+    constant-time compare; ``_device_for_token`` is last because it touches the device
     registry on disk.
     """
     active, fed, fleet = _BEARER[0], _FEDERATION[0], _FLEET[0]
     if not token:
         return None
     if active is not None and hmac.compare_digest(token, active):
-        return "operator"
+        return Credential("operator", SCOPE_FULL)
     if fed is not None and hmac.compare_digest(token, fed):
-        return "federation"
+        # Scope is moot here — the ADR 0066 ceiling already denies federation all of /api.
+        return Credential("federation", SCOPE_FULL)
     if fleet is not None and hmac.compare_digest(token, fleet):
         # Fleet service token (ADR 0089): the hub already authenticated the external caller
-        # and presents members with this internal, loopback-only credential.
-        return "operator"
-    if _device_token_ok(token):
-        # A paired device (ADR 0087 D1) is the OPERATOR — per-device tokens are identity +
-        # revocation, not a reduced tier.
-        return "operator"
+        # (and applied ITS credential-plane ceiling) and presents members with this internal,
+        # loopback-only credential.
+        return Credential("operator", SCOPE_FULL)
+    device = _device_for_token(token)
+    if device is not None:
+        # A paired device (ADR 0087 D1) is the OPERATOR tier — never a new tier string, which
+        # would silently fail every `== "operator"` consumer. What narrows is the SCOPE (ADR
+        # 0121 D4): a phone is ``device``; an agent device and a legacy row are ``full``.
+        try:
+            scope = device.effective_scope()
+        except Exception:  # noqa: BLE001 — an odd row must not widen: fail to the narrow scope
+            scope = SCOPE_DEVICE
+        return Credential("operator", scope if scope in SCOPES else SCOPE_DEVICE, str(device.id))
     return None
 
 
@@ -536,52 +578,73 @@ def configure(
 # ---------------------------------------------------------------------------
 
 
-def generate_sse_token(session_id: str = "") -> str:
+def generate_sse_token(session_id: str = "", scope: str = SCOPE_DEVICE) -> str:
     """Return a base64url-encoded, HMAC-signed token valid for ``_SSE_TOKEN_LIFETIME`` seconds.
 
-    The token is a JSON payload ``{session_id, exp}`` concatenated with an
+    The token is a JSON payload ``{sid, exp, scope}`` concatenated with an
     HMAC-SHA256 signature. The signing key is the active bearer token — when
     no bearer is configured (open mode) the function returns an empty string
     (SSE is already unrestricted).
+
+    ``scope`` (ADR 0121 D4) is the MINTING caller's credential scope, signed into the payload
+    so an EventSource stream a device opened doesn't come back as ``full``. It defaults to the
+    NARROW scope: a caller that forgets to pass it gets a token that can do less, never more.
     """
     key = _BEARER[0]
     if not key:
         return ""
-    payload = json.dumps({"sid": session_id, "exp": int(time.time()) + _SSE_TOKEN_LIFETIME}, separators=(",", ":"))
+    scope = scope if scope in SCOPES else SCOPE_DEVICE
+    payload = json.dumps(
+        {"sid": session_id, "exp": int(time.time()) + _SSE_TOKEN_LIFETIME, "scope": scope}, separators=(",", ":")
+    )
     sig = hmac.new(key.encode(), payload.encode(), hashlib.sha256).digest()
     return base64.urlsafe_b64encode(payload.encode() + b"." + sig).decode()
 
 
 def _validate_sse_token(token: str) -> bool:
     """Validate a query-string SSE token in constant time. Returns True when valid."""
+    return _sse_token_scope(token) is not None
+
+
+def _sse_token_scope(token: str) -> str | None:
+    """The credential scope a valid query-string SSE token carries, or None when invalid.
+
+    A token with NO ``scope`` field (minted before ADR 0121, at most ``_SSE_TOKEN_LIFETIME``
+    seconds before an upgrade) or an unknown value reads as ``device``: the old format can't say
+    whether a phone minted it, and the narrow scope is the fail-safe reading. That costs a full
+    caller nothing — the SSE streams are reads, none of them is behind the credential-plane
+    ceiling — so no format version bump is needed. Open mode ⇒ ``full`` (nothing is checked)."""
     key = _BEARER[0]
     if not key:
-        return True  # open mode — no bearer ⇒ no token needed
+        return SCOPE_FULL  # open mode — no bearer ⇒ no token needed
     if not token:
-        return False
+        return None
     try:
         raw = base64.urlsafe_b64decode(token.encode())
     except Exception:
-        return False
+        return None
     # HMAC-SHA256 is always 32 bytes; the delimiter "." is the byte before it.
     # Split by known offset instead of rsplit to avoid ambiguity when the
     # signature bytes happen to contain 0x2e (".").
     _SIG_LEN = 32
     if len(raw) < _SIG_LEN + 2 or raw[-_SIG_LEN - 1 : -_SIG_LEN] != b".":
-        return False
+        return None
     payload_bytes = raw[: -_SIG_LEN - 1]
     sig = raw[-_SIG_LEN:]
     expected = hmac.new(key.encode(), payload_bytes, hashlib.sha256).digest()
     if not hmac.compare_digest(sig, expected):
-        return False
+        return None
     try:
         data = json.loads(payload_bytes)
     except Exception:
-        return False
+        return None
+    if not isinstance(data, dict):
+        return None
     exp = data.get("exp", 0)
-    if time.time() > exp:
-        return False
-    return True
+    if not isinstance(exp, (int, float)) or time.time() > exp:
+        return None
+    scope = data.get("scope")
+    return scope if isinstance(scope, str) and scope in SCOPES else SCOPE_DEVICE
 
 
 def _unauthorized(detail: str) -> JSONResponse:
@@ -706,7 +769,8 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         # (the event bus AND the session-attendance stream — see _SSE_QUERY_TOKEN_PATHS).
         if _is_sse_query_token_path(path):
             sse_token = request.query_params.get("token", "")
-            if _validate_sse_token(sse_token):
+            sse_scope = _sse_token_scope(sse_token)
+            if sse_scope is not None:
                 # A valid SSE token proves the caller held the operator bearer — it's HMAC-signed
                 # with it and mintable only via the operator-gated /api/sse-token. Mark the tier so
                 # the fleet proxy swaps in the MEMBER's credential (ADR 0089) for a proxied
@@ -715,6 +779,11 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
                 # member, which validates the token against ITS bearer (the fleet token, not the
                 # hub's that signed it), rejects the hub-signed token → 401 on every live stream.
                 request.state.trust_tier = "operator"
+                # The scope the MINTER held (ADR 0121 D4), restored from the signed payload.
+                request.state.credential_scope = sse_scope
+                denied = _credential_plane_refusal(request, path, sse_scope, None)
+                if denied is not None:
+                    return denied
                 _trust_tier_token = _record_trust_tier_telemetry(request)
                 try:
                     return await call_next(request)
@@ -724,16 +793,17 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
             # server-to-server caller with an Authorization header still passes.
 
         # Configured credentials are ALTERNATIVES — satisfy any one (#2620).
-        tier = "operator"
+        cred = _OPEN_CREDENTIAL
         if _API_KEY[0] or _BEARER[0]:
-            tier = _classify_request(request)
-            if tier is None:
+            cred = _classify_request_credential(request)
+            if cred is None:
                 if media_expired:
                     return JSONResponse(
                         {"detail": "Forbidden: this media link has expired — ask the agent for a fresh link"},
                         status_code=403,
                     )
                 return _unauthorized(_credential_error())
+        tier = cred.tier
 
         # R1 path ceiling (ADR 0066): a federation credential is denied the /api operator
         # surface — otherwise the token split is cosmetic (it has RCE via
@@ -741,6 +811,14 @@ class A2AAuthMiddleware(BaseHTTPMiddleware):
         if tier == "federation" and _requires_operator(path):
             return JSONResponse({"detail": "Forbidden: operator credential required"}, status_code=403)
         request.state.trust_tier = tier
+        # Credential scope (ADR 0121 D4): orthogonal to the tier. The credential-plane ceiling
+        # sits right beside the federation one, and runs before any route — including the
+        # fleet proxy's ADR 0089 D3 credential swap, which is just a route handler.
+        request.state.credential_scope = cred.scope
+        request.state.device_id = cred.device_id
+        denied = _credential_plane_refusal(request, path, cred.scope, cred.device_id)
+        if denied is not None:
+            return denied
 
         # Origin — enforced only when an allowlist is set AND an Origin is
         # present. Origin is a browser-only header; server-to-server callers
@@ -775,8 +853,33 @@ def _credential_error() -> str:
     return "Unauthorized: expected " + " or ".join(accepted)
 
 
+def _credential_plane_refusal(request, path: str, scope: str, device_id: str | None) -> JSONResponse | None:
+    """The ADR 0121 D4 credential-plane ceiling: a 403 when a non-``full`` credential asks for
+    a route that changes who can get in (``a2a_impl.credential_scope.CEILING``), else None."""
+    if scope == SCOPE_FULL:
+        return None
+    # Both spellings of the path: ``request.url.path`` (what the rest of this middleware
+    # keys on) and the ASGI ``scope["path"]`` the router dispatches on. They differ when a
+    # percent-decoded ``?``/``#`` lands in the path; checking both means neither can be used
+    # to slip a ceiling route past the other.
+    raw = (getattr(request, "scope", None) or {}).get("path") or path
+    rule = ceiling_rule(request.method, path, device_id)
+    if rule is None and raw != path:
+        rule = ceiling_rule(request.method, raw, device_id)
+    if rule is None:
+        return None
+    logger.info("[auth] device-scope credential refused %s %s (%s)", request.method, path, rule.why)
+    return JSONResponse(refusal_body(rule), status_code=403)
+
+
 def _classify_request(request) -> str | None:
-    """The trust tier this request's credential earns, or None if none matched.
+    """The trust tier this request's credential earns, or None if none matched."""
+    cred = _classify_request_credential(request)
+    return cred.tier if cred else None
+
+
+def _classify_request_credential(request) -> Credential | None:
+    """The tier + scope this request's credential earns, or None if none matched.
 
     **Alternatives, not a conjunction (#2620).** This used to be two sequential checks —
     an X-API-Key guard, then a bearer guard — which made them an AND: with a legacy key
@@ -798,7 +901,7 @@ def _classify_request(request) -> str | None:
     if api_key:
         presented = request.headers.get("x-api-key", "") or ""
         if presented and hmac.compare_digest(presented, api_key):
-            return "operator"
+            return Credential("operator", SCOPE_FULL)
 
     active = _BEARER[0]
     if not active:
@@ -814,7 +917,7 @@ def _classify_request(request) -> str | None:
     # below denies it /api). Single-token mode resolves to operator (R3 back-compat).
     # Shared with `bearer_tier` — one ladder, so the WS proxy and the HTTP middleware can
     # never disagree about what a token earns.
-    return _bearer_tier_for(token)
+    return _classify_token(token)
 
 
 def inbound_credentials() -> tuple[str, str]:

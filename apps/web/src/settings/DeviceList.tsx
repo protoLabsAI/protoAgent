@@ -2,7 +2,7 @@ import { Spinner } from "@protolabsai/ui/data";
 import { Input } from "@protolabsai/ui/forms";
 import { useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { Pencil, Smartphone, Trash2 } from "lucide-react";
+import { Pencil, ShieldCheck, ShieldMinus, Smartphone, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { StatusPill } from "../app/StatusPill";
@@ -11,7 +11,7 @@ import { notifyAuthRequired } from "../lib/auth";
 import { currentDeviceId, forgetDeviceCredential } from "../lib/credentials";
 import "./device-list.css";
 
-import type { PairedDevice } from "../lib/api";
+import type { DeviceScope, PairedDevice } from "../lib/api";
 
 /** Matches the server's `ACTIVE_WINDOW_SECONDS` (last-seen throttle 300 s + 60 s margin) —
  *  used only when an older server's rows carry no `active` field. */
@@ -36,6 +36,30 @@ export function lastSeenLabel(d: Pick<PairedDevice, "active" | "last_seen_at">, 
   return `last seen ${Math.floor(secs / 86400)}d ago`;
 }
 
+/** The scope badge for a row (ADR 0121 D4), or null when there is none to show: an agent is
+ *  always full access (its "Agent" badge says enough), and a pre-ADR-0121 server sends no
+ *  scope. */
+export function scopeBadge(d: Pick<PairedDevice, "kind" | "scope">): { label: string; status: "warning" | "neutral" } | null {
+  if (d.kind === "agent" || !d.scope) return null;
+  return d.scope === "device" ? { label: "Limited", status: "warning" } : { label: "Full access", status: "neutral" };
+}
+
+/** The scope action a row offers (Limit a full-access phone, Promote a limited one), or null.
+ *  None when THIS console's credential is itself limited — the server would refuse it, and a
+ *  button that can only fail is a dead one. */
+export function scopeAction(
+  d: Pick<PairedDevice, "kind" | "scope">,
+  callerLimited: boolean,
+): { label: "Limit" | "Promote"; to: DeviceScope } | null {
+  if (callerLimited || d.kind === "agent" || !d.scope) return null;
+  return d.scope === "full" ? { label: "Limit", to: "device" } : { label: "Promote", to: "full" };
+}
+
+/** Whether a limited console may rename/remove this row: only its own (ADR 0121 D4). */
+export function canManage(rowId: string, selfId: string, callerLimited: boolean): boolean {
+  return !callerLimited || (!!selfId && rowId === selfId);
+}
+
 /**
  * The paired-devices list in Settings ▸ Devices (ADR 0087, #4336 S3): rename in place, the
  * row for THIS browser marked "This device", and removing yourself confirmed in-page (the
@@ -47,10 +71,16 @@ export function DeviceList({
   devices,
   loading,
   onChanged,
+  callerLimited = false,
+  callerDeviceId = null,
 }: {
   devices: PairedDevice[];
   loading: boolean;
   onChanged: () => Promise<void> | void;
+  /** This console's own credential is device scope (ADR 0121 D4). */
+  callerLimited?: boolean;
+  /** The server's answer to "which device is asking" — a fallback for the localStorage id. */
+  callerDeviceId?: string | null;
 }) {
   const toast = useToast();
   const [revoking, setRevoking] = useState<string | null>(null);
@@ -61,7 +91,26 @@ export function DeviceList({
   const [renameError, setRenameError] = useState<string | null>(null);
   // Read per render — it's a localStorage read, and it must reflect a pairing made in this
   // tab without a reload.
-  const thisId = currentDeviceId();
+  const thisId = currentDeviceId() || callerDeviceId || "";
+  const [scoping, setScoping] = useState<string | null>(null);
+
+  async function changeScope(d: PairedDevice, to: DeviceScope) {
+    setScoping(d.id);
+    try {
+      await api.setDeviceScope(d.id, to);
+      toast(
+        to === "full"
+          ? { title: `${d.name} has full access`, message: "It can now pair devices, manage plugins and change credentials." }
+          : { title: `${d.name} is limited`, message: "It can't pair devices, manage plugins or change credentials any more." },
+      );
+      await onChanged();
+    } catch (err) {
+      // A device-scope refusal arrives already readable (lib/api/http.ts).
+      toast({ tone: "error", title: `Couldn't change ${d.name}`, message: err instanceof Error ? err.message : "Try again." });
+    } finally {
+      setScoping(null);
+    }
+  }
 
   function startRename(d: PairedDevice) {
     setEditing(d.id);
@@ -147,8 +196,11 @@ export function DeviceList({
   return (
     <div className="subagent-list devices-list">
       {devices.map((d) => {
-        const self = d.id === thisId;
+        const self = !!thisId && d.id === thisId;
         const isEditing = editing === d.id;
+        const badge = scopeBadge(d);
+        const action = scopeAction(d, callerLimited);
+        const manage = canManage(d.id, thisId, callerLimited);
         return (
           <div className={`subagent-row${self ? " devices-row--self" : ""}`} key={d.id} data-testid={`device-row-${d.id}`}>
             <div className="devices-row-main">
@@ -194,6 +246,11 @@ export function DeviceList({
                   {/* Which entries are other agents (ADR 0113 D3) — the kind is fixed by the
                       code the client claimed, so this can't be spoofed by the claimer. */}
                   <Badge status={d.kind === "agent" ? "info" : "neutral"}>{d.kind === "agent" ? "Agent" : "Device"}</Badge>
+                  {badge ? (
+                    <Badge status={badge.status} data-testid={`device-scope-${d.id}`}>
+                      {badge.label}
+                    </Badge>
+                  ) : null}
                   {self ? <Badge status="success">This device</Badge> : null}
                   {isActive(d) ? <StatusPill label="active" tone="success" /> : null}
                 </strong>
@@ -220,8 +277,24 @@ export function DeviceList({
                 </div>
               )}
             </div>
-            {!isEditing && (
+            {!isEditing && (action || manage) && (
               <div className="issue-actions">
+                {action && (
+                  <Button
+                    variant="ghost"
+                    type="button"
+                    title={action.label === "Limit" ? "Limit what this device can change" : "Give this device full access"}
+                    aria-label={`${action.label} ${d.name}`}
+                    loading={scoping === d.id}
+                    disabled={scoping != null || revoking != null}
+                    onClick={() => void changeScope(d, action.to)}
+                  >
+                    {action.label === "Limit" ? <ShieldMinus size={15} aria-hidden /> : <ShieldCheck size={15} aria-hidden />}{" "}
+                    {action.label}
+                  </Button>
+                )}
+                {manage && (
+                <>
                 <Button
                   icon
                   variant="ghost"
@@ -252,6 +325,8 @@ export function DeviceList({
                 >
                   <Trash2 size={15} />
                 </Button>
+                </>
+                )}
               </div>
             )}
           </div>

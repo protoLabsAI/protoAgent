@@ -7,8 +7,10 @@ stayed authorised.
 
 This adds a registry of named devices, each with its own token, individually revocable. A
 device token resolves to the **operator** tier: a paired phone runs the full console and
-needs the same surface the desktop does. The split buys identity and revocation, not reduced
-capability.
+needs the same surface the desktop does. Since ADR 0121 D4 a phone's token also carries a
+narrower credential **scope** (``device``): it can use the whole product but not change who can
+get in — pairing, plugin lifecycle, secrets and credential-plane config. Agent devices (hubs)
+and rows written before ADR 0121 are ``full``.
 
 Two halves, deliberately different in durability:
 
@@ -61,6 +63,14 @@ KIND_DEVICE = "device"
 KIND_AGENT = "agent"
 _KINDS = frozenset({KIND_DEVICE, KIND_AGENT})
 
+# Credential scope (ADR 0121 D4) — orthogonal to the trust TIER, which stays "operator" for
+# every device. ``device`` scope can use the whole product but can't change who can get in
+# (the credential-plane ceiling, ``a2a_impl.credential_scope``). Mirrors that module's
+# constants; ``security`` doesn't import ``a2a_impl``.
+SCOPE_FULL = "full"
+SCOPE_DEVICE = "device"
+_SCOPES = frozenset({SCOPE_FULL, SCOPE_DEVICE})
+
 # Every code is TYPEABLE (agent codes per ADR 0113 D2; device codes since ADR 0087's
 # 2026-10-18 amendment): short, unambiguous, with a window long enough to read it off one
 # screen and type it into another. 10 chars of Crockford base32 = 50 bits; under the claim
@@ -87,6 +97,18 @@ class Device:
     # ``device`` (a phone/browser) or ``agent`` (another protoAgent's hub, ADR 0113 D3). Taken
     # from the pending code's kind at claim time — never from anything the claimer sent.
     kind: str = KIND_DEVICE
+    # ``full`` or ``device`` (ADR 0121 D4). The dataclass default is ``full`` because that is
+    # what a row written before ADR 0121 means; NEW phone pairings are minted ``device`` in
+    # `_register`. Read through `effective_scope`, never directly: an agent device is always
+    # full, whatever its row says.
+    scope: str = SCOPE_FULL
+
+    def effective_scope(self) -> str:
+        """The scope this device's token earns. An agent (another protoAgent's hub, ADR 0113)
+        must proxy the whole console, so it is ``full`` regardless of the stored value."""
+        if self.kind == KIND_AGENT:
+            return SCOPE_FULL
+        return self.scope if self.scope in _SCOPES else SCOPE_DEVICE
 
     def public(self) -> dict:
         """The shape safe to hand the console — everything except the hash.
@@ -100,6 +122,7 @@ class Device:
             "id": self.id,
             "name": self.name,
             "kind": self.kind,
+            "scope": self.effective_scope(),
             "created_at": self.created_at,
             "last_seen_at": self.last_seen_at,
             "active": is_active(self.last_seen_at),
@@ -167,6 +190,7 @@ def _load() -> list[Device]:
     for item in raw if isinstance(raw, list) else []:
         try:
             raw_kind = item.get("kind")
+            raw_scope = item.get("scope", SCOPE_FULL)
             out.append(
                 Device(
                     id=str(item["id"]),
@@ -180,6 +204,11 @@ def _load() -> list[Device]:
                     # isinstance first: a hand-edited list/dict is unhashable, and a TypeError
                     # here would skip the whole entry — which the next `_save` then deletes.
                     kind=(raw_kind if isinstance(raw_kind, str) and raw_kind in _KINDS else KIND_DEVICE),
+                    # ADR 0121 D4: a row with NO scope predates it and keeps ``full`` (the
+                    # Devices panel labels it "Full access" and offers Limit). A PRESENT but
+                    # unknown value reads as ``device`` — the narrower scope is the safe
+                    # default for anything we can't vouch for. Nothing is rewritten here.
+                    scope=(raw_scope if isinstance(raw_scope, str) and raw_scope in _SCOPES else SCOPE_DEVICE),
                 )
             )
         except (AttributeError, KeyError, TypeError, ValueError):  # AttributeError: a non-dict entry
@@ -217,6 +246,27 @@ def rename_device(device_id: str, name: object) -> dict | None:
                 _save(devices)
                 logger.info("[devices] renamed %s", device_id)
                 return device.public()
+    return None
+
+
+def set_device_scope(device_id: str, scope: object) -> dict | None:
+    """Promote (``full``) or limit (``device``) a device; returns its public shape, or None if
+    there's no such device. ``ValueError`` for an unknown scope or for limiting an agent (a hub
+    must proxy the whole console, ADR 0113). WHO may call this is the route's check: only a
+    ``full``-scope caller (ADR 0121 D4)."""
+    if not isinstance(scope, str) or scope not in _SCOPES:
+        raise ValueError("scope must be 'full' or 'device'")
+    with _LOCK:
+        devices = _load()
+        for device in devices:
+            if device.id != device_id:
+                continue
+            if device.kind == KIND_AGENT and scope != SCOPE_FULL:
+                raise ValueError("an agent pairing always has full access")
+            device.scope = str(scope)
+            _save(devices)
+            logger.info("[devices] scope of %s set to %s", device_id, scope)
+            return device.public()
     return None
 
 
@@ -294,6 +344,9 @@ def _register(name: str, kind: str = KIND_DEVICE) -> tuple[Device, str]:
         token_sha256=_hash(token),
         created_at=time.time(),
         kind=kind,
+        # ADR 0121 D4: every new phone/tablet pairing — LAN, tailnet or public — is
+        # ``device`` scope; an agent (a hub) is ``full``.
+        scope=SCOPE_FULL if kind == KIND_AGENT else SCOPE_DEVICE,
     )
     devices = _load()
     devices.append(device)

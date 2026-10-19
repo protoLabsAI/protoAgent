@@ -11,8 +11,13 @@
                                              (refused unless a token is configured)
     DELETE /api/pairing/tailscale/serve    → stop serving it (only OUR handler)
     GET    /api/devices         → list paired devices
-    PATCH  /api/devices/{id}    → rename one (body ``{"name": …}``)
+    PATCH  /api/devices/{id}    → rename one (``{"name": …}``) and/or promote/limit it
+                                  (``{"scope": "full"|"device"}`` — full-scope callers only)
     DELETE /api/devices/{id}    → revoke one
+
+A ``device``-scope credential (a paired phone, ADR 0121 D4) is refused start/cancel/serve and
+PATCH/DELETE of any device but its own by the credential-plane ceiling in
+``a2a_impl.credential_scope`` — enforced in the auth middleware, before these handlers run.
 
 Every route here is behind the ``/api/*`` operator bearer (a2a_impl/auth.py) EXCEPT
 ``claim``, which is on the auth allowlist by necessity — obtaining auth is its purpose. Its
@@ -414,6 +419,16 @@ def _default_agent_name() -> str:
     return os.environ.get("AGENT_NAME", "protoagent")
 
 
+def _caller(request) -> dict:
+    """The requesting credential's scope + device id, as the auth middleware stamped them.
+    Unstamped (an app assembled without the middleware) reads as the narrow scope."""
+    state = getattr(request, "state", None)
+    return {
+        "scope": getattr(state, "credential_scope", None) or "device",
+        "device_id": getattr(state, "device_id", None),
+    }
+
+
 def register_pairing_routes(app, agent_name=None) -> None:
     """Mount the pairing + devices routes.
 
@@ -652,20 +667,42 @@ def register_pairing_routes(app, agent_name=None) -> None:
         return JSONResponse({"ok": True, "device": device, "token": token})
 
     @router.get("/api/devices")
-    async def _list():  # noqa: ANN202
+    async def _list(request: Request):  # noqa: ANN202
         from security.devices import list_devices
 
-        return JSONResponse({"devices": list_devices()})
+        # ``caller`` is THIS request's credential (ADR 0121 D4), so the panel can hide the
+        # Promote / Limit actions a device-scope caller would only be refused. The server stays
+        # the authority — the middleware and `_update` below enforce it either way.
+        return JSONResponse({"devices": list_devices(), "caller": _caller(request)})
 
     @router.patch("/api/devices/{device_id}")
-    async def _rename(device_id: str, request: Request):  # noqa: ANN202
-        from security.devices import rename_device
+    async def _update(device_id: str, request: Request):  # noqa: ANN202
+        """Rename (``{"name": …}``, #4336 S3) and/or promote/limit (``{"scope": "full"|"device"}``,
+        ADR 0121 D4). A ``device``-scope caller reaches this only for its OWN id (the
+        middleware's credential-plane ceiling refuses every other id) and may only rename."""
+        from a2a_impl.credential_scope import SCOPE_FULL, refusal_body
+        from security.devices import rename_device, set_device_scope, validate_device_name
 
         body = await _json_body(request)
+        has_name, has_scope = "name" in body, "scope" in body
+        if not has_name and not has_scope:
+            msg = "nothing to change: send name and/or scope"
+            return JSONResponse({"ok": False, "error": msg, "detail": msg}, status_code=400)
+        if has_scope and getattr(request.state, "credential_scope", None) != SCOPE_FULL:
+            # Promotion needs a full-scope caller — so a phone can never promote itself.
+            return JSONResponse(
+                refusal_body(message="Only a full-access device can change what a device can do."),
+                status_code=403,
+            )
         # `detail` alongside `error`: the console's request() surfaces FastAPI's `detail`, so
-        # the operator sees "name must be 64 characters or fewer", not a JSON blob.
+        # the operator sees "name must be 64 characters or fewer", not a JSON blob. Both inputs
+        # are validated BEFORE either write, so a bad name can't leave a half-applied change.
         try:
-            device = rename_device(device_id, body.get("name"))
+            if has_name:
+                validate_device_name(body.get("name"))
+            device = set_device_scope(device_id, body.get("scope")) if has_scope else None
+            if has_name and (device is not None or not has_scope):
+                device = rename_device(device_id, body.get("name"))
         except ValueError as exc:
             return JSONResponse({"ok": False, "error": str(exc), "detail": str(exc)}, status_code=400)
         if device is None:

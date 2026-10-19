@@ -327,3 +327,85 @@ test("the device QR says a tailnet address needs Tailscale on the phone", async 
     "the phone needs the Tailscale app, signed in to the same tailnet",
   );
 });
+
+// ── #4336 S7.2: device scope (ADR 0121 D4) ────────────────────────────────────────────────
+
+/** Mock the devices list + PATCH statefully, as the given caller. Returns the PATCH bodies. */
+async function mockScopedDevices(page, { caller, refusePatch = false }) {
+  const now = Math.floor(Date.now() / 1000);
+  const rows = [
+    { id: "p-old", name: "Old iPhone", kind: "device", scope: "full", created_at: now - 9000, last_seen_at: null },
+    { id: "p-new", name: "New Pixel", kind: "device", scope: "device", created_at: now - 900, last_seen_at: null },
+    { id: "h-1", name: "studio-hub", kind: "agent", scope: "full", created_at: now - 9000, last_seen_at: null },
+  ];
+  const patches = [];
+  await page.route("**/api/devices", (route) => route.fulfill({ json: { devices: rows, caller } }));
+  await page.route("**/api/devices/*", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    const body = route.request().postDataJSON();
+    patches.push(body);
+    if (refusePatch) {
+      return route.fulfill({
+        status: 403,
+        json: { error: "device_scope", detail: { code: "device_scope", reason: "This device can't change pairing or credentials — use a full-access device." } },
+      });
+    }
+    const id = route.request().url().split("/").pop();
+    const row = rows.find((r) => r.id === id);
+    if (body.scope) row.scope = body.scope;
+    return route.fulfill({ json: { ok: true, device: row } });
+  });
+  return patches;
+}
+
+test("Full access and Limited badges; Limit and Promote change a phone's scope", async ({ page }) => {
+  const patches = await mockScopedDevices(page, { caller: { scope: "full", device_id: null } });
+  await openDevices(page);
+  const old = page.locator(".subagent-row", { hasText: "Old iPhone" });
+  const fresh = page.locator(".subagent-row", { hasText: "New Pixel" });
+  const hub = page.locator(".subagent-row", { hasText: "studio-hub" });
+  await expect(old.getByText("Full access", { exact: true })).toBeVisible();
+  await expect(fresh.getByText("Limited", { exact: true })).toBeVisible();
+  // An agent is always full access and can't be limited — no badge, no action.
+  await expect(hub.getByText("Full access", { exact: true })).toHaveCount(0);
+  await expect(hub.getByRole("button", { name: /^(Limit|Promote) / })).toHaveCount(0);
+
+  await old.getByRole("button", { name: "Limit Old iPhone" }).click();
+  await expect(page.getByText("Old iPhone is limited")).toBeVisible();
+  await expect(old.getByText("Limited", { exact: true })).toBeVisible();
+
+  await fresh.getByRole("button", { name: "Promote New Pixel" }).click();
+  await expect(page.getByText("New Pixel has full access")).toBeVisible();
+  await expect(fresh.getByText("Full access", { exact: true })).toBeVisible();
+  expect(patches).toEqual([{ scope: "device" }, { scope: "full" }]);
+});
+
+test("a limited console can't Promote, Limit, pair or manage other devices — only itself", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("protoagent.deviceToken", "e2e-device-token");
+    window.localStorage.setItem("protoagent.deviceId", "p-new");
+  });
+  await mockScopedDevices(page, { caller: { scope: "device", device_id: "p-new" } });
+  await openDevices(page);
+  await expect(page.getByTestId("devices-limited-note")).toContainText("This device has limited access.");
+  await expect(page.getByRole("button", { name: "Add a device" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Pair an agent" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^(Limit|Promote) / })).toHaveCount(0);
+
+  const old = page.locator(".subagent-row", { hasText: "Old iPhone" });
+  await expect(old.getByRole("button", { name: "Remove Old iPhone" })).toHaveCount(0);
+  await expect(old.getByRole("button", { name: "Rename Old iPhone" })).toHaveCount(0);
+  const mine = page.locator(".subagent-row", { hasText: "New Pixel" });
+  await expect(mine.getByText("This device", { exact: true })).toBeVisible();
+  await expect(mine.getByRole("button", { name: "Rename New Pixel" })).toBeVisible();
+  await expect(mine.getByRole("button", { name: "Remove New Pixel" })).toBeVisible();
+});
+
+test("a device-scope refusal from the server reads as a sentence, not a code", async ({ page }) => {
+  // The panel believed it was full access (a stale answer); the server is the authority.
+  await mockScopedDevices(page, { caller: { scope: "full", device_id: null }, refusePatch: true });
+  await openDevices(page);
+  await page.locator(".subagent-row", { hasText: "New Pixel" }).getByRole("button", { name: "Promote New Pixel" }).click();
+  await expect(page.getByText("This device can't change pairing or credentials — use a full-access device.")).toBeVisible();
+  await expect(page.getByText("device_scope")).toHaveCount(0);
+});

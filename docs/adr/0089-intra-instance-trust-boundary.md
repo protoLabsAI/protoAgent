@@ -92,6 +92,8 @@ answers that with no per-request crypto.
 
 ### D3 — The hub swaps credentials at the proxy boundary, operator-tier only
 
+> **Amended by [ADR 0121](./0121-device-pairing-over-an-operator-supplied-public-url.md) D4 (2026-10-18):** the credential swap runs *after* the credential-plane ceiling — a `device`-scope caller is refused a ceiling path before the hub lends it the fleet token (HTTP and the WS `?token=` swap alike).
+
 For a **local-peer** target, the fleet proxy **replaces** the caller's `Authorization` with the
 fleet service token (`_target_for_slug` / `forward_to`). Two guards:
 

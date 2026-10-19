@@ -27,6 +27,8 @@ lost phone stays authorised.
 
 ### D1 — Per-device tokens, individually revocable
 
+> **Amended by [ADR 0121](./0121-device-pairing-over-an-operator-supplied-public-url.md) D4 (2026-10-18):** device tokens are operator-trust with `device` *scope* — new phone pairings can't pair devices, manage plugins, use secrets or write credential-plane config. Agent devices and pre-0121 rows are `full`.
+
 A **device registry** joins the operator and federation tiers: a list of named devices, each
 holding its own token. Auth accepts the shared operator bearer **or** any non-revoked device
 token; both resolve to the `operator` tier.
