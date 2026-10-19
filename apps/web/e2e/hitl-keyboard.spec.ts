@@ -39,10 +39,13 @@ test("a defaults-carrying agent form opens prefilled + focused and submits untou
   await page.keyboard.press("Enter");
   await expect(card).toHaveCount(0);
 
-  // The untouched defaults ride back as the answer; the composer regains focus.
+  // The untouched defaults ride back as the answer, now rendered as a labelled form-response
+  // card (#4259): the Strategy choice shows its option TITLE ("Rolling"), not the raw "rolling"
+  // const, and the Environment text value ("staging") rides through verbatim. The resume JSON on
+  // the wire is byte-identical to before — only this bubble's presentation changed.
   const answer = page.locator(`${SLOT} .pl-message--user`).last();
   await expect(answer).toContainText("staging");
-  await expect(answer).toContainText("rolling");
+  await expect(answer).toContainText("Rolling");
   await expect(page.locator(`${SLOT} .pl-message--assistant`).last()).toContainText(
     "Done — found 8 results.",
   );

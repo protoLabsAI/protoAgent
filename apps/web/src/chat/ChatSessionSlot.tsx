@@ -987,6 +987,10 @@ export function ChatSessionSlot({
       // into the composer. It is still a NORMAL, visible user turn — this only tags where the
       // click came from so the bubble shows a "from ‹title›" label and the turn stays audited.
       sentVia?: ChatMessage["sentVia"];
+      // Presentation-only labels for a HITL form answer (#4259) — stamped on THIS turn's freshly
+      // minted user message (so it's keyed to that stable id, never matched by text) and rendered
+      // as a card. Never touches `content`/`sent`: the resume JSON stays byte-identical.
+      formResponse?: ChatMessage["formResponse"];
     } = {},
   ) {
     if (!session || !content) return;
@@ -1000,6 +1004,7 @@ export function ChatSessionSlot({
       createdAt: Date.now(),
       status: "done",
       ...(opts.sentVia ? { sentVia: opts.sentVia } : {}),
+      ...(opts.formResponse ? { formResponse: opts.formResponse } : {}),
     };
     // On an approval resume, CONTINUE the original assistant message (`resumeMessageId`) instead of
     // minting a fresh bubble — so the pre- and post-approval tool cards extend ONE message / one

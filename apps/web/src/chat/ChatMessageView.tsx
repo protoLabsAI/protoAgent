@@ -1,4 +1,4 @@
-import { Button } from "@protolabsai/ui/primitives";
+import { Button, Card } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
@@ -21,7 +21,7 @@ import {
   usageTipNote,
 } from "./costLabel";
 import { useUI } from "../state/uiStore";
-import type { ChatMessage, ChatPart, ContextWindow, TurnUsage } from "../lib/types";
+import type { ChatMessage, ChatPart, ContextWindow, FormResponseDisplay, TurnUsage } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
 import { DelegateProgressView } from "./DelegateProgressView";
 import { hideDanglingMarker } from "./danglingMarker";
@@ -162,6 +162,11 @@ export function ChatMessageView({
   // A turn the operator STOPPED (#4076) says so on replay too — a quiet marker in the same
   // footer row, so a transcript that ends mid-thought reads as stopped, not as finished.
   const stoppedMark = !revealStreaming && message.role === "assistant" && message.stopped === true;
+  // A submitted HITL form answer (#4259): the user message carries a presentation-only label
+  // map, so render a compact key/value card instead of its raw resume JSON. Guarded to a user
+  // message with at least one labelled field — a legacy message without the map, or an empty /
+  // malformed one, falls through to the normal text path below (we never sniff arbitrary JSON).
+  const formResponseDisplay = renderableFormResponse(message);
   return (
     <Message
       role={message.role}
@@ -210,7 +215,9 @@ export function ChatMessageView({
         // reasoning card. Live turns render reasoning inline via parts.
         <ReasoningCard text={message.reasoning} streaming={streaming && !message.content} />
       ) : null}
-      {message.parts && message.parts.length ? (
+      {formResponseDisplay ? (
+        <FormResponseCard display={formResponseDisplay} />
+      ) : message.parts && message.parts.length ? (
         (() => {
           // Fold the intermediate reason→tool timeline behind ONE WorkBlock so the answer
           // leads — but ONLY when the turn interleaves reasoning WITH tools (the forever-stack
@@ -429,6 +436,43 @@ export function ChatMessageView({
         </MessageActions>
       ) : null}
     </Message>
+  );
+}
+
+/** The HITL form-response label map to render for a message (#4259), or null to fall back to
+ *  the legacy text path. Only a USER message with a well-formed map holding ≥1 labelled field
+ *  qualifies — so a typed turn, an older message without the map, and an empty / malformed one
+ *  all keep their normal text rendering (arbitrary JSON is never treated as a form). Pure. */
+function renderableFormResponse(message: ChatMessage): FormResponseDisplay | null {
+  if (message.role !== "user") return null;
+  const display = message.formResponse;
+  if (!display || !Array.isArray(display.groups)) return null;
+  const hasField = display.groups.some((group) => Array.isArray(group.fields) && group.fields.length > 0);
+  return hasField ? display : null;
+}
+
+// The HITL form-response CARD (#4259): a compact, read-only key/value rendering of what the
+// operator submitted to a `request_user_input` form — field titles + option labels, grouped by
+// wizard step — shown in place of the raw resume JSON on the user bubble. Presentation only: the
+// message's `content` still holds the byte-identical JSON the server resumed with. Reuses the DS
+// Card primitive + the existing hitl-* card styling (hitl.css) — no new design-system CSS.
+function FormResponseCard({ display }: { display: FormResponseDisplay }) {
+  const groups = display.groups.filter((group) => Array.isArray(group.fields) && group.fields.length > 0);
+  return (
+    <Card className="hitl-response" data-testid="hitl-response" role="group" aria-label={display.title || "Form response"}>
+      {display.title ? <div className="hitl-title hitl-response-title">{display.title}</div> : null}
+      {groups.map((group, gi) => (
+        <div className="hitl-response-group" key={gi}>
+          {group.title ? <div className="hitl-step-title">{group.title}</div> : null}
+          {group.fields.map((field, fi) => (
+            <div className="hitl-field hitl-response-field" key={fi}>
+              <span className="hitl-response-label">{field.label}</span>
+              <div className="hitl-response-value">{field.value}</div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </Card>
   );
 }
 
