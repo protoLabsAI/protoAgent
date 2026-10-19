@@ -49,10 +49,20 @@ def test_question_payload_passes_through():
 def test_plain_value_degrades_to_question():
     assert server._interrupt_payload("just text") == {"question": "just text"}
     assert server._interrupt_payload(None) == {"question": "Input required."}
-    # A dict that's neither a question nor a form is stringified into a question
-    # (never silently dropped).
+    # A dict that's neither a question nor a form still becomes a question (never
+    # silently dropped); with no text field it shows as JSON, not a Python repr.
     out = server._interrupt_payload({"foo": 1})
-    assert "question" in out and "foo" in out["question"]
+    assert "question" in out and '"foo": 1' in out["question"]
+
+
+def test_unrecognised_dict_reads_its_prompt_as_prose():
+    """A plugin card in its own shape ({type, title, prompt, options}, as careercoach's
+    handoff was) showed as `{'type': …, 'prompt': "…\\n\\n…"}`. Its prompt is the question
+    and its title the heading, with real newlines."""
+    val = {"type": "x_handoff", "title": "Finish one step", "prompt": "Do this.\n\nThen that.", "options": ["done"]}
+    out = server._interrupt_payload(val)
+    assert out == {"question": "Do this.\n\nThen that.", "title": "Finish one step"}
+    assert server._interrupt_payload({"message": "Pick one"}) == {"question": "Pick one"}
 
 
 # ── autonomous-turn HITL guard ────────────────────────────────────────────────
