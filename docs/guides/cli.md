@@ -151,7 +151,8 @@ On the hub, enter it under Settings ▸ Fleet ▸ Discover ▸ Pair…, or run:
 ```
 
 The code is ten characters, case-insensitive (dashes optional), works **once**, and expires
-after five minutes. Five wrong guesses at the instance cancel every pending code. An
+after five minutes. Wrong guesses never cancel it; too many only make the instance wait
+before checking more ([Too many attempts](./pairing.md#too-many-attempts)). An
 instance bound to loopback can't be paired, because nothing else can reach it:
 `protoagent pair` says so, lists the addresses it could use, and points at the fix. On a
 machine running Tailscale, the fix it names first is **Use HTTPS via Tailscale** in Settings ▸
@@ -188,7 +189,8 @@ The code works once. The phone shows up under Settings ▸ Devices, where you ca
 
 The QR encodes the first address with the code in its `#pair=` fragment. The order is
 tailnet HTTPS (when [`tailscale serve`](./phone-access.md#https-via-tailscale) serves this
-agent), the tailnet name, a tailnet IP, then Wi-Fi.
+agent), your [public console URL](./phone-access.md#without-tailscale) when one is set
+("HTTPS from any network, no Tailscale needed"), the tailnet name, a tailnet IP, then Wi-Fi.
 The code follows the same rules as an agent code: ten characters, case-insensitive, works
 once, and expires after five minutes. Wrong tries never cancel it; too many in a row only
 make the agent wait before checking more ([Too many attempts](./pairing.md#too-many-attempts)).

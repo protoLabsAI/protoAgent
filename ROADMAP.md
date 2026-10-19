@@ -9,7 +9,6 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 ## Planned
 
-- **Remote device improvements** — build on existing QR pairing with typed device codes, clearer device identity, easier private-network access, and tablet layout improvements. (#4336)
 - **Settings, reorganized** — one place for every setting: each field reachable from a real panel (not only a shortcut chip), grouped by what you're trying to do, with clearer wording and safer saves.
 - **A smarter command palette** — jump to anything and run any action from one box: better ranking across sessions, settings, plugins and commands, and consistent behavior on desktop and mobile.
 
@@ -19,6 +18,7 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 ## Shipped
 
+- **Remote device improvements** — pair a phone or tablet by QR or a typed code (or `protoagent pair --device` on a headless box), reach it over Wi-Fi, Tailscale HTTPS or your own public URL, and move it between networks in one tap. Phones get limited access, expire when unused and rotate their tokens weekly, and tablets get their own layout. (#4336)
 - **Phone access and device pairing** — connect a phone browser to a reachable agent over LAN or a private network, pair with a QR code, and manage paired devices. Offline access and the next device-polish work remain planned.
 - **App-first documentation** — task paths for setup, everyday use, automation, building, and operation, with commands and UI instructions checked against current source. (#4329)
 

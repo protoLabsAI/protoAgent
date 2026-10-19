@@ -343,7 +343,7 @@
       "status": "current"
     },
     "guides/phone-access.md": {
-      "title": "Access from your phone (LAN / Tailscale)",
+      "title": "Use protoAgent on your phone or tablet",
       "status": "current"
     },
     "guides/pairing.md": {

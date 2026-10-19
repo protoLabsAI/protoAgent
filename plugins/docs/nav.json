@@ -115,7 +115,7 @@
           "items": [
             {
               "path": "guides/phone-access.md",
-              "title": "Access from your phone (LAN / Tailscale)"
+              "title": "Use protoAgent on your phone or tablet"
             },
             {
               "path": "guides/pairing.md",

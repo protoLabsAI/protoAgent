@@ -1,6 +1,6 @@
 # Pair a remote fleet member
 
-Use this procedure to connect a hub to an agent on another machine. First [make the remote reachable](/guides/pairing#before-you-pair-make-this-agent-reachable). Agent pairing codes last five minutes and are single-use; restarting clears pending codes. Five wrong guesses cancel pending codes; generate a fresh code before retrying. To revoke the hub’s access, remove its entry on the remote under Settings → Devices. Removing a fleet row on the hub alone does not revoke its token.
+Use this procedure to connect a hub to an agent on another machine. First [make the remote reachable](/guides/pairing#before-you-pair-make-this-agent-reachable). Agent pairing codes last five minutes and are single-use; restarting clears pending codes. Wrong guesses never cancel a code; after too many, the remote makes the hub wait before it checks the next one ([Too many attempts](/guides/pairing#too-many-attempts)). To revoke the hub’s access, remove its entry on the remote under Settings → Devices. Removing a fleet row on the hub alone does not revoke its token.
 
 ## Pair another agent
 
