@@ -1,0 +1,11 @@
+{
+  "reviewed_against": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+  "export_sha256": "16438595b46be82737e5e22cc90198732574c61cd7f4bdac32d1c552cad4c581",
+  "steps": {
+    "reused_from": "sites/marketing/media/sources/2026-10-18/README.md",
+    "capture_commit": "cd99084a79d375a45f5714286fc06d8735c25c7e",
+    "editable_script": "sites/marketing/media/sources/2026-10-18/211-memory-inspection.json",
+    "review": "No changes in apps/web/src/memory between capture and reviewed source. Re-inspected the exported image; real synthetic preference and injection are visible."
+  },
+  "privacy_review": "Synthetic demo material; no live credentials, pairing codes, or personal paths."
+}

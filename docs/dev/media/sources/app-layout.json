@@ -1,0 +1,32 @@
+{
+  "reviewed_against": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+  "export_sha256": "d699a4db94d7b8eced45aad4bd671b396ac2624e248e02ab24d8bdd83ebe0f8b",
+  "steps": {
+    "viewport": "1440 × 900, Chromium, light theme",
+    "setup": "Fresh isolated instance with a real hello reply and sample recurring schedule.",
+    "annotations": [
+      {
+        "number": 1,
+        "left": 170,
+        "top": 22
+      },
+      {
+        "number": 2,
+        "left": 47,
+        "top": 280
+      },
+      {
+        "number": 3,
+        "left": 970,
+        "top": 70
+      },
+      {
+        "number": 4,
+        "left": 1358,
+        "top": 82
+      }
+    ],
+    "style": "28px circular purple badges, white numerals, 2px white border. Overlaid only for documentation; no UI controls or results changed."
+  },
+  "privacy_review": "Synthetic demo material; no live credentials, pairing codes, or personal paths."
+}

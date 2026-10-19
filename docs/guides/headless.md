@@ -4,7 +4,7 @@ Run protoAgent as a service and drive it through the OpenAI-compatible API or A2
 Configure a model connection first; [Headless setup](#headless-setup) covers that step.
 
 <!-- docs-media: deployment-topology -->
-
+<figure class="docs-media"><img src="/media/deployment-topology/v1.svg" alt="Choose a deployment; the browser is a client in each case. Desktop app / local browser → Local server + instance data → Native or HTTP model connection; Browser via host port → Container + persistent volume → Native or HTTP model connection; Remote browser / A2A client → Private server behind auth + proxy → Native or HTTP model connection" loading="lazy" style="max-width:100%;height:auto"><figcaption>Protect remote access with authentication. Keep storage beside the server; back up its instance data.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Run it

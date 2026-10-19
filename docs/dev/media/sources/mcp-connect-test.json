@@ -1,0 +1,10 @@
+{
+  "viewport": "1440x1000 Chromium",
+  "steps": [
+    "Create an isolated FastMCP stdio server with one read-only launch_status tool returning synthetic launch readiness.",
+    "Settings \u2192 MCP \u2192 Add server: name demo; command the demo environment Python; args the demo server script.",
+    "Connect and wait for 1 server, 1 tool. Capture the actual result.",
+    "In a new chat, request demo__launch_status once; actual tool card reports 5ms and the reply reflects its three readiness values."
+  ],
+  "privacy_review": "Final capture does not expose the command path or credentials. Synthetic local tool; no external service."
+}

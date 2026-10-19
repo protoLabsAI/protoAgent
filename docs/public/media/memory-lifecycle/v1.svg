@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="680" viewBox="0 0 1200 680" role="img" aria-labelledby="title desc"><title id="title">Choose the right lifetime</title><desc id="desc">Current-chat material, saved references, and memory have different controls. Inspect, correct, or remove saved material in Memory and Knowledge. Saving does not guarantee delivery.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#5865cc" stroke-width="1.5"/></marker></defs>
+<rect width="1200" height="680" rx="20" fill="#f5f7fb"/><g font-family="Arial, Helvetica, sans-serif">
+<text x="48" y="57" fill="#182437" font-size="32" font-weight="700"><tspan x="48" dy="0">Choose the right lifetime</tspan></text>
+<text x="48" y="103" fill="#4b5870" font-size="20" font-weight="400"><tspan x="48" dy="0">Current-chat material, saved references, and memory have different controls.</tspan></text>
+<rect x="48" y="160" width="350" height="104" rx="12" fill="white" stroke="#cdd4e3"/>
+<text x="66" y="197" fill="#182437" font-size="21" font-weight="600"><tspan x="66" dy="0">Attach a file</tspan></text>
+<path d="M401 212 H417" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="423" y="160" width="350" height="104" rx="12" fill="white" stroke="#cdd4e3"/>
+<text x="441" y="197" fill="#182437" font-size="21" font-weight="400"><tspan x="441" dy="0">Use in this conversation</tspan></text>
+<path d="M776 212 H792" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="798" y="160" width="350" height="104" rx="12" fill="white" stroke="#cdd4e3"/>
+<text x="816" y="197" fill="#182437" font-size="21" font-weight="400"><tspan x="816" dy="0">Inspect chat + tool cards</tspan></text>
+<rect x="48" y="292" width="350" height="104" rx="12" fill="white" stroke="#cdd4e3"/>
+<text x="66" y="329" fill="#182437" font-size="21" font-weight="600"><tspan x="66" dy="0">Ingest a source</tspan></text>
+<path d="M401 344 H417" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="423" y="292" width="350" height="104" rx="12" fill="white" stroke="#cdd4e3"/>
+<text x="441" y="329" fill="#182437" font-size="21" font-weight="400"><tspan x="441" dy="0">Save in Knowledge → Store</tspan></text>
+<path d="M776 344 H792" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="798" y="292" width="350" height="104" rx="12" fill="white" stroke="#cdd4e3"/>
+<text x="816" y="329" fill="#182437" font-size="21" font-weight="400"><tspan x="816" dy="0">Retrieve relevant passages</tspan></text>
+<rect x="48" y="424" width="350" height="104" rx="12" fill="white" stroke="#cdd4e3"/>
+<text x="66" y="461" fill="#182437" font-size="21" font-weight="600"><tspan x="66" dy="0">Save a memory</tspan></text>
+<path d="M401 476 H417" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="423" y="424" width="350" height="104" rx="12" fill="white" stroke="#cdd4e3"/>
+<text x="441" y="461" fill="#182437" font-size="21" font-weight="400"><tspan x="441" dy="0">Eligible for later turns</tspan></text>
+<path d="M776 476 H792" stroke="#5865cc" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="798" y="424" width="350" height="104" rx="12" fill="white" stroke="#cdd4e3"/>
+<text x="816" y="461" fill="#182437" font-size="21" font-weight="400"><tspan x="816" dy="0">Inspect Memory → Injections</tspan></text>
+<text x="48" y="594" fill="#4b5870" font-size="19" font-weight="400"><tspan x="48" dy="0">Inspect, correct, or remove saved material in Memory and Knowledge. Saving does not guarantee delivery.</tspan></text>
+</g></svg>

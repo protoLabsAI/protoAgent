@@ -23,7 +23,7 @@ network restrictions. Operator routes additionally expose configuration, files,
 and plugin installation.
 
 <!-- docs-media: exposure-boundaries -->
-
+<figure class="docs-media"><img src="/media/exposure-boundaries/v1.svg" alt="A proxy rule and an application credential solve different problems. Public A2A hostname → Card: discovery · /a2a: bearer → Block /app, /api, /metrics; Separate console hostname → HTTPS proxy / optional access gate → App + API still require credentials; Optional plugin webhook → Explicitly allow only its route → Plugin verifies its signature" loading="lazy" style="max-width:100%;height:auto"><figcaption>Keep the agent privately bound. Public plugin routes are deliberate exceptions, not a reason to expose /api.</figcaption></figure>
 <!-- /docs-media -->
 
 ## The pattern

@@ -1,0 +1,18 @@
+{
+  "viewport": "1440x1000 Chromium",
+  "steps": [
+    "Test and choose a model \u2014 silent recording.",
+    "",
+    "This example starts with an already-connected Claude subscription. Adding and signing in to a connection are described in the guide.",
+    "",
+    "1. Open Settings \u2192 Model.",
+    "2. Choose Test on the connection. The actual model list returns 14 models. This confirms discovery, not completion.",
+    "3. Expand Model & runtime and choose anthropic-oauth:claude-haiku-5-5 under Primary model.",
+    "4. Save & apply.",
+    "5. Close Settings, open a new chat, and ask for a one-sentence confirmation without tools.",
+    "6. The real model replies: Yes, I can answer your questions. The composer identifies claude-haiku-5-5."
+  ],
+  "encoding": "H.264 yuv420p CRF24 faststart, no audio",
+  "verification": "Actual 14-model discovery result and real reply from newly selected claude-haiku-5-5.",
+  "privacy_review": "No account identifiers, credentials, or personal paths."
+}

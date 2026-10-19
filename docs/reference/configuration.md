@@ -51,7 +51,7 @@ through the App → Host → Agent cascade; `config explain` shows provenance an
 redacts secrets.
 
 <!-- docs-media: config-precedence -->
-
+<figure class="docs-media"><img src="/media/config-precedence/v1.svg" alt="Later configured values override earlier layers; nested maps merge and lists replace. 1 · App defaults → 2 · Host configuration → 3 · Agent configuration; Built-in defaults → &lt;box_root&gt;/host-config.yaml → &lt;instance_root&gt;/config/langgraph-config.yaml; Inspect the effective result → protoagent config explain → Read each field’s provenance" loading="lazy" style="max-width:100%;height:auto"><figcaption>Environment rules are field-specific; they are not one universal final layer. Secrets use separate overlays.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Full example

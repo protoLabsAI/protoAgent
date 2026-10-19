@@ -46,7 +46,7 @@ The asymmetry is intentional: your *backend* is trusted because it must be, your
 sandboxed because it needn't be.
 
 <!-- docs-media: plugin-boundaries -->
-
+<figure class="docs-media"><img src="/media/plugin-boundaries/v1.svg" alt="Backend Python is trusted server code; the view uses the iframe bridge. Host loads the manifest → register(registry) → Tools, routes, background work; Public iframe page → Bridge supplies bearer + theme → Authenticated /api/plugins data; Plugin-to-plugin work → Event bus or optional service → No imports of plugin internals" loading="lazy" style="max-width:100%;height:auto"><figcaption>Python plugins run with server privileges. An iframe boundary does not sandbox the plugin backend.</figcaption></figure>
 <!-- /docs-media -->
 
 ## The load lifecycle

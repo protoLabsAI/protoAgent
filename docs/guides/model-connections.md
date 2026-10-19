@@ -27,7 +27,7 @@ prove a particular model can answer, use tools, or create embeddings. The
 setup wizard's **Test connection** makes a model-completion request instead.
 
 <!-- docs-media: model-select-and-test -->
-
+<figure class="docs-media"><video controls playsinline preload="none" poster="/media/model-select-and-test/v1-poster.png" aria-label="Test an existing subscription connection, select a primary model, save, and verify a real reply in a new chat." style="max-width:100%"><source src="/media/model-select-and-test/v1.mp4"><a href="/media/model-select-and-test/v1.mp4">Download video</a></video><p><a href="/media/model-select-and-test/v1.mp4">Open video</a> · <a href="/media/model-select-and-test/v1-steps.txt">Read the text walkthrough</a></p><figcaption>Test lists models; a new chat verifies a reply. This silent example uses an already-connected Claude subscription.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Connect a subscription

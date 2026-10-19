@@ -1,0 +1,178 @@
+{
+  "memory-lifecycle": {
+    "title": "Choose the right lifetime",
+    "subtitle": "Current-chat material, saved references, and memory have different controls.",
+    "rows": [
+      [
+        "Attach a file",
+        "Use in this conversation",
+        "Inspect chat + tool cards"
+      ],
+      [
+        "Ingest a source",
+        "Save in Knowledge → Store",
+        "Retrieve relevant passages"
+      ],
+      [
+        "Save a memory",
+        "Eligible for later turns",
+        "Inspect Memory → Injections"
+      ]
+    ],
+    "note": "Inspect, correct, or remove saved material in Memory and Knowledge. Saving does not guarantee delivery."
+  },
+  "watch-goal-schedule": {
+    "title": "Choose what starts the work",
+    "subtitle": "Use the smallest mechanism that fits the task.",
+    "rows": [
+      [
+        "Schedule",
+        "A time becomes due",
+        "Run the saved prompt"
+      ],
+      [
+        "Watch",
+        "An external condition changes",
+        "Notify or act on the change"
+      ],
+      [
+        "Goal",
+        "Work → verify → repeat",
+        "Stop on completion or a limit"
+      ]
+    ],
+    "note": "The server must be running. Check schedule recovery and goal iteration limits in the linked guides."
+  },
+  "plugin-boundaries": {
+    "title": "Plugin code crosses two different boundaries",
+    "subtitle": "Backend Python is trusted server code; the view uses the iframe bridge.",
+    "rows": [
+      [
+        "Host loads the manifest",
+        "register(registry)",
+        "Tools, routes, background work"
+      ],
+      [
+        "Public iframe page",
+        "Bridge supplies bearer + theme",
+        "Authenticated /api/plugins data"
+      ],
+      [
+        "Plugin-to-plugin work",
+        "Event bus or optional service",
+        "No imports of plugin internals"
+      ]
+    ],
+    "note": "Python plugins run with server privileges. An iframe boundary does not sandbox the plugin backend."
+  },
+  "deployment-topology": {
+    "title": "The server owns the agent and its data",
+    "subtitle": "Choose a deployment; the browser is a client in each case.",
+    "rows": [
+      [
+        "Desktop app / local browser",
+        "Local server + instance data",
+        "Native or HTTP model connection"
+      ],
+      [
+        "Browser via host port",
+        "Container + persistent volume",
+        "Native or HTTP model connection"
+      ],
+      [
+        "Remote browser / A2A client",
+        "Private server behind auth + proxy",
+        "Native or HTTP model connection"
+      ]
+    ],
+    "note": "Protect remote access with authentication. Keep storage beside the server; back up its instance data."
+  },
+  "box-instance-paths": {
+    "title": "One box, separate instance roots",
+    "subtitle": "Example: PROTOAGENT_BOX_ROOT=/srv/agents with alice and bob instance IDs.",
+    "rows": [
+      [
+        "/srv/agents/",
+        "host-config.yaml",
+        "Shared machine defaults"
+      ],
+      [
+        "/srv/agents/alice/",
+        "config/ + workspace/ + stores",
+        "Alice’s private state"
+      ],
+      [
+        "/srv/agents/bob/",
+        "config/ + workspace/ + stores",
+        "Bob’s private state"
+      ]
+    ],
+    "note": "commons/ is opt-in shared material. PROTOAGENT_HOME overrides the instance root; check store overrides too."
+  },
+  "exposure-boundaries": {
+    "title": "Route public traffic deliberately",
+    "subtitle": "A proxy rule and an application credential solve different problems.",
+    "rows": [
+      [
+        "Public A2A hostname",
+        "Card: discovery · /a2a: bearer",
+        "Block /app, /api, /metrics"
+      ],
+      [
+        "Separate console hostname",
+        "HTTPS proxy / optional access gate",
+        "App + API still require credentials"
+      ],
+      [
+        "Optional plugin webhook",
+        "Explicitly allow only its route",
+        "Plugin verifies its signature"
+      ]
+    ],
+    "note": "Keep the agent privately bound. Public plugin routes are deliberate exceptions, not a reason to expose /api."
+  },
+  "config-precedence": {
+    "title": "Settings resolve through three layers",
+    "subtitle": "Later configured values override earlier layers; nested maps merge and lists replace.",
+    "rows": [
+      [
+        "1 · App defaults",
+        "2 · Host configuration",
+        "3 · Agent configuration"
+      ],
+      [
+        "Built-in defaults",
+        "<box_root>/host-config.yaml",
+        "<instance_root>/config/langgraph-config.yaml"
+      ],
+      [
+        "Inspect the effective result",
+        "protoagent config explain",
+        "Read each field’s provenance"
+      ]
+    ],
+    "note": "Environment rules are field-specific; they are not one universal final layer. Secrets use separate overlays."
+  },
+  "a2a-task-lifecycle": {
+    "title": "A task can finish or pause for input",
+    "subtitle": "A paused task is not a completed result.",
+    "rows": [
+      [
+        "SUBMITTED",
+        "WORKING",
+        "COMPLETED / FAILED / CANCELED"
+      ],
+      [
+        "Input needed during work",
+        "INPUT_REQUIRED",
+        "Follow up in the same context"
+      ],
+      [
+        "Reconnect while running",
+        "SubscribeToTask",
+        "For terminal results: GetTask"
+      ]
+    ],
+    "note": "Restart reconciliation fails interrupted work but preserves input/auth pauses. Terminal retention is 24 hours."
+  }
+}

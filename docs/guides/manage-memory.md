@@ -26,7 +26,7 @@ afterward; inspect the turn's tool cards for those reads. An old injection
 record may refer to an entry you have since deleted.
 
 <!-- docs-media: memory-inspector -->
-
+<figure class="docs-media"><img src="/media/memory-inspector/v1.png" alt="The injection inspector shows the saved demo preference for three short bullet points among the memories used by one turn." loading="lazy" style="max-width:100%;height:auto"><figcaption>Inspect the sources this turn actually received. Saving a fact does not guarantee that every turn receives it.</figcaption></figure>
 <!-- /docs-media -->
 
 ## Correct or remove a memory {#correct-a-memory}

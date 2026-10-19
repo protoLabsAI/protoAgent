@@ -1,3 +1,28 @@
 {
-  "files": []
+  "files": [
+    "a2a-task-lifecycle/v1.svg",
+    "app-layout/v1.png",
+    "attach-and-download/v1-poster.png",
+    "attach-and-download/v1-steps.txt",
+    "attach-and-download/v1.mp4",
+    "box-instance-paths/v1.svg",
+    "config-precedence/v1.svg",
+    "deployment-topology/v1.svg",
+    "exposure-boundaries/v1.svg",
+    "first-reply/v1.png",
+    "knowledge-import-result/v1.png",
+    "mcp-connect-test/v1.png",
+    "memory-inspector/v1.png",
+    "memory-lifecycle/v1.svg",
+    "model-select-and-test/v1-poster.png",
+    "model-select-and-test/v1-steps.txt",
+    "model-select-and-test/v1.mp4",
+    "plugin-boundaries/v1.svg",
+    "schedule-state/v1.png",
+    "setup-model-test/v1.png",
+    "skill-create-run/v1-poster.png",
+    "skill-create-run/v1-steps.txt",
+    "skill-create-run/v1.mp4",
+    "watch-goal-schedule/v1.svg"
+  ]
 }

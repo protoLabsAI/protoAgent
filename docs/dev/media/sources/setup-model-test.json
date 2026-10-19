@@ -1,0 +1,13 @@
+{
+  "steps": [
+    "Open a fresh isolated instance without a setup-complete marker.",
+    "Welcome \u2192 Basic archetype \u2192 Name and settings \u2192 Brain.",
+    "Select Claude subscription, load available models, run Test connection.",
+    "Wait for Connection OK; capture without account identifiers or credentials."
+  ],
+  "viewport": "1440x1000",
+  "browser": "Chromium",
+  "export_sha256": "e5b533aab021d7b6390716fd4ec5fdd31579d1e33d2a74bcf49a745f77a34b1c",
+  "privacy_review": "Synthetic isolated instance; no credentials, email, personal paths, or live pairing codes.",
+  "result": "Actual backend result; no mocked network responses."
+}

@@ -11,9 +11,10 @@ import sys
 
 import pytest
 
-_load_docs = runpy.run_path("tests/test_docs_plugin.py")["_load_docs"]
+ROOT = Path(__file__).resolve().parents[1]
+_load_docs = runpy.run_path(str(ROOT / "tests/test_docs_plugin.py"))["_load_docs"]
 
-API = runpy.run_path("scripts/docs_media.py")
+API = runpy.run_path(str(ROOT / "scripts/docs_media.py"))
 
 
 @pytest.fixture
@@ -224,15 +225,15 @@ def test_media_route_exact_allowlist_and_containment(media_repo, monkeypatch):
 
 @pytest.mark.platform_sensitive
 def test_committed_media_is_current():
-    subprocess.run([sys.executable, "scripts/docs_media.py", "--check"], check=True)
+    subprocess.run([sys.executable, str(ROOT / "scripts/docs_media.py"), "--check"], check=True)
 
 
 def test_packaging_includes_only_media_subtree():
-    assert '"docs/public/media": "docs/public/media"' in Path("hatch_build.py").read_text(encoding="utf-8")
-    assert '("docs/public/media", "docs/public/media")' in Path("apps/desktop/sidecar/build_sidecar.py").read_text(
+    assert '"docs/public/media": "docs/public/media"' in (ROOT / "hatch_build.py").read_text(encoding="utf-8")
+    assert '("docs/public/media", "docs/public/media")' in (ROOT / "apps/desktop/sidecar/build_sidecar.py").read_text(
         encoding="utf-8"
     )
-    assert '"docs/public": "docs/public"' not in Path("hatch_build.py").read_text(encoding="utf-8")
+    assert '"docs/public": "docs/public"' not in (ROOT / "hatch_build.py").read_text(encoding="utf-8")
 
 
 def test_ready_requires_review_metadata(media_repo):

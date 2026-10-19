@@ -1,0 +1,8 @@
+{
+  "viewport": "1440x900 Chromium",
+  "steps": "See the published v1-steps.txt for complete reproducible actions and synthetic input.",
+  "synthetic_input": "Launch notes: The demo now supports text search. File import is ready. Video transcription still needs a configured model.",
+  "encoding": "ffmpeg libx264 -crf 24 -pix_fmt yuv420p -movflags +faststart -an",
+  "verification": "Actual saved skill and actual model output; three summary bullets inspected.",
+  "capture_notes": "Earlier failed automation takes discarded. Duplicate composer selectors narrowed to visible elements; prior demo skill deleted through its API before recording."
+}

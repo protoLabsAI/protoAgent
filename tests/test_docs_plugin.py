@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 def _load_docs():
     """Load the multi-file docs plugin as a package (so its relative imports resolve) —
     mirrors graph.plugins.loader._load_plugin_module."""
@@ -16,8 +19,8 @@ def _load_docs():
         sys.modules.pop(n, None)
     spec = importlib.util.spec_from_file_location(
         name,
-        Path("plugins/docs/__init__.py"),
-        submodule_search_locations=["plugins/docs"],
+        (ROOT / "plugins/docs/__init__.py"),
+        submodule_search_locations=[str(ROOT / "plugins/docs")],
     )
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
@@ -177,11 +180,11 @@ def test_generated_navigation_and_landings_are_in_sync() -> None:
     import importlib.util
     import json
 
-    spec = importlib.util.spec_from_file_location("gen_docs_nav_under_test", Path("scripts/gen_docs_nav.py"))
+    spec = importlib.util.spec_from_file_location("gen_docs_nav_under_test", (ROOT / "scripts/gen_docs_nav.py"))
     gen = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(gen)
-    committed = json.loads(Path("plugins/docs/nav.json").read_text(encoding="utf-8"))
+    committed = json.loads((ROOT / "plugins/docs/nav.json").read_text(encoding="utf-8"))
     assert gen.route("index.md") == "/"
     assert gen.route("guides/index.md") == "/guides/"
     assert gen.route("guides/reindex.md") == "/guides/reindex"
@@ -353,7 +356,7 @@ def test_alias_is_readable_but_search_returns_canonical_pages() -> None:
     # This legacy website URL was never in the reader's bundled corpus. Search
     # classification must not silently broaden the read-access gate.
     import json
-    catalog = json.loads(Path("plugins/docs/catalog.json").read_text(encoding="utf-8"))
+    catalog = json.loads((ROOT / "plugins/docs/catalog.json").read_text(encoding="utf-8"))
     website_alias = "how-to/build-a-plugin-view.md"
     assert catalog["website_pages"][website_alias]["canonical"] == "guides/build-a-plugin-view.md"
     assert not index.has(website_alias)
@@ -394,7 +397,7 @@ def test_catalog_rejects_dangling_canonical_on_current_page(tmp_path, monkeypatc
     import importlib.util
     import json
 
-    spec = importlib.util.spec_from_file_location("nav_validation", Path("scripts/gen_docs_nav.py"))
+    spec = importlib.util.spec_from_file_location("nav_validation", (ROOT / "scripts/gen_docs_nav.py"))
     gen = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gen)
     catalog = json.loads(gen.CATALOG.read_text(encoding="utf-8"))

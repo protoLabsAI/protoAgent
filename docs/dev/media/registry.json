@@ -592,12 +592,12 @@
     "setup-model-test": {
       "priority": "P1",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Recognize a successful model test before finishing setup.",
       "brief": "Capture the Brain step with a named demo connection, selected model, and successful Test connection result. Crop to the wizard; use dummy credentials. Do not imply Probe is a completion test.",
-      "alt": "Recognize a successful model test before finishing setup.",
-      "caption": "Recognize a successful model test before finishing setup.",
+      "alt": "The setup wizard shows Claude subscription selected, a model name, and a successful real connection test.",
+      "caption": "Run Test connection before continuing. This example uses a Claude subscription; gateway setup uses the same test step.",
       "placements": [
         {
           "page": "tutorials/first-agent.md",
@@ -609,23 +609,23 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "setup-model-test/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/setup-model-test.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "first-reply": {
       "priority": "P1",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Show the observable endpoint of onboarding.",
       "brief": "Capture a clean chat with the exact one-sentence hello prompt and one reply. No plugins or unrelated panels; make the composer and active agent visible.",
-      "alt": "Show the observable endpoint of onboarding.",
-      "caption": "Show the observable endpoint of onboarding.",
+      "alt": "Docs demo answers “Say hello in one sentence.” The completed reply appears above the chat composer.",
+      "caption": "A completed model reply confirms that the connection can answer. This capture uses an isolated demo agent.",
       "placements": [
         {
           "page": "tutorials/first-agent.md",
@@ -637,23 +637,23 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "first-reply/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/first-reply.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+      "reviewer": "Codex"
     },
     "app-layout": {
       "priority": "P1",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Locate the rail, conversation tabs, composer, and tool result.",
       "brief": "Annotated still with four numbered callouts matching the nearby guide. Use a modest window size with legible labels. Keep annotation source separate from the export.",
-      "alt": "Locate the rail, conversation tabs, composer, and tool result.",
-      "caption": "Locate the rail, conversation tabs, composer, and tool result.",
+      "alt": "Four numbered callouts mark the agent switcher, left navigation rail, chat workspace, and right work rail.",
+      "caption": "The numbered callouts match the four layout areas described above.",
       "placements": [
         {
           "page": "guides/react-tauri-ui.md",
@@ -665,23 +665,23 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "app-layout/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/app-layout.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "model-select-and-test": {
       "priority": "P1",
       "kind": "video",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Distinguish adding a connection, testing its model list, and selecting the primary model.",
-      "brief": "A 20–40 second silent capture: add a demo endpoint, Test, choose Primary model, Save & apply, send a short chat. Hold each success state. Supply a poster and numbered text walkthrough.",
-      "alt": "Distinguish adding a connection, testing its model list, and selecting the primary model.",
-      "caption": "Distinguish adding a connection, testing its model list, and selecting the primary model.",
+      "brief": "Record a real connected subscription: Test model discovery, choose Primary model, Save & apply, and verify a new-chat reply. Connection creation and sign-in remain in the text; never record credentials.",
+      "alt": "Test an existing subscription connection, select a primary model, save, and verify a real reply in a new chat.",
+      "caption": "Test lists models; a new chat verifies a reply. This silent example uses an already-connected Claude subscription.",
       "placements": [
         {
           "page": "guides/model-connections.md",
@@ -693,23 +693,24 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
-      "poster": null,
-      "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "asset": "model-select-and-test/v1.mp4",
+      "poster": "model-select-and-test/v1-poster.png",
+      "transcript": "model-select-and-test/v1-steps.txt",
+      "source": "docs/dev/media/sources/model-select-and-test.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex",
+      "has_audio": false
     },
     "attach-and-download": {
       "priority": "P1",
       "kind": "video",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Show the difference between an input attachment and a downloadable output.",
-      "brief": "Two short scenes in one 20–40 second silent clip: attach a small public sample and ask about it; request a document and download its artifact. Use a poster with both states and a text walkthrough.",
-      "alt": "Show the difference between an input attachment and a downloadable output.",
-      "caption": "Show the difference between an input attachment and a downloadable output.",
+      "brief": "Reuse the reviewed real public-README attachment and Markdown-artifact recording. Retain the actual model wait, poster, and text alternative. Caption clearly distinguishes an available Download action from a completed local save.",
+      "alt": "A public README is attached, summarized, and returned as a downloadable Markdown artifact.",
+      "caption": "Attach a public document and inspect the generated result. This 54-second silent recording shows real model wait time; select Download to save your own copy.",
       "placements": [
         {
           "page": "guides/documents-and-files.md",
@@ -721,23 +722,24 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
-      "poster": null,
-      "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "asset": "attach-and-download/v1.mp4",
+      "poster": "attach-and-download/v1-poster.png",
+      "transcript": "attach-and-download/v1-steps.txt",
+      "source": "docs/dev/media/sources/attach-and-download.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex",
+      "has_audio": false
     },
     "memory-inspector": {
       "priority": "P1",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Help readers find the evidence behind a reply.",
       "brief": "Capture an expanded turn memory inspector with synthetic facts and a visible source. Annotate the route and one source entry; avoid exposing real conversations.",
-      "alt": "Help readers find the evidence behind a reply.",
-      "caption": "Help readers find the evidence behind a reply.",
+      "alt": "The injection inspector shows the saved demo preference for three short bullet points among the memories used by one turn.",
+      "caption": "Inspect the sources this turn actually received. Saving a fact does not guarantee that every turn receives it.",
       "placements": [
         {
           "page": "guides/manage-memory.md",
@@ -749,23 +751,23 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "memory-inspector/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/memory-inspector.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "knowledge-import-result": {
       "priority": "P1",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Show what successful ingestion and later retrieval look like.",
       "brief": "A two-panel still: import a public sample into Knowledge → Store, then show its title in search results. Include the completion state; no embedding requirement implied.",
-      "alt": "Show what successful ingestion and later retrieval look like.",
-      "caption": "Show what successful ingestion and later retrieval look like.",
+      "alt": "A search for transcription returns the imported Demo launch notes with its source filename and pending review status.",
+      "caption": "Search for a distinctive term to verify the imported content. Pending review means the entry still needs review.",
       "placements": [
         {
           "page": "guides/ingestion.md",
@@ -777,13 +779,13 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "knowledge-import-result/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/knowledge-import-result.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "plugin-install-result": {
       "priority": "P1",
@@ -816,12 +818,12 @@
     "mcp-connect-test": {
       "priority": "P1",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Locate the MCP connection controls and success state.",
       "brief": "Capture Settings → MCP with a harmless demo server, connected status, and discovered tools. A second crop may show Add server. Never include environment secrets.",
-      "alt": "Locate the MCP connection controls and success state.",
-      "caption": "Locate the MCP connection controls and success state.",
+      "alt": "Settings shows the demo stdio MCP server connected with one discovered tool.",
+      "caption": "A connected server lists its discovered tools. Verify a small read-only call separately; discovery alone does not prove a tool works.",
       "placements": [
         {
           "page": "guides/mcp.md",
@@ -833,13 +835,13 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "mcp-connect-test/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/mcp-connect-test.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "browser-control": {
       "priority": "P2",
@@ -899,12 +901,12 @@
     "memory-lifecycle": {
       "priority": "P2",
       "kind": "diagram",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Explain attachment, stored knowledge, and recalled context as different lifetimes.",
       "brief": "Draw three clearly labelled paths: attachment → current chat; ingest → saved store → retrieval; memory → later turns. Include inspect/edit/delete actions and retain the prose as the full explanation. Export SVG from an editable diagram source.",
-      "alt": "Explain attachment, stored knowledge, and recalled context as different lifetimes.",
-      "caption": "Explain attachment, stored knowledge, and recalled context as different lifetimes.",
+      "alt": "Current-chat material, saved references, and memory have different controls. Attach a file → Use in this conversation → Inspect chat + tool cards; Ingest a source → Save in Knowledge → Store → Retrieve relevant passages; Save a memory → Eligible for later turns → Inspect Memory → Injections",
+      "caption": "Inspect, correct, or remove saved material in Memory and Knowledge. Saving does not guarantee delivery.",
       "placements": [
         {
           "page": "explanation/memory-and-knowledge.md",
@@ -915,23 +917,23 @@
         "src/knowledge"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "memory-lifecycle/v1.svg",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/memory-lifecycle.svg",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+      "reviewer": "Codex"
     },
     "skill-create-run": {
       "priority": "P1",
       "kind": "video",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Make the first app-authored skill concrete.",
       "brief": "A 20–40 second silent clip creating the tutorial skill in Settings → Skills, saving it, then invoking its slash name in chat. Poster shows the saved skill; transcript includes its short text.",
-      "alt": "Make the first app-authored skill concrete.",
-      "caption": "Make the first app-authored skill concrete.",
+      "alt": "Create the tldr skill, enable its slash command, and receive a real three-bullet summary in chat.",
+      "caption": "Create a skill and invoke it with /tldr. This silent recording enables the slash command during creation; it can also be enabled later by editing the skill.",
       "placements": [
         {
           "page": "tutorials/first-skill.md",
@@ -943,23 +945,24 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
-      "poster": null,
-      "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "asset": "skill-create-run/v1.mp4",
+      "poster": "skill-create-run/v1-poster.png",
+      "transcript": "skill-create-run/v1-steps.txt",
+      "source": "docs/dev/media/sources/skill-create-run.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex",
+      "has_audio": false
     },
     "schedule-state": {
       "priority": "P1",
       "kind": "image",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Recognize a saved schedule and its next firing time.",
-      "brief": "Capture a synthetic one-time task in the Schedule view with timezone, enabled state, and next run visible. Add a small second crop showing the Activity result; use fixed sample dates.",
-      "alt": "Recognize a saved schedule and its next firing time.",
-      "caption": "Recognize a saved schedule and its next firing time.",
+      "brief": "Capture a real sample job with its saved timezone, prompt, next and last fire times. Verify a completed Feed result separately; a Last fire timestamp alone is not proof of a successful reply.",
+      "alt": "The sample job shows a daily schedule in America/Los_Angeles, next and last fire times, its prompt, and Edit and Delete controls.",
+      "caption": "Inspect the saved timezone and next fire. Last fire records dispatch; confirm the completed reply in Feed.",
       "placements": [
         {
           "page": "guides/scheduler.md",
@@ -971,13 +974,13 @@
         "package-lock.json"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "schedule-state/v1.png",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/schedule-state.json",
+      "verified_on": "2026-10-19",
+      "verified_commit": "29bdcf526a694f59fb8ae489e3d3e7119476102e",
+      "reviewer": "Codex"
     },
     "goal-progress": {
       "priority": "P1",
@@ -1010,12 +1013,12 @@
     "watch-goal-schedule": {
       "priority": "P2",
       "kind": "diagram",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Explain the different triggers and stopping conditions.",
       "brief": "Three short lanes: scheduled time → run; watch condition → notify/act; goal → work/verify/repeat until stop. Label missed-fire and iteration limits by linking text rather than packing config into the drawing.",
-      "alt": "Explain the different triggers and stopping conditions.",
-      "caption": "Explain the different triggers and stopping conditions.",
+      "alt": "Use the smallest mechanism that fits the task. Schedule → A time becomes due → Run the saved prompt; Watch → An external condition changes → Notify or act on the change; Goal → Work → verify → repeat → Stop on completion or a limit",
+      "caption": "The server must be running. Check schedule recovery and goal iteration limits in the linked guides.",
       "placements": [
         {
           "page": "guides/watches.md",
@@ -1026,13 +1029,13 @@
         "src/scheduler"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "watch-goal-schedule/v1.svg",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/watch-goal-schedule.svg",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+      "reviewer": "Codex"
     },
     "delegate-room-round": {
       "priority": "P2",
@@ -1121,12 +1124,12 @@
     "plugin-boundaries": {
       "priority": "P2",
       "kind": "diagram",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Explain the plugin boundary and supported communication paths.",
       "brief": "Show host, registry, plugin tool/router/view, event bus, and optional service calls. Mark public iframe page vs authenticated data API. Do not imply the event bus is the only inter-plugin path.",
-      "alt": "Explain the plugin boundary and supported communication paths.",
-      "caption": "Explain the plugin boundary and supported communication paths.",
+      "alt": "Backend Python is trusted server code; the view uses the iframe bridge. Host loads the manifest → register(registry) → Tools, routes, background work; Public iframe page → Bridge supplies bearer + theme → Authenticated /api/plugins data; Plugin-to-plugin work → Event bus or optional service → No imports of plugin internals",
+      "caption": "Python plugins run with server privileges. An iframe boundary does not sandbox the plugin backend.",
       "placements": [
         {
           "page": "explanation/plugin-architecture.md",
@@ -1137,23 +1140,23 @@
         "src/graph/plugins"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "plugin-boundaries/v1.svg",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/plugin-boundaries.svg",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+      "reviewer": "Codex"
     },
     "deployment-topology": {
       "priority": "P2",
       "kind": "diagram",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Help operators choose a topology and understand browser versus server location.",
       "brief": "Compare desktop/local service, Docker host, and remote host with an authenticated access boundary. Draw model connection as native OR HTTP endpoint; storage sits beside the server, not the browser.",
-      "alt": "Help operators choose a topology and understand browser versus server location.",
-      "caption": "Help operators choose a topology and understand browser versus server location.",
+      "alt": "Choose a deployment; the browser is a client in each case. Desktop app / local browser → Local server + instance data → Native or HTTP model connection; Browser via host port → Container + persistent volume → Native or HTTP model connection; Remote browser / A2A client → Private server behind auth + proxy → Native or HTTP model connection",
+      "caption": "Protect remote access with authentication. Keep storage beside the server; back up its instance data.",
       "placements": [
         {
           "page": "guides/headless.md",
@@ -1164,23 +1167,23 @@
         "src/infra/paths.py"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "deployment-topology/v1.svg",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/deployment-topology.svg",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+      "reviewer": "Codex"
     },
     "box-instance-paths": {
       "priority": "P1",
       "kind": "diagram",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Explain what is shared and what is isolated across instances.",
       "brief": "Draw one box root containing host config and two named instance roots, each with private config/stores/workspace. Show optional commons separately. Use exact path names from infra.paths and the guide.",
-      "alt": "Explain what is shared and what is isolated across instances.",
-      "caption": "Explain what is shared and what is isolated across instances.",
+      "alt": "Example: PROTOAGENT_BOX_ROOT=/srv/agents with alice and bob instance IDs. /srv/agents/ → host-config.yaml → Shared machine defaults; /srv/agents/alice/ → config/ + workspace/ + stores → Alice’s private state; /srv/agents/bob/ → config/ + workspace/ + stores → Bob’s private state",
+      "caption": "commons/ is opt-in shared material. PROTOAGENT_HOME overrides the instance root; check store overrides too.",
       "placements": [
         {
           "page": "guides/multi-instance.md",
@@ -1191,13 +1194,13 @@
         "src/infra/paths.py"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "box-instance-paths/v1.svg",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/box-instance-paths.svg",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+      "reviewer": "Codex"
     },
     "fleet-create-result": {
       "priority": "P2",
@@ -1257,12 +1260,12 @@
     "exposure-boundaries": {
       "priority": "P1",
       "kind": "diagram",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Clarify which network surfaces require authentication before exposure.",
       "brief": "Draw public internet, proxy/tunnel, operator API, A2A, and public plugin webhooks as separate routes. Label authentication boundaries from current source, not a generic all-traffic-lock icon.",
-      "alt": "Clarify which network surfaces require authentication before exposure.",
-      "caption": "Clarify which network surfaces require authentication before exposure.",
+      "alt": "A proxy rule and an application credential solve different problems. Public A2A hostname → Card: discovery · /a2a: bearer → Block /app, /api, /metrics; Separate console hostname → HTTPS proxy / optional access gate → App + API still require credentials; Optional plugin webhook → Explicitly allow only its route → Plugin verifies its signature",
+      "caption": "Keep the agent privately bound. Public plugin routes are deliberate exceptions, not a reason to expose /api.",
       "placements": [
         {
           "page": "guides/exposing-protoagent.md",
@@ -1273,13 +1276,13 @@
         "src/security"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "exposure-boundaries/v1.svg",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/exposure-boundaries.svg",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+      "reviewer": "Codex"
     },
     "trace-correlation": {
       "priority": "P3",
@@ -1311,12 +1314,12 @@
     "config-precedence": {
       "priority": "P2",
       "kind": "diagram",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Make configuration precedence and file locations easier to scan.",
       "brief": "Draw the actual layers from config explain, with direction of overrides and separate box/instance locations. Keep environment variables and secret values out of the image. Link the field tables for exhaustive detail.",
-      "alt": "Make configuration precedence and file locations easier to scan.",
-      "caption": "Make configuration precedence and file locations easier to scan.",
+      "alt": "Later configured values override earlier layers; nested maps merge and lists replace. 1 · App defaults → 2 · Host configuration → 3 · Agent configuration; Built-in defaults → <box_root>/host-config.yaml → <instance_root>/config/langgraph-config.yaml; Inspect the effective result → protoagent config explain → Read each field’s provenance",
+      "caption": "Environment rules are field-specific; they are not one universal final layer. Secrets use separate overlays.",
       "placements": [
         {
           "page": "reference/configuration.md",
@@ -1328,23 +1331,23 @@
         "src/graph/config.py"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "config-precedence/v1.svg",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/config-precedence.svg",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+      "reviewer": "Codex"
     },
     "a2a-task-lifecycle": {
       "priority": "P3",
       "kind": "diagram",
-      "status": "planned",
-      "owner": "Docs maintainers",
+      "status": "ready",
+      "owner": "Codex",
       "purpose": "Visualize task transitions without duplicating the full protocol reference.",
       "brief": "Replace or accompany the text diagram with an SVG state diagram of the documented states, including input-required and terminal outcomes. Verify transitions against the implementation; retain textual state definitions.",
-      "alt": "Visualize task transitions without duplicating the full protocol reference.",
-      "caption": "Visualize task transitions without duplicating the full protocol reference.",
+      "alt": "A paused task is not a completed result. SUBMITTED → WORKING → COMPLETED / FAILED / CANCELED; Input needed during work → INPUT_REQUIRED → Follow up in the same context; Reconnect while running → SubscribeToTask → For terminal results: GetTask",
+      "caption": "Restart reconciliation fails interrupted work but preserves input/auth pauses. Terminal retention is 24 hours.",
       "placements": [
         {
           "page": "explanation/a2a-protocol.md",
@@ -1355,13 +1358,13 @@
         "src/a2a_impl"
       ],
       "refresh_when": "The shown controls, labels, paths, or behavior change; review after changes to the watched source.",
-      "asset": null,
+      "asset": "a2a-task-lifecycle/v1.svg",
       "poster": null,
       "transcript": null,
-      "source": null,
-      "verified_on": null,
-      "verified_commit": null,
-      "reviewer": null
+      "source": "docs/dev/media/sources/a2a-task-lifecycle.svg",
+      "verified_on": "2026-10-19",
+      "verified_commit": "7d90560d1f3656790e65d81e0c1e16829afd1324",
+      "reviewer": "Codex"
     }
   },
   "tracker": "https://github.com/protoLabsAI/protoAgent/issues/4332"

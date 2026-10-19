@@ -27,7 +27,7 @@ agent’s machine. Scanned PDFs may lack extractable text. Remove unwanted impor
 using [Manage memory](/guides/manage-memory#correct-a-memory).
 
 <!-- docs-media: knowledge-import-result -->
-
+<figure class="docs-media"><img src="/media/knowledge-import-result/v1.png" alt="A search for transcription returns the imported Demo launch notes with its source filename and pending review status." loading="lazy" style="max-width:100%;height:auto"><figcaption>Search for a distinctive term to verify the imported content. Pending review means the entry still needs review.</figcaption></figure>
 <!-- /docs-media -->
 
 ## From the agent
