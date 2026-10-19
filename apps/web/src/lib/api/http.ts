@@ -24,6 +24,28 @@ export class ApiError extends Error {
   }
 }
 
+/** ADR 0121 D4: a paired phone's credential is `device` scope — it can use the whole product
+ *  but the server refuses it anything that changes who can get in (pairing, plugin lifecycle,
+ *  secrets, credential-plane config), with a 403 whose code is this. */
+export const DEVICE_SCOPE_CODE = "device_scope";
+export const DEVICE_SCOPE_MESSAGE = "This device can't change pairing or credentials — use a full-access device.";
+
+/** True for the server's device-scope refusal (see `DEVICE_SCOPE_CODE`). */
+export function isDeviceScopeError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403 && error.code === DEVICE_SCOPE_CODE;
+}
+
+/** The readable message for a device-scope refusal BODY (for the few calls that read a
+ *  response directly instead of through `request`), or null when it isn't one. Prefers the
+ *  server's reason — a config refusal names the key it refused. */
+export function deviceScopeMessage(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const b = body as { error?: unknown; detail?: unknown };
+  const d = b.detail && typeof b.detail === "object" ? (b.detail as { code?: unknown; reason?: unknown }) : null;
+  if (b.error !== DEVICE_SCOPE_CODE && d?.code !== DEVICE_SCOPE_CODE) return null;
+  return typeof d?.reason === "string" && d.reason ? d.reason : DEVICE_SCOPE_MESSAGE;
+}
+
 /** Pull a human message (+ a machine code) out of an error response body. FastAPI's
  *  `detail` is a string for plain HTTPExceptions, but routes that raise a STRUCTURED detail
  *  send `{code, reason}` — and a validation error sends a list. Interpolating either of those
@@ -138,7 +160,9 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     // But a MEMBER-scoped 401 is the focused remote's bad token, not the hub's — don't
     // hijack the hub AuthGate; the boot gate / fleet panel own that recovery.
     if (response.status === 401 && !isMemberScoped(path, host)) notifyAuthRequired();
-    throw new ApiError(response.status, detail || "request failed", code);
+    // A device-scope refusal always reads as a sentence, never a bare code (ADR 0121 D4).
+    const message = code === DEVICE_SCOPE_CODE && (!detail || detail === code) ? DEVICE_SCOPE_MESSAGE : detail;
+    throw new ApiError(response.status, message || "request failed", code);
   }
 
   return (await response.json()) as T;

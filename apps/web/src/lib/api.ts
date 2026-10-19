@@ -15,7 +15,11 @@ import { workspaceApi } from "./api/workspace";
 export { agentHref, apiUrl, authToken, currentSlug, isHostConsole, memberPath } from "./api/routing";
 export {
   ApiError,
+  DEVICE_SCOPE_CODE,
+  DEVICE_SCOPE_MESSAGE,
+  deviceScopeMessage,
   is401,
+  isDeviceScopeError,
   isAgentNotRunning,
   isAgentUnreachable,
   isColdStart,
@@ -42,7 +46,7 @@ export {
 // #3822: the `api` object's methods live in per-domain slices under ./api/*; re-export the
 // types and helpers that used to be defined here alongside it.
 export { isDesktopWebview } from "./api/desktop";
-export type { PairAddress, PairedDevice, PairHost, PairingStart, PairReach, RestartInfo, ServeResult, TailscaleInfo } from "./api/runtime";
+export type { DeviceCaller, DeviceScope, PairAddress, PairedDevice, PairHost, PairingStart, PairReach, RestartInfo, ServeResult, TailscaleInfo } from "./api/runtime";
 export type { FsDiff, FsDiffFile, FsFile, FsStamp } from "./api/workspace";
 
 /** Boot hook (ADR 0042 slug routing → #806): a window opening `/app/agent/<slug>/` ensures

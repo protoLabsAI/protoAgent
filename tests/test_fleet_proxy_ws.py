@@ -447,7 +447,7 @@ def real_open_hub(monkeypatch):
     monkeypatch.setattr(auth, "_API_KEY", [""])
     monkeypatch.setattr(auth, "_FEDERATION", [None])
     monkeypatch.setattr(auth, "_FLEET", [None])
-    monkeypatch.setattr(auth, "_device_token_ok", lambda t: False)
+    monkeypatch.setattr(auth, "_device_for_token", lambda t: None)
     assert auth.bearer_tier("attacker") == "operator"  # the trap this guards against
     return auth
 

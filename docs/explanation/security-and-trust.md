@@ -132,6 +132,60 @@ looks like the proxy and shares its 5 tries.
 
 The buckets live in memory. A restart empties them, and it also clears every pending code.
 
+## Device tokens
+
+Each paired phone, tablet or agent hub has its own token
+([ADR 0087](../adr/0087-device-pairing-and-per-device-tokens.md)), so you can revoke one without
+signing out anything else. Two separate properties decide what a token can do.
+
+**Trust tier: who the caller is.** Every device token is the **operator** tier, the same as the
+auth token. Chat, goals, knowledge trust and everything else that asks "is this the operator?"
+treat a paired phone as you. A phone isn't a second-class user of the product.
+
+**Credential scope: whether it can change who gets in.**
+([ADR 0121](../adr/0121-device-pairing-over-an-operator-supplied-public-url.md) D4.)
+
+| Credential | Scope |
+|---|---|
+| The auth token, `X-API-Key`, the fleet service token, another agent's hub | `full` |
+| A phone or tablet paired since ADR 0121, over any network | `device` (shown as **Limited**) |
+| A phone or tablet paired before ADR 0121 | `full` (shown as **Full access**, with a **Limit** action) |
+
+A `device`-scope token can use the whole product, but the server refuses it (`403 device_scope`)
+everything that would let it keep access after you revoke it, or hand access to someone else:
+
+- pairing: minting or cancelling codes, pairing another agent, and serving over tailnet HTTPS;
+- restarting the agent;
+- renaming, removing or promoting any device except itself (it can rename and unpair itself);
+- plugin lifecycle: install, update, enable, remove, sync, bundles and plugin setup steps;
+- MCP servers: adding, importing, changing or removing one. Like a plugin, an MCP server is a
+  command the server runs, so a phone that added one would leave host code behind that keeps
+  running after you revoke it. The same goes for delegate and ACP agent commands, lifecycle
+  hooks and the editor command, which are refused as config writes;
+- the secrets manager and provider sign-ins (`/api/secrets/*`, `/api/config/oauth/*`);
+- [credential-plane settings](../reference/configuration.md#credential-plane-keys): auth tokens,
+  `network.*`, `devices.*`, egress, `filesystem.allow_run`, the secrets manager, the plugin
+  lists, and every setting that holds a command the server runs (`mcp.*`, `delegates`,
+  `lifecycle_hooks`, `acp.*`, `filesystem.editor_command`).
+
+The full route list is in the [operator API reference](../reference/operator-api.md#device-scope-refusals).
+The check runs in the auth middleware, matches the fleet-proxied form of each path
+(`/agents/<slug>/…`) too, and runs before the hub swaps in its fleet credential, so a phone
+can't reach these routes on a fleet member either. Stream tokens (`/api/sse-token`) carry the
+scope of the device that minted them.
+
+To give a phone full access, promote it from a full-access device in
+[Settings ▸ Devices](../guides/pairing.md#full-access-and-limited). A phone can't promote itself.
+
+**The honest limit: scope is not a sandbox.** A `device`-scope phone can still chat, and a chat
+turn runs with the agent's tools. If the agent can run shell commands or read files, a turn
+started from the phone can read anything the server user can, including the auth token in the
+config. What the scope guarantees is that revoking a phone is final through the console's own
+surface: it can't mint itself a new token, install a plugin or change the network settings on
+the way out. To contain tools, use tool policy (`filesystem.allow_run: false`) and, for an
+internet-facing console, an identity-aware proxy in front of it. A narrower tool policy for
+`device`-scope turns is possible future work, not something this release does.
+
 ## See also
 
 - [Building a plugin view](../guides/building-react-plugin-views.md) — the sandboxed-iframe plugin UI model.

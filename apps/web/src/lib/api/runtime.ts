@@ -10,7 +10,7 @@
 import type { NodeRuntimePayload, PythonRuntimePayload, RuntimeStatus } from "../types";
 import { cancelBody, type PairKind } from "../agentPairing";
 import { apiUrl, applyAuth } from "./routing";
-import { request } from "./http";
+import { deviceScopeMessage, request } from "./http";
 import { tauriCore } from "./desktop";
 
 /** A reachable address in a pairing-start answer. For a PHONE code `url` is the full
@@ -70,7 +70,14 @@ export type PairedDevice = {
   /** Server-computed against its own last-seen write throttle (#4336 S3), so the badge can't
    *  drift from how often the stamp is refreshed. Absent from older servers. */
   active?: boolean;
+  /** Credential scope (ADR 0121 D4): `device` = "Limited" (can't change pairing, plugins,
+   *  secrets or credential-plane settings); `full` = "Full access". Agents are always `full`.
+   *  Absent from servers before ADR 0121. */
+  scope?: DeviceScope;
 };
+export type DeviceScope = "full" | "device";
+/** Who is ASKING — the credential this request used, as the server classified it. */
+export type DeviceCaller = { scope: DeviceScope; device_id: string | null };
 export type PairingStart =
   | {
       ok: true;
@@ -107,8 +114,16 @@ export const runtimeApi = {
   // ── Device pairing (ADR 0087) ──
   // The CLAIM half deliberately lives outside this object (lib/pairing.ts): `request`
   // attaches the operator bearer, and claiming runs precisely when there isn't one.
-  devices() {
-    return request<{ devices: PairedDevice[] }>("/api/devices");
+  devices(opts: { host?: boolean } = {}) {
+    return request<{ devices: PairedDevice[]; caller?: DeviceCaller }>("/api/devices", opts);
+  },
+  /** Promote (`full`) or limit (`device`) a paired phone (ADR 0121 D4). The server refuses
+   *  it unless THIS credential is full scope — so a phone can't promote itself. */
+  setDeviceScope(id: string, scope: DeviceScope) {
+    return request<{ ok: boolean; device: PairedDevice }>(`/api/devices/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: { scope },
+    });
   },
   /** Start pairing.
    *
@@ -131,7 +146,7 @@ export const runtimeApi = {
     if (res.ok) return { ok: true, ...data } as PairingStart;
     return {
       ok: false,
-      error: String(data?.error || `${res.status} ${res.statusText}`),
+      error: deviceScopeMessage(data) ?? String(data?.error || `${res.status} ${res.statusText}`),
       available: Array.isArray(data?.available) ? data.available : [],
       bind: String(data?.bind || ""),
       // Absent (an older server) is treated as NOT configured, so the flow mints rather than
@@ -151,7 +166,9 @@ export const runtimeApi = {
       ok: res.ok && data?.ok === true,
       ...(typeof data?.url === "string" ? { url: data.url } : {}),
       ...(typeof data?.reason === "string" ? { reason: data.reason } : {}),
-      error: typeof data?.error === "string" ? data.error : res.ok ? undefined : `${res.status} ${res.statusText}`,
+      error:
+        deviceScopeMessage(data) ??
+        (typeof data?.error === "string" ? data.error : res.ok ? undefined : `${res.status} ${res.statusText}`),
       ...(typeof data?.enable_url === "string" ? { enable_url: data.enable_url } : {}),
     };
   },

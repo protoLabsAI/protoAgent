@@ -200,6 +200,23 @@ This is the R1 path ceiling behind the goal trust-gate: the dangerous goal verif
 
 A stricter mode that outright *refuses* the operator bearer on `/a2a` once a federation token is configured has been discussed but is deliberately **not implemented**: the console's own chat UI streams over `/a2a` using the operator bearer, so a naive version of that flag would lock the operator out of their own console the moment they configure a federation token, and there's no reliable, non-forgeable way to tell "the console" apart from "an external peer" at that layer (see ADR 0066's R5). Rotation today is voluntary and per-peer, not enforced.
 
+### Credential-plane keys (ADR 0121) {#credential-plane-keys}
+
+A paired phone or tablet has **`device` scope** ([ADR 0121](../adr/0121-device-pairing-over-an-operator-supplied-public-url.md) D4): it can change most settings, but not the ones that decide who can get in or where the tool sandbox ends. Writing any of these from a `device`-scope credential (Settings, `POST /api/settings`, `/api/settings/reset`, `POST /api/config` or the setup wizard) is refused with `403 device_scope`, and the response names the key. Other keys in the same save are not applied either, so nothing is half-saved. A full-access credential (the auth token, the desktop app, an agent's hub, a promoted device) can write them as usual.
+
+| Key | Why |
+|---|---|
+| `auth.*` — `auth.token`, `auth.federation_token` | The credentials themselves |
+| `network.*` — `network.bind` and any `network.` key added later (such as `network.trusted_proxies`) | Where the agent listens and how it's reached. Matched by prefix, so a new key is covered the day it lands |
+| `devices.*` | Device-pairing policy |
+| `egress.*` — `egress.allowed_hosts` | The outbound half of the tool sandbox |
+| `filesystem.allow_run` | Whether the agent can run shell commands at all |
+| `secrets_manager.*` | Where secrets (the auth token's environment fallback among them) are loaded from; the config side of `/api/secrets/*` |
+| `plugins.*` | The plugin install/enable lists; the config side of the plugin-lifecycle routes |
+| `mcp.*`, `delegates`, `lifecycle_hooks`, `acp.*`, `filesystem.editor_command` | Commands the server runs (MCP servers, delegate and ACP agent executables, event hooks, the open-in-editor command). A phone that set one would leave host code behind that outlives its revoke; the config side of the `/api/mcp/servers` routes |
+
+`A2A_ALLOWED_ORIGINS` and `PROTOAGENT_TRUSTED_HOSTS` are environment variables with no config key, so no config write can reach them. The Settings schema marks each of these fields with `credential_plane: true`.
+
 ## `subagents`
 
 The built-in `subagents.researcher` block accepts the fields below. Plugin roles are registered with `register_subagent`; arbitrary YAML names do not create new roles. Defaults shown are for the built-in researcher.

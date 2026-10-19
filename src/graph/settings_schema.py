@@ -66,6 +66,11 @@ class Field:
     # configs, older cores (which ignore the flag and show the single box) and readers
     # that split on commas/newlines all keep working. A rendering hint, like path_kind.
     multiple: bool = False
+    # ADR 0121 D4: a key that decides WHO CAN GET IN (auth tokens, the bind) or the tool
+    # sandbox boundary (allow_run, egress). A ``device``-scope caller (a paired phone) is
+    # refused a write to it at the config write path — see `credential_plane_keys`, which
+    # also matches whole sections by prefix (`CREDENTIAL_PLANE_SECTIONS`).
+    credential_plane: bool = False
 
 
 # ACP coding-agent choices, offered as the main-brain runtime AND as model overrides for the
@@ -1077,6 +1082,7 @@ FIELDS: list[Field] = [
         "the server user). Off = the tool is never built — the model can't see or call "
         "it; the read/write file tools stay. The full kill switch for shell access.",
         depends_on={"key": "filesystem.enabled"},
+        credential_plane=True,
     ),
     Field(
         "filesystem.run_requires_approval",
@@ -1137,6 +1143,7 @@ FIELDS: list[Field] = [
         "editor on THIS machine — fenced to the managed projects like every fs tool. Empty "
         "= the tool is not bound. Only useful when the agent runs on your own desktop.",
         depends_on={"key": "filesystem.enabled"},
+        credential_plane=True,
     ),
     Field(
         "filesystem.code_pane",
@@ -1417,6 +1424,7 @@ FIELDS: list[Field] = [
         "secret",
         "Identity",
         "Bearer token for the A2A endpoint. Stored in secrets.yaml; applies live.",
+        credential_plane=True,
     ),
     # ADR 0066 — a second, narrower credential for cross-instance peers: valid on
     # /a2a + /v1 only, explicitly denied the /api operator surface auth.token can
@@ -1433,6 +1441,7 @@ FIELDS: list[Field] = [
         "it cannot reach the /api operator surface even though the console's operator "
         "token still can. Optional; give it to remote peers instead of the operator "
         "token. Stored in secrets.yaml; applies live.",
+        credential_plane=True,
     ),
     # A plugin's Settings group is declared by its manifest (ADR 0019) and rendered
     # via the plugin-fields path in build_schema — same for bundled or external
@@ -1508,6 +1517,7 @@ FIELDS: list[Field] = [
         "explicit --host flag still wins. Env fallback: PROTOAGENT_HOST.",
         restart=True,
         scope="host",
+        credential_plane=True,
     ),
     # Which reverse proxies' X-Forwarded-* headers to believe (ADR 0121 D3). Passed to uvicorn
     # at boot, and it keys the pairing-claim throttle on the real client, not the proxy.
@@ -1541,6 +1551,7 @@ FIELDS: list[Field] = [
         "base URL) is always permitted automatically, so you needn't list it. Also the source of "
         "truth for the OpenShell sandbox network policy.",
         scope="host",
+        credential_plane=True,
     ),
     Field(
         "fleet.port_base",
@@ -1933,6 +1944,75 @@ def host_keys() -> set[str]:
     return set(_HOST_KEYS)
 
 
+# ADR 0121 D4 — whole config sections on the credential plane, matched by PREFIX so a key
+# added later (S7.1's ``network.trusted_proxies``, S7.3's ``devices.idle_ttl_days``, S7.4's
+# ``network.public_console_url``) is covered the day it lands, with no Field flag to forget:
+#   auth / network / devices — who can get in (tokens, bind, proxies, public URL, device policy);
+#   egress — the outbound half of the tool sandbox boundary;
+#   secrets_manager — where secrets (the bearer's env fallback among them) are hydrated from:
+#     the config twin of the `/api/secrets/*` routes the middleware ceiling refuses;
+#   plugins — install/enable lists: the config twin of the plugin-lifecycle routes.
+#   mcp / delegates / lifecycle_hooks / acp — COMMANDS the server runs (MCP servers, delegate
+#     and ACP agent executables, event hooks): host code that outlives a revoke, the config
+#     twin of the `/api/mcp/servers*` routes. ``filesystem.editor_command`` is flagged on its
+#     Field for the same reason.
+# ``A2A_ALLOWED_ORIGINS`` / ``PROTOAGENT_TRUSTED_HOSTS`` are env-only today (no config key),
+# so the config write path can't reach them; S7.4 folds the public origin in via network.*.
+CREDENTIAL_PLANE_SECTIONS: tuple[str, ...] = (
+    "auth",
+    "network",
+    "devices",
+    "egress",
+    "secrets_manager",
+    "plugins",
+    "mcp",
+    "delegates",
+    "lifecycle_hooks",
+    "acp",
+)
+_CREDENTIAL_PLANE_KEYS = frozenset(f.key for f in FIELDS if f.credential_plane)
+
+
+def is_credential_plane_key(key: str) -> bool:
+    """True when writing dotted config ``key`` changes who can get in (ADR 0121 D4)."""
+    k = str(key or "").strip()
+    if k in _CREDENTIAL_PLANE_KEYS:
+        return True
+    if any(k == s or k.startswith(s + ".") for s in CREDENTIAL_PLANE_SECTIONS):
+        return True
+    # A PARENT of a flagged key (``filesystem`` written as a whole dict) reaches it too.
+    return any(f.startswith(k + ".") for f in _CREDENTIAL_PLANE_KEYS) if k else False
+
+
+def _flatten_keys(doc: Any, prefix: str = "") -> list[str]:
+    """Dotted leaf paths of a nested update. An empty dict yields its own path (it can
+    replace a section), a non-dict value is a leaf."""
+    if not isinstance(doc, dict):
+        return [prefix] if prefix else []
+    if not doc and prefix:
+        return [prefix]
+    out: list[str] = []
+    for k, v in doc.items():
+        out.extend(_flatten_keys(v, f"{prefix}.{k}" if prefix else str(k)))
+    return out
+
+
+def credential_plane_keys(updates: Any, *, nested: bool = False) -> list[str]:
+    """The credential-plane keys an update would write (ADR 0121 D4), sorted.
+
+    ``nested=False``: a flat ``{dotted.key: value}`` payload (``POST /api/settings``) — or a
+    plain list of keys (``/api/settings/reset``). ``nested=True``: a nested YAML-shaped dict
+    (``POST /api/config``, the setup wizard's finish). Empty = the write is allowed for a
+    ``device``-scope caller."""
+    if nested:
+        keys = _flatten_keys(updates)
+    elif isinstance(updates, dict):
+        keys = [str(k) for k in updates]
+    else:
+        keys = [str(k) for k in (updates or [])]
+    return sorted({k for k in keys if is_credential_plane_key(k)})
+
+
 def is_secret_key(key: str) -> bool:
     """True for a secret-typed FIELD (ADR 0047 D5 — secrets are agent-leaf only,
     never written to the non-secret Host file)."""
@@ -2247,6 +2327,8 @@ def build_schema(
             entry["maximum"] = f.maximum
         if f.depends_on:
             entry["depends_on"] = f.depends_on  # #963 — full dotted sibling key
+        if is_credential_plane_key(f.key):
+            entry["credential_plane"] = True  # ADR 0121 D4 — refused to device-scope callers
         groups.setdefault(f.section, {"section": f.section, "fields": []})["fields"].append(entry)
 
     # Plugin-declared settings fields (ADR 0019) — value from config.plugin_config,

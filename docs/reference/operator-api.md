@@ -22,6 +22,45 @@ Every error body is `{"detail": …}`, in one of three shapes:
 A client should read `detail` as: a string → show it; an object → show `message` (or
 `reason`); a list → show the first item's `msg`.
 
+### Device-scope refusals (`403 device_scope`) {#device-scope-refusals}
+
+A paired phone or tablet authenticates as the operator but with **`device` scope**
+([ADR 0121](../adr/0121-device-pairing-over-an-operator-supplied-public-url.md) D4): it can use
+the whole API except the routes that change who can get in. Those answer `403` with:
+
+```json
+{"error": "device_scope",
+ "detail": {"code": "device_scope",
+            "reason": "This device can't change pairing or credentials — use a full-access device.",
+            "action": "install a plugin"}}
+```
+
+The same rule applies to the proxied form of each path (`/agents/<slug>/…`); the hub refuses it
+before it swaps in the fleet credential. Refused for `device` scope:
+
+| Method | Path |
+|---|---|
+| POST | `/api/pairing/start` · `/api/pairing/cancel` · `/api/fleet/remotes/pair` |
+| POST · DELETE | `/api/pairing/tailscale/serve` |
+| POST | `/api/restart` |
+| PATCH · DELETE | `/api/devices/{id}` — **except the caller's own id** (rename or unpair yourself). Changing `scope` needs a full-scope caller even for your own id |
+| POST | `/api/plugins/install` · `/sync` · `/install-deps` · `/ack` · `/api/plugins/{id}/update` · `/api/plugins/{id}/enabled` |
+| DELETE | `/api/plugins/{id}` |
+| POST · PUT · PATCH · DELETE | `/api/plugins/bundles/…` |
+| POST | `/api/mcp/servers` · `/api/mcp/servers/import` |
+| POST · PUT · PATCH · DELETE | `/api/mcp/servers/…` (`{name}`, `/promote`, `/forget`) |
+| any | `/api/plugin-setup/…` · `/api/secrets/…` · `/api/config/oauth/…` |
+
+Plugin lifecycle and MCP servers are on the list because each is host code the server runs: a
+phone that installed a plugin or added an MCP server would leave it running after its token was
+revoked.
+
+Config writes are checked by key instead of by path: `POST /api/settings`,
+`/api/settings/reset`, `/api/config` and `/api/config/setup` answer `403 device_scope` when
+they would write a [credential-plane key](configuration.md#credential-plane-keys), with the
+refused keys in `keys` and named in `detail.reason`. A write that touches no such key saves as
+usual.
+
 A `502` with a **string** detail comes from the fleet hub's proxy (the agent isn't up or
 reachable yet) and is worth retrying; a `502` with an **object** detail is the agent itself
 reporting that its model provider failed, so retrying right away won't help. The console
@@ -173,8 +212,8 @@ under every root; a claim removes them all), 120 s TTL, one-shot.
 | POST · DELETE | `/api/fleet/remotes[/{ident}]` | Register / remove a remote member |
 | POST | `/api/pairing/start` · `/api/pairing/cancel` | Mint a phone (default) or agent (`{"kind": "agent"}`) pairing code with the addresses it works on, best first (`hosts[].via`: `serve` → `magicdns` → `ip`), plus `reach` (Tailscale status, restart facts) / drop pending codes of that kind (ADR 0087, ADR 0113). `409` when nothing is reachable yet |
 | POST | `/api/pairing/claim` | Redeem a code for a per-device token (`{code, name}` → `{ok, device, token}`). The **only** unauthenticated `/api/*` route; one `403` for every bad code. `429` with `Retry-After` (seconds) and `{ok: false, error, retry_after}` when the claim throttle is empty (5 wrong codes per client per 5 min, 30 per ingress class per min; ADR 0121 D3). A `429` claim is never compared with any code, and no claim cancels a pending code |
-| GET | `/api/devices` | Paired devices and hubs: `id`, `name`, `kind`, `created_at`, `last_seen_at`, and `active` (used within the last-seen write throttle, about 6 minutes). Never the token or its hash |
-| PATCH | `/api/devices/{id}` | Rename (`{name}`: 1–64 printable characters on one line). `400` with the reason for an unusable name, `404` for an unknown id. The token is untouched |
+| GET | `/api/devices` | Paired devices and hubs: `id`, `name`, `kind`, `scope` (`full` or `device`, ADR 0121 D4; agents are always `full`), `created_at`, `last_seen_at`, and `active` (used within the last-seen write throttle, about 6 minutes). Never the token or its hash. `caller` is the credential that asked: `{scope, device_id}` (`device_id` is null unless a device token was used) |
+| PATCH | `/api/devices/{id}` | Rename (`{name}`: 1–64 printable characters on one line) and/or promote or limit (`{scope: "full" \| "device"}`). Changing `scope` needs a full-scope caller (`403 device_scope` otherwise, so a phone can't promote itself); limiting an agent is a `400`. `400` with the reason for an unusable name or scope, `404` for an unknown id. The token is untouched |
 | DELETE | `/api/devices/{id}` | Revoke one device; its token stops working on the next request |
 | GET | `/api/pairing/reach` | How this agent can be reached: bind, listening port, offered and bindable addresses, `auth_configured`, `tailscale` (`dns_name`, `https`, `served`), `restart` (`supported`, `bind_pinned`, `container`, `pending`, `hint`) |
 | POST · DELETE | `/api/pairing/tailscale/serve` | Serve this agent over tailnet HTTPS with `tailscale serve --bg` / turn off only its own handler. POST is `409 no_token` until an auth token is set; `409 https_disabled` carries `enable_url` |

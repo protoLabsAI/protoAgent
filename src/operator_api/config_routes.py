@@ -20,9 +20,12 @@ import logging
 import os
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request  # Request at MODULE level: under `from __future__
+# import annotations` FastAPI resolves `request: Request` against module globals — a local
+# import silently turns it into a required query param.
 from pydantic import BaseModel
 
+from operator_api.scope_guard import credential_plane_refusal
 from runtime.state import STATE
 from server.agent_init import (
     _build_settings_callbacks,
@@ -200,7 +203,10 @@ def register_config_routes(app) -> None:
         return build_config_explain(STATE.graph_config)
 
     @app.post("/api/config")
-    async def _api_post_config(req: ConfigReloadRequest):
+    async def _api_post_config(req: ConfigReloadRequest, request: Request):
+        # ADR 0121 D4: a device-scope caller can't write credential-plane keys this way either.
+        if (denied := credential_plane_refusal(request, req.config, nested=True)) is not None:
+            return denied
         # Offload off the event loop (#497) — the reload's graph compile is heavy
         # and would otherwise freeze the server for its duration.
         from server.agent_init import _apply_settings_changes
@@ -526,11 +532,13 @@ def register_config_routes(app) -> None:
         }
 
     @app.post("/api/config/setup")
-    async def _api_finish_setup(req: SetupFinishRequest):
+    async def _api_finish_setup(req: SetupFinishRequest, request: Request):
         """Terminal wizard action over HTTP. Same semantics as the
         drawer's ``finish_setup`` callback — writes everything, marks
         setup complete, optionally installs autostart, then reloads.
         """
+        if (denied := credential_plane_refusal(request, req.config, nested=True)) is not None:
+            return denied  # ADR 0121 D4 — the wizard writes auth/network too
         callbacks = _build_settings_callbacks()
         # Offload off the event loop (#497) — finish-setup validates the model +
         # compiles the graph, both heavy; running inline froze the server ~30s.
@@ -888,11 +896,15 @@ def register_config_routes(app) -> None:
         }
 
     @app.post("/api/settings")
-    async def _api_save_settings(req: SettingsUpdateRequest):
+    async def _api_save_settings(req: SettingsUpdateRequest, request: Request):
         """Validate a flat {key: value} payload, persist it to the chosen cascade
         layer (``layer``: "agent" leaf, default, or "host" box-shared file; secrets
         split out / refused on host), and hot-reload the graph. Returns any keys that
         need a full process restart to take effect."""
+        # ADR 0121 D4: checked by KEY, before validation — a device-scope caller writing
+        # any credential-plane key gets a 403 naming it; other keys save as normal.
+        if (denied := credential_plane_refusal(request, req.updates)) is not None:
+            return denied
         from graph.settings_schema import nest_updates, restart_keys, validate_flat
 
         # settings.hidden (#2172): hidden keys are absent from the schema AND refused
@@ -916,7 +928,7 @@ def register_config_routes(app) -> None:
         return {"ok": result.ok, "messages": result.messages, "restart_required": restart_keys(req.updates)}
 
     @app.post("/api/settings/reset")
-    async def _api_reset_settings(req: SettingsResetRequest):
+    async def _api_reset_settings(req: SettingsResetRequest, request: Request):
         """Reset-to-inherited (ADR 0047 slice 3): pop the given dotted keys from the
         agent leaf YAML + reload, so each falls back to the Host/App layer. Only
         known settings keys are accepted (existence-gated against the registry —
@@ -928,6 +940,9 @@ def register_config_routes(app) -> None:
         # the rebuild refused it and every reset rolled back. The group resets as one —
         # and the hidden/known checks below then cover the expanded set too.
         keys = expand_reset_keys(list(req.keys))
+        # A reset WRITES (the value falls back to Host/App), so it's on the ceiling too.
+        if (denied := credential_plane_refusal(request, keys)) is not None:
+            return denied
         pulled = [k for k in keys if k not in req.keys]
         hidden = getattr(STATE.graph_config, "settings_hidden", None) or []
         for k in keys:

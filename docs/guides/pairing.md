@@ -206,6 +206,32 @@ shows the name, a **Device** or **Agent** badge, and when it was last used.
   paired. A browser signed in with the operator token isn't a paired device, so no row
   is marked.
 
+### Full access and Limited {#full-access-and-limited}
+
+Phone and tablet rows also show what the device may change
+([ADR 0121](../adr/0121-device-pairing-over-an-operator-supplied-public-url.md)):
+
+- **Limited**: every phone or tablet you pair now, over Wi-Fi, a tailnet or anything else. It
+  can use the whole console (chat, goals, knowledge, plugins and most settings) and rename or
+  remove itself. It can't pair devices or agents, change or remove another device, install or
+  change plugins or MCP servers, use the secrets manager or provider sign-ins, restart the agent, or change
+  [credential-plane settings](../reference/configuration.md#credential-plane-keys) such as the
+  auth token and `network.bind`. Those attempts answer **This device can't change pairing or
+  credentials — use a full-access device.**
+- **Full access**: a phone paired before this change. It can do everything the desktop can.
+
+Agent hubs are always full access, so their rows carry no badge.
+
+To change one, open **Settings ▸ Devices** on a full-access device (the desktop app, or a
+browser signed in with the auth token):
+
+- **Promote** on a **Limited** row gives that phone full access.
+- **Limit** on a **Full access** row takes it away.
+
+A limited phone sees neither action, and the server refuses a phone that tries to promote
+itself. Limited is not a sandbox: a chat turn from a limited phone still runs with the agent's
+tools. See [Device tokens](../explanation/security-and-trust.md#device-tokens).
+
 ### Rename a device
 
 Select the pencil icon on its row, type a new name and press **Enter** (or **Save**).

@@ -4,7 +4,7 @@ import { Copy, Network, QrCode, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { formatCountdown, hostKindLabel, secondsLeft, tailnetFirst, type PairKind } from "../lib/agentPairing";
-import { api } from "../lib/api";
+import { api, DEVICE_SCOPE_MESSAGE } from "../lib/api";
 import { currentSlug } from "../lib/api/routing";
 import { reachKey, reachLabel, reachRequirement, waitForRestart } from "../lib/deviceReach";
 import { DeviceList } from "./DeviceList";
@@ -44,6 +44,11 @@ export function DevicesPanel() {
   const toast = useToast();
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
+  // This console's OWN credential is device scope (ADR 0121 D4) — a paired phone. The server
+  // refuses it pairing and Promote/Limit regardless; this only keeps those buttons from being
+  // dead ones.
+  const [limited, setLimited] = useState(false);
+  const [callerDeviceId, setCallerDeviceId] = useState<string | null>(null);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [pairError, setPairError] = useState<string | null>(null);
   const [unreachable, setUnreachable] = useState<Unreachable | null>(null);
@@ -75,6 +80,15 @@ export function DevicesPanel() {
     try {
       const res = await api.devices();
       setDevices(res.devices || []);
+      let lim = res.caller?.scope === "device";
+      if (!lim && currentSlug() !== "host") {
+        // A member's list is answered for the HUB's fleet token (always full): what this
+        // console may do is decided by the hub, so ask the hub who we are.
+        const hub = await api.devices({ host: true }).catch(() => null);
+        lim = hub?.caller?.scope === "device";
+      }
+      setLimited(lim);
+      setCallerDeviceId(res.caller?.device_id ?? null);
     } catch {
       /* read-mostly panel; a transient failure just leaves the last list */
     } finally {
@@ -347,7 +361,8 @@ export function DevicesPanel() {
               variant="ghost"
               onClick={() => startPairing("agent")}
               loading={starting === "agent"}
-              disabled={starting != null}
+              disabled={starting != null || limited}
+              title={limited ? DEVICE_SCOPE_MESSAGE : undefined}
             >
               <Network size={15} aria-hidden /> {starting === "agent" ? "Preparing…" : "Pair an agent"}
             </Button>
@@ -355,7 +370,8 @@ export function DevicesPanel() {
               type="button"
               onClick={() => startPairing("device")}
               loading={starting === "device"}
-              disabled={starting != null}
+              disabled={starting != null || limited}
+              title={limited ? DEVICE_SCOPE_MESSAGE : undefined}
             >
               <QrCode size={15} aria-hidden /> {starting === "device" ? "Preparing…" : "Add a device"}
             </Button>
@@ -367,6 +383,13 @@ export function DevicesPanel() {
         Phones, tablets and other agents&apos; hubs paired to this agent. Each holds its own
         token, so removing one here doesn&apos;t sign out anything else.
       </p>
+      {limited && (
+        <p className="setting-desc" data-testid="devices-limited-note">
+          <strong>This device has limited access.</strong> It can rename or remove itself, but
+          pairing devices, changing another device and promoting one need a full-access device,
+          such as the desktop app.
+        </p>
+      )}
 
       {pairError && <p className="setting-desc devices-error">{pairError}</p>}
 
@@ -650,7 +673,7 @@ export function DevicesPanel() {
       )}
 
       {/* The paired-devices list — rename, "This device", revoke (DeviceList.tsx). */}
-      <DeviceList devices={devices} loading={loading} onChanged={refresh} />
+      <DeviceList devices={devices} loading={loading} onChanged={refresh} callerLimited={limited} callerDeviceId={callerDeviceId} />
     </SettingsSubPanel>
   );
 }
