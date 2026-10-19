@@ -309,9 +309,66 @@ def test_enable_serve_needs_loopback_served(app_client, monkeypatch, cli):
 
 
 def test_disable_serve_route(app_client, cli):
-    cli.serve = SERVED_443
+    cli.serve = json.loads(json.dumps(SERVED_443))  # a copy: the fake mutates it
     assert app_client.delete("/api/pairing/tailscale/serve").json() == {"ok": True}
     assert cli.mutations == [["serve", "--https=443", "off"]]
+
+
+_OTHER_INSTANCE_ON_443 = {
+    "TCP": {"443": {"HTTPS": True}},
+    "Web": {"box.tail1234.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7870"}}}},
+}
+
+
+def test_disable_serve_route_never_touches_another_instances_handler(app_client, cli):
+    """Ownership (#4359): this instance listens on 7931; the only serve handler proxies to
+    7870 (the operator's other agent). Turning serve off here is a no-op, not a reset."""
+    cli.serve = json.loads(json.dumps(_OTHER_INSTANCE_ON_443))
+    resp = app_client.delete("/api/pairing/tailscale/serve")
+    assert resp.status_code == 200 and resp.json() == {"ok": True}
+    assert cli.mutations == []
+    assert cli.serve == _OTHER_INSTANCE_ON_443
+
+
+def test_disable_serve_route_turns_off_ours_and_leaves_theirs(app_client, cli):
+    cli.serve = {
+        "TCP": {"443": {"HTTPS": True}, "8443": {"HTTPS": True}},
+        "Web": {
+            "box.tail1234.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7870"}}},
+            "box.tail1234.ts.net:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7931"}}},
+            # A sub-path handler pointing at us is someone's hand-made config, not ours to drop.
+            "box.tail1234.ts.net:10000": {"Handlers": {"/x": {"Proxy": "http://127.0.0.1:7931"}}},
+        },
+    }
+    resp = app_client.delete("/api/pairing/tailscale/serve")
+    assert resp.status_code == 200 and resp.json() == {"ok": True}
+    assert cli.mutations == [["serve", "--https=8443", "off"]]
+    assert set(cli.serve["Web"]) == {"box.tail1234.ts.net:443", "box.tail1234.ts.net:10000"}
+
+
+def test_disable_serve_route_when_tailscale_is_stopped_changes_nothing(app_client, cli):
+    cli.serve = json.loads(json.dumps(SERVED_443))
+    cli.status = dict(STATUS, BackendState="Stopped")
+    resp = app_client.delete("/api/pairing/tailscale/serve")
+    assert resp.status_code == 409 and resp.json()["reason"] == "not_running"
+    assert cli.mutations == []
+
+
+def test_reach_route_lists_addresses_and_changes_nothing(app_client, cli):
+    """``GET /api/pairing/reach`` is a read: D1-ordered hosts, what could be bound, and no
+    tailscale mutation (it only ever asks ``status``)."""
+    cli.serve = SERVED_443
+    body = app_client.get("/api/pairing/reach").json()
+    assert [(h["via"], h["origin"]) for h in body["hosts"]] == [
+        ("serve", "https://box.tail1234.ts.net"),
+        ("magicdns", "http://box.tail1234.ts.net:7931"),
+        ("ip", "http://100.119.239.8:7931"),
+        ("ip", "http://192.168.5.31:7931"),
+    ]
+    assert body["available"] == [{"host": "100.119.239.8", "kind": "tailnet"}, {"host": "192.168.5.31", "kind": "lan"}]
+    assert body["tailscale"]["served"]["url"] == "https://box.tail1234.ts.net"
+    assert body["public_console_url"] == "" and body["bind_interface"] is True
+    assert cli.mutations == []
 
 
 def test_reach_route_reports_bind_token_tailscale_and_restart(app_client, monkeypatch):

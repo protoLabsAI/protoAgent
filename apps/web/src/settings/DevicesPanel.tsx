@@ -4,7 +4,7 @@ import { Badge, Button } from "@protolabsai/ui/primitives";
 import { Copy, Network, QrCode, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { formatCountdown, hostKindLabel, secondsLeft, tailnetFirst, type PairKind } from "../lib/agentPairing";
+import { formatCountdown, hostKindLabel, newlyPaired, secondsLeft, tailnetFirst, type PairKind } from "../lib/agentPairing";
 import { api, DEVICE_SCOPE_MESSAGE } from "../lib/api";
 import { currentSlug } from "../lib/api/routing";
 import {
@@ -89,6 +89,8 @@ export function DevicesPanel() {
   // when the hub says "invalid or expired".
   const [expired, setExpired] = useState<PairKind | null>(null);
   const pollRef = useRef<number | null>(null);
+  const devicesRef = useRef<Device[]>(devices);
+  devicesRef.current = devices;
 
   const refresh = useCallback(async () => {
     try {
@@ -140,24 +142,28 @@ export function DevicesPanel() {
       pollRef.current = null;
       return;
     }
-    const before = devices.length;
+    // The ids paired BEFORE this code, from the latest list (a ref, not this render's closure).
+    // Compared by id, not count: a refresh that lands meanwhile — a revoke shrinking the list,
+    // say — can't make the claimed device look like no change.
+    const before = new Set(devicesRef.current.map((d) => d.id));
     pollRef.current = window.setInterval(async () => {
       const res = await api.devices().catch(() => null);
       if (!res) return;
-      if ((res.devices || []).length > before) {
+      const fresh = newlyPaired(before, res.devices || []);
+      if (fresh.length > 0) {
         setDevices(res.devices);
         setPairing(null); // claimed — the code is spent
         if (pairing.kind === "agent") {
           // The newest agent row is the hub that just claimed — name it, since the operator
           // is looking at THIS machine while the success happened on another one.
-          const hub = [...res.devices].reverse().find((d) => d.kind === "agent");
+          const hub = [...fresh].reverse().find((d) => d.kind === "agent");
           toast({
             tone: "success",
             title: "Agent paired",
             message: `${hub?.name ?? "The other agent's hub"} can now reach this agent. Remove it here to revoke.`,
           });
         } else {
-          const phone = [...res.devices].reverse().find((d) => d.kind !== "agent");
+          const phone = [...fresh].reverse().find((d) => d.kind !== "agent");
           toast({
             tone: "success",
             title: "Device paired",

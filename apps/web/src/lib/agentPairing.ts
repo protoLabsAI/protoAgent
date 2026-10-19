@@ -51,6 +51,13 @@ export function secondsLeft(expiresAt: number, nowMs: number = Date.now()): numb
 }
 
 /** `m:ss` — an agent code lives 5 minutes, and "287s" makes the operator do arithmetic. */
+/** The rows of `rows` whose id isn't in `before` — the devices paired since that snapshot.
+ *  The Devices panel's pairing poll confirms a claim with this: by id, never by count, so a
+ *  list that shrank meanwhile (a revoke) can't hide the new device. */
+export function newlyPaired<T extends { id: string }>(before: ReadonlySet<string>, rows: readonly T[]): T[] {
+  return rows.filter((row) => !before.has(row.id));
+}
+
 export function formatCountdown(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;

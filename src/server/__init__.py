@@ -1295,9 +1295,7 @@ def _main():
     # along too (ADR 0121 D5), so the stream re-verifies that device and closes on revoke.
     @fastapi_app.get("/api/sse-token", include_in_schema=False)
     async def _sse_token(request: Request):
-        scope = getattr(request.state, "credential_scope", None) or "device"
-        device_id = getattr(request.state, "device_id", None)
-        return {"token": auth.generate_sse_token(scope=scope, device_id=device_id)}
+        return {"token": auth.sse_token_for(request)}
 
     # Live ACP coding-agent sessions (#2889): the per-thread runtime registry in
     # server/chat.py had no read surface, leaving coding-delegation triage blind.

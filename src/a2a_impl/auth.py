@@ -129,15 +129,20 @@ _SSE_TOKEN_LIFETIME = 30
 # ``Authorization`` header, so they authenticate with a short-lived query-string token
 # instead (see ``_validate_sse_token``). ``/api/events`` is the event bus; ``/api/chat/attend``
 # is the session-attendance presence stream (#3110) the console holds open while a chat is on
-# screen, so a background-resume into that session can park for HITL. Matched by exact path OR
-# trailing suffix so the fleet-proxy variants (``/agents/<slug>/api/events``) are covered too.
+# screen, so a background-resume into that session can park for HITL. Matched as the exact path
+# or behind the fleet proxy's ``/agents/<slug>`` prefix (``/agents/<slug>/api/events``, and a
+# hub-of-hubs ``/agents/<a>/agents/<b>/api/events``) — anchored at both ends, segment by
+# segment, so ``/foo/api/events`` or ``/agents/x/y/api/events`` is NOT a stream path.
 _SSE_QUERY_TOKEN_PATHS = ("/api/events", "/api/chat/attend")
+_SSE_QUERY_TOKEN_RE = re.compile(
+    r"^(?:/agents/[^/]+)*(?:" + "|".join(re.escape(p) for p in _SSE_QUERY_TOKEN_PATHS) + r")$"
+)
 
 
 def _is_sse_query_token_path(path: str) -> bool:
     """Whether ``path`` is one of the EventSource streams that accept a ``?token=`` in place
     of a bearer header (see ``_SSE_QUERY_TOKEN_PATHS``)."""
-    return any(path == p or path.endswith(p) for p in _SSE_QUERY_TOKEN_PATHS)
+    return _SSE_QUERY_TOKEN_RE.match(path or "") is not None
 
 # A plugin public-prefix must be a real SUBTREE of its own namespace —
 # ``/plugins/<id>/…`` or ``/api/plugins/<id>/…`` with a trailing slash after the
@@ -616,6 +621,17 @@ def generate_sse_token(session_id: str = "", scope: str = SCOPE_DEVICE, device_i
     payload = json.dumps(claims, separators=(",", ":"))
     sig = hmac.new(key.encode(), payload.encode(), hashlib.sha256).digest()
     return base64.urlsafe_b64encode(payload.encode() + b"." + sig).decode()
+
+
+def sse_token_for(request) -> str:
+    """The ``GET /api/sse-token`` answer for ``request``: a stream token carrying the MINTING
+    caller's credential scope and paired device, as the auth middleware stamped them (ADR 0121
+    D4/D5). No scope stamped (an app assembled without the middleware) mints the narrow one.
+    Here rather than inline in the server so the scope it signs is testable as behaviour."""
+    state = getattr(request, "state", None)
+    scope = getattr(state, "credential_scope", None) or SCOPE_DEVICE
+    device_id = getattr(state, "device_id", None)
+    return generate_sse_token(scope=scope, device_id=device_id)
 
 
 def _validate_sse_token(token: str) -> bool:
