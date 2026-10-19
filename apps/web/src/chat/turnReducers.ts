@@ -94,6 +94,63 @@ export function applyToolEvent(message: ChatMessage, evt: ToolEvent): ChatMessag
   return { ...message, toolCalls: calls, parts: nextParts };
 }
 
+/** Apply one tool frame to the TURN, not just its live bubble (#4300).
+ *
+ *  A turn can be split mid-step: a `delegate_to` room bubble or a consumed steer freezes
+ *  what the live bubble holds as a `splitOf` half and resets the live bubble empty
+ *  (roomBubble.insertConversationBubbles). When the step made parallel calls — a plugin
+ *  tool beside two background `delegate_to`s — the sibling's START is in the frozen half,
+ *  but its END arrives after the split. Applied to the live bubble alone, that end found no
+ *  card ("missed start"), drew a duplicate ✓ row in the continuation, and left the frozen
+ *  card spinning forever: the frozen half is already `done`, so no settle ever reached it.
+ *
+ *  So a frame for a call the live bubble doesn't hold goes to the turn bubble that does —
+ *  the end (or a re-announcing start) to the half holding the card, a child's start to the
+ *  half holding its parent. Anything else lands on the live bubble, as before. */
+export function applyToolEventToTurn(messages: ChatMessage[], assistantId: string, evt: ToolEvent): ChatMessage[] {
+  const holds = (m: ChatMessage | undefined, id: string | undefined) =>
+    id != null && Boolean(m?.toolCalls?.some((c) => c.id === id));
+  // Latest half first: a call id is unique per turn, but the newest split is its likeliest home.
+  const halfHolding = (id: string | undefined) =>
+    [...messages].reverse().find((m) => m.splitOf === assistantId && holds(m, id));
+  const live = messages.find((m) => m.id === assistantId);
+  let target: ChatMessage | undefined;
+  if (!holds(live, evt.id)) {
+    target = halfHolding(evt.id);
+    if (!target && evt.phase === "start" && !holds(live, evt.parentId)) target = halfHolding(evt.parentId);
+  }
+  const targetId = target?.id ?? assistantId;
+  return messages.map((m) => (m.id === targetId ? applyToolEvent(m, evt) : m));
+}
+
+/** Settle the frozen halves of a split turn when the turn ends (#4300): a card still
+ *  `running` there can't be — the turn is over — so it settles done (or STOPPED for a
+ *  cancelled turn), whatever frame went missing. The halves' own status is untouched;
+ *  they were frozen `done` at split time. The live bubble is settled by its own reducer. */
+export function settleSplitHalves(
+  messages: ChatMessage[],
+  assistantId: string,
+  opts: { stopped?: boolean; now?: number } = {},
+): ChatMessage[] {
+  const now = opts.now ?? Date.now();
+  let changed = false;
+  const next = messages.map((m) => {
+    if (m.splitOf !== assistantId || !m.toolCalls?.some((c) => c.status === "running")) return m;
+    changed = true;
+    return {
+      ...m,
+      toolCalls: m.toolCalls.map((c) =>
+        c.status !== "running"
+          ? c
+          : opts.stopped
+            ? { ...c, status: "done" as const, paused: undefined, stopped: true }
+            : { ...c, status: "done" as const, paused: undefined, durationMs: c.durationMs ?? elapsedSince(c, now) },
+      ),
+    };
+  });
+  return changed ? next : messages;
+}
+
 export function applyComponent(message: ChatMessage, spec: ComponentSpec): ChatMessage {
   // A renderable component (ADR 0051) — an ORDERED part at its emission point
   // so it renders ABOVE the answer text that streams in after (#1323).
