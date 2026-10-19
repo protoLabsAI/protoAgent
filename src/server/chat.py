@@ -583,9 +583,21 @@ def _interrupt_payload(val) -> dict:
     ``{"kind":"approval", "title", "detail", …}``. Anything else degrades to a
     question with the stringified value. The console renders by shape (prompt vs
     JSON-schema form vs Approve/Deny); the resume value is a string for a
-    question, a dict for a form, and a decision for an approval."""
+    question, a dict for a form, and a decision for an approval.
+
+    An unrecognised dict still reads as prose: its ``prompt``/``message``/``text`` becomes
+    the question and its ``title`` the card's heading. Only a dict with no text at all
+    shows as JSON. It used to be ``str(dict)``, a Python repr with escaped newlines."""
     if isinstance(val, dict) and (val.get("question") or val.get("kind") in ("form", "approval")):
         return val
+    if isinstance(val, dict):
+        text = next((val[k] for k in ("prompt", "message", "text") if isinstance(val.get(k), str) and val[k].strip()), "")
+        if not text:
+            text = json.dumps(val, indent=2, ensure_ascii=False, default=str)
+        out = {"question": text}
+        if isinstance(val.get("title"), str) and val["title"].strip():
+            out["title"] = val["title"]
+        return out
     return {"question": (str(val) if val is not None else "Input required.")}
 
 
