@@ -19,7 +19,9 @@ Two layers, both here:
    request body (Anthropic Messages, OpenAI chat-completions or OpenAI Responses) so
    every image honours the hard limits: all images — inline and provider-fetched —
    count toward the many-image rule, the oldest past ``max_images_per_request`` become
-   a short ``[image omitted: …]`` note, and the total stays inside a request budget. It
+   a short ``[image omitted: …]`` note (in whole batches, so the omission boundary —
+   and the provider's prompt cache — stays put between batches), and the total stays
+   inside a request budget. It
    builds new containers instead of mutating, so the stored history is never touched —
    which is what UNPOISONS a session that is already broken: its checkpoint still holds
    the big image, but no request carries it any more.
@@ -447,16 +449,58 @@ def _content_lists(payload: dict):
                         yield (top, mi, field, bi), block["content"]
 
 
-def _plan(kinds: list[str], max_images: int | None = None) -> tuple[int, int, bool, int]:
+def omit_batch(cap: int) -> int:
+    """How many images the omission boundary advances by once a request is over ``cap``.
+
+    Prompt-cache stability (brandLaunch context-burn investigation, 10-2026): keeping
+    exactly the newest ``cap`` images meant every NEW image turned one more OLD image
+    into an ``[image omitted]`` note — a block deep in the history changed on every
+    image-adding call, so the provider's prompt cache was invalidated from that point
+    on (84 of 101 image-adding calls rewrote a 300–480k-token cache). Dropping in
+    batches of half the cap means the boundary only moves every ``cap // 2`` images;
+    between moves the serialized history prefix is byte-identical, so it stays cached.
+    """
+    return max(1, cap // 2)
+
+
+def _plan(images: list[tuple[str, int]], max_images: int | None = None) -> tuple[int, int, bool, int]:
     """``(cap, n_drop, omit_refs, side_limit)`` for a request whose images, oldest
-    first, are of ``kinds`` (``"b64"`` / ``"ref"``) — shared by the clamp and the
-    off-loop prewarm so both reach the same side limit (and so the same cache keys)."""
+    first, are ``(kind, b64_len)`` pairs (``kind`` is ``"b64"`` / ``"ref"``; ``b64_len``
+    is 0 for a ref) — shared by the clamp and the off-loop prewarm so both reach the
+    same side limit (and so the same cache keys).
+
+    Every decision here is a pure, MONOTONIC function of the image sequence, so an
+    image omitted from one request stays omitted from the next as the history grows
+    (prompt-cache stability — see :func:`omit_batch`):
+
+    * ``n_drop`` (the oldest images to omit) is a multiple of :func:`omit_batch`: over
+      the cap, the newest ``cap - batch + 1`` … ``cap`` images are kept, so the boundary
+      moves only once per batch of new images.
+    * If the kept inline images would overrun :data:`REQUEST_IMAGE_B64_BUDGET` (sized
+      from their stored length, capped per image), ``n_drop`` grows by further whole
+      batches until they fit — never one image at a time.
+    * The many-image regime (refs omitted, 2000 px side) is decided by the TOTAL count
+      when the cap can keep more than :data:`MANY_IMAGES_THRESHOLD` images (or there is
+      no cap), so the oscillating kept count can't flip it on and off and re-encode
+      every image. Stricter than needed between batches, never illegal.
+    """
+    kinds = [k for k, _n in images]
+    total = len(kinds)
     cap = _limits["max_images"] if max_images is None else max(0, int(max_images))
-    n_drop = len(kinds) - cap if cap and len(kinds) > cap else 0
-    kept = kinds[n_drop:]
-    omit_refs = len(kept) > MANY_IMAGES_THRESHOLD
-    n_kept = len(kept) - (kept.count("ref") if omit_refs else 0)
-    return cap, n_drop, omit_refs, MANY_IMAGES_MAX_SIDE if n_kept > MANY_IMAGES_THRESHOLD else HARD_MAX_SIDE
+    batch = omit_batch(cap or DEFAULT_MAX_IMAGES_PER_REQUEST)
+    n_drop = -(-(total - cap) // batch) * batch if cap and total > cap else 0  # ceil to a whole batch
+    sizes = [min(n, HARD_MAX_IMAGE_B64_CHARS) if k == "b64" else 0 for k, n in images]
+    while n_drop + batch < total and sum(sizes[n_drop:]) > REQUEST_IMAGE_B64_BUDGET:
+        n_drop += batch
+    n_drop = min(n_drop, total)
+    if cap and cap <= MANY_IMAGES_THRESHOLD:
+        many_basis = kinds[n_drop:]  # kept ≤ cap ≤ threshold: never the many-image regime
+    else:
+        many_basis = kinds  # sticky: decided by the monotonic total, not the kept count
+    omit_refs = len(many_basis) > MANY_IMAGES_THRESHOLD
+    n_inline = len(many_basis) - (many_basis.count("ref") if omit_refs else 0)
+    side_limit = MANY_IMAGES_MAX_SIDE if n_inline > MANY_IMAGES_THRESHOLD else HARD_MAX_SIDE
+    return cap, n_drop, omit_refs, side_limit
 
 
 def _needs_work(data: str, side_limit: int) -> bool:
@@ -487,7 +531,7 @@ async def aprewarm(messages: Any) -> None:
                     images.append(kind)
         if not images:
             return
-        _cap, n_drop, _omit_refs, side_limit = _plan([k[0] for k in images])
+        _cap, n_drop, _omit_refs, side_limit = _plan([(k[0], len(k[2] or "")) for k in images])
         todo = [(data, mime) for kind, mime, data in images[n_drop:] if kind == "b64" and _needs_work(data, side_limit)]
         if not todo:
             return
@@ -506,8 +550,10 @@ def clamp_request_images(payload: dict, *, max_images: int | None = None) -> dic
     Responses body (``input`` items' ``input_image`` in ``content``/``output``). Steps:
 
     1. EVERY image counts — inline base64 and provider-fetched (URL / file id) alike.
-       Keep the newest ``max_images`` (default ``model.max_images_per_request``); older
-       ones become ``[image omitted: <caption>]`` text.
+       Over ``max_images`` (default ``model.max_images_per_request``), the oldest are
+       omitted in whole batches of ``max_images // 2`` (:func:`omit_batch`) and become
+       ``[image omitted: <caption>]`` text — so an omitted image stays omitted and the
+       history prefix stays byte-stable (prompt-cache friendly) between batches.
     2. If more than 20 images remain, the provider applies its 2000 px many-image limit
        to all of them — including the URL images it fetches, which we can neither
        measure nor resize, so those are omitted too in that case.
@@ -532,7 +578,7 @@ def clamp_request_images(payload: dict, *, max_images: int | None = None) -> dic
     if not refs:
         return payload
 
-    cap, n_drop, omit_refs, side_limit = _plan([k[0] for _a, _i, k in refs], max_images)
+    cap, n_drop, omit_refs, side_limit = _plan([(k[0], len(k[2] or "")) for _a, _i, k in refs], max_images)
     omit: set[tuple] = {(addr, i) for addr, i, _k in refs[:n_drop]}
     kept = refs[n_drop:]
     if omit_refs:

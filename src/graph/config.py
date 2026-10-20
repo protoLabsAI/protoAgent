@@ -684,8 +684,9 @@ class LangGraphConfig:
     # an image a tool returns or a user attaches is downscaled to before it enters the
     # history (1568 = Anthropic's recommended size; clamped to ≤ 2000 at use so no
     # setting can store an image that breaks a many-image request).
-    # ``max_images_per_request`` — only the newest N inline images ride a model request;
-    # older ones become an ``[image omitted: …]`` note (0 = no count cap; the per-image
+    # ``max_images_per_request`` — at most the newest N images ride a model request;
+    # older ones become an ``[image omitted: …]`` note, dropped in batches of N/2 so the
+    # prompt cache isn't invalidated by every new image (0 = no count cap; the per-image
     # provider limits still apply).
     image_max_side: int = 1568
     max_images_per_request: int = 20

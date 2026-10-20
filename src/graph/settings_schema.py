@@ -224,9 +224,10 @@ FIELDS: list[Field] = [
         "Max images per request",
         "number",
         "Model & runtime",
-        "Only the newest N images in the conversation are sent with each model request; "
+        "At most the newest N images in the conversation are sent with each model request; "
         "older ones are replaced by a short '[image omitted: …]' note, so long visual "
-        "sessions stay within the provider's request limits. 0 = no count cap.",
+        "sessions stay within the provider's request limits. Over the cap, the oldest are "
+        "omitted in batches of N/2 so the prompt cache survives between batches. 0 = no count cap.",
         minimum=0,
     ),
     Field(
