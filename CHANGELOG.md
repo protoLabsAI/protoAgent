@@ -15,6 +15,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.212.0] - 2026-10-20
+
+### Added
+- **Opt-in: drop completed earlier turns' thinking from Claude requests (#4417).**
+  `model.strip_prior_turn_thinking` (anthropic-oauth, default off) sends each request
+  without the thinking blocks of turns that already finished. Claude Opus/Sonnet 5.5
+  otherwise replay and bill every earlier turn's reasoning as input — about 40% of the
+  prompt on one long production thread. The current turn keeps its reasoning, earlier
+  turns keep their text and tool calls, and the removal stays inside what Anthropic's
+  preserved-thinking check accepts.
+
+### Fixed
+- **Image-heavy chats no longer rewrite the prompt cache on every new image (#4412).**
+  Over `model.max_images_per_request`, the oldest images used to be omitted one at a
+  time, so each new screenshot changed a block deep in the history and invalidated the
+  provider's prompt cache (a brandLaunch thread rewrote a 300–480k-token cache on 84 of
+  101 image-adding calls). Old images are now omitted in batches of half the cap, so
+  the history prefix stays byte-stable — and cached — between batches.
+
+- **Compaction now fires on long threads with large-window models (#4416).**
+  `compaction.trigger: fraction:0.8` on a 1M-window model meant 800k tokens — never —
+  so one thread re-sent up to 478k prompt tokens per call. New `compaction.max_tokens`
+  (default `200000`) is an absolute ceiling: compaction fires at
+  min(fraction × window, max_tokens). The context window now resolves past the gateway
+  (the model's own profile, a conservative 272k for the `openai-codex` lane, family
+  defaults), the trigger follows the model a chat tab actually runs on, and tool-result
+  pruning measures pressure from the provider's reported input tokens instead of a
+  text-only estimate. Compaction now also strips thinking blocks from the turns it keeps verbatim — they
+  were produced with the summarized history in front of them, and Anthropic rejects them
+  afterwards on accounts that enforce preserved thinking.
+
+- **anthropic-oauth sends the thinking shape each Claude model accepts (#4418).**
+  Setting a reasoning effort (`/effort`) or `model.thinking: enabled` on an anthropic-oauth
+  agent sent `thinking: {type: "enabled", budget_tokens: N}`, which Opus 5.5 and the rest
+  of the 5.x family (and Opus 4.7/4.8) reject, so every call failed. Claude 4.6 and newer
+  now get adaptive thinking (`{type: "adaptive", display: "summarized"}`) with the effort
+  in `output_config.effort`; models before 4.6 (Haiku/Sonnet/Opus 4.5 and older) keep
+  `budget_tokens`, now clamped below `max_tokens`. `model.thinking: disabled` sends no
+  thinking field, and an unknown effort value is dropped instead of sent.
+
 ## [0.211.2] - 2026-10-20
 
 ### Fixed
