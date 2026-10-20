@@ -963,7 +963,7 @@ export function SetupWizard({
                       <Input
                         value={state.apiBase}
                         onChange={(event) => update({ apiBase: event.target.value })}
-                        placeholder="https://api.openai.com/v1"
+                        placeholder="e.g. https://api.openai.com/v1"
                         autoComplete="off"
                       />
                     </FormField>
