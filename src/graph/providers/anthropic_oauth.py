@@ -231,6 +231,8 @@ try:
         # (where the source tool's metadata is still visible) and consumed in
         # ``_get_request_payload`` to flip on ``eager_input_streaming`` (ADR 0118 D3, #4120).
         _stream_args_tool_names: set[str] = PrivateAttr(default_factory=set)
+        # model.strip_prior_turn_thinking (#4415) — set by build_anthropic_oauth_llm.
+        _strip_prior_thinking: bool = PrivateAttr(default=False)
 
         def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
             """Record which bound tools declare ``stream_args`` before binding.
@@ -332,6 +334,15 @@ try:
                 payload = clamp_request_images(payload)
             except Exception:  # noqa: BLE001 — clamping must never be what fails a turn
                 log.warning("[anthropic-oauth] image clamping skipped", exc_info=True)
+            # Completed prior turns' thinking blocks are replayed as billed input on the 5.5
+            # models; dropping that leading run is accepted by preserved thinking (#4415).
+            if self._strip_prior_thinking:
+                try:
+                    from graph.thinking_history import strip_prior_turn_thinking
+
+                    payload = strip_prior_turn_thinking(payload)
+                except Exception:  # noqa: BLE001 — an optimisation, never a failure
+                    log.warning("[anthropic-oauth] prior-turn thinking strip skipped", exc_info=True)
             # Stream the arguments of write tools as they arrive so the D3 inline preview
             # streams, instead of landing in one burst at message end (#4120). Scoped to
             # tools whose source tool declared ``stream_args`` (resolved by name from the
@@ -488,4 +499,6 @@ def build_anthropic_oauth_llm(
         budget = {"low": 4096, "medium": 8192, "high": 16384, "max": 24576}.get(effort or "medium", 8192)
         kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
 
-    return _OAuthChatAnthropic(**kwargs)
+    llm = _OAuthChatAnthropic(**kwargs)
+    llm._strip_prior_thinking = bool(getattr(config, "strip_prior_turn_thinking", False))
+    return llm

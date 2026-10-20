@@ -259,6 +259,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "providers_declared": True,
     "model_vision": False,
     "image_max_side": 1568,
+    "strip_prior_turn_thinking": False,
     "max_images_per_request": 20,
     "operator_allowed_dirs": [],
     "operator_project_dir": "",

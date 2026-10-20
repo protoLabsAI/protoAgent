@@ -230,6 +230,17 @@ FIELDS: list[Field] = [
         minimum=0,
     ),
     Field(
+        "model.strip_prior_turn_thinking",
+        "strip_prior_turn_thinking",
+        "Drop earlier turns' thinking",
+        "bool",
+        "Model & runtime",
+        "Claude subscription (anthropic-oauth): send each request without the thinking blocks "
+        "of completed earlier turns. Claude 5.5 models otherwise replay — and bill — every "
+        "earlier turn's reasoning as input. The current turn keeps its reasoning; earlier "
+        "turns keep their text and tool calls.",
+    ),
+    Field(
         "model.max_iterations",
         "max_iterations",
         "Max tool iterations",

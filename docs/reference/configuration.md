@@ -149,6 +149,7 @@ model:
 | `presence_penalty` | _(unset)_ | Standard OpenAI param; sent only when set. |
 | `top_k` | `-1` | Top-k sampling. Rides `extra_body` (vLLM-style gateways). `-1`/negative = gateway default. |
 | `repetition_penalty` | _(unset)_ | Rides `extra_body`; sent only when set. |
+| `strip_prior_turn_thinking` | `false` | `anthropic-oauth` only: send each request without the `thinking` blocks of **completed** earlier turns (everything before the last user message). Claude Opus/Sonnet 5.5 replay every earlier turn's thinking as billed input — on one long thread ~40% of the prompt. Removing that leading run is accepted by the API's preserved-thinking check; the in-flight turn's blocks are kept, so its tool loop keeps its reasoning. Trade-off: each new turn starts without the earlier turns' reasoning (their text and tool calls stay). |
 | `chat_template_kwargs` | _(unset)_ | Dict passed via `extra_body` to the vLLM renderer, e.g. `{preserve_thinking: true}` to keep historical `<think>`/`<scratch_pad>` blocks across turns. |
 
 All sampling params are optional — omit to use the gateway / model-card defaults. `temperature`, `max_tokens`, `top_p`, and `presence_penalty` are standard OpenAI fields; `top_k`, `repetition_penalty`, and `chat_template_kwargs` are sent via `extra_body` for vLLM-compatible gateways.
