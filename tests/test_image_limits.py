@@ -248,18 +248,19 @@ def test_anthropic_payload_leaves_a_legal_image_alone(oauth_llm):
 
 def test_anthropic_payload_with_25_large_images_is_unpoisoned(oauth_llm, big_png):
     """The live failure: 25 screenshots of 2560×1600 in the checkpointed history. With
-    the default cap the oldest 5 become notes; with no cap all 25 are downscaled under
-    the 2000 px many-image limit. Either way, the stored messages are not mutated."""
+    the default cap (20) the oldest batch of 10 become notes (batched omission keeps the
+    prompt cache stable); with no cap all 25 are downscaled under the 2000 px many-image
+    limit. Either way, the stored messages are not mutated."""
     history = _poisoned_history(big_png, 25)
     snapshot = copy.deepcopy(history)
 
     payload = oauth_llm._get_request_payload(history)
     imgs = _anthropic_images(payload)
-    assert len(imgs) == 20
+    assert len(imgs) == 15
     for img in imgs:
         assert max(_dims_b64(img["source"]["data"])) <= 8000
     omitted = [t for t in _anthropic_texts(payload) if t.startswith("[image omitted:")]
-    assert omitted == [f"[image omitted: campaign screenshot {i}]" for i in range(5)]
+    assert omitted == [f"[image omitted: campaign screenshot {i}]" for i in range(10)]
     assert history == snapshot
 
     image_limits.configure(max_images_per_request=0)  # no count cap → many-image rule
@@ -401,7 +402,7 @@ def test_url_images_count_toward_the_many_image_limit(oauth_llm):
     history = [*_poisoned_history(big, 20), _url_turn()]
     payload = oauth_llm._get_request_payload(history)
     _assert_legal(payload)
-    assert len(_all_wire_images(payload)) == 20  # default cap: oldest base64 dropped
+    assert len(_all_wire_images(payload)) == 11  # default cap: oldest batch of 10 base64 dropped
 
     image_limits.configure(max_images_per_request=0)  # no count cap: the URL must go
     payload = oauth_llm._get_request_payload(history)
@@ -545,13 +546,13 @@ def test_responses_api_payload_is_clamped(big_png):
 
     image_limits.configure(max_images_per_request=20)
     payload = model._get_request_payload(history)
-    assert len(_all_wire_images(payload)) == 20
+    assert len(_all_wire_images(payload)) == 13  # 23 > 20: the oldest batch of 10 goes
     notes = [
         b for item in payload["input"] for f in ("content", "output")
         for b in (item.get(f) if isinstance(item.get(f), list) else [])
         if b.get("type") == "input_text" and b["text"].startswith("[image omitted:")
     ]
-    assert len(notes) == 3
+    assert len(notes) == 10
 
 
 def test_stored_standard_image_blocks_are_recognised():
@@ -589,3 +590,81 @@ async def test_prewarm_moves_the_downscale_off_the_event_loop(monkeypatch, big_p
     out = image_limits.clamp_request_images(payload)
     assert len(calls) == n  # the clamp hit the cache — no decode on the loop
     _assert_legal(out)
+
+
+# ── prompt-cache stability (brandLaunch context-burn investigation, 10-2026) ──────────
+# Keeping exactly the newest 20 images turned one more OLD image into a note on every
+# image-adding call, rewriting a block deep in the history and invalidating a
+# 300–480k-token prompt cache on 84 of 101 such calls. Omission is now batched.
+
+
+def _wire_prefix(payload: dict, n_msgs: int) -> str:
+    import json
+
+    return json.dumps(payload["messages"][:n_msgs], sort_keys=True)
+
+
+def test_history_prefix_is_byte_stable_between_omission_batches(oauth_llm):
+    """Grow a screenshot history one image at a time. The serialized prefix — everything
+    before the newest messages — must be byte-identical from one request to the next,
+    except at the batch boundaries (21st, 31st, 41st image with the default cap of 20)."""
+    small = _png(64, 48)
+    k = 2  # the last wire message merges the newest tool result with the user's turn
+    prev = None
+    changed_at = []
+    for n in range(1, 46):
+        payload = oauth_llm._get_request_payload(_poisoned_history(small, n))
+        _assert_legal(payload)
+        if prev is not None:
+            cut = len(prev["messages"]) - k
+            if _wire_prefix(prev, cut) != _wire_prefix(payload, cut):
+                changed_at.append(n)
+        prev = payload
+    assert changed_at == [21, 31, 41]
+
+
+def test_omission_boundary_is_monotonic_and_batched():
+    """An image omitted once stays omitted as the history grows, and the boundary only
+    moves in whole batches — for the count cap and for the byte budget alike."""
+    import random
+
+    rng = random.Random(4242)
+    for cap in (1, 5, 20, 30, 0):
+        images: list[tuple[str, int]] = []
+        last_drop = 0
+        batch = image_limits.omit_batch(cap or image_limits.DEFAULT_MAX_IMAGES_PER_REQUEST)
+        for _ in range(120):
+            images.append(("b64", rng.choice((50_000, 400_000, 2_500_000, 6_000_000))) if rng.random() > 0.1 else ("ref", 0))
+            _cap, n_drop, _refs, _side = image_limits._plan(images, cap)
+            assert n_drop >= last_drop, (cap, len(images))
+            assert n_drop % batch == 0 or n_drop == len(images)
+            if cap:
+                assert len(images) - n_drop <= cap
+            last_drop = n_drop
+
+
+def test_many_image_regime_does_not_flap_with_a_high_cap():
+    """With a cap above 20 the kept count oscillates across the 20-image threshold
+    between batches; the 2000 px / omit-refs regime must not flip back off (that would
+    re-encode every image and rewrite the cache)."""
+    images: list[tuple[str, int]] = []
+    seen_many = False
+    for _ in range(100):
+        images.append(("b64", 10_000))
+        _cap, _drop, _refs, side = image_limits._plan(images, 30)
+        many = side == image_limits.MANY_IMAGES_MAX_SIDE
+        assert not (seen_many and not many)
+        seen_many = seen_many or many
+    assert seen_many
+
+
+def test_large_images_over_the_budget_are_dropped_in_batches():
+    """The byte budget is enforced on whole batches too, never image by image."""
+    images = [("b64", 2_500_000)] * 18
+    assert image_limits._plan(images[:8], 20)[1] == 0  # 8 × 2.5 MB = the 20 MB budget
+    assert image_limits._plan(images[:9], 20)[1] == 0  # can't drop a whole batch of 10 from 9
+    assert image_limits._plan(images, 20)[1] == 10  # 18 overrun it; one batch of 10 goes (8 left)
+    images.append(("b64", 2_500_000))
+    assert image_limits._plan(images, 20)[1] == 10  # one more image: same boundary
+    images += [("b64", 2_500_000)] * 2
+    assert image_limits._plan(images, 20)[1] == 20  # 21: next batch
