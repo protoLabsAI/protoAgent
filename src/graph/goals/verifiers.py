@@ -312,12 +312,29 @@ _LLM_SYSTEM = (
 )
 
 
+def _first_verdict(content: str) -> dict | None:
+    """The first JSON object in ``content`` that carries ``met`` — tolerating fences and prose
+    around it (and braces inside that prose)."""
+    dec = json.JSONDecoder()
+    i = content.find("{")
+    while i != -1:
+        try:
+            obj, _ = dec.raw_decode(content, i)
+        except ValueError:
+            obj = None
+        if isinstance(obj, dict) and "met" in obj:
+            return obj
+        i = content.find("{", i + 1)
+    return None
+
+
 async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
     if ctx.config is None:
         return VerifyResult(False, "llm verifier unavailable (no config)", "")
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        from graph.message_blocks import text_of
         from graph.llm import create_llm
 
         # Goal verification is classification, not the main reasoning task:
@@ -333,12 +350,13 @@ async def _verify_llm(spec: dict, ctx: VerifyContext) -> VerifyResult:
             [SystemMessage(content=_LLM_SYSTEM), HumanMessage(content=prompt)],
             config={"temperature": 0},
         )
-        content = resp.content if isinstance(resp.content, str) else str(resp.content)
-        # Tolerate fenced/extra text — grab the first JSON object.
-        start, end = content.find("{"), content.rfind("}")
-        if start == -1 or end == -1:
+        # A provider may answer with content BLOCKS (text + thinking), not a string: read the
+        # text blocks — str() of the list is a Python repr whose first "{" is a block dict,
+        # which failed every judgment with JSONDecodeError.
+        content = text_of(resp)
+        parsed = _first_verdict(content)
+        if parsed is None:
             return VerifyResult(False, "evaluator returned no JSON", _tail(content))
-        parsed = json.loads(content[start : end + 1])
         return VerifyResult(bool(parsed.get("met")), str(parsed.get("reason") or ""), "")
     except Exception as exc:  # fail safe: never let evaluator errors mark met
         log.warning("[goal] llm verifier error: %s", exc)

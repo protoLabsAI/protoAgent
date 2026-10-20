@@ -427,7 +427,7 @@ async def test_nonstreaming_driver_reads_beacon_priority_and_hitl_constants_from
         def active_goal(self, sid):
             return SimpleNamespace(iteration=1)
 
-        async def evaluate(self, sid, last_text=""):
+        async def evaluate(self, sid, last_text="", tool_summary=""):
             return None
 
     monkeypatch.setattr(STATE, "graph", _Graph(), raising=False)
