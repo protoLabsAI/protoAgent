@@ -690,6 +690,12 @@ class LangGraphConfig:
     # provider limits still apply).
     image_max_side: int = 1568
     max_images_per_request: int = 20
+    # Drop thinking blocks from COMPLETED prior turns before an anthropic-oauth request
+    # (graph/thinking_history.py, #4415). Opus/Sonnet 5.5 replay — and bill — every earlier
+    # turn's thinking as input; stripping the leading run before the last user turn is
+    # accepted by the API and keeps the in-flight turn's reasoning. Off by default: the
+    # model then starts each turn without its earlier reasoning (text + tool calls stay).
+    strip_prior_turn_thinking: bool = False
     # Pinned go-to models (#1957) — the chat `/model` quick-switch shows these (in
     # order) instead of the gateway's full list. Console-consumed via the settings
     # schema; empty = no favorites, /model falls back to the full model list.
@@ -2037,6 +2043,7 @@ class LangGraphConfig:
             max_tokens=model.get("max_tokens", cls.max_tokens),
             model_vision=model.get("vision", cls.model_vision),
             image_max_side=model.get("image_max_side", cls.image_max_side),
+            strip_prior_turn_thinking=bool(model.get("strip_prior_turn_thinking", cls.strip_prior_turn_thinking)),
             max_images_per_request=model.get("max_images_per_request", cls.max_images_per_request),
             model_favorites=list(model.get("favorites", []) or []),
             providers=_parse_providers(data.get("providers"), secrets),
