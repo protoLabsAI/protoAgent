@@ -50,6 +50,11 @@ two additions:
    profile is only the fallback. The absolute ``compaction.max_tokens`` ceiling rides
    the trigger as an OR clause (graph/agent.py), so it applies on any window.
 
+5. **Kept turns lose their thinking blocks.** Compaction is keep-tail; the kept turns'
+   thinking blocks were produced with the full history in front of them, and Anthropic's
+   preserved-thinking check rejects them after the rewrite (see
+   :func:`_strip_retained_thinking`).
+
 Telemetry and archiving are both best-effort: neither ever affects the model call.
 """
 
@@ -81,6 +86,28 @@ def _surface_op(state, result) -> None:
         )
     except Exception:  # noqa: BLE001 — the trajectory never touches a model call
         pass
+
+
+def _strip_retained_thinking(result):
+    """Drop thinking blocks from the messages the parent kept verbatim after the summary.
+
+    langchain's summarization is keep-tail: ``[RemoveMessage(ALL), summary, *preserved]``.
+    The preserved turns' thinking blocks were produced with the full history in front of
+    them, and Anthropic's history-editing check (preserved thinking — enforced for
+    accounts created on/after 2026-08-31, Opus 5.5 / Sonnet 5.5 / Fable 5.1 / Haiku 5.5)
+    rejects every later request that replays them: one compaction would brick the thread.
+    Stripping them from the retained turns is the documented fix; text and tool calls stay.
+    """
+    try:
+        from graph.message_blocks import without_thinking
+
+        update = list((result or {}).get("messages") or [])
+        if not update:
+            return result
+        return {**result, "messages": [update[0], *(without_thinking(m) for m in update[1:])]}
+    except Exception:  # noqa: BLE001 — never let the cleanup cost the compaction
+        log.debug("[compaction] thinking strip skipped", exc_info=True)
+        return result
 
 
 def _thread_id() -> str | None:
@@ -425,6 +452,7 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
             self._record_failure(key, state, exc)
             return None
         if result is not None:
+            result = _strip_retained_thinking(result)
             self._record_success(key)
             # The rewrite lands only when this update is RETURNED — archiving here
             # is before-commit, exactly like the manual path's ordering.
@@ -445,6 +473,7 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
             self._record_failure(key, state, exc)
             return None
         if result is not None:
+            result = _strip_retained_thinking(result)
             self._record_success(key)
             import asyncio
 

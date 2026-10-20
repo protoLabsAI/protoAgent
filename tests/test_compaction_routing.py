@@ -330,3 +330,45 @@ def test_compaction_max_tokens_parsed_from_yaml(tmp_path):
     p.write_text(yaml.safe_dump({"compaction": {"max_tokens": 150000}}))
     assert LangGraphConfig.from_yaml(p).compaction_max_tokens == 150000
     assert LangGraphConfig().compaction_max_tokens == 200_000
+
+
+def test_compaction_strips_thinking_from_the_kept_tail():
+    """Keep-tail compaction: the kept turns' thinking blocks were produced with the full
+    history in front of them; Anthropic's preserved-thinking check 400s them after the
+    rewrite. They are stripped; text and tool_use stay."""
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    think = {"type": "thinking", "thinking": "", "signature": "sig"}
+    msgs = [HumanMessage("q", id=f"h{i}") if i % 2 == 0 else AIMessage([think, {"type": "text", "text": "a"}], id=f"a{i}") for i in range(10)]
+    mw = _summ(("messages", 4), tokens=1)
+    out = mw.before_model({"messages": msgs}, None)
+    assert out is not None
+    kept = out["messages"][2:]
+    assert kept, "the parent keeps the newest messages verbatim"
+    for m in kept:
+        if isinstance(m.content, list):
+            assert all(b.get("type") != "thinking" for b in m.content)
+            assert any(b.get("type") == "text" for b in m.content)
+    assert msgs[-1].content[0]["type"] == "thinking"  # the stored history is not mutated
+
+
+def test_without_thinking_keeps_text_and_tool_use():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from graph.message_blocks import without_thinking
+
+    m = AIMessage(
+        [
+            {"type": "thinking", "thinking": "x", "signature": "s"},
+            {"type": "redacted_thinking", "data": "d"},
+            {"type": "text", "text": "hi"},
+            {"type": "tool_use", "id": "t1", "name": "f", "input": {}},
+        ],
+        tool_calls=[{"id": "t1", "name": "f", "args": {}}],
+        id="ai-1",
+    )
+    out = without_thinking(m)
+    assert [b["type"] for b in out.content] == ["text", "tool_use"]
+    assert out.id == "ai-1" and out.tool_calls[0]["id"] == "t1"
+    plain = HumanMessage("hi")
+    assert without_thinking(plain) is plain
