@@ -473,7 +473,12 @@ function handleApiGet(
       };
     case "/api/config":
       return {
-        config: { identity: { name: "mock-agent", operator: "" } },
+        // A configured endpoint: the wizard leaves a blank base/model blank (no internal
+        // pre-fill), and the setup specs walk Brain → Finish without typing one.
+        config: {
+          identity: { name: "mock-agent", operator: "" },
+          model: { provider: "openai", api_base: "https://api.proto-labs.ai/v1", name: "protolabs/reasoning" },
+        },
         soul: "# Mock agent\nYou are a helpful test agent.",
       };
     case "/api/config/oauth-status":

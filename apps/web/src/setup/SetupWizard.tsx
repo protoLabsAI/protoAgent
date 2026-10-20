@@ -37,7 +37,7 @@ import { ArchetypePicker } from "./ArchetypePicker";
 import { ArchetypeSetupForm } from "./ArchetypeSetupForm";
 import { needyPlugins } from "./depsReport";
 import { useOauthLifecycle } from "../oauth/OAuthAccount";
-import { personaSoul } from "./persona";
+import { namedSoul, personaSoul } from "./persona";
 
 // One row of the post-install dependency report (finish step): a just-enabled
 // plugin that declares pip deps the runtime doesn't have yet.
@@ -95,6 +95,10 @@ type WizardState = {
   initTasks: boolean;
 };
 
+// The dataclass default `model.api_base` (src/graph/config.py) — what an unconfigured
+// instance reports. Treated as "not set" by the first-run wizard.
+export const UNCONFIGURED_API_BASE = "http://gateway:4000/v1";
+
 export function defaultState(): WizardState {
   return {
     agentName: "protoagent",
@@ -102,9 +106,11 @@ export function defaultState(): WizardState {
     runtimeKind: "native",
     provider: "openai",
     acpAgent: "proto",
-    apiBase: "https://api.proto-labs.ai/v1",
+    // Blank, not a protoLabs-internal default (#B8): a stranger's first screen must not
+    // show a URL they can't reach. The fields carry example placeholders instead.
+    apiBase: "",
     apiKey: "",
-    modelName: "protolabs/reasoning",
+    modelName: "",
     temperature: 0.2,
     maxTokens: 32768,
     maxIterations: 2000,
@@ -132,7 +138,14 @@ export function hydrateState(payload: ConfigPayload): WizardState {
   const d = defaultState();
   const config: Partial<ConfigPayload["config"]> = payload?.config ?? {};
   const identity: Partial<ConfigPayload["config"]["identity"]> = config.identity ?? {};
-  const model: Partial<ConfigPayload["config"]["model"]> = config.model ?? {};
+  const rawModel: Partial<ConfigPayload["config"]["model"]> = config.model ?? {};
+  // A fresh install's config still carries the code-level example endpoint (an in-cluster
+  // LiteLLM hostname) and its model alias. Neither means anything to a new user, so the
+  // Brain step starts blank rather than pre-filled with an unreachable URL.
+  const unconfigured = rawModel.api_base === UNCONFIGURED_API_BASE;
+  const model: Partial<ConfigPayload["config"]["model"]> = unconfigured
+    ? { ...rawModel, api_base: "", name: "" }
+    : rawModel;
   const rt = String(config.agent_runtime || "native");
   return {
     agentName: identity.name || d.agentName,
@@ -587,7 +600,7 @@ export function SetupWizard({
           // omitted here so finishing setup leaves any existing integration config
           // untouched (the YAML write merges, never replaces).
         },
-        state.soul,
+        namedSoul(state.soul, state.agentName, pickedArchetype ? personaSoul(pickedArchetype, archetypeList) : ""),
         // The archetype's capability contract (ADR 0100) — recorded host-side so the
         // operator-status banner can check it against the tools that actually bound,
         // exactly as a member created from POST /api/fleet gets (#2277).
@@ -683,7 +696,9 @@ export function SetupWizard({
           });
         }
       } else {
-        toast({ tone: "success", title: "Setup complete", message: response.message || "Your agent is ready." });
+        // The server's message is an operator log line ("config saved • SOUL saved (1 path) •
+        // … • model=…") — fine in Settings, jargon on a first-run toast (#B9).
+        toast({ tone: "success", title: "Setup complete", message: `${state.agentName.trim() || "Your agent"} is ready — say hello.` });
       }
       onFinished();
     } catch (exc) {
@@ -944,19 +959,31 @@ export function SetupWizard({
                       shouldn't have to tune — they flow through finishSetup; tweak later in
                       Settings. */}
                   <div className="setup-grid two">
-                    <Field label="API base" value={state.apiBase} onValueChange={(value) => update({ apiBase: value })} />
+                    <FormField label="API base">
+                      <Input
+                        value={state.apiBase}
+                        onChange={(event) => update({ apiBase: event.target.value })}
+                        placeholder="e.g. https://api.openai.com/v1"
+                        autoComplete="off"
+                      />
+                    </FormField>
                     <FormField label="API key">
                       <SecretInput
                         value={state.apiKey}
                         onChange={(event) => update({ apiKey: event.target.value })}
                         autoComplete="off"
-                        placeholder="Leave blank to preserve current key"
+                        placeholder="Your endpoint's key (blank keeps a saved one)"
                       />
                     </FormField>
                   </div>
                   <div className="setup-grid model-row">
                     <FormField label="Model">
-                      <Input list="model-options" value={state.modelName} onChange={(event) => update({ modelName: event.target.value })} />
+                      <Input
+                        list="model-options"
+                        value={state.modelName}
+                        onChange={(event) => update({ modelName: event.target.value })}
+                        placeholder="Probe lists your endpoint's models"
+                      />
                       <datalist id="model-options">
                         {models.map((model) => (
                           <option key={model} value={model} />

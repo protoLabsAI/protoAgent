@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { personaSoul } from "./persona";
+import { namedSoul, personaSoul } from "./persona";
 import type { Archetype } from "../lib/types";
 
 const arch = (id: string, soul: string): Archetype => ({
@@ -31,5 +31,28 @@ describe("personaSoul", () => {
 
   it("returns empty string when there is no soul and no basic archetype to borrow from", () => {
     expect(personaSoul(arch("x", ""), [arch("custom", "# c")])).toBe("");
+  });
+});
+
+describe("namedSoul", () => {
+  const base = "# Identity\n\nI am protoAgent — a general-purpose operator agent.";
+
+  it("introduces the agent by the name chosen in the wizard", () => {
+    expect(namedSoul(base, " scout ", base)).toBe("# Identity\n\nI am scout — a general-purpose operator agent.");
+  });
+
+  it("leaves the SOUL alone for the default name, a blank name, or a custom persona", () => {
+    expect(namedSoul(base, "protoagent", base)).toBe(base);
+    expect(namedSoul(base, "", base)).toBe(base);
+    expect(namedSoul("# Mine\nI am Ada.", "scout", "# Mine\nI am Ada.")).toBe("# Mine\nI am Ada.");
+  });
+
+  it("writes a name with $ patterns literally", () => {
+    expect(namedSoul(base, "a$&b", base)).toBe("# Identity\n\nI am a$&b — a general-purpose operator agent.");
+  });
+
+  it("never rewrites a SOUL the operator edited, even if the phrase survives in it", () => {
+    const edited = "# Identity\n\nI am Ada.\n\nNote: never say \"I am protoAgent\".";
+    expect(namedSoul(edited, "scout", base)).toBe(edited);
   });
 });

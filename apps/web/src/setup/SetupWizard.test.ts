@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { defaultState, hydrateState, SetupWizard, withTimeout } from "./SetupWizard";
+import { defaultState, hydrateState, SetupWizard, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
 import { api } from "../lib/api";
 import type { Archetype, ArchetypePreview, ConfigPayload } from "../lib/types";
 
@@ -241,6 +241,19 @@ describe("hydrateState", () => {
     expect(s.middleware).toEqual({ ...d.middleware, audit: false });
     expect(s.researcherTurns).toBe(d.researcherTurns);
     expect(s.knowledgeTopK).toBe(d.knowledgeTopK);
+  });
+
+  it("a fresh install's example endpoint hydrates blank, not as an unreachable pre-fill", () => {
+    const s = hydrateState(partial({ model: { api_base: UNCONFIGURED_API_BASE, name: "protolabs/reasoning", temperature: 0.2 } }));
+    expect(s.apiBase).toBe("");
+    expect(s.modelName).toBe("");
+    expect(s.temperature).toBe(0.2);
+  });
+
+  it("a configured endpoint and model are kept", () => {
+    const s = hydrateState(partial({ model: { api_base: "https://api.openai.com/v1", name: "gpt-x" } }));
+    expect(s.apiBase).toBe("https://api.openai.com/v1");
+    expect(s.modelName).toBe("gpt-x");
   });
 });
 
