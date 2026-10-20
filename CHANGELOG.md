@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.211.2] - 2026-10-20
+
+### Fixed
+- **The setup wizard no longer pre-fills an internal gateway URL, and its finish message is plain English (#4408).**
+  The Brain step starts blank with example placeholders instead of `http://gateway:4000/v1` / `protolabs/reasoning`. The finish toast says "<name> is ready" instead of a server log line. The Basic card no longer claims "no plugins", and the persona introduces itself by the name you chose. The vega-lite skill keeps months and other ordered categories in order.
+
 ## [0.211.1] - 2026-10-20
 
 ### Fixed
