@@ -418,7 +418,7 @@ _FALLBACK_ARCHETYPES = [
         "label": "Basic",
         "icon": "Sparkles",
         "bundle": None,
-        "blurb": "A blank-slate agent — the core loop + built-in tools, no plugins.",
+        "blurb": "A blank-slate agent — the core loop and built-in tools (chat artifacts, notes, docs); add more from Discover.",
         "soul_preset": "base",
     },
     {

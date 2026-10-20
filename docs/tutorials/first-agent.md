@@ -28,7 +28,8 @@ uvx --from protolabs-agent protoagent serve
 ```
 
 Keep the terminal open, then visit <http://localhost:7870>. Run the same command
-when you want to start it again.
+when you want to start it again. If port 7870 is taken, add `--port 7880` and open
+that port instead.
 :::
 
 ::: details Run from a source checkout

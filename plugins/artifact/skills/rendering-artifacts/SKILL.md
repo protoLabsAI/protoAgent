@@ -126,6 +126,9 @@ A themed calculator skeleton:
   plugin on, `data_chart(sql, spec, title)` runs the query and inlines the rows for you.
   **Leave `$schema` out.** The renderer is always the bundled Vega-Lite v6, so a `$schema` line
   adds nothing (a v5 one only logs a version warning).
+  **Keep ordered categories in order.** A `nominal`/`ordinal` axis sorts alphabetically by
+  default, so months come out Apr, Feb, Jan… — for months, weekdays, stages or any sequence
+  set `"sort": null` (data order) or an explicit array on that encoding.
 
 **Every standard chart is a `vega-lite` artifact — no exceptions for "add it to the tool".**
 A bar, line, area, point, arc (pie/donut) or heat-map chart is ALWAYS its own `vega-lite`

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { personaSoul } from "./persona";
+import { namedSoul, personaSoul } from "./persona";
 import type { Archetype } from "../lib/types";
 
 const arch = (id: string, soul: string): Archetype => ({
@@ -31,5 +31,19 @@ describe("personaSoul", () => {
 
   it("returns empty string when there is no soul and no basic archetype to borrow from", () => {
     expect(personaSoul(arch("x", ""), [arch("custom", "# c")])).toBe("");
+  });
+});
+
+describe("namedSoul", () => {
+  const base = "# Identity\n\nI am protoAgent — a general-purpose operator agent.";
+
+  it("introduces the agent by the name chosen in the wizard", () => {
+    expect(namedSoul(base, " scout ")).toBe("# Identity\n\nI am scout — a general-purpose operator agent.");
+  });
+
+  it("leaves the SOUL alone for the default name, a blank name, or a custom persona", () => {
+    expect(namedSoul(base, "protoagent")).toBe(base);
+    expect(namedSoul(base, "")).toBe(base);
+    expect(namedSoul("# Mine\nI am Ada.", "scout")).toBe("# Mine\nI am Ada.");
   });
 });
