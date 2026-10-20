@@ -3,11 +3,13 @@ import { Spinner } from "@protolabsai/ui/data";
 import { Conversation, Message } from "@protolabsai/ui/ai";
 import { TerminalSquare } from "lucide-react";
 import { memo, useMemo } from "react";
+import { createPortal } from "react-dom";
 
 import type { ChatMessage, QueuedSteer } from "../lib/types";
 import type { SessionStatus } from "./chat-store";
 import { ChatMessageView, type ChatMessageActions } from "./ChatMessageView";
 import { hideDismissedToolCalls } from "./dismissedToolCalls";
+import { useStreamFollow } from "./streamFollow";
 
 type ChatTranscriptProps = {
   sessionId: string;
@@ -22,6 +24,8 @@ type ChatTranscriptProps = {
   onCancelDelegation: (id: string) => void;
   onDismissToolCall: (id: string) => void;
   onCancelSteer: (id: string) => void;
+  /** Bumped on every send: re-pins the transcript to the bottom (it always follows a send). */
+  followSignal?: number;
 };
 
 type TranscriptMessageRowProps = {
@@ -81,7 +85,10 @@ export const ChatTranscript = memo(function ChatTranscript({
   onCancelDelegation,
   onDismissToolCall,
   onCancelSteer,
+  followSignal = 0,
 }: ChatTranscriptProps) {
+  const rootId = `pl-conv-${sessionId}`;
+  const follow = useStreamFollow(rootId, followSignal);
   // The transcript is the one record of "settled": once a queued message's id is in it (the
   // agent consumed it and a marker or reconcile placed it), it is a normal user message and
   // must not ALSO render as pending. The slot prunes its queue to match; this keeps the one
@@ -96,7 +103,9 @@ export const ChatTranscript = memo(function ChatTranscript({
   // predates the live preview, when such a turn showed nothing else at all.)
   const liveId = liveServerTurnMessageId(messages, serverTurnLabel);
   return (
-    <Conversation id={`pl-conv-${sessionId}`}>
+    // autoScroll off: the DS follower unpinned itself when a card grew right after its own
+    // follow scroll (B6) — `useStreamFollow` owns following and the jump button instead.
+    <Conversation id={rootId} autoScroll={false}>
       {messages.length === 0 ? (
         <Empty icon={<TerminalSquare />} description="No messages in this session." />
       ) : (
@@ -142,6 +151,26 @@ export const ChatTranscript = memo(function ChatTranscript({
           </span>
         </Message>
       ) : null}
+      {follow.wrap && !follow.pinned
+        ? createPortal(
+            // The DS jump-to-latest, verbatim (class, glyph, label), portaled into the wrap
+            // that positions it — so its styling and the HITL hide rule keep applying.
+            <button type="button" className="pl-convo__jump" aria-label="Jump to latest" onClick={follow.jump}>
+              <svg
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden
+              >
+                <path d="M8 3v10M3.5 8.5L8 13l4.5-4.5" />
+              </svg>
+            </button>,
+            follow.wrap,
+          )
+        : null}
     </Conversation>
   );
 });
