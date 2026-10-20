@@ -291,13 +291,16 @@ workflows:
 # Context compaction — summarize old history near the context limit so long
 # sessions don't overflow the window. ON by default.
 #   trigger: "fraction:0.8" | "tokens:120000" | "messages:80"
-# NOTE: "fraction:"/"tokens:" need the model's context-window profile. A custom
-# gateway alias usually lacks one, so the wiring auto-falls back to a
-# message-count trigger (logged). Set "messages:N" explicitly to be deterministic.
+#   max_tokens: absolute ceiling OR-ed with the trigger — compaction fires at
+#     min(fraction × window, max_tokens). 0 = no ceiling.
+# NOTE: "fraction:" needs the model's context window (gateway, then the model's
+# langchain profile, then a conservative family window). When none is known the
+# max_tokens ceiling alone applies (or a message count, logged, when it is 0).
 #   model: a cheaper/faster alias to summarize with (blank = main model).
 compaction:
   enabled: true
   trigger: "fraction:0.8"
+  max_tokens: 200000
   keep_messages: 20
   # model: protolabs/fast
 

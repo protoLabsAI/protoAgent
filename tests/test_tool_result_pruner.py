@@ -100,3 +100,46 @@ def test_batched_pass_prunes_every_eligible_result():
 def test_est_tokens_counts_block_content():
     msgs = [AIMessage(content=[{"type": "text", "text": "x" * 400}, {"type": "thinking", "thinking": "y" * 400}])]
     assert _est_tokens(msgs) == 200
+
+
+# ── measured pressure (brandLaunch context burn, 10-2026) ─────────────────────────────
+
+
+def _with_usage(msgs, input_tokens, output_tokens=0):
+    """Stamp the newest AIMessage with the provider's reported usage."""
+    out = list(msgs)
+    for i in range(len(out) - 1, -1, -1):
+        if isinstance(out[i], AIMessage):
+            out[i] = out[i].model_copy(
+                update={"usage_metadata": {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": input_tokens + output_tokens}}
+            )
+            break
+    return out
+
+
+def test_reported_input_tokens_trigger_pruning_the_text_estimate_misses():
+    """The text estimate sees ~25k (under the 60k line); the provider reported a 90k
+    prompt (system prompt, tool schemas, images). The measured size wins."""
+    from graph.middleware.tool_result_pruner import _pressure_tokens
+
+    msgs = _thread(big_chars=100_000)
+    assert _mw().before_model({"messages": msgs}, None) is None
+    measured = _with_usage(msgs, 90_000, 500)
+    assert _pressure_tokens(measured) == 90_500 + _est_tokens(measured[-1:])
+    out = _mw().before_model({"messages": measured}, None)
+    assert out is not None and out["messages"][0].id == "tm-1"
+
+
+def test_reported_usage_never_lowers_the_estimate():
+    from graph.middleware.tool_result_pruner import _pressure_tokens
+
+    msgs = _with_usage(_thread(big_chars=400_000), 10)
+    assert _pressure_tokens(msgs) == _est_tokens(msgs)
+    assert _mw().before_model({"messages": msgs}, None) is not None
+
+
+def test_no_usage_falls_back_to_the_text_estimate():
+    from graph.middleware.tool_result_pruner import _pressure_tokens
+
+    msgs = _thread(big_chars=100_000)
+    assert _pressure_tokens(msgs) == _est_tokens(msgs)

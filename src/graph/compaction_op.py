@@ -245,7 +245,11 @@ async def compact_thread(
         )
 
     cut = _safe_cut_index(messages, keep)
-    recent_tail = messages[cut:]
+    # Thinking blocks in the kept tail were produced with the now-summarized history in
+    # front of them; Anthropic rejects them once that prefix changes (preserved thinking).
+    from graph.message_blocks import without_thinking
+
+    recent_tail = [without_thinking(m) for m in messages[cut:]]
 
     from langchain_core.messages import RemoveMessage
     from langgraph.graph.message import REMOVE_ALL_MESSAGES

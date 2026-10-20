@@ -320,7 +320,7 @@ prompt_cache:
 
 ## `pruning`
 
-In-history tool-result pruning (#2782, ADR 0101 D3/D4) — the near-lossless relief step that runs **before** compaction's lossy summarize. At `at_fraction` of the model's context window (chars÷4 estimate; a fixed conservative floor when the gateway reports no window), tool results older than the newest `keep_messages` are rewritten to bounded head + omission marker + bounded tail, in **one batched pass** so the rolling history cache breakpoints (#2777) take a single miss instead of one per call. Replacement is by message id, so tool-call pairing survives; the marker says the middle is gone and to re-run the tool if needed. A pass here often keeps the 0.8 compaction valve from firing at all.
+In-history tool-result pruning (#2782, ADR 0101 D3/D4) — the near-lossless relief step that runs **before** compaction's lossy summarize. At `at_fraction` of the model's context window — measured from the newest AI message's reported `usage_metadata` input tokens (plus a chars÷4 estimate of anything after it) when the provider reports usage, else a chars÷4 text estimate; a fixed 80k-token threshold when no window is known —, tool results older than the newest `keep_messages` are rewritten to bounded head + omission marker + bounded tail, in **one batched pass** so the rolling history cache breakpoints (#2777) take a single miss instead of one per call. Replacement is by message id, so tool-call pairing survives; the marker says the middle is gone and to re-run the tool if needed. A pass here often keeps the 0.8 compaction valve from firing at all.
 
 ```yaml
 pruning:
@@ -332,15 +332,25 @@ pruning:
 
 ## `compaction`
 
-Wires langchain's `SummarizationMiddleware` to summarize old history near the context limit (enables long-horizon runs; we otherwise only cap via `max_iterations`). Opt-in.
+Wires langchain's `SummarizationMiddleware` to summarize old history near the context limit (enables long-horizon runs; we otherwise only cap via `max_iterations`). On by default.
 
 ```yaml
 compaction:
   enabled: true
   trigger: "fraction:0.8"   # or "tokens:120000" / "messages:80"
+  max_tokens: 200000         # absolute ceiling OR-ed with the trigger; 0 = none
   keep_messages: 20          # most-recent messages kept verbatim
   model: ""                  # blank = summarize with the main model; or a cheaper one
 ```
+
+| Key | Default | What |
+|---|---|---|
+| `trigger` | `"fraction:0.8"` | When to summarize: a fraction of the context window, an absolute token count, or a message count. |
+| `max_tokens` | `200000` | Absolute token ceiling, OR-ed with `trigger`: compaction fires at **min(fraction × window, max_tokens)**. Without it a 1M-window model waited for 800k tokens, re-sending a huge prompt on every call. `0` disables the ceiling. |
+| `keep_messages` | `20` | Most-recent messages kept verbatim. |
+| `model` | `""` | Summarizer model. Blank = `routing.aux_model`, then the main model. |
+
+**Which window.** A `fraction:` trigger is sized off the window of the model **this turn** runs on — a chat tab's model override included — not the summarizer's. The window comes from the gateway's model info; when the gateway doesn't know the model, from the model's own langchain profile (`claude-opus-5-5`, `gpt-5.4`, …); for the `openai-codex` lane, a conservative 272k (the ChatGPT backend is smaller than the public API card); otherwise a conservative family window (`gpt-*` 272k, `claude-*` 200k). When no window is known at all, the `max_tokens` ceiling alone triggers (or `messages:60`, logged, when the ceiling is `0`).
 
 ## `execute_code`
 

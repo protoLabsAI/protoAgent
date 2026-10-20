@@ -369,7 +369,17 @@ FIELDS: list[Field] = [
         "Trigger",
         "string",
         "Compaction",
-        "fraction:0.8 | tokens:120000 | messages:80 (fraction/tokens need a model profile).",
+        "fraction:0.8 | tokens:120000 | messages:80 (fraction needs a known context window).",
+    ),
+    Field(
+        "compaction.max_tokens",
+        "compaction_max_tokens",
+        "Token ceiling",
+        "number",
+        "Compaction",
+        "Absolute ceiling OR-ed with the trigger: compaction fires at min(trigger, this) tokens, "
+        "so a 1M-window model doesn't wait for 800k. 0 = no ceiling.",
+        minimum=0,
     ),
     Field(
         "compaction.keep_messages",

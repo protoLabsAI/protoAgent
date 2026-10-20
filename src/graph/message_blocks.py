@@ -68,3 +68,31 @@ def tool_calls_of(message) -> list[dict]:
     if not calls and isinstance(message, dict):
         calls = message.get("tool_calls")
     return list(calls or [])
+
+
+#: Provider reasoning blocks bound to the conversation that produced them (Anthropic's
+#: "preserved thinking": a block's signature records the system prompt, tools and every
+#: earlier message, so it is valid only while that prefix is unchanged).
+THINKING_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
+
+
+def without_thinking(message):
+    """``message`` minus its ``thinking`` / ``redacted_thinking`` blocks — a copy, or the
+    same object when it has none. Text and ``tool_use`` blocks stay, so tool-call pairing
+    is untouched.
+
+    For history that is REWRITTEN under a kept message — compaction keeps the newest turns
+    verbatim after a summary — those turns' thinking blocks were produced with the full,
+    now-removed history in front of them. Anthropic rejects such a block (HTTP 400,
+    "bound to a different conversation") on accounts that enforce the history-editing
+    check; its documented recovery is exactly this: strip the thinking blocks from the
+    retained turns. A message left with no blocks is skipped by the Anthropic client.
+    """
+    content = getattr(message, "content", None)
+    if not isinstance(content, list):
+        return message
+    kept = [b for b in content if not (isinstance(b, dict) and b.get("type") in THINKING_BLOCK_TYPES)]
+    if len(kept) == len(content):
+        return message
+    copy = getattr(message, "model_copy", None)
+    return copy(update={"content": kept}) if copy else message

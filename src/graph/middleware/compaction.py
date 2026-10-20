@@ -41,11 +41,26 @@ two additions:
    (:class:`CompactionFailedContextOverflow`; the provider's text is kept so the
    server's overflow recovery still matches it).
 
+4. **The window is THIS turn's model's** (brandLaunch context burn, 10-2026). The
+   parent sizes a ``fraction:`` trigger off ``self.model.profile`` — the SUMMARIZER's
+   profile, built once from the config model. A chat tab on another model (the
+   per-turn ``model`` override) or a cheap ``compaction.model`` was measured against
+   the wrong window. A ``window_resolver(state)`` (``graph.model_window
+   .context_window_for_turn``) now supplies the window per call; the summarizer's
+   profile is only the fallback. The absolute ``compaction.max_tokens`` ceiling rides
+   the trigger as an OR clause (graph/agent.py), so it applies on any window.
+
+5. **Kept turns lose their thinking blocks.** Compaction is keep-tail; the kept turns'
+   thinking blocks were produced with the full history in front of them, and Anthropic's
+   preserved-thinking check rejects them after the rewrite (see
+   :func:`_strip_retained_thinking`).
+
 Telemetry and archiving are both best-effort: neither ever affects the model call.
 """
 
 from __future__ import annotations
 
+import contextvars
 import logging
 
 from langchain.agents.middleware import SummarizationMiddleware
@@ -71,6 +86,28 @@ def _surface_op(state, result) -> None:
         )
     except Exception:  # noqa: BLE001 — the trajectory never touches a model call
         pass
+
+
+def _strip_retained_thinking(result):
+    """Drop thinking blocks from the messages the parent kept verbatim after the summary.
+
+    langchain's summarization is keep-tail: ``[RemoveMessage(ALL), summary, *preserved]``.
+    The preserved turns' thinking blocks were produced with the full history in front of
+    them, and Anthropic's history-editing check (preserved thinking — enforced for
+    accounts created on/after 2026-08-31, Opus 5.5 / Sonnet 5.5 / Fable 5.1 / Haiku 5.5)
+    rejects every later request that replays them: one compaction would brick the thread.
+    Stripping them from the retained turns is the documented fix; text and tool calls stay.
+    """
+    try:
+        from graph.message_blocks import without_thinking
+
+        update = list((result or {}).get("messages") or [])
+        if not update:
+            return result
+        return {**result, "messages": [update[0], *(without_thinking(m) for m in update[1:])]}
+    except Exception:  # noqa: BLE001 — never let the cleanup cost the compaction
+        log.debug("[compaction] thinking strip skipped", exc_info=True)
+        return result
 
 
 def _thread_id() -> str | None:
@@ -190,15 +227,46 @@ class CompactionFailedContextOverflow(_OverflowBase):
     """
 
 
+# The window of the model THIS call runs on, set around each hook. A ContextVar, not an
+# attribute: one middleware instance serves every concurrent session's turns.
+_TURN_WINDOW: contextvars.ContextVar[int | None] = contextvars.ContextVar("compaction_turn_window", default=None)
+
+
 class CountingSummarizationMiddleware(SummarizationMiddleware):
     """``SummarizationMiddleware`` + archive-first (#2784) + a compaction counter."""
 
-    def __init__(self, *args, knowledge_store=None, **kwargs):
+    def __init__(self, *args, knowledge_store=None, window_resolver=None, default_window: int | None = None, **kwargs):
+        # Set BEFORE the parent's __init__: it validates a ``fraction`` trigger by asking
+        # ``_get_profile_limits``, which reads these.
+        self._window_resolver = window_resolver
+        self._default_window = default_window if isinstance(default_window, int) and default_window > 0 else None
         super().__init__(*args, **kwargs)
         self._knowledge_store = knowledge_store
         # Replace the parent's retry-everything ``with_retry()`` wrapper.
         self._summary_model = _TransientRetry(self.model)
         self._backoff: dict[str, dict] = {}
+
+    # ── per-turn window ──────────────────────────────────────────────────────
+
+    def _get_profile_limits(self) -> int | None:  # type: ignore[override]
+        """The window a ``fraction`` trigger is sized off: this turn's model's (set by
+        the hooks), else the configured model's, else the summarizer's own profile."""
+        win = _TURN_WINDOW.get()
+        if win:
+            return win
+        if getattr(self, "_default_window", None):
+            return self._default_window
+        return super()._get_profile_limits()
+
+    def _bind_turn_window(self, state):
+        resolver = getattr(self, "_window_resolver", None)
+        win = None
+        if resolver is not None:
+            try:
+                win = resolver(state)
+            except Exception:  # noqa: BLE001 — sizing never breaks a turn; fall back
+                log.debug("[compaction] per-turn window resolution failed", exc_info=True)
+        return _TURN_WINDOW.set(win if isinstance(win, int) and win > 0 else None)
 
     # ── failure backoff ──────────────────────────────────────────────────────
 
@@ -359,6 +427,20 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
     # ── hooks ────────────────────────────────────────────────────────────────
 
     def before_model(self, state, runtime):  # type: ignore[override]
+        token = self._bind_turn_window(state)
+        try:
+            return self._before_model(state, runtime)
+        finally:
+            _TURN_WINDOW.reset(token)
+
+    async def abefore_model(self, state, runtime):  # type: ignore[override]
+        token = self._bind_turn_window(state)
+        try:
+            return await self._abefore_model(state, runtime)
+        finally:
+            _TURN_WINDOW.reset(token)
+
+    def _before_model(self, state, runtime):
         key = _backoff_key(state)
         if self._skip_for_backoff(key, state):
             return None
@@ -370,6 +452,7 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
             self._record_failure(key, state, exc)
             return None
         if result is not None:
+            result = _strip_retained_thinking(result)
             self._record_success(key)
             # The rewrite lands only when this update is RETURNED — archiving here
             # is before-commit, exactly like the manual path's ordering.
@@ -378,7 +461,7 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
             _surface_op(state, result)
         return result
 
-    async def abefore_model(self, state, runtime):  # type: ignore[override]
+    async def _abefore_model(self, state, runtime):
         key = _backoff_key(state)
         if self._skip_for_backoff(key, state):
             return None
@@ -390,6 +473,7 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
             self._record_failure(key, state, exc)
             return None
         if result is not None:
+            result = _strip_retained_thinking(result)
             self._record_success(key)
             import asyncio
 

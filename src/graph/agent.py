@@ -379,34 +379,47 @@ def _build_middleware(
     if config.compaction_enabled:
         from graph.middleware.compaction import CountingSummarizationMiddleware
 
+        from graph.model_window import context_window_for, context_window_for_turn
+
         summ_model = create_llm(config, model_name=_resolve_aux_model(config, config.compaction_model))
         keep = ("messages", config.compaction_keep_messages)
+        ceiling = _compaction_ceiling(config)
+        try:
+            _window = context_window_for(config)
+        except Exception:  # noqa: BLE001 — unknown window → the summarizer's own profile
+            _window = None
+        common = dict(
+            model=summ_model,
+            keep=keep,
+            # Archive-first (#2784, ADR 0101 D5): the pre-compaction transcript
+            # lands in the knowledge store before the rewrite is committed.
+            knowledge_store=knowledge_store,
+            # The fraction is of THIS turn's model's window (a per-chat model
+            # override), not the summarizer's profile; the config model's window
+            # is the default.
+            window_resolver=lambda state: context_window_for_turn(config, state),
+            default_window=_window,
+        )
         try:
             mw = CountingSummarizationMiddleware(
-                model=summ_model,
-                trigger=_parse_compaction_trigger(config.compaction_trigger),
-                keep=keep,
-                # Archive-first (#2784, ADR 0101 D5): the pre-compaction transcript
-                # lands in the knowledge store before the rewrite is committed.
-                knowledge_store=knowledge_store,
+                trigger=compaction_trigger_clauses(config.compaction_trigger, ceiling), **common
             )
         except ValueError:
-            # `fraction:`/`tokens:` triggers need the model's context-window
-            # profile, which custom gateway aliases don't expose — langchain
-            # raises here. Fall back to a message-count trigger so compaction
-            # still runs instead of taking down the whole graph at load.
+            # A `fraction:` trigger needs a context window and none is known (no
+            # gateway entry, no langchain profile, no known family) — langchain
+            # raises here. Fall back to the absolute ceiling alone, or a
+            # message-count trigger when there is none, so compaction still runs
+            # instead of taking down the whole graph at load.
             import logging
 
-            fallback = max(config.compaction_keep_messages * 3, 60)
+            fallback = ("tokens", ceiling) if ceiling else ("messages", max(config.compaction_keep_messages * 3, 60))
             logging.getLogger(__name__).warning(
-                "[compaction] trigger %r needs a model profile that %r lacks; falling back to messages:%d",
+                "[compaction] trigger %r needs a context window that %r lacks; falling back to %s:%d",
                 config.compaction_trigger,
                 config.model_name,
-                fallback,
+                *fallback,
             )
-            mw = CountingSummarizationMiddleware(
-                model=summ_model, trigger=("messages", fallback), keep=keep, knowledge_store=knowledge_store
-            )
+            mw = CountingSummarizationMiddleware(trigger=fallback, **common)
         middleware.append(mw)
 
     # Model routing / failover — retry on fallback models (same gateway).
@@ -526,6 +539,27 @@ def _auto_background_seconds() -> float:
         return max(0.0, float(os.environ.get("BACKGROUND_AUTO_S", "0")))
     except ValueError:
         return 0.0
+
+
+def _compaction_ceiling(config) -> int:
+    """``compaction.max_tokens`` as a positive int, or 0 (no ceiling)."""
+    try:
+        return max(0, int(getattr(config, "compaction_max_tokens", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def compaction_trigger_clauses(spec: str, ceiling: int = 0):
+    """The langchain trigger for ``compaction.trigger`` plus the absolute
+    ``compaction.max_tokens`` ceiling, OR-ed (a list of clauses fires when ANY is met),
+    so the effective threshold is min(fraction × window, ceiling). Without a ceiling
+    it is the parsed trigger alone, exactly as before."""
+    trigger = _parse_compaction_trigger(spec)
+    if not ceiling or trigger == ("tokens", ceiling):
+        return trigger
+    if trigger[0] == "tokens":
+        return ("tokens", min(trigger[1], ceiling))
+    return [trigger, ("tokens", ceiling)]
 
 
 def _parse_compaction_trigger(spec: str):
