@@ -38,6 +38,10 @@
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
   overflow: hidden;
+  /* `overflow: hidden` drops a grid item's automatic minimum height to 0, so when the
+     overview scrolls in a short rail the auto rows share the scroller's height and every
+     card clips its own content (empty-state buttons cut by the border). Size to content. */
+  min-height: max-content;
   cursor: pointer;
   transition:
     transform 120ms ease,
