@@ -15,6 +15,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.211.1] - 2026-10-20
+
+### Fixed
+- **The `/goal` llm verifier now sees the turn's tool calls, and reads replies that come as content blocks (#4399).** The judge was always handed `Recent tool calls: (none)`, so a goal proven by tool results (write a note, read it back) never passed and looped until it was marked unachievable. The goal drive now gives it the current turn's tool calls, each paired with its result. A judge reply made of content blocks (text plus thinking) is no longer misread as an `evaluator error: JSONDecodeError`.
+
+- **Image generation, transcription and embeddings reach the gateway the setup wizard configured (#4400).** The wizard writes one connection and a qualified `model.name`, leaving legacy `model.api_base` on the App default `http://gateway:4000/v1`; `gateway_client()` (plugin `/images/*`, core `/audio/transcriptions`), embeddings and the context-window probe read only that legacy field, so they failed with `ConnectError [Errno 8]` while chat worked — and the reload mirrored the dead host into `host-config.yaml`. They now resolve the connection the chat model runs on (`graph.llm.resolve_gateway_route`), the Host-layer mirror writes that endpoint (a stale value heals on the next reload), and the egress auto-allow covers it.
+
+- **vega-lite charts render on the first try (#4401).** The chart frame's CSP refused the vendored `pl-embed.css` stylesheet, and the error overlay reported that refused stylesheet as "Script error" with a failed render verdict. The chart had drawn fine, but `check_artifact` reported a failure, so the agent kept re-trying and then fell back to Chart.js. The CSP now admits that one sheet, and a stylesheet or image that fails to load is no longer reported as a render failure.
+
+- **An answered agent form no longer doubles the agent's reply after a reload, and reads as the picked labels in a rebuilt chat (#4403).**
+  Answering a `request_user_input` form continues the same task as a new turn, so a reload
+  wrote the agent's reply onto the question turn too and it appeared twice — only the turn
+  after your answer takes it now. The answer's labelled card text is also kept in the server
+  transcript, so a chat rebuilt on another browser shows `Plan: Plan C` instead of the
+  resume JSON.
+
+- **The chat transcript keeps following the stream when artifacts grow, and a send always brings you back to the latest turn (#4404).**
+  Turns that produced tall cards (a diagram, a chart, an inline artifact) left the view parked on the first card with the jump button showing, and every later turn landed off-screen. The follow scroll's own scroll event arrived after the card had grown and was read as "the user scrolled away". Following now stops only when you scroll up yourself. Layout shifts (an iframe measuring itself, a card settling shorter) are caught back up to the bottom, the jump button lands at the real bottom, and every send re-pins.
+
 ## [0.211.0] - 2026-10-19
 
 ### Added

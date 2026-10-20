@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.211.1",
+    "date": "2026-10-20",
+    "changes": [
+      "The /goal llm verifier now sees the turn's tool calls, and reads replies that come as content blocks (#4399).",
+      "Image generation, transcription and embeddings reach the gateway the setup wizard configured (#4400).",
+      "vega-lite charts render on the first try (#4401).",
+      "An answered agent form no longer doubles the agent's reply after a reload, and reads as the picked labels in a rebuilt chat (#4403).",
+      "The chat transcript keeps following the stream when artifacts grow, and a send always brings you back to the latest turn (#4404)."
+    ]
+  },
+  {
     "version": "v0.211.0",
     "date": "2026-10-19",
     "changes": [
