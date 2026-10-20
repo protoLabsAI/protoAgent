@@ -23,7 +23,10 @@ test("mobile: New agent → pick → set-up dialog fits the phone and creates", 
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("header-menu").click();
   await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("combobox", { name: "Settings sections" }).selectOption("Fleet"); // the side nav collapses to a <select> on a phone
+  // The side nav collapses to a DS Menu switcher on a phone (ds-o0k): open the ghost trigger
+  // (named "<active section> Settings sections" via aria-labelledby) and pick the Fleet radio row.
+  await page.getByRole("button", { name: /Settings sections/ }).click();
+  await page.getByRole("menuitemradio", { name: "Fleet", exact: true }).click();
   await page.getByRole("button", { name: "New agent" }).click();
 
   await page.locator(".pl-radiocard", { hasText: "Product Manager" }).tap();
@@ -65,7 +68,8 @@ test("mobile: From a bundle URL — the form and the bundle preview fit the phon
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("header-menu").click();
   await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("combobox", { name: "Settings sections" }).selectOption("Fleet");
+  await page.getByRole("button", { name: /Settings sections/ }).click();
+  await page.getByRole("menuitemradio", { name: "Fleet", exact: true }).click();
   await page.getByRole("button", { name: "New agent" }).click();
   await page.getByRole("tab", { name: "From a bundle URL" }).tap();
   await page.getByLabel("Repository URL").fill("https://github.com/acme/analyst-archetype");

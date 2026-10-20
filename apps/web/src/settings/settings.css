@@ -60,7 +60,7 @@
   padding-left: var(--pl-space-4);
 }
 /* The rail column — fixed width (SideNav renders without `responsive`, so it stays a
-   vertical tablist and never collapses to the <select>; see SettingsSurface). */
+   vertical tablist and never collapses to the switcher; see SettingsSurface). */
 .settings-shell > .pl-sidenav-wrap {
   flex: 0 0 200px;
   min-height: 0;
@@ -95,9 +95,11 @@
 
 /* Phones: the two-column shell can't fit a 200px rail + readable content in a ~360px
    overlay, so stack it — the SideNav (rendered `responsive` on mobile, see
-   SettingsSurface) becomes a full-width <select> on top, content fills the width below.
-   The DS collapse is a 15rem container query on the rail's own width; the stacked rail is
-   full-width (> 15rem) so that query never fires — force the <select> by viewport instead. */
+   SettingsSurface) becomes a full-width section switcher on top, content fills the width
+   below. The DS collapse is a 15rem container query on the rail's own width; the stacked
+   rail is full-width (> 15rem) so that query never fires — force the collapsed switcher by
+   viewport instead. @protolabsai/ui 0.68.3 (ds-o0k) replaced the native <select> with the
+   `.pl-sidenav__collapsed` ghost trigger + DS Menu, so the override points there now. */
 @media (max-width: 767px) {
   .settings-shell {
     flex-direction: column;
@@ -116,8 +118,8 @@
   .settings-shell > .pl-sidenav-wrap--responsive > .pl-sidenav {
     display: none;
   }
-  .settings-shell > .pl-sidenav-wrap--responsive > .pl-sidenav__select {
-    display: block;
+  .settings-shell > .pl-sidenav-wrap--responsive > .pl-sidenav__collapsed {
+    display: flex;
   }
 }
 

@@ -107,7 +107,7 @@ const RENDERERS: Record<SettingsSectionId, () => ReactNode> = {
 export function SettingsSurface({ initialSection }: { initialSection?: string } = {}) {
   const onHost = isHostConsole();
   // On phones the two-column shell can't fit a 200px rail + readable content, so collapse
-  // the SideNav to its DS <select> (mobile only — the desktop rail is deliberately a tablist).
+  // the SideNav to its DS Menu switcher (mobile only — the desktop rail is deliberately a tablist).
   const isMobile = useIsMobile();
   const persistedSection = useUI((s) => s.settingsSection);
   const setSection = useUI((s) => s.setSettingsSection);
