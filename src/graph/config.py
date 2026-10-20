@@ -821,12 +821,18 @@ class LangGraphConfig:
     # summarize old history near the context limit. ON by default (a long
     # session would otherwise overflow the window). trigger is
     # "fraction:0.8" | "tokens:120000" | "messages:80"; keep = last N messages.
-    # NOTE: "fraction:"/"tokens:" triggers need the model's context-window
-    # profile; for a custom gateway alias that lacks one, the wiring falls back
-    # to a message-count trigger (see graph/agent.py) instead of crashing.
+    # NOTE: "fraction:" triggers need the model's context window (gateway, then
+    # the model's langchain profile, then a conservative family window — see
+    # graph/model_window.py); when none is known the wiring falls back to the
+    # ``max_tokens`` ceiling alone, or a message count when that is 0.
+    # ``max_tokens`` is an ABSOLUTE ceiling OR-ed with the trigger, so the
+    # effective threshold is min(fraction × window, max_tokens): on a 1M-window
+    # model "fraction:0.8" alone meant 800k — never reached, while a thread grew
+    # to 478k tokens of prompt per call (brandLaunch, 10-2026). 0 = no ceiling.
     compaction_enabled: bool = True
     compaction_trigger: str = "fraction:0.8"
     compaction_keep_messages: int = 20
+    compaction_max_tokens: int = 200_000
     # In-history tool-result pruning (#2782, ADR 0101 D3) — the near-lossless
     # step BEFORE compaction's lossy summarize: at ``at_fraction`` of the model's
     # context window, tool results older than the newest ``keep_messages`` are
@@ -2076,6 +2082,7 @@ class LangGraphConfig:
             compaction_enabled=data.get("compaction", {}).get("enabled", cls.compaction_enabled),
             compaction_trigger=data.get("compaction", {}).get("trigger", cls.compaction_trigger),
             compaction_keep_messages=data.get("compaction", {}).get("keep_messages", cls.compaction_keep_messages),
+            compaction_max_tokens=data.get("compaction", {}).get("max_tokens", cls.compaction_max_tokens),
             pruning_enabled=data.get("pruning", {}).get("enabled", cls.pruning_enabled),
             pruning_at_fraction=data.get("pruning", {}).get("at_fraction", cls.pruning_at_fraction),
             pruning_keep_messages=data.get("pruning", {}).get("keep_messages", cls.pruning_keep_messages),

@@ -10,11 +10,14 @@ often relieves enough pressure that the 0.8 compaction valve never fires.
 
 Mechanics:
 
-- **Pressure-triggered, late by default.** Nothing happens until the estimated
-  request size crosses ``pruning.at_fraction`` of the model's context window
-  (chars//4 heuristic — same arithmetic as the meter; precision belongs to the
-  adapter layer). Without a gateway window profile it degrades to a fixed
-  conservative token estimate, mirroring compaction's messages-count fallback.
+- **Pressure-triggered, late by default.** Nothing happens until the request
+  size crosses ``pruning.at_fraction`` of the model's context window. The size
+  is MEASURED when it can be: the newest ``AIMessage``'s ``usage_metadata``
+  (the provider's own count of the prompt that produced it — system prompt,
+  tool schemas and images included, which a text estimate can't see) plus its
+  output and a chars//4 estimate of anything after it. The text-only chars//4
+  estimate is the floor and the fallback. Without any known window it degrades
+  to a fixed conservative token threshold.
 - **One batched pass, not continuous nibbling.** Every eligible result is
   rewritten in the same update. Each rewrite invalidates the rolling history
   breakpoints (#2777) once — batching amortizes that to one cache miss per
@@ -70,6 +73,31 @@ def _est_tokens(messages) -> int:
     return total // 4
 
 
+def _pressure_tokens(messages) -> int:
+    """The request size the next model call will carry, in tokens.
+
+    The text-only :func:`_est_tokens` undercounts badly on a real agent (the system
+    prompt, tool schemas and every image are invisible to it: a brandLaunch thread
+    reported 478k prompt tokens while the estimate sat far below the pruning line).
+    When the newest ``AIMessage`` carries ``usage_metadata``, its ``input_tokens`` (+
+    ``output_tokens`` — that message is in the next prompt too) is the provider's own
+    measurement; only what came after it is estimated. Never lower than the estimate.
+    """
+    est = _est_tokens(messages)
+    for idx in range(len(messages) - 1, -1, -1):
+        usage = getattr(messages[idx], "usage_metadata", None)
+        if getattr(messages[idx], "type", "") != "ai" or not usage:
+            continue
+        try:
+            reported = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+        except (AttributeError, TypeError, ValueError):
+            break
+        if reported <= 0:
+            break
+        return max(est, reported + _est_tokens(messages[idx + 1 :]))
+    return est
+
+
 def _stub(text: str, *, tool_name: str) -> str:
     omitted = len(text) - STUB_HEAD_CHARS - STUB_TAIL_CHARS
     marker = (
@@ -121,7 +149,7 @@ class ToolResultPrunerMiddleware(AgentMiddleware):
         messages = state.get("messages") or []
         if len(messages) <= self._keep:
             return None
-        est = _est_tokens(messages)
+        est = _pressure_tokens(messages)
         if est < self._threshold_tokens(state):
             return None
 
@@ -143,7 +171,7 @@ class ToolResultPrunerMiddleware(AgentMiddleware):
             return None
 
         log.info(
-            "[pruning] context ~%dk est. tokens crossed the %.0f%% threshold — pruned %d tool "
+            "[pruning] context ~%dk tokens crossed the %.0f%% threshold — pruned %d tool "
             "result(s) older than the last %d messages in one batched pass (~%dk tokens relieved)",
             est // 1000,
             self._at * 100,

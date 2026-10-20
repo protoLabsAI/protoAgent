@@ -124,6 +124,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "commons_path": "",
     "compaction_enabled": True,
     "compaction_keep_messages": 20,
+    "compaction_max_tokens": 200_000,
     "pruning_enabled": True,
     "pruning_at_fraction": 0.6,
     "pruning_keep_messages": 20,

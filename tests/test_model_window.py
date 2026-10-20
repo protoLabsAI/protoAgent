@@ -87,7 +87,7 @@ def test_unknown_model_is_none(monkeypatch):
             },
         ),
     )
-    assert model_window.context_window_for(_cfg(model_name="claude-opus-4-8")) is None
+    assert model_window.context_window_for(_cfg(model_name="protolabs/mystery")) is None
 
 
 def test_unreachable_gateway_is_none_and_not_refetched(monkeypatch):
@@ -185,3 +185,37 @@ def test_two_keys_on_one_base_are_cached_apart(monkeypatch):
     assert model_window.context_window_for(_cfg(api_key="k-two"), "m") == 2000
     assert model_window.context_window_for(_cfg(api_key="k-one"), "m") == 1000  # still cached, still its own
     assert len(seen) == 2
+
+
+# ── fallback when the gateway doesn't know the model (brandLaunch context burn) ───────
+
+
+def _gateway_knows_nothing(monkeypatch):
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp(200, {"data": []}))
+
+
+def test_gateway_miss_falls_back_to_the_models_own_langchain_profile(monkeypatch):
+    _gateway_knows_nothing(monkeypatch)
+    from langchain_anthropic.data._profiles import _PROFILES
+
+    want = _PROFILES["claude-opus-5-5"]["max_input_tokens"]
+    assert model_window.context_window_for(_cfg(model_name="claude-opus-5-5")) == want
+    # a gateway alias that wraps a known id resolves through its bare name
+    assert model_window.context_window_for(_cfg(model_name="anthropic/claude-opus-5-5")) == want
+
+
+def test_the_codex_lane_gets_the_conservative_subscription_window(monkeypatch):
+    """gpt-6.1-sol's public-API profile says ~1M; the ChatGPT backend is smaller. The
+    codex lane — the lead's ``model.provider`` or a qualified slot — uses the
+    conservative subscription window, never the API card."""
+    _gateway_knows_nothing(monkeypatch)
+    cfg = SimpleNamespace(**vars(_cfg(model_name="gpt-6.1-sol")), model_provider="openai-codex", providers=[], providers_declared=False)
+    assert model_window.context_window_for(cfg) == model_window.CODEX_SUBSCRIPTION_WINDOW
+    assert model_window.fallback_window(cfg, "gpt-6.1-sol", "openai-codex") == model_window.CODEX_SUBSCRIPTION_WINDOW
+
+
+def test_unknown_family_member_gets_a_conservative_family_window(monkeypatch):
+    _gateway_knows_nothing(monkeypatch)
+    assert model_window.context_window_for(_cfg(model_name="gpt-99-nova")) == 272_000
+    assert model_window.context_window_for(_cfg(model_name="claude-future-9")) == 200_000
+    assert model_window.context_window_for(_cfg(model_name="protolabs/smart")) is None

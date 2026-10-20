@@ -99,7 +99,83 @@ def context_window_for(config: LangGraphConfig, model_name: str | None = None, c
     # one a connection-built chat client actually talks to. Without it a wizard-written
     # config (one declared connection, legacy ``model.api_base`` left on the App default)
     # probed a host that does not exist and ran with no known window.
-    return _window_on_route(resolve_model_route(config, connection), (model_name or config.model_name or "").strip())
+    model = (model_name or config.model_name or "").strip()
+    win = _window_on_route(resolve_model_route(config, connection), model)
+    if win:
+        return win
+    ptype = getattr(connection, "type", "") if connection is not None else ""
+    return fallback_window(config, model, ptype)
+
+
+# ── when the gateway doesn't know: the model's own profile, then a known family ────────
+#
+# The gateway lookup alone left the window unknown for every native-subscription model
+# (``anthropic-oauth`` / ``openai-codex`` don't go through a gateway at all) and for any
+# alias the gateway doesn't describe — so the pruner sized itself off a fixed 80k guess,
+# the meter had no denominator, and compaction relied on whatever profile the client
+# library happened to ship (brandLaunch on codex ``gpt-6.1-sol``, 10-2026).
+
+#: The ChatGPT-subscription (Codex) backend enforces a smaller window than the public
+#: API's model card — the Codex CLI itself budgets 272k for its models. Conservative on
+#: purpose: an underestimate only compacts/prunes early, an overestimate overflows.
+CODEX_SUBSCRIPTION_WINDOW = 272_000
+#: Conservative windows by family, for a model neither the gateway nor a client-library
+#: profile describes. Longest prefix wins.
+KNOWN_FAMILY_WINDOWS: tuple[tuple[str, int], ...] = (
+    ("gpt-", 272_000),
+    ("o3", 200_000),
+    ("o4", 200_000),
+    ("claude-", 200_000),
+)
+
+
+def _library_profile_window(model: str) -> int | None:
+    """``max_input_tokens`` from langchain-anthropic / langchain-openai's bundled model
+    profiles — what the client would report as ``profile`` for this exact model id."""
+    for mod in ("langchain_anthropic.data._profiles", "langchain_openai.data._profiles"):
+        try:
+            import importlib
+
+            profiles = getattr(importlib.import_module(mod), "_PROFILES", None) or {}
+        except Exception:  # noqa: BLE001 — optional dependency / private table moved
+            continue
+        win = (profiles.get(model) or {}).get("max_input_tokens")
+        if isinstance(win, int) and win > 0:
+            return win
+    return None
+
+
+def fallback_window(config, model: str, provider_type: str = "") -> int | None:
+    """The window for ``model`` when the gateway doesn't report one.
+
+    ``provider_type`` is the lane the model runs on (a connection's ``type``); blank means
+    "work it out": a provider-qualified value names its lane, an unqualified one runs on
+    ``model.provider``. Order: the Codex subscription window for the codex lane; the
+    model's own langchain profile (a gateway alias like ``anthropic/claude-opus-5-5`` is
+    tried bare too); a conservative family window; else None.
+    """
+    model = (model or "").strip()
+    if not model:
+        return None
+    if not provider_type:
+        try:
+            from graph.llm import resolve_slot_target  # lazy — llm imports this module
+
+            prefix, _entry, ptype, bare = resolve_slot_target(model, config)
+            if prefix:
+                provider_type, model = ptype, bare or model
+        except Exception:  # noqa: BLE001 — a probe never breaks a turn
+            pass
+        provider_type = provider_type or str(getattr(config, "model_provider", "") or "")
+    if provider_type.strip().lower() == "openai-codex":
+        return CODEX_SUBSCRIPTION_WINDOW
+    bare = model.rsplit("/", 1)[-1]
+    for name in dict.fromkeys((model, bare)):
+        win = _library_profile_window(name)
+        if win:
+            return win
+    best = max((p for p in KNOWN_FAMILY_WINDOWS if bare.lower().startswith(p[0])), key=lambda p: len(p[0]), default=None)
+    return best[1] if best else None
 
 
 def context_window_for_slot(config: LangGraphConfig, model_name: str | None) -> int | None:
@@ -119,7 +195,7 @@ def context_window_for_slot(config: LangGraphConfig, model_name: str | None) -> 
     provider = next((p for p in (getattr(config, "providers", None) or []) if p.id == prefix), None)
     if provider is None:
         return context_window_for(config, bare or None)
-    return _window_on_route(resolve_model_route(config, provider), bare)
+    return _window_on_route(resolve_model_route(config, provider), bare) or fallback_window(config, bare, provider.type)
 
 
 def _window_on_route(route, model: str) -> int | None:

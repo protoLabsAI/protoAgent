@@ -27,16 +27,22 @@ session would otherwise hit the context window and error.
 compaction:
   enabled: true
   trigger: "fraction:0.8"   # | "tokens:120000" | "messages:80"
+  max_tokens: 200000         # absolute ceiling: fires at min(0.8 × window, 200k)
   keep_messages: 20
   # model: protolabs/fast   # summarize with a cheap model (blank = main model)
 ```
 
-**Trigger caveat:** `fraction:` and `tokens:` need the model's context-window
-**profile**. A custom gateway alias (e.g. `protolabs/reasoning`) usually doesn't
-expose one, so langchain raises at construction. The wiring catches this and
-**falls back to a message-count trigger** (logged) rather than crashing the
-graph — but for deterministic behavior on a profile-less model, set
-`trigger: "messages:N"` explicitly.
+**Why a ceiling.** On a 1M-window model `fraction:0.8` alone means 800k tokens —
+in practice never — while every call re-sends the whole history. A thread that
+grows to several hundred thousand prompt tokens costs that on every tool step;
+`max_tokens` bounds it regardless of the window. Set `0` to rely on the fraction.
+
+**Which window.** The fraction is sized off the window of the model the turn
+actually runs on (per-chat overrides included): the gateway's model info first,
+then the model's own langchain profile, then a conservative window (272k for the
+`openai-codex` lane and unknown `gpt-*`, 200k for unknown `claude-*`). With no
+known window, the `max_tokens` ceiling alone triggers (a message count, logged,
+only when the ceiling is `0`). See [configuration › compaction](../reference/configuration.md#compaction).
 
 ## Aux-model routing
 
