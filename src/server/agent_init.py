@@ -161,9 +161,13 @@ def apply_egress_allowlist(config) -> None:
     that stopped auto-allowing the gateway left the whole suite green.
     """
     from graph.config import resolve_model_route
+    from graph.llm import resolve_gateway_route
     from security import egress
 
-    egress.set_allowed_hosts(config.egress_allowed_hosts, also_allow_url=resolve_model_route(config).base_url or "")
+    # Both: the default route, and the connection the chat model / gateway HTTP client
+    # actually talk to — a wizard-written config leaves the former on the App default.
+    gateways = [resolve_model_route(config).base_url or "", resolve_gateway_route(config).base_url or ""]
+    egress.set_allowed_hosts(config.egress_allowed_hosts, also_allow_url=gateways)
 
 
 def _init_langgraph_agent(headless_setup: bool = False):

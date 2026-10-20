@@ -82,7 +82,7 @@ def _fetch_window_map(api_base: str, api_key: str) -> dict[str, int]:
     return out
 
 
-def context_window_for(config: LangGraphConfig, model_name: str | None = None) -> int | None:
+def context_window_for(config: LangGraphConfig, model_name: str | None = None, connection=None) -> int | None:
     """The input context window (``max_input_tokens``) for a model on the gateway, or ``None``.
 
     Fetched once per gateway base and cached, so it's safe to call per turn. Returns ``None``
@@ -94,7 +94,12 @@ def context_window_for(config: LangGraphConfig, model_name: str | None = None) -
     # secrets manager, where `model.api_key` is blank by design): a 401, an unknown window
     # for the life of the process, and everything sized off it quietly on its fallback
     # (#3502).
-    return _window_on_route(resolve_model_route(config), (model_name or config.model_name or "").strip())
+    #
+    # ``connection`` (a registered ``Provider``) asks THAT connection's gateway instead — the
+    # one a connection-built chat client actually talks to. Without it a wizard-written
+    # config (one declared connection, legacy ``model.api_base`` left on the App default)
+    # probed a host that does not exist and ran with no known window.
+    return _window_on_route(resolve_model_route(config, connection), (model_name or config.model_name or "").strip())
 
 
 def context_window_for_slot(config: LangGraphConfig, model_name: str | None) -> int | None:

@@ -23,7 +23,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from pydantic import Field
 
 from graph import image_limits, llm_limiter
-from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, Provider, resolve_model_route
+from graph.config import PROVIDER_TYPE_OPENAI_COMPAT, LangGraphConfig, ModelRoute, Provider, resolve_model_route
 from graph.providers.identity import tag_model_provider
 
 log = logging.getLogger(__name__)
@@ -890,7 +890,7 @@ def _build_gateway_llm(
     try:
         from graph.model_window import context_window_for
 
-        win = context_window_for(config, kwargs.get("model"))
+        win = context_window_for(config, kwargs.get("model"), connection=provider)
         if win:
             kwargs.setdefault("profile", {"max_input_tokens": win})
     except Exception:  # noqa: BLE001 — model-info must never break model creation
@@ -969,6 +969,49 @@ def resolve_slot_target(model_name: str | None, config: LangGraphConfig | None =
     entry = config.provider_by_id(slot_provider) if config is not None else None
     ptype = entry.type if entry is not None else slot_provider
     return slot_provider, entry, ptype, slot_model
+
+
+def resolve_gateway_route(config) -> ModelRoute:
+    """The OpenAI-compatible endpoint + key the gateway-endpoint callers talk to.
+
+    Embeddings, transcription and :func:`gateway_client` (``/images/*``, ``/audio/*`` for
+    plugins) are not chat calls, but they must reach the SAME gateway the chat model runs
+    on. Reading only the legacy default route (``model.api_base`` / ``model.api_key``) broke
+    every config the setup wizard writes (ADR 0106): it declares one connection and a
+    qualified ``model.name`` (``gateway:protolabs/smart``), so chat ran on the connection
+    while ``model.api_base`` sat on the App default ``http://gateway:4000/v1`` — image
+    generation, transcription and embeddings all failed DNS on a host that does not exist.
+
+    Precedence, mirroring what ``create_llm`` builds the lead model on:
+
+    1. the lead ``model.name`` names a registered openai-compat connection → that
+       connection (exactly the chat model's endpoint and key);
+    2. the lead runs on a native provider (no gateway of its own) → a registered
+       ``gateway`` openai-compat connection with an endpoint, when one is declared;
+    3. otherwise the legacy default route — which IS the chat model's route for an
+       unqualified lead, so nothing that worked before moves.
+
+    A connection is resolved strictly from its own fields (``resolve_model_route``), so one
+    connection's key never travels to another's endpoint.
+    """
+    providers = getattr(config, "providers", None) or []
+    if providers and hasattr(config, "provider_by_id"):
+        slot, entry, ptype, _ = resolve_slot_target(getattr(config, "model_name", "") or "", config)
+        if entry is not None and ptype == PROVIDER_TYPE_OPENAI_COMPAT:
+            route = resolve_model_route(config, entry)
+            if route.base_url:
+                return route
+        from graph.providers import is_native_oauth_provider
+
+        native_lead = (bool(slot) and ptype != PROVIDER_TYPE_OPENAI_COMPAT and slot != GATEWAY_SLOT) or (
+            not slot and is_native_oauth_provider(getattr(config, "model_provider", ""))
+        )
+        gateway = config.provider_by_id(GATEWAY_SLOT) if native_lead else None
+        if gateway is not None and gateway.type == PROVIDER_TYPE_OPENAI_COMPAT:
+            route = resolve_model_route(config, gateway)
+            if route.base_url:
+                return route
+    return resolve_model_route(config)
 
 
 def _build_llm_kwargs(config: LangGraphConfig, connection: Provider | None = None) -> dict:
@@ -1233,7 +1276,9 @@ def _build_embeddings(config: LangGraphConfig) -> "OpenAIEmbeddings | None":
     model = (getattr(config, "embed_model", "") or "").strip()
     if not model:
         return None
-    route = resolve_model_route(config)
+    # The connection the chat model runs on, not the legacy default route (see
+    # ``resolve_gateway_route``).
+    route = resolve_gateway_route(config)
     return OpenAIEmbeddings(
         base_url=route.base_url,
         api_key=route.api_key,
@@ -1277,7 +1322,7 @@ def create_embed_batch_fn(
 # an image plugin. Every such call must reproduce three load-bearing details, so
 # they live in ONE factory instead of being re-derived per caller:
 #
-#   1. the default route's endpoint + key (bearer auth), from ``resolve_model_route``;
+#   1. the chat model's connection endpoint + key (bearer auth), from ``resolve_gateway_route``;
 #   2. the allowlisted User-Agent — the gateway's Cloudflare WAF 403s default
 #      SDK UAs (see the ``default_headers`` note in ``_build_llm_kwargs``);
 #   3. the egress-trust property (ADR 0008): the ``api_base`` host is
@@ -1291,8 +1336,12 @@ _GATEWAY_CLIENT_TIMEOUT_S = 120.0
 
 
 def _gateway_client_kwargs(config: LangGraphConfig, *, timeout: float) -> dict:
-    """The shared httpx client kwargs (base_url + bearer + allowlisted UA + timeout)."""
-    route = resolve_model_route(config)
+    """The shared httpx client kwargs (base_url + bearer + allowlisted UA + timeout).
+
+    Endpoint and key are the connection the chat model runs on (``resolve_gateway_route``)
+    — never the legacy ``model.api_base`` alone, which a wizard-written config leaves on
+    the App default."""
+    route = resolve_gateway_route(config)
     headers = {"User-Agent": _GATEWAY_UA}
     if route.api_key:
         headers["Authorization"] = f"Bearer {route.api_key}"
@@ -1305,7 +1354,7 @@ def gateway_client(
     """An ``httpx.AsyncClient`` pre-configured for the model gateway (#1931).
 
     Request relative paths (``await client.post("/images/generations", json=…)``) —
-    they resolve under the configured ``api_base`` with bearer auth and the
+    they resolve under the chat model's gateway connection with bearer auth and the
     allowlisted User-Agent already set, zero hand-set headers. Use it per call
     (``async with``); ``**httpx_kwargs`` forwards to the client constructor
     (e.g. a ``transport`` in tests). Plugins reach this via
