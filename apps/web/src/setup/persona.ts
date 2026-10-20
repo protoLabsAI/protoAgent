@@ -17,5 +17,6 @@ export function personaSoul(a: Archetype, archetypes: Archetype[]): string {
 export function namedSoul(soul: string, agentName: string, seededSoul: string): string {
   const name = agentName.trim();
   if (!name || name.toLowerCase() === "protoagent" || soul !== seededSoul) return soul;
-  return soul.replace(/\bI am protoAgent\b/, `I am ${name}`);
+  // A replacer function, not a string: a name like "a$&b" must land literally.
+  return soul.replace(/\bI am protoAgent\b/, () => `I am ${name}`);
 }

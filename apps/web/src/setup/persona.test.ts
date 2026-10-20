@@ -47,6 +47,10 @@ describe("namedSoul", () => {
     expect(namedSoul("# Mine\nI am Ada.", "scout", "# Mine\nI am Ada.")).toBe("# Mine\nI am Ada.");
   });
 
+  it("writes a name with $ patterns literally", () => {
+    expect(namedSoul(base, "a$&b", base)).toBe("# Identity\n\nI am a$&b — a general-purpose operator agent.");
+  });
+
   it("never rewrites a SOUL the operator edited, even if the phrase survives in it", () => {
     const edited = "# Identity\n\nI am Ada.\n\nNote: never say \"I am protoAgent\".";
     expect(namedSoul(edited, "scout", base)).toBe(edited);
