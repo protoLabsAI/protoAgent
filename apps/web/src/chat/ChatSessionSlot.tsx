@@ -82,6 +82,7 @@ import { beginLocalTurn, reconcileSessionStatus } from "./sessionLiveness";
 import { watchGoalKickoff, type GoalKickoffWatch } from "./goalKickoffWatch";
 import { loadDraft, loadScroll, saveDraft, saveScroll } from "./scratchState";
 import { createStreamWatchdog } from "./streamWatchdog";
+import { markUserScroll } from "./streamFollow";
 import { composerPlaceholder } from "./composerPlaceholder";
 
 // A stable event function whose body always sees the latest render. Transcript props need
@@ -194,6 +195,9 @@ export function ChatSessionSlot({
   const session = useSession(sessionId);
   const chat = useChatState();
   const [draft, setDraft] = useState(() => loadDraft(sessionId));
+  // Bumped on every send; the transcript re-pins to the bottom when it changes (B6).
+  const [followSignal, setFollowSignal] = useState(0);
+  const repinTranscript = () => setFollowSignal((n) => n + 1);
   // Persist the draft per session (Swap & Resume S3) — an agent switch is a full
   // navigation, and a half-written message used to vanish silently. Debounced a
   // touch so streaming keystrokes don't hammer sessionStorage.
@@ -568,8 +572,9 @@ export function ChatSessionSlot({
     if (!el) return;
     const saved = loadScroll(sessionId);
     if (saved !== null && el.scrollHeight > el.clientHeight) {
-      // After the DS's land-at-bottom mount effect — two frames out.
+      // After the transcript's land-at-bottom mount effect — two frames out.
       requestAnimationFrame(() => requestAnimationFrame(() => {
+        markUserScroll(el); // your place, restored — the transcript stops following
         el.scrollTop = saved;
       }));
     }
@@ -692,6 +697,9 @@ export function ChatSessionSlot({
     // steer instead. It folds into the agent's context right AFTER the form
     // response (submit or dismiss), with the same queued-bubble + ✕ affordances
     // as mid-turn steering. Attachments stay in the tray for the next real send.
+    if (draft.trim() && (hitl || serverTurnControl || canSend)) {
+      repinTranscript(); // a send always brings the transcript back to the latest (B6)
+    }
     if (hitl) {
       void queueSteer();
       return;
@@ -784,6 +792,7 @@ export function ChatSessionSlot({
   function sendDespiteDuplicate() {
     setDuplicateRisk((risk) => nextDuplicateRisk(risk, { type: "sent" }));
     if (turnInterruptible) {
+      repinTranscript();
       void (serverTurnControl ? queueServerInterjection() : queueSteer());
     } else {
       void send();
@@ -994,6 +1003,8 @@ export function ChatSessionSlot({
     } = {},
   ) {
     if (!session || !content) return;
+    // Every visible send — composer, artifact bridge, HITL answer — re-pins the transcript.
+    if (!opts.hidden) repinTranscript();
     // `sendAs` (attachment context prepended) is what the MODEL receives; `content`
     // is what the user bubble shows.
     const sent = opts.sendAs ?? content;
@@ -1833,6 +1844,7 @@ export function ChatSessionSlot({
               onCancelDelegation={transcriptCancelDelegation}
               onDismissToolCall={transcriptDismissToolCall}
               onCancelSteer={transcriptCancelSteer}
+              followSignal={followSignal}
             />
           </ComponentFrameRegistryContext.Provider>
         </ComponentChatSendContext.Provider>
@@ -1987,7 +1999,10 @@ export function ChatSessionSlot({
           busy={chatComposerBusy(status, serverTurnLabel, serverTurnControl)}
           onQueue={
             turnInterruptible
-              ? () => void (serverTurnControl ? queueServerInterjection() : queueSteer())
+              ? () => {
+                  repinTranscript();
+                  void (serverTurnControl ? queueServerInterjection() : queueSteer());
+                }
               : undefined
           }
           onStop={turnInterruptible ? () => void stop() : undefined}
