@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.211.2",
+    "date": "2026-10-20",
+    "changes": [
+      "The setup wizard no longer pre-fills an internal gateway URL, and its finish message is plain English (#4408)."
+    ]
+  },
+  {
     "version": "v0.211.1",
     "date": "2026-10-20",
     "changes": [
