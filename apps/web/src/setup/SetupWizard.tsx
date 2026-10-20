@@ -600,7 +600,7 @@ export function SetupWizard({
           // omitted here so finishing setup leaves any existing integration config
           // untouched (the YAML write merges, never replaces).
         },
-        namedSoul(state.soul, state.agentName),
+        namedSoul(state.soul, state.agentName, pickedArchetype ? personaSoul(pickedArchetype, archetypeList) : ""),
         // The archetype's capability contract (ADR 0100) — recorded host-side so the
         // operator-status banner can check it against the tools that actually bound,
         // exactly as a member created from POST /api/fleet gets (#2277).

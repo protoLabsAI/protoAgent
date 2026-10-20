@@ -38,12 +38,17 @@ describe("namedSoul", () => {
   const base = "# Identity\n\nI am protoAgent — a general-purpose operator agent.";
 
   it("introduces the agent by the name chosen in the wizard", () => {
-    expect(namedSoul(base, " scout ")).toBe("# Identity\n\nI am scout — a general-purpose operator agent.");
+    expect(namedSoul(base, " scout ", base)).toBe("# Identity\n\nI am scout — a general-purpose operator agent.");
   });
 
   it("leaves the SOUL alone for the default name, a blank name, or a custom persona", () => {
-    expect(namedSoul(base, "protoagent")).toBe(base);
-    expect(namedSoul(base, "")).toBe(base);
-    expect(namedSoul("# Mine\nI am Ada.", "scout")).toBe("# Mine\nI am Ada.");
+    expect(namedSoul(base, "protoagent", base)).toBe(base);
+    expect(namedSoul(base, "", base)).toBe(base);
+    expect(namedSoul("# Mine\nI am Ada.", "scout", "# Mine\nI am Ada.")).toBe("# Mine\nI am Ada.");
+  });
+
+  it("never rewrites a SOUL the operator edited, even if the phrase survives in it", () => {
+    const edited = "# Identity\n\nI am Ada.\n\nNote: never say \"I am protoAgent\".";
+    expect(namedSoul(edited, "scout", base)).toBe(edited);
   });
 });

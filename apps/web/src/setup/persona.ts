@@ -11,10 +11,11 @@ export function personaSoul(a: Archetype, archetypes: Archetype[]): string {
 
 // The Basic preset introduces itself as "I am protoAgent". When the operator names the
 // agent something else in the wizard, the persona should agree with the name on screen —
-// otherwise "scout" answers "I'm protoAgent" when asked who it is. Only that exact
-// self-introduction is rewritten; a custom or edited SOUL is left alone.
-export function namedSoul(soul: string, agentName: string): string {
+// otherwise "scout" answers "I'm protoAgent" when asked who it is. Only an UNEDITED preset
+// (soul === the archetype's seeded SOUL) is rewritten; once the operator has touched the
+// text, it is saved exactly as written.
+export function namedSoul(soul: string, agentName: string, seededSoul: string): string {
   const name = agentName.trim();
-  if (!name || name.toLowerCase() === "protoagent") return soul;
+  if (!name || name.toLowerCase() === "protoagent" || soul !== seededSoul) return soul;
   return soul.replace(/\bI am protoAgent\b/, `I am ${name}`);
 }
