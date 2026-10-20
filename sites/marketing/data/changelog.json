@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.212.0",
+    "date": "2026-10-20",
+    "changes": [
+      "Opt-in: drop completed earlier turns' thinking from Claude requests (#4417).",
+      "Image-heavy chats no longer rewrite the prompt cache on every new image (#4412).",
+      "Compaction now fires on long threads with large-window models (#4416).",
+      "anthropic-oauth sends the thinking shape each Claude model accepts (#4418)."
+    ]
+  },
+  {
     "version": "v0.211.2",
     "date": "2026-10-20",
     "changes": [
