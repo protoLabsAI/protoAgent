@@ -23,6 +23,7 @@ so the graph and middleware treat it like any other model.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import time
 from functools import cached_property
@@ -445,6 +446,88 @@ def resolve_claude_model_name(config: "LangGraphConfig", model_name: str | None 
     return name
 
 
+# Manual thinking budgets (``thinking: {type: "enabled", budget_tokens: N}``) per effort —
+# only for the models that predate adaptive thinking (see :func:`claude_thinking_kwargs`).
+_LEGACY_THINKING_BUDGETS = {"low": 4096, "medium": 8192, "high": 16384, "xhigh": 24576, "max": 24576}
+_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# Effort spellings other providers use that have an obvious Anthropic equivalent.
+_EFFORT_ALIASES = {"minimal": "low"}
+_CLAUDE_VERSION = re.compile(r"^claude-(?:opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?:-|$)")
+_CLAUDE_3_FAMILY = re.compile(r"^claude-(?:instant|\d)(?:[-.]|$)")
+
+
+def _claude_version(model: str) -> tuple[int, int] | None:
+    """``(major, minor)`` of a Claude model id, or None when the id doesn't say.
+
+    ``claude-opus-5-5`` → (5, 5); ``claude-sonnet-4-20250514`` → (4, 0) (an 8-digit date
+    is not a minor version); ``claude-3-7-sonnet-latest`` → (3, 7).
+    """
+    m = _CLAUDE_VERSION.match(model)
+    if m:
+        return int(m.group(1)), int(m.group(2) or 0)
+    m = re.match(r"^claude-(\d)(?:-(\d))?-", model)
+    if m:
+        return int(m.group(1)), int(m.group(2) or 0)
+    if _CLAUDE_3_FAMILY.match(model):
+        return 3, 0
+    return None
+
+
+def claude_thinking_kwargs(
+    model: str, *, thinking: str = "", effort: str | None = None, max_tokens: int | None = None
+) -> dict[str, Any]:
+    """``ChatAnthropic`` kwargs for ``model.thinking`` / reasoning effort on ``model`` (#4418).
+
+    Anthropic's thinking request shape depends on the model family (checked against the
+    platform docs' per-model thinking table, 2026-10-20):
+
+    - **Claude 4.6 and newer** (Opus 4.6/4.7/4.8/5/5.5, Sonnet 4.6/5/5.5, Haiku 5.5,
+      Fable/Mythos 5.x) — adaptive thinking: ``thinking: {type: "adaptive"}`` with depth
+      set by ``output_config.effort``. ``budget_tokens`` is a 400 on 4.7+ and every 5.x
+      model (deprecated on 4.6). ``display: "summarized"`` keeps the thinking text visible
+      (the 4.7+ default is ``"omitted"``, which streams empty thinking blocks).
+    - **Before 4.6** (Opus/Sonnet/Haiku 4.5, Opus 4.1, Sonnet/Opus 4, Claude 3.x) — the
+      manual budget: ``thinking: {type: "enabled", budget_tokens: N}`` scaled by effort.
+      Adaptive thinking is a 400 there, and ``effort`` is not sent.
+
+    An unrecognised id is treated as current (adaptive): every model released since 4.6
+    rejects ``budget_tokens``, so that is the shape a new model will accept.
+
+    ``thinking == "disabled"`` sends no ``thinking`` field — on 4.6–4.8 that is thinking
+    off; on the 5.x family thinking can't be disabled (an explicit ``disabled`` is a 400
+    on Opus 5.5), so effort is the only control and still rides ``output_config``.
+    """
+    raw = (effort or "").strip().lower()
+    level = _EFFORT_ALIASES.get(raw, raw) or None
+    if level is not None and level not in _EFFORT_LEVELS:
+        log.warning("[anthropic-oauth] ignoring unknown reasoning effort %r for %s", effort, model)
+        level = None
+    wants_thinking = thinking == "enabled" or (level is not None and thinking != "disabled")
+    if not wants_thinking and level is None:
+        return {}
+
+    version = _claude_version(model)
+    if version is not None and version < (4, 6):
+        if not wants_thinking:
+            return {}
+        budget = _LEGACY_THINKING_BUDGETS.get(level or "medium", 8192)
+        if max_tokens:
+            # budget_tokens must be >= 1024 and < max_tokens, or the request 400s.
+            if max_tokens <= 1024:
+                return {}
+            budget = min(budget, max_tokens - 1)
+        return {"thinking": {"type": "enabled", "budget_tokens": budget}}
+
+    out: dict[str, Any] = {}
+    if wants_thinking:
+        out["thinking"] = {"type": "adaptive", "display": "summarized"}
+    if level is not None:
+        if level == "xhigh" and version is not None and version < (4, 7):
+            level = "high"  # xhigh arrived with Opus 4.7; 4.6 takes low/medium/high/max
+        out["output_config"] = {"effort": level}
+    return out
+
+
 def build_anthropic_oauth_llm(
     config: "LangGraphConfig",
     *,
@@ -494,10 +577,7 @@ def build_anthropic_oauth_llm(
         "default_headers": oauth_default_headers(),
     }
     effort = reasoning_effort if reasoning_effort is not None else config.reasoning_effort
-    if config.thinking == "enabled" or effort:
-        # Extended thinking. Budget scales with the requested effort.
-        budget = {"low": 4096, "medium": 8192, "high": 16384, "max": 24576}.get(effort or "medium", 8192)
-        kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    kwargs.update(claude_thinking_kwargs(name, thinking=config.thinking, effort=effort, max_tokens=config.max_tokens))
 
     llm = _OAuthChatAnthropic(**kwargs)
     llm._strip_prior_thinking = bool(getattr(config, "strip_prior_turn_thinking", False))
