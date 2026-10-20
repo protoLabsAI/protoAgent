@@ -38,8 +38,6 @@ export type StreamFollower = {
   follow(): void;
   /** A scroll event. Unpins only on a user's upward move that leaves the bottom. */
   onScroll(): void;
-  /** An explicit upward gesture (wheel up) — stop following now, before the scroll lands. */
-  release(): void;
   /** Re-pin and land at the bottom (a send, or the jump button). */
   pin(scrollTo?: (top: number) => void): void;
 };
@@ -79,9 +77,6 @@ export function createStreamFollower(
         }
       }
       lastTop = top;
-    },
-    release() {
-      setPinned(false);
     },
     pin(scrollTo) {
       setPinned(true);
@@ -138,11 +133,9 @@ export function useStreamFollow(rootId: string, signal: number) {
     follower.pin(); // land at the bottom on mount
     const onScroll = () => follower.onScroll();
     const mark = () => markUserScroll(scroller);
-    const onWheel = (e: WheelEvent) => {
-      mark();
-      // Only a wheel that can actually move the view up — not one at the top already.
-      if (e.deltaY < 0 && scroller.scrollTop > 0) follower.release();
-    };
+    // A wheel only marks intent; the scroll it causes (if any) does the unpinning. Releasing
+    // on the wheel itself would unpin for a wheel that scrolled a nested code block or zoomed.
+    const onWheel = mark;
     // A scrollbar drag holds the pointer for as long as it likes; count all of it.
     const onPointerDown = () => {
       pointerDown = true;

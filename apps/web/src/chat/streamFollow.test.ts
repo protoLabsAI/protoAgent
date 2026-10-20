@@ -72,11 +72,12 @@ describe("createStreamFollower", () => {
     expect(f.pinned).toBe(true);
   });
 
-  it("an upward wheel releases at once; scrolling back to the bottom re-pins", () => {
+  it("scrolling back to the bottom re-pins", () => {
     const b = box(2000);
     const f = createStreamFollower(b, () => {});
     f.pin();
-    f.release();
+    b.scrollTop -= 400;
+    f.onScroll();
     expect(f.pinned).toBe(false);
     b.scrollTop = b.scrollHeight;
     f.onScroll();
