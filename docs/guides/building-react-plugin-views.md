@@ -501,6 +501,23 @@ pieces, none of them core edits:
    (`e.source === window.parent`; check `e.origin` against `location.ancestorOrigins[0]` where
    available) — never from a frame you embed. A delivery type can't be `protoagent:*`.
 
+### Inline design previews
+
+The design-system plugin uses this same seam for `design-preview-ref`. Its tools save
+immutable palette and contrast snapshots in the plugin's instance store, then emit only
+`{preview_id, title}` into chat. The console fetches the snapshot through the authenticated
+`/api/plugins/design-system/previews/{preview_id}` route and renders swatches, copy controls,
+or a contrast specimen. Reloading a conversation preserves the original values.
+
+Component previews use the published Storybook and are labeled **live**. A variant picker
+changes the inline frame; **Open playground** sends `design-system:select-story` with
+`{story_id}` through the view inbox. The plugin installs its listener before the ready
+handshake and keeps the selection until its catalog finishes loading.
+
+The renderer ships in the console's `src/ext/designSystem.tsx`; installing the Python
+plugin alone cannot add it to an older console. Missing plugins or snapshots render an
+unavailable message. Exported references require access to the original instance's store.
+
 ## Fleet-proxied requests: the 20-second read lane
 
 When your view runs on a fleet **member**, every request rides the hub's reverse

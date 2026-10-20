@@ -1110,6 +1110,14 @@ function scenarioFor(prompt) {
     };
   if (t.includes("CALC"))
     return { name: "calculator", input: { expression: "19 * 23" }, output: "19 * 23 = 437", answer: "19 × 23 = 437." };
+  if (t.includes("DESIGN-PREVIEW"))
+    return {
+      component: {
+        component: "design-preview-ref",
+        props: { preview_id: "a".repeat(32), title: "Design example" },
+      },
+      answer: "Here is the design preview.",
+    };
   if (t.includes("COMPONENT"))
     // show_component (#1323): the tool fires AND emits a component-v1 part. The tool card is
     // suppressed (it's a render directive); the table renders inline below the answer.
