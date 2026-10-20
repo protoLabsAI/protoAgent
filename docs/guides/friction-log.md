@@ -40,8 +40,8 @@ plugins:
 ```
 
 You can also use the **Enable / Disable** toggle in **Settings ▸ Plugins ▸ Installed**.
-The Friction view is a console surface, so removing it needs a restart; the toggle says
-so. If you only want the agent to stop *seeing* its backlog each turn, and still want it
+Disabling removes the plugin's tools and view; restart only if the app requests it.
+If you only want the agent to stop *seeing* its backlog each turn, and still want it
 to record, leave the plugin on and set `friction.working_state: false` (see
 [How it affects the agent](#how-it-affects-the-agent)).
 
@@ -171,12 +171,8 @@ what period, and the payload. The row's action button turns that into an issue:
 Pin `issue_repo` to the repo that owns the **runtime**: upstream protoAgent, or your
 fork of it. Set it in **Settings ▸ Plugins ▸ Friction Log**.
 
-`issue_repo` is **not** taken from the project the agent is working in. Harness friction
-is about the agent's own tools and framework, not about the repo it happens to be
-editing. Before v0.180.0 the plugin guessed the repo from the agent's first managed
-project. For a coding agent onboarded onto someone else's repo (a client's project, or a
-private repo from a coding interview), that pointed the file-an-issue link at the wrong
-tracker. Now it is either the repo you pinned, or the clipboard.
+`issue_repo` is not inferred from a managed project. Set it to the repository that
+owns the runtime; leave it empty to copy an issue draft to the clipboard.
 
 For filing an issue from chat with the repo's issue-gate sections, see
 [File GitHub issues (`/issue`)](/guides/file-github-issues).
@@ -232,13 +228,9 @@ exact counts.
 
 ### The knobs
 
-| Key | Default | Effect |
-|---|---|---|
-| `working_state` | `true` | Project open friction into `<working_state>` at all |
-| `working_state_limit` | `3` | At most this many friction lines per turn. The block is shared with the agent's tasks and other work |
-| `working_state_repeat_threshold` | `3` | How many times a `minor` group must repeat before it is carried. `major` is always carried |
-
-These are read live, so a change applies on the next turn with no restart.
+Set `working_state`, `working_state_limit`, and `working_state_repeat_threshold`
+in the [configuration reference below](#configuration-reference). Changes apply
+on the next turn without a restart.
 
 ### When to turn projection off
 
@@ -305,36 +297,12 @@ friction:
 Use it for an agent whose shell tool **is** the job, and where even a `cat` through the
 shell isn't worth a row. Tool **errors** are still captured for exempt tools.
 
-## Worked example: a coding agent drowning in escape-hatch noise
+## Clear noise from older versions {#worked-example-a-coding-agent-drowning-in-escape-hatch-noise}
 
-**What happened.** A hands-on coding agent (clone a repo, run the tests, find the bug,
-commit) used `run_command` for most of its work. Before v0.180.0, auto-capture logged
-*every* shell call as friction. Its ledger ended up with **131** auto entries, all with
-the same summary:
-
-```
-reached for escape hatch 'run_command' — candidate for a first-class tool
-```
-
-**127** of them were git, vitest, `tsc`, npm and `mise`: normal work with no
-first-class equivalent. Only **4** (`ls`, `cat`, `grep`) duplicated a tool the agent
-had. Because the group repeated past the threshold, the working state told the agent
-`minor x131: reached for escape hatch 'run_command'` on every turn. That pushed it away
-from the tool it needed most.
-
-The same agent had a second problem. `issue_repo` was empty, so the plugin derived it
-from the agent's first managed project, which was the private repo the agent was
-working in. Its **File issue** links pointed at someone else's tracker.
-
-**What changed in v0.180.0.**
-
-- Shell commands are logged only when they duplicate a bound tool, using the table
-  above. Git, tests and builds are no longer logged.
-- The entry names the tool to use, and the working-state hint says `use <tool>`.
-- Working-state counts are bucketed (`x100+`), so the line stops changing every turn.
-- `escape_hatch_exempt` was added.
-- `issue_repo` is never derived from a project. It is either pinned, or empty and
-  copy-to-clipboard.
+Before v0.180.0, auto-capture counted every shell call as friction and could infer
+an issue repository from a managed project. Current versions only classify shell
+commands that duplicate a bound tool, and require an explicit `issue_repo`.
+Old ledger entries remain until resolved.
 
 **Cleaning up after the upgrade.** The upgrade doesn't rewrite your ledger. Rows
 recorded under the old rule stay open until you resolve them, and while they're open

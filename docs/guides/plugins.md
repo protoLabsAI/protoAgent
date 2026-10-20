@@ -5,7 +5,7 @@ without changing core. Plugins run in the server process with its privileges.
 Enable only code you trust. Some bundled plugins are enabled by default; the
 `delegates` registry is built in and needs no enable step.
 
-To use an existing plugin, follow [Install and publish plugins](/guides/plugin-registry).
+To use an existing plugin, follow [Install and manage plugins](/guides/plugin-registry).
 Telegram is bundled; Discord, GitHub, Google, and Slack install from external repos.
 
 ## Start here
@@ -82,45 +82,23 @@ def register(registry):
     registry.register_skill_dir("skills")  # bundle SKILL.md skills (relative to the plugin)
 ```
 
-`register` is called once at load. The registry accepts these contribution types
-(plus console **views**, declared in the manifest — see [Building a plugin view](/guides/building-react-plugin-views)) —
-a fork adds any of them as a plugin, never editing the core `server/` package:
+`register` runs when the plugin loads. Choose the contribution needed for your task:
 
-| Method | Contributes | Lifecycle |
-|---|---|---|
-| `register_tool(tool)` / `register_tools(iter)` | A LangChain tool | graph build (live-reloads) |
-| `emit(topic, data)` / `on(topic, handler)` | Broadcast / subscribe on the **event bus** (ADR 0039) — `emit` auto-namespaces to `<plugin>.<topic>`; `on` takes `*`/`#` wildcards | any time (publish is fire-and-forget) |
-| `navigate(view="")` | Ask the console to focus one of **this plugin's own views** (ADR 0044) — scoped to your plugin id, blank opens the first view | any time (fire-and-forget) |
-| `live_config()` | The plugin's **current** resolved config, re-read from the host each call — use it inside a mounted router/surface so config edits take effect without a restart (`registry.config` is a register-time snapshot) | any time |
-| `register_skill_dir(path)` | A `SKILL.md` directory (procedural memory) | graph build |
-| `register_workflow_dir(path)` | A directory of `*.yaml` workflow recipes | workflow-registry build |
-| `register_a2a_skill(spec)` | An A2A **card** skill (what the card advertises; optional structured output) | agent-card build |
-| `register_router(router, prefix=None)` | A FastAPI `APIRouter` | **mounted once** at init (default prefix `/plugins/<id>`) |
-| `register_surface(start, stop=None, name=None, reload=None)` | A background surface (a Discord-style gateway) | `start` in startup, `stop` in shutdown, `reload(cfg)` on config save |
-| `register_subagent(config)` | A `SubagentConfig` (a delegate) | added to `SUBAGENT_REGISTRY` |
-| `register_middleware(factory)` | A LangGraph **`AgentMiddleware`** (per-turn before/after-model + tool hooks) — `factory(config) → middleware \| None` | graph build; appended before message-capture (ADR 0032) |
-| `register_goal_verifier(name, fn)` | An in-process **goal/watch verifier** (ADR 0028) — dispatched by a `{"type": "plugin", "check": "<plugin-id>:<name>"}` goal or watch spec | graph build (re-set on reload) |
-| `register_goal_hook(on_achieved=, on_failed=)` | React when a **goal** reaches a terminal state (ADR 0028) — the `GoalState` in, push a notification / set the next goal | graph build (re-set on reload) |
-| `register_watch_hook(on_met=, on_expired=, on_stalled=)` | React when a **watch** trips (ADR 0067) — met / deadline passed / evidence stalled | graph build (re-set on reload) |
-| `register_lifecycle_hook(on_app_loaded=, on_agent_active=, on_system_wake=)` | React to a **system lifecycle** event (ADR 0074) — see [Lifecycle events](/guides/lifecycle-events) | graph build (re-set on reload) |
-| `register_knowledge_store(name, factory)` | A **knowledge backend** (ADR 0031) — `factory(config) → KnowledgeBackend`, selected by a fork's `knowledge.backend: "<name>"` (pgvector/Qdrant/…); degrades to the built-in SQLite store on error | graph build |
-| `register_embedder(name, factory)` | An in-process **embedder** (ADR 0031) — `factory(config) → (text) → vector`, selected by `knowledge.embedder: "<name>"` to skip the gateway round-trip; degrades to the gateway embedder on error | graph build |
-| `register_mcp_server(factory)` | A **managed MCP server** the agent connects to | `factory(config)` called at each graph build → entry dict or `None` |
-| `register_thread_id_resolver(fn)` | A `(request_metadata, session_id) → str` checkpointer-scope resolver (e.g. per-project memory) | each turn; one wins (last plugin) |
-| `register_chat_command(name, handler)` | A **user-only** `/<name>` chat control command that short-circuits the turn (the generalized `/goal`) — token slugified+lowercased; `goal` and `lifecycle` are reserved core tokens (refused); see [publish guide](/guides/plugin-registry) | chat dispatch; first plugin to claim a token wins |
-| `register_late_tool_factory(factory)` | A tool factory that runs **after** the full toolset is assembled — `factory(all_tools, config) → tool \| list \| None`, for meta-tools that must see every other tool | graph build, appended last |
-| `save_media(data, mime, meta=None)` | Persist a generated binary artifact (image/audio/video) into the **core media store** (#1929) → `MediaRef {id, url, path, mime}`. Embed `ref.url` in the tool's returned markdown (`![alt](url)`) and the console renders it inline — no plugin route needed. The URL carries a per-file HMAC signature so it works under a bearer gate; `media.public` / `media.retention_days` (core config) control exposure and pruning; broadcasts `media.saved` on the bus. Inbound is bridged too (#1969): chat image attachments are auto-saved at turn entry (except incognito) and named by media id in a `[attached-image refs]` note, so a tool that accepts media-id refs works on user attachments directly | any time (typically inside a tool) |
+| Task | API or guide |
+| --- | --- |
+| Give the model a tool | `register_tool` / `register_tools` |
+| Teach a procedure or advertise a capability | `register_skill_dir` / `register_a2a_skill` |
+| Serve an HTTP endpoint or run background work | `register_router` / `register_surface`; see [reload behavior](#surface-resume) |
+| Add model-call hooks or a completion check | [Middleware](#middleware-register-middleware-adr-0032) / [goal and watch verifiers](#goal-and-watch-verifiers) |
+| Connect an MCP server | [Managed MCP servers](#managed-mcp-servers-—-register-mcp-server) |
+| React to another component | [Event bus](#event-bus) / [lifecycle events](/guides/lifecycle-events) |
+| Call the agent or persist plugin data | [Host services](#host-services-—-registry-host) / [SDK](#consumption-sdk) |
+| Add a console view | [Plugin-view quickstart](/guides/build-a-plugin-view) |
 
-```python
-def register(registry):
-    registry.register_tool(hello)
-    registry.register_a2a_skill({"id": "greet", "name": "Greet", "description": "..."})
-    registry.register_router(_build_router())        # → GET /plugins/<id>/...
-    registry.register_surface(_start, stop=_stop, name="my-surface")
-    registry.register_subagent(_build_subagent())    # delegate via task/task_batch
-    registry.register_mcp_server(_server_factory)    # a managed MCP server (e.g. an OAuth-gated surface)
-    registry.register_thread_id_resolver(lambda md, sid: f"proj:{md.get('project')}:{sid}")
-```
+The [registry reference](/reference/plugin-registry-api) owns the full method list,
+signatures, and lifecycle contracts, including chat commands, knowledge backends,
+embedders, and media storage. Use `live_config()` in long-lived handlers;
+`registry.config` is the snapshot from registration.
 
 #### Surfaces that resume their work across reloads {#surface-resume}
 
@@ -365,34 +343,19 @@ Every service, with its signature:
 
 ### Tapping core deeper — `graph.sdk` (ADR 0043) {#consumption-sdk}
 
-`registry.host` covers the common cases. For deeper capability, import the **consumption
-SDK** — a stable surface onto the agent itself, so a plugin can run a subagent, search
-knowledge, arm a watch, spawn campaign-scale background work, schedule a recurring turn, or
-record a metric series without reaching into core internals (which are free to change
-underneath you — `graph.sdk` and `registry.host` are not).
+Use `graph.sdk` for model calls, subagents, knowledge, watches, background jobs,
+scheduling, and metrics. It is the supported interface to core capabilities.
 
 ```python
-from graph import sdk                      # import lazily if your tests run host-free
+from graph import sdk  # import inside the caller when tests need to run host-free
 
 answer = await sdk.complete("Summarize the changelog")
 db = sdk.plugin_store(plugin_id=registry.plugin_id) / "state.db"
 ```
 
-**Every call, with its signature and failure mode: [Plugin SDK reference](/reference/plugin-sdk-api).**
-The reference is generated from source signatures and docstrings.
-
-Two things the reference can't tell you. First, **import it inside the function that uses
-it** if your plugin must also run host-free in its own test suite; a module-level
-`from graph import sdk` makes the whole plugin need a host to import. Second, the
-**workflows plugin** (`plugins/workflows`) is the reference consumer — its engine injects
-`run_subagent` as the per-step runner, which is the pattern to copy for a plugin that drives
-the agent rather than just extending it.
-
-The SDK also re-exports a few host-free kits so a plugin doesn't hand-roll them:
-`supervise` / `Supervisor` / `RetryAfter` (a watchdog-backed runner for a self-perpetuating
-engine loop), `Knobs` / `make_knob_tools` (bounded, reversible tunables with generated
-`show`/`tune`/`preset` tools), and `DecisionLog` / `telemetry` / `render_html` (an audit
-trail plus a themed panel).
+The [SDK reference](/reference/plugin-sdk-api) lists signatures and failure behavior.
+For a workflow runner example, see `plugins/workflows`, which injects `run_subagent`
+as its per-step runner.
 
 ## Events — the plugin bus (ADR 0039) {#event-bus}
 
@@ -685,83 +648,20 @@ drop-ins live in `<instance_root>/plugins/`; `plugins.dir` or
 `PROTOAGENT_PLUGINS_DIR` can override that directory. Run `protoagent config explain`
 to find it. A live plugin overrides a bundled plugin with the same `id`.
 
-`plugins.dir` must be an **absolute** path. A relative one is ignored with a warning
-(the instance's own plugins dir is used instead): it would resolve against the working
-directory of whichever process read it — the server, a CLI, a fleet subprocess — so they
-would disagree about where your plugins live. Everything that acts on installed copies
-reads this same setting: install, uninstall, the Plugins list, `plugin sync`, scaffolding,
-and the managed-MCP subprocess. `PROTOAGENT_PLUGINS_DIR` follows the same rule, and a
-refused value shows as a **Plugins** banner, not only in the log — because it moves the whole
-plugin root, your plugins would otherwise just stop loading with nothing on screen.
+Directory overrides must be absolute; invalid relative values are ignored with a
+warning. A plugin must be enabled in `plugins.enabled` or its manifest to load.
+Discovered but disabled plugins still appear in runtime status.
 
-A plugin loads only when **enabled** — either:
-
-```yaml
-plugins:
-  enabled: [hello]   # operator opt-in, by id
-```
-
-or `enabled: true` in the plugin's own manifest (author opt-in for plugins you
-wrote/dropped in). Discovered-but-disabled plugins still appear in runtime
-status so you can see what's available.
-
-From the console, the **Plugins ▸ Installed** panel is a sortable table: free-text search
-matches plugin names, ids, versions, **and tool names** ("which plugin ships `search_jobs`?"),
-status chips filter to All / Loaded / Disabled / **Attention** (error, unfinished setup,
-update available, or missing pip deps), and plugins installed by a bundle carry the bundle's
-name as a chip (searchable too). Each row has a one-click **Enable / Disable** toggle — it
-edits `plugins.enabled` and hot-reloads, so tools / middleware / MCP servers apply
-immediately. That includes a plugin's **console view** and **background surface**: enabling
-mounts its router on the live app (the view's rail icon appears) and starts its surfaces;
-disabling unmounts the router and stops them. Neither direction needs a restart. Installing
-from a git URL auto-enables through the same reload, so a fresh install is live too, and
-**Update** / uninstall are live the same way (the router re-mounts with the new code or
-leaves). The exception is a background surface the reload can't swap: one whose task won't
-stop, or one that stays on its `reload(cfg)` hook across an update and so keeps running the
-old code. The toast asks for a restart then.
-
-Plugin tools that would shadow a core or MCP tool name are skipped (logged).
-Bundled skills load as `disk`-source [skills](./skills.md), re-seeded each boot.
+Use [Install and manage plugins](/guides/plugin-registry) for enabling, disabling,
+updating, and recovering installations. Changes normally reload tools, routes,
+views, and background surfaces immediately; restart only when the app requests it.
+Plugin tools that shadow core or MCP names are skipped. Bundled skills are
+re-seeded as disk-source skills at boot.
 
 ## Keeping plugins current
 
-A git-URL-installed plugin is pinned in `plugins.lock` at the ref you installed
-(a branch, a release tag, or an exact commit). By default updates are **manual**:
-the console **Plugins** panel shows an *Update available* badge when a plugin is
-behind its ref, and the **Update** button pulls the latest code + hot-reloads it
-(`POST /api/plugins/{id}/update`).
-
-To let chosen plugins update themselves in the background, opt them into an
-**auto-update policy** (#1720):
-
-```yaml
-plugins:
-  autoupdate_interval_hours: 6      # sweep cadence; 0 disables the loop entirely
-  update_policy:
-    my-plugin:
-      track: main                   # arms auto-update (the ref itself comes from the lock)
-      when: idle                    # idle (default) | always
-    another-plugin:
-      track: main
-      when: always
-```
-
-Each sweep, for every plugin listed in `update_policy`, the runtime checks whether
-it's behind its locked ref and — if so — pulls + hot-reloads it exactly like the
-**Update** button, then emits `plugin.updated` on the [event bus](#event-bus).
-The gates:
-
-- **Opt-in only.** A plugin is auto-updated only if it appears in `update_policy`
-  with a non-empty `track`. Everything else stays manual.
-- **Never a pinned commit.** A plugin pinned to an exact SHA is immutable and is
-  skipped; a release-tag pin moves to the newest matching tag, a branch pulls its head.
-- **`when: idle`** (the default) defers a plugin's update while a chat turn is — or
-  was just — in flight. A reload rebuilds tools/routers, which is safe *between*
-  turns but disruptive *during* one. **`when: always`** updates on the next sweep
-  regardless.
-
-The default config has an empty `update_policy`, so nothing auto-updates until you
-add a plugin to it.
+For manual updates and opt-in automatic update policies, see
+[Manage plugin updates](/guides/plugin-registry#automatic-updates).
 
 ## Behavior
 
@@ -790,14 +690,9 @@ pkg.register(reg)
 assert reg.tools and "issue" in reg.chat_commands   # assert the captured contributions
 ```
 
-**The parity contract:** `FakeRegistry` mirrors every public `PluginRegistry` method
-(`register_*`, `emit`, `on`, `navigate`, `live_config`) with the same parameters — a
-missing method would make that seam silently untestable (plugins `hasattr`-guard these
-calls, so a typo'd registration would ship green). A drift guard in
-`tests/test_plugin_testkit.py` introspects both classes and fails when a new registry
-seam isn't mirrored. One intentional divergence: where the real registry *warns and
-skips* an invalid registration (degrade-safe live — e.g. a chat command named `goal`,
-which is reserved), the fake **raises `ValueError`** so the mistake fails your test.
+The fake mirrors the registry's public methods. Invalid registrations raise
+`ValueError` in tests even where the live registry warns and skips them. See the
+[testkit reference](/reference/plugin-testkit) for the complete test API.
 
 ## Try it
 
@@ -815,8 +710,5 @@ Restart, then check `GET /api/runtime/status` — the `hello` plugin shows
 
 - **[Building a plugin view](/guides/building-react-plugin-views)** — give a plugin its own
   console surface — a left-rail view or a chat-slot panel (ADR 0026 / 0045).
-- **[Install & publish plugins (git URLs)](/guides/plugin-registry)** — install a
-  plugin from a git URL (`python -m server plugin install <url>`) or publish one as
-  a shareable repo. A repo is a full bundle: besides what `register()` adds, a
-  conventional `skills/` (SKILL.md) and `workflows/` (`*.yaml`) are auto-discovered
-  (ADR 0027).
+- [Install and manage plugins](/guides/plugin-registry) — operator controls and updates.
+- [Publish a plugin](/guides/publish-a-plugin) — dependencies, packaging, and listing.

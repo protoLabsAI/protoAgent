@@ -9,6 +9,9 @@ In-progress ref points at a closed issue — rotate shipped work into `## Shippe
 
 ## Planned
 
+- **Remote device improvements** — a first-class phone and tablet experience: the mobile console, pairing a device with a code, and reaching your agent from anywhere without fiddling with tokens.
+- **Settings, reorganized** — one place for every setting: each field reachable from a real panel (not only a shortcut chip), grouped by what you're trying to do, with clearer wording and safer saves.
+- **A smarter command palette** — jump to anything and run any action from one box: better ranking across sessions, settings, plugins and commands, and consistent behavior on desktop and mobile.
 - **The trajectory** — an append-only log of everything the model sees, so resume, fork, search and replay all work from one session record. (#2806)
 
 ## In progress

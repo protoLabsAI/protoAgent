@@ -1,5 +1,13 @@
 # Settings/views/config true-up — resume guide
 
+> Archived June 2026 handoff. Verified 2026-10-16: Stage A's Playbooks and Knowledge
+> Query migrations are implemented (`PlaybooksSurface.tsx`, `KnowledgeStore.tsx`),
+> and Stage B's `ToastProvider position="top-right"` is used in `main.tsx`.
+> The app now declares `@protolabsai/ui ^0.66.1`. The versions and machine paths
+> below are historical. Other Stage B items have not been revalidated here;
+> reconcile them against source and their owning issues before scheduling work.
+
+
 Cold-start guide for the two remaining stages of the settings/views/config true-up.
 The canonical plan + ledger is **ADR 0048 §6** (`docs/adr/0048-settings-ia-two-scope-homes.md`).
 This file is the "where to start" companion.

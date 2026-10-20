@@ -133,14 +133,23 @@ model:
 
 All sampling params are optional — omit to use the gateway / model-card defaults. `temperature`, `max_tokens`, `top_p`, and `presence_penalty` are standard OpenAI fields; `top_k`, `repetition_penalty`, and `chat_template_kwargs` are sent via `extra_body` for vLLM-compatible gateways.
 
-**Retiring: `model.provider`, `model.api_base`, `model.api_key`** (#3128). The `providers:`
-registry replaces all three, and Settings no longer renders them. They are still honored —
-a config with no `providers:` block has its registry built from them at load — and, until
-#3128 lands, a few paths still read them directly rather than through the registry: the
-unqualified default model route, knowledge embeddings and transcription, the plugin
-`gateway_client`, the context-window probe, the egress auto-allow (below) and `--setup`
-validation. A subscription *lead* therefore still wants `model.provider: anthropic-oauth`
-(or `openai-codex`) beside its qualified `name` for now.
+### Legacy model fields
+
+Use `providers:` and qualified model names for new connections. Settings no longer
+renders `model.provider`, `model.api_base`, or `model.api_key`, but existing configs
+can still depend on them:
+
+- Without a `providers:` block, the loader derives connections from these fields.
+  An explicit `providers: []` remains empty.
+- A qualified name such as `anthropic-oauth:<model>` selects its connection directly.
+  `model.provider` still routes unqualified model names, including auxiliary slots,
+  and is read by legacy setup validation.
+- `model.api_base` and `model.api_key` still supply the default gateway route used
+  by embeddings, transcription, the plugin gateway client, context-window probing,
+  and egress auto-allow. Registered connections use their own endpoint and key.
+
+Do not remove legacy fields without checking those consumers. See
+[Connect and change models](/guides/model-connections) for connection setup.
 
 ## Secrets
 
@@ -735,53 +744,29 @@ toggle it on a running agent:
   state, and the background watch **poller is untouched** — existing watches keep polling and
   keep firing their `on_met` hooks. You are removing the agent's ability to *create and manage*
   watches, not the watches themselves.
-- It is **independent of `goal.enabled`**. A watch is verifier-only and moved by an external
-  process; a goal is a bounded loop the agent drives. They are separate dispositions and each
-  flag now binds its own tools. (Until this change the watch tools were nested inside the
-  goal-enabled group, so `watches.enabled: true` with goal mode off bound nothing — and, worse,
-  the background poller rode `goal.enabled` too, so an instance with goal mode off accepted
-  watches on `POST /api/watches`, listed them in the console as `active`, and never polled one.)
-- It defaults **on**. It shipped off while the feature settled (#2020) and flipped back on once
-  it did; an instance that wants the tools gone sets `enabled: false` explicitly.
+- Watches are independent of `goal.enabled`: they observe external conditions;
+  goals drive a bounded work loop.
+- Watches default on. Set `watches.enabled: false` to disable them.
 
 ## `knowledge`
 
-Only read when `middleware.knowledge` is `true`.
-
-| Key | Default | What |
-|---|---|---|
-| `db_path` | `/sandbox/knowledge/agent.db` | SQLite file path. Falls back to `~/.protoagent/knowledge/agent.db` automatically when the configured path isn't writable (e.g. running locally without `/sandbox`). Override at runtime with `KNOWLEDGE_DB_PATH`. |
-| `scope` | `""` (→ `scoped`) | Tier ([ADR 0041](../adr/0041-workspaces-and-tiered-stores.md)): `scoped` (private, **default**) · `shared` (the whole store is the host-level commons) · `layered` (read commons ∪ private, write private, operator-`promote`d). The commons lives at `commons.path`/knowledge.db and is host-level + un-scoped (every agent reading the same `commons.path` shares it). A shared/layered fleet must share one `embed_model` — the commons is stamped with it and a mismatched agent serves the commons tier **FTS5-only** (no incompatible-vector fusion). |
-| `embeddings` | `false` | Opt-in hybrid `HybridKnowledgeStore` (FTS5 keyword + vector similarity, RRF-fused); off = keyword-only FTS5. Off by default so a fresh install never depends on a gateway embedding route (#1681). |
-| `embed_model` | `qwen3-embedding` | Gateway embedding model used when `embeddings` is on — must be a model your gateway serves (not the chat model). |
-| `facts` | `true` | Extract semantic facts during the conversation-harvest pass. |
-| `top_k` | `5` | RAG hits auto-injected into the prompt per turn. A negative value is not a smaller cap — it removes the cap, so it is read as `0` with a warning; `0` itself means no auto-injection. |
-
-The bundled store is keyword-only FTS5 by default; once your gateway serves `embed_model`, opt in with `embeddings: true` for hybrid search — keyword fused with vector similarity (RRF), with an embedding circuit breaker that falls back to FTS5 on an outage. One `chunks` table; the `domain` column distinguishes operator-set notes (`memory_ingest`), always-on hot facts (`hot`), episodic summaries stored by `conversation_harvest` (`conversation`), and extracted facts (`fact`).
-
-**Hot memory** — chunks with `delivery_policy='always'` are *always-on*: the projection injects them into context every turn (vs. retrieved-on-relevance), re-read each turn so a freshly-added fact is seen immediately. A `domain='hot'` write is stamped with that policy automatically ([ADR 0108 D4 + D6](../adr/0108-context-architecture-v2.md)), so `memory_ingest(content, domain="hot")` still pins a fact the agent should never forget (operator preferences, standing constraints) — and so does `delivery_policy="always"` on any domain. Rejected or expired rows never inject.
+The [Knowledge reference](/reference/knowledge#the-knobs) owns retrieval keys,
+defaults, and store locations. It also covers [shared and layered stores](/reference/knowledge#sharing-knowledge-across-a-fleet-the-commons)
+and [automatic delivery controls](/reference/knowledge#memory-delivery-controls-adr-0069).
+Use [Tune knowledge recall](/guides/knowledge) to compare retrieval settings.
 
 ## `context`
 
-The per-turn injected context — working state, always-on memory, the skill index, the prior-session digest, RAG hits — on top of the stable prompt ([ADR 0108 D6](../adr/0108-context-architecture-v2.md)).
-
-| Key | Default | What |
-|---|---|---|
-| `budget_pct` | `8` | Ceiling for the injected context as a percentage of the model's context window (chars//4), never below 16 000 chars (room for always-on memory + the digest — on a ≤32k window the floor applies). Over budget the lowest-priority parts shed first — RAG hits, then prior-session digest entries, then skill descriptions (skill names never drop); working state and always-on memory are never shed. `0` = unbounded; unbounded too when the gateway reports no window for the model (logged once). The priority order is fixed. The prompt preview API reports the budget and what was shed. |
-| `prior_sessions` | `newest` | Prior-session digest policy ([ADR 0108 D9](../adr/0108-context-architecture-v2.md)): `newest` injects the newest-N attributed digest exactly as before; `relevant` injects only sessions matching the turn's query (session-search FTS, bm25 then newest — falls back to `newest` on an empty query, a build without FTS5, or zero matches); `off` injects no automatic digest (`session_search` / `recall_session` stay the on-demand path). The active session's own summary is never injected as a "prior" session, whatever the policy. Under the D6 budget the digest sheds entry by entry (oldest / lowest-rank first). `off` may be written bare or quoted — YAML reads a bare `off` (like `no`/`false`) as the boolean false, which is restored to the policy rather than read as unset. |
+`context.budget_pct` and `context.prior_sessions` control the injected context
+budget and prior-session selection. See [Context and session digest](/reference/knowledge#context-and-session-digest)
+for defaults, shedding order, and the effect of `off`.
 
 ## `memory`
 
-The `<prior_sessions>` digest itself — the ceilings on the block `context.prior_sessions` chooses the contents of. Summaries are written by `SessionSummaryMiddleware` on the terminal turn and read back each turn by `KnowledgeMiddleware` ([ADR 0021](../adr/0021-agent-memory-architecture.md)).
-
-| Key | Default | What |
-|---|---|---|
-| `max_sessions` | `10` | How many past sessions the digest may list — one attributed line each (id, timestamp, surface, topic, message count), roughly 30 tokens per entry. Lower it to keep continuity while spending less of the turn on unrelated history. |
-| `max_tokens` | `2000` | Ceiling for the rendered block (chars ÷ 4). Entries past it drop from the end — oldest first under `newest`, lowest-ranked first under `relevant`. At the default session count the block lands well under this, so `max_sessions` is usually the binding limit. |
-
-Both are **ceilings, not switches**: a non-positive value falls back to the default with a warning, because `0` would be an undocumented second spelling of `context.prior_sessions: off` — which is how you actually remove the digest. Before #3308 neither key was read by anything, so an operator who set them got a silent no-op.
-
-There is no `path` key. Summaries live in the instance store (`~/.protoagent/<instance>/memory`), overridable only with the `MEMORY_PATH` environment variable — the old `path: /sandbox/memory/` was a container-era default that is unwritable on an ordinary host, which is why the location moved to the instance store.
+`memory.max_sessions` and `memory.max_tokens` limit the prior-session digest.
+See [Context and session digest](/reference/knowledge#context-and-session-digest)
+for defaults, storage, and invalid values. Use [Manage memory](/guides/manage-memory)
+to inspect, correct, or remove saved context.
 
 ## `skills`
 

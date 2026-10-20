@@ -1,5 +1,9 @@
 # Fleet console — front-end handoff (ADR 0042)
 
+> Historical work record; not a current execution queue. Before resuming an unchecked
+> item, verify the current implementation and the linked issue or PR. Completed
+> entries are retained as evidence, not instructions to repeat the work.
+
 For whoever builds the native-app fleet panels. The **backend control plane is live**
 (protoAgent PR #787) — you can build the onboarding / switcher / fleet-manager panels
 against it **today**. This doc is the contract + the task split + what's still backend-pending.

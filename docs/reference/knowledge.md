@@ -4,6 +4,9 @@ Configure retrieval in **Settings → Knowledge** or the `knowledge:` block of
 `langgraph-config.yaml`. Use [Tune knowledge recall](/guides/knowledge) for a
 comparison procedure and [Manage memory](/guides/manage-memory) for curation.
 
+These settings control automatic delivery when `middleware.knowledge` is enabled.
+The tool signatures are maintained in [Starter tools](/reference/starter-tools#memory-knowledge).
+
 ## Store selection
 
 Keyword-only FTS5 is the default (`embeddings: false`). `embeddings: true`
@@ -18,7 +21,7 @@ and leave keyword search available. Plugins can supply `knowledge.backend` or
 | --- | --- | --- |
 | `embeddings` | `false` | Enable hybrid search |
 | `embed_model` | `qwen3-embedding` | Embedding model served by the gateway |
-| `top_k` | `5` | Maximum document hits automatically injected per turn; `0` stops this injection |
+| `top_k` | `5` | Maximum document hits automatically injected per turn; `0` stops injection. Negative values become `0` with a warning |
 | `vector_k` | `20` | Vector candidates before rank fusion |
 | `rrf_k` | `60` | Rank-fusion smoothing constant; this is not a semantic-versus-keyword weight |
 | `min_score` | `0.0` | Retrieval score floor; `0` keeps all scored matches |
@@ -26,7 +29,7 @@ and leave keyword search available. Plugins can supply `knowledge.backend` or
 | `embed_breaker_threshold` | `2` | Consecutive failures before the embedding circuit opens |
 | `embed_breaker_cooldown_s` | `300` | Seconds before retrying the embedding route |
 | `facts` | `true` | Extract facts when conversations are harvested |
-| `db_path` | `/sandbox/knowledge/agent.db` | Legacy default resolves to `<instance_root>/knowledge/agent.db` |
+| `db_path` | `/sandbox/knowledge/agent.db` | Legacy default resolves to `<instance_root>/knowledge/agent.db`; an explicit non-`/sandbox` path is used as supplied. `KNOWLEDGE_DB_PATH` overrides it |
 
 Chunk sizes and contextual enrichment affect ingestion, not existing chunks;
 see [Ingestion](/guides/ingestion). Tune rank fusion with retrieval evaluations
@@ -52,7 +55,7 @@ Over budget, document hits give way first, then session-digest entries, then
 skill descriptions. Working state and always-on memory are retained.
 
 `prior_sessions: newest` selects recent summaries. `relevant` uses session-search
-FTS and falls back to newest; `off` disables the automatic digest while keeping
+FTS and falls back to newest for an empty query, unavailable FTS, or no matches; `off` disables the automatic digest while keeping
 on-demand session tools. The active chat's summary is always excluded. Quoted
 and bare YAML `off` both work.
 

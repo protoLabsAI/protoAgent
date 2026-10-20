@@ -89,7 +89,7 @@ Autonomous turns (scheduled, inbox, background) **fail closed**: there is no
 operator to approve, the runtime auto-answers the pause, and the auto-answer
 declines. The Project Manager preset relies on this tool for its empty-bench
 rule (an absent `list_agents` *is* the answer — propose, don't retry); the
-[coding-agent guide](/guides/build-with-a-coding-agent#_2-wire-a-coder) shows it
+[coding-agent guide](/guides/build-with-a-coding-agent#_1-register-and-test-a-coder) shows it
 in that flow, and the archetype's Configure step can pick whatever it registered.
 
 ## Use it

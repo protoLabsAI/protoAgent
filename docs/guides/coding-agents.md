@@ -317,7 +317,7 @@ Two caveats worth planning for: worktrees don't share `node_modules`/build cache
 per-worktree, or share a package store), and two parallel PRs that touch the same file will
 conflict at *merge* time (normal parallel-dev friction — rebase the loser), not at build time.
 
-### Managed git: the framework owns branch/commit/push/PR (ADR 0076)
+### Managed git: the framework owns branch/commit/push/PR (ADR 0076) {#managed-git-the-framework-owns-branch-commit-push-pr-adr-0076}
 
 By default the coder owns its own git lifecycle — fine for a single supervised coder in a
 disposable checkout. At pool scale it is the reliability ceiling: coders invent colliding

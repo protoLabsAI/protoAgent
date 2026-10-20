@@ -4,6 +4,13 @@ Run several agents from one console. Each has its own config, chats, memory, and
 stores; the hub starts and stops local members and routes you to their consoles.
 Model connections and optional commons can be shared across the box.
 
+## What the box shares with every member
+
+Members share the hub's box settings and model connections. Delegates marked
+**Share with fleet** also stay shared, including credential updates; edit them
+from the hub's **Settings → Delegates**. Chats and private stores stay separate.
+See [Run multiple instances](./multi-instance.md) for box and instance boundaries.
+
 ## Create an agent in the console
 
 1. Open **Settings → Fleet** and start the new-agent flow.
@@ -19,25 +26,19 @@ model connection and required tools.
 
 ## Quick start
 
+For an installed package with a running hub:
+
 ```bash
-# an agent from a bundle-backed archetype (project-manager-archetype: board-driven PM) —
-# --input answers the bundle's Configure prompts, --soul seeds the persona the picker would
-python -m server workspace new pm --bundle https://github.com/protoLabsAI/project-manager-archetype \
-  --input project_board.repo=/abs/path/to/repo --input project_board.coder=claude-code \
-  --soul config/soul-presets/project-manager.md
-
-# a blank-slate agent (the built-in Basic archetype — core loop + tools, no plugins)
-python -m server workspace new scratch
-
-# run the whole fleet in the background, then look at it
-python -m server fleet up
-python -m server fleet ls
-#   ● pm        :7871  pid 12345  [project-manager-archetype]
-#   ● scratch   :7872  pid 12346
-
-# …or open the fleet deck: the same fleet in a terminal (q quits; members keep running)
-python -m server fleet
+protoagent fleet new scratch
+protoagent fleet ls
+protoagent fleet
 ```
+
+The new member inherits the hub's model connections by default. Open it from the
+roster and send a small prompt. In a source checkout, replace `protoagent` with
+`uv run python -m server`. Use [CLI management](./cli.md) for flags and offline
+workspace creation; use [Build with a coding agent](./build-with-a-coding-agent.md)
+for a Project Manager's required inputs.
 
 ## Fleet components
 
@@ -79,7 +80,7 @@ without `=` is a usage error, and a `type: delegate` answer is copied from the h
 the persona the picker would have seeded; without it the workspace has **no persona**, and
 the CLI never records an archetype's capability contract. The picker and
 `POST /api/fleet` do all of that in one step
-([the body](./build-with-a-coding-agent#_1-stand-up-the-pm)).
+([PM setup](./build-with-a-coding-agent#_2-create-the-pm)).
 
 Unlike the CLI path, the new-agent picker and `POST /api/fleet` default to
 `inherit_config: true`: they carry the host's effective model and provider registry plus
@@ -91,124 +92,35 @@ inheritance and no legacy OAuth transfer; an existing box OAuth store remains ho
 
 ## Bundles & archetypes — start from a type {#bundles-and-archetypes}
 
-A **bundle** ([ADR 0040](../adr/0040-plugin-bundles.md)) is a repo whose
-`protoagent.bundle.yaml` names a *pinned set of plugins* to install together, plus a
-suggested enable list + config — the full lifecycle (manifest reference, updating,
-uninstalling, publishing an archetype repo) is in the [Bundles guide](./bundles.md). Install
-one into a workspace and you skip the plugin-by-plugin setup:
+An archetype supplies a persona and, optionally, a bundle of plugins. Choose its
+card, review **What's included**, then enter a name and the required Configure
+answers. The **Advanced** section holds optional MCP inputs, secrets, and persona.
+**Back** keeps the answers while you choose another type.
 
-```bash
-python -m server plugin install https://github.com/protoLabsAI/project-manager-archetype   # fans out + pins each member
-```
-
-A bundle that carries an **`archetype:`** block becomes a **starter agent type** the
-new-agent picker offers — additive metadata, no change to the bundle shape:
-
-```yaml
-# protoagent.bundle.yaml
-id: project-manager-archetype
-plugins: [ … ]
-enabled: [ … ]
-archetype:
-  label: Project Manager
-  icon: ClipboardList
-  blurb: Board-driven project manager — reads deeply, never holds the keyboard; ships through a verdict-gated board of coding agents.
-  # optional persona: inline markdown, or a host preset stem under config/soul-presets/
-  # (unknown preset → warns + the picker falls back to the base persona)
-  soul_preset: project-manager
-  # optional picker placement: "standard" (default, inline card) or "advanced"
-  # (collapsed under the picker's "Advanced (N)" toggle)
-  tier: advanced
-  # optional: host capabilities the archetype needs to be USEFUL — the picker warns at
-  # choose-time when one isn't provisioned (e.g. cowork's document skills route through
-  # execute_code, which on the desktop app needs the managed Python runtime, ADR 0094)
-  requires: [python_runtime]
-  # optional capability contract (#2277): tool names the persona commits to using —
-  # persisted to the created agent's workspace.yaml, checked against its bound
-  # toolset at boot (advisory warning, never a gate)
-  requires_tools: [github_create_issue]
-```
-
-Unknown keys in the block warn at install time; the full annotated field set lives in
-`examples/bundles/template/protoagent.bundle.yaml`.
-
-The picker draws from **two** sources:
-
-- **The archetype catalog** — `config/archetype-catalog.json`, served by `GET /api/archetypes`.
-  The shipped catalog carries the starter set (Basic, Cowork, Engineer, and — under the
-  *Advanced* toggle — Design System Engineer and Project Manager, then Custom; the two
-  code-free personas are Basic and Custom, the rest reference published archetype repos)
-  and is **data-driven**: add or remove archetypes by editing the JSON, no code change. A
-  row the operator has pulled from the picker without deleting it sits in the file's
-  `held:` array (Brand & Launch, which replaced Social Marketing, is parked there until it's been tested) — held rows are never served, but a held archetype is still creatable through the API (`POST /api/fleet` with its `bundle` URL and the persona as `soul`). A fork or instance overrides it by
-  dropping its own `archetype-catalog.json` in the live config dir (same rule as
-  `plugin-catalog.json`); if the file is missing entirely, a hardcoded Basic + Custom
-  fallback keeps the picker from rendering empty. Each entry names a `soul_preset` (a
-  file under `config/soul-presets/`) or an inline `soul` for the base persona.
-  `GET /api/archetypes/{id}/preview` peeks a bundle archetype's members/MCP
-  servers/secrets before anything installs.
-- **Installed bundles** — any bundle whose manifest carries an `archetype:` block
-  **self-registers** on top of the catalog (deduped by id + bundle URL). Install the bundle
-  and its starter type appears in the picker for free — no catalog edit needed.
-
-Creating from an archetype is two steps, the same in Settings ▸ Fleet ▸ New agent and in the
-first-run Setup Wizard: **pick** a card (label, blurb, *What's included*), then **set it up** —
-the name (pre-filled from the archetype, e.g. `engineer`), the bundle's `config_inputs`
-questions, and a collapsed **Advanced** section with the bundle's MCP inputs / secrets and the
-persona. **Back** returns to the cards with every answer kept. The archetype seeds the new
-agent's **persona** (its `SOUL.md`) and — if it carries a bundle — installs the bundle's
-plugins into the new agent. See [Install & publish plugins](./plugin-registry.md).
+The picker combines the shipped catalog with archetypes declared by installed
+bundles. Installing a bundle with an `archetype:` block adds its starter type.
+For manifests, catalog overrides, installation, updates, and publishing, see
+[Bundles](./bundles.md) and [ADR 0100](../adr/0100-agent-archetypes.md).
 
 ### The Engineer archetype — a navigator, not a solver
 
-**Engineer** ([engineer-archetype](https://github.com/protoLabsAI/engineer-archetype)) is a
-hands-on pair-programming *navigator* for the operator's own machine: point it at a repo
-(a git URL or a folder), and it clones or registers it, shows you its README and manifest,
-draws a code-linked architecture overview (click a node to open its code), proves the
-toolchain, writes a short repo card, and then works through a problem **one checkpoint per turn** — reproduce, narrow,
-*your* hypothesis first, you type the fix, it reviews and runs the checks, you commit. It
-never edits or commits unless your latest message says so. The design follows research that
-passive, delegated AI help costs the operator comprehension; the bundle's README has the
-references.
-
-What it turns on: the in-tree `engineer` skill pack (`repo-onboard`, `debug-loop`; off for
-every other agent), `craft`, `friction`, `delegates`, and the
-[terminal plugin](https://github.com/protoLabsAI/terminal-plugin) — the operator's own shell
-beside chat, not an agent tool — and the [github plugin](https://github.com/protoLabsAI/github-plugin)
-**read-only** (issues, PRs, diffs, CI over `gh`; `github.write` stays off unless the operator
-flips it, and even then the persona only posts when asked). Its recommended config enables the filesystem with
-per-command approval (read-only `git` commands auto-approved via
-`filesystem.run_auto_approve`), the code pane (`filesystem.code_pane`, so `show_code` can
-point at exact lines), `open_in_editor` for Zed (`filesystem.editor_command: zed`; change it
-to `code -g` / `cursor -g`), and project onboarding under `~/code` from any GitHub repo
-(Settings ▸ Capabilities ▸ Project onboarding narrows or moves it). The Configure step asks
-two optional things: a local checkout to start in (registered as a project and used as the
-terminal's starting directory) and whether the GitHub write tools bind. The model is left to your host. Pair it with Zed's Agent
-Panel through the `protoagent-acp` shim ([ADR 0111](../adr/0111-zed-operator-editor-acp-shim.md)).
+Choose **Engineer** for guided repository onboarding and debugging on your machine.
+It asks you to form a hypothesis and make the change, then helps check the result;
+it edits or commits only when asked. The bundle includes a terminal view and
+read-only GitHub access. Configure its starting checkout and GitHub write access
+when creating it. See the [Engineer skill pack](https://github.com/protoLabsAI/protoAgent/tree/main/plugins/engineer)
+for the procedures and [coding agents](./coding-agents.md) to delegate implementation.
 
 ## Tiered stores — private by default, share what should be shared
 
-Each agent's stores are **scoped** (private) by default. **Skills** can be tiered so a fleet
-shares a growing skill library while keeping the rest private —
-[ADR 0041](../adr/0041-workspaces-and-tiered-stores.md):
+Chats, tasks, and other instance stores are private. Skills and knowledge can
+optionally use a shared commons: `scoped` reads and writes private data, `shared`
+reads and writes commons, and `layered` reads both but writes privately.
 
-```yaml
-skills:
-  scope: scoped | shared | layered   # default: scoped
-commons:
-  path: ""    # shared-tier base dir; blank → ~/.protoagent/commons
-```
-
-- **scoped** — a private skills DB per agent.
-- **shared** — one commons DB the whole fleet reads *and* writes.
-- **layered** — *shared brain, private hands*: read the commons ∪ your private library, but
-  **writes go to private**, so half-baked learned skills never pollute the fleet. Lift a
-  proven one up explicitly:
-
-```bash
-python -m server skills ls               # private + commons, tagged by tier
-python -m server skills promote <name>   # a private skill → the shared commons
-```
+Use [Skills](/guides/skills) and [Knowledge reference](/reference/knowledge) for
+configuration and promotion. [Run multiple instances](./multi-instance.md)
+explains the box and instance roots. Share a store only when all participating
+agents should be able to read it.
 
 ## The supervisor — agents in the background
 
@@ -227,56 +139,24 @@ one keeps its background work (schedules, an in-flight loop) going while you're 
 
 ## Deploying a team — config-as-code (`fleet.autostart`) {#deploying-a-team}
 
-The commands above are **imperative** — you create members and start them by hand. That's
-fine at the console, but a team you *deploy* (a lead plus the specialist members it delegates
-to) should be a **config-as-code artifact**: baked into an image, versioned, and stood up with
-one `docker compose up`. Two pieces make that real.
-
-**1. Declare the crew — `fleet.autostart`.** A container recreate (an image roll) or a host
-restart kills the members' detached processes; `fleet.json` survives in the volume with
-now-dead pids, but nothing restarts them — so a hand-assembled crew silently stays down until
-you re-activate each one. List the members the hub should keep up and it **(re)starts them on
-boot**:
+To restart existing members when the hub boots, set their ids or display names:
 
 ```yaml
 fleet:
-  autostart: [cindi, matt]   # member ids or display names
+  autostart: [cindi, matt]
 ```
 
-(or `PROTOAGENT_FLEET_AUTOSTART=cindi,matt` in the environment). It runs right after the boot
-version-reconcile: **idempotent** (an already-running member is skipped), **best-effort** (a
-missing workspace or a failed spawn is logged and skipped — never blocks boot), and **hub-only**
-(a member's own scoped config carries no roster, so it no-ops inside a member).
+Alternatively, set `PROTOAGENT_FLEET_AUTOSTART=cindi,matt`. Already-running members
+are skipped; missing workspaces and failed starts are logged without blocking boot.
+This is hub-only and does not create missing members after a volume wipe.
 
-> Autostart restarts the member **process**; it does not by itself resume the **work** that
-> process was doing. A member whose job is a long-running background loop (a trading engine, a
-> poller) needs its *plugin* to resume that loop when it boots — see
-> [surfaces that resume across reloads](./plugins.md#surface-resume). The two compose: autostart
-> brings the agent back, the surface pattern brings its work back, and a host restart recovers
-> the whole crew with no manual steps.
+Autostart restores processes. A plugin running a persistent job must also
+[resume its work on boot](./plugins.md#surface-resume).
 
-**2. Bake the lead + personas as seeds.** The lead's own config and persona seed from
-`PROTOAGENT_SEED_CONFIG` and `PROTOAGENT_SEED_SOUL` on first boot (seed-not-force — operator
-edits persist), so the whole team ships in one image with no wizard. See
-[Deploy with Docker](./deploy-docker.md) for the seed pattern and the volume-shadow traps it
-avoids — in particular, add `PROTOAGENT_SEED_MERGE=1` if you expect to keep *changing* the
-baked config: without it, seeding is first-boot-only, so a member with a persisted config
-volume will go on serving the identity and card it was originally seeded with no matter what
-later images bake.
-
-Put together, a deployed team is **lead config seed + persona seed + `fleet.autostart` roster +
-[`delegate_to`](./delegates.md) wiring** — `docker compose up` brings up the lead, restarts the
-crew, and hands real work to them (delegation is reliable past 60s as of
-[#1788](https://github.com/protoLabsAI/protoAgent/pull/1788); a member's turn is bounded by its
-delegate `poll_timeout_s` of *no observable progress*, not by total length — a turn that keeps
-streaming work is waited out).
-
-> **Reproducible-from-zero is the next step, not this one.** `fleet.autostart` reconciles members
-> that already **exist** (created via the console, `POST /api/fleet`, or `--from`/`--bundle`) and
-> references them by id/name — so a full volume wipe that must recreate them from scratch is out of
-> scope. Creating members from archetypes, auto-deriving the lead's delegates, and a shared commons
-> — a whole team from a single baked manifest — is [ADR 0072](../adr/0072-fleet-seed-team-via-config.md)'s
-> `PROTOAGENT_SEED_FLEET`; `fleet.autostart` is its first shipped slice.
+For container deployment, use [Docker config seeds](./deploy-docker.md).
+`PROTOAGENT_SEED_CONFIG` and `PROTOAGENT_SEED_SOUL` seed the first boot;
+`PROTOAGENT_SEED_MERGE=1` applies later config seeds while preserving operator edits.
+See [Operate a fleet](./operating-a-fleet.md) for rollout and recovery.
 
 ## The unified console — every agent in one UI
 
@@ -519,12 +399,3 @@ the tool is absent from every surface — the local model's toolset, the resolve
   [install & publish plugins](./plugin-registry.md) · [skills](./skills.md) ·
   [operating a fleet (health, rollout, triage, recovery)](./operating-a-fleet.md) ·
   [the fleet deck (a terminal for the fleet)](./fleet-deck.md)
-
-## What the box shares with every member
-
-Every agent on the machine reads the box's `host-config.yaml` (the Host layer of
-the settings cascade, ADR 0047 — gateway/model defaults) and, since ADR 0105, its
-`delegates:` list: a delegate the hub saved with **Share with fleet** is on every
-member's bench without a copy, its secrets in the owner-only `host-secrets.yaml`
-beside it. Members read both files and never write them; the hub's Settings ▸
-Delegates is the editor. The `dev` sandbox shares the same box.

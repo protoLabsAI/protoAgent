@@ -109,50 +109,16 @@ when your change touches those surfaces. The full breakdown:
 | Web unit | `npm run test:unit --workspace @protoagent/web` |
 | Web e2e | `npm run test:e2e --workspace @protoagent/web` (Playwright/chromium) |
 | Changelog entry | a `changelog.d/<pr>.<kind>.md` fragment — shape and kinds in [changelog.d/README.md](./changelog.d/README.md) (bullet with a **bold lead-in** ending in `(#NNNN)`; never edit `CHANGELOG.md` directly) |
-| Windows tests | A stable `Windows tests (native)` aggregate gate. Python/runtime changes run `python -m pytest tests/ -q -m platform_sensitive` (the OS-touching ~27% of the suite, minus [tests/windows_native_exclusions.txt](./tests/windows_native_exclusions.txt)) across two isolated, duration-balanced `windows-latest` shards; a nightly `schedule` run covers the whole suite. **A test that spawns processes, signals, locks, chmods/symlinks, `os.replace`/`os.rename`s, reads `sys.platform`/`os.name`, or imports code that branches on the platform must carry `@pytest.mark.platform_sensitive`** (or the module's `pytestmark`) — `tests/test_platform_sensitive_marks.py` fails otherwise; Tauri-native changes run `cargo test --locked` on Windows. Known docs/web/marketing-only changes skip both expensive lanes, while pushes to `main` and changes to the classifier/workflow run both. Refresh the checked-in timing seed after a major suite shift — **on Windows only** (a macOS seed skews the split, #3892) — by running the `Windows test durations` workflow (`gh workflow run windows-test-durations.yml`; it also runs monthly and opens a PR with the new seed), or by hand on a Windows box with `uv run --with pytest-split==0.11.0 --with pytest --with pytest-asyncio python -m pytest tests/ -q --store-durations --clean-durations --durations-path tests/windows_test_durations.json`. The exclusion list is the #2412 burndown: shrink it, never grow it |
+| Windows tests | Runtime changes require the platform-sensitive Windows suite; Tauri-native changes require `cargo test --locked` on Windows. OS-touching tests must carry `@pytest.mark.platform_sensitive`. Never grow the exclusion list; refresh timing data on Windows after major suite shifts. Commands, triggers, and timing procedure: [Windows checks](docs/dev/contributor-workflows.md#windows-checks). |
 
-### Dependabot PRs land red on Lint — that is expected, and it is your job to fix
+<a id="dependabot-prs-land-red-on-lint--that-is-expected-and-it-is-your-job-to-fix"></a>
 
-`gen_attribution.py` reads *installed* package metadata, so Dependabot cannot run
-it: **every** dependency PR arrives failing `Attribution in sync` even when the
-bump is perfectly good. Nothing is wrong with the PR; it just isn't finished. Push
-the regenerated file onto the Dependabot branch:
+### Dependency PRs
 
-```bash
-gh pr checkout <pr>                                   # the dependabot/... branch
-uv sync --frozen                                      # install THAT PR's versions
-uv run python scripts/gen_attribution.py              # rewrite THIRD_PARTY_LICENSES.md
-git commit -am "chore(deps): regenerate attribution" && git push
-```
-
-`--frozen` matters: a bare `uv sync` can re-resolve and quietly turn a scoped bump
-into a whole-world upgrade. Check `git status` before committing — the only file
-that should have changed is `THIRD_PARTY_LICENSES.md`.
-
-Pushing to the branch has two consequences, and the second one is a trap:
-
-1. Dependabot stops managing the PR (no more rebases), which is what you want
-   at that point anyway.
-2. **The PR's actor stops being `dependabot[bot]` and becomes you** — and
-   `scripts/changelog_gate.sh` exempts bot PRs by exactly that check. So the
-   changelog gate, green a moment ago, goes red on a dependency bump that has
-   nothing to put in release notes. Apply the `skip-changelog` label; it
-   re-runs its own gate, but `Verify workspace config` (which carries the twin
-   check in `checks.yml`) does not re-trigger on a label event, so re-run that
-   job by hand.
-
-Two things to look at before you do any of this, because a green suite does not
-cover them:
-
-- **Dependabot edits version *constraints*, not just the lock.** A cap in
-  `pyproject.toml` with a comment explaining it is documentation, not protection —
-  it will happily rewrite `mcp>=1.2,<2` to `<3`. Diff `pyproject.toml` first; if a
-  cap moved, the comment above it says why it was there. Caps that must never move
-  belong in `dependabot.yml`'s `ignore` list.
-- **A green PR only proves the workflows that run on PRs.** `desktop-build`,
-  `prepare-release`, `publish`, `release`, `docker-publish` and `marketing-deploy`
-  are dispatch/push-only, so an `actions/*` bump touching them ships untested —
-  hold those until after a release, then dispatch the affected workflow by hand.
+For dependency PRs, inspect constraint changes and dispatch-only workflow changes,
+install the PR's locked dependencies with `uv sync --frozen`, and regenerate
+attribution. Follow [Dependency updates](docs/dev/contributor-workflows.md#dependency-updates)
+for the branch procedure and changelog-gate handling.
 
 If a change is genuinely test-free (docs, config, pure refactor), say so
 explicitly in the PR description — but that is the exception, not the default.
@@ -386,6 +352,9 @@ label before concluding the loop is stuck.
   `reference`, `explanation`, `adr`).
 - Validate with `npm run docs:build`, the docs-related tests, and generated-doc
   checks. Change generated reference prose at its source, then regenerate it.
+- Keep one owner for each procedure or contract; link to it from other guides.
+  Mark completed plans and handoffs as historical. Record ADR implementation status
+  separately from decision status; shipped code alone does not imply acceptance.
 
 ## Conventions
 

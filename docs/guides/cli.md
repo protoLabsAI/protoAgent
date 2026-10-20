@@ -59,131 +59,26 @@ then exits:
 | `protoagent config explain` · `get` · `set key=value …` | Explain the config cascade; print `config.yaml`; write dotted keys (JSON-typed) to disk. | [0047](../adr/0047-layered-settings-cascade.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent knowledge ingest <url\|file>` | Fetch/extract a source and index it into this instance's knowledge base. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent operations` | List the operations on the shared ops layer — name, read/write, one-line summary. | [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
-| `protoagent agent export [-o PATH] [--dry-run]` | Write this agent's **secret-free snapshot** zip — the declarative recipe (SOUL, stripped config, plugin SHA pins, skills). Works on a **stopped** agent. | [0091](../adr/0091-agent-snapshot-portability.md) |
+| `protoagent agent export [-o PATH] [--dry-run]` | Write this agent's **redacted snapshot** zip — the declarative recipe (SOUL, stripped config, plugin SHA pins, skills). Works on a **stopped** agent. | [0091](../adr/0091-agent-snapshot-portability.md) |
 | `protoagent agent import <zip> [--name N] [--dry-run] [--yes]` | Stand up a **fresh agent** from a snapshot. Prints the plan (plugins it will install and run, capabilities it grants) and refuses to apply without `--yes`. | [0091](../adr/0091-agent-snapshot-portability.md) |
 | `protoagent runtime use <rt>` · `list` | Select the agent runtime. **`native` (LangGraph) is the supported value**; the `acp:*` runtimes are [deprecated](/guides/acp-runtime) — hand coding jobs to an [`acp` delegate](/guides/coding-agents) instead. | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
 | `protoagent hermes` | **Deprecated** ([#2633](https://github.com/protoLabsAI/protoAgent/issues/2633)) — the Hermes preset still works for existing installs but is no longer offered. Hand work to an external agent with [ACP delegates](delegates.md) instead. | [0033](../adr/0033-pluggable-agent-runtime-acp.md) |
 
 #### The fleet deck: `protoagent fleet` with no arguments
 
-Bare `protoagent fleet` (or `protoagent top`) opens an interactive terminal over the
-running hub — the **fleet deck** (a task-oriented walkthrough: [The fleet deck](./fleet-deck.md)). The roster shows every member with the console's
-presence words (host, online, remote, stopped, unreachable), version skew, spend over the
-last 24 h, and the hub's runtime warnings as a banner. Keys: `enter` (or `c`) talk to the member, `i` member detail, `w` the work feed, `n` new
-member, `R` rename, `d` delete, `a` add a remote, `e` edit a remote, `J`/`K` move a row (with
-no filter active), `H` every hub on the box, `F5` refresh, `s`
-start, `x` stop, `r` restart, `l` follow logs, `o` open the member in the browser console,
-`/` filter, `?` help, `q` quit (members keep running). The footer lists only the keys that
-apply to the selected row. Member detail shows runtime status (model, identity, warnings),
-a following tail of the member's bounded, redacted log ring, the session inventory, and
-the telemetry rollup — each pane degrades on its own if that read fails.
+Run `protoagent fleet` (or `protoagent top`) for the interactive terminal UI.
+Use `protoagent fleet --all` to choose among hubs, or `--hub URL --token TOKEN`
+to select one explicitly. `q` closes the deck while members keep running.
 
-**Talking to a member.** `enter` (or `c`) on an online member opens a conversation.
-The transcript streams your messages and the member's answers; the WORK pane lists every
-tool call of the current turn as it happens — a subagent's own calls nested under its
-`task` card — with args, result, and duration; `enter` on a card shows the full args and
-result. Thinking folds behind a one-line count (`ctrl+z` unfolds). `esc` cancels a running
-turn (then backs out); `ctrl+n` starts a new session; `ctrl+s` lists the member's console
-sessions and replays one, tool cards included. Sessions use the console's own id shape,
-so a conversation started here is waiting in the browser and vice versa. A stream that
-goes silent for 45 s is checked against the member's durable task and finalized from it
-only if the server already finished — never fabricated.
-
-**Acting on a turn.** When the member parks on a question, a form, or an approval, the
-status line says so; `enter` on the empty composer (or `ctrl+r`) opens it — a plain
-question also takes whatever you type as the answer. Approvals are `a` / `d`; a form is a
-stepped wizard (`ctrl+→` / `ctrl+←`, `ctrl+s` submits) with the console's own rules for
-required fields, choices, and conditional fields; `ctrl+d` dismisses a request the way the
-console does, so the turn never stays parked forever. Typing while the member is working
-STEERS the running turn: the message queues and folds in at the member's next model call;
-`up` on the empty composer pulls the newest queued message back to edit, and anything the
-turn ended without reading is re-sent as a fresh turn. `ctrl+x` cancels the selected
-running `task` card — that one delegation, not the turn. While a conversation is open the
-session is *attended*: a scheduled or inbox turn in it parks on a question instead of
-auto-answering, and the deck attaches to it as it runs (a turn already running when you
-open a session is attached too); when the member says the turn is operator-controllable,
-the composer interjects into it. `esc` on an attached turn detaches and backs out — it
-never cancels somebody else's turn. (`ctrl+x` is the composer's *cut* while the composer
-has focus; `tab` to the WORK pane first.)
-
-**Managing members.** `n` creates a member: a name, an archetype from the hub's catalog
-(the built-in Basic and every installed archetype, with what each installs and needs),
-"inherit the hub's model connections and credentials" (on by default — the member boots
-ready to chat) and "start after create". `R` renames the selected member's display name
-only (letters, digits, `-` and `_`, like every member name) — its id, URL slug and data never
-change, so open windows survive. `d` deletes it:
-the member is stopped first, you type its name to confirm, and purging its workspace and
-data is a separate checkbox — both irreversible, and the deck says so. If the hub reports
-that the member stopped but its workspace survived (a 409), the deck says so and asks you
-to repeat the delete; that is a partial result, not a failure. `a` registers a remote
-protoAgent (name, URL, an optional bearer typed masked, sent once and never shown again);
-`e` edits one in place (blank bearer keeps the stored one, "clear" forgets it — one or the
-other, not both); `d` on a remote only unregisters it. An unreachable remote reads `unreachable`, never `stopped`.
-`J`/`K` move the selected row and persist the order on the hub as a complete permutation
-of member ids. The status line shows the hub's warm-agent cap (`fleet.warm.max`;
-read-only here — change it in the hub's settings).
-
-**Every hub on the box.** `H` (or `protoagent fleet --all`) lists the hubs this machine
-runs — the desktop app's, `~/.protoagent`, each scoped instance under it — and peers found
-on this box's ports and the tailnet (and the LAN when `fleet.discovery.mdns` is on): one row per hub with its state, how it was launched (desktop
-app, `protoagent up`, foreground), port, version and member counts, then its instance
-root. Running hubs come from the `.instances/` heartbeats under every known box root;
-stopped ones from every instance root that carries a `workspaces/fleet.json` (a member's
-root is never a hub row). This shell's own instance is one input among these, never the
-only one — what a shell "sees" is not what it inherited.
-A running hub is probed with its own fleet token: one that answers but refuses every
-credential reads `unauthorized` (pass `--token`), one that does not answer `unreachable`.
-A peer found on the network is never sent a credential — not `--token`, not the env — its
-name and url are its own claim; to open one with a bearer, name it: `--hub <url> --token`.
-`enter` attaches the deck to that hub — the roster, feed and conversations then belong to
-its fleet; `u` on a stopped hub runs `protoagent up` for that instance root — on the port it
-last used when that is free and no member of any instance records it, else the first such port
-from 7870 to 7910 — and attaches once its port answers. Stopping a hub is not a deck action (`protoagent down` in that
-instance). Two hubs claiming one port both say so — ports are box-global.
-
-**The work feed.** `w` lists what the fleet is doing — every member's server-fired turns,
-tool calls, room replies, spend, and parked questions, folded from the members' event
-buses into one time-ordered feed. `f` filters, `p` pauses, `enter` opens the member's
-conversation at that row's session. The roster's TURN column follows the same events, and
-the deck rings the bell when a member newly needs you.
-
-**Credentials.** The deck opens a hub exactly as the verbs do (below): `--token` /
-`PROTOAGENT_HUB_TOKEN` first, then the hub's own fleet service token, then
-`A2A_AUTH_TOKEN`, then no credential — local tokens go to loopback hubs only, nothing goes
-off-box in cleartext without `--insecure-http`, and a peer the network reported gets no
-credential at all. Conversations reuse the credential that opened the hub; a remote
-member's bearer stays on the hub and is attached by its proxy. Nothing is ever printed.
-
-**Offline.** The deck follows the same live/offline rule as the verbs below: with no hub
-answering it shows this instance's `fleet.json` badged `offline`, and only start/stop are
-available — `H` still lists every hub on the box, and `u` brings one up. `--all` opens the
-tree even when a hub answered but refused this shell's credentials; the roster beneath it is
-then the disk view, badged with the refusal, and start/stop are **not** offered there — attach
-to the hub (`enter` on its row) or pass `--token`. A `fleet --all --json` run never loads Textual.
-
-**From the desktop app.** The desktop sidecar bundles the deck, so `protoagent-server fleet`
-opens it from the frozen binary (a desktop-only install has no other `protoagent` on the box, so that is how the deck is reached there).
-Textual is imported only when the deck opens, so `--help` and the non-interactive verbs
-stay fast; a build without it prints a one-line hint and exits 2.
-
-**Screens and keys, at a glance.**
-
-| Screen | Keys |
-|---|---|
-| Roster | `enter`/`c` talk · `i` detail · `w` work feed · `H` hubs · `n` new · `R` rename · `d` delete · `a` add remote · `e` edit remote · `J`/`K` move · `s` start · `x` stop · `r` restart · `l` logs · `o` open in console · `/` filter · `F5` refresh · `?` help · `q` quit |
-| Conversation | type + `enter` send (steers a running turn) · `enter` on the empty composer / `ctrl+r` answer what the turn parked on · `esc` cancel or detach, then back · `ctrl+n` new session · `ctrl+s` sessions · `ctrl+z` unfold thinking · `tab` to the WORK pane · `ctrl+x` cancel the selected delegation · `up` edit the newest queued message |
-| Question / form / approval | `a` approve · `d` deny · `ctrl+→`/`ctrl+←` form steps · `ctrl+s` submit · `ctrl+d` dismiss · `esc` back |
-| Hubs | `enter` attach · `u` bring up · `r` rediscover · `esc` back |
-| Work feed | `f` filter · `p` pause · `enter` open that session · `esc` back |
+The [fleet-deck guide](./fleet-deck.md) owns the keyboard controls, conversations,
+approvals, member management, offline behavior, and desktop binary instructions.
+For scripts, use `protoagent fleet ls --json` or `protoagent fleet --all --json`;
+these commands do not load the terminal UI.
 
 #### `fleet` talks to the running hub
 
-`fleet ls` / `up` / `down` look for a **running hub** before they read anything from
-disk, because the hub is the only source of live truth about the fleet: its
-`GET /api/fleet` is what the console shows, and its control plane is what owns the
-member processes. A shell that read `fleet.json` from its own instance root used to
-report a fleet of one beside the desktop app's hub (which lives under a different
-`PROTOAGENT_HOME`) — and called the CLI's own pid a running server.
+`fleet ls`, `up`, and `down` use a running hub's API when available. The hub owns
+member processes and supplies the same live roster as the console.
 
 How a hub is found, in order: this instance's `server.pid` (from `protoagent up`), the
 `.instances/<pid>.json` heartbeats every server writes under its box root — scanned
@@ -333,7 +228,8 @@ Supply credentials to the new agent through its Settings, or use repeatable
 See [Snapshot reference](/reference/agent-snapshots) for contents, knowledge
 exclusions, credential names, and model-connection inheritance.
 
-## Roadmap
+## Shared operations {#roadmap}
 
-Later slices of ADR 0075 add a shared operation layer so every verb here has a matching
-MCP tool and REST endpoint. See the ADR for the plan.
+`protoagent operations` lists the shared operations available in this build.
+See the [operator API reference](/reference/operator-api) and
+[operator MCP guide](/guides/mcp) for the other interfaces.

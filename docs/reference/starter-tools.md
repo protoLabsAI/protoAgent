@@ -441,7 +441,7 @@ trigger · text) plus a telemetry rollup (turns, tool calls, LLM calls, cost, su
 model) over the window. `limit` is clamped to 1–200. Returns a "nothing to consolidate" line
 when both sources are empty.
 
-## Memory & knowledge
+## Memory & knowledge {#memory-knowledge}
 
 See [Memory & the knowledge store](/explanation/memory-and-knowledge) for the model behind
 these, and [Ingestion](/guides/ingestion) for the pipeline `knowledge_ingest` drives.

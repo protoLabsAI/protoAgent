@@ -15,7 +15,7 @@ The `protoagent` command comes from the `protolabs-agent` package on PyPI (see
 `uv run python -m server fleet`. With only the desktop app installed, use
 [its bundled binary](#from-the-desktop-app). `q` quits the deck; members
 keep running. The footer only ever lists the keys that apply to the selected row, and `?` lists
-all of them — the full key table is in [the CLI guide](./cli.md#the-fleet-deck-protoagent-fleet-with-no-arguments).
+all of them — see the [key table](#screens-and-keys).
 
 The deck needs a terminal. For scripts, use the non-interactive verbs with `--json`
 (`protoagent fleet ls --json`, `protoagent fleet --all --json`).
@@ -46,7 +46,9 @@ full arguments and result.
 
 Sessions are **shared with the console**: a conversation started in the deck is waiting in the
 browser, and the other way round. `ctrl+s` lists the member's sessions and replays one, tool
-cards included; `ctrl+n` starts a new one.
+cards included; `ctrl+n` starts a new one. `ctrl+z` unfolds thinking. A stream
+silent for 45 seconds is checked against the durable task and finalized only when
+the server reports completion.
 
 ## Answer a member that is waiting on you
 
@@ -61,7 +63,9 @@ conversation's status line says what it needs.
 
 While a member is working, typing **steers** the running turn: the message queues and folds in at
 the member's next model call. `ctrl+x` on a running `task` card cancels that one delegation, not
-the turn. A turn the scheduler or an inbox started is attached too when you open its session, and
+the turn. With the composer focused, `ctrl+x` cuts text; press `tab` to focus WORK first.
+`up` on an empty composer edits the newest queued message. `esc` cancels a turn you
+started; on an attached turn it detaches. A turn the scheduler or an inbox started is attached too when you open its session, and
 when the member marks it operator-controllable the composer interjects into it; `esc` on an
 attached turn detaches and never cancels someone else's work.
 
@@ -76,6 +80,12 @@ On a live hub, from the roster:
 | `d` | Delete: the member is stopped first, you type its name to confirm, and purging its data is a separate choice |
 | `a` / `e` | Register a remote protoAgent, or edit one in place (the bearer is typed masked and never shown again) |
 | `J` / `K` | Move the selected row; the order is saved on the hub |
+
+Blank remote bearer input preserves the stored value; **Clear** removes it.
+Deleting a remote unregisters it. If deleting a local member reports that its
+process stopped but its workspace survived, review the partial result before
+retrying. The status line shows the hub's warm-agent cap (`fleet.warm.max`);
+change that cap in the hub's settings.
 
 The same operations are `protoagent fleet new | rm | rename | remote add|edit|rm | order` on the
 command line, and the `fleet.*` operations on the shared ops layer.
@@ -123,6 +133,16 @@ with no other `protoagent` installed. On macOS:
 ```bash
 /Applications/protoAgent.app/Contents/MacOS/protoagent-server fleet
 ```
+
+## Screens and keys
+
+| Screen | Keys |
+|---|---|
+| Roster | `enter`/`c` talk · `i` detail · `w` work feed · `H` hubs · `n` new · `R` rename · `d` delete · `a` add remote · `e` edit remote · `J`/`K` move · `s` start · `x` stop · `r` restart · `l` logs · `o` open in console · `/` filter · `F5` refresh · `?` help · `q` quit |
+| Conversation | type + `enter` send (steers a running turn) · `enter` on the empty composer / `ctrl+r` answer what the turn parked on · `esc` cancel or detach, then back · `ctrl+n` new session · `ctrl+s` sessions · `ctrl+z` unfold thinking · `tab` to the WORK pane · `ctrl+x` cancel the selected delegation · `up` edit the newest queued message |
+| Question / form / approval | `a` approve · `d` deny · `ctrl+→`/`ctrl+←` form steps · `ctrl+s` submit · `ctrl+d` dismiss · `esc` back |
+| Hubs | `enter` attach · `u` bring up · `r` rediscover · `esc` back |
+| Work feed | `f` filter · `p` pause · `enter` open that session · `esc` back |
 
 ## Troubleshooting
 

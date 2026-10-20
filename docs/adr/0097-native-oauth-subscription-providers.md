@@ -2,6 +2,15 @@
 
 Status: **Proposed**
 
+
+**Implementation status (2026-10-16):** Native OAuth providers are implemented in `graph/providers/`. The provider
+registry in [ADR 0106](0106-provider-registry.md) supersedes the single-lead-provider
+configuration described here. Use [model connections](../guides/model-connections.md)
+for current setup.
+
+The decision status above is retained; implementation does not establish formal
+acceptance. Context and sequencing below record the original proposal.
+
 ## Context
 
 protoAgent's native pipeline (`graph/agent.py` → `graph/llm.py`) drives every model call
