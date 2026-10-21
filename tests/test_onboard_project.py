@@ -944,9 +944,11 @@ async def test_local_disabled_means_absent(tmp_path):
 # ── refresh=true on a reused checkout (#3733): fetch + fast-forward only ─────────
 
 
-def _origin_and_clone(tmp_path: Path) -> tuple[Path, Path, Path]:
-    """A bare origin, a clone in the onboarding root (``widget``), and a second clone
-    that pushes new commits to origin — all real git."""
+def _origin_and_clone(tmp_path: Path, dirname: str = "widget") -> tuple[Path, Path, Path]:
+    """A bare origin, a clone in the onboarding root (``root/<dirname>``, default
+    ``widget``), and a second clone that pushes new commits to origin — all real git.
+    ``dirname`` need not equal the repo name, so the registry path and ``root/<repo>``
+    can differ (#4425)."""
     origin = tmp_path / "src" / "widget.git"
     origin.parent.mkdir()
     _git("init", "-q", "--bare", "-b", "main", str(origin), cwd=tmp_path)
@@ -960,7 +962,7 @@ def _origin_and_clone(tmp_path: Path) -> tuple[Path, Path, Path]:
     _git("push", "-q", "origin", "main", cwd=seed)
     root = tmp_path / "root"
     root.mkdir()
-    clone = root / "widget"
+    clone = root / dirname
     _git("clone", "-q", str(origin), str(clone), cwd=tmp_path)
     for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
         _git("config", k, v, cwd=clone)
@@ -1033,3 +1035,98 @@ async def test_refresh_without_upstream_is_refused(tmp_path, applied):
     _repo(root / "widget", branch="main")
     out = await _tool(_cfg(root)).ainvoke({"repo": "acme/widget", "refresh": True})
     assert "Not refreshed — the current branch has no upstream" in out
+
+
+# ---------------------------------------------------------------------------
+# resolve an already-registered project by repo/name, not root/<repo-name> (#4425)
+# ---------------------------------------------------------------------------
+#
+# A project lives at the PATH its registry entry names — which need not be
+# root/<repo-name>. Re-onboarding the same repo must act on THAT checkout (reuse or
+# fast-forward) and add nothing, instead of cloning a shadow copy into root/<repo-name>
+# and appending a second, shadowing registry/fence entry.
+
+
+async def test_refresh_resolves_registered_nondefault_path_not_root_reponame(tmp_path, applied):
+    """r1: a repo registered at root/protoAgent-team (bound to the repo) refreshes THAT
+    checkout — never clones root/<repo-name> — and writes no new registry/fence entry."""
+    _origin, seed, clone = _origin_and_clone(tmp_path, "protoAgent-team")
+    _push_commits(seed, 2)
+    stale = _head(clone)
+    root = tmp_path / "root"
+    entry = {"name": "protoAgent", "path": str(clone.resolve()), "github": "acme/widget", "write": True}
+    out = await _tool(_cfg(root, projects=[entry])).ainvoke({"repo": "acme/widget", "refresh": True})
+
+    # acted on the registered checkout, by its path…
+    assert "Fetched and fast-forwarded 2 commits to origin/main" in out
+    assert str(clone.resolve()) in out
+    assert _head(clone) == _head(seed) != stale
+    # …never on root/<repo-name>, and added no entries.
+    assert not (root / "widget").exists()
+    assert applied == []
+
+
+async def test_registered_nondefault_path_no_refresh_reuses_without_clone_or_write(tmp_path, mocks):
+    """r2: with no refresh, onboarding a repo already registered at a non-default path
+    names that existing path, attempts no clone, and writes nothing new."""
+    registered = tmp_path / "protoAgent-team"
+    registered.mkdir()  # the real checkout is on disk
+    entry = {"name": "protoAgent", "path": str(registered), "github": "acme/widget", "write": True}
+    out = await _tool(_cfg(tmp_path, projects=[entry])).ainvoke({"github_repo": "acme/widget"})
+
+    assert mocks.clone_calls == []  # no clone attempted
+    assert mocks.apply_calls == []  # no new registry/fence entries
+    assert "already registered" in out
+    assert str(registered) in out
+    assert not (tmp_path / "widget").exists()  # never touched root/<repo-name>
+
+
+async def test_resolution_matches_github_binding_case_insensitively(tmp_path, mocks):
+    """The GitHub binding match ignores case, so ``protoLabsAI/protoAgent`` resolves to a
+    checkout registered as ``protolabsai/protoagent``."""
+    registered = tmp_path / "protoAgent-team"
+    registered.mkdir()
+    entry = {"name": "protoAgent", "path": str(registered), "github": "protolabsai/protoagent", "write": True}
+    tool = _tool(_cfg(tmp_path, onboarding_allow=["github.com/protoLabsAI/*"], projects=[entry]))
+    out = await tool.ainvoke({"repo": "protoLabsAI/protoAgent"})
+
+    assert mocks.clone_calls == [] and mocks.apply_calls == []
+    assert "already registered" in out and str(registered) in out
+
+
+async def test_onboard_refuses_name_collision_with_a_different_repo(tmp_path, mocks):
+    """r3: the repo's default name is already held by a DIFFERENT repo at another path →
+    refuse with the second-checkout hint; nothing cloned or registered."""
+    other = tmp_path / "other-widget"
+    entry = {"name": "widget", "path": str(other), "github": "acme/other", "write": False}
+    out = await _tool(_cfg(tmp_path, projects=[entry])).ainvoke({"github_repo": "acme/widget"})
+
+    assert out.startswith("Refused:")
+    assert "name 'widget' is already registered at" in out and str(other) in out
+    assert "pass name=" in out
+    assert mocks.clone_calls == [] and mocks.apply_calls == []
+
+
+async def test_onboard_name_collision_does_not_block_a_distinct_name(tmp_path, mocks):
+    """Passing an explicit distinct ``name=`` sidesteps the collision and clones as new."""
+    other = tmp_path / "other-widget"
+    entry = {"name": "widget", "path": str(other), "github": "acme/other", "write": False}
+    await _tool(_cfg(tmp_path, projects=[entry])).ainvoke({"github_repo": "acme/widget", "name": "widget-2"})
+
+    assert len(mocks.clone_calls) == 1  # a genuinely new checkout
+    assert mocks.clone_calls[0][0][0] == ["git", "clone", "--", "https://github.com/acme/widget.git", str(tmp_path / "widget")]
+    assert any(p["path"] == str(tmp_path / "widget") and p["name"] == "widget-2" for p in mocks.apply_calls[0]["projects"])
+
+
+async def test_local_refuses_name_collision_at_different_path(tmp_path, applied):
+    """r3: register_local_project refuses a name already registered at a different path,
+    telling the caller to pass an explicit ``name=``; the registry is untouched."""
+    existing = _repo(tmp_path / "existing")
+    other = _repo(tmp_path / "other")
+    entry = {"name": "shared", "path": str(existing.resolve()), "write": False}
+    out = await _local(_cfg(tmp_path, projects=[entry])).ainvoke({"path": str(other), "name": "shared"})
+
+    assert out.startswith("Refused:")
+    assert "name 'shared' is already registered at" in out and str(existing.resolve()) in out
+    assert "pass name=" in out
+    assert applied == []
