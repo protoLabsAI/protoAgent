@@ -1047,7 +1047,8 @@ async def test_refresh_without_upstream_is_refused(tmp_path, applied):
 # and appending a second, shadowing registry/fence entry.
 
 
-async def test_refresh_resolves_registered_nondefault_path_not_root_reponame(tmp_path, applied):
+@pytest.mark.parametrize("home_relative", [False, True])
+async def test_refresh_resolves_registered_nondefault_path_not_root_reponame(tmp_path, applied, monkeypatch, home_relative):
     """r1: a repo registered at root/protoAgent-team (bound to the repo) refreshes THAT
     checkout — never clones root/<repo-name> — and writes no new registry/fence entry."""
     _origin, seed, clone = _origin_and_clone(tmp_path, "protoAgent-team")
@@ -1055,6 +1056,10 @@ async def test_refresh_resolves_registered_nondefault_path_not_root_reponame(tmp
     stale = _head(clone)
     root = tmp_path / "root"
     entry = {"name": "protoAgent", "path": str(clone.resolve()), "github": "acme/widget", "write": True}
+    if home_relative:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        entry["path"] = "~/root/protoAgent-team"
     out = await _tool(_cfg(root, projects=[entry])).ainvoke({"repo": "acme/widget", "refresh": True})
 
     # acted on the registered checkout, by its path…
@@ -1135,13 +1140,20 @@ async def test_local_refuses_name_collision_at_different_path(tmp_path, applied)
 @pytest.mark.parametrize("outside_root", [False, True])
 @pytest.mark.parametrize("registration", ["fence_only", "registry_excluded", "both"])
 @pytest.mark.parametrize("refresh", [False, True])
-async def test_binding_reuse_preserves_operator_access(tmp_path, mocks, monkeypatch, outside_root, registration, refresh):
+@pytest.mark.parametrize("home_relative", [False, True])
+async def test_binding_reuse_preserves_operator_access(
+    tmp_path, mocks, monkeypatch, outside_root, registration, refresh, home_relative
+):
     """A binding is not permission to promote or mirror entries at the agent's mode."""
     root = tmp_path / "root"
     root.mkdir()
     target = (tmp_path if outside_root else root) / "registered-checkout"
     target.mkdir()
     entry = {"name": "registered-name", "path": str(target), "github": "acme/widget", "write": False}
+    if home_relative:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        entry["path"] = "~/" + target.relative_to(tmp_path).as_posix()
     unrelated = {"name": "other", "path": str(root / "other"), "write": False}
     projects = [] if registration == "fence_only" else [entry.copy()]
     fence = [unrelated] if registration == "registry_excluded" else [entry.copy()]

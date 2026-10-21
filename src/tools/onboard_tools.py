@@ -1024,7 +1024,7 @@ def build_onboard_tools(config) -> list:
             # Same name at the default location → the normal reuse/promote path below.
 
         if resolved_entry is not None:
-            target = Path(str(resolved_entry.get("path") or ""))
+            target = Path(str(resolved_entry.get("path") or "")).expanduser()
         else:
             # (2b) A genuinely new repo: clone into root/<repo-name>. resolve() collapses
             #      .. and follows symlinks, so an escape is caught here — before git or
