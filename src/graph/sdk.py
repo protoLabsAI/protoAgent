@@ -302,8 +302,10 @@ def attach_file(ref: Any, *, name: str = "", mime: str = "", ttl_s: int | None =
     (a no-op) outside an armed turn (e.g. a background job), after the turn's answer was
     built (a late background attach), for a non-media, unsigned or expired URL, or past 16
     files in one turn. Attaching the same content twice (or a re-run tool's fresh copy of the
-    same bytes) is one attachment; a later file under the same ``name`` replaces the earlier
-    one. Files attached before a HITL pause are
+    same bytes) collapses when either attachment is unnamed, keeping the given name. Two
+    explicitly named attachments with different names stay separate even with identical
+    bytes; a later file under the same explicit ``name`` replaces the earlier one.
+    Files attached before a HITL pause are
     delivered with the answer of the turn that resumes it. Guard with
     ``getattr(sdk, "attach_file", None)`` on cores older than this seam (``ttl_s`` needs a
     core with #4258)."""

@@ -775,8 +775,10 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
     False — and nothing happens — outside an armed turn (a background job), after the turn's
     answer was built (a late background/delegated attach), for a non-media, unsigned or
     expired URL, or past 16 files a turn. Attaching the same content twice (the same ref, or a
-    re-run tool's fresh copy of the same bytes) is one attachment; a second file under the same
-    explicit ``name`` replaces the first. A console turn IS armed (it rides
+    re-run tool's fresh copy of the same bytes) collapses when either attachment is unnamed,
+    keeping the given name. Two explicitly named attachments with different names stay
+    separate even with identical bytes; a second file under the same explicit ``name``
+    replaces the first. A console turn IS armed (it rides
     A2A ``message/stream``): the file part lands on the console's task, which ignores it and
     renders the inline link."""
     tf = _TURN_FILES.get()
@@ -816,13 +818,13 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
                 rel,
             )
             return False
-        # Every entry this attach supersedes: the same content (same file, or a fresh copy of
-        # the same bytes), or the same explicit name. They collapse into ONE entry, at the
-        # first one's position — never two entries for one file.
+        # Collapse the same explicit name, or matching content when either side is unnamed,
+        # at the first match's position. Distinct explicit names keep separate entries.
         hits = [
             i
             for i, f in enumerate(tf.items)
-            if f["key"] == entry["key"] or (entry["named"] and f.get("named") and f["name"] == entry["name"])
+            if (f["key"] == entry["key"] and not (entry["named"] and f.get("named")))
+            or (entry["named"] and f.get("named") and f["name"] == entry["name"])
         ]
         if hits:
             first = tf.items[hits[0]]
