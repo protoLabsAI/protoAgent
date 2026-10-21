@@ -815,20 +815,71 @@ def _approval_card(
     }
 
 
+def _live_source(config):
+    """The LIVE config (``HOST.config``) when the host wired one, else the build-time
+    ``config`` — the same resolution :func:`_register` / :func:`_existing_entry` use, so
+    a lookup sees a mid-turn registration instead of the build-time snapshot (#2836)."""
+    from graph.plugins.host import HOST
+
+    if HOST.config is not None:
+        try:
+            return HOST.config() or config
+        except Exception:  # noqa: BLE001 — degrade to the build-time config, never raise into the turn
+            return config
+    return config
+
+
 def _existing_entry(config, target: Path) -> dict | None:
     """The registry (else explicit fence) entry already naming ``target``, read from the
     LIVE config like :func:`_register` does — or ``None``."""
-    from graph.plugins.host import HOST
-
-    source = config
-    if HOST.config is not None:
-        try:
-            source = HOST.config() or config
-        except Exception:  # noqa: BLE001
-            source = config
+    source = _live_source(config)
     for attr in ("projects", "filesystem_projects"):
         for e in getattr(source, attr, []) or []:
             if isinstance(e, dict) and _same_path(e.get("path"), target):
+                return e
+    return None
+
+
+def _github_matches(entry_github, slug: str) -> bool:
+    """True when a registry entry's ``github`` binding is the same ``owner/repo`` as
+    ``slug`` (case-insensitive). ``slug`` empty (a non-GitHub source) never matches."""
+    return bool(slug) and str(entry_github or "").strip().lower() == slug.strip().lower()
+
+
+def _find_registered_project(config, *, github: str, name: str) -> tuple[dict | None, str]:
+    """The already-registered project an onboarding resolves to (#4425), read from the
+    LIVE config (registry first, then the explicit ``filesystem.projects`` fence).
+
+    A project lives at the PATH its registry entry names — not at ``root/<repo-name>`` —
+    so onboarding the same repo must act on that entry rather than clone a shadow copy.
+    Matches the strong repo identity (a GitHub ``owner/repo`` binding, case-insensitive)
+    first, then a project ``name``. Returns ``(entry, "github")`` / ``(entry, "name")`` /
+    ``(None, "")``."""
+    source = _live_source(config)
+    entries: list[dict] = []
+    for attr in ("projects", "filesystem_projects"):
+        entries += [e for e in (getattr(source, attr, []) or []) if isinstance(e, dict)]
+    if github:
+        for e in entries:
+            if _github_matches(e.get("github"), github):
+                return e, "github"
+    if name:
+        for e in entries:
+            if str(e.get("name") or "") == name:
+                return e, "name"
+    return None, ""
+
+
+def _name_collision(config, name: str, target: Path) -> dict | None:
+    """An existing registry/fence entry that already holds ``name`` at a DIFFERENT path
+    than ``target`` (#4425). Registering ``name`` for ``target`` would append a second
+    same-named entry that shadows the first for the fs tools, so both onboarding tools
+    refuse and point the caller at an explicit ``name=``. Read from the LIVE config; a
+    re-registration of the SAME path is idempotent, not a collision."""
+    source = _live_source(config)
+    for attr in ("projects", "filesystem_projects"):
+        for e in getattr(source, attr, []) or []:
+            if isinstance(e, dict) and str(e.get("name") or "") == name and not _same_path(e.get("path"), target):
                 return e
     return None
 
@@ -937,9 +988,8 @@ def build_onboard_tools(config) -> list:
                 f"({', '.join(allow)})"
             )
 
-        # (2) resolve the clone path and confirm it stays UNDER the root. resolve()
-        #     collapses .. and follows symlinks, so an escape is caught here — before
-        #     git or the config writer touches anything.
+        # (2) resolve where this repo lives: an existing registered path if one matches,
+        #     else a fresh clone under the root.
         root_raw = getattr(config, "onboarding_root", "") or ""
         # An UNSET root is not "anywhere" — it is nowhere. `Path("")` is `Path(".")`,
         # so without this an empty root silently means the server's working directory
@@ -950,9 +1000,38 @@ def build_onboard_tools(config) -> list:
         if not root_raw.strip():
             return _ROOT_UNSET.format(verb="clone into")
         root = Path(root_raw).expanduser()
-        target = root / ref.name
-        if not target.resolve().is_relative_to(root.resolve()):
-            return f"Refused: {target} resolves outside the onboarding root ({root_raw})"
+        default_target = root / ref.name
+
+        # (2a) Resolve an ALREADY-registered project before cloning a shadow copy
+        #      (#4425). A project lives at the path its registry entry names — which may
+        #      not be root/<repo-name> (e.g. a checkout named protoAgent-team bound to
+        #      protoLabsAI/protoAgent). Match the repo's GitHub binding first, then the
+        #      requested name; act on THAT path (refresh/reuse below), never on
+        #      root/<repo-name>, and register nothing new.
+        requested_name = name or ref.name
+        existing, how = _find_registered_project(config, github=ref.github_slug, name=requested_name)
+        resolved_entry: dict | None = None
+        if existing is not None and how == "github":
+            resolved_entry = existing
+        elif existing is not None and how == "name":
+            existing_path = Path(str(existing.get("path") or ""))
+            if not _same_path(existing.get("path"), default_target):
+                # A DIFFERENT repo wants a name another checkout already holds.
+                return (
+                    f"Refused: name '{requested_name}' is already registered at {existing_path}; "
+                    "pass name= to register a second checkout."
+                )
+            # Same name at the default location → the normal reuse/promote path below.
+
+        if resolved_entry is not None:
+            target = Path(str(resolved_entry.get("path") or "")).expanduser()
+        else:
+            # (2b) A genuinely new repo: clone into root/<repo-name>. resolve() collapses
+            #      .. and follows symlinks, so an escape is caught here — before git or
+            #      the config writer touches anything.
+            target = default_target
+            if not target.resolve().is_relative_to(root.resolve()):
+                return f"Refused: {target} resolves outside the onboarding root ({root_raw})"
 
         # (3) clone, or reuse an existing checkout untouched. An operator may have
         #     work in progress there, so we never fetch/reset a directory we find.
@@ -962,6 +1041,10 @@ def build_onboard_tools(config) -> list:
         #     instead of waiting out the timeout on a password prompt nobody sees.
         reused_checkout = target.is_dir()
         if not reused_checkout:
+            # Restoring a missing registered checkout still creates files: the
+            # existing binding must not authorize a clone outside the root.
+            if not target.resolve().is_relative_to(root.resolve()):
+                return f"Refused: {target} resolves outside the onboarding root ({root_raw})"
             try:
                 proc = await asyncio.to_thread(
                     subprocess.run,
@@ -985,8 +1068,12 @@ def build_onboard_tools(config) -> list:
                 return f"Error: git clone failed: {_redact(err)}"
 
         write_effective = write if write is not None else bool(getattr(config, "onboarding_write_default", False))
+        if resolved_entry is not None:
+            write_effective = bool(resolved_entry.get("write", False))
         rw = "read-write" if write_effective else "read-only"
-        project_name = name or target.name
+        project_name = (
+            str(resolved_entry.get("name") or target.name) if resolved_entry is not None else name or target.name
+        )
         default_branch = await asyncio.to_thread(_default_branch, target)
 
         # On any REUSE path we inspect local Git metadata only and report how the
@@ -1005,14 +1092,20 @@ def build_onboard_tools(config) -> list:
 
         # (4) register — the shared read-merge-write path (see ``_register``).
         github = ref.github_slug
-        reg = await _register(
-            config,
-            target=target,
-            project_name=project_name,
-            write=write_effective,
-            github=github,
-            default_branch=default_branch,
-        )
+        # Resolving a binding reuses its registration as-is. In particular, do
+        # not promote a fence-only entry or add it to an explicit fence that
+        # excludes it: either would change operator-approved access (#4425).
+        if resolved_entry is not None:
+            reg = _Registration("already")
+        else:
+            reg = await _register(
+                config,
+                target=target,
+                project_name=project_name,
+                write=write_effective,
+                github=github,
+                default_branch=default_branch,
+            )
         if reg.status == "already":
             if not reused_checkout:
                 # Registered, but the folder was gone — we just cloned it back (#3643). Saying
@@ -1087,6 +1180,15 @@ def build_onboard_tools(config) -> list:
             if reg.status == "already":
                 return f"{existing.get('name') or project_name} is already registered at {target} ({rw}) — nothing changed."
             return f"Promoted the existing filesystem.projects entry for {existing.get('name') or project_name} ({rw}) at {target} in {_where(reg)}."
+
+        # A name another checkout already holds at a different path would shadow it once
+        # registered (#4425) — refuse before even showing the approval card.
+        collision = _name_collision(config, project_name, target)
+        if collision is not None:
+            return (
+                f"Refused: name '{project_name}' is already registered at {collision.get('path')}; "
+                "pass name= to register a second checkout."
+            )
 
         requested_write = write if write is not None else bool(getattr(config, "onboarding_write_default", False))
         token = _path_token(target)
@@ -1239,6 +1341,12 @@ def build_onboard_tools(config) -> list:
         write_effective = write if write is not None else bool(getattr(config, "onboarding_write_default", False))
         rw = "read-write" if write_effective else "read-only"
         project_name = name or target.name
+        collision = _name_collision(config, project_name, target)
+        if collision is not None:
+            return (
+                f"Refused: name '{project_name}' is already registered at {collision.get('path')}; "
+                "pass name= to register a second checkout."
+            )
         github = await asyncio.to_thread(github_slug_for_checkout, target)
         default_branch = await asyncio.to_thread(_default_branch, target)
 
