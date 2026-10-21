@@ -205,3 +205,151 @@ def test_finished_records_expire_by_ttl(monkeypatch):
     assert local_turns.get_turn("s", "old")["state"] == "completed"
     clock["t"] += local_turns._FINISHED_TTL_S + 1
     assert local_turns.get_turn("s", "old") is None  # aged out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_error", [None, {"message": "Reconnect the provider."}])
+async def test_detach_graphless_response_matches_synchronous(app, monkeypatch, auth_error):
+    monkeypatch.setattr(STATE, "graph", None)
+    monkeypatch.setattr(STATE, "graph_auth_error", auth_error)
+    async with _client(app) as client:
+        payload = {"message": "SECRET-PROMPT", "session_id": "graphless"}
+        inline = await client.post("/api/chat", json=payload)
+        submitted = await client.post("/api/chat", json={**payload, "detach": True})
+        assert inline.status_code == 200
+        assert submitted.status_code == 202
+        turn_id = submitted.json()["turn_id"]
+        done = await _poll(client, "graphless", turn_id)
+        assert done == {"turn_id": turn_id, "state": "completed",
+                        "response": inline.json()["response"], "messages": inline.json()["messages"]}
+        assert "SECRET-PROMPT" not in str(done)
+        assert not local_turns.snapshot("graphless")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("detach", [False, True])
+async def test_queued_local_turn_does_not_replace_running_stop_target(app, monkeypatch, detach):
+    from server import turn_control
+
+    entered = asyncio.Event()
+    queued = asyncio.Event()
+    second_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def provider(message, session_id, **kwargs):
+        if message == "second":
+            queued.set()
+        async with turn_control._thread_lock("a2a:" + session_id):
+            if message == "first":
+                entered.set()
+                await asyncio.Event().wait()
+            second_entered.set()
+            await release.wait()
+            return [{"role": "assistant", "content": "second done"}]
+
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
+    sid = "queue"
+    async with _client(app) as client:
+        first = asyncio.create_task(client.post("/api/chat", json={
+            "message": "first", "session_id": sid, "detach": detach}))
+        await asyncio.wait_for(entered.wait(), 5)
+        second = asyncio.create_task(client.post("/api/chat", json={
+            "message": "second", "session_id": sid, "detach": detach}))
+        try:
+            await asyncio.wait_for(queued.wait(), 5)
+            rows = local_turns.snapshot(sid)
+            assert len(rows) == 2  # detached inner drivers must not register duplicates
+            turns = (await client.get(f"/api/chat/sessions/{sid}/turns")).json()
+            assert turns["live_task_id"] == rows[0]["id"]
+            assert [row["live"] for row in turns["local_turns"]] == [True, False]
+            stopped = await client.post(f"/api/chat/sessions/{sid}/local-turns/{turns['live_task_id']}/cancel")
+            assert stopped.json() == {"stopped": True}
+            await asyncio.wait_for(second_entered.wait(), 5)
+            after = (await client.get(f"/api/chat/sessions/{sid}/turns")).json()
+            assert after["live_task_id"] == rows[1]["id"]
+            assert after["local_turns"][0]["live"] is True
+            if detach:
+                assert (await _poll(client, sid, rows[0]["id"]))["state"] == "canceled"
+            else:
+                assert (await first).status_code == 409
+            release.set()
+            await asyncio.gather(first, second)
+            if detach:
+                assert (await _poll(client, sid, rows[1]["id"]))["state"] == "completed"
+        finally:
+            release.set()
+            for row in local_turns.snapshot(sid):
+                await local_turns.cancel(sid, row["id"])
+            await asyncio.gather(first, second)
+
+
+def test_a2a_live_turn_retains_precedence_over_local_queue():
+    from operator_api.chat_routes import _mark_local_live
+
+    rows = [{"id": "running"}, {"id": "queued"}]
+    assert _mark_local_live(rows, {"task_id": "a2a"}) is None
+    assert all(row["live"] is False for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_detached_id_is_registered_and_cancelable_before_driver_starts():
+    entered = False
+
+    async def driver():
+        nonlocal entered
+        entered = True
+        await asyncio.Event().wait()
+
+    turn_id = local_turns.start_detached(driver(), session_id="early", origin="api-chat",
+                                         error_adapter=lambda exc: {"message": str(exc)})
+    assert local_turns.get_turn("early", turn_id) == {"turn_id": turn_id, "state": "working"}
+    assert await local_turns.cancel("early", turn_id)
+    assert not entered
+    assert local_turns.get_turn("early", turn_id)["state"] == "canceled"
+    assert not local_turns.snapshot("early")
+
+
+@pytest.mark.asyncio
+async def test_detached_failure_before_tracked_graph_driver_is_retained():
+    from server.chat import turn_error
+
+    async def driver():
+        raise ValueError("before graph")
+
+    turn_id = local_turns.start_detached(driver(), session_id="early-fail", origin="api-chat",
+                                         error_adapter=turn_error)
+    await asyncio.gather(*local_turns._DETACHED_TASKS)
+    done = local_turns.get_turn("early-fail", turn_id)
+    assert done["state"] == "failed"
+    assert done["error"] == turn_error(ValueError("before graph"))
+    assert not local_turns.snapshot("early-fail")
+
+
+@pytest.mark.asyncio
+async def test_detached_child_task_keeps_its_own_registration():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    @local_turns.tracked
+    async def child(message, session_id, **kwargs):
+        entered.set()
+        await release.wait()
+        return [{"role": "assistant", "content": "child done"}]
+
+    async def parent():
+        return await asyncio.create_task(child("private", "child", origin="plugin"))
+
+    turn_id = local_turns.start_detached(parent(), session_id="parent", origin="api-chat",
+                                         error_adapter=lambda exc: {"message": str(exc)})
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        child_rows = local_turns.snapshot("child")
+        assert len(child_rows) == 1
+        assert child_rows[0]["id"] != turn_id
+        assert child_rows[0]["origin"] == "plugin"
+        assert local_turns.snapshot("parent")[0]["id"] == turn_id
+    finally:
+        release.set()
+        await asyncio.gather(*local_turns._DETACHED_TASKS)
+    assert local_turns.get_turn("parent", turn_id)["state"] == "completed"
+    assert not local_turns.snapshot("child")

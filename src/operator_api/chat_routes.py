@@ -152,10 +152,10 @@ def _live_turn(turns: list[dict], holder: str | None) -> dict | None:
 def _mark_local_live(local_rows: list[dict], a2a_live: dict | None) -> str | None:
     """Stamp ``live`` on each local-turn row and name the live local turn, if any (#4277).
 
-    An A2A task always wins: while one is live, no local turn is. Otherwise the newest
-    running local turn — a detached (#4277) or any other #4205 non-A2A driver — is the one
-    a reader treats as live, mirroring ``_live_turn``'s "name it outright" contract."""
-    chosen = local_rows[-1] if (a2a_live is None and local_rows) else None
+    An A2A task always wins: while one is live, no local turn is. Otherwise the oldest
+    registered local turn — a detached (#4277) or any other #4205 non-A2A driver — is the one
+    a reader treats as live; later rows are queued, as in ``_live_turn``."""
+    chosen = local_rows[0] if (a2a_live is None and local_rows) else None
     for row in local_rows:
         row["live"] = row is chosen
     return chosen["id"] if chosen else None
@@ -760,6 +760,8 @@ def register_chat_routes(app, ui: str) -> None:
                     hitl_resume=req.hitl_resume,
                     origin="api-chat",
                 ),
+                session_id=session_id,
+                origin="api-chat",
                 error_adapter=turn_error,
             )
             return JSONResponse(

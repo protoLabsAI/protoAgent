@@ -74,6 +74,11 @@ _DETACHED_TASKS: set[asyncio.Task] = set()
 # to the tracked wrapper, which consumes it once so a child driver is its own turn.
 _DETACH: contextvars.ContextVar[_DetachSpec | None] = contextvars.ContextVar("local_turn_detach", default=None)
 
+# Nested drivers in the same detached task share the outer registration.
+_DETACHED_OWNER: contextvars.ContextVar[asyncio.Task | None] = contextvars.ContextVar(
+    "local_turn_detached_owner", default=None,
+)
+
 # Injectable clock so tests can drive TTL eviction deterministically.
 _clock: Callable[[], float] = time.monotonic
 
@@ -87,24 +92,39 @@ def snapshot(session_id: str) -> list[dict]:
     ]
 
 
-def start_detached(coro, *, error_adapter: Callable[[BaseException], dict]) -> str:
-    """Run ``coro`` (a ``chat()`` driver call) as a background turn and return its id (#4277).
+def start_detached(coro, *, session_id: str, origin: str,
+                   error_adapter: Callable[[BaseException], dict]) -> str:
+    """Register the whole chat call before returning its detached id (#4277).
 
-    The turn is registered exactly like any local turn — it appears in :func:`snapshot` and
-    operator :func:`cancel` stops it — but it is NOT wrapped in the disconnect watcher, so a
-    client leaving never cancels it. The id is minted here and adopted by the ``tracked``
-    wrapper (via a task-scoped context var) so it can be returned before the turn runs.
-    ``error_adapter`` shapes a raised exception into the stored ``error``.
+    The outer wrapper retains outcomes even when chat returns before reaching its
+    tracked graph driver (for example, setup is required). Nested tracked drivers
+    in this task share that registration; child tasks still get their own turns.
     """
     turn_id = uuid.uuid4().hex
+
+    @tracked
+    async def run(message, session_id, **kwargs):
+        return await coro
+
     token = _DETACH.set(_DetachSpec(turn_id, error_adapter))
     try:
-        # create_task snapshots the current context, carrying the spec into the task.
-        task = asyncio.create_task(coro)
+        task = asyncio.create_task(run(None, session_id, origin=origin))
     finally:
         _DETACH.reset(token)
+    turn = LocalTurn(turn_id, session_id, origin, task)
+    _ACTIVE[turn_id] = turn
     _DETACHED_TASKS.add(task)
-    task.add_done_callback(_DETACHED_TASKS.discard)
+
+    def finished(task):
+        _DETACHED_TASKS.discard(task)
+        # Cancellation before the task's first step never enters tracked's finally.
+        if _ACTIVE.get(turn_id) is turn:
+            coro.close()
+            _record(turn, "canceled", response=None, messages=None, error=None)
+            _ACTIVE.pop(turn_id, None)
+            turn.stopped.set()
+
+    task.add_done_callback(finished)
     return turn_id
 
 
@@ -199,12 +219,15 @@ def tracked(driver):
     async def run(message, session_id, **kwargs):
         task = asyncio.current_task()
         assert task is not None
+        if _DETACHED_OWNER.get() is task:
+            return await driver(message, session_id, **kwargs)
         spec = _DETACH.get()
         if spec is not None:
             # Consume: a child driver spawned under this turn is its own turn, not this one.
             _DETACH.set(None)
+            _DETACHED_OWNER.set(task)
         turn_id = spec.turn_id if spec is not None else uuid.uuid4().hex
-        turn = LocalTurn(turn_id, session_id, kwargs.get("origin", "local"), task)
+        turn = _ACTIVE.get(turn_id) or LocalTurn(turn_id, session_id, kwargs.get("origin", "local"), task)
         _ACTIVE[turn.id] = turn
         try:
             result = await driver(message, session_id, **kwargs)
