@@ -266,6 +266,8 @@ files in one turn. Attaching the same content twice (or a re-run tool's fresh co
 same bytes) collapses when either attachment is unnamed, keeping the given name. Two
 explicitly named attachments with different names stay separate even with identical
 bytes; a later file under the same explicit `name` replaces the earlier one.
+An unnamed attachment matching several named files refreshes only the first matching
+name, preserving the others.
 Files attached before a HITL pause are
 delivered with the answer of the turn that resumes it. Guard with
 `getattr(sdk, "attach_file", None)` on cores older than this seam (`ttl_s` needs a

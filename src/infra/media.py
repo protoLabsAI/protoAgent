@@ -778,7 +778,8 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
     re-run tool's fresh copy of the same bytes) collapses when either attachment is unnamed,
     keeping the given name. Two explicitly named attachments with different names stay
     separate even with identical bytes; a second file under the same explicit ``name``
-    replaces the first. A console turn IS armed (it rides
+    replaces the first. An unnamed attachment matching several named files refreshes only
+    the first matching name, preserving the others. A console turn IS armed (it rides
     A2A ``message/stream``): the file part lands on the console's task, which ignores it and
     renders the inline link."""
     tf = _TURN_FILES.get()
@@ -818,6 +819,13 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
                 rel,
             )
             return False
+        # Resolve an unnamed refresh to one name before collecting matches: matching
+        # content must not bridge distinct explicit names and delete another attachment.
+        if not entry["named"]:
+            for f in tf.items:
+                if f["key"] == entry["key"] and f.get("named"):
+                    entry = {**entry, "name": f["name"], "named": True}
+                    break
         # Collapse the same explicit name, or matching content when either side is unnamed,
         # at the first match's position. Distinct explicit names keep separate entries.
         hits = [
@@ -827,9 +835,6 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
             or (entry["named"] and f.get("named") and f["name"] == entry["name"])
         ]
         if hits:
-            first = tf.items[hits[0]]
-            if not entry["named"] and first.get("named"):
-                entry = {**entry, "name": first["name"], "named": True}  # keep the name it was given
             tf.items[hits[0]] = entry
             for i in reversed(hits[1:]):
                 del tf.items[i]

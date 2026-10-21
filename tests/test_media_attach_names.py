@@ -54,3 +54,26 @@ def test_same_explicit_name_replaces_different_content_without_merging_other_nam
     files = media.turn_files()
     assert [f["name"] for f in files] == ["a.png", "b.png"]
     assert all(f"/media/{second.path.name}?" in f["url"] for f in files)
+
+
+@pytest.mark.parametrize("names", [("a.png", "b.png"), ("b.png", "a.png")])
+@pytest.mark.parametrize("same_ref", [False, True])
+def test_unnamed_refresh_preserves_distinct_explicit_names(names, same_ref):
+    first = media.save_media(b"same", "image/png")
+    second = media.save_media(b"same", "image/png")
+    assert media.attach_file(first, name=names[0])
+    assert media.attach_file(second, name=names[1])
+    for _ in range(2):
+        refresh = first if same_ref else media.save_media(b"same", "image/png")
+        assert media.attach_file(refresh)
+        files = media.turn_files()
+        assert [f["name"] for f in files] == list(names)
+        assert f"/media/{refresh.path.name}?" in files[0]["url"]
+        assert f"/media/{second.path.name}?" in files[1]["url"]
+    # The refreshed entry still has an explicit identity for later replacements.
+    replacement = media.save_media(b"changed", "image/png")
+    assert media.attach_file(replacement, name=names[0])
+    files = media.close_turn_files()
+    assert [f["name"] for f in files] == list(names)
+    assert f"/media/{replacement.path.name}?" in files[0]["url"]
+    assert f"/media/{second.path.name}?" in files[1]["url"]
