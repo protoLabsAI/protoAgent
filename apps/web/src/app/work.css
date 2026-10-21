@@ -37,7 +37,10 @@
   border: 1px solid var(--pl-color-border);
   border-radius: var(--pl-radius);
   background: var(--pl-color-bg-raised);
-  overflow: hidden;
+  /* `clip`, not `hidden`: a scroll container's automatic minimum height is 0, so in a short
+     rail the auto rows squeezed below their cards, which overlapped and hid each other's
+     empty-state buttons. `clip` still trims to the radius without being a scroll container. */
+  overflow: clip;
   cursor: pointer;
   transition:
     transform 120ms ease,
