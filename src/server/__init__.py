@@ -1590,6 +1590,15 @@ def _main():
     # server orphaned (holding its port). Poll the launcher and exit if it dies.
     _install_parent_death_watchdog()
 
+    # Keep signed media links out of the access log (#4274 item 6). uvicorn logs every
+    # request's full path, and every media link carries a replayable credential in its query
+    # (/media/?sig=…, the expiring /media/?exp=…&sig=…, the fleet /agents/<slug>/media/?sig=…,
+    # and the artifact /plugins/artifact/media/?t=…). Install the redactor in CORE startup,
+    # before uvicorn serves the first request, so it runs regardless of which plugins are on.
+    from infra.access_log_redact import install as install_access_log_redaction
+
+    install_access_log_redaction()
+
     # Bound the graceful drain. The console holds long-lived connections that
     # never close on their own — SSE streams (chat, runtime status) and the
     # fleet proxy's stream-to-member. With uvicorn's default (no timeout), the
