@@ -1130,3 +1130,46 @@ async def test_local_refuses_name_collision_at_different_path(tmp_path, applied)
     assert "name 'shared' is already registered at" in out and str(existing.resolve()) in out
     assert "pass name=" in out
     assert applied == []
+
+
+@pytest.mark.parametrize("outside_root", [False, True])
+@pytest.mark.parametrize("registration", ["fence_only", "registry_excluded", "both"])
+@pytest.mark.parametrize("refresh", [False, True])
+async def test_binding_reuse_preserves_operator_access(tmp_path, mocks, monkeypatch, outside_root, registration, refresh):
+    """A binding is not permission to promote or mirror entries at the agent's mode."""
+    root = tmp_path / "root"
+    root.mkdir()
+    target = (tmp_path if outside_root else root) / "registered-checkout"
+    target.mkdir()
+    entry = {"name": "registered-name", "path": str(target), "github": "acme/widget", "write": False}
+    unrelated = {"name": "other", "path": str(root / "other"), "write": False}
+    projects = [] if registration == "fence_only" else [entry.copy()]
+    fence = [unrelated] if registration == "registry_excluded" else [entry.copy()]
+    config = _cfg(root, projects=projects, filesystem_projects=fence)
+    refreshed = []
+
+    def fake_refresh(path):
+        refreshed.append(path)
+        return "Fetched and fast-forwarded 1 commit to origin/main."
+
+    monkeypatch.setattr(onboard_tools, "_refresh_checkout", fake_refresh)
+    out = await _tool(config).ainvoke({"repo": "acme/widget", "name": "agent-name", "write": True, "refresh": refresh})
+
+    assert "registered-name is already registered" in out
+    assert str(target) in out and "(read-only)" in out
+    assert "read-write" not in out and "agent-name" not in out
+    assert mocks.apply_calls == []
+    assert mocks.clone_calls == []
+    assert config.projects == projects and config.filesystem_projects == fence
+    assert refreshed == ([target] if refresh else [])
+    assert not (root / "widget").exists()
+
+
+async def test_missing_binding_outside_root_cannot_authorize_clone(tmp_path, mocks):
+    root = tmp_path / "root"
+    target = tmp_path / "missing-checkout"
+    entry = {"name": "registered-name", "path": str(target), "github": "acme/widget", "write": False}
+    out = await _tool(_cfg(root, projects=[entry])).ainvoke({"repo": "acme/widget", "write": True})
+
+    assert out.startswith("Refused:") and "outside the onboarding root" in out
+    assert mocks.git_calls == [] and mocks.apply_calls == []

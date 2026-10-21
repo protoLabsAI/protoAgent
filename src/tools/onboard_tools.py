@@ -1041,6 +1041,10 @@ def build_onboard_tools(config) -> list:
         #     instead of waiting out the timeout on a password prompt nobody sees.
         reused_checkout = target.is_dir()
         if not reused_checkout:
+            # Restoring a missing registered checkout still creates files: the
+            # existing binding must not authorize a clone outside the root.
+            if not target.resolve().is_relative_to(root.resolve()):
+                return f"Refused: {target} resolves outside the onboarding root ({root_raw})"
             try:
                 proc = await asyncio.to_thread(
                     subprocess.run,
@@ -1064,8 +1068,12 @@ def build_onboard_tools(config) -> list:
                 return f"Error: git clone failed: {_redact(err)}"
 
         write_effective = write if write is not None else bool(getattr(config, "onboarding_write_default", False))
+        if resolved_entry is not None:
+            write_effective = bool(resolved_entry.get("write", False))
         rw = "read-write" if write_effective else "read-only"
-        project_name = name or (str(resolved_entry.get("name")) if resolved_entry else "") or target.name
+        project_name = (
+            str(resolved_entry.get("name") or target.name) if resolved_entry is not None else name or target.name
+        )
         default_branch = await asyncio.to_thread(_default_branch, target)
 
         # On any REUSE path we inspect local Git metadata only and report how the
@@ -1084,14 +1092,20 @@ def build_onboard_tools(config) -> list:
 
         # (4) register — the shared read-merge-write path (see ``_register``).
         github = ref.github_slug
-        reg = await _register(
-            config,
-            target=target,
-            project_name=project_name,
-            write=write_effective,
-            github=github,
-            default_branch=default_branch,
-        )
+        # Resolving a binding reuses its registration as-is. In particular, do
+        # not promote a fence-only entry or add it to an explicit fence that
+        # excludes it: either would change operator-approved access (#4425).
+        if resolved_entry is not None:
+            reg = _Registration("already")
+        else:
+            reg = await _register(
+                config,
+                target=target,
+                project_name=project_name,
+                write=write_effective,
+                github=github,
+                default_branch=default_branch,
+            )
         if reg.status == "already":
             if not reused_checkout:
                 # Registered, but the folder was gone — we just cloned it back (#3643). Saying
