@@ -51,6 +51,7 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -592,7 +593,8 @@ def absolutize_media_links(
 #     refused (False, with a log line) — never appended to a list nobody will read again.
 #   * A turn parking at a HITL interrupt stashes its attachments under (conversation,
 #     principal) — the credential that parked it. Only the turn that answers the pause in that
-#     conversation WITH the same principal re-arms with them (``begin_turn_files(carry=…)``),
+#     conversation WITH the same principal (or an adapter-authorized owner handoff)
+#     re-arms with them (``begin_turn_files(carry=…)``),
 #     re-minting each link so its lifetime starts there. A cancel drops the conversation's
 #     stash; an unanswered one ages out after a day.
 #   * Dedupe is by CONTENT (the sha256 ``save_media`` records): the same ref attached twice,
@@ -615,9 +617,9 @@ class _TurnFiles:
 _TURN_FILES: contextvars.ContextVar[_TurnFiles | None] = contextvars.ContextVar("protoagent_turn_files", default=None)
 
 # Attachments of turns parked at a HITL interrupt: (conversation, principal) → (parked_at,
-# entries). In-memory and bounded: a restart drops them (the resumed turn then carries none),
-# an unanswered park ages out.
-_PARKED: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+# entries, principal_kind). In-memory and bounded: a restart drops them (the resumed turn
+# then carries none), an unanswered park ages out.
+_PARKED: dict[tuple[str, str], tuple[float, list[dict], str]] = {}
 _PARKED_LOCK = threading.Lock()
 _PARKED_MAX = 256
 _PARKED_TTL_S = 86400
@@ -633,29 +635,37 @@ def _remint(entry: dict) -> dict:
 
 def _sweep_parked(now: float) -> None:
     """Drop aged-out parks, then the oldest past the bound. Caller holds ``_PARKED_LOCK``."""
-    for k in [k for k, (at, _) in _PARKED.items() if now - at > _PARKED_TTL_S]:
+    for k in [k for k, (at, _, _) in _PARKED.items() if now - at > _PARKED_TTL_S]:
         _PARKED.pop(k, None)
     while len(_PARKED) > _PARKED_MAX:
         _PARKED.pop(next(iter(_PARKED)))
 
 
-def begin_turn_files(carry: str = "", principal: str = "") -> contextvars.Token:
+def begin_turn_files(
+    carry: str = "", principal: str = "", *, claim_mismatch: Callable[[str, int], bool] | None = None
+) -> contextvars.Token:
     """Arm file attachments for the turn running in this context; pass the token to
     :func:`end_turn_files` when the turn ends. ``carry`` names a conversation whose parked
     turn's attachments (:func:`park_turn_files`) this turn takes over — a HITL resume — and
-    ``principal`` must be the one that parked them (else nothing is carried)."""
+    ``principal`` must be the one that parked them, unless ``claim_mismatch`` authorizes
+    a handoff. Rejected mismatches stay parked, preserving the default lifecycle."""
     items: list[dict] = []
     if carry:
         now = time.time()
         with _PARKED_LOCK:
             _sweep_parked(now)
             got = _PARKED.pop((carry, principal), None)
+            if got is None and claim_mismatch is not None:
+                for key, parked in list(_PARKED.items()):
+                    if key[0] == carry and claim_mismatch(parked[2], len(parked[1])):
+                        got = _PARKED.pop(key)
+                        break
         if got is not None:
             items = [_remint(e) for e in got[1] if resolve_media(e["file"]) is not None]
     return _TURN_FILES.set(_TurnFiles(items))
 
 
-def park_turn_files(key: str, principal: str = "") -> None:
+def park_turn_files(key: str, principal: str = "", *, principal_kind: str = "unknown") -> None:
     """Stash the armed turn's attachments under ``(key, principal)`` — the conversation and the
     credential that parked it — when the turn parks at a HITL interrupt, merged with any
     already parked there (a held message re-parks on the same pause). The holder CLOSES in the
@@ -675,7 +685,7 @@ def park_turn_files(key: str, principal: str = "") -> None:
         merged = list(prev[1]) if prev is not None else []
         have = {e.get("key") or e["file"] for e in merged}
         merged.extend(e for e in mine if (e.get("key") or e["file"]) not in have)
-        _PARKED[(key, principal)] = (now, merged[:_MAX_TURN_FILES])
+        _PARKED[(key, principal)] = (now, merged[:_MAX_TURN_FILES], principal_kind)
         _sweep_parked(now)
 
 

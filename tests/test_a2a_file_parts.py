@@ -780,9 +780,9 @@ async def _resume_with(c, task, headers, text="yes"):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("same_principal", [True, False])
-async def test_parked_attachments_go_only_to_the_principal_that_parked_them(same_principal):
+async def test_parked_attachments_follow_same_or_other_owner_credential(same_principal):
     """Bearer and X-API-Key are both accepted (alternatives, #2620) — a resume presented with the
-    OTHER credential is another principal, and the parked files don't follow it."""
+    OTHER owner credential is another principal, but may claim the parked files (#4274)."""
     from a2a_impl import auth
 
     async def stream(text, ctx, *, resume=False, caller_trace=None, **kwargs):
@@ -814,7 +814,7 @@ async def test_parked_attachments_go_only_to_the_principal_that_parked_them(same
         auth._ALLOWED_ORIGINS[0] = None
     assert final["status"]["state"] == "TASK_STATE_COMPLETED"
     files = [p for art in final["artifacts"] for p in art["parts"] if "url" in p]
-    assert len(files) == (1 if same_principal else 0)
+    assert len(files) == 1
 
 
 @pytest.mark.asyncio

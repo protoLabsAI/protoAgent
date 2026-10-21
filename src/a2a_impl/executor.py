@@ -391,11 +391,20 @@ def _text_part(text: str) -> Part:
     return Part(text=text)
 
 
-def _begin_turn_files(carry: str = "", principal: str = ""):
+def _begin_turn_files(carry: str = "", principal: str = "", *, principal_kind: str = "unknown", task_id: str = ""):
+    def claim_mismatch(parked_kind: str, count: int) -> bool:
+        if principal_kind == "operator" and parked_kind in ("scheduler", "operator"):
+            return True
+        logger.warning(
+            "[a2a] %d paused-turn file(s) for context %s (task %s) dropped: parked by %s, answered by %s",
+            count, carry, task_id, parked_kind, principal_kind,
+        )
+        return False
+
     try:
         from infra import media
 
-        return media.begin_turn_files(carry=carry, principal=principal)
+        return media.begin_turn_files(carry=carry, principal=principal, claim_mismatch=claim_mismatch)
     except Exception:  # noqa: BLE001 — attachments must never break a turn
         return None
 
@@ -430,7 +439,8 @@ def _fleet_member_links(text: str) -> str:
 def _principal(context: Any) -> str:
     """An opaque fingerprint of the credential this request presented (sha256 of its
     ``Authorization`` / ``X-API-Key`` header, ``""`` when none) — what a HITL-parked turn's
-    attachments are bound to, so only the same caller's resume takes them (#4258)."""
+    attachments are bound to, so the same caller's resume takes them (#4258).
+    Owner handoffs are checked separately."""
     try:
         headers = getattr(getattr(context, "call_context", None), "state", {}).get("headers") or {}
         lowered = {str(k).lower(): str(v) for k, v in headers.items()}
@@ -444,6 +454,37 @@ def _principal(context: Any) -> str:
     return hashlib.sha256(cred.encode()).hexdigest()
 
 
+def _principal_kind(context: Any, origin: str = "") -> str:
+    """Classify the presented secret, never trusting origin alone for file handoffs.
+
+    Devices (even full-scope ones) and fleet service tokens are not the owner bearer.
+    Open mode and unknown credentials cannot authorize a cross-credential handoff.
+    """
+    import hmac
+    from types import SimpleNamespace
+
+    from a2a_impl import auth
+
+    try:
+        headers = getattr(getattr(context, "call_context", None), "state", {}).get("headers") or {}
+        lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+        bearer, api_key = auth.inbound_credentials()
+        if (api_key and hmac.compare_digest(lowered.get("x-api-key", ""), api_key)) or (
+            bearer and hmac.compare_digest(lowered.get("authorization", ""), f"Bearer {bearer}")
+        ):
+            return "scheduler" if origin == "scheduler" else "operator"
+        cred = auth._classify_request_credential(
+            SimpleNamespace(headers={**lowered, "Authorization": lowered.get("authorization", "")})
+        )
+        if cred is not None:
+            if cred.device_id is not None:
+                return "device"
+            return "federation" if cred.tier == "federation" else "fleet"
+    except Exception:  # noqa: BLE001 — an unclassified credential must not widen delivery
+        pass
+    return "unknown"
+
+
 def _drop_parked_turn_files(context_id: str) -> None:
     try:
         from infra import media
@@ -453,13 +494,13 @@ def _drop_parked_turn_files(context_id: str) -> None:
         pass
 
 
-def _park_turn_files(context_id: str, principal: str = "") -> None:
+def _park_turn_files(context_id: str, principal: str = "", *, principal_kind: str = "unknown") -> None:
     """Carry the turn's attachments across a HITL pause (#4258): the turn that answers it
     (``begin_turn_files(carry=context_id)``) delivers them with its answer."""
     try:
         from infra import media
 
-        media.park_turn_files(str(context_id or ""), principal)
+        media.park_turn_files(str(context_id or ""), principal, principal_kind=principal_kind)
     except Exception:  # noqa: BLE001
         pass
 
@@ -827,10 +868,12 @@ class ProtoAgentExecutor(AgentExecutor):
         # on the answer artifact), disarmed in the ``finally``. A turn answering a HITL pause
         # takes over the files the parked turn attached before it paused (#4258) — one parked
         # pause per context (#3930), so the context is the key.
-        # Bound to the credential that parked them: another caller naming this context gets none.
+        # Credential-bound, with an owner-only handoff from scheduler/operator parks (#4274).
         _turn_principal = _principal(context)
+        _turn_principal_kind = _principal_kind(context, _origin)
         files_token = _begin_turn_files(
-            carry=str(context.context_id or "") if touches_pause else "", principal=_turn_principal
+            carry=str(context.context_id or "") if touches_pause else "", principal=_turn_principal,
+            principal_kind=_turn_principal_kind, task_id=str(context.task_id or ""),
         )
 
         # Live answer streaming: forward each text delta as an incremental
@@ -1295,7 +1338,7 @@ class ProtoAgentExecutor(AgentExecutor):
                         parts.append(_data_part_proto(payload, HITL_MIME))
                     # Files attached before the pause ride the turn that answers it (#4258) —
                     # stashed BEFORE the pause is published, so an answer can't race past it.
-                    _park_turn_files(context.context_id, _turn_principal)
+                    _park_turn_files(context.context_id, _turn_principal, principal_kind=_turn_principal_kind)
                     await updater.requires_input(message=updater.new_agent_message(parts))
                     touches_pause = True  # settled against in the finally (#3930)
                     # The park leg is a real turn with real spend (#2943): every model
