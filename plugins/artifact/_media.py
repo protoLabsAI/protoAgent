@@ -20,7 +20,6 @@ its next render). Only allowlisted image/video types are ever served this way, e
 from __future__ import annotations
 
 import logging
-import re
 import secrets
 import threading
 import time
@@ -152,33 +151,43 @@ def parse_range(header: str | None, size: int) -> tuple[int, int] | None | bool:
 
 # ── access-log redaction ──────────────────────────────────────────────────────
 # The ticket rides the media URL's query, and uvicorn's access log writes every request's full
-# path — so a log reader could replay a live ticket. This filter (installed on the
-# ``uvicorn.access`` logger when the plugin's routers are built) rewrites the ticket value in any
-# media-route path to ``…`` before the record is formatted. Only media-route paths are touched.
-_TICKET_PARAM = re.compile(r"([?&](?:t|ticket|token)=)[^&#\s\"]*")
-_MEDIA_MARK = "/plugins/artifact/media/"
+# path — so a log reader could replay a live ticket. Redaction now lives in CORE
+# (``infra.access_log_redact``) so it covers the core ``/media/`` and fleet
+# ``/agents/<slug>/media/`` links too, and runs regardless of whether this plugin is enabled
+# (#4274 item 6). These stay as thin shims: core's redactor already matches any ``/media/``
+# path (which includes ``/plugins/artifact/media/``) and the ``t``/``ticket``/``token`` params.
+# Host imports stay lazy (like the plugin's ``graph.sdk`` imports) so the module still imports
+# cleanly when vendored host-free.
 
 
 def redact(text: str) -> str:
-    """``text`` with every ticket query value in a media-route URL replaced by ``…``."""
-    if _MEDIA_MARK not in text:
-        return text
-    return _TICKET_PARAM.sub(r"\1…", text)
+    """``text`` with every credential query value in a media-route URL replaced by ``…``.
+    Delegates to the single core implementation (``infra.access_log_redact.redact``)."""
+    from infra.access_log_redact import redact as _core_redact
+
+    return _core_redact(text)
 
 
-class TicketRedactFilter(logging.Filter):
-    """Redacts media tickets from access-log records (args and a pre-formatted msg alike)."""
+_TICKET_FILTER_CLS: type[logging.Filter] | None = None
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.args, tuple) and any(isinstance(a, str) and _MEDIA_MARK in a for a in record.args):
-            record.args = tuple(redact(a) if isinstance(a, str) else a for a in record.args)
-        if isinstance(record.msg, str) and _MEDIA_MARK in record.msg:
-            record.msg = redact(record.msg)
-        return True
+
+def _ticket_filter_cls() -> type[logging.Filter]:
+    """The back-compat ``TicketRedactFilter`` class: a pure-name subclass of the core filter, so
+    the uvicorn.access filter keeps its historical name (and the logic is defined once, in core)."""
+    global _TICKET_FILTER_CLS
+    if _TICKET_FILTER_CLS is None:
+        from infra.access_log_redact import MediaRedactFilter
+
+        _TICKET_FILTER_CLS = type("TicketRedactFilter", (MediaRedactFilter,), {})
+    return _TICKET_FILTER_CLS
 
 
 def install_log_redaction(logger_name: str = "uvicorn.access") -> None:
-    """Attach ``TicketRedactFilter`` to ``logger_name`` once (idempotent across re-registers)."""
-    lg = logging.getLogger(logger_name)
-    if not any(type(f).__name__ == "TicketRedactFilter" for f in lg.filters):
-        lg.addFilter(TicketRedactFilter())
+    """Attach the access-log redactor to ``logger_name`` once (idempotent across re-registers).
+
+    Core server startup already installs ``MediaRedactFilter``; this re-asserts redaction under
+    the historical ``TicketRedactFilter`` name when the plugin's routers are built, so coverage
+    holds even if the routers are built without the core install path (e.g. in tests)."""
+    from infra.access_log_redact import install
+
+    install(logger_name, filter_cls=_ticket_filter_cls())
