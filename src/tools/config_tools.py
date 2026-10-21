@@ -334,6 +334,42 @@ def _page_value(value: Any, *, section_segments: list[str], offset: int, limit: 
     return _dump(envelope)
 
 
+def _self_url(config) -> dict:
+    """The agent's own console URL, so it can reach ITSELF without probing ports (#4424).
+
+    An agent had no first-class way to learn where its own console is served, so a tool
+    would curl-probe a range of localhost ports to find itself — which once hit the live
+    instance and once hung ``terminal_run``. This hands over the answer directly.
+
+    - ``local``: ``http://<host>:<port>`` this process is actually serving on, read from
+      the runtime bind state (``STATE.bind_host`` / ``STATE.active_port`` via
+      :func:`infra.media.bound_base_url`). A wildcard bind (``0.0.0.0`` / ``::``) and
+      ``localhost`` normalise to ``127.0.0.1`` — a same-host client reaches it there.
+    - ``public``: the configured HTTPS origin a remote device pairs through
+      (``network.public_console_url``), or ``""`` when none is set.
+    - ``preferred``: the public URL when set, else local — the one address to hand out.
+
+    Outside a running server the listening port is NOT known (e.g. these tools built
+    without a server serving); ``local`` is ``""`` and a ``note`` says why. The port is
+    never guessed and no socket is ever opened."""
+    from infra.media import bound_base_url
+
+    public = str(getattr(config, "public_console_url", "") or "").strip()
+    local = bound_base_url()
+    out: dict = {
+        "local": local,
+        "public": public,
+        "preferred": public or local,
+    }
+    if not local:
+        out["note"] = (
+            "The local URL is unknown: no server is serving in this process (these tools "
+            "were built outside a running server), so the bound port can't be read. "
+            "Nothing was probed or guessed — use `preferred`/`public` if set."
+        )
+    return out
+
+
 def build_config_tools(config) -> list:
     """Bind ``show_config`` against the LIVE config object.
 
@@ -355,6 +391,11 @@ def build_config_tools(config) -> list:
         - ``section``: a dotted key path (e.g. "project_board",
           "project_board.projects", "filesystem", "mcp", "model"). Omit it to see
           the whole config, or to list the sections when it's too large to show at once.
+        - ``section="self_url"``: your OWN console URL — ``{"local", "public",
+          "preferred"}``. Use this instead of probing ports to find yourself: ``local``
+          is the address this process is actually serving on, ``public`` the configured
+          external origin, ``preferred`` the one to hand out. It also appears in the
+          whole-config view and the section list.
         - ``offset`` / ``limit``: page a selected dict, list, or oversized string.
           Dict keys are sorted deterministically. Large selected values return an
           explicit page envelope instead of being silently cut off; ``next_offset``
@@ -371,6 +412,12 @@ def build_config_tools(config) -> list:
         except Exception as exc:  # noqa: BLE001 — a tool must not raise into the turn
             log.exception("[config] show_config failed to serialize the live config")
             return f"Error: could not read the effective config: {exc}"
+
+        # The agent's own console URL (#4424) — a computed, URL-only key, not a stored
+        # config field, so it rides ON TOP of the redacted document. Lands in the
+        # whole-config view, the too-large section index (it's a dict → listed there),
+        # and `section="self_url"` — the agent finds itself without probing ports.
+        doc["self_url"] = _self_url(config)
 
         wanted = (section or "").strip()
         if wanted:

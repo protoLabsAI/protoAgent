@@ -458,6 +458,137 @@ def test_tool_description_tells_the_model_what_the_marker_means(show_config):
     assert "Read-only" in show_config.description
 
 
+@pytest.fixture
+def serving(monkeypatch):
+    """Pretend a server is actually serving in THIS process: ``bound_base_url`` reads the
+    bind host + port straight off ``STATE`` (never a socket). ``main_loop`` is the "a loop
+    is up" signal it gates on. monkeypatch restores the singleton after the test."""
+    from runtime.state import STATE
+
+    def _bind(host, port):
+        monkeypatch.setattr(STATE, "main_loop", object())
+        monkeypatch.setattr(STATE, "bind_host", host)
+        monkeypatch.setattr(STATE, "active_port", port)
+
+    return _bind
+
+
+@pytest.fixture
+def not_serving(monkeypatch):
+    """No server serving — pin ``main_loop`` to None so the "unknown port" path is
+    deterministic even if another test left the process-wide singleton populated."""
+    from runtime.state import STATE
+
+    monkeypatch.setattr(STATE, "main_loop", None)
+    return STATE
+
+
+def test_self_url_section_reports_local_public_preferred(serving):
+    serving("127.0.0.1", 7871)
+    cfg = LangGraphConfig()
+    cfg.public_console_url = "https://agent.example.com"
+    tool = build_config_tools(cfg)[0]
+
+    out = json.loads(tool.invoke({"section": "self_url"}))["self_url"]
+
+    assert out["local"] == "http://127.0.0.1:7871"
+    assert out["public"] == "https://agent.example.com"
+    assert out["preferred"] == "https://agent.example.com"
+    assert "note" not in out
+
+
+def test_self_url_preferred_falls_back_to_local_without_public(serving):
+    serving("127.0.0.1", 7871)
+    tool = build_config_tools(LangGraphConfig())[0]  # public_console_url defaults to ""
+
+    out = json.loads(tool.invoke({"section": "self_url"}))["self_url"]
+
+    assert out["public"] == ""
+    assert out["local"] == "http://127.0.0.1:7871"
+    assert out["preferred"] == "http://127.0.0.1:7871"
+
+
+def test_self_url_wildcard_bind_renders_as_loopback(serving):
+    """A 0.0.0.0 / :: bind listens on loopback too, so a same-host client reaches it at
+    127.0.0.1 — never report the wildcard as the address."""
+    serving("0.0.0.0", 7871)
+    tool = build_config_tools(LangGraphConfig())[0]
+
+    out = json.loads(tool.invoke({"section": "self_url"}))["self_url"]
+
+    assert out["local"] == "http://127.0.0.1:7871"
+    assert out["preferred"] == "http://127.0.0.1:7871"
+
+
+def test_self_url_without_running_server_is_blank_with_a_note(not_serving):
+    """Tools built outside a running server can't know the bound port — report "" and say
+    why, and never guess or probe."""
+    cfg = LangGraphConfig()
+    cfg.public_console_url = "https://agent.example.com"
+    tool = build_config_tools(cfg)[0]
+
+    out = json.loads(tool.invoke({"section": "self_url"}))["self_url"]
+
+    assert out["local"] == ""
+    assert out["note"]
+    # A public URL is still known even with no local server, and is still preferred.
+    assert out["public"] == "https://agent.example.com"
+    assert out["preferred"] == "https://agent.example.com"
+
+
+def test_self_url_without_server_or_public_is_entirely_blank(not_serving):
+    tool = build_config_tools(LangGraphConfig())[0]
+
+    out = json.loads(tool.invoke({"section": "self_url"}))["self_url"]
+
+    assert out == {"local": "", "public": "", "preferred": "", "note": out["note"]}
+    assert out["note"]
+
+
+def test_self_url_appears_in_whole_config_view(not_serving):
+    """It rides the whole-config view (and the section list), not only an explicit
+    ``section="self_url"`` selection."""
+    out = build_config_tools(LangGraphConfig())[0].invoke({})
+    doc = json.loads(out)
+
+    assert "self_url" in doc
+    assert set(doc["self_url"]) >= {"local", "public", "preferred"}
+
+
+def test_self_url_listed_in_section_index_when_config_too_large(not_serving):
+    """When the whole config is too big to render, the fallback is a section index — and
+    ``self_url`` must still be listed there as a selectable section."""
+    cfg = LangGraphConfig()
+    cfg.plugin_config = {"bulky": {f"k{i:03d}": "x" * 400 for i in range(100)}}
+    out = build_config_tools(cfg)[0].invoke({})
+
+    assert "too large to show at once" in out  # the section-index fallback, not full JSON
+    assert "self_url" in out
+
+
+def test_self_url_opens_no_socket(serving, monkeypatch):
+    """The whole point is to NOT probe ports: resolving self_url must never touch a socket."""
+    import socket
+
+    def _no_sockets(*a, **k):
+        raise AssertionError("show_config(self_url) must not open a socket")
+
+    monkeypatch.setattr(socket, "socket", _no_sockets)
+    serving("0.0.0.0", 7871)
+    tool = build_config_tools(LangGraphConfig())[0]
+
+    out = json.loads(tool.invoke({"section": "self_url"}))["self_url"]
+
+    assert out["local"] == "http://127.0.0.1:7871"
+
+
+def test_self_url_documented_as_the_port_probing_alternative():
+    tool = build_config_tools(LangGraphConfig())[0]
+
+    assert "self_url" in tool.description
+    assert "probing ports" in tool.description
+
+
 def test_show_config_binds_with_the_core_toolset():
     from tools.lg_tools import get_all_tools
 
