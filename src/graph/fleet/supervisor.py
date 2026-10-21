@@ -231,6 +231,18 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
         if stop is not None and stop.is_set():
             return {"name": name, "running": False, "already": False, "cancelled": True}
 
+        # Our member isn't running, so anything holding its recorded port is someone else (a
+        # dev server, another instance's agent). Spawning onto it fails at bind, and the boot
+        # watch below would read the STRANGER's socket as "up": start reported success, the
+        # child died a second later, and the hub proxied the member's traffic to the wrong
+        # server. Move the member to a free port first (run_exec reads the new one).
+        moved_from = None
+        recorded = ws.get("port")
+        if recorded and not manager._port_is_free(int(recorded)):
+            moved_from, new_port = manager.reassign_port(wid)
+            ws = {**ws, "port": new_port}
+            log.warning("[fleet] %s: port %s is held by another process — moved to :%s", name, moved_from, new_port)
+
         env, argv = manager.run_exec(wid, ["--ui", "none"])
         full_env = {**os.environ, **env}
         # Fleet service token (ADR 0089): the instance's internal, loopback-only credential.
@@ -337,7 +349,10 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
             break
         time.sleep(0.2)
     log.info("[fleet] started %s (pid %d, :%s)", name, proc.pid, rec["port"])
-    return {**rec, "name": name, "running": True, "already": False}
+    out = {**rec, "name": name, "running": True, "already": False}
+    if moved_from:
+        out["port_moved_from"] = moved_from
+    return out
 
 
 def stop(ident: str, *, timeout: float = 8.0) -> dict:

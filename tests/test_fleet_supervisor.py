@@ -1324,3 +1324,28 @@ def test_member_keeps_its_own_public_console_url(tmp_path, monkeypatch):
     supervisor.start("iota")
 
     assert captured["env"]["PROTOAGENT_PUBLIC_CONSOLE_URL"] == "https://iota.example.com"
+
+
+def test_start_moves_a_member_off_a_port_another_process_holds(fleet):
+    """killteamCoach recorded :7871; a dev server already held it. start() spawned onto the
+    taken port, the boot watch read the dev server's socket as "up", and the child died at
+    bind. Now start() moves the member to a free port before spawning."""
+    with socket.socket() as squatter:
+        squatter.bind(("127.0.0.1", 0))
+        squatter.listen()
+        held = squatter.getsockname()[1]
+        manager.create("alpha", port=held)
+
+        r = supervisor.start("alpha")
+
+    assert r["running"] and r["port_moved_from"] == held and r["port"] != held
+    assert manager._find("alpha")["port"] == r["port"]  # recorded, so the next start uses it
+
+
+def test_start_keeps_a_free_recorded_port(fleet):
+    port = _free_port()
+    manager.create("alpha", port=port)
+
+    r = supervisor.start("alpha")
+
+    assert r["port"] == port and "port_moved_from" not in r

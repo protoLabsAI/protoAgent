@@ -27,7 +27,7 @@ def test_new_ls_run_rm(root):
     s = manager.create("alpha")
     # The id is opaque + immutable (`alpha-<4hex>`) and keys the dir; the name is display.
     assert s["name"] == "alpha" and s["id"].startswith("alpha-") and s["id"] != "alpha"
-    assert s["port"] == 7871
+    assert s["port"] == 7872  # :7871 is the dev sandbox's, never a member's
     ws = root / s["id"]
     assert (ws / "config" / "langgraph-config.yaml").exists() and (ws / "workspace.yaml").exists()
     cfg = yaml.safe_load((ws / "config" / "langgraph-config.yaml").read_text())
@@ -38,9 +38,9 @@ def test_new_ls_run_rm(root):
     env, argv = manager.run_exec("alpha", [])  # resolves by display name too
     assert env["PROTOAGENT_HOME"] == str(ws)  # <ws> IS the member's instance root
     assert env["PROTOAGENT_INSTANCE"] == s["id"]
-    assert "--port" in argv and "7871" in argv
+    assert "--port" in argv and "7872" in argv
 
-    assert manager.create("beta")["port"] == 7872  # next free port
+    assert manager.create("beta")["port"] == 7873  # next free port
     with pytest.raises(manager.WorkspaceError):
         manager.create("alpha")  # display-name collision
 
@@ -55,6 +55,13 @@ def test_pick_port_skips_os_occupied(root, monkeypatch):
     # 7871 is "occupied" by something outside the fleet registry → must be skipped.
     monkeypatch.setattr(manager, "_port_is_free", lambda port: port != 7871)
     assert manager.create("alpha")["port"] == 7872
+
+
+def test_pick_port_never_assigns_the_dev_instance_port(root):
+    """`scripts/dev.sh` binds :7871 whenever it runs, so a member recorded there dies with
+    EADDRINUSE the day a dev instance is up. The first member goes to :7872."""
+    assert manager._pick_port(None) == manager.DEV_INSTANCE_PORT + 1
+    assert manager._pick_port(7871) == 7871  # an explicit port is still honoured
 
 
 def test_pick_port_skips_ports_other_instances_record_for_stopped_members(root, monkeypatch, tmp_path):
@@ -79,7 +86,7 @@ def test_pick_port_skips_ports_other_instances_record_for_stopped_members(root, 
 def test_pick_port_is_unchanged_when_no_other_instance_exists(root):
     """No other instance on the machine: the scan finds nothing and allocation is the old one."""
     assert manager._ports_other_instances_record() == set()
-    assert manager.create("alpha")["port"] == 7871
+    assert manager.create("alpha")["port"] == 7872
 
 
 def test_known_box_roots_lists_each_existing_root_once(tmp_path, monkeypatch):
@@ -99,7 +106,7 @@ def test_one_unreadable_record_does_not_void_the_scan(root, monkeypatch, tmp_pat
     from infra import paths
 
     desktop = tmp_path / "desktop"
-    for name, port in (("bad-1", 7871), ("good-2", 7872)):
+    for name, port in (("bad-1", 7872), ("good-2", 7873)):
         (desktop / "workspaces" / name).mkdir(parents=True)
         (desktop / "workspaces" / name / "workspace.yaml").write_text(f"id: {name}\nname: {name}\nport: {port}\n")
     monkeypatch.setattr(paths, "desktop_box_roots", lambda: [desktop])
@@ -111,9 +118,9 @@ def test_one_unreadable_record_does_not_void_the_scan(root, monkeypatch, tmp_pat
         return real(ws)
 
     monkeypatch.setattr(manager, "_read_record", read)
-    assert manager._ports_other_instances_record() == {7872}
-    assert manager.create("alpha")["port"] == 7871  # the unreadable member's port cannot be known
-    assert manager.create("beta")["port"] == 7873  # …but the readable one is still skipped
+    assert manager._ports_other_instances_record() == {7873}
+    assert manager.create("alpha")["port"] == 7872  # the unreadable member's port cannot be known
+    assert manager.create("beta")["port"] == 7874  # …but the readable one is still skipped
 
 
 @pytest.mark.skipif(os.name == "nt", reason="patching os.name to posix makes pathlib refuse every path on Windows; the Linux branch is covered on Linux/macOS")
@@ -174,7 +181,7 @@ def test_create_chooses_and_records_its_port_under_the_machine_wide_lock(root, m
         return real_pick(explicit)
 
     monkeypatch.setattr(manager, "_pick_port", pick)
-    assert manager.create("alpha")["port"] == 7871
+    assert manager.create("alpha")["port"] == 7872
     assert seen == {"held": True}
 
 
@@ -196,7 +203,7 @@ def test_a_create_that_cannot_get_the_port_lock_fails_cleanly(root, monkeypatch)
         holder.release()
     assert not [p for p in root.iterdir() if p.name.startswith("alpha")] if root.exists() else True
     assert manager.list_workspaces() == []
-    assert manager.create("alpha")["port"] == 7871
+    assert manager.create("alpha")["port"] == 7872
 
 
 def test_pick_port_raises_when_range_saturated(root, monkeypatch):

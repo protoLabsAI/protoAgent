@@ -31,6 +31,7 @@ from infra.paths import atomic_write, read_text_utf8
 _log = logging.getLogger("protoagent.workspaces")
 
 PORT_BASE = 7870  # workspaces get PORT_BASE+1, +2, … unless an explicit port is given
+DEV_INSTANCE_PORT = 7871  # `scripts/dev.sh`'s default — never assigned to a member (see _pick_port)
 
 
 class WorkspaceError(Exception):
@@ -399,6 +400,10 @@ def _pick_port(explicit: int | None) -> int:
             used.add(int(STATE.active_port))
     except Exception:  # noqa: BLE001 — best-effort; CLI/no-STATE context just skips it
         pass
+    # Never hand out the dev sandbox's default port: `scripts/dev.sh` binds it whenever it runs,
+    # so a member recorded on it boots fine today and dies with EADDRINUSE the day a dev
+    # instance is up (the desktop's killteamCoach sat on :7871 behind a 2-week-old dev server).
+    used.add(DEV_INSTANCE_PORT)
     base = _port_base() + 1
     # Skip registry-known ports AND OS-occupied ones (an unrelated process on the port).
     # Bounded scan so a saturated range fails loudly instead of looping forever.
@@ -406,6 +411,27 @@ def _pick_port(explicit: int | None) -> int:
         if p not in used and _port_is_free(p):
             return p
     raise WorkspaceError(f"no free port in {base}..{base + 999} — too many agents, or the range is occupied")
+
+
+def reassign_port(ident: str) -> tuple[int, int]:
+    """Move a workspace (by id or name) to a fresh free port and record it; returns
+    ``(old, new)``. For a member whose recorded port another process now holds: started
+    as-is it would die with EADDRINUSE at bind. Same shared lock and picker as create, so
+    two hubs can't move two members onto one port. The member's port lives only in its
+    ``workspace.yaml`` (``run_exec`` reads it from there), so nothing else needs rewriting."""
+    import yaml
+
+    found = _find(ident)
+    if found is None:
+        raise WorkspaceError(f"no workspace {ident!r}")
+    ws = Path(found["path"])
+    with _port_allocation_lock():
+        rec = _read_record(ws) or {}
+        old = int(rec.get("port") or 0)
+        new = _pick_port(None)
+        rec["port"] = new
+        atomic_write(ws / "workspace.yaml", yaml.safe_dump(rec, sort_keys=False))
+    return old, new
 
 
 _CONFIG_TEMPLATE = """\
