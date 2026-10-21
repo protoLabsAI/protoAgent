@@ -149,6 +149,18 @@ def _live_turn(turns: list[dict], holder: str | None) -> dict | None:
     return trailing[0] if trailing else None
 
 
+def _mark_local_live(local_rows: list[dict], a2a_live: dict | None) -> str | None:
+    """Stamp ``live`` on each local-turn row and name the live local turn, if any (#4277).
+
+    An A2A task always wins: while one is live, no local turn is. Otherwise the newest
+    running local turn — a detached (#4277) or any other #4205 non-A2A driver — is the one
+    a reader treats as live, mirroring ``_live_turn``'s "name it outright" contract."""
+    chosen = local_rows[-1] if (a2a_live is None and local_rows) else None
+    for row in local_rows:
+        row["live"] = row is chosen
+    return chosen["id"] if chosen else None
+
+
 async def _record_chat_tombstone(conn, session_id: str) -> None:
     """Record durable retirement without unsafe age/count eviction."""
     from sqlalchemy import delete, insert
@@ -340,6 +352,11 @@ class ChatRequest(BaseModel):
     # desktop /api/chat fallback — the streaming path carries the same flag as
     # A2A message metadata (`hitl_resume`). Additive, default False.
     hitl_resume: bool = False
+    # Submit-then-poll (#4277): run the turn as a background task and answer 202 at once
+    # with its ``turn_id``. The turn survives the client disconnecting (operator Stop still
+    # cancels it) and is polled via ``GET …/turns/{turn_id}``. Additive, default False — the
+    # console's normal call keeps its #4205 cancel-on-disconnect behaviour.
+    detach: bool = False
 
     @field_validator("session_id")
     @classmethod
@@ -725,6 +742,30 @@ def register_chat_routes(app, ui: str) -> None:
         # Echo the (possibly minted) session_id so callers can continue the
         # session — additive key, existing consumers unaffected.
         session_id = req.session_id.strip() or _mint_session_id()
+        if req.detach:
+            # Submit-then-poll (#4277): the SAME driver, but launched as a background turn
+            # NOT wrapped in _run_disconnectable_chat — a client disconnect never cancels it
+            # (operator Stop via local_turns.cancel still does). Answer 202 at once with the
+            # id to poll at GET …/turns/{turn_id}. The outcome (and never the prompt) is
+            # retained in local_turns; turn_error shapes a raised failure the same way the
+            # synchronous branch below does.
+            from runtime import local_turns
+
+            turn_id = local_turns.start_detached(
+                chat(
+                    req.message,
+                    session_id,
+                    model=req.model,
+                    incognito=req.incognito,
+                    hitl_resume=req.hitl_resume,
+                    origin="api-chat",
+                ),
+                error_adapter=turn_error,
+            )
+            return JSONResponse(
+                {"turn_id": turn_id, "session_id": session_id, "state": "working"},
+                status_code=202,
+            )
         # A failed turn is a real HTTP error, mapped the way /v1 maps it (#3973): a turn
         # that raised used to be a bare 500 carrying the exception text, and one that came
         # back as a structured error bubble a 200 a client counted as an answer. The
@@ -1069,7 +1110,9 @@ def register_chat_routes(app, ui: str) -> None:
 
         Turns are in CREATION order (when each began), and ``live_task_id`` names the one
         running or waiting on the operator, or is null; each row carries ``live`` to match
-        (#3963, ``_live_turn``).
+        (#3963, ``_live_turn``). When no A2A task is live but a non-A2A local turn (a
+        detached #4277 or other #4205 ``/api/chat`` / ``/v1`` driver) is running, that local
+        turn is named as ``live_task_id`` and its ``local_turns`` row carries ``live: true``.
 
         **Read-only** over the store the SDK already persists; no checkpoint
         access, no flag gate (the export sibling's rule)."""
@@ -1080,7 +1123,8 @@ def register_chat_routes(app, ui: str) -> None:
         local = local_turns.snapshot(session_id)
         engine = getattr(STATE, "a2a_task_engine", None)
         if engine is None:
-            return {"turns": [], "local_turns": local, "live_task_id": None, "reason": "task store not initialized"}
+            return {"turns": [], "local_turns": local,
+                    "live_task_id": _mark_local_live(local, None), "reason": "task store not initialized"}
         limit = max(1, min(int(limit), 200))
         try:
             from sqlalchemy import exists, select
@@ -1116,7 +1160,8 @@ def register_chat_routes(app, ui: str) -> None:
                 rows.reverse()
         except Exception as exc:  # noqa: BLE001 — a read API must degrade, not 500 the console
             log.warning("[chat] session turns read failed for %s: %s", session_id, exc)
-            return {"turns": [], "local_turns": local, "live_task_id": None, "reason": f"read failed: {type(exc).__name__}"}
+            return {"turns": [], "local_turns": local,
+                    "live_task_id": _mark_local_live(local, None), "reason": f"read failed: {type(exc).__name__}"}
 
         def _text(artifacts) -> str:
             # One paragraph per artifact: a task resumed after a HITL pause answers in one
@@ -1154,7 +1199,28 @@ def register_chat_routes(app, ui: str) -> None:
         live = _live_turn(turns, turn_activity.holding_task(session_id))
         for turn in turns:
             turn["live"] = turn is live
-        return {"turns": turns, "local_turns": local_turns.snapshot(session_id), "live_task_id": live["task_id"] if live else None}
+        # No A2A task live → the newest running local turn (detached #4277 / other #4205
+        # non-A2A driver) is the live one; A2A liveness always wins.
+        local_rows = local_turns.snapshot(session_id)
+        local_live_id = _mark_local_live(local_rows, live)
+        return {"turns": turns, "local_turns": local_rows,
+                "live_task_id": live["task_id"] if live else local_live_id}
+
+    @app.get("/api/chat/sessions/{session_id}/turns/{turn_id}")
+    async def _api_session_turn(session_id: SessionId, turn_id: str):
+        """Poll one detached ``/api/chat`` turn by id (#4277).
+
+        ``state`` is ``working`` while it runs, then its retained outcome: ``completed`` with
+        the ``response`` and ``messages``, ``failed`` with the ``error`` (the same
+        ``turn_error`` shape the synchronous turn would have raised), or ``canceled`` after an
+        operator Stop. An unknown (or expired) id is 404. Read-only; the prompt is never
+        stored, so it is never returned."""
+        from runtime import local_turns
+
+        result = local_turns.get_turn(session_id, turn_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail={"code": "not_found", "reason": f"unknown turn: {turn_id}"})
+        return result
 
     @app.get("/api/chat/sessions/{session_id}/publish/preview")
     async def _api_publish_preview(session_id: SessionId, title: str | None = None):
