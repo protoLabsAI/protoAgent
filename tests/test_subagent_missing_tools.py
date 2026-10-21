@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 
 import graph.agent as agent_mod
@@ -22,6 +24,9 @@ from graph.subagents.config import SUBAGENT_REGISTRY
 from tools.lg_tools import HITL_TOOL_NAMES, get_all_tools
 
 RESEARCHER_TOOLS = list(SUBAGENT_REGISTRY["researcher"].tools)
+# codebase-mapper allowlists read_file; a detached run gets it (full graph + fence), an
+# in-graph task never does (pre-filesystem snapshot) — the split the background guard honours.
+MAPPER_TOOLS = list(SUBAGENT_REGISTRY["codebase-mapper"].tools)
 
 
 def _stub(name: str):
@@ -39,7 +44,19 @@ def _lead_tools(extra: list[str] | None = None) -> list:
     return [_stub(n) for n in [*RESEARCHER_TOOLS, *(extra or [])]]
 
 
-def _task_tools(monkeypatch, *, all_tools, lead_tool_names=None, recorder=None):
+class _FakeBackgroundMgr:
+    """Records ``spawn`` calls and returns a stable job id — the detached dispatch path never
+    runs a real subagent, so a refusal vs. a spawn is observable without an LLM."""
+
+    def __init__(self):
+        self.spawned: list[dict] = []
+
+    async def spawn(self, **kwargs) -> str:
+        self.spawned.append(kwargs)
+        return f"bg-{len(self.spawned)}"
+
+
+def _task_tools(monkeypatch, *, all_tools, lead_tool_names=None, recorder=None, background_mgr=None):
     """Build {name: tool} with ``_run_subagent`` replaced by a fake that records calls."""
 
     async def fake_run(**kwargs):
@@ -50,7 +67,7 @@ def _task_tools(monkeypatch, *, all_tools, lead_tool_names=None, recorder=None):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(agent_mod, "_run_subagent", fake_run)
     tools = agent_mod._build_task_tools(
-        LangGraphConfig(), all_tools, background_mgr=None, lead_tool_names=lead_tool_names
+        LangGraphConfig(), all_tools, background_mgr=background_mgr, lead_tool_names=lead_tool_names
     )
     return {t.name: t for t in tools}
 
@@ -60,9 +77,11 @@ def _call(task, **args) -> str:
     return getattr(out, "content", out)
 
 
-def _call_batch(task_batch, tasks) -> str:
+def _call_batch(task_batch, tasks, **args) -> str:
     out = asyncio.run(
-        task_batch.ainvoke({"name": "task_batch", "args": {"tasks": tasks}, "id": "tb-1", "type": "tool_call"})
+        task_batch.ainvoke(
+            {"name": "task_batch", "args": {"tasks": tasks, **args}, "id": "tb-1", "type": "tool_call"}
+        )
     )
     return getattr(out, "content", out)
 
@@ -219,3 +238,116 @@ def test_r5_guard_is_read_only_on_resolution():
 def test_unknown_subagent_is_not_guarded():
     # An unknown subagent returns None here — the existing unknown-subagent error owns it.
     assert _dispatch_tool_gap(LangGraphConfig(), "nope", "Use read_file.", {}, {"read_file"}) is None
+
+
+# ── blocker: the lead-only delegation tools must never be scanned ─────────────
+# (The lead vocabulary is filled from the final toolset, which includes task/task_batch/
+# stop_task; no subagent has them, so a naive scan refused every "Your task is to …"
+# prompt. create_agent_graph must keep the delegation controls OUT of the scan vocabulary.)
+
+
+class _ToolFake(GenericFakeChatModel):
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+
+def _real_graph(monkeypatch, recorder=None):
+    """A real ``create_agent_graph`` (fake model) so the live lead vocabulary — the one the
+    task closure scans — is the production one, including the delegation controls."""
+    from unittest.mock import patch
+
+    async def fake_run(**kwargs):
+        if recorder is not None:
+            recorder.append(kwargs)
+        return f"OUT:{kwargs['description']}"
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(agent_mod, "_run_subagent", fake_run)
+    with patch("graph.agent.create_llm", lambda *a, **k: _ToolFake(messages=iter([AIMessage(content="x")]))):
+        return agent_mod.create_agent_graph(LangGraphConfig())
+
+
+def test_blocker_prose_task_word_dispatches(monkeypatch):
+    called: list = []
+    graph = _real_graph(monkeypatch, recorder=called)
+    bound = {t.name for t in graph.bound_tools}
+    assert {"task", "task_batch"} <= bound  # the controls ARE lead tools (so the vocab holds them)
+    task = next(t for t in graph.bound_tools if t.name == "task")
+    out = _call(
+        task,
+        description="poem",
+        prompt="Your task is to write a short poem about the sea.",
+        subagent_type="researcher",
+    )
+    assert out == "OUT:poem"  # the ordinary word "task"/"task_batch" must not refuse
+    assert len(called) == 1
+
+
+# ── major: a run_in_background delegation resolves against the FINAL toolset ───
+# (A detached job runs the full lead graph fenced by the allowlist, so it HOLDS a tool its
+# allowlist names even though the pre-filesystem task snapshot can't see it. Resolving the
+# background guard against the snapshot refused such a delegation before spawn.)
+
+
+def test_background_resolves_against_full_toolset_not_snapshot():
+    # codebase-mapper allowlists read_file. Snapshot (tool_map) lacks it; the final lead
+    # vocabulary has it. In-graph → refuse; detached → dispatch.
+    snapshot = {n: _stub(n) for n in RESEARCHER_TOOLS}  # pre-filesystem: no read_file
+    lead_vocab = {*RESEARCHER_TOOLS, *MAPPER_TOOLS, "read_file"}
+    prompt = "Use read_file to open src/graph/agent.py and map its call graph."
+    assert "read_file" in MAPPER_TOOLS
+    # In-graph task: resolves against the snapshot → read_file is missing → refuse.
+    fg = _dispatch_tool_gap(LangGraphConfig(), "codebase-mapper", prompt, snapshot, lead_vocab)
+    assert fg is not None and "read_file" in fg
+    # Detached: resolves against the final vocabulary where codebase-mapper has read_file → dispatch.
+    bg = _dispatch_tool_gap(LangGraphConfig(), "codebase-mapper", prompt, snapshot, lead_vocab, background=True)
+    assert bg is None
+
+
+def test_background_still_refuses_a_genuine_gap():
+    # researcher never gets read_file even detached (its allowlist excludes it), so the
+    # background guard must still refuse — the fix is narrow, not a blanket pass for background.
+    lead_vocab = {*RESEARCHER_TOOLS, "read_file"}
+    bg = _dispatch_tool_gap(
+        LangGraphConfig(), "researcher", "Use read_file to open it.", {}, lead_vocab, background=True
+    )
+    assert bg is not None and "read_file" in bg
+
+
+def test_background_task_dispatches_tool_in_subagent_allowlist(monkeypatch):
+    # The task tool's background branch must use the detached resolution: a codebase-mapper
+    # delegation naming read_file is SPAWNED, not refused, when read_file is in the final vocab.
+    called: list = []
+    mgr = _FakeBackgroundMgr()
+    holder = {*RESEARCHER_TOOLS, *MAPPER_TOOLS, "read_file"}
+    tools = _task_tools(
+        monkeypatch, all_tools=_lead_tools(), lead_tool_names=holder, recorder=called, background_mgr=mgr
+    )
+    out = _call(
+        tools["task"],
+        description="map",
+        prompt="Use read_file to open src/graph/agent.py.",
+        subagent_type="codebase-mapper",
+        run_in_background=True,
+    )
+    assert out.startswith("Background agent started:")
+    assert len(mgr.spawned) == 1 and mgr.spawned[0]["subagent_type"] == "codebase-mapper"
+    assert called == []  # background spawn, not an in-graph run
+
+
+def test_background_task_batch_isolates_only_genuine_gaps(monkeypatch):
+    # Detached fan-out: codebase-mapper(read_file) spawns; researcher(read_file) is refused inline.
+    mgr = _FakeBackgroundMgr()
+    holder = {*RESEARCHER_TOOLS, *MAPPER_TOOLS, "read_file"}
+    tools = _task_tools(monkeypatch, all_tools=_lead_tools(), lead_tool_names=holder, background_mgr=mgr)
+    out = _call_batch(
+        tools["task_batch"],
+        [
+            {"description": "mapper", "prompt": "Use read_file to open it.", "subagent_type": "codebase-mapper"},
+            {"description": "researcher", "prompt": "Use read_file to open it.", "subagent_type": "researcher"},
+        ],
+        run_in_background=True,
+    )
+    assert "Started 1 background agent" in out
+    assert "Task 2 (researcher): Not dispatched" in out and "read_file" in out
+    assert len(mgr.spawned) == 1 and mgr.spawned[0]["subagent_type"] == "codebase-mapper"
