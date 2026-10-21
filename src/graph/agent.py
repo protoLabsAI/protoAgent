@@ -632,9 +632,11 @@ def _prompt_missing_tools(prompt: str, lead_tool_names, sub_tool_names) -> list[
     Fail-fast scan: a subagent told to use a tool it doesn't have runs to completion and
     comes back "blocked" (a ``researcher`` asked for ``pdf_look``/``read_file`` it never got).
     A name is flagged only when it is BOTH (a) a real LEAD tool — matched as a whole
-    identifier on a word boundary, so ``read_file`` hits but ``thread_filename`` and ordinary
-    prose do not, and a name the lead itself lacks is never flagged — and (b) absent from the
-    subagent's resolved toolset. Returned in first-mention order so the message is stable.
+    identifier on a word boundary — and (b) absent from the subagent's resolved toolset.
+    Alphabetic names can also be ordinary prose (including plugin/MCP names), so they
+    require explicit backticks or call syntax: `` `calculator` `` or ``calculator(...)``.
+    Structured names such as ``read_file`` match bare whole identifiers. A name the lead
+    itself lacks is never flagged. Returned in first-mention order for stable messages.
     """
     text = prompt or ""
     gap = {str(n) for n in lead_tool_names} - {str(n) for n in sub_tool_names}
@@ -642,7 +644,10 @@ def _prompt_missing_tools(prompt: str, lead_tool_names, sub_tool_names) -> list[
     for name in gap:
         if not name:
             continue
-        m = re.search(rf"\b{re.escape(name)}\b", text)
+        identifier = rf"\b{re.escape(name)}\b"
+        if name.isalpha():
+            identifier = rf"`{identifier}`|{identifier}\("
+        m = re.search(identifier, text)
         if m:
             hits.append((m.start(), name))
     hits.sort()

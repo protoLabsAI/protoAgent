@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
@@ -351,3 +353,70 @@ def test_background_task_batch_isolates_only_genuine_gaps(monkeypatch):
     assert "Started 1 background agent" in out
     assert "Task 2 (researcher): Not dispatched" in out and "read_file" in out
     assert len(mgr.spawned) == 1 and mgr.spawned[0]["subagent_type"] == "codebase-mapper"
+
+
+@pytest.mark.parametrize("name", ["calculator", "search", "browser", "summarize"])
+@pytest.mark.parametrize("prompt", ["Find {name} sites.", "Use a {name} for research.", "Consider {name} (where relevant)."])
+def test_plain_word_lead_tool_names_are_prose(name, prompt):
+    assert _prompt_missing_tools(prompt.format(name=name), [name], []) == []
+
+
+@pytest.mark.parametrize("name", ["calculator", "search", "browser"])
+@pytest.mark.parametrize("prompt", ["Use `{name}` now.", "Call {name}(query)."])
+def test_explicit_single_word_tool_references_are_guarded(name, prompt):
+    text = prompt.format(name=name)
+    assert _prompt_missing_tools(text, [name], []) == [name]
+    assert _prompt_missing_tools(text, [name], [name]) == []
+    assert _prompt_missing_tools(text, [], []) == []
+
+
+def test_single_word_tool_reference_requires_whole_identifier():
+    assert _prompt_missing_tools("Use `calculators` or mycalculator().", ["calculator"], []) == []
+    assert _prompt_missing_tools(
+        "A calculator site, then read_file, then `calculator`.", ["calculator", "read_file"], []
+    ) == ["read_file", "calculator"]
+
+
+def test_default_calculator_prose_dispatches_in_real_graph(monkeypatch):
+    called: list = []
+    graph = _real_graph(monkeypatch, recorder=called)
+    bound = {t.name: t for t in graph.bound_tools}
+    assert "calculator" in bound
+    assert "calculator" not in RESEARCHER_TOOLS
+    out = _call(
+        bound["task"], description="mortgages", prompt="Find mortgage calculator sites.", subagent_type="researcher"
+    )
+    assert out == "OUT:mortgages"
+    assert len(called) == 1
+
+
+@pytest.mark.parametrize("background", [False, True])
+def test_batch_plain_word_tools_dispatch_but_explicit_references_refuse(monkeypatch, background):
+    called: list = []
+    mgr = _FakeBackgroundMgr()
+    tools = _task_tools(
+        monkeypatch, all_tools=_lead_tools(["calculator", "search"]), recorder=called, background_mgr=mgr
+    )
+    out = _call_batch(
+        tools["task_batch"],
+        [
+            {
+                "description": "prose",
+                "prompt": "Search for mortgage calculator sites using search engines.",
+                "subagent_type": "researcher",
+            },
+            {
+                "description": "explicit",
+                "prompt": "Use `calculator` and search(query).",
+                "subagent_type": "researcher",
+            },
+        ],
+        run_in_background=background,
+    )
+    assert "does not have tool(s) calculator, search" in out
+    if background:
+        assert len(mgr.spawned) == 1
+        assert called == []
+    else:
+        assert "OUT:prose" in out
+        assert [call["description"] for call in called] == ["prose"]
