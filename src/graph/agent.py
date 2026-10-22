@@ -603,17 +603,33 @@ def _subagent_tools(sub_config, tool_map: dict) -> list:
     return [tool_map[name] for name in sub_config.tools if name in tool_map and name not in HITL_TOOL_NAMES]
 
 
-def _subagent_tool_names(sub_config, resolvable_names) -> list[str]:
-    """The subagent's effective tool NAMES against an arbitrary bound-name vocabulary.
+def _effective_subagent_tools(config, sub_config, tool_map: dict) -> list:
+    """Allowlist first, then inherited reads, with policy applied to the final set."""
+    import logging
+    from dataclasses import replace
 
-    Same filter ``_subagent_tools`` applies (allowlist order, minus the lead-only HITL
-    interrupt tools and anything not bound), but keyed by NAME so the #4327 guard can resolve
-    a ``run_in_background`` delegation against the FINAL lead toolset. A detached job runs the
-    full lead graph fenced only by its allowlist (ADR 0050 / ``subagent_fence``), so it DOES
-    hold the filesystem/late tools (``read_file``) the in-graph ``task`` snapshot never sees —
-    resolving it against the snapshot would wrongly refuse it before spawn."""
+    from graph.tool_access import inherited_read_tools
+
+    missing = [name for name in sub_config.tools or [] if name not in tool_map]
+    if missing:
+        logging.getLogger(__name__).warning(
+            "[subagent] '%s' allowlisted tool(s) %s are not bound on this host",
+            sub_config.name, missing,
+        )
+    names = list(sub_config.tools or [])
+    if names and getattr(sub_config, "inherit_read_tools", True):
+        names.extend(t.name for t in inherited_read_tools(tool_map.values(), config))
+    effective = replace(sub_config, tools=list(dict.fromkeys(names)))
+    return _subagent_tools(effective, _policy_tool_map(config, sub_config.name, tool_map))
+
+
+def _subagent_tool_names(sub_config, resolvable_names, *, config=None, lead_tools=()) -> list[str]:
+    """Resolve detached names, retaining explicit grants to held tools."""
     names = {str(n) for n in resolvable_names}
-    return [n for n in (sub_config.tools or []) if n in names and n not in HITL_TOOL_NAMES]
+    explicit = [n for n in (sub_config.tools or []) if n in names and n not in HITL_TOOL_NAMES]
+    inherited = _effective_subagent_tools(config, sub_config, {t.name: t for t in lead_tools})
+    combined = dict.fromkeys([*explicit, *(t.name for t in inherited if getattr(t, "name", None))])
+    return list(_policy_tool_map(config, sub_config.name, combined))
 
 
 def _policy_tool_map(config, subagent_type: str, tool_map: dict) -> dict:
@@ -657,31 +673,14 @@ def _prompt_missing_tools(prompt: str, lead_tool_names, sub_tool_names) -> list[
 def _dispatch_tool_gap(
     config, subagent_type: str, prompt: str, tool_map: dict, lead_tool_names, *, background: bool = False
 ) -> str | None:
-    """Not-dispatched refusal (#4327) when a delegation prompt names lead tools the subagent lacks.
-
-    Resolves the subagent's toolset exactly as the matching dispatch will, so ``Its tools``
-    and the flagged gap are what the subagent would actually run with — this only decides
-    whether to START, it never changes what a subagent inherits. ``lead_tool_names`` is the
-    FULL lead vocabulary the prompt is scanned against (the ``task`` tool_map is a
-    pre-filesystem snapshot that can't see ``read_file``/``pdf_look``).
-
-    An IN-GRAPH ``task`` runs the subagent on the pre-filesystem snapshot (``_policy_tool_map``
-    → ``_subagent_tools``), so it is resolved against ``tool_map``. A ``run_in_background``
-    delegation runs the FULL lead graph fenced by its allowlist (ADR 0050), so it is resolved
-    against ``lead_tool_names`` — the final bound toolset — and keeps the ``read_file`` etc. a
-    snapshot resolution would wrongly strip, which would refuse a background delegation to a
-    subagent (e.g. ``codebase-mapper``) that in fact holds the tool.
-
-    Returns the tool result to hand the lead, or ``None`` to dispatch normally. An unknown
-    subagent returns ``None`` — the existing unknown-subagent error path owns that case.
-    """
+    """Extend the prompt scan with the same inherited reads used by dispatch."""
     sub_config = SUBAGENT_REGISTRY.get(subagent_type)
     if not sub_config:
         return None
     if background:
-        sub_names = _subagent_tool_names(sub_config, lead_tool_names)
+        sub_names = _subagent_tool_names(sub_config, lead_tool_names, config=config, lead_tools=tool_map.values())
     else:
-        resolved = _subagent_tools(sub_config, _policy_tool_map(config, subagent_type, tool_map))
+        resolved = _effective_subagent_tools(config, sub_config, tool_map)
         sub_names = [n for n in (getattr(t, "name", None) for t in resolved) if n]
     missing = _prompt_missing_tools(prompt, lead_tool_names, sub_names)
     if not missing:
@@ -692,7 +691,7 @@ def _dispatch_tool_gap(
         f"{', '.join(missing)} that the prompt asks for. Its tools: {its}. "
         "Do the step yourself, or pick a subagent that has them. If the prompt only "
         'mentions them without asking for them (e.g. "don\'t use X"), re-send it without '
-        "naming those tools."
+        f"naming those tools. Write tools must be named in subagents.{subagent_type}.tools."
     )
 
 
@@ -938,8 +937,7 @@ async def _run_subagent_inner(
     if not (prompt or "").strip() and getattr(sub_config, "default_prompt", ""):
         prompt = sub_config.default_prompt
 
-    tool_map = _policy_tool_map(config, subagent_type, tool_map)
-    sub_tools = _subagent_tools(sub_config, tool_map)
+    sub_tools = _effective_subagent_tools(config, sub_config, tool_map)
     if not sub_tools and getattr(sub_config, "tools", None):
         # The subagent DECLARED tools and none resolved — a misconfiguration
         # (denylisted / not bound on this instance), not a text-only design.
@@ -1004,7 +1002,7 @@ async def _run_subagent_inner(
     from graph.middleware.subagent_fence import SubagentFenceMiddleware, intersect_fences
 
     _parent_fence = current_fence()
-    sub_fence = intersect_fences(list(getattr(sub_config, "tools", None) or []), _parent_fence) if _parent_fence else []
+    sub_fence = intersect_fences([t.name for t in sub_tools], _parent_fence) if _parent_fence else []
     if sub_fence:
         sub_middleware.append(SubagentFenceMiddleware())
     # In-history tool-result pruning (#3576) — the lead stack has had it since #2782; a
@@ -1295,12 +1293,35 @@ async def run_manual_subagent(
     )
     if extra_tools:
         all_tools = all_tools + list(extra_tools)
+    if config.filesystem_enabled:
+        from tools.fs_tools import build_fs_tools
+
+        all_tools.extend(build_fs_tools(config))
+    all_tools = drop_disabled_tools(all_tools)
+    held = set(getattr(config, "tools_subagent_only", None) or [])
+    for factory in STATE.plugin_late_tool_factories:
+        try:
+            produced = factory([t for t in all_tools if t.name not in held], config)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("[plugins] late tool factory failed — skipped")
+            continue
+        if produced:
+            all_tools.extend(produced if isinstance(produced, list) else [produced])
     # Operator denylist over the extras (get_all_tools filtered the core set) — the
     # out-of-graph runner must not see tools the lead graph dropped (parity, see
     # create_agent_graph).
     all_tools = drop_disabled_tools(all_tools)
     tool_map = {t.name: t for t in all_tools}
-    tool_map = _policy_tool_map(config, subagent_type, tool_map)
+    gap = _dispatch_tool_gap(config, subagent_type, prompt, tool_map, tool_map)
+    if gap:
+        return gap
+    if self_improvement_run and subagent_type in SUBAGENT_REGISTRY:
+        # Keep the manual review boundary policy-filtered, after inheritance.
+        tool_map = {
+            t.name: t for t in _effective_subagent_tools(config, SUBAGENT_REGISTRY[subagent_type], tool_map)
+        }
     available_subagents = ", ".join(SUBAGENT_REGISTRY.keys()) or "(none configured)"
 
     return await _run_subagent(
@@ -1401,14 +1422,14 @@ def split_subagent_only(tools: list, config, *, resolvable: frozenset[str] | Non
     return lead, held
 
 
-def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], background_mgr=None, lead_tool_names=None):
+def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], background_mgr=None, lead_tool_names=None, lead_tools=None):
     """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
     Subagents share AuditMiddleware so their tool calls land alongside the
     parent agent's. The session_id contextvar set by trace_session
     propagates because subagents run in the same async context. Subagents are
-    given only their allowlisted tools (which never include ``task``/
-    ``task_batch``), so delegation depth is naturally bounded to one level.
+    given their allowlisted tools plus inherited reads; delegation controls
+    never inherit, so delegation depth stays bounded to one level.
 
     ``background_mgr`` (ADR 0050) enables ``run_in_background`` on the ``task``
     tool — a delegation the agent fires and keeps working past, surfaced back via
@@ -1420,7 +1441,8 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
     filesystem/late/MCP tools are appended to the lead set, so on its own it can't
     see ``read_file``/``pdf_look``; the graph passes a live set it populates with the
     final lead toolset once assembly finishes (always long before any delegation
-    runs). Falls back to the snapshot for direct callers (tests, scheduler builder).
+    runs). ``lead_tools`` publishes the matching final objects for read inheritance.
+    Falls back to the snapshot for direct callers (tests, scheduler builder).
     """
     import asyncio
     from typing import Literal
@@ -1431,6 +1453,10 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
 
     tool_map = {t.name: t for t in all_tools}
     lead_vocab = lead_tool_names if lead_tool_names is not None else tool_map
+
+    def dispatch_tool_map():
+        return {**tool_map, **{t.name: t for t in (lead_tools or [])}}
+
     subagent_names = list(SUBAGENT_REGISTRY.keys())
     available_subagents = ", ".join(subagent_names) or "(none configured)"
     max_concurrency = max(1, config.subagent_max_concurrency)
@@ -1470,10 +1496,10 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
         # never bound, refuse BEFORE spawning — the subagent graph is never invoked,
         # so it can't run to completion and come back "blocked". A delegation that will
         # actually run detached (``run_in_background`` with a manager) runs the full lead
-        # graph fenced by its allowlist, so resolve its tools against the final toolset,
-        # not the pre-filesystem ``task`` snapshot the in-graph run uses.
+        # graph fenced by its effective tools. Both paths resolve inherited reads
+        # from the final objects, including filesystem and late plugin tools.
         will_detach = run_in_background and background_mgr is not None
-        gap = _dispatch_tool_gap(config, subagent_type, prompt, tool_map, lead_vocab, background=will_detach)
+        gap = _dispatch_tool_gap(config, subagent_type, prompt, dispatch_tool_map(), lead_vocab, background=will_detach)
         if gap:
             return gap
 
@@ -1523,7 +1549,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             inline = asyncio.ensure_future(
                 _run_subagent(
                     config=config,
-                    tool_map=tool_map,
+                    tool_map=dispatch_tool_map(),
                     available_subagents=available_subagents,
                     description=description,
                     prompt=prompt,
@@ -1569,7 +1595,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
         deleg = asyncio.ensure_future(
             _run_subagent(
                 config=config,
-                tool_map=tool_map,
+                tool_map=dispatch_tool_map(),
                 available_subagents=available_subagents,
                 description=description,
                 prompt=prompt,
@@ -1668,7 +1694,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                     continue
                 # These specs run detached (full lead graph fenced by the allowlist), so
                 # resolve against the final toolset — not the pre-filesystem snapshot (#4327).
-                gap = _dispatch_tool_gap(config, st, prm, tool_map, lead_vocab, background=True)
+                gap = _dispatch_tool_gap(config, st, prm, dispatch_tool_map(), lead_vocab, background=True)
                 if gap:
                     lines.append(f"Task {i} ({desc}): {gap}")
                     continue
@@ -1706,14 +1732,14 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 return f"Error: task '{desc}' is missing 'prompt'."
             # Fail fast (#4327) per item — the offending task returns inline while its
             # siblings still run; the subagent for this spec is never invoked.
-            gap = _dispatch_tool_gap(config, spec.get("subagent_type", "researcher"), prm, tool_map, lead_vocab)
+            gap = _dispatch_tool_gap(config, spec.get("subagent_type", "researcher"), prm, dispatch_tool_map(), lead_vocab)
             if gap:
                 return gap
             async with sem:
                 try:
                     return await _run_subagent(
                         config=config,
-                        tool_map=tool_map,
+                        tool_map=dispatch_tool_map(),
                         available_subagents=available_subagents,
                         description=desc,
                         prompt=prm,
@@ -1861,13 +1887,15 @@ def create_agent_graph(
     # subagent via an allowlist either.
     all_tools = drop_disabled_tools(all_tools, disabled_tools)
 
-    # What an in-graph `task` subagent can resolve: the snapshot _build_task_tools takes.
+    # Held tools remain explicitly resolvable from the task snapshot; final lead
+    # tools are published separately below.
     task_resolvable = frozenset(t.name for t in all_tools)
     # The FULL lead tool vocabulary the dispatch guard (#4327) scans prompts against. The
     # task tool's own tool_map is this pre-filesystem snapshot, so it can't see read_file/
     # pdf_look; this live set is populated with the final lead toolset once assembly ends
     # (below), and the task closures read it only at delegation time — long after.
     lead_tool_name_holder: set[str] = set()
+    lead_tool_holder: list[BaseTool] = []
     # The lead-only delegation controls (``task``/``task_batch``/``stop_task``) a subagent
     # can NEVER be granted (depth is bounded to one level) — so they must stay OUT of the
     # vocabulary the #4327 guard scans, or ``\btask\b`` refuses every "Your task is to …"
@@ -1879,6 +1907,7 @@ def create_agent_graph(
             all_tools,
             background_mgr=background_mgr,
             lead_tool_names=lead_tool_name_holder,
+            lead_tools=lead_tool_holder,
         )
         delegation_tool_names = {t.name for t in task_tools}
         all_tools.extend(task_tools)
@@ -1967,6 +1996,7 @@ def create_agent_graph(
     # prompt scan. In place so the task closures that already captured this set see it.
     # The delegation controls are excluded (see ``delegation_tool_names`` above): they're
     # lead-only, so scanning for them would flag the ordinary word "task" in a prompt.
+    lead_tool_holder.extend(t for t in lead_tools if t.name not in delegation_tool_names)
     lead_tool_name_holder.update(t.name for t in lead_tools if t.name not in delegation_tool_names)
     # A held tool is still the agent's capability, reached through `task`, so moving a tool
     # into or out of tools.subagent_only is not a toolset change to announce. Announcing it

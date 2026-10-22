@@ -851,14 +851,28 @@ def _subagent_fence(subagent_type: str) -> list[str]:
         if registry_def is None:
             return []
         tools = list(registry_def.tools or [])
+        inherit_reads = registry_def.inherit_read_tools
         try:
             from runtime.state import STATE
 
             override = getattr(STATE.graph_config, subagent_type, None) if STATE.graph_config else None
-            tools = list(getattr(override, "tools", None) or tools)
+            tools = list(override.tools) if override is not None and override.tools is not None else tools
+            inherit_reads = getattr(override, "inherit_read_tools", inherit_reads)
         except Exception:  # noqa: BLE001 — config overlay is best-effort
             pass
-        return tools
+        from dataclasses import replace
+
+        from graph.agent import _subagent_tool_names
+        from graph.middleware.subagent_fence import FENCE_DENY_ALL
+        from runtime.state import STATE
+
+        resolved = replace(registry_def, tools=tools, inherit_read_tools=inherit_reads)
+        lead_tools = getattr(STATE.graph, "bound_tools", []) or []
+        names = _subagent_tool_names(
+            resolved, [*tools, *(t.name for t in lead_tools)],
+            config=STATE.graph_config, lead_tools=lead_tools,
+        )
+        return names or [FENCE_DENY_ALL]
     except Exception:  # noqa: BLE001
         return []
 
