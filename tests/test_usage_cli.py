@@ -5,7 +5,8 @@ test_fleet_friction_cli), and ``usage_cli._now`` is pinned so reset countdowns a
 deterministic. Under test: the per-account/per-window table (scoped windows labelled by
 model, ``unknown`` accounts), the stable ``--json`` schema, ``--fleet`` dedupe by
 account_key with the members listed, an unreachable member shown beside a reachable one,
-the exit codes 0/2/1, and ``--account`` filtering.
+the exit codes 0/2/1, ``--account`` filtering, and a stale account whose last-known windows
+are marked ``stale`` and never trip ``--warn-at``.
 """
 
 from __future__ import annotations
@@ -201,6 +202,37 @@ def test_exit_0_when_warn_at_raised_above_usage(monkeypatch, capsys):
     doc = json.loads(capsys.readouterr().out)
     assert doc["warn_hit"] is False
     assert doc["accounts"][0]["windows"][0]["over_warn"] is False
+
+
+def test_stale_account_is_marked_and_never_trips_warn(monkeypatch, capsys):
+    # usage_store._present keeps the last-known windows on a failed poll but forces the
+    # account status to "unknown" and stale=True. Those numbers are not live: a 95% window
+    # must NOT trip the default --warn-at 80, and the row must be marked "stale", not shown
+    # with its old live-looking per-window status.
+    stale = acct(
+        "anthropic-oauth", status="unknown", stale=True,
+        windows=[win("session", "session", 95.0, SESSION_RESET, status="ok")],
+    )
+    _live(monkeypatch, FakeClient({"host": [stale]}))
+    assert _run([]) == 0  # default warn-at 80, but stale data never trips it
+    out = capsys.readouterr().out
+    assert "95%" in out  # the last-known number is still shown…
+    assert "stale" in out  # …but the row's status is marked stale, not its old live value
+    assert "95%!" not in out  # and it carries no over-warn marker
+
+
+def test_json_stale_account_suppresses_over_warn(monkeypatch, capsys):
+    stale = acct(
+        "anthropic-oauth", status="unknown", stale=True,
+        windows=[win("weekly", "weekly", 95.0, WEEKLY_RESET, status="warning")],
+    )
+    _live(monkeypatch, FakeClient({"host": [stale]}))
+    assert _run(["--json"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["warn_hit"] is False
+    a = doc["accounts"][0]
+    assert a["stale"] is True and a["status"] == "unknown"
+    assert a["windows"][0]["over_warn"] is False
 
 
 def test_exit_1_when_no_server_answers(monkeypatch, capsys):

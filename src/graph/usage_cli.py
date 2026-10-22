@@ -163,13 +163,19 @@ def _countdown(resets_at: Any, now: datetime) -> tuple[int | None, str]:
 
 
 def _account_record(acct: dict, members: list[str], warn_at: float, now: datetime) -> dict:
+    # A stale account is NOT live. usage_store._present forces its status to "unknown" but
+    # keeps the last-known windows (each still carrying its old, live-looking per-window
+    # status) "so the console can grey out the previous numbers". Those numbers are not
+    # current, so they must never trip --warn-at — otherwise the CLI would report outdated
+    # usage as current and exit 2 on it indefinitely (ADR 0122 D4).
+    stale = bool(acct.get("stale"))
     windows: list[dict] = []
     for w in acct.get("windows") or []:
         if not isinstance(w, dict):
             continue
         used = _used_pct(w.get("used_pct"))
         secs, human = _countdown(w.get("resets_at"), now)
-        over = used is not None and used >= warn_at
+        over = used is not None and used >= warn_at and not stale
         windows.append(
             {
                 "id": str(w.get("id") or ""),
@@ -192,7 +198,7 @@ def _account_record(acct: dict, members: list[str], warn_at: float, now: datetim
         "account_key": acct.get("account_key"),
         "plan": acct.get("plan"),
         "status": str(acct.get("status") or "unknown"),
-        "stale": bool(acct.get("stale")),
+        "stale": stale,
         "error": acct.get("error"),
         "members": list(members),
         "windows": windows,
@@ -300,11 +306,15 @@ def _render(payload: dict) -> None:
         plan = str(a["plan"]) if a["plan"] else "—"
         members = ", ".join(a["members"]) if a["members"] else ""
         if a["windows"]:
+            stale = a["stale"]
             for w in a["windows"]:
                 used = f"{w['used_pct']:.0f}%" if w["used_pct"] is not None else "—"
                 if w["over_warn"]:
                     used += "!"
-                rows.append([provider, plan, w["label"], used, w["resets_in"] or "—", w["status"], members])
+                # A stale account's last-known windows are marked "stale" — not shown with
+                # their old per-window status, which would read as a current live value.
+                status = "stale" if stale else w["status"]
+                rows.append([provider, plan, w["label"], used, w["resets_in"] or "—", status, members])
         else:
             status = f"{a['status']} ({a['error']})" if a["error"] else a["status"]
             rows.append([provider, plan, "—", "—", "—", status, members])

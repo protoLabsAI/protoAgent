@@ -227,13 +227,17 @@ protoagent usage --json | jq '.accounts[].windows[] | select(.over_warn)'
 
 Each row is one **window** of one **account**: provider, plan, the window (a scoped window
 is labelled `kind·model`, e.g. `weekly·opus`), used %, the reset countdown, and status
-(`ok` / `warning` / `blocked`, or `unknown` for a disconnected or stale account). A `!`
-after the used % marks a window at or above `--warn-at`. With `--fleet`, accounts reported
-by more than one member are collapsed to a single row that lists those members, and a member
-that cannot be read is named as unreachable on stderr without hiding the others.
+(`ok` / `warning` / `blocked`). A disconnected account that never reported shows `unknown`;
+an account whose last poll failed shows its last-known windows marked `stale` — the numbers
+are not current, so they are **not** compared against `--warn-at`. A `!` after the used %
+marks a window at or above `--warn-at`. With `--fleet`, accounts reported by more than one
+member are collapsed to a single row that lists those members, and a member that cannot be
+read is named as unreachable on stderr without hiding the others.
 
-**Exit code:** `2` when any window is at or above `--warn-at` (default `80`), `0` otherwise,
-and `1` when no server (or, with `--fleet`, no hub) answered — so a cron can alert on `2`.
+**Exit code:** `2` when any **live** window is at or above `--warn-at` (default `80`), `0`
+otherwise, and `1` when no server (or, with `--fleet`, no hub) answered — so a cron can alert
+on `2`. A stale account's last-known windows never count toward the `2`, so a dropped poll
+can't pin the exit code high on outdated numbers.
 
 **`--json` schema** (stable; keys are always present):
 
@@ -243,7 +247,7 @@ and `1` when no server (or, with `--fleet`, no hub) answered — so a cron can a
   "ok": true,                          // false only when nothing answered (exit 1)
   "hub": "http://127.0.0.1:7870",      // the server/hub read, or null
   "warn_at": 80.0,                     // the --warn-at threshold in effect
-  "warn_hit": false,                   // any window used_pct >= warn_at (drives exit 2)
+  "warn_hit": false,                   // any live window used_pct >= warn_at (drives exit 2; stale windows excluded)
   "error": null,                       // the reason when ok is false, else null
   "accounts": [
     {
@@ -251,8 +255,8 @@ and `1` when no server (or, with `--fleet`, no hub) answered — so a cron can a
       "provider_type": "anthropic-oauth",
       "account_key": "acct-1",         // null when the provider gave none
       "plan": "pro",                   // null when unknown
-      "status": "ok",                  // "ok" or "unknown"
-      "stale": false,                  // last-known data, not a fresh poll
+      "status": "ok",                  // "ok" or "unknown" (unknown when disconnected or stale)
+      "stale": false,                  // last-known data, not a fresh poll — its windows never trip warn_at
       "error": null,                   // why the account is unknown, else null
       "members": ["host", "scout"],    // --fleet: who reported it; [] in local mode
       "windows": [
@@ -268,7 +272,7 @@ and `1` when no server (or, with `--fleet`, no hub) answered — so a cron can a
           "resets_in": "2h13m",        // compact countdown; "now" past reset, "—" when absent
           "window_seconds": 18000,     // the window length, or null
           "binding": false,            // the window the provider enforces first
-          "over_warn": false           // used_pct >= warn_at
+          "over_warn": false           // used_pct >= warn_at (always false on a stale account's windows)
         }
       ]
     }
