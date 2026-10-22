@@ -33,6 +33,7 @@ config:
   max_pinned: 10
   max_code_kb: 512
   max_blob_kb: 25600
+  max_linked_kb: 204800
   max_preview_kb: 64
   ask_max_chars: 4000
   open_link_origins: []
@@ -45,6 +46,7 @@ settings:
   - { key: max_pinned, label: "Pinned artifacts", type: number, description: "Max artifacts the agent may pin (pin_artifact). Pinned artifacts are never evicted and don't count toward Artifacts kept; at this cap a new pin is refused. 0 refuses all new pins; existing pins stay protected until unpinned." }
   - { key: max_code_kb, label: "Max artifact size (KB)", type: number, description: "Max source size per version; a larger render is rejected." }
   - { key: max_blob_kb, label: "Max file size (KB)", type: number, description: "Max size of a file saved via save_file_artifact (stored as a sidecar blob); a larger file is rejected." }
+  - { key: max_linked_kb, label: "Max linked file size (KB)", type: number, description: "Max size of a file LINKED via save_file_artifact(link=True) — referenced in place from a registered project, no copy stored, so this cap is much larger than Max file size; a larger file is rejected." }
   - { key: max_preview_kb, label: "Max file preview (KB)", type: number, description: "Max extracted-text preview kept per file version (the diffable projection shown in the panel)." }
   - { key: open_link_origins, label: "Allowed openLink origins", type: string_list, description: "Origins an artifact's window.protoArtifact.openLink(url) may open in a new tab (one per line, e.g. https://example.com). Empty = any https origin. Non-https links are always refused." }
 # The shell page is PUBLIC (an iframe page-load can't carry a bearer, and the page
