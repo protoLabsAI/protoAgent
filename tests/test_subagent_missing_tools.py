@@ -143,9 +143,9 @@ def test_scan_matches_whole_identifiers_only():
 
 def test_r1_missing_tool_refuses_without_invoking_subagent(monkeypatch):
     called: list = []
-    tools = _task_tools(monkeypatch, all_tools=_lead_tools(["read_file"]), recorder=called)
-    out = _call(tools["task"], description="read spec", prompt="Use read_file to open docs/spec.md.", subagent_type="researcher")
-    assert out.startswith("Not dispatched: subagent 'researcher' does not have tool(s) read_file")
+    tools = _task_tools(monkeypatch, all_tools=_lead_tools(["write_file"]), recorder=called)
+    out = _call(tools["task"], description="read spec", prompt="Use write_file to open docs/spec.md.", subagent_type="researcher")
+    assert out.startswith("Not dispatched: subagent 'researcher' does not have tool(s) write_file")
     assert "Its tools:" in out
     assert "web_search" in out  # the subagent's real tools are listed, sorted
     assert "Do the step yourself, or pick a subagent that has them." in out
@@ -202,15 +202,15 @@ def test_r3_prose_and_unknown_names_dispatch(monkeypatch):
 
 def test_r4_task_batch_isolates_offending_item(monkeypatch):
     called: list = []
-    tools = _task_tools(monkeypatch, all_tools=_lead_tools(["read_file"]), recorder=called)
+    tools = _task_tools(monkeypatch, all_tools=_lead_tools(["write_file"]), recorder=called)
     out = _call_batch(
         tools["task_batch"],
         [
-            {"description": "bad", "prompt": "Use read_file to open it.", "subagent_type": "researcher"},
+            {"description": "bad", "prompt": "Use write_file to open it.", "subagent_type": "researcher"},
             {"description": "good", "prompt": "Use web_search to find it.", "subagent_type": "researcher"},
         ],
     )
-    assert "Not dispatched" in out and "read_file" in out  # item 1 refused inline
+    assert "Not dispatched" in out and "write_file" in out  # item 1 refused inline
     assert "OUT:good" in out  # item 2 still ran
     assert [k["description"] for k in called] == ["good"]  # only the good item reached _run_subagent
 

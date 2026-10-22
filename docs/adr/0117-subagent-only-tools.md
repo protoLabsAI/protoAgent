@@ -84,3 +84,20 @@ step whose subagent allowlists a held tool still gets it.
   operator MCP, which never serves held tools (D3). A background subagent on such an agent
   therefore can't use them; only in-graph `task` subagents can.
 
+## Amendment (2026-10-22, #4327)
+
+A subagent's effective tools are its explicit allowlist followed by the lead's
+inherited read tools, deduplicated in that order. Classification is default-deny:
+known core reads and plugin tools declaring `metadata.access=read` qualify; write
+and unannotated tools require an explicit `subagents.<name>.tools` grant. Held
+`tools.subagent_only` tools and control, HITL, shell, and code-execution tools are
+never inherited. An empty `tools` list or `inherit_read_tools: false` disables
+inheritance. The `self-improve` policy filters the resulting set afterward.
+
+This rule applies to in-graph task/task_batch dispatch, detached background
+fences, and manual subagent runs. In-graph closures receive the final lead tool
+objects, including filesystem and late plugin tools. Background and in-graph
+runs still intersect their effective tools with the spawning turn's fence.
+The existing prompt scan refuses requested tools absent from the effective set
+and explains the explicit write opt-in; an allowlisted tool unavailable on this
+host produces a warning, not a dispatch refusal.

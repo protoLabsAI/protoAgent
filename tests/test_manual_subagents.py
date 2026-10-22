@@ -26,7 +26,7 @@ async def test_run_manual_subagent_reuses_private_runner(monkeypatch) -> None:
     monkeypatch.setattr(agent_mod, "_run_subagent", fake_run)
 
     out = await agent_mod.run_manual_subagent(
-        LangGraphConfig(),
+        LangGraphConfig(filesystem_enabled=False),
         knowledge_store=object(),
         scheduler=object(),
         description="Check docs",
@@ -65,7 +65,7 @@ async def test_run_manual_subagent_merges_extra_tools(monkeypatch) -> None:
     monkeypatch.setattr(agent_mod, "_run_subagent", fake_run)
 
     out = await agent_mod.run_manual_subagent(
-        LangGraphConfig(),
+        LangGraphConfig(filesystem_enabled=False),
         knowledge_store=object(),
         scheduler=object(),
         description="Backtest it",
