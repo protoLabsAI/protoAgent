@@ -1026,12 +1026,12 @@
 }
 
 /* Background work still running for THIS chat — beside the roster, above the composer, so
-   "is anything still going on here?" is answerable without opening a panel. The strip's line
-   is reserved PERMANENTLY: the container always renders (empty + `--idle` when nothing runs),
-   with a fixed block size so a job starting or the last one finishing can't grow/shrink the
-   composer row and resize the transcript under the reader (the slot is grid minmax(0,1fr)
-   auto). The height is the running row's height — the DS sm "View" Button (~31px) plus the
-   bottom padding — so the idle and running states are pixel-identical. */
+   "is anything still going on here?" is answerable without opening a panel. The container
+   always renders (one stable live region), but only takes space while a job runs: idle, it
+   collapses to nothing (`--idle` below). A permanently reserved empty line (#4247) cost a
+   ~38px blank band above the composer most of the time; a job starting or finishing now
+   moves the composer by one line instead. The running height is the DS sm "View" Button
+   (~31px) plus the bottom padding. */
 .chat-bgwork {
   display: flex;
   align-items: center;
@@ -1043,6 +1043,12 @@
   padding: 0 var(--pl-space-0_5) var(--pl-space-1_5);
   font-size: var(--pl-font-size-xs);
   color: var(--pl-color-fg-muted);
+}
+.chat-bgwork--idle {
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden; /* still in the accessibility tree, so the live region announces a job starting */
 }
 .chat-bgwork > :not(.chat-bgwork-list) {
   flex: none; /* the spinner and View keep their size; only the label list shrinks */

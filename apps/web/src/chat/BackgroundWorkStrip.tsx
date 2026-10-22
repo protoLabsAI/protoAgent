@@ -15,9 +15,8 @@ export function jobLabel(job: Pick<JobLite, "description" | "subagent_type">): s
  *  going on here?" is answerable at a glance, not by opening a panel or scrolling back to
  *  find a row. The `.chat-bgwork` container ALWAYS renders (one stable DOM node and live
  *  region): with running jobs it shows the spinner, labels and "View"; with none it renders
- *  empty with a `chat-bgwork--idle` modifier, keeping its reserved height so a job starting
- *  or the last one finishing never grows/shrinks the composer row and resizes the transcript
- *  under the reader (the slot is `grid: minmax(0,1fr) auto`). */
+ *  empty with a `chat-bgwork--idle` modifier that collapses it to zero height — an always-
+ *  reserved empty line left a blank band above the composer most of the time. */
 export function BackgroundWorkStrip({ sessionId }: { sessionId: string }) {
   const running = useRunningBackgroundJobs(sessionId);
   const openBackgroundJobs = useUI((s) => s.openBackgroundJobs);
