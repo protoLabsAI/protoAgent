@@ -8,9 +8,10 @@ The proxy now rewrites a sync ``POST /agents/<slug>/api/chat`` into submit-then-
 (bd-bas5 / slice 1): it adds ``detach: true``, the member answers 202 ``{turn_id,
 session_id}``, and the hub polls ``GET …/turns/{turn_id}`` until the turn is terminal or a
 3600s ceiling — answering its caller in the same shape a sync call returns. These tests cover
-the injection, the poll-to-completion, the >600s case, the ceiling, a hub-client disconnect
-mid-poll (no cancel sent), old-core 200 passthrough, an explicit detach forwarded verbatim,
-and the failed/canceled error-status mapping.
+the injection, the poll-to-completion, the >600s case, the ceiling (no Stop — the caller can
+keep polling), a hub-client disconnect mid-poll (a best-effort Stop IS sent, restoring the sync
+chat's #4205 cancel-on-disconnect), old-core 200 passthrough, an explicit detach forwarded
+verbatim, and the failed/canceled error-status mapping.
 """
 
 from __future__ import annotations
@@ -59,14 +60,17 @@ class FakeResponse:
 
 
 class FakeClient:
-    """Dispatches by method: the POST is the submit, every GET is a poll (the last poll
-    response is reused once the script runs out, so an always-"working" member is easy to
-    model). Records every built request for assertions on the forwarded body / poll URL."""
+    """Dispatches by method/URL: a POST to ``…/cancel`` is the Stop the hub sends when its own
+    caller left, any other POST is the submit, and every GET is a poll (the last poll response
+    is reused once the script runs out, so an always-"working" member is easy to model). Records
+    every built request for assertions on the forwarded body / poll URL / Stop. ``cancel_exc``
+    makes the Stop raise, to exercise the best-effort swallow."""
 
-    def __init__(self, submit, polls):
+    def __init__(self, submit, polls, cancel_exc=None):
         self._submit = submit
         self._polls = list(polls)
         self._poll_i = 0
+        self._cancel_exc = cancel_exc
         self.requests: list[dict] = []
 
     def build_request(self, method, url, headers=None, content=None, params=None, timeout=None):
@@ -83,16 +87,23 @@ class FakeClient:
 
     async def send(self, req, stream=False):
         if req["method"] == "POST":
+            if req["url"].endswith("/cancel"):
+                if self._cancel_exc is not None:
+                    raise self._cancel_exc
+                return FakeResponse(200, {"stopped": True})
             return self._submit
         resp = self._polls[min(self._poll_i, len(self._polls) - 1)]
         self._poll_i += 1
         return resp
 
     def posts(self):
-        return [r for r in self.requests if r["method"] == "POST"]
+        return [r for r in self.requests if r["method"] == "POST" and not r["url"].endswith("/cancel")]
 
     def gets(self):
         return [r for r in self.requests if r["method"] == "GET"]
+
+    def cancels(self):
+        return [r for r in self.requests if r["method"] == "POST" and r["url"].endswith("/cancel")]
 
 
 def _local(monkeypatch):
@@ -221,16 +232,20 @@ async def test_ceiling_returns_504_naming_turn_and_poll_url(monkeypatch):
     assert body["turn_id"] == "t9"
     assert body["poll_url"] == "/agents/ava/api/chat/sessions/s9/turns/t9"
     assert body["state"] == "working"
-    # the member turn was never cancelled — the hub only ever POSTed (submit) and GET-polled
+    # the member turn is NOT cancelled at the ceiling — the caller stayed connected and can keep
+    # polling, so the hub sends no Stop (unlike the client-disconnect path) and uses no other verb
+    assert client.cancels() == []
     assert not any(r["method"] not in ("POST", "GET") for r in client.requests)
 
 
-# --- r3: a hub-client disconnect mid-poll stops polling, sends no cancel ----
+# --- r3: a hub-client disconnect mid-poll stops polling and Stops the member turn ----
 
 
-async def test_client_disconnect_stops_polling_and_sends_no_cancel(monkeypatch):
-    """r3: when the hub's own client goes away mid-poll, polling stops and NO cancel request is
-    sent to the member — the detached turn keeps running."""
+async def test_client_disconnect_stops_polling_and_cancels_the_member(monkeypatch):
+    """r3 (revised per review): when the hub's own client goes away mid-poll, polling stops AND
+    the hub sends the member a best-effort Stop — the interactive sync /api/chat's #4205
+    cancel-on-disconnect, which a detached turn would otherwise lose. An abandoned turn must not
+    run on spending tokens and holding the session turn lock until a manual Stop."""
     _local(monkeypatch)
     monkeypatch.setattr(proxy, "_DETACHED_POLL_S", 0)
     submit = FakeResponse(202, {"turn_id": "t2", "session_id": "s2"})
@@ -249,8 +264,32 @@ async def test_client_disconnect_stops_polling_and_sends_no_cancel(monkeypatch):
 
     assert resp.status_code == 499  # the body is dropped — the socket is gone — but we stop
     assert len(client.gets()) == 1  # polled once while connected, then stopped
-    # NEVER a cancel/stop/delete to the member: only the submit POST + the one poll GET
+    # the hub Stopped the abandoned turn: a POST to the member's operator cancel route
+    cancels = client.cancels()
+    assert len(cancels) == 1
+    assert cancels[0]["url"] == "http://127.0.0.1:7001/api/chat/sessions/s2/local-turns/t2/cancel"
+    assert cancels[0]["timeout"] is proxy._READ_TIMEOUT  # bounded, like the polls
+    # exactly the submit POST, the one poll GET, and the Stop POST — no other verb (no DELETE etc.)
     assert {r["method"] for r in client.requests} == {"POST", "GET"}
+
+
+async def test_client_disconnect_cancel_is_best_effort(monkeypatch):
+    """The Stop is best-effort: if it fails (the member already gone, say) the hub must not
+    surface it — its own caller is already disconnected — and still answers 499."""
+    _local(monkeypatch)
+    monkeypatch.setattr(proxy, "_DETACHED_POLL_S", 0)
+    submit = FakeResponse(202, {"turn_id": "t8", "session_id": "s8"})
+    # gone before the first poll → straight to the Stop, which raises
+    client = FakeClient(submit, [FakeResponse(200, {"state": "working"})], cancel_exc=RuntimeError("boom"))
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+
+    req = FakeRequest(method="POST", body=json.dumps({"message": "hi"}).encode())
+    req._disconnected = True
+    resp = await proxy.forward_to("bob", req, "api/chat")
+
+    assert resp.status_code == 499  # the raise was swallowed — the caller is gone
+    assert len(client.cancels()) == 1  # a Stop was attempted on the right route
+    assert client.gets() == []  # disconnected before the first poll
 
 
 # --- r4: old-core 200 passthrough / explicit detach verbatim ---------------

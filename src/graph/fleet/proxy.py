@@ -502,6 +502,22 @@ async def _client_gone(request) -> bool:
         return False
 
 
+async def _cancel_detached_turn(client, base: str, session_id: str, turn_id: str, headers: dict) -> None:
+    """Best-effort Stop of a member's detached turn after the hub's own caller left (#4277 slice 2).
+
+    Restores the #4205 cancel-on-disconnect an interactive sync /api/chat has but a detached
+    turn would otherwise lose: POSTs the member's operator Stop route
+    (``…/local-turns/{turn_id}/cancel`` — the one the console Stop button hits) on the bounded
+    read lane, carrying the auth headers already resolved for this proxied call. The caller's
+    socket is gone, so the outcome can't be surfaced — any failure is swallowed and logged by
+    turn id alone (never the bearer or body)."""
+    cancel_url = f"{base}/api/chat/sessions/{session_id}/local-turns/{turn_id}/cancel"
+    try:
+        await client.send(client.build_request("POST", cancel_url, headers=headers, timeout=_READ_TIMEOUT))
+    except Exception as exc:  # noqa: BLE001 — best effort; the caller is gone, nothing to report
+        log.info("[fleet] stop of abandoned detached turn %s failed: %s", turn_id, type(exc).__name__)
+
+
 async def _forward_chat_detach(slug, base, request, path, extra, drop_params, body: bytes):
     """Submit a member /api/chat turn detached and poll it to completion (#4277 slice 2).
 
@@ -514,10 +530,16 @@ async def _forward_chat_detach(slug, base, request, path, extra, drop_params, bo
     failed/canceled; 504 naming the turn (and a hub-side poll URL) at the ceiling.
 
     A member that answers 200 (an older core that ignores ``detach``) is passed through
-    unchanged. If the hub's OWN client disconnects while polling, polling stops and NO cancel
-    is sent — the member turn keeps running (#4205 cancel-on-disconnect must not reach a
-    detached turn). Diagnostics name only the turn id and member base, never the body or any
-    bearer."""
+    unchanged. If the hub's OWN client disconnects while polling, polling stops and the hub
+    sends the member a best-effort Stop (``…/local-turns/{turn_id}/cancel``) — the interactive
+    REST chat's #4205 cancel-on-disconnect, which the sync proxy got for free (the browser
+    leaving closed the hub's one upstream socket and the member's ``_run_disconnectable_chat``
+    cancelled the turn) and a detached turn would otherwise lose, so an abandoned turn stops
+    spending tokens and releases the session turn lock instead of running on until a manual
+    Stop. Only the hub's own caller leaving triggers this: a hub↔member disconnect DURING the
+    turn still never cancels it (the turn is detached and each poll is its own short request) —
+    that decoupling is the whole point of the lane. Diagnostics name only the turn id and
+    member base, never the body or any bearer."""
     import asyncio
 
     client = _get_client()
@@ -553,10 +575,14 @@ async def _forward_chat_detach(slug, base, request, path, extra, drop_params, bo
     deadline = _now() + _DETACHED_TURN_MAX_S
     while True:
         if await _client_gone(request):
-            # The hub's own caller left. Stop polling and send NO cancel: a detached turn must
-            # outlive the client (#4277), and #4205 cancel-on-disconnect must not reach it. The
-            # returned response is dropped — the socket is already gone.
-            log.info("[fleet] chat client left while polling detached turn %s — stopped, no cancel sent", turn_id)
+            # The hub's own caller left. An interactive sync /api/chat cancels on disconnect
+            # (#4205): the browser leaving closed the hub's one upstream socket and the member's
+            # _run_disconnectable_chat stopped the turn. A detached turn has no such socket, so
+            # the hub restores that guarantee explicitly — a best-effort Stop so the abandoned
+            # turn stops spending tokens and frees the session turn lock, instead of running on
+            # until a manual Stop. The 499 we return is dropped (the socket is already gone).
+            await _cancel_detached_turn(client, base, session_id, turn_id, headers)
+            log.info("[fleet] chat client left while polling detached turn %s — sent a Stop", turn_id)
             return JSONResponse({"detail": "client disconnected"}, status_code=499)
         try:
             poll = await client.send(client.build_request("GET", poll_url, headers=headers, timeout=_READ_TIMEOUT))
