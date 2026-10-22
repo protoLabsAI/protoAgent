@@ -220,6 +220,27 @@ or an absolute path. An absolute path given *with* `project` must lie inside tha
 naming the root — leave `project` empty to save a file from elsewhere. Every version also keeps a **text projection** in `code`, so history stays
 diffable and screen readers / a failed render still have the content.
 
+**Linked files (`save_file_artifact(link=True)`, #4370 / ADR 0092 D2).** `link=True` *references* a
+file in place instead of copying its bytes — for **reference material you did not produce** (a long
+source PDF, a dataset, a spec) that the operator should open from the panel without the agent
+storing a copy. The version keeps **no blob**, only a fenced `(project, project-relative path)`
+reference plus a `size`/`mtime`/`sha256` stamp, and the artifact is marked `linked`. The file must
+live inside a **registered filesystem project** — it's **served in place** from there, and the
+project **fence is re-checked on every serve** (over a single stamp-checked fd), so unregistering
+the project, turning the filesystem off, or the path leaving the project **immediately revokes
+access**, and substituted bytes are never served. A linked artifact is **read-only**: reference
+material, not an editable copy, so it keeps **no version history** and can't be revised (no
+`artifact_id` with `link=True`). Its own size cap is **`max_linked_kb`** (200 MB default) — much
+larger than the copied-file `max_blob_kb`, since nothing is stored.
+
+In the panel a linked version carries a **"Linked · `<project>/<path>` · read-only"** banner on its
+card and page view, and the version stepper is hidden. The panel trusts only the server's per-serve
+verdict (it never resolves a path itself): a **403** shows *"This linked file is no longer
+reachable…"* and a **409** shows *"This file changed or is missing since it was linked…"*, each over
+the stored extracted-text preview — stale bytes are never drawn, and Download flashes the same two
+messages. A linked PDF/`.docx`/`.pptx` whose preflight cleared still renders real pages/slides in
+place (the bytes stream through the same gated blob route).
+
 | File | Preview | Safety gate |
 |---|---|---|
 | `.docx` | **Real pages** — Word styles, headings, lists, tables, images, headers/footers, footnotes; − / Fit / + zoom ([below](#word-documents-docx)) | save-time zip preflight (`_docx.py`) |
@@ -340,6 +361,8 @@ environment variable of the same knob overrides the UI for headless / ACP setups
 | **Versions per artifact** | `ARTIFACT_MAX_VERSIONS` | `50` | Max versions kept per artifact, pinned or not (oldest edits trimmed). |
 | **Pinned artifacts** | `ARTIFACT_MAX_PINNED` | `10` | Max pinned artifacts; a pin past this is refused. `0` refuses all new pins. Lowering it (to `0` included) doesn't unpin anything: existing pins stay protected until unpinned. |
 | **Max artifact size (KB)** | `ARTIFACT_MAX_CODE_KB` | `512` | Max source size per version (a larger render is rejected). |
+| **Max file size (KB)** | `ARTIFACT_MAX_BLOB_KB` | `25600` | Max size of a file **copied** via `save_file_artifact` (stored as a sidecar blob); a larger file is rejected — or `link=True` it instead. |
+| **Max linked file size (KB)** | `ARTIFACT_MAX_LINKED_KB` | `204800` | Max size of a file **linked** via `save_file_artifact(link=True)` — referenced in place from a registered project, no copy stored, so this cap is much larger than Max file size. |
 
 State (`history.json` plus the sidecar `blobs/`) lives in the instance's plugin store —
 `<instance_root>/artifact` (ADR 0004 / ADR 0065), so a box-scoped server (`PROTOAGENT_BOX_ROOT`)

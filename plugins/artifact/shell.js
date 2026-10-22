@@ -960,6 +960,33 @@
     if(previewKind(f.filename, f.mime)!=="docx") return false;
     return !!(f.docx && typeof f.docx==="object" && f.docx.render===true);
   }
+  // ── linked file artifacts (save_file_artifact(link=true), #4370, ADR 0092 D2) ─────────────
+  // A LINKED version stores no blob — only a fenced (project, project-relative path) reference
+  // (version.link) plus a size/mtime/sha256 stamp; the artifact carries `linked: true`. Its bytes
+  // are the LIVE project file, served in place through the blob route and re-checked against the fs
+  // fence on EVERY serve, so it's reference material, not an editable copy. The card and every page
+  // view carry a read-only banner; a 403/409 from the serve maps to a clear card (below) over the
+  // stored extracted text — the panel never shows stale bytes.
+  function linkOf(v){
+    var l=v&&v.link;
+    return (l && typeof l==="object" && typeof l.project==="string" && typeof l.path==="string") ? l : null;
+  }
+  // The server's per-serve verdict is the only thing the panel trusts (ADR 0092 D2): 409 means the
+  // on-disk bytes changed or the file is gone since it was linked; 403 means the fence failed (its
+  // project was unregistered, or the path left the project). Anything else keeps the generic card.
+  var LINK_CHANGED_MSG="This file changed or is missing since it was linked. Re-link it to view the current file.";
+  var LINK_GONE_MSG="This linked file is no longer reachable (its project was unregistered or the path left the project).";
+  function linkStatusMsg(status){ return status===409 ? LINK_CHANGED_MSG : status===403 ? LINK_GONE_MSG : ""; }
+  // The "Linked · <project>/<path> · read-only" banner, injected at the top of a linked version's
+  // card / page view. Colours are passed in (CSS var() in the themed page views, resolved tokens in
+  // fileCard/mediaDoc, so it reads on both themes); the project/path is escaped text, never markup.
+  function linkBanner(v, fg, muted, border){
+    var l=linkOf(v); if(!l) return "";
+    return '<div class="linkbar" role="note" style="flex:none;font-size:11px;line-height:1.4;'
+      + 'padding:6px 10px;border-radius:6px;border:1px solid '+border+';background:rgba(127,127,127,.1);'
+      + 'color:'+muted+';word-break:break-all">🔗 Linked · '
+      + '<b style="font-weight:600;color:'+fg+'">'+esc(String(l.project)+"/"+String(l.path))+'</b> · read-only</div>';
+  }
   // `note` (optional) forces the text card and says why the slides/pages aren't shown.
   function fileCard(v, note){
     var f=v.file||{}, name=f.filename||"file", mime=f.mime||"application/octet-stream";
@@ -1037,7 +1064,7 @@
       + '.sh{font-size:12px;font-weight:600;margin-top:8px}.sh span{font-weight:400;color:'+muted+'}'
       + '.tw tbody tr:nth-child(even){background:rgba(127,127,127,.06)}'
       + '.note{font-size:12px;color:'+fg+';padding:8px 10px;border-radius:6px;border:1px solid '+border+';background:rgba(127,127,127,.1)}'
-      + '</style><div class="wrap"><div class="hd">'+thumb
+      + '</style><div class="wrap">'+linkBanner(v, fg, muted, border)+'<div class="hd">'+thumb
       + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div></div>'
       + (note ? '<div class="note" role="status">'+esc(note)+'</div>' : '')
       + '<div class="pvl">'+esc(pvl)+'</div>'+body+'</div>';
@@ -1151,7 +1178,7 @@
     var cfg={caps:PPTX_CAPS, count:+((f.slides&&f.slides.count)||0)};
     return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
       + '<style>'+tokens+SLIDES_CSS+'</style>'
-      + '<div class="wrap"><div class="hd"><div class="ic" aria-hidden="true">PPTX</div>'
+      + '<div class="wrap">'+linkBanner(v, "var(--pl-color-fg)", "var(--pl-color-fg-muted)", "var(--pl-color-border)")+'<div class="hd"><div class="ic" aria-hidden="true">PPTX</div>'
       + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div>'
       + '<div class="nav" id="nav" hidden><button id="prev" type="button" aria-label="Previous slide" title="Previous slide (←)">‹</button>'
       + '<span id="pos" aria-live="polite"></span>'
@@ -1521,7 +1548,7 @@
     draw();
   }
   var $art=document.getElementById("art"), $vprev=document.getElementById("vprev"),
-      $vnext=document.getElementById("vnext"), $vlabel=document.getElementById("vlabel"),
+      $vnext=document.getElementById("vnext"), $vlabel=document.getElementById("vlabel"), $vnav=document.getElementById("vnav"),
       $dl=document.getElementById("dl"), $del=document.getElementById("del"),
       $bar=document.getElementById("bar"), $empty=document.getElementById("empty"),
       $frame=document.getElementById("frame"), $edit=document.getElementById("edit"),
@@ -1693,6 +1720,9 @@
     var vtot=total(a);
     $vlabel.textContent="v"+(vtot-a.versions.length+vi+1)+" of "+vtot;
     $vprev.disabled = vi<=0; $vnext.disabled = vi>=a.versions.length-1;
+    // A linked artifact is read-only with no version history (#4370) — hide the whole version
+    // stepper so there are no revision affordances to click.
+    $vnav.style.display = a.linked ? "none" : "";
     $empty.style.display="none";
     $edit.style.display = a.kind==="file" ? "none" : "";  // a file's preview isn't user-editable
     // Re-srcdoc only when the shown version actually changes. Keyed by ts as well as position: at
@@ -1869,6 +1899,11 @@
     var a=selArt(); if(!a)return; var vi=verIdx(a), v=a.versions[vi];
     if(a.kind==="file"){  // download the STORED BYTES via the gated blob route (ADR 0092 D2)
       try{ var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(a.id)+"/blob?version="+(vi+1));
+        // A linked version downloads through the SAME route; its 403/409 is the fence/stamp verdict,
+        // so the flash carries the same two messages the panel shows (#4370) — "no longer reachable"
+        // / "changed or missing", not a bare "failed". Any other non-2xx keeps the generic failure.
+        var lm = (!r.ok && linkOf(v)) ? linkStatusMsg(r.status) : "";
+        if(lm){ dlFlash("Unavailable", lm); return; }
         if(!r.ok) throw 0; saveBlob(await r.blob(), (v.file&&v.file.filename)||("artifact-"+a.id)); dlFlash("Started","Download started"); }
       catch(e){ dlFlash("Failed","Download failed"); }
       return;
@@ -1955,7 +1990,7 @@
     var cfg={caps:PDF_CAPS, pages:+((f.pdf&&f.pdf.pages)||0)};
     return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
       + '<style>'+tokens+PDF_CSS+'</style>'
-      + '<div class="wrap"><div class="hd"><div class="ic" aria-hidden="true">PDF</div>'
+      + '<div class="wrap">'+linkBanner(v, "var(--pl-color-fg)", "var(--pl-color-fg-muted)", "var(--pl-color-border)")+'<div class="hd"><div class="ic" aria-hidden="true">PDF</div>'
       + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div>'
       + '<div class="nav" id="nav" hidden>'
       + '<button id="prev" type="button" aria-label="Previous page" title="Previous page">‹</button>'
@@ -2176,7 +2211,7 @@
     var cfg={caps:DOCX_CAPS};
     return '<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="'+csp+'">'
       + '<style>'+tokens+PDF_CSS+DOCX_CSS+'</style>'
-      + '<div class="wrap"><div class="hd"><div class="ic dx" aria-hidden="true">DOCX</div>'
+      + '<div class="wrap">'+linkBanner(v, "var(--pl-color-fg)", "var(--pl-color-fg-muted)", "var(--pl-color-border)")+'<div class="hd"><div class="ic dx" aria-hidden="true">DOCX</div>'
       + '<div class="meta"><div class="nm">'+esc(name)+'</div><div class="mt">'+esc(mime)+' · '+fmtSize(f.size)+'</div></div>'
       + '<div class="nav" id="nav" hidden>'
       + '<span id="pos" aria-live="polite"></span>'
@@ -2313,7 +2348,13 @@
     var size=+((ctx.v.file||{}).size||0), maxBytes=feedCaps(ctx.kind).maxBytes;
     if(size>maxBytes) throw new Error("the file is over the "+Math.round(maxBytes/1048576)+" MB preview cap");
     var r=await kit.apiFetch("/api/plugins/artifact/artifact/"+encodeURIComponent(ctx.id)+"/blob?version="+(ctx.vi+1));
-    if(!r.ok) throw new Error("the file couldn't be fetched ("+r.status+")");
+    if(!r.ok){
+      // A LINKED version's 403/409 is the fence/stamp verdict (#4370): swap the whole frame for the
+      // card that says so over the stored extracted text — never leave half-rendered stale pages.
+      var lm = linkOf(ctx.v) ? linkStatusMsg(r.status) : "";
+      if(lm){ var le=new Error(lm); le.fallback=true; throw le; }
+      throw new Error("the file couldn't be fetched ("+r.status+")");
+    }
     var buf=await r.arrayBuffer();
     if(buf.byteLength>maxBytes) throw new Error("the file is over the preview size cap");
     pptxCache={key:ctx.key, buf:buf};
@@ -2334,6 +2375,9 @@
       $frame.contentWindow.postMessage({type:"protoArtifact:"+ctx.kind+":data", buf:copy}, "*", [copy]);
     }catch(err){
       if(pptxCtx!==ctx) return;
+      // A linked 403/409 → the shell's own card (message + stored extracted text), not an in-frame
+      // error, so no pages are ever drawn from bytes we couldn't verify.
+      if(err && err.fallback){ pptxFallback(ctx, String(err.message)); return; }
       try{ $frame.contentWindow.postMessage({type:"protoArtifact:"+ctx.kind+":error", reason:String((err&&err.message)||err)}, "*"); }catch(_){}
     }
   }
