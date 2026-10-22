@@ -683,8 +683,19 @@ def park_turn_files(key: str, principal: str = "", *, principal_kind: str = "unk
         _sweep_parked(now)
         prev = _PARKED.pop((key, principal), None)
         merged = list(prev[1]) if prev is not None else []
-        have = {e.get("key") or e["file"] for e in merged}
-        merged.extend(e for e in mine if (e.get("key") or e["file"]) not in have)
+        # Keep the parked copy on a content match, adopting an incoming explicit
+        # name when needed. Match against the updated entries so an unnamed copy
+        # cannot swallow several distinct names from the held message.
+        for e in mine:
+            for i, f in enumerate(merged):
+                if (e.get("key") or e["file"]) == (f.get("key") or f["file"]) and not (
+                    e.get("named") and f.get("named") and e["name"] != f["name"]
+                ):
+                    if e.get("named") and not f.get("named"):
+                        merged[i] = {**f, "name": e["name"], "named": True}
+                    break
+            else:
+                merged.append(e)
         _PARKED[(key, principal)] = (now, merged[:_MAX_TURN_FILES], principal_kind)
         _sweep_parked(now)
 
@@ -775,8 +786,11 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
     False — and nothing happens — outside an armed turn (a background job), after the turn's
     answer was built (a late background/delegated attach), for a non-media, unsigned or
     expired URL, or past 16 files a turn. Attaching the same content twice (the same ref, or a
-    re-run tool's fresh copy of the same bytes) is one attachment; a second file under the same
-    explicit ``name`` replaces the first. A console turn IS armed (it rides
+    re-run tool's fresh copy of the same bytes) collapses when either attachment is unnamed,
+    keeping the given name. Two explicitly named attachments with different names stay
+    separate even with identical bytes; a second file under the same explicit ``name``
+    replaces the first. An unnamed attachment matching several named files refreshes only
+    the first matching name, preserving the others. A console turn IS armed (it rides
     A2A ``message/stream``): the file part lands on the console's task, which ignores it and
     renders the inline link."""
     tf = _TURN_FILES.get()
@@ -816,18 +830,22 @@ def attach_file(ref: MediaRef | str, *, name: str = "", mime: str = "", ttl_s: i
                 rel,
             )
             return False
-        # Every entry this attach supersedes: the same content (same file, or a fresh copy of
-        # the same bytes), or the same explicit name. They collapse into ONE entry, at the
-        # first one's position — never two entries for one file.
+        # Resolve an unnamed refresh to one name before collecting matches: matching
+        # content must not bridge distinct explicit names and delete another attachment.
+        if not entry["named"]:
+            for f in tf.items:
+                if f["key"] == entry["key"] and f.get("named"):
+                    entry = {**entry, "name": f["name"], "named": True}
+                    break
+        # Collapse the same explicit name, or matching content when either side is unnamed,
+        # at the first match's position. Distinct explicit names keep separate entries.
         hits = [
             i
             for i, f in enumerate(tf.items)
-            if f["key"] == entry["key"] or (entry["named"] and f.get("named") and f["name"] == entry["name"])
+            if (f["key"] == entry["key"] and not (entry["named"] and f.get("named")))
+            or (entry["named"] and f.get("named") and f["name"] == entry["name"])
         ]
         if hits:
-            first = tf.items[hits[0]]
-            if not entry["named"] and first.get("named"):
-                entry = {**entry, "name": first["name"], "named": True}  # keep the name it was given
             tf.items[hits[0]] = entry
             for i in reversed(hits[1:]):
                 del tf.items[i]
