@@ -152,9 +152,12 @@ def _live_turn(turns: list[dict], holder: str | None) -> dict | None:
 def _mark_local_live(local_rows: list[dict], a2a_live: dict | None) -> str | None:
     """Stamp ``live`` on each local-turn row and name the live local turn, if any (#4277).
 
-    An A2A task always wins: while one is live, no local turn is. Otherwise the oldest
-    registered local turn — a detached (#4277) or any other #4205 non-A2A driver — is the one
-    a reader treats as live; later rows are queued, as in ``_live_turn``."""
+    An A2A task always wins: while one is live, no local turn is. Otherwise the OLDEST
+    registered local turn — ``local_rows[0]``, since ``snapshot`` yields them in registration
+    order — is the one a reader treats as live: turns on a session serialize on a FIFO lock,
+    so the first-registered holds it and the later rows are queued behind it, exactly the
+    none-paused rule in ``_live_turn``. (Detached #4277 and any other #4205 non-A2A driver
+    alike.)"""
     chosen = local_rows[0] if (a2a_live is None and local_rows) else None
     for row in local_rows:
         row["live"] = row is chosen
@@ -748,22 +751,36 @@ def register_chat_routes(app, ui: str) -> None:
             # (operator Stop via local_turns.cancel still does). Answer 202 at once with the
             # id to poll at GET …/turns/{turn_id}. The outcome (and never the prompt) is
             # retained in local_turns; turn_error shapes a raised failure the same way the
-            # synchronous branch below does.
+            # synchronous branch below does. The concurrent-detached cap is enforced in
+            # start_detached, which refuses an over-cap admission before scheduling any work
+            # and closes the coroutine it was handed, so a 429 here leaks nothing (#4446).
             from runtime import local_turns
 
-            turn_id = local_turns.start_detached(
-                chat(
-                    req.message,
-                    session_id,
-                    model=req.model,
-                    incognito=req.incognito,
-                    hitl_resume=req.hitl_resume,
+            try:
+                turn_id = local_turns.start_detached(
+                    chat(
+                        req.message,
+                        session_id,
+                        model=req.model,
+                        incognito=req.incognito,
+                        hitl_resume=req.hitl_resume,
+                        origin="api-chat",
+                    ),
+                    session_id=session_id,
                     origin="api-chat",
-                ),
-                session_id=session_id,
-                origin="api-chat",
-                error_adapter=turn_error,
-            )
+                    incognito=req.incognito,
+                    error_adapter=turn_error,
+                )
+            except local_turns.DetachedAdmissionError as exc:
+                raise HTTPException(
+                    status_code=429,
+                    headers={"Retry-After": "5"},
+                    detail={
+                        "code": "too_many_detached_turns",
+                        "message": str(exc),
+                        "session_id": session_id,
+                    },
+                ) from exc
             return JSONResponse(
                 {"turn_id": turn_id, "session_id": session_id, "state": "working"},
                 status_code=202,
@@ -1201,8 +1218,8 @@ def register_chat_routes(app, ui: str) -> None:
         live = _live_turn(turns, turn_activity.holding_task(session_id))
         for turn in turns:
             turn["live"] = turn is live
-        # No A2A task live → the newest running local turn (detached #4277 / other #4205
-        # non-A2A driver) is the live one; A2A liveness always wins.
+        # No A2A task live → the oldest (first-registered) running local turn (detached
+        # #4277 / other #4205 non-A2A driver) is the live one; A2A liveness always wins.
         local_rows = local_turns.snapshot(session_id)
         local_live_id = _mark_local_live(local_rows, live)
         return {"turns": turns, "local_turns": local_rows,

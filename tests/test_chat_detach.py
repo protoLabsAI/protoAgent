@@ -353,3 +353,239 @@ async def test_detached_child_task_keeps_its_own_registration():
         await asyncio.gather(*local_turns._DETACHED_TASKS)
     assert local_turns.get_turn("parent", turn_id)["state"] == "completed"
     assert not local_turns.snapshot("child")
+
+
+# --- #4446: admission cap, cancellation outcomes, incognito retention --------------------
+
+
+@pytest.mark.asyncio
+async def test_detach_admission_cap_rejects_excess_with_429(app, monkeypatch):
+    """A finite global cap bounds concurrent detached turns: an over-cap submit is refused
+    with 429 and schedules no work; freeing a slot admits a new turn (r1)."""
+    monkeypatch.setattr(local_turns, "_MAX_DETACHED", 2)
+    entered: list[str] = []
+    release = asyncio.Event()
+    started = 0
+
+    async def provider(message, session_id, **kwargs):
+        nonlocal started
+        started += 1
+        entered.append(session_id)
+        await release.wait()
+        return [{"role": "assistant", "content": "done"}]
+
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
+    async with _client(app) as client:
+        admitted = []
+        for n in range(2):
+            r = await client.post("/api/chat", json={"message": "x", "session_id": f"cap-{n}", "detach": True})
+            assert r.status_code == 202
+            admitted.append((f"cap-{n}", r.json()["turn_id"]))
+        for _ in range(500):
+            if len(entered) == 2:
+                break
+            await asyncio.sleep(0.01)
+        assert len(entered) == 2 and len(local_turns._DETACHED_TASKS) == 2
+
+        # Cap full → the next admission is refused before any work is created; the rejected
+        # turn's coroutine never ran, and it left no task/registration behind.
+        over = await client.post("/api/chat", json={"message": "SECRET", "session_id": "cap-over", "detach": True})
+        assert over.status_code == 429
+        assert over.json()["detail"]["code"] == "too_many_detached_turns"
+        assert started == 2 and len(local_turns._DETACHED_TASKS) == 2
+        assert not local_turns.snapshot("cap-over")
+
+        # Free a slot → a new detached turn is admitted. The cancelled task's done-callback
+        # (which drops it from the strong-ref set) runs on the next loop tick.
+        sid0, tid0 = admitted[0]
+        assert await local_turns.cancel(sid0, tid0)
+        for _ in range(500):
+            if len(local_turns._DETACHED_TASKS) == 1:
+                break
+            await asyncio.sleep(0.01)
+        assert len(local_turns._DETACHED_TASKS) == 1
+        again = await client.post("/api/chat", json={"message": "y", "session_id": "cap-new", "detach": True})
+        assert again.status_code == 202
+
+        release.set()
+        await asyncio.gather(*list(local_turns._DETACHED_TASKS), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_start_detached_over_cap_closes_coro_and_reopens_slot(monkeypatch):
+    """start_detached refuses over-cap admission with DetachedAdmissionError, closing the
+    handed coroutine so nothing leaks, and the slot reopens when the in-flight turn ends (r1)."""
+    monkeypatch.setattr(local_turns, "_MAX_DETACHED", 1)
+    release = asyncio.Event()
+
+    async def busy():
+        await release.wait()
+        return [{"role": "assistant", "content": "ok"}]
+
+    ran = False
+
+    async def rejected_body():
+        nonlocal ran
+        ran = True
+
+    admitted = local_turns.start_detached(busy(), session_id="u1", origin="api-chat",
+                                          error_adapter=lambda e: {"message": str(e)})
+    rejected = rejected_body()
+    with pytest.raises(local_turns.DetachedAdmissionError):
+        local_turns.start_detached(rejected, session_id="u2", origin="api-chat",
+                                   error_adapter=lambda e: {"message": str(e)})
+    assert rejected.cr_frame is None  # closed → no un-awaited-coroutine leak
+    assert ran is False
+    assert len(local_turns._DETACHED_TASKS) == 1
+
+    release.set()
+    await asyncio.gather(*list(local_turns._DETACHED_TASKS), return_exceptions=True)
+    assert local_turns.get_turn("u1", admitted)["state"] == "completed"
+
+    # Slot freed (release is already set) → a fresh detached turn is admitted and completes.
+    again = local_turns.start_detached(busy(), session_id="u3", origin="api-chat",
+                                       error_adapter=lambda e: {"message": str(e)})
+    await asyncio.gather(*list(local_turns._DETACHED_TASKS), return_exceptions=True)
+    assert local_turns.get_turn("u3", again)["state"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_detach_shutdown_cancellation_reports_canceled(app, monkeypatch):
+    """A shutdown (loop-driven) cancellation — NOT an operator Stop — still records
+    `canceled`, so an authorized poll never degrades to an unknown turn (r2)."""
+    entered = asyncio.Event()
+
+    async def provider(message, session_id, **kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
+    sid = "det-shutdown"
+    async with _client(app) as client:
+        turn_id = (await client.post(
+            "/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()["turn_id"]
+        await asyncio.wait_for(entered.wait(), 5)
+        # Shutdown cancels the background task directly; cancel_requested stays False (no Stop).
+        turn = local_turns._ACTIVE[turn_id]
+        assert turn.cancel_requested is False
+        turn.task.cancel()
+        await asyncio.wait_for(turn.stopped.wait(), 5)
+        done = (await client.get(f"/api/chat/sessions/{sid}/turns/{turn_id}")).json()
+        assert done["state"] == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_detach_incognito_outcome_is_content_free(app, monkeypatch):
+    """An incognito detached turn retains only a content-free terminal state: its assistant
+    response/messages (and the prompt) never enter the retained outcome (r3)."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def provider(message, session_id, **kwargs):
+        entered.set()
+        await release.wait()
+        return [{"role": "assistant", "content": "PRIVATE-ANSWER"}]
+
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
+    sid = "incog-ok"
+    async with _client(app) as client:
+        turn_id = (await client.post("/api/chat", json={
+            "message": "PRIVATE-PROMPT", "session_id": sid, "incognito": True, "detach": True})).json()["turn_id"]
+        await asyncio.wait_for(entered.wait(), 5)
+        release.set()
+        done = await _poll(client, sid, turn_id)
+        assert done["state"] == "completed"
+        assert "response" not in done and "messages" not in done
+        assert "PRIVATE-ANSWER" not in str(done) and "PRIVATE-PROMPT" not in str(done)
+        fin = local_turns._FINISHED[turn_id]
+        assert fin.response is None and fin.messages is None
+
+
+@pytest.mark.asyncio
+async def test_detach_incognito_failure_retains_state_and_error_only(app, monkeypatch):
+    """An incognito turn that fails in-band keeps the state and the structured error, but
+    never the assistant messages (r3)."""
+    async def provider(message, session_id, **kwargs):
+        return [{"role": "assistant", "content": "PRIVATE **Error:** boom",
+                 "error": {"type": "server_error", "message": "boom", "upstream_status": None}}]
+
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
+    sid = "incog-fail"
+    async with _client(app) as client:
+        turn_id = (await client.post("/api/chat", json={
+            "message": "p", "session_id": sid, "incognito": True, "detach": True})).json()["turn_id"]
+        done = await _poll(client, sid, turn_id)
+        assert done["state"] == "failed"
+        assert done["error"]["message"] == "boom"
+        assert "messages" not in done and "response" not in done
+        assert "PRIVATE" not in str(done)
+
+
+@pytest.mark.asyncio
+async def test_wrong_session_poll_is_404_live_and_finished(app, monkeypatch):
+    """Polling an existing turn under the WRONG session is 404 — never another session's
+    live state or retained outcome (r4)."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def provider(message, session_id, **kwargs):
+        entered.set()
+        await release.wait()
+        return [{"role": "assistant", "content": "done"}]
+
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
+    sid = "right"
+    async with _client(app) as client:
+        turn_id = (await client.post(
+            "/api/chat", json={"message": "x", "session_id": sid, "detach": True})).json()["turn_id"]
+        await asyncio.wait_for(entered.wait(), 5)
+        wrong_live = await client.get(f"/api/chat/sessions/wrong/turns/{turn_id}")
+        assert wrong_live.status_code == 404 and wrong_live.json()["detail"]["code"] == "not_found"
+        release.set()
+        assert (await _poll(client, sid, turn_id))["state"] == "completed"
+        wrong_done = await client.get(f"/api/chat/sessions/wrong/turns/{turn_id}")
+        assert wrong_done.status_code == 404 and wrong_done.json()["detail"]["code"] == "not_found"
+        assert (await client.get(f"/api/chat/sessions/{sid}/turns/{turn_id}")).json()["state"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_non_detached_turn_cancels_on_client_disconnect(app, monkeypatch):
+    """A non-detached /api/chat turn is cancelled and unregistered when its client
+    disconnects — the #4205 contract a detached turn deliberately does NOT share (r4)."""
+    from operator_api.chat_routes import _run_disconnectable_chat
+    chat = importlib.import_module("server.chat")
+
+    entered = asyncio.Event()
+    gone = asyncio.Event()
+
+    async def provider(message, session_id, **kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+        return [{"role": "assistant", "content": "unreachable"}]
+
+    monkeypatch.setattr(turn_sync, "_chat_langgraph_impl", provider)
+
+    class Request:
+        async def receive(self):
+            await gone.wait()
+            return {"type": "http.disconnect"}
+
+    pending = asyncio.create_task(
+        _run_disconnectable_chat(Request(), chat.chat("hi", "nd-5", origin="api-chat")))
+    await asyncio.wait_for(entered.wait(), 5)
+    assert local_turns.snapshot("nd-5")  # registered as a live local turn
+    gone.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(pending, 5)
+    assert not local_turns.snapshot("nd-5")  # disconnect cancelled + unregistered it
+    assert not local_turns._FINISHED  # a non-detached turn retains no pollable outcome
+
+
+def test_mark_local_live_names_oldest_first_registered():
+    """The live local turn is the OLDEST (first-registered) row — the comment agrees with the
+    ``local_rows[0]`` implementation (r5)."""
+    from operator_api.chat_routes import _mark_local_live
+
+    rows = [{"id": "oldest"}, {"id": "newer"}]
+    assert _mark_local_live(rows, None) == "oldest"
+    assert [row["live"] for row in rows] == [True, False]
