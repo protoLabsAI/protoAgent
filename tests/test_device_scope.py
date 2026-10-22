@@ -968,15 +968,23 @@ async def test_http_proxy_still_swaps_for_a_device_elsewhere(monkeypatch):
 
     seen = {}
 
-    async def _forward(base, request, raw_path, extra, **k):
+    # A sync POST api/chat now takes the detached long-turn lane (#4277 slice 2). The
+    # device-scope credential swap still runs first in _forward_member, so the swapped fleet
+    # token must ride into the poller exactly as it rode into _forward_to_base before.
+    async def _detach(slug, base, request, path, extra, drop_params, body):
         seen["extra"] = extra
         return "forwarded"
 
+    async def _body():
+        return b'{"message": "hi"}'
+
     monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "fleet-tok")
-    monkeypatch.setattr(proxy, "_forward_to_base", _forward)
+    monkeypatch.setattr(proxy, "_forward_chat_detach", _detach)
     req = SimpleNamespace(
         method="POST",
         headers={},
+        query_params={},
+        body=_body,
         state=SimpleNamespace(trust_tier="operator", credential_scope="device", member_public=False),
     )
     assert await proxy._forward_member("alice", req, "api/chat", "api/chat", ("http://m", {})) == "forwarded"
