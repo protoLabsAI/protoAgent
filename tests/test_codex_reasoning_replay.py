@@ -341,3 +341,30 @@ def test_recovery_sits_inside_the_failover_wrapper():
     assert at > names.index("ObservableModelFallbackMiddleware")
     assert at < names.index("ProviderShapeMiddleware")
     assert at < names.index("MessageCaptureMiddleware")
+
+
+# ── system messages ride `instructions` (the backend 400s a system-role item) ──
+
+
+def test_codex_client_moves_a_system_message_into_instructions():
+    from langchain_core.messages import SystemMessage
+
+    payload = _codex_client()._get_request_payload([SystemMessage("be terse"), HumanMessage("hi")])
+    assert payload["instructions"] == "be terse"
+    assert all(item.get("role") != "system" for item in payload["input"])
+    assert payload["input"][-1]["role"] == "user"
+
+
+def test_codex_client_keeps_middleware_instructions_first():
+    from langchain_core.messages import SystemMessage
+
+    payload = _codex_client()._get_request_payload(
+        [SystemMessage([{"type": "text", "text": "judge"}]), HumanMessage("hi")], instructions="agent prompt"
+    )
+    assert payload["instructions"] == "agent prompt\n\njudge"
+    assert all(item.get("role") != "system" for item in payload["input"])
+
+
+def test_codex_client_without_a_system_message_sets_no_instructions():
+    payload = _codex_client()._get_request_payload([HumanMessage("hi")])
+    assert "instructions" not in payload

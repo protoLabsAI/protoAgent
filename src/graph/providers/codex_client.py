@@ -105,6 +105,35 @@ def _warn_once(key: str, message: str, *args: Any) -> None:
         log.warning(message, *args)
 
 
+def _input_text(content: Any) -> str:
+    """Flatten a Responses input item's content (string or ``input_text`` blocks)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n\n".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content if b).strip()
+    return ""
+
+
+def hoist_system_to_instructions(payload: dict) -> None:
+    """Move ``system``-role input items into the top-level ``instructions`` field.
+
+    The Codex backend rejects a system-role input item with 400 "System messages are
+    not allowed". ``CodexResponsesInputMiddleware`` already does this for agent turns,
+    but direct ``llm.ainvoke([SystemMessage, ...])`` callers bypass the middleware
+    (the goal llm verifier, ``sdk.complete(system=...)``, the soul judge), and every
+    one of them 400'd on this provider. Doing it here covers every caller. Any
+    ``instructions`` already set (by the middleware) come first.
+    """
+    items = payload.get("input")
+    if not isinstance(items, list):
+        return
+    texts = [_input_text(i.get("content")) for i in items if isinstance(i, dict) and i.get("role") == "system"]
+    if not texts:
+        return
+    payload["input"] = [i for i in items if not (isinstance(i, dict) and i.get("role") == "system")]
+    payload["instructions"] = "\n\n".join(t for t in [payload.get("instructions") or "", *texts] if t)
+
+
 def sanitize_responses_input(items: Any, *, issuer: str = "") -> Any:
     """Drop reasoning items this endpoint cannot verify; strip private keys.
 
@@ -367,6 +396,7 @@ class CodexChatOpenAI(_ReasoningChatOpenAI):
         # `input` exists only on the Responses path, so this is a no-op elsewhere.
         if isinstance(payload.get("input"), list):
             payload["input"] = sanitize_responses_input(payload["input"], issuer=self._issuer)
+            hoist_system_to_instructions(payload)
         return payload
 
     # Arming happens on `_stream`/`_astream`, NOT on `_stream_responses`.
