@@ -40,6 +40,7 @@ from croniter import croniter
 
 from a2a_impl.wire import task_id_from_response
 from events import ACTIVITY_CONTEXT
+from infra import keep_awake
 from scheduler.interface import Job, is_cron, parse_iso_to_utc, parse_ttl
 
 log = logging.getLogger(__name__)
@@ -738,7 +739,8 @@ class LocalScheduler:
         one-shots (delete on success, leave for retry on failure) and always clear
         the in-flight guard so the job can be claimed again on its next due slot."""
         try:
-            ok = await self._fire(job)
+            with keep_awake.hold(f"scheduled run {job.id}"):
+                ok = await self._fire(job)
             if not cron:
                 if ok:
                     # `_fire` blocks for the whole agent turn, which can itself call
