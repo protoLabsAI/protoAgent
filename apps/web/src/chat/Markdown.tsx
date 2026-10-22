@@ -1,6 +1,8 @@
+import { useEffect, useRef } from "react";
+
 import { Markdown as DSMarkdown } from "@protolabsai/ui/markdown";
 
-import { rehypeAbsolutizeServerUrls } from "./mediaUrls";
+import { handleMediaImageError, rehypeAbsolutizeServerUrls } from "./mediaUrls";
 
 // Module-level for a stable array identity across renders. The DS appends these AFTER its
 // own defaults (GFM/sanitize/harden/KaTeX), so the URL rewrite sees the final tree.
@@ -35,11 +37,31 @@ export type MarkdownProps = { children: string; streaming?: boolean };
  * the DS ported that exact guard on-by-default. Opt out per the DS `math` prop if ever needed.
  *
  * Only growing text needs repair; settled code markers must never synthesize closing tokens.
+ *
+ * An expired media `<img>` (a member's old hub-console history carries 7-day signed links that
+ * 403 once they lapse) re-mints its link on the first load error and repaints (#4274 item 4):
+ * `handleMediaImageError` POSTs to the owning agent's remint endpoint and swaps in the fresh URL.
+ * Image load errors don't bubble, so we catch them in the CAPTURE phase on a wrapper box rather
+ * than overriding `components.img` — that keeps the DS's built-in image chrome (download /
+ * fullscreen / open-in-new-tab) and its "Image not available" fallback fully intact. The wrapper
+ * is `display: contents`, so it adds an event target without adding a layout box.
  */
 export function Markdown({ children, streaming = false }: MarkdownProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const onError = (e: Event) => {
+      if (e.target instanceof HTMLImageElement) handleMediaImageError(e.target);
+    };
+    root.addEventListener("error", onError, true);
+    return () => root.removeEventListener("error", onError, true);
+  }, []);
   return (
-    <DSMarkdown className="markdown" rehypePlugins={REHYPE_PLUGINS} parseIncompleteMarkdown={streaming}>
-      {children}
-    </DSMarkdown>
+    <div ref={ref} style={{ display: "contents" }}>
+      <DSMarkdown className="markdown" rehypePlugins={REHYPE_PLUGINS} parseIncompleteMarkdown={streaming}>
+        {children}
+      </DSMarkdown>
+    </div>
   );
 }
