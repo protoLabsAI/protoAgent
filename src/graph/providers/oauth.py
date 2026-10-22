@@ -377,6 +377,62 @@ def _refresh_anthropic_tokens(refresh_token: str, *, timeout_s: float = 20.0) ->
     return tokens
 
 
+@dataclass(frozen=True)
+class OAuthAccessToken:
+    """Read-only snapshot for usage polling; never contains a refresh token."""
+
+    access_token: str
+    account_id: str | None
+    source: str
+
+
+def peek_anthropic_access_token() -> OAuthAccessToken | None:
+    """Read the current token, even near expiry, without locks, refreshes or writes.
+
+    Usage respects explicit disconnect even when an environment override exists.
+    Account identity is absent for opaque environment tokens; never borrow an id
+    from a different credential source.
+    """
+    try:
+        if is_disconnected("anthropic-oauth"):
+            return None
+        token = os.environ.get(_CLAUDE_ENV_VAR, "").strip()
+        if token:
+            return OAuthAccessToken(token, None, "env")
+        store = _read_anthropic_store()
+        if store:
+            token = store.get("access_token")
+            if isinstance(token, str) and token.strip():
+                return OAuthAccessToken(token.strip(), _anthropic_account_uuid(store), "instance_store")
+        for source, read in (
+            ("credentials_file", _read_claude_credentials_file),
+            ("keychain", _read_claude_keychain),
+        ):
+            doc = read()
+            node = doc.get("claudeAiOauth") if isinstance(doc, dict) else None
+            token = node.get("accessToken") if isinstance(node, dict) else None
+            if isinstance(token, str) and token.strip():
+                account = _anthropic_account_uuid(node) or _anthropic_account_uuid(doc)
+                return OAuthAccessToken(token.strip(), account, source)
+    except Exception:  # Best-effort read; usage must never disturb authentication.
+        return None
+    return None
+
+
+def peek_codex_access_token() -> OAuthAccessToken | None:
+    """Read our owned store only, following Codex's no-silent-CLI-import rule."""
+    try:
+        if is_disconnected("openai-codex"):
+            return None
+        tokens = _read_codex_tokens(_codex_store_path())
+        token = tokens.get("access_token") if tokens else None
+        if isinstance(token, str) and token.strip():
+            return OAuthAccessToken(token.strip(), _codex_account_id(tokens), "instance_store")
+    except Exception:
+        return None
+    return None
+
+
 def resolve_anthropic_oauth() -> AnthropicOAuthCreds:
     """Resolve Claude OAuth while holding the stable credential-scope lock."""
     with _oauth_scope_lock("anthropic-oauth"):
