@@ -334,6 +334,41 @@ def _page_value(value: Any, *, section_segments: list[str], offset: int, limit: 
     return _dump(envelope)
 
 
+def _public_origin(config) -> str:
+    """The public origin a remote reaches this console on, or ``""`` when none is set.
+
+    The canonical console-base precedence shared with ``infra.media.console_base_url`` /
+    ``graph.sdk.console_url`` (#4256): ``A2A_PUBLIC_URL`` (normalised, the same value the
+    A2A card and the absolute ``/media`` links use) when set, else the configured pairing
+    origin (``network.public_console_url``).
+
+    A hub-spawned fleet member inherits an ``A2A_PUBLIC_URL`` of ``{hub}/agents/<id>`` —
+    the tenant path the hub proxies the member's A2A through. That is its card address,
+    not a console base (``graph.sdk.console_url``'s fleet-member rule), so for a member
+    the env URL is dropped and the configured pairing origin (or nothing) stands in;
+    a non-member with a tenant-shaped URL keeps it."""
+    from urllib.parse import urlsplit
+
+    from graph.sdk import _HUB_TENANT_PATH
+    from infra.media import configured_public_url
+
+    public = configured_public_url()
+    try:
+        tenant_path = public and _HUB_TENANT_PATH.search(urlsplit(public).path or "")
+    except ValueError:
+        tenant_path = False
+    if tenant_path:
+        try:
+            from graph.workspaces.manager import is_workspace_member
+
+            member = is_workspace_member()
+        except Exception:  # noqa: BLE001 — no workspace record readable: not a member
+            member = False
+        if member:
+            public = ""
+    return public or str(getattr(config, "public_console_url", "") or "").strip()
+
+
 def _self_url(config) -> dict:
     """The agent's own console URL, so it can reach ITSELF without probing ports (#4424).
 
@@ -345,16 +380,22 @@ def _self_url(config) -> dict:
       the runtime bind state (``STATE.bind_host`` / ``STATE.active_port`` via
       :func:`infra.media.bound_base_url`). A wildcard bind (``0.0.0.0`` / ``::``) and
       ``localhost`` normalise to ``127.0.0.1`` — a same-host client reaches it there.
-    - ``public``: the configured HTTPS origin a remote device pairs through
-      (``network.public_console_url``), or ``""`` when none is set.
-    - ``preferred``: the public URL when set, else local — the one address to hand out.
+    - ``public``: the public origin a remote reaches, in the canonical console-base
+      precedence shared with ``infra.media.console_base_url`` / ``graph.sdk.console_url``
+      (#4256): ``A2A_PUBLIC_URL`` when set (the same normalised value the A2A card and the
+      absolute ``/media`` links use) — except a hub-spawned fleet member's tenant URL
+      (``{hub}/agents/<id>``), which is its A2A-card address, not a console base, and is
+      skipped by the same member rule ``graph.sdk.console_url`` applies — else the
+      configured pairing origin (``network.public_console_url``), else ``""`` when
+      neither is set.
+    - ``preferred``: the public origin when set, else local — the one address to hand out.
 
     Outside a running server the listening port is NOT known (e.g. these tools built
     without a server serving); ``local`` is ``""`` and a ``note`` says why. The port is
     never guessed and no socket is ever opened."""
     from infra.media import bound_base_url
 
-    public = str(getattr(config, "public_console_url", "") or "").strip()
+    public = _public_origin(config)
     local = bound_base_url()
     out: dict = {
         "local": local,
