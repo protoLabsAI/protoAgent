@@ -424,7 +424,7 @@ def peek_codex_access_token() -> OAuthAccessToken | None:
     try:
         if is_disconnected("openai-codex"):
             return None
-        tokens = _read_codex_tokens(_codex_store_path())
+        tokens = _read_codex_tokens(_codex_store_path(instance_paths()))
         token = tokens.get("access_token") if tokens else None
         if isinstance(token, str) and token.strip():
             return OAuthAccessToken(token.strip(), _codex_account_id(tokens), "instance_store")

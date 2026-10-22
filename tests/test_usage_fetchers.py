@@ -11,6 +11,7 @@ from graph.providers import oauth, usage
 from graph.providers.usage import classify, usable_for
 from graph.providers.usage.anthropic import fetch_anthropic_usage, parse_anthropic_usage
 from graph.providers.usage.codex import fetch_codex_usage, parse_codex_usage
+from infra.paths import InstancePaths
 
 RESET = "2026-10-23T12:00:00Z"
 CLAUDE = {"plan": "max", "ignored": True, "limits": [
@@ -167,9 +168,15 @@ def test_peek_claude_order(monkeypatch):
 
 @pytest.mark.platform_sensitive
 def test_peek_codex(monkeypatch, tmp_path):
+    # Drive the REAL _codex_store_path(instance_paths()) resolution so a regression to a
+    # no-arg call raises TypeError -> swallowed -> None and this test fails, rather than
+    # being masked by a zero-arg stub.
     monkeypatch.setattr(oauth, "is_disconnected", lambda *args: False)
-    path = tmp_path / "codex.json"
-    monkeypatch.setattr(oauth, "_codex_store_path", lambda: path)
+    paths = InstancePaths(instance_id="test", box_root=tmp_path / "box",
+                          instance_root=tmp_path / "inst", app_root=tmp_path / "app")
+    monkeypatch.setattr(oauth, "instance_paths", lambda: paths)
+    paths.config_dir.mkdir(parents=True)
+    path = paths.config_dir / "codex-oauth.json"
     assert oauth.peek_codex_access_token() is None
     path.write_text(json.dumps({"tokens": {"access_token": "fake-expired", "account_id": "fake-account"}}))
     before = path.read_bytes()
