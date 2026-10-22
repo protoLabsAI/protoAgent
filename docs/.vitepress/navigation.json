@@ -904,6 +904,7 @@
         "/reference/a2a-conformance",
         "/reference/agent-card",
         "/reference/extensions",
+        "/reference/hitl-display",
         "/reference/mcp",
         "/reference/plugin-manifest",
         "/reference/plugin-settings",
@@ -1004,6 +1005,10 @@
             {
               "text": "Extensions",
               "link": "/reference/extensions"
+            },
+            {
+              "text": "HITL display contract",
+              "link": "/reference/hitl-display"
             },
             {
               "text": "MCP connections and operator bridge",

@@ -35,6 +35,7 @@ Use [configuration](/reference/configuration) for saved settings, [environment v
 - [A2A conformance](/reference/a2a-conformance)
 - [Agent card](/reference/agent-card)
 - [Extensions](/reference/extensions)
+- [HITL display contract](/reference/hitl-display)
 - [MCP connections and operator bridge](/reference/mcp)
 
 ## Plugin development

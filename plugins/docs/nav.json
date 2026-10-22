@@ -603,6 +603,10 @@
               "title": "Extensions"
             },
             {
+              "path": "reference/hitl-display.md",
+              "title": "HITL display contract"
+            },
+            {
               "path": "reference/mcp.md",
               "title": "MCP connections and operator bridge"
             }

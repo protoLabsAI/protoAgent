@@ -266,6 +266,7 @@
             "reference/a2a-conformance.md",
             "reference/agent-card.md",
             "reference/extensions.md",
+            "reference/hitl-display.md",
             "reference/mcp.md"
           ]
         },
@@ -650,6 +651,10 @@
     },
     "reference/agent-card.md": {
       "title": "Agent card",
+      "status": "current"
+    },
+    "reference/hitl-display.md": {
+      "title": "HITL display contract",
       "status": "current"
     },
     "reference/extensions.md": {
