@@ -2,7 +2,7 @@
 // assert the <img>/<a> that reach the DOM carry the rewritten URL — i.e. the DS actually
 // applies the consumer rehypePlugins after its sanitize/harden defaults. The pure rewrite
 // logic is covered in mediaUrls.test.ts; this covers the wiring.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -31,6 +31,7 @@ afterEach(async () => {
   root = null;
   host = null;
   window.history.replaceState({}, "", "/app/");
+  vi.unstubAllGlobals();
 });
 
 describe("<Markdown> media URL rewrite reaches the DOM (#1946)", () => {
@@ -53,5 +54,36 @@ describe("<Markdown> media URL rewrite reaches the DOM (#1946)", () => {
     const el = await render("![x](/media/a.png?sig=s) [ext](https://example.com/y)");
     expect(el.querySelector("img")?.getAttribute("src")).toBe("/media/a.png?sig=s");
     expect(el.querySelector('a[href="https://example.com/y"]')).toBeTruthy();
+  });
+});
+
+describe("<Markdown> re-mints an expired media image on load error (#4274)", () => {
+  it("a member image that 403s POSTs to the member's remint endpoint and repaints the fresh link", async () => {
+    window.history.replaceState({}, "", "/app/agent/ava/");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ url: "/agents/ava/media/old.png?exp=2&sig=fresh" }),
+      text: async () => "",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const el = await render("![chart](/media/old.png?exp=1&sig=stale)");
+    const img = el.querySelector("img")!;
+    // #1946 rewrite already pointed it at the member proxy.
+    expect(img.getAttribute("src")).toBe("/agents/ava/media/old.png?exp=1&sig=stale");
+
+    // img load errors don't bubble — the capture-phase listener on the wrapper catches it.
+    await act(async () => {
+      img.dispatchEvent(new Event("error"));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [RequestInfo, RequestInit];
+    expect(String(url)).toBe("/agents/ava/api/media/remint");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ url: "/agents/ava/media/old.png?exp=1&sig=stale" });
+    expect(img.getAttribute("src")).toBe("/agents/ava/media/old.png?exp=2&sig=fresh");
   });
 });
