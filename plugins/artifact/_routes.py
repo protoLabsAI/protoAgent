@@ -6,6 +6,8 @@ import functools
 import hashlib
 import logging
 import os
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import quote
 
@@ -15,6 +17,42 @@ log = logging.getLogger("protoagent.plugins.artifact")
 
 _BLOB_CHUNK = 64 * 1024  # bytes per body message when streaming a blob download
 _BLOB_RESOLVE_TRIES = 5  # store re-reads when the blob a read named was swept before it could be opened
+_LINK_DIGEST_LIMIT = 128
+_link_digests: OrderedDict[tuple, str] = OrderedDict()
+_link_digest_lock = threading.Lock()
+
+
+def _link_stamp(st):
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def _linked_digest(fh, st):
+    """Reuse hashes only for unchanged POSIX file identities, never as fence authorization.
+
+    ctime catches writes even when mtime is restored. Windows ctime may mean creation
+    time, so it must hash each request. Keep only bounded metadata, never open handles.
+    The lock coalesces concurrent Range requests while the first worker verifies a file.
+    """
+    from fastapi import HTTPException
+
+    stamp = _link_stamp(st)
+    cacheable = os.name == "posix" and st.st_ino != 0
+    with _link_digest_lock:
+        # A worker may have waited behind another verification; don't trust its
+        # pre-wait stamp to select a cached digest after the file has changed.
+        if _link_stamp(os.fstat(fh.fileno())) != stamp:
+            raise HTTPException(409, {"state": "changed_or_missing"})
+        if cacheable and stamp in _link_digests:
+            _link_digests.move_to_end(stamp)
+            return _link_digests[stamp]
+        digest = _sha256_fd(fh)
+        if _link_stamp(os.fstat(fh.fileno())) != stamp:
+            raise HTTPException(409, {"state": "changed_or_missing"})
+        if cacheable:
+            _link_digests[stamp] = digest
+            if len(_link_digests) > _LINK_DIGEST_LIMIT:
+                _link_digests.popitem(last=False)
+        return digest
 
 
 def _open_blob(art_id: str, version: int):
@@ -88,7 +126,8 @@ def _open_linked(link: dict, meta: dict):
     escapes the project (a symlink out of it — ``resolve`` follows it and refuses).
 
     TOCTOU is closed by opening the fd FIRST and verifying THAT fd: fstat it (size + mtime_ns),
-    then sha256 it and seek back to 0. A gone file, or any size/mtime/digest mismatch, is 409
+    then verify its sha256 (cached by identity + change stamps) and seek back to 0.
+    A gone file, or any size/mtime/digest mismatch, is 409
     ``{"state": "changed_or_missing"}`` with the fd closed and NO bytes sent — substituted bytes
     are never streamed."""
     from fastapi import HTTPException
@@ -110,7 +149,7 @@ def _open_linked(link: dict, meta: dict):
         st = os.fstat(fh.fileno())
         if st.st_size != link.get("size") or st.st_mtime_ns != link.get("mtime_ns"):
             raise HTTPException(409, {"state": "changed_or_missing"})
-        if _sha256_fd(fh) != link.get("sha256"):
+        if _linked_digest(fh, st) != link.get("sha256"):
             raise HTTPException(409, {"state": "changed_or_missing"})
         fh.seek(0)
         ok = True
@@ -547,7 +586,11 @@ def _build_data_router():
         the live fs fence on this request (403 if the project is gone / fs is off / the path
         escapes it) and stamp-checked against the saved size+mtime+sha256 (409
         ``{"state": "changed_or_missing"}`` on any mismatch) before a single byte goes out."""
-        fh, meta, name = _open_blob(art_id, version)
+        from starlette.concurrency import run_in_threadpool
+
+        # Includes whole-file verification on a linked cache miss. Do not block the
+        # event loop; the worker is shielded from cancellation until it hands back the fd.
+        fh, meta, name = await run_in_threadpool(_open_blob, art_id, version)
         return _open_file_response()(
             fh, meta.get("mime") or "application/octet-stream", meta.get("filename") or name, range_header=req_range
         )

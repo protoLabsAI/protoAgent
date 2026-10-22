@@ -12,6 +12,7 @@ with the fs fence substituted over temp dirs via ``_links._registry`` (the modul
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import os
 from pathlib import Path
 
@@ -118,6 +119,17 @@ def test_linked_over_25mb_serves_exact_bytes_and_range(monkeypatch, tmp_path):
     _fence(monkeypatch, art, _registry(proj=proj))
     c = _client(art)
     url = _blob_url(aid)
+    hashed = []
+    original_hash = art._routes._sha256_fd
+
+    def hash_in_worker(fh):
+        # A running loop here means the whole-file read blocks async request handling.
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        hashed.append(fh.name)
+        return original_hash(fh)
+
+    monkeypatch.setattr(art._routes, "_sha256_fd", hash_in_worker)
 
     full = c.get(url)
     assert full.status_code == 200 and full.content == data
@@ -131,6 +143,7 @@ def test_linked_over_25mb_serves_exact_bytes_and_range(monkeypatch, tmp_path):
     assert r.status_code == 206 and r.content == b"TAILX"
     r = c.get(url, headers={"Range": f"bytes={len(data)}-"})  # past the end
     assert r.status_code == 416 and r.content == b""
+    assert len(hashed) == (1 if os.name == "posix" else 4)
 
 
 def test_save_then_serve_round_trips(monkeypatch, tmp_path):
@@ -221,7 +234,8 @@ def test_symlink_escape_never_serves_outside_bytes(monkeypatch, tmp_path):
 # ── r4: a changed/missing file is 409 {"state": "changed_or_missing"} and sends no bytes ───────
 
 
-def test_modified_same_size_same_mtime_is_409(monkeypatch, tmp_path):
+@pytest.mark.parametrize("replace", [False, True])
+def test_modified_same_size_same_mtime_is_409(monkeypatch, tmp_path, replace):
     """The adversarial case: bytes swapped but length AND mtime restored, so only the sha256 of
     the open fd catches it."""
     art = _load(monkeypatch, tmp_path)
@@ -230,17 +244,60 @@ def test_modified_same_size_same_mtime_is_409(monkeypatch, tmp_path):
     data = b"original contents, exact length matters\n"
     aid = _put_linked(art, proj, "doc.txt", data, mime="text/plain")
     stamp = _stored_link(art, aid)["mtime_ns"]
+    _fence(monkeypatch, art, _registry(proj=proj))
+    assert _client(art).get(_blob_url(aid)).content == data  # warm the digest cache
 
     tampered = b"SWAPPED contents, exact length matters!\n"
     assert len(tampered) == len(data)
     p = proj / "doc.txt"
-    p.write_bytes(tampered)
-    os.utime(p, ns=(stamp, stamp))  # restore mtime so size + mtime both still match the stamp
+    modified = p.with_suffix(".new") if replace else p
+    modified.write_bytes(tampered)
+    os.utime(modified, ns=(stamp, stamp))  # size + mtime both still match the stamp
+    if replace:
+        os.replace(modified, p)  # a new inode must not inherit the cached digest
 
     _fence(monkeypatch, art, _registry(proj=proj))
     r = _client(art).get(_blob_url(aid))
     assert r.status_code == 409 and r.json()["detail"]["state"] == "changed_or_missing"
     assert tampered not in r.content
+
+
+def test_cached_digest_checks_expected_hash_and_bounds_entries(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _fence(monkeypatch, art, _registry(proj=proj))
+    monkeypatch.setattr(art._routes, "_LINK_DIGEST_LIMIT", 2)
+    client = _client(art)
+    for n in range(3):
+        aid = _put_linked(art, proj, f"{n}.txt", b"linked bytes")
+        assert client.get(_blob_url(aid)).status_code == 200
+    assert len(art._routes._link_digests) == (2 if os.name == "posix" else 0)
+    store = art._read_store()
+    art._store._find(store, aid)["versions"][0]["link"]["sha256"] = "wrong"
+    art._store._write_store(store)
+    response = client.get(_blob_url(aid), headers={"Range": "bytes=0-1"})
+    assert response.status_code == 409
+    assert response.json()["detail"] == {"state": "changed_or_missing"}
+
+
+def test_file_changed_during_hash_is_not_cached_or_served(monkeypatch, tmp_path):
+    art = _load(monkeypatch, tmp_path)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    aid = _put_linked(art, proj, "doc.txt", b"original bytes")
+    _fence(monkeypatch, art, _registry(proj=proj))
+    original_hash = art._routes._sha256_fd
+
+    def mutate_after_hash(fh):
+        digest = original_hash(fh)
+        (proj / "doc.txt").write_bytes(b"changed while hashing")
+        return digest
+
+    monkeypatch.setattr(art._routes, "_sha256_fd", mutate_after_hash)
+    response = _client(art).get(_blob_url(aid))
+    assert response.status_code == 409
+    assert not art._routes._link_digests
 
 
 def test_changed_mtime_is_409(monkeypatch, tmp_path):
