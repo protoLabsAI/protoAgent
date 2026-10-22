@@ -128,6 +128,25 @@ def test_missing_ruff_is_a_hard_failure(gate, monkeypatch, capsys):
     assert "gate: FAIL" in out and "ruff==0.15.10" in out
 
 
+def test_stale_tool_interpreter_is_an_actionable_hard_failure(gate, monkeypatch, capsys):
+    run = gate._runner.run
+
+    def missing_interpreter(argv, cwd=None):
+        if argv == ["/fake/bin/lint-imports"]:
+            raise FileNotFoundError(2, "No such file or directory", argv[0])
+        return run(argv, cwd=cwd)
+
+    monkeypatch.setattr(gate.subprocess, "run", missing_interpreter)
+    assert gate.run_gate() == 1
+    assert gate._runner.calls == [["/fake/bin/ruff", "check", "."]]
+    out = capsys.readouterr().out
+    assert "gate: FAIL  import contracts (lint-imports)" in out
+    assert "/fake/bin/lint-imports" in out
+    assert "interpreter not found" in out
+    assert "reinstall" in out and "import-linter==2.11" in out
+    assert "gate: OK" not in out
+
+
 def test_cli_flag_parsing_maps_to_lint_only(gate):
     assert gate.main(["--lint-only"]) == 0
     assert len(gate._runner.calls) == 4

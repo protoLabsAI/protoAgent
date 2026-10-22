@@ -118,7 +118,18 @@ def run_gate(lint_only: bool = False) -> int:
             print(f"gate: FAIL  {check.name} — tool not found; {check.missing_hint}", flush=True)
             return 1
         print(f"gate: RUN   {check.name}", flush=True)
-        result = subprocess.run(check.argv, cwd=REPO)
+        try:
+            result = subprocess.run(check.argv, cwd=REPO)
+        except FileNotFoundError:
+            # A console script can resolve via which() but still fail to launch
+            # after a worktree move leaves its shebang pointing at the old venv.
+            print(
+                f"gate: FAIL  {check.name} — executable or its interpreter not found: "
+                f"{check.argv[0]}; recreate the active environment or reinstall the tool"
+                + (f" ({check.missing_hint})" if check.missing_hint else ""),
+                flush=True,
+            )
+            return 1
         if result.returncode < 0:
             # KILLED, not failed. `subprocess` reports a signal death as a NEGATIVE code,
             # and flattening that to 1 tells the caller the repo failed its own gate when

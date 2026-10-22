@@ -578,3 +578,11 @@ jobs:
         # model, or network. Guards the operator-console rendering contract:
         # tool-call cards, markdown, slash commands, runtime panel.
         run: npm run test:e2e --workspace @protoagent/web
+      - name: Preserve scrollback paint evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-e2e-paint-evidence
+          path: apps/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
