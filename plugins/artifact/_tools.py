@@ -333,8 +333,10 @@ def save_file_artifact(
     don't pass ``artifact_id`` with ``link=True``, and don't try to revise a linked artifact
     (save it without ``link`` for an editable, versioned copy). The 25 MB ``max_blob_kb`` cap does
     not apply; a linked file has its own, larger ``max_linked_kb`` cap (200 MB default).
-    Downloads and media previews recheck the live project fence and saved file stamp; if the
-    source changes or disappears, save a new linked artifact to make it available again.
+    Serving the linked bytes is NOT in this slice: a linked version stores no blob, and the
+    download / media routes answer 404 for one. So a linked artifact is a panel REFERENCE
+    today — use it to point at a document in place, not to hand the bytes to a reader. The
+    fence re-check on serving lands with that follow-up.
     """
     if link and artifact_id:
         return (
@@ -644,8 +646,9 @@ def _save_linked(
     kb = link["size"] // 1024
     return (
         f"Linked file artifact {art_id} → v1: {filename} ({mime}, {kb} KB) from "
-        f"{link['project']}/{link['path']} — now in the Artifact panel, served in place "
-        f"(read-only, no copy)."
+        f"{link['project']}/{link['path']} — now in the Artifact panel as a reference "
+        f"(read-only, no copy). The bytes are not served yet: download and preview of a "
+        f"linked artifact land in a follow-up."
     ) + _ref.ref_tail(art)
 
 
