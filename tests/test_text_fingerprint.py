@@ -17,6 +17,7 @@ from a2a_impl.executor import (
     TEXT_FINGERPRINT_META,
     _normalise_media_text,
     _text_fingerprint_meta,
+    _text_offset_meta,
     _utf16_fnv1a,
 )
 
@@ -44,6 +45,7 @@ SHARED_VECTORS = [
     ("/agents/m/profile?x=1", "/agents/m/profile?x=1"),
     # Plain prose with no URL at all.
     ("no urls here, just text.", "no urls here, just text."),
+    ("😀 https://hub/agents/m/media/a.png?sig=x done", "😀 /media/a.png done"),
 ]
 
 
@@ -95,3 +97,11 @@ def test_non_media_url_does_not_match_a_media_fingerprint():
     meta = _text_fingerprint_meta(streamed)[TEXT_FINGERPRINT_META]
     measured = _normalise_media_text(stored)
     assert _utf16_fnv1a(measured[: meta["length"]]) != meta["fnv1a"]
+
+
+def test_offsets_preserve_raw_and_normalised_utf16_boundaries():
+    text = "😀 ![img](/media/a.png?sig=x) done"
+    assert _text_offset_meta(text) == {
+        "protoagent/textOffset": len(text.encode("utf-16-le")) // 2,
+        "protoagent/normalisedTextOffset": len(_normalise_media_text(text).encode("utf-16-le")) // 2,
+    }

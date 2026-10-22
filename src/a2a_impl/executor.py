@@ -120,7 +120,12 @@ TEXT_OFFSET_META = "protoagent/textOffset"
 
 
 def _text_offset_meta(accumulated: str) -> dict[str, int]:
-    return {TEXT_OFFSET_META: len(accumulated.encode("utf-16-le")) // 2}
+    # Keep raw offsets for older clients and in-flight snapshots. V2 replay uses the
+    # canonical boundary to account for media links that change length before a frame.
+    return {
+        TEXT_OFFSET_META: len(accumulated.encode("utf-16-le")) // 2,
+        "protoagent/normalisedTextOffset": len(_normalise_media_text(accumulated).encode("utf-16-le")) // 2,
+    }
 
 
 # What the offsets were measured AGAINST, stamped on the terminal answer artifact: the

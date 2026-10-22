@@ -592,6 +592,20 @@ export function normaliseMediaText(text: string): string {
   return text.replace(MEDIA_URL_RE, (_m, file) => `/media/${file}`);
 }
 
+// Translate a canonical UTF-16 boundary back into the stored answer, preserving signed
+// links verbatim. A boundary inside a rewritten URL is unsafe to replay.
+function storedMediaOffset(text: string, offset: number): number | null {
+  let removed = 0;
+  for (const match of text.matchAll(MEDIA_URL_RE)) {
+    const start = match.index! - removed;
+    if (offset <= start) return offset + removed;
+    const end = start + `/media/${match[1]}`.length;
+    if (offset < end) return null;
+    removed += match[0].length - (end - start);
+  }
+  return offset + removed;
+}
+
 /** FNV-1a (32-bit) over a string's UTF-16 code units — the executor's `_utf16_fnv1a`. */
 export function utf16Fnv1a(text: string): number {
   let h = 0x811c9dc5;
@@ -642,12 +656,19 @@ function replayTaskSnapshot(
   const measuredOk = fingerprint
     ? fingerprint.length <= measuredText.length && utf16Fnv1a(measuredText.slice(0, fingerprint.length)) === fingerprint.fnv1a
     : /working|submitted|input.required|auth.required/i.test((task.status?.state || "").toString());
-  const measuredLength = fingerprint ? fingerprint.length : accumulated.length;
+  const measuredLength = fingerprint
+    ? (fingerprint.v >= 2 ? (storedMediaOffset(accumulated, fingerprint.length) ?? 0) : fingerprint.length)
+    : accumulated.length;
   const interleave = textArtifacts === 1 && !splitsTurn && measuredOk;
   let emitted = 0;
   const catchUpText = (metadata?: ExtMetadata) => {
     if (!interleave) return;
-    const offset = textOffsetFromMeta(metadata);
+    const normalisedOffset = textOffsetFromMeta({
+      "protoagent/textOffset": metadata?.["protoagent/normalisedTextOffset"],
+    });
+    const offset = fingerprint && fingerprint.v >= 2 && normalisedOffset !== null
+      ? (normalisedOffset <= fingerprint.length ? storedMediaOffset(accumulated, normalisedOffset) : null)
+      : textOffsetFromMeta(metadata);
     if (offset === null || offset <= emitted || offset > measuredLength) return;
     handlers.onText?.(accumulated.slice(emitted, offset), true);
     emitted = offset;

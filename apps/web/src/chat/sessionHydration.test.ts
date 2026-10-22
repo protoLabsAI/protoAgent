@@ -1532,6 +1532,7 @@ describe("media-URL normalisation keeps the fingerprint stable across link rewri
     ["https://example.com/foo/bar?x=1", "https://example.com/foo/bar?x=1"],
     ["/agents/m/profile?x=1", "/agents/m/profile?x=1"],
     ["no urls here, just text.", "no urls here, just text."],
+    ["😀 https://hub/agents/m/media/a.png?sig=x done", "😀 /media/a.png done"],
   ];
 
   it("normaliseMediaText matches the Python normaliser on the shared vectors", () => {
@@ -1576,6 +1577,29 @@ describe("media-URL normalisation keeps the fingerprint stable across link rewri
       { kind: "text", text: storedTail },
     ]);
     expect(textRuns(assistant.parts).join("")).toBe(stored);
+  });
+
+  it("keeps tools after rewritten media links at their canonical boundaries", () => {
+    const streamedLead = "😀 ![img](/media/a.png?sig=x) ready ";
+    const storedLead = "😀 ![img](https://hub/agents/m/media/a.png?exp=1&sig=y) ready ";
+    const stored = storedLead + "Done.";
+    const [, assistant] = messagesFromDurableTurn(turn({
+      text: stored,
+      artifacts: [{ parts: [{ text: stored }], metadata: fp2(streamedLead + "Done.") }],
+      history: [
+        { role: "ROLE_USER", parts: [{ text: "go" }] },
+        { role: "ROLE_AGENT", metadata: {
+          [TOOL]: { toolCallId: "r1", name: "render", phase: "started", args: "{}" },
+          [OFFSET]: streamedLead.length,
+          "protoagent/normalisedTextOffset": normaliseMediaText(streamedLead).length,
+        } },
+      ],
+    }));
+    expect(assistant.parts).toEqual([
+      { kind: "text", text: storedLead },
+      { kind: "tools", ids: ["r1"] },
+      { kind: "text", text: "Done." },
+    ]);
   });
 
   it("falls back when the stored text diverges on a NON-media URL (normalisation won't forgive it)", () => {
