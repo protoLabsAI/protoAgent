@@ -106,12 +106,25 @@ def _warn_once(key: str, message: str, *args: Any) -> None:
 
 
 def _input_text(content: Any) -> str:
-    """Flatten a Responses input item's content (string or ``input_text`` blocks)."""
+    """Flatten a Responses input item's content (string or ``input_text`` blocks).
+
+    ``instructions`` is text-only, so a non-text block (an image) can't ride it; it is
+    dropped with a warning rather than failing the whole call."""
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
-        return "\n\n".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content if b).strip()
-    return ""
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if not block:
+            continue
+        if not isinstance(block, dict):
+            parts.append(str(block))
+        elif block.get("type") in {"text", "input_text"} and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+        else:
+            log.warning("codex: dropped a non-text %r block from a system message", block.get("type"))
+    return "\n\n".join(parts).strip()
 
 
 def hoist_system_to_instructions(payload: dict) -> None:

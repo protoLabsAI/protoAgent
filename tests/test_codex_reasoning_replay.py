@@ -368,3 +368,15 @@ def test_codex_client_keeps_middleware_instructions_first():
 def test_codex_client_without_a_system_message_sets_no_instructions():
     payload = _codex_client()._get_request_payload([HumanMessage("hi")])
     assert "instructions" not in payload
+
+
+def test_a_non_text_system_block_is_dropped_with_a_warning(caplog):
+    from graph.providers.codex_client import hoist_system_to_instructions
+
+    payload = {"input": [{"role": "system", "content": [
+        {"type": "input_text", "text": "judge"}, {"type": "input_image", "image_url": "data:x"}]},
+        {"role": "user", "content": "hi"}]}
+    hoist_system_to_instructions(payload)
+    assert payload["instructions"] == "judge"
+    assert [i["role"] for i in payload["input"]] == ["user"]
+    assert "non-text 'input_image' block" in caplog.text
