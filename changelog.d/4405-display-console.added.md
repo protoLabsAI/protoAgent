@@ -1,0 +1,1 @@
+- **Inert tables beside HITL prompts (#4405).** The console renders bounded, scalar-only display tables with the design system Table alongside approval, form, and question prose. Malformed or unsupported displays fall back to the existing text and host actions; approval values and resume behavior are unchanged.
