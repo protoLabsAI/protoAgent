@@ -37,6 +37,9 @@ _FORWARD: dict[str, tuple[str, str]] = {
     "workspace": ("graph.workspaces.cli", "run_workspace_cli"),
     "skills": ("graph.skills.cli", "run_skills_cli"),
     "fleet": ("graph.fleet.cli", "run_fleet_cli"),
+    # `usage` — subscription usage for the native-OAuth providers: this instance's
+    # /api/usage (ADR 0122 U2b), or every member's through the hub with `--fleet`.
+    "usage": ("graph.usage_cli", "run_usage_cli"),
     # `top` = the fleet deck straight away (same as bare `fleet`); the TUI over the running hub.
     "top": ("graph.fleet.cli", "run_deck_cli"),
     # `pair` = the remote half of agent pairing (ADR 0113 D7): a one-time code a hub claims.
@@ -67,6 +70,7 @@ _FORWARD_HELP = {
     "workspace": "Create / list / run / remove isolated workspace agents (ADR 0041)",
     "skills": "Inspect and curate the SKILL.md library (ADR 0041)",
     "fleet": "The fleet deck: bare = interactive TUI over the running hub; ls/up/down = non-interactive (ADR 0042)",
+    "usage": "Subscription usage for the native-OAuth providers — this instance, or --fleet for every member (ADR 0122)",
     "top": "Open the fleet deck (alias for bare `protoagent fleet`)",
     "pair": "Print a one-time code another agent's hub (or, with --device, a phone) can use to pair with this one",
     "config": "Explain / get / set this instance's config (ADR 0047)",
