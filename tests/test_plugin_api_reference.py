@@ -209,13 +209,14 @@ def test_event_scan_finds_the_topics_it_should(gen) -> None:
     three different publisher spellings.
     """
     topics = gen._scan_topics()
-    for expected in ("turn.started", "watch.met", "ui.navigate", "inbox.item", "turn.usage"):
+    for expected in ("turn.started", "watch.met", "ui.navigate", "inbox.item", "turn.usage", "provider.usage"):
         assert expected in topics, (
             f"the bus-topic scan no longer finds {expected!r} — a publisher helper was probably "
             f"renamed; check gen_plugin_api._PUBLISHERS"
         )
     assert len(topics) >= 25, f"only {len(topics)} topics found — the scan is probably broken"
     assert topics["turn.usage"]["keys"], "payload keys stopped being extracted"
+    assert "src/observability/usage_store.py" in topics["provider.usage"]["sources"]
 
 
 def test_event_catalog_documents_every_scanned_topic(gen) -> None:

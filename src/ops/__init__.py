@@ -84,7 +84,7 @@ def registry() -> dict[str, OpSpec]:
 # needs), so nothing guarantees the WHOLE registry is loaded. `load_all()` forces it, for the
 # `GET /api/operations` catalog + `protoagent operations` + the safe-operator profile, which
 # must see every op, not just the ones some surface happened to import.
-_OP_MODULES = ("ops.knowledge", "ops.plugins", "ops.config", "ops.fleet")
+_OP_MODULES = ("ops.knowledge", "ops.plugins", "ops.config", "ops.fleet", "ops.usage")
 
 
 def load_all() -> dict[str, OpSpec]:
