@@ -424,7 +424,8 @@ def _begin_turn_files(carry: str = "", principal: str = "", *, principal_kind: s
         if principal_kind == "operator" and parked_kind in ("scheduler", "operator"):
             return True
         logger.warning(
-            "[a2a] %d paused-turn file(s) for context %s (task %s) dropped: parked by %s, answered by %s",
+            "[a2a] %d paused-turn file(s) for context %s (task %s) withheld: parked by %s, answered by %s; "
+            "files stay parked until TTL expiry/cancel or an authorized claim",
             count, carry, task_id, parked_kind, principal_kind,
         )
         return False
