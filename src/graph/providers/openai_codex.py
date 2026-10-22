@@ -77,6 +77,7 @@ def build_codex_llm(
         "base_url": creds.base_url,
         "api_key": creds.access_token,
         "use_responses_api": True,
+        "include_response_headers": True,
         # Content blocks, not the legacy "v0" string. This is the follow-up the v0
         # pin was holding open: "v0" collapses a turn's reasoning into ONE
         # additional_kwargs slot (later items overwrite the first, and streamed

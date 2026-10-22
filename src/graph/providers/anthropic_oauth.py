@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import PrivateAttr
 
 from graph.providers.oauth import resolve_anthropic_oauth
+from graph.providers.usage.headers import anthropic_response_hook, with_anthropic_headers
 from graph.upstream_errors import provider_retry_delay
 
 if TYPE_CHECKING:
@@ -206,6 +207,11 @@ try:
         must not turn into repeated first-token stalls (#4205).
         """
 
+        def _make_status_error(self, message, *, body, response):
+            if response.status_code == 429:
+                anthropic_response_hook(response)
+            return super()._make_status_error(message, body=body, response=response)
+
         def _should_retry(self, response):
             delay = provider_retry_delay(response.headers)
             if delay is not None and delay > 10:
@@ -267,14 +273,16 @@ try:
         def _client(self):
             return _InteractiveAnthropic(
                 **self._client_params,
-                http_client=_get_default_httpx_client(**self._http_client_params()),
+                http_client=with_anthropic_headers(_get_default_httpx_client(**self._http_client_params())),
             )
 
         @cached_property
         def _async_client(self):
             return _AsyncInteractiveAnthropic(
                 **self._client_params,
-                http_client=_get_default_async_httpx_client(**self._http_client_params()),
+                http_client=with_anthropic_headers(
+                    _get_default_async_httpx_client(**self._http_client_params()), asynchronous=True,
+                ),
             )
 
         def _refresh_oauth_token(self) -> None:
