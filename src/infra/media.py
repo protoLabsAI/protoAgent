@@ -683,8 +683,18 @@ def park_turn_files(key: str, principal: str = "", *, principal_kind: str = "unk
         _sweep_parked(now)
         prev = _PARKED.pop((key, principal), None)
         merged = list(prev[1]) if prev is not None else []
-        have = {e.get("key") or e["file"] for e in merged}
-        merged.extend(e for e in mine if (e.get("key") or e["file"]) not in have)
+        # Keep the parked copy on a content match, except when both attachments
+        # have distinct explicit names (the same distinction attach_file preserves).
+        previous = list(merged)
+        merged.extend(
+            e
+            for e in mine
+            if not any(
+                (e.get("key") or e["file"]) == (f.get("key") or f["file"])
+                and not (e.get("named") and f.get("named") and e["name"] != f["name"])
+                for f in previous
+            )
+        )
         _PARKED[(key, principal)] = (now, merged[:_MAX_TURN_FILES], principal_kind)
         _sweep_parked(now)
 

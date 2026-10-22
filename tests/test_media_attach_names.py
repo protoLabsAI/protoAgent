@@ -77,3 +77,43 @@ def test_unnamed_refresh_preserves_distinct_explicit_names(names, same_ref):
     assert [f["name"] for f in files] == list(names)
     assert f"/media/{replacement.path.name}?" in files[0]["url"]
     assert f"/media/{second.path.name}?" in files[1]["url"]
+
+
+@pytest.mark.parametrize("same_ref", [False, True])
+@pytest.mark.parametrize(
+    ("first_name", "second_name", "expected_count"),
+    [
+        ("a.png", "b.png", 2),
+        ("", "", 1),
+        ("", "a.png", 1),
+        ("a.png", "", 1),
+        ("a.png", "a.png", 1),
+    ],
+)
+def test_repark_preserves_distinct_names_and_existing_content_deduplication(
+    same_ref, first_name, second_name, expected_count, monkeypatch
+):
+    monkeypatch.setattr(media, "_PARKED", {})
+    first = media.save_media(b"same", "image/png")
+    second = first if same_ref else media.save_media(b"same", "image/png")
+    assert media.attach_file(first, name=first_name)
+    media.park_turn_files("conversation", "principal")
+    # A held message parks again without consuming the existing stash.
+    token = media.begin_turn_files()
+    try:
+        assert media.attach_file(second, name=second_name)
+        media.park_turn_files("conversation", "principal")
+        media.park_turn_files("conversation", "principal")  # repeated park is idempotent
+    finally:
+        media.end_turn_files(token)
+    token = media.begin_turn_files(carry="conversation", principal="principal")
+    try:
+        files = media.close_turn_files()
+        assert len(files) == expected_count
+        assert files[0]["name"] == (first_name or first.path.name)
+        assert f"/media/{first.path.name}?" in files[0]["url"]
+        if expected_count == 2:
+            assert files[1]["name"] == second_name
+            assert f"/media/{second.path.name}?" in files[1]["url"]
+    finally:
+        media.end_turn_files(token)
