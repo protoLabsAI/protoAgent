@@ -245,6 +245,66 @@ def test_persisted_snapshot_reloads_as_stale(tmp_path):
     assert reload_calls["n"] == 0
 
 
+# ── failed poll must not erase last-known windows (the get() path readers use) ───────
+
+
+def test_failed_poll_keeps_last_known_windows_via_get(tmp_path):
+    """A 429 after good data degrades to ``unknown``/stale but must keep the last-known
+    windows reachable through ``get()`` (not just ``cached()``), and must not re-poll for
+    the whole back-off — one 429 cannot erase the windows a process already held."""
+    clock = FakeClock()
+    calls = {"n": 0}
+    state = {"mode": "ok"}
+
+    def fetcher():
+        calls["n"] += 1
+        if state["mode"] == "ok":
+            return ok_account("anthropic-oauth", used=42.0)
+        return rate_limited_account("anthropic-oauth")
+
+    store = UsageStore({"anthropic-oauth": fetcher}, path=tmp_path / "u.json", clock=clock)
+
+    first = store.get("anthropic-oauth")
+    assert first["status"] == "ok"
+    assert first["windows"][0]["used_pct"] == 42.0
+    assert calls["n"] == 1
+
+    state["mode"] = "429"
+    clock.advance(61)  # min-interval elapsed → the next read polls and hits the 429
+    degraded = store.get("anthropic-oauth")
+    assert calls["n"] == 2
+    assert degraded["status"] == "unknown"  # degraded...
+    assert degraded["stale"] is True
+    assert degraded["windows"][0]["used_pct"] == 42.0  # ...but the windows survive the 429
+
+    clock.advance(61)  # past the min-interval but still inside the 300 s back-off
+    held = store.get("anthropic-oauth", force=True)  # back-off binds even under force
+    assert calls["n"] == 2  # no extra poll
+    assert held["status"] == "unknown"
+    assert held["windows"][0]["used_pct"] == 42.0  # last-known windows still shown
+
+
+def test_restart_last_known_survives_failing_first_poll_via_get(tmp_path):
+    """After a restart the first ``get()`` polls (``_load`` leaves ``last_poll=None``); if
+    that poll fails, the reader must still see the disk-loaded last-known windows, not an
+    empty ``unknown`` account."""
+    path = tmp_path / "u.json"
+    good = UsageStore(
+        {"anthropic-oauth": lambda: ok_account("anthropic-oauth", used=73.0)}, path=path
+    )
+    good.get("anthropic-oauth")  # persist a good snapshot
+    assert path.exists()
+
+    def boom():
+        raise RuntimeError("no creds")
+
+    store2 = UsageStore({"anthropic-oauth": boom}, path=path)  # "restart", provider now fails
+    out = store2.get("anthropic-oauth")  # the only method the op/route call
+    assert out["stale"] is True
+    assert out["status"] == "unknown"
+    assert out["windows"][0]["used_pct"] == 73.0  # last-known data survives the failing poll
+
+
 # ── r5: publish on change, no-op when the bus is absent ─────────────────────────────
 
 

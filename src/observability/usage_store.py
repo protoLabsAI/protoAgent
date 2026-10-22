@@ -189,21 +189,60 @@ class UsageStore:
         if not self._should_poll(prior, force):
             return prior, None
         account = self._fetch_one(provider_id)
-        fp = self._fingerprint(account.to_dict())
-        entry = _Entry(
-            account=account,
-            last_poll=self._clock(),
-            rate_limited=account.retry_after is not None,
-            stale=False,
-            window_fetched={w.id: account.fetched_at for w in account.windows},
-            fingerprint=fp,
-        )
+        now = self._clock()
+        rate_limited = account.retry_after is not None
+        if self._has_good_data(account):
+            # A fresh, real poll: take the new account as-is.
+            entry = _Entry(
+                account=account,
+                last_poll=now,
+                rate_limited=rate_limited,
+                stale=False,
+                window_fetched={w.id: account.fetched_at for w in account.windows},
+                fingerprint=self._fingerprint(account.to_dict()),
+            )
+        elif prior is not None and self._has_good_data(prior.account):
+            # The poll failed (429, network error, missing credentials) but we still hold
+            # last-known-good windows — from an earlier poll or loaded off disk at restart.
+            # Keep showing them (marked stale) rather than erasing them with an empty
+            # ``unknown`` account, but record the poll time and arm the 429 back-off so a
+            # single failure can't re-hammer the endpoint. This is what every reader —
+            # ``get()``, the op, the route — sees, not just ``cached()``.
+            entry = _Entry(
+                account=prior.account,
+                last_poll=now,
+                rate_limited=rate_limited,
+                stale=True,
+                window_fetched=dict(prior.window_fetched),
+                fingerprint=prior.fingerprint,
+            )
+        else:
+            # Failed poll with no last-known-good data to fall back on → show unknown.
+            entry = _Entry(
+                account=account,
+                last_poll=now,
+                rate_limited=rate_limited,
+                stale=False,
+                window_fetched={w.id: account.fetched_at for w in account.windows},
+                fingerprint=self._fingerprint(account.to_dict()),
+            )
         self._entries[provider_id] = entry
-        # A stale→fresh transition is a UI-visible change even when the data matches.
-        changed = prior is None or prior.fingerprint != fp or prior.stale
+        # A fresh→stale or stale→fresh transition is a UI-visible change even when the
+        # underlying windows match.
+        changed = (
+            prior is None
+            or prior.fingerprint != entry.fingerprint
+            or prior.stale != entry.stale
+        )
         if self._record_good(account):
             self._persist_locked()
         return entry, (self._present(provider_id, entry) if changed else None)
+
+    @staticmethod
+    def _has_good_data(account) -> bool:
+        """Whether ``account`` carries real, usable windows (as opposed to an ``unknown``/
+        failed poll). Only such an account is worth persisting or falling back to."""
+        return account.status == "ok" and bool(account.windows)
 
     def _should_poll(self, entry: _Entry | None, force: bool) -> bool:
         if entry is None or entry.last_poll is None:
@@ -259,7 +298,7 @@ class UsageStore:
     def _record_good(self, account) -> bool:
         """Remember an account as last-known-good iff it carries real data; returns
         whether the persisted set changed. Unknown accounts never displace good data."""
-        if account.status != "ok" or not account.windows:
+        if not self._has_good_data(account):
             return False
         data = account.to_dict()
         if self._last_good.get(account.provider_id) == data:
