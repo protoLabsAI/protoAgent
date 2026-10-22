@@ -353,7 +353,11 @@ def _public_origin(config) -> str:
     from infra.media import configured_public_url
 
     public = configured_public_url()
-    if public and _HUB_TENANT_PATH.search(urlsplit(public).path or ""):
+    try:
+        tenant_path = public and _HUB_TENANT_PATH.search(urlsplit(public).path or "")
+    except ValueError:
+        tenant_path = False
+    if tenant_path:
         try:
             from graph.workspaces.manager import is_workspace_member
 

@@ -79,6 +79,24 @@ def test_env_normalised_like_the_canonical_helper(monkeypatch):
     assert out["preferred"] == "https://roxy.example"
 
 
+@pytest.mark.parametrize("configured", ["", "https://configured.example.com"])
+def test_malformed_env_public_url_keeps_precedence(monkeypatch, configured):
+    """A malformed URL is not a tenant path and must not break config inspection."""
+    from tools.config_tools import _self_url as resolve_self_url
+
+    cfg = LangGraphConfig()
+    cfg.public_console_url = configured
+    monkeypatch.setenv("A2A_PUBLIC_URL", "http://[::1")
+
+    out = resolve_self_url(cfg)
+
+    assert out["public"] == "http://[::1"
+    assert out["preferred"] == "http://[::1"
+    assert out["local"] == ""
+    assert out["note"]
+    assert _self_url(cfg) == out
+
+
 def test_blank_env_falls_back_to_config(monkeypatch):
     """A whitespace-only A2A_PUBLIC_URL is unset, so the configured origin still shows."""
     cfg = LangGraphConfig()
