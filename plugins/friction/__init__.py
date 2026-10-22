@@ -962,6 +962,8 @@ def _build_subagent():
     from graph.subagents.config import SubagentConfig
 
     return SubagentConfig(
+        # Backlog triage needs only friction_review, not unrelated lead data.
+        inherit_read_tools=False,
         name="friction_triage",
         description=(
             "Read the friction backlog and turn it into a filing plan: group related "

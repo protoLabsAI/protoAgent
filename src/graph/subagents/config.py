@@ -42,6 +42,12 @@ def answered(text: str) -> bool:
 
 @dataclass
 class SubagentConfig:
+    """A worker spec; inherit_read_tools opts into lead reads by default.
+
+    The flag is declarative until dispatch wires read-tool inheritance. Writes
+    remain explicit allowlist entries; narrow roles can opt out of lead reads.
+    """
+
     name: str
     description: str
     system_prompt: str
@@ -95,6 +101,7 @@ class SubagentConfig:
     # How the nudge names the deliverable to the model. Blank = quote the marker when
     # there is one (`nudge_contract`); with only a `completion_check`, a generic phrase.
     completion_contract: str = ""
+    inherit_read_tools: bool = True
 
     def delivered(self) -> Callable[[str], bool] | None:
         """The test a finished answer must pass, or None when this subagent declares none."""
@@ -535,6 +542,8 @@ Hard stop at max_turns: return what you have (partial findings beat none).""",
 )
 
 REVIEW_SYNTHESIZER_CONFIG = SubagentConfig(
+    # Text-in/findings-out synthesis must not gather new evidence.
+    inherit_read_tools=False,
     lead_visible=False,
     name="review-synthesizer",
     completion_check=findings_delivered,
@@ -628,6 +637,8 @@ FINAL block of your reply.""",
 # commands, adapted to protoAgent's stores + native scheduler.
 
 DREAM_CONFIG = SubagentConfig(
+    # Memory curation must use scoped activity and memory APIs only.
+    inherit_read_tools=False,
     name="dream",
     description=(
         "Memory consolidation pass. Reviews what the agent recently did and BOTH "
@@ -707,6 +718,8 @@ Output a short summary — what you consolidated (added) and what you pruned
 )
 
 DISTILL_CONFIG = SubagentConfig(
+    # Skill curation must stay within its declared evidence sources.
+    inherit_read_tools=False,
     name="distill",
     description=(
         "Workflow packaging pass. Reviews recent work for repeated, manual "
@@ -782,6 +795,8 @@ bead ids) + what you skipped and why. Hard stop at max_turns.""",
 
 
 SELF_IMPROVE_CONFIG = SubagentConfig(
+    # Policy-bounded review must not expand its evidence access from the lead.
+    inherit_read_tools=False,
     lead_visible=False,
     name="self-improve",
     description=(
