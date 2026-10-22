@@ -36,11 +36,15 @@ def _acquire(reason: str):
         # Execution state belongs to the calling thread. Scheduler fires and
         # their finally blocks run on the same asyncio event-loop thread.
         set_state = ctypes.windll.kernel32.SetThreadExecutionState
-        if not set_state(0x80000000 | 0x00000001):
+        # EXECUTION_STATE is a DWORD, including the high ES_CONTINUOUS bit.
+        set_state.argtypes = [ctypes.c_uint32]
+        set_state.restype = ctypes.c_uint32
+        # Win32 documents NULL (zero) as failure, not INVALID_HANDLE_VALUE.
+        if set_state(0x80000000 | 0x00000001) == 0:
             raise OSError("SetThreadExecutionState failed")
 
         def release():
-            if not set_state(0x80000000):
+            if set_state(0x80000000) == 0:
                 raise OSError("SetThreadExecutionState reset failed")
 
         return release

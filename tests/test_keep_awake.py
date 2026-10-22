@@ -1,6 +1,7 @@
 """Sleep inhibitors use fake backends: never inhibit the test host's sleep."""
 
 import asyncio
+import ctypes
 import logging
 import os
 from types import SimpleNamespace
@@ -130,14 +131,38 @@ def test_process_backend(monkeypatch, platform):
     process.wait.assert_called_once_with(timeout=1)
 
 
-def test_windows_backend(monkeypatch):
+def test_windows_backend(monkeypatch, caplog):
     monkeypatch.setattr(keep_awake.sys, "platform", "win32")
-    state = Mock(return_value=1)
+    state = Mock(side_effect=[0x80000000, 0x80000001])
     monkeypatch.setattr(keep_awake.ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(
         SetThreadExecutionState=state)), raising=False)
     with keep_awake.hold("test"):
         state.assert_called_once_with(0x80000001)
+        assert state.argtypes == [ctypes.c_uint32]
+        assert state.restype is ctypes.c_uint32
     assert [call.args for call in state.call_args_list] == [(0x80000001,), (0x80000000,)]
+    assert not keep_awake._warned
+    assert not caplog.records
+
+
+@pytest.mark.parametrize("fail_on_release", [False, True])
+def test_windows_null_failure_is_logged_once(monkeypatch, caplog, fail_on_release):
+    monkeypatch.setattr(keep_awake.sys, "platform", "win32")
+    results = [0x80000000, 0] if fail_on_release else [0]
+    state = Mock(side_effect=results * 2)
+    monkeypatch.setattr(keep_awake.ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(
+        SetThreadExecutionState=state)), raising=False)
+    with caplog.at_level(logging.INFO):
+        for _ in range(2):
+            with keep_awake.hold("test"):
+                assert keep_awake._users == 1
+    expected = [(0x80000001,), (0x80000000,)] if fail_on_release else [(0x80000001,)]
+    assert [call.args for call in state.call_args_list] == expected * 2
+    assert len(caplog.records) == 1
+    message = "SetThreadExecutionState reset failed" if fail_on_release else "SetThreadExecutionState failed"
+    assert message in caplog.records[0].message
+    assert keep_awake._users == 0
+    assert keep_awake._release is None
 
 
 def test_release_failure_does_not_mask_run_error(monkeypatch):
