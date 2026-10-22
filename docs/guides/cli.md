@@ -54,6 +54,7 @@ then exits:
 | `protoagent workspace new` · `ls` · `run` · `rm` | Named, isolated agents on one host. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent fleet ls` · `up` · `down` · `new` · `rm` · `rename` · `remote add\|edit\|rm` · `pair` · `order` | Inspect, run and **manage** fleet **member** agents — **live from the running hub** when one answers, from this instance's `fleet.json` (through the `ops/` layer) otherwise (see below). `--json` on each. | [0042](../adr/0042-fleet-supervisor-unified-console.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent fleet friction` · `friction resolve <id>` | Read **every member's friction ledger** through the hub (`--kind`, `--severity major`, `--since 7d`, `--agent`, `--resolved`, `--raw`, `-v`, `--json`) — ranked worst-first, with signals several agents hit called out and unreadable members named. `resolve` stamps a signal fixed on the agents you name (`--agent`, or `--all-agents`; `--reason`, `--reopen`). Live hub only. | [friction log](friction-log.md#across-the-fleet-from-the-terminal) |
+| `protoagent usage [--account ID] [--fleet] [--warn-at PCT] [--json]` | **Subscription usage** for the native-OAuth providers (Claude, Codex) — per account and per window (used %, reset countdown, status; scoped windows labelled by model). Reads this instance's `/api/usage`; `--fleet` reads every member through the hub, deduped by account. Exit `2` when any window is ≥ `--warn-at` (default 80), `0` otherwise, `1` with no server/hub. See [below](#subscription-usage-protoagent-usage). | [0122](../adr/0122-subscription-usage-model-and-routing.md) |
 | `protoagent fleet --all` | The **hub tree**: every hub on this box (heartbeats, instance roots with a fleet, listeners by port) probed for its version and member counts, plus peers found on the network. `--offline` skips the scan and the probes. Not a member command: it never reads one hub's fleet. | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | `protoagent pair` | Print a **one-time code** another agent's hub claims to pair with the protoAgent running on this machine — the headless half of agent pairing (see below). `--device` pairs a **phone** instead: code, console URL and a terminal QR. `--json` for scripts. | [0113](../adr/0113-agent-pairing-for-remote-fleet-members.md) |
 | `protoagent skills ls` · `promote <name>` | Inspect and curate the SKILL.md library. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
@@ -206,6 +207,77 @@ On a loopback-bound instance it exits 1 and explains the fix, the same as `proto
 On a `--ui none` instance it exits 1 with *Restart it with --ui console (the default) to
 pair a phone*: there is no console for the phone to open, so the instance makes no code.
 See [Pair a phone by typing the code](./pairing.md#pair-a-phone-by-typing-the-code).
+
+### Subscription usage: `protoagent usage` {#subscription-usage-protoagent-usage}
+
+`protoagent usage` shows how much of each native-OAuth subscription (Claude, Codex) is
+spent — the same numbers the console renders, read from the running instance's
+`GET /api/usage` ([ADR 0122](../adr/0122-subscription-usage-model-and-routing.md)). It
+resolves no tokens and polls no provider itself: it reaches the live server exactly as
+`protoagent fleet` reaches a hub (discovery, then the hub's credential; `--hub` / `--token`
+/ `--insecure-http` to pick one explicitly). It is read-only and operator-authenticated.
+
+```bash
+protoagent usage                        # this instance — one row per account, per window
+protoagent usage --account anthropic-oauth   # one provider id (or account key)
+protoagent usage --fleet                # every member through the hub, deduped by account
+protoagent usage --warn-at 90           # exit 2 if any window is ≥ 90% used
+protoagent usage --json | jq '.accounts[].windows[] | select(.over_warn)'
+```
+
+Each row is one **window** of one **account**: provider, plan, the window (a scoped window
+is labelled `kind·model`, e.g. `weekly·opus`), used %, the reset countdown, and status
+(`ok` / `warning` / `blocked`, or `unknown` for a disconnected or stale account). A `!`
+after the used % marks a window at or above `--warn-at`. With `--fleet`, accounts reported
+by more than one member are collapsed to a single row that lists those members, and a member
+that cannot be read is named as unreachable on stderr without hiding the others.
+
+**Exit code:** `2` when any window is at or above `--warn-at` (default `80`), `0` otherwise,
+and `1` when no server (or, with `--fleet`, no hub) answered — so a cron can alert on `2`.
+
+**`--json` schema** (stable; keys are always present):
+
+```json
+{
+  "mode": "local",                     // "local" or "fleet"
+  "ok": true,                          // false only when nothing answered (exit 1)
+  "hub": "http://127.0.0.1:7870",      // the server/hub read, or null
+  "warn_at": 80.0,                     // the --warn-at threshold in effect
+  "warn_hit": false,                   // any window used_pct >= warn_at (drives exit 2)
+  "error": null,                       // the reason when ok is false, else null
+  "accounts": [
+    {
+      "provider_id": "anthropic-oauth",
+      "provider_type": "anthropic-oauth",
+      "account_key": "acct-1",         // null when the provider gave none
+      "plan": "pro",                   // null when unknown
+      "status": "ok",                  // "ok" or "unknown"
+      "stale": false,                  // last-known data, not a fresh poll
+      "error": null,                   // why the account is unknown, else null
+      "members": ["host", "scout"],    // --fleet: who reported it; [] in local mode
+      "windows": [
+        {
+          "id": "session",
+          "kind": "session",           // session | weekly | monthly | other
+          "label": "weekly·opus",      // kind, or kind·model for a scoped window
+          "scope": {"model": "opus"},  // null when the window is not scoped
+          "used_pct": 42.0,            // null when the provider gave none
+          "status": "ok",              // ok | warning | blocked
+          "resets_at": "2026-10-23T12:00:00+00:00",   // null when unknown
+          "resets_in_seconds": 7980,   // null when resets_at is absent/past-parse
+          "resets_in": "2h13m",        // compact countdown; "now" past reset, "—" when absent
+          "window_seconds": 18000,     // the window length, or null
+          "binding": false,            // the window the provider enforces first
+          "over_warn": false           // used_pct >= warn_at
+        }
+      ]
+    }
+  ],
+  "unreachable": [                     // --fleet: members that could not be read
+    {"member": "beta", "slug": "beta-2", "error": "stopped"}
+  ]
+}
+```
 
 ### Point at a local model
 
