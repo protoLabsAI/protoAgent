@@ -32,6 +32,7 @@ from a2a_impl.hosts import cross_site_refusal as _cross_site_refusal
 from a2a_impl.hosts import host_allowed as _host_allowed
 from a2a_impl.hosts import origin_allowed as _origin_allowed
 from graph.fleet import supervisor
+from infra.access_log_redact import redact as _redact_media
 
 log = logging.getLogger("protoagent.server")
 
@@ -332,8 +333,12 @@ async def _forward_to_base(
     except httpx.ReadTimeout:
         # Accepted the connection, then went silent. Answer instead of parking the socket —
         # a parked one is what let a busy member exhaust the browser's per-origin connection
-        # cap and freeze the console (#2590). 504 so the panel can render a real error.
-        log.warning("[fleet] proxied %s %s timed out waiting for the agent to respond", request.method, url)
+        # cap and freeze the console (#2590). 504 so the panel can render a real error. The URL
+        # is redacted (#4446 item 1): a proxied signed-media link would otherwise log a replayable
+        # ``sig`` here, so it rides through the one core media redactor before it reaches the log.
+        log.warning(
+            "[fleet] proxied %s %s timed out waiting for the agent to respond", request.method, _redact_media(url)
+        )
         return JSONResponse({"detail": "agent did not respond in time"}, status_code=504)
 
     if ticket_binding is not None and 200 <= upstream.status_code < 300:
@@ -383,7 +388,9 @@ async def _forward_to_base(
                         await queue.put(chunk)
                 except httpx.ReadTimeout:
                     log.warning(
-                        "[fleet] proxied %s %s stalled mid-response — closing the stream", request.method, url
+                        "[fleet] proxied %s %s stalled mid-response — closing the stream",
+                        request.method,
+                        _redact_media(url),
                     )
                 except Exception:  # noqa: BLE001 — reader end = stream end; the finally closes upstream
                     pass
@@ -408,7 +415,9 @@ async def _forward_to_base(
         except httpx.ReadTimeout:
             # Stalled mid-body (non-SSE lane). The status line is already sent, so the only
             # honest signal left is to end the response rather than hold the connection open.
-            log.warning("[fleet] proxied %s %s stalled mid-response — closing the stream", request.method, url)
+            log.warning(
+                "[fleet] proxied %s %s stalled mid-response — closing the stream", request.method, _redact_media(url)
+            )
         finally:
             await upstream.aclose()  # close the response, not the shared client
 
@@ -558,13 +567,17 @@ async def _forward_chat_detach(slug, base, request, path, extra, drop_params, bo
     except (httpx.ConnectError, httpx.ConnectTimeout):
         return JSONResponse({"detail": "agent is not reachable"}, status_code=502)
     except httpx.ReadTimeout:
-        log.warning("[fleet] proxied POST %s/%s timed out submitting the turn", base, path)
+        # Redact the upstream URL (#4446 item 1): a signed-media path proxied here would otherwise
+        # log a replayable ``sig``. The body and any bearer are never logged — only this URL.
+        log.warning("[fleet] proxied POST %s timed out submitting the turn", _redact_media(f"{base}/{path}"))
         return JSONResponse({"detail": "agent did not respond in time"}, status_code=504)
     except httpx.HTTPError as exc:
         # No turn id yet (the submit itself failed), so there is nothing to poll — answer the
         # honest 502 a sync call gives for a dropped connection rather than letting any other
         # httpx error (ReadError/RemoteProtocolError/PoolTimeout/…) escape as a generic hub 500.
-        log.warning("[fleet] proxied POST %s/%s failed submitting the turn (%s)", base, path, type(exc).__name__)
+        log.warning(
+            "[fleet] proxied POST %s failed submitting the turn (%s)", _redact_media(f"{base}/{path}"), type(exc).__name__
+        )
         return JSONResponse({"detail": "agent is not reachable"}, status_code=502)
 
     if submitted.status_code != 202:

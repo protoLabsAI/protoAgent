@@ -61,6 +61,30 @@ class JsonFormatter(logging.Formatter):
 # pytest's caplog or a host application, breaking log capture / their routing).
 _handler: logging.Handler | None = None
 
+# Third-party HTTP-client loggers that print a request's FULL URL at INFO: httpx emits
+# ``HTTP Request: GET <url> "HTTP/1.1 200 OK"`` and httpcore traces the connection the same
+# way. The hub proxies signed media links (``…/media/?exp=…&sig=…``, ``…/agents/<slug>/media/?sig=…``)
+# whose ``sig`` is a REPLAYABLE credential, so one of those INFO lines leaks it straight into any
+# log sink / the in-process ring (#4446 item 1, follow-up to #4427). Pinned to at least WARNING at
+# logging setup so the request lines never reach a sink, while genuine httpx/httpcore warnings and
+# errors (connect refused, pool exhaustion, protocol faults) still surface as useful diagnostics.
+_SECRET_URL_LOGGERS = ("httpx", "httpcore")
+
+
+def _quiet_secret_url_loggers(root_level: int) -> None:
+    """Raise httpx/httpcore to at least WARNING so their INFO request lines — which carry a
+    replayable media ``sig`` whenever the hub proxies a signed link — never reach a log sink.
+
+    The floor is WARNING even under ``LOG_LEVEL=DEBUG``: a signed URL must not be logged at ANY
+    level, and an operator who truly needs httpx wire debug raises these loggers back by hand. A
+    QUIETER root (``LOG_LEVEL=WARNING``/``ERROR``) is honored, so these loggers are never noisier
+    than the rest of the process. uvicorn's own ``dictConfig`` leaves them untouched (it only
+    configures ``uvicorn*`` and does not disable existing loggers), so this level survives startup.
+    """
+    floor = max(logging.WARNING, root_level)
+    for name in _SECRET_URL_LOGGERS:
+        logging.getLogger(name).setLevel(floor)
+
 # ---------------------------------------------------------------------------
 # Bounded in-process log buffer (#3168)
 # ---------------------------------------------------------------------------
@@ -221,3 +245,8 @@ def configure_logging() -> None:
 
     root.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())
     _handler = handler
+
+    # Keep replayable signed-media URLs out of the log: httpx/httpcore log a request's full URL
+    # at INFO, and the hub proxies signed ``/media/?sig=…`` links (#4446 item 1). Pin them to at
+    # least WARNING so the request lines never reach a sink, while their real warnings/errors do.
+    _quiet_secret_url_loggers(root.level)
