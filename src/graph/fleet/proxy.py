@@ -527,7 +527,10 @@ async def _forward_chat_detach(slug, base, request, path, extra, drop_params, bo
     ``_DETACHED_POLL_S`` on the bounded read lane until the turn is terminal or
     ``_DETACHED_TURN_MAX_S`` elapses, and answers its caller in the shape a sync /api/chat
     returns — 200 ``{response, messages, session_id}``; the sync error envelope for
-    failed/canceled; 504 naming the turn (and a hub-side poll URL) at the ceiling.
+    failed/canceled; 504 naming the turn (and a hub-side poll URL) at the ceiling. A transport
+    error on any single poll (or a 200 body that isn't a JSON object) is treated as a slow poll
+    and retried — the turn runs on the member, so one failed poll never aborts the proxy and
+    strands it; only a non-200 answer the caller should see (404/422) or the ceiling ends the loop.
 
     A member that answers 200 (an older core that ignores ``detach``) is passed through
     unchanged. If the hub's OWN client disconnects while polling, polling stops and the hub
@@ -557,6 +560,12 @@ async def _forward_chat_detach(slug, base, request, path, extra, drop_params, bo
     except httpx.ReadTimeout:
         log.warning("[fleet] proxied POST %s/%s timed out submitting the turn", base, path)
         return JSONResponse({"detail": "agent did not respond in time"}, status_code=504)
+    except httpx.HTTPError as exc:
+        # No turn id yet (the submit itself failed), so there is nothing to poll — answer the
+        # honest 502 a sync call gives for a dropped connection rather than letting any other
+        # httpx error (ReadError/RemoteProtocolError/PoolTimeout/…) escape as a generic hub 500.
+        log.warning("[fleet] proxied POST %s/%s failed submitting the turn (%s)", base, path, type(exc).__name__)
+        return JSONResponse({"detail": "agent is not reachable"}, status_code=502)
 
     if submitted.status_code != 202:
         return _passthrough(submitted)  # old core answered the turn inline, or rejected the request
@@ -586,18 +595,29 @@ async def _forward_chat_detach(slug, base, request, path, extra, drop_params, bo
             return JSONResponse({"detail": "client disconnected"}, status_code=499)
         try:
             poll = await client.send(client.build_request("GET", poll_url, headers=headers, timeout=_READ_TIMEOUT))
-        except (httpx.ConnectError, httpx.ConnectTimeout):
-            return JSONResponse({"detail": "agent is not reachable"}, status_code=502)
-        except httpx.ReadTimeout:
-            poll = None  # a single slow poll: fall through to the ceiling check and retry
+        except httpx.HTTPError as exc:
+            # The turn is already running detached on the member, so a transport error on ONE poll
+            # must never abort the proxy and strand it: not a ReadTimeout, and not any of the other
+            # httpx failures a long poll string hits (ConnectError/ConnectTimeout, ReadError,
+            # RemoteProtocolError on a dropped keep-alive, PoolTimeout, WriteError, …). Surfacing
+            # one as a hub 500, or as a bare 502 with no turn id, is the EXACT failure this lane
+            # removes — the member keeps working but the caller loses the id to recover it. Treat
+            # every poll error as a single slow poll: log by type (never the bearer or body), fall
+            # through to the ceiling check, and retry. If the member never answers again the ceiling
+            # hands the caller the poll URL to resume; nothing in the loop becomes a hub 5xx.
+            log.info("[fleet] poll of detached turn %s failed (%s) — retrying", turn_id, type(exc).__name__)
+            poll = None
         if poll is not None:
             if poll.status_code != 200:
                 return _passthrough(poll)  # unknown/expired turn (404), bad session (422), …
             try:
                 state_data = json.loads(poll.content)
-                state = state_data.get("state")
             except (ValueError, TypeError):
-                state = None
+                state_data = None
+            # A 200 body that parsed but is not an object (a bare list / string / null) carries no
+            # state we can read — ``.get`` on it would raise AttributeError and escape as a hub 500.
+            # Treat it like an unfinished poll and retry, same as a transport error above.
+            state = state_data.get("state") if isinstance(state_data, dict) else None
             if state == "completed":
                 return JSONResponse(
                     {

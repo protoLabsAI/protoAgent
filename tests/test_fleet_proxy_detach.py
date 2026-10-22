@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 
 from graph.fleet import proxy
@@ -64,7 +65,9 @@ class FakeClient:
     caller left, any other POST is the submit, and every GET is a poll (the last poll response
     is reused once the script runs out, so an always-"working" member is easy to model). Records
     every built request for assertions on the forwarded body / poll URL / Stop. ``cancel_exc``
-    makes the Stop raise, to exercise the best-effort swallow."""
+    makes the Stop raise, to exercise the best-effort swallow. A poll entry that is an exception
+    instance (not a ``FakeResponse``) is RAISED when that poll is sent, to model a transport
+    error mid-string (httpx.ReadError / RemoteProtocolError / PoolTimeout / …)."""
 
     def __init__(self, submit, polls, cancel_exc=None):
         self._submit = submit
@@ -94,6 +97,8 @@ class FakeClient:
             return self._submit
         resp = self._polls[min(self._poll_i, len(self._polls) - 1)]
         self._poll_i += 1
+        if isinstance(resp, BaseException):
+            raise resp
         return resp
 
     def posts(self):
@@ -416,6 +421,92 @@ async def test_non_200_poll_is_passed_through(monkeypatch):
     req = FakeRequest(method="POST", body=json.dumps({"message": "hi"}).encode())
     resp = await proxy.forward_to("alice", req, "api/chat")
     assert resp.status_code == 404
+
+
+# --- a transient transport error on a poll is retried, never a hub 5xx -------
+#
+# Review (#4277 slice 2): the turn is already running detached on the member, so a transport
+# error on ONE of up to ~1800 polls must not abort the proxy and strand the turn. The old loop
+# caught only ConnectError/ConnectTimeout (→ bare 502) and ReadTimeout; anything else escaped as
+# a generic hub 500, and the 502 carried no turn id to recover with.
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.ReadError("connection reset"),
+        httpx.RemoteProtocolError("server disconnected"),
+        httpx.PoolTimeout("no connection free"),
+        httpx.WriteError("broken pipe"),
+        httpx.ConnectError("connection refused"),
+        httpx.ReadTimeout("slow poll"),
+    ],
+)
+async def test_transient_poll_error_is_retried_then_completes(monkeypatch, exc):
+    """Any httpx transport error on a single poll is treated as a slow poll and retried — the
+    turn still completes 200, never a hub 5xx that loses the running turn."""
+    _local(monkeypatch)
+    monkeypatch.setattr(proxy, "_DETACHED_POLL_S", 0)
+    submit = FakeResponse(202, {"turn_id": "t1", "session_id": "s1"})
+    polls = [
+        FakeResponse(200, {"state": "working"}),
+        exc,  # one poll blows up mid-string
+        FakeResponse(200, {"state": "completed", "response": "ok", "messages": []}),
+    ]
+    client = FakeClient(submit, polls)
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+
+    req = FakeRequest(method="POST", body=json.dumps({"message": "hi"}).encode())
+    resp = await proxy.forward_to("alice", req, "api/chat")
+
+    assert resp.status_code == 200  # the failed poll did not abort the proxy
+    assert json.loads(resp.body)["response"] == "ok"
+    assert len(client.gets()) == 3  # working → (error, retried) → completed
+
+
+async def test_persistent_poll_error_hits_ceiling_with_recovery_url(monkeypatch):
+    """When polls keep failing with a transport error right up to the ceiling, the caller still
+    gets the recoverable 504 (turn id + hub poll URL) — never a bare 502/500 that drops the turn."""
+    _local(monkeypatch)
+    monkeypatch.setattr(proxy, "_DETACHED_POLL_S", 0)
+    monkeypatch.setattr(proxy, "_DETACHED_TURN_MAX_S", 5)
+    ticks = iter([0.0, 2.0, 6.0])  # deadline=5; the third read trips it
+    monkeypatch.setattr(proxy, "_now", lambda: next(ticks))
+    submit = FakeResponse(202, {"turn_id": "t9", "session_id": "s9"})
+    client = FakeClient(submit, [httpx.ReadError("connection reset")])  # every poll fails
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+
+    req = FakeRequest(method="POST", body=json.dumps({"message": "hi"}).encode())
+    resp = await proxy.forward_to("ava", req, "api/chat")
+
+    assert resp.status_code == 504  # NOT 502/500 — the turn is recoverable
+    body = json.loads(resp.body)
+    assert body["turn_id"] == "t9"
+    assert body["poll_url"] == "/agents/ava/api/chat/sessions/s9/turns/t9"
+    assert client.cancels() == []  # the caller stayed connected; the member turn is not stopped
+
+
+async def test_non_dict_200_poll_body_is_retried_then_completes(monkeypatch):
+    """A 200 poll whose JSON is valid but not an object (a bare list / string) has no state to
+    read — ``.get`` on it would raise AttributeError and escape as a hub 500. It is treated as an
+    unfinished poll and retried, and the turn still completes."""
+    _local(monkeypatch)
+    monkeypatch.setattr(proxy, "_DETACHED_POLL_S", 0)
+    submit = FakeResponse(202, {"turn_id": "t1", "session_id": "s1"})
+    polls = [
+        FakeResponse(200, [1, 2, 3]),            # a JSON array, not an object
+        FakeResponse(200, b'"still working"'),   # a bare JSON string
+        FakeResponse(200, {"state": "completed", "response": "ok", "messages": []}),
+    ]
+    client = FakeClient(submit, polls)
+    monkeypatch.setattr(proxy, "_get_client", lambda: client)
+
+    req = FakeRequest(method="POST", body=json.dumps({"message": "hi"}).encode())
+    resp = await proxy.forward_to("alice", req, "api/chat")
+
+    assert resp.status_code == 200  # the unreadable bodies did not become a 500
+    assert json.loads(resp.body)["response"] == "ok"
+    assert len(client.gets()) == 3  # both non-object bodies were retried, not surfaced
 
 
 # --- a non-POST / non-api-chat request is untouched by the detach lane -------
