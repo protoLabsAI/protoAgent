@@ -838,6 +838,12 @@ def _on_chat_model_stream(st: _TurnStreamState, event: dict, name: str, parent_t
 
 def _on_chat_model_end(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -> _Frames:
     output = event.get("data", {}).get("output")
+    try:
+        from graph.providers.usage.headers import capture
+
+        capture("openai-codex", getattr(output, "response_metadata", {}).get("headers", {}))
+    except Exception:  # telemetry must never interrupt a turn
+        pass
     # Terminate any streamed tool-arg preview for this model call (ADR 0118 D3) with a
     # final done frame — also covering a model that delivered the args only at end. The
     # lead's own call only, mirroring where the previews are produced.
