@@ -333,6 +333,8 @@ def save_file_artifact(
     don't pass ``artifact_id`` with ``link=True``, and don't try to revise a linked artifact
     (save it without ``link`` for an editable, versioned copy). The 25 MB ``max_blob_kb`` cap does
     not apply; a linked file has its own, larger ``max_linked_kb`` cap (200 MB default).
+    Downloads and media previews recheck the live project fence and saved file stamp; if the
+    source changes or disappears, save a new linked artifact to make it available again.
     """
     if link and artifact_id:
         return (
@@ -530,7 +532,7 @@ def _save_file(
 # ── linked file artifacts (ADR 0092 D2 extension, #4370) ─────────────────────────────
 # A LINKED version stores no blob — only a fenced (project, project-relative path) reference
 # plus a size/mtime/sha256 stamp. It serves the document in place from the registered project
-# (re-resolved through the live fence when served, card 2), is read-only, and keeps no history.
+# (re-resolved through the live fence when served), is read-only, and keeps no history.
 
 
 def _project_for(registry, p: Path, prefer: str = "") -> tuple[str, str] | None:

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import json
 import logging
 import os
 from pathlib import Path
 from urllib.parse import quote
 
-from . import _config, _media, _render_status, _shell, _store
+from . import _config, _links, _media, _render_status, _shell, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
@@ -16,8 +18,46 @@ _BLOB_CHUNK = 64 * 1024  # bytes per body message when streaming a blob download
 _BLOB_RESOLVE_TRIES = 5  # store re-reads when the blob a read named was swept before it could be opened
 
 
+def _open_linked(link: dict, meta: dict):
+    """Open a reference through the live fence; refuse unavailable or changed source bytes.
+
+    Validate the opened handle before returning it, and stream that same handle. The
+    reference digest also binds media tickets without inventing a sidecar blob.
+    """
+    from fastapi import HTTPException
+    from tools.fs_view import open_regular
+
+    fh = None
+    try:
+        registry = _links._registry()
+        if registry is None:
+            raise ValueError("no filesystem registry")
+        project, rel = link["project"], link["path"]
+        target = registry.resolve(project, rel)
+        fh = open_regular(target)
+        before = os.fstat(fh.fileno())
+        if before.st_size > _config._max_linked_bytes():
+            raise ValueError("linked file exceeds cap")
+        if (before.st_size, before.st_mtime_ns) != (link["size"], link["mtime_ns"]):
+            raise ValueError("linked file changed")
+        digest = hashlib.file_digest(fh, "sha256").hexdigest()
+        # Re-check containment and identity after opening/reading, including parent swaps.
+        current = registry.resolve(project, rel).stat()
+        if not os.path.samestat(before, current) or digest != link["sha256"]:
+            raise ValueError("linked file changed")
+        if (current.st_size, current.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+            raise ValueError("linked file changed")
+        fh.seek(0)
+        identity = "link:" + hashlib.sha256(json.dumps(link, sort_keys=True).encode()).hexdigest()
+        return fh, meta, identity
+    except (OSError, ValueError, KeyError, TypeError):
+        if fh is not None:
+            fh.close()
+        raise HTTPException(404, "linked file unavailable or changed") from None
+
+
 def _open_blob(art_id: str, version: int):
-    """Resolve a `file` artifact version to its sidecar blob and OPEN it: ``(file, meta, name)``.
+    """Resolve a `file` artifact version to its blob or fenced reference and OPEN it: ``(file, meta, name)``.
 
     The blob is opened HERE, before any byte is sent, and the download streams from that handle
     (``_open_file_response``) — never re-opened by path at send time. The store is read without
@@ -49,6 +89,8 @@ def _open_blob(art_id: str, version: int):
             idx = len(vers) - 1
         v = vers[idx]
         blob_name, meta = v.get("blob"), v.get("file") or {}
+        if art.get("linked") is True and isinstance(v.get("link"), dict):
+            return _open_linked(v["link"], meta)
         if not blob_name:
             raise HTTPException(404, "not a file artifact / no stored blob")
         if blob_name in missing:  # the store still names it, and it isn't on disk
@@ -227,7 +269,7 @@ def _build_view_router():
         except HTTPException:
             return Response(status_code=404)
         mt = _media.media_type(meta)
-        # The version at this index must still hold the MINTED blob: a version-cap trim shifts
+        # The version at this index must still hold the MINTED blob/reference: a version-cap trim shifts
         # indices, and a ticket for v1 must never start serving what is now v1 (an older v2).
         if mt is None or name != granted:
             fh.close()
@@ -502,11 +544,16 @@ def _build_data_router():
         if version and not (1 <= version <= len(vers)):
             raise HTTPException(404, f"no version {version} (have 1..{len(vers)})")
         n = version or len(vers)
-        if not n or not vers[n - 1].get("blob"):
+        if not n or not (vers[n - 1].get("blob") or art.get("linked") is True):
             raise HTTPException(404, "not a file artifact / no stored blob")
         if _media.media_kind(vers[n - 1].get("file") or {}) is None:
             raise HTTPException(415, "not an inline image/video file")
-        tok = _media.mint(art_id, n, _store._blob_path(art_id, vers[n - 1]["blob"]).name)
+        if art.get("linked") is True:
+            fh, _, identity = _open_blob(art_id, n)
+            fh.close()
+        else:
+            identity = _store._blob_path(art_id, vers[n - 1]["blob"]).name
+        tok = _media.mint(art_id, n, identity)
         return {"ticket": tok, "version": n, "path": f"/plugins/artifact/media/{quote(art_id)}?version={n}&t={tok}"}
 
     @router.delete("/artifact/{art_id}")
