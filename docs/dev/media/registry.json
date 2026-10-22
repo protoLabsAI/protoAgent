@@ -522,6 +522,11 @@
       "decision": "text",
       "reason": "Keep searchable signatures, fields, and examples in text; illustrate the related task guide instead of duplicating captures."
     },
+    "reference/hitl-display.md": {
+      "journey": "reference",
+      "decision": "text",
+      "reason": "Keep the display schema, bounds, and producer contract searchable; browser proof captures are generated as Playwright attachments, not published documentation media."
+    },
     "reference/extensions.md": {
       "journey": "reference",
       "decision": "text",
