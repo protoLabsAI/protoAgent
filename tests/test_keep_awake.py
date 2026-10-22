@@ -1,0 +1,167 @@
+"""Sleep inhibitors use fake backends: never inhibit the test host's sleep."""
+
+import asyncio
+import logging
+import os
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+
+from infra import keep_awake
+from scheduler.local import LocalScheduler
+
+pytestmark = pytest.mark.platform_sensitive
+
+
+@pytest.fixture(autouse=True)
+def isolated(monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_KEEP_AWAKE", "1")
+    monkeypatch.setattr(keep_awake, "_users", 0)
+    monkeypatch.setattr(keep_awake, "_release", None)
+    monkeypatch.setattr(keep_awake, "_warned", False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+async def test_fire_releases(monkeypatch, tmp_path, outcome):
+    release = Mock()
+    acquire = Mock(return_value=release)
+    monkeypatch.setattr(keep_awake, "_acquire", acquire)
+    scheduler = LocalScheduler("test", invoke_url="http://unused", db_dir=tmp_path)
+    scheduler._settle_cron_expiry = Mock()
+    job = SimpleNamespace(id="job")
+    scheduler._inflight_ids.add(job.id)
+
+    async def fire(job):
+        acquire.assert_called_once_with("scheduled run job")
+        release.assert_not_called()
+        if outcome == "error":
+            raise ValueError("failed")
+        if outcome == "cancel":
+            raise asyncio.CancelledError()
+        return True
+
+    monkeypatch.setattr(scheduler, "_fire", fire)
+    if outcome == "success":
+        await scheduler._fire_and_settle(job, True)
+    else:
+        with pytest.raises(ValueError if outcome == "error" else asyncio.CancelledError):
+            await scheduler._fire_and_settle(job, True)
+    release.assert_called_once_with()
+    assert not scheduler._inflight_ids
+
+
+@pytest.mark.asyncio
+async def test_overlapping_fires(monkeypatch, tmp_path):
+    release = Mock()
+    acquire = Mock(return_value=release)
+    monkeypatch.setattr(keep_awake, "_acquire", acquire)
+    scheduler = LocalScheduler("test", invoke_url="http://unused", db_dir=tmp_path)
+    scheduler._settle_cron_expiry = Mock()
+    entered = [asyncio.Event(), asyncio.Event()]
+    finish = [asyncio.Event(), asyncio.Event()]
+
+    async def fire(job):
+        entered[job.id].set()
+        await finish[job.id].wait()
+        return True
+
+    monkeypatch.setattr(scheduler, "_fire", fire)
+    tasks = [asyncio.create_task(scheduler._fire_and_settle(SimpleNamespace(id=i), True)) for i in range(2)]
+    try:
+        await asyncio.gather(*(event.wait() for event in entered))
+        acquire.assert_called_once()
+        finish[0].set()
+        await tasks[0]
+        release.assert_not_called()
+        finish[1].set()
+        await tasks[1]
+        release.assert_called_once()
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
+def test_backend_failure_is_logged_once(monkeypatch, caplog, platform):
+    monkeypatch.setattr(keep_awake.sys, "platform", platform)
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", Mock(side_effect=FileNotFoundError("missing")))
+    monkeypatch.setattr(keep_awake.ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(
+        SetThreadExecutionState=Mock(side_effect=OSError("ctypes failure")))), raising=False)
+    with caplog.at_level(logging.INFO):
+        for _ in range(2):
+            with keep_awake.hold("test"):
+                pass
+    assert len(caplog.records) == 1
+    assert keep_awake._users == 0
+
+
+def test_disabled(monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_KEEP_AWAKE", "0")
+    acquire = Mock()
+    monkeypatch.setattr(keep_awake, "_acquire", acquire)
+    with keep_awake.hold("test"):
+        pass
+    acquire.assert_not_called()
+
+
+def test_desktop_default(monkeypatch):
+    monkeypatch.delenv("PROTOAGENT_KEEP_AWAKE")
+    monkeypatch.delenv("PROTOAGENT_PARENT_PID", raising=False)
+    assert not keep_awake._enabled()
+    monkeypatch.setenv("PROTOAGENT_PARENT_PID", "123")
+    assert keep_awake._enabled()
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_process_backend(monkeypatch, platform):
+    monkeypatch.setattr(keep_awake.sys, "platform", platform)
+    process = Mock()
+    spawn = Mock(return_value=process)
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
+    with keep_awake.hold("test"):
+        process.terminate.assert_not_called()
+    expected = (["caffeinate", "-i", "-w", str(os.getpid())] if platform == "darwin" else
+                ["systemd-inhibit", "--what=sleep", "--why=test", "--mode=block", "sleep", "infinity"])
+    assert spawn.call_args.args[0] == expected
+    process.terminate.assert_called_once()
+    process.wait.assert_called_once_with(timeout=1)
+
+
+def test_windows_backend(monkeypatch):
+    monkeypatch.setattr(keep_awake.sys, "platform", "win32")
+    state = Mock(return_value=1)
+    monkeypatch.setattr(keep_awake.ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(
+        SetThreadExecutionState=state)), raising=False)
+    with keep_awake.hold("test"):
+        state.assert_called_once_with(0x80000001)
+    assert [call.args for call in state.call_args_list] == [(0x80000001,), (0x80000000,)]
+
+
+def test_release_failure_does_not_mask_run_error(monkeypatch):
+    monkeypatch.setattr(keep_awake, "_acquire", Mock(return_value=Mock(side_effect=OSError("release"))))
+    with pytest.raises(ValueError, match="run"):
+        with keep_awake.hold("test"):
+            raise ValueError("run")
+    assert keep_awake._users == 0
+
+
+@pytest.mark.asyncio
+async def test_backend_failure_does_not_interrupt_fire(monkeypatch, tmp_path):
+    monkeypatch.setattr(keep_awake, "_acquire", Mock(side_effect=FileNotFoundError("missing")))
+    scheduler = LocalScheduler("test", invoke_url="http://unused", db_dir=tmp_path)
+    settled = Mock()
+    monkeypatch.setattr(scheduler, "_settle_cron_expiry", settled)
+    fired = []
+
+    async def fire(job):
+        fired.append(job.id)
+        return True
+
+    monkeypatch.setattr(scheduler, "_fire", fire)
+    job = SimpleNamespace(id="job")
+    await scheduler._fire_and_settle(job, True)
+    assert fired == ["job"]
+    settled.assert_called_once_with(job)
