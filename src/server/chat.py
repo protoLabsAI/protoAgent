@@ -43,6 +43,7 @@ from graph.output_format import extract_output
 from runtime import turn_activity as _turn_activity
 from runtime.state import STATE
 from runtime import local_turns
+from server import hitl_display as _hitl_display
 from server import turn_telemetry as _turn_telemetry
 
 # The ACP runtime registry + turn driving moved to server/chat_acp.py (#3828). The
@@ -587,18 +588,50 @@ def _interrupt_payload(val) -> dict:
 
     An unrecognised dict still reads as prose: its ``prompt``/``message``/``text`` becomes
     the question and its ``title`` the card's heading. Only a dict with no text at all
-    shows as JSON. It used to be ``str(dict)``, a Python repr with escaped newlines."""
+    shows as JSON. It used to be ``str(dict)``, a Python repr with escaped newlines.
+
+    A dict interrupt may also carry an optional ``display`` — inert render data beside the
+    prompt (ADR 0118), the only supported shape being a bounded ``table``. It's validated
+    host-side (``server/hitl_display.py``) and carried through on every dict path; an
+    invalid/unsupported/oversized one is dropped WITHOUT touching the pause's prose, options
+    or resume value. The caller's payload is copied, never mutated."""
     if isinstance(val, dict) and (val.get("question") or val.get("kind") in ("form", "approval")):
-        return val
+        return _carry_display(val)
     if isinstance(val, dict):
         text = next((val[k] for k in ("prompt", "message", "text") if isinstance(val.get(k), str) and val[k].strip()), "")
         if not text:
-            text = json.dumps(val, indent=2, ensure_ascii=False, default=str)
+            # Inert `display` data is never part of the unknown-client prose fallback — it
+            # rides only in the vetted slot below, so it's excluded from this JSON dump.
+            text = json.dumps(
+                {k: v for k, v in val.items() if k != "display"}, indent=2, ensure_ascii=False, default=str
+            )
         out = {"question": text}
         if isinstance(val.get("title"), str) and val["title"].strip():
             out["title"] = val["title"]
+        display = _hitl_display.validate_display(val.get("display"))
+        if display is not None:
+            out["display"] = display
         return out
     return {"question": (str(val) if val is not None else "Input required.")}
+
+
+def _carry_display(val: dict) -> dict:
+    """Return a recognised interrupt payload (question/form/approval) with its optional
+    ``display`` validated, without mutating the input.
+
+    A legacy payload (no ``display`` key) is returned VERBATIM — same object, same shape —
+    so its pre-change identity and decision contract are untouched. When a ``display`` is
+    present, the payload is shallow-copied and the validated bounded table (or nothing, if
+    it fails :func:`server.hitl_display.validate_display`) takes its place. Every other
+    field — ``question``/``kind``/``title``/``description``/``detail``/``steps``/``options``
+    and the resume shape — rides through unchanged."""
+    if "display" not in val:
+        return val
+    out = {k: v for k, v in val.items() if k != "display"}
+    display = _hitl_display.validate_display(val["display"])
+    if display is not None:
+        out["display"] = display
+    return out
 
 
 async def _pending_interrupt(config: dict):
