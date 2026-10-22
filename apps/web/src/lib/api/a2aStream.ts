@@ -562,15 +562,34 @@ export function textOffsetFromMeta(metadata?: ExtMetadata): number | null {
 }
 
 /** What the offsets were measured against (a2a_impl/executor.py TEXT_FINGERPRINT_META):
- *  the streamed text's UTF-16 length + FNV-1a hash, stamped on the terminal artifact. */
+ *  the streamed text's UTF-16 length + FNV-1a hash, stamped on the terminal artifact.
+ *  `v` is the fingerprint scheme: v2 hashes the text NORMALISED by normaliseMediaText
+ *  (so a member turn's rewritten media links still match); an absent `v` is the original
+ *  raw-text scheme and defaults to 1. */
 export const TEXT_FINGERPRINT_META = "protoagent/textFingerprint";
-export function textFingerprintFromMeta(metadata?: ExtMetadata): { length: number; fnv1a: number } | null {
+export function textFingerprintFromMeta(metadata?: ExtMetadata): { length: number; fnv1a: number; v: number } | null {
   const raw = (metadata as Record<string, unknown> | undefined)?.[TEXT_FINGERPRINT_META] as
-    | { length?: unknown; fnv1a?: unknown }
+    | { length?: unknown; fnv1a?: unknown; v?: unknown }
     | undefined;
   const length = Number(raw?.length);
   const fnv1a = Number(raw?.fnv1a);
-  return raw && Number.isInteger(length) && length >= 0 && Number.isInteger(fnv1a) ? { length, fnv1a } : null;
+  const v = Number(raw?.v);
+  return raw && Number.isInteger(length) && length >= 0 && Number.isInteger(fnv1a)
+    ? { length, fnv1a, v: Number.isInteger(v) && v > 0 ? v : 1 }
+    : null;
+}
+
+/** Canonicalise media URLs so a v2 fingerprint survives the hub rewriting a member turn's
+ *  final text with expiring absolute links. Matches an optional `scheme://host` and an
+ *  optional `/agents/<slug>` segment in front of `/media/<file>`, plus an optional `?query`,
+ *  and rewrites the whole reference to a bare `/media/<file>` — so a streamed relative
+ *  `/media/a.png?sig=x` and a stored absolute `https://hub/agents/m/media/a.png?exp=1&sig=y`
+ *  normalise to the same string. Non-media URLs have no `/media/` segment and are untouched.
+ *  Kept BYTE-IDENTICAL to a2a_impl/executor.py `_normalise_media_text` (same regex, same
+ *  replacement); the shared vector list in the test suites pins the parity. */
+const MEDIA_URL_RE = /(?:https?:\/\/[^\/\s"'<>)]+)?(?:\/agents\/[^\/\s"'<>)]+)?\/media\/([^\s"'<>)?]+)(?:\?[^\s"'<>)]*)?/g;
+export function normaliseMediaText(text: string): string {
+  return text.replace(MEDIA_URL_RE, (_m, file) => `/media/${file}`);
 }
 
 /** FNV-1a (32-bit) over a string's UTF-16 code units — the executor's `_utf16_fnv1a`. */
@@ -616,8 +635,12 @@ function replayTaskSnapshot(
   // interleaves only when its answer artifact's fingerprint proves the stored text starts
   // with exactly the measured text; a turn still running stores the streamed text itself.
   const fingerprint = arts.map((a) => textFingerprintFromMeta(a.metadata)).find((f) => f !== null) ?? null;
+  // v2 hashed the NORMALISED text, so compare the normalised prefix — a member turn whose
+  // final text the hub rewrote with absolute expiring media links still matches (#4274). A
+  // fingerprint with no `v` (v1) is the original raw-text scheme and is compared as before.
+  const measuredText = fingerprint && fingerprint.v >= 2 ? normaliseMediaText(accumulated) : accumulated;
   const measuredOk = fingerprint
-    ? fingerprint.length <= accumulated.length && utf16Fnv1a(accumulated.slice(0, fingerprint.length)) === fingerprint.fnv1a
+    ? fingerprint.length <= measuredText.length && utf16Fnv1a(measuredText.slice(0, fingerprint.length)) === fingerprint.fnv1a
     : /working|submitted|input.required|auth.required/i.test((task.status?.state || "").toString());
   const measuredLength = fingerprint ? fingerprint.length : accumulated.length;
   const interleave = textArtifacts === 1 && !splitsTurn && measuredOk;

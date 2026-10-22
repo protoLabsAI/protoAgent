@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable
@@ -129,7 +130,28 @@ def _text_offset_meta(accumulated: str) -> dict[str, int]:
 # land mid-word in it. The console interleaves only when the stored answer STARTS WITH
 # exactly the measured text (same length prefix, same hash); otherwise it falls back to
 # the old order (frames, then text).
+#
+# `v: 2` (#4274): the fingerprint is taken over the text NORMALISED by `_normalise_media_text`,
+# not the raw streamed text. A member turn's final answer is rewritten with expiring absolute
+# media links (`https://hub/agents/<slug>/media/<file>?exp=…&sig=…`), so the stored text no
+# longer equals the streamed text and the raw fingerprint missed — folding the interleaving
+# back to frames-then-text on reload. Normalising both sides to `/media/<file>` makes them
+# compare equal again. Turns stamped before `v` existed are still compared the old (raw) way.
 TEXT_FINGERPRINT_META = "protoagent/textFingerprint"
+
+# Canonicalise media URLs so a fingerprint survives the hub rewriting a member turn's final
+# text. Matches an optional `scheme://host` and an optional `/agents/<slug>` segment in front
+# of `/media/<file>`, plus an optional `?query`, and rewrites the whole reference to a bare
+# `/media/<file>` — so a streamed relative `/media/a.png?sig=x` and a stored absolute
+# `https://hub/agents/m/media/a.png?exp=1&sig=y` normalise to the same string. Non-media URLs
+# have no `/media/` segment and are left untouched. Kept BYTE-IDENTICAL to a2aStream.ts
+# `normaliseMediaText` (same regex, same replacement); the shared vector list in
+# tests/test_text_fingerprint.py and sessionHydration.test.ts pins the parity.
+_MEDIA_URL_RE = re.compile(r"""(?:https?:\/\/[^\/\s"'<>)]+)?(?:\/agents\/[^\/\s"'<>)]+)?\/media\/([^\s"'<>)?]+)(?:\?[^\s"'<>)]*)?""")
+
+
+def _normalise_media_text(text: str) -> str:
+    return _MEDIA_URL_RE.sub(lambda m: f"/media/{m.group(1)}", text)
 
 
 def _utf16_fnv1a(text: str) -> int:
@@ -142,7 +164,8 @@ def _utf16_fnv1a(text: str) -> int:
 
 
 def _text_fingerprint_meta(measured: str) -> dict[str, dict[str, int]]:
-    return {TEXT_FINGERPRINT_META: {"length": len(measured.encode("utf-16-le")) // 2, "fnv1a": _utf16_fnv1a(measured)}}
+    normalised = _normalise_media_text(measured)
+    return {TEXT_FINGERPRINT_META: {"v": 2, "length": len(normalised.encode("utf-16-le")) // 2, "fnv1a": _utf16_fnv1a(normalised)}}
 
 
 class TurnStalled(RuntimeError):

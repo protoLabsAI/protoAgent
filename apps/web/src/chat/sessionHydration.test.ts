@@ -26,7 +26,7 @@ import {
 import { MAX_SESSIONS } from "./chat-store";
 import { applyText, applyToolEvent } from "./turnReducers";
 import { foldPlan, textRuns } from "./parts";
-import { utf16Fnv1a } from "../lib/api/a2aStream";
+import { normaliseMediaText, utf16Fnv1a } from "../lib/api/a2aStream";
 import { applyCanonicalTurnText } from "./turnText";
 import { sentTimestamp } from "./ChatMessageView";
 
@@ -1504,6 +1504,98 @@ describe("durable replay keeps stream order — the pre-tool sentence stays the 
       turn({ text: ANSWER, artifacts: [{ parts: [{ text: ANSWER }] }], history: history(true) }),
     );
     expect(assistant.parts?.map((p) => p.kind)).toEqual(["reasoning", "tools", "text"]);
+  });
+});
+
+// The fingerprint is taken over a MEDIA-NORMALISED copy of the text (v:2), so a member turn
+// whose final answer the hub rewrote with expiring absolute media links still matches on
+// reload (#4274). SHARED_VECTORS is the parity list — the identical inputs/outputs are
+// asserted against the Python `_normalise_media_text` in tests/test_text_fingerprint.py.
+describe("media-URL normalisation keeps the fingerprint stable across link rewriting (#4274)", () => {
+  const FINGERPRINT = "protoagent/textFingerprint";
+  const OFFSET = "protoagent/textOffset";
+  const TOOL = "https://proto-labs.ai/a2a/ext/tool-call-v1";
+
+  // (input, expected) — kept IN SYNC with SHARED_VECTORS in tests/test_text_fingerprint.py.
+  const SHARED_VECTORS: Array<[string, string]> = [
+    ["/media/a.png?sig=x", "/media/a.png"],
+    ["https://hub/agents/m/media/a.png?exp=1&sig=y", "/media/a.png"],
+    ["https://hub/media/a.png", "/media/a.png"],
+    ["/agents/m/media/a.png?x=1", "/media/a.png"],
+    ["/media/a.png", "/media/a.png"],
+    ["/media/sub/dir/file.png?sig=x", "/media/sub/dir/file.png"],
+    [
+      "See ![img](/media/a.png?sig=x) and ![b](https://hub/agents/z/media/b.jpg?exp=2&sig=w) here",
+      "See ![img](/media/a.png) and ![b](/media/b.jpg) here",
+    ],
+    ['<img src="https://hub/agents/m/media/a.png?exp=1&sig=y">', '<img src="/media/a.png">'],
+    ["https://example.com/foo/bar?x=1", "https://example.com/foo/bar?x=1"],
+    ["/agents/m/profile?x=1", "/agents/m/profile?x=1"],
+    ["no urls here, just text.", "no urls here, just text."],
+  ];
+
+  it("normaliseMediaText matches the Python normaliser on the shared vectors", () => {
+    for (const [raw, expected] of SHARED_VECTORS) expect(normaliseMediaText(raw)).toBe(expected);
+  });
+
+  it("is idempotent", () => {
+    for (const [raw] of SHARED_VECTORS) {
+      const once = normaliseMediaText(raw);
+      expect(normaliseMediaText(once)).toBe(once);
+    }
+  });
+
+  // A v:2 fingerprint is taken over the NORMALISED text; the console normalises `accumulated`
+  // before comparing, so a streamed relative link and the stored absolute rewritten link hash
+  // to the same value.
+  const fp2 = (streamed: string) => ({
+    [FINGERPRINT]: { v: 2, length: normaliseMediaText(streamed).length, fnv1a: utf16Fnv1a(normaliseMediaText(streamed)) },
+  });
+
+  it("a member turn whose final text has absolute expiring links interleaves on reload", () => {
+    const LEAD = "Here is the image:\n\n";
+    const streamed = `${LEAD}![img](/media/a.png?sig=x)`;
+    const storedTail = "![img](https://hub/agents/m/media/a.png?exp=1&sig=y)";
+    const stored = `${LEAD}${storedTail}`;
+    const [, assistant] = messagesFromDurableTurn(
+      turn({
+        text: stored,
+        artifacts: [{ parts: [{ text: stored }], metadata: fp2(streamed) }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "render the image" }] },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "r1", name: "render", phase: "started", args: "{}" }, [OFFSET]: LEAD.length } },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "r1", name: "render", phase: "completed", result: "ok" }, [OFFSET]: LEAD.length } },
+        ],
+      }),
+    );
+    // The lead sentence streamed BEFORE the tool, so it comes back above it; the final text run
+    // keeps the hub's absolute rewritten link verbatim, and nothing is doubled.
+    expect(assistant.parts).toEqual([
+      { kind: "text", text: LEAD },
+      { kind: "tools", ids: ["r1"] },
+      { kind: "text", text: storedTail },
+    ]);
+    expect(textRuns(assistant.parts).join("")).toBe(stored);
+  });
+
+  it("falls back when the stored text diverges on a NON-media URL (normalisation won't forgive it)", () => {
+    const LEAD = "See the link:\n\n";
+    const streamed = `${LEAD}https://example.com/a?x=1`;
+    const stored = `${LEAD}https://example.com/a?x=2`; // a non-media edit the normaliser leaves alone
+    const [, assistant] = messagesFromDurableTurn(
+      turn({
+        text: stored,
+        artifacts: [{ parts: [{ text: stored }], metadata: fp2(streamed) }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "link it" }] },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "l1", name: "link", phase: "started", args: "{}" }, [OFFSET]: LEAD.length } },
+          { role: "ROLE_AGENT", metadata: { [TOOL]: { toolCallId: "l1", name: "link", phase: "completed", result: "ok" }, [OFFSET]: LEAD.length } },
+        ],
+      }),
+    );
+    // Fingerprint miss → old order (frames, then the whole answer).
+    expect(assistant.parts?.map((p) => p.kind)).toEqual(["tools", "text"]);
+    expect(textRuns(assistant.parts).join("")).toBe(stored);
   });
 });
 

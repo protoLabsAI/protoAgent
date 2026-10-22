@@ -1547,9 +1547,10 @@ async def test_work_frames_carry_the_text_offset_they_streamed_at(tmp_path):
     assert [m["metadata"][TEXT_OFFSET_META] for m in tools] == [utf16, utf16]
     assert final["artifacts"][0]["parts"][0]["text"] == answer
     # The terminal artifact proves what the offsets were measured against: the streamed text
-    # (here identical to the stored answer), as a UTF-16 length + FNV-1a hash.
+    # (here identical to the stored answer, and media-free so normalisation is a no-op), as a
+    # UTF-16 length + FNV-1a hash, stamped v:2 (the media-normalised scheme, #4274).
     fp = final["artifacts"][0]["metadata"][TEXT_FINGERPRINT_META]
-    assert fp == {"length": len(answer.encode("utf-16-le")) // 2, "fnv1a": _utf16_fnv1a(answer)}
+    assert fp == {"v": 2, "length": len(answer.encode("utf-16-le")) // 2, "fnv1a": _utf16_fnv1a(answer)}
 
 
 def test_utf16_fnv1a_parity_constants():
@@ -1586,7 +1587,7 @@ async def test_goal_style_turn_fingerprints_the_streamed_text_not_the_stored_ans
     art = final["artifacts"][0]
     assert art["parts"][0]["text"] == stored
     fp = art["metadata"][TEXT_FINGERPRINT_META]
-    assert fp == {"length": len(streamed), "fnv1a": _utf16_fnv1a(streamed)}
+    assert fp == {"v": 2, "length": len(streamed), "fnv1a": _utf16_fnv1a(streamed)}
     # Struct numbers round-trip as floats on the wire — the console reads them with Number().
     assert _utf16_fnv1a(stored[: int(fp["length"])]) != int(fp["fnv1a"])  # the console sees a mismatch → fallback
     tools = [m for m in final.get("history") or [] if pa.TOOL_CALL_EXT_URI in (m.get("metadata") or {})]
