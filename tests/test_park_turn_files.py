@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -53,10 +54,13 @@ def test_claim_policy_and_redacted_warning(parked, answered, caplog):
     assert p_kind == {"owner": "operator"}.get(parked, parked)
     assert a_kind == {"owner": "operator", "device-other": "device"}.get(answered, answered)
     p_id, a_id = executor._principal(before), executor._principal(after)
+    attached = []
     token = executor._begin_turn_files()
     try:
-        for content in (b"one", b"two"):
-            assert sdk.attach_file(media.save_media(content, "image/png"))
+        for content in (b"private attachment one", b"private attachment two"):
+            ref = media.save_media(content, "image/png")
+            attached.append(urlsplit(ref.url).path)
+            assert sdk.attach_file(ref)
         executor._park_turn_files("paused-context", p_id, principal_kind=p_kind)
     finally:
         executor._end_turn_files(token)
@@ -77,6 +81,10 @@ def test_claim_policy_and_redacted_warning(parked, answered, caplog):
         assert "2 paused-turn file(s)" in message
         assert "paused-context" in message and "paused-task" in message
         assert f"parked by {p_kind}, answered by {a_kind}" in message
+        assert "withheld" in message and "dropped" not in message
+        assert "files stay parked until TTL expiry/cancel or an authorized claim" in message
+    for value in (*attached, "private attachment one", "private attachment two"):
+        assert value not in caplog.text
     for secret in (
         "owner-secret",
         "legacy-secret",
@@ -92,7 +100,8 @@ def test_claim_policy_and_redacted_warning(parked, answered, caplog):
     # Successful claims are consumed once; denied claims preserve the existing stash.
     token = executor._begin_turn_files("paused-context", p_id, principal_kind=p_kind)
     try:
-        assert len(executor._close_turn_files()) == (0 if allowed else 2)
+        reclaimed = executor._close_turn_files()
+        assert [urlsplit(f["url"]).path for f in reclaimed] == ([] if allowed else attached)
     finally:
         executor._end_turn_files(token)
 
