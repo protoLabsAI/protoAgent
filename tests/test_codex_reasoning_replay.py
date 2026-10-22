@@ -341,3 +341,42 @@ def test_recovery_sits_inside_the_failover_wrapper():
     assert at > names.index("ObservableModelFallbackMiddleware")
     assert at < names.index("ProviderShapeMiddleware")
     assert at < names.index("MessageCaptureMiddleware")
+
+
+# ── system messages ride `instructions` (the backend 400s a system-role item) ──
+
+
+def test_codex_client_moves_a_system_message_into_instructions():
+    from langchain_core.messages import SystemMessage
+
+    payload = _codex_client()._get_request_payload([SystemMessage("be terse"), HumanMessage("hi")])
+    assert payload["instructions"] == "be terse"
+    assert all(item.get("role") != "system" for item in payload["input"])
+    assert payload["input"][-1]["role"] == "user"
+
+
+def test_codex_client_keeps_middleware_instructions_first():
+    from langchain_core.messages import SystemMessage
+
+    payload = _codex_client()._get_request_payload(
+        [SystemMessage([{"type": "text", "text": "judge"}]), HumanMessage("hi")], instructions="agent prompt"
+    )
+    assert payload["instructions"] == "agent prompt\n\njudge"
+    assert all(item.get("role") != "system" for item in payload["input"])
+
+
+def test_codex_client_without_a_system_message_sets_no_instructions():
+    payload = _codex_client()._get_request_payload([HumanMessage("hi")])
+    assert "instructions" not in payload
+
+
+def test_a_non_text_system_block_is_dropped_with_a_warning(caplog):
+    from graph.providers.codex_client import hoist_system_to_instructions
+
+    payload = {"input": [{"role": "system", "content": [
+        {"type": "input_text", "text": "judge"}, {"type": "input_image", "image_url": "data:x"}]},
+        {"role": "user", "content": "hi"}]}
+    hoist_system_to_instructions(payload)
+    assert payload["instructions"] == "judge"
+    assert [i["role"] for i in payload["input"]] == ["user"]
+    assert "non-text 'input_image' block" in caplog.text
