@@ -231,6 +231,78 @@ def test_ring_buffer_caps_a_single_huge_record():
     assert "more chars truncated" in message
 
 
+# ── httpx/httpcore are quieted so signed-media URLs never log (#4446 item 1) ──
+# httpx logs each request's FULL URL at INFO ("HTTP Request: GET …?sig=… \"200 OK\""), and the
+# hub proxies signed /media/?sig=… links whose sig is a replayable credential. configure_logging
+# pins httpx/httpcore to at least WARNING so those request lines never reach a sink, while their
+# genuine warnings/errors still do. No real signed URL or credential appears in these fixtures.
+
+
+def _reset_logging_to_default(monkeypatch) -> None:
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    monkeypatch.delenv("LOG_FORMAT", raising=False)
+    configure_logging()
+
+
+def test_configure_logging_pins_httpx_and_httpcore_to_warning(monkeypatch):
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    configure_logging()  # default LOG_LEVEL is INFO → the request-line leak would be emitted
+    for name in ("httpx", "httpcore"):
+        assert logging.getLogger(name).level == logging.WARNING, name
+
+
+def test_httpx_info_request_line_with_a_signature_never_reaches_the_ring(monkeypatch):
+    """An httpx INFO 'HTTP Request' line carrying a signed media URL is suppressed at the logger
+    level, so the replayable sig never lands in the in-process ring (or any other sink)."""
+    from observability import logging_config
+
+    _reset_logging_to_default(monkeypatch)
+    ring = logging_config.log_buffer()
+    assert ring is not None
+    ring.clear()
+
+    sig = "a" * 64
+    httpx_log = logging.getLogger("httpx")
+    # Exactly the shape httpx emits at INFO for every request.
+    httpx_log.info('HTTP Request: GET http://127.0.0.1:7001/media/x.png?exp=1&sig=%s "HTTP/1.1 200 OK"', sig)
+
+    messages = [r["message"] for r in ring.snapshot(10_000)]
+    assert all(sig not in m for m in messages)  # the credential never reached the ring
+    assert all("HTTP Request:" not in m for m in messages)  # nor did the request line at all
+
+
+def test_httpx_warning_diagnostics_are_preserved(monkeypatch):
+    """Quieting is a floor, not a mute: a real httpx WARNING (a benign, non-secret diagnostic)
+    still propagates to the ring so operators keep useful signal."""
+    from observability import logging_config
+
+    _reset_logging_to_default(monkeypatch)
+    ring = logging_config.log_buffer()
+    assert ring is not None
+    ring.clear()
+
+    logging.getLogger("httpx").warning("connection pool is full; discarding connection")
+    messages = [r["message"] for r in ring.snapshot(10_000)]
+    assert any("connection pool is full" in m for m in messages)
+
+
+def test_quiet_floor_honors_a_quieter_root_but_never_drops_below_warning(monkeypatch):
+    """A quieter LOG_LEVEL (ERROR) is honored so httpx is never noisier than the process; but
+    LOG_LEVEL=DEBUG must NOT re-expose the request line — the WARNING floor holds at any level."""
+    try:
+        monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+        configure_logging()
+        assert logging.getLogger("httpx").level == logging.WARNING  # floor holds even at DEBUG
+        assert logging.getLogger("httpcore").level == logging.WARNING
+
+        monkeypatch.setenv("LOG_LEVEL", "ERROR")
+        configure_logging()
+        assert logging.getLogger("httpx").level == logging.ERROR  # quieter root is honored
+        assert logging.getLogger("httpcore").level == logging.ERROR
+    finally:
+        _reset_logging_to_default(monkeypatch)
+
+
 def test_snapshot_copies_under_the_handler_lock():
     """`snapshot()` must hold the handler lock while copying `_records`.
 

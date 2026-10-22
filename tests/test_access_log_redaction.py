@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import logging
 
+import httpx
+
+from graph.fleet import proxy
 from infra import access_log_redact
 
 _UVICORN_FMT = '%s - "%s %s HTTP/%s" %d'  # uvicorn's AccessFormatter record shape
@@ -134,3 +137,122 @@ def test_core_server_install_path_needs_no_plugin():
         assert "sig=…" in rec.getMessage() and "c" * 64 not in rec.getMessage()
     finally:
         lg.filters = before
+
+
+def test_media_redaction_survives_uvicorn_config_logging_init():
+    """server/__init__ installs the redaction filter, THEN constructs a ``uvicorn.Config`` — whose
+    ``__init__`` runs its own ``dictConfig(LOGGING_CONFIG)`` and reconfigures the ``uvicorn.access``
+    logger (dropping and rebuilding its handlers). The filter lives on the LOGGER and must survive
+    that reconfigure, or every signed media link hits the access log unredacted the moment the
+    server boots (r2). This locks the install-order + survival in regardless of the stdlib version's
+    dictConfig behavior."""
+    import uvicorn
+    from uvicorn.config import LOGGING_CONFIG
+
+    lg = logging.getLogger("uvicorn.access")
+    saved = list(lg.filters)
+    try:
+        # Clean slate, then install exactly as core startup does (before the Config is built).
+        lg.filters = [f for f in saved if not isinstance(f, access_log_redact.MediaRedactFilter)]
+        access_log_redact.install()
+
+        async def _app(scope, receive, send):  # minimal ASGI app — the Config is built, never served
+            raise AssertionError("not served in this test")
+
+        uvicorn.Config(_app, log_config=LOGGING_CONFIG)  # __init__ applies the logging dictConfig
+
+        mine = [f for f in lg.filters if isinstance(f, access_log_redact.MediaRedactFilter)]
+        assert len(mine) == 1, "uvicorn.Config logging init dropped the media redaction filter"
+
+        sig = "e" * 64
+        rec = logging.LogRecord(
+            "uvicorn.access", logging.INFO, __file__, 1, "%s", (f"/media/x.png?sig={sig}",), None,
+        )
+        assert mine[0].filter(rec) is True
+        assert "sig=…" in rec.getMessage() and sig not in rec.getMessage()
+    finally:
+        lg.filters = saved
+
+
+# ── the fleet proxy's own timeout/error logs don't leak a signed upstream URL (#4446 item 1) ──
+# Beyond the access log, the hub PROXIES signed media (``/agents/<slug>/media/?sig=…``). Both
+# upstream proxy log paths — ``_forward_to_base`` (the 502/504 + mid-stream stall) and
+# ``_forward_chat_detach`` (the submit timeout/error) — run their URL through the SAME core
+# ``redact`` before logging, so a failure can't print a replayable ``sig``. No real signed URL or
+# credential appears in these fixtures.
+
+
+class _FakeRequest:
+    def __init__(self, *, method="GET", headers=None, query=None, body=b""):
+        self.method = method
+        self.headers = headers or {}
+        self.query_params = query or {}
+        self._body = body
+
+    async def body(self):
+        return self._body
+
+
+class _RaisingClient:
+    """An httpx-like client whose send() always raises — to drive a proxy timeout/error log path."""
+
+    def __init__(self, exc):
+        self._exc = exc
+
+    def build_request(self, *args, **kwargs):
+        return object()
+
+    async def send(self, *args, **kwargs):
+        raise self._exc
+
+
+async def test_forward_to_base_timeout_redacts_signed_media_url(monkeypatch, caplog):
+    monkeypatch.setattr(proxy, "_get_client", lambda: _RaisingClient(httpx.ReadTimeout("stalled")))
+    sig = "a" * 64
+    # A signed fleet-media sub-path carried into the proxied URL — the 504 timeout log must redact it.
+    path = f"media/report.png?exp=1700000000&sig={sig}"
+    with caplog.at_level(logging.WARNING, logger="protoagent.server"):
+        resp = await proxy._forward_to_base("http://127.0.0.1:7001", _FakeRequest(), path)
+    assert resp.status_code == 504
+    assert sig not in caplog.text and "sig=…" in caplog.text
+    assert "exp=1700000000" in caplog.text  # the non-secret timestamp stays — diagnostics preserved
+
+
+async def test_forward_to_base_timeout_never_logs_the_sig_from_query_params(monkeypatch, caplog):
+    """In the REAL fleet-media flow the sig rides in the query string (forwarded to httpx via
+    ``params=``), not the sub-path — so the proxy's own URL log never even contains it."""
+    monkeypatch.setattr(proxy, "_get_client", lambda: _RaisingClient(httpx.ReadTimeout("stalled")))
+    sig = "b" * 64
+    req = _FakeRequest(query={"exp": "1700000000", "sig": sig})
+    with caplog.at_level(logging.WARNING, logger="protoagent.server"):
+        resp = await proxy._forward_to_base("http://127.0.0.1:7001", req, "media/report.png")
+    assert resp.status_code == 504
+    assert sig not in caplog.text
+
+
+async def test_detached_submit_timeout_redacts_url_and_never_logs_the_body(monkeypatch, caplog):
+    monkeypatch.setattr(proxy, "_get_client", lambda: _RaisingClient(httpx.ReadTimeout("stalled")))
+    sig = "c" * 64
+    body = b'{"message": "user secret prompt"}'
+    path = f"media/report.png?exp=1&sig={sig}"
+    with caplog.at_level(logging.WARNING, logger="protoagent.server"):
+        resp = await proxy._forward_chat_detach(
+            "ava-1a2b", "http://127.0.0.1:7001", _FakeRequest(method="POST", body=body),
+            path, {}, frozenset(), body,
+        )
+    assert resp.status_code == 504
+    assert sig not in caplog.text and "sig=…" in caplog.text
+    assert "user secret prompt" not in caplog.text  # the request body is never logged
+
+
+async def test_detached_submit_error_redacts_signed_media_url(monkeypatch, caplog):
+    # A non-timeout transport failure on submit takes the 502 branch — it must redact the URL too.
+    monkeypatch.setattr(proxy, "_get_client", lambda: _RaisingClient(httpx.RemoteProtocolError("boom")))
+    sig = "d" * 64
+    path = f"media/report.png?sig={sig}"
+    with caplog.at_level(logging.WARNING, logger="protoagent.server"):
+        resp = await proxy._forward_chat_detach(
+            "ava-1a2b", "http://127.0.0.1:7001", _FakeRequest(method="POST"), path, {}, frozenset(), b"{}",
+        )
+    assert resp.status_code == 502
+    assert sig not in caplog.text and "sig=…" in caplog.text
