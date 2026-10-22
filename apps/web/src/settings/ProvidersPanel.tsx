@@ -239,7 +239,7 @@ export function ProvidersPanel() {
 
             {/* An OAuth connection carries its own sign-in lifecycle; an endpoint carries a key. */}
             {OAUTH_PROVIDER_LABEL[p.type] ? (
-              <OAuthAccountCard provider={p.type} />
+              <OAuthAccountCard provider={p.type} showUsage />
             ) : (
               <Callout tone={p.has_key ? "success" : "warning"}>
                 <KeyRound size={15} />{" "}

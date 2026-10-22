@@ -100,3 +100,10 @@ separate confirmation and can leave the agent without a model source.
 If a test or chat fails, keep the error and follow
 [Chat fails](/guides/troubleshooting#chat-fails). For a new installation, start
 with [Set up your first agent](/tutorials/first-agent).
+
+Connected native OAuth accounts show subscription usage beneath their sign-in status in
+Settings → Model → Connections. Each window has a percentage bar and reset countdown;
+model-specific windows include the model name. Available windows turn to warning at 80%,
+and blocked windows show when they reset. Missing or stale data appears as muted
+“Usage unavailable”. Usage refreshes while this view is open and on live provider updates;
+closing Settings stops its polling. These meters describe this instance's accounts.
