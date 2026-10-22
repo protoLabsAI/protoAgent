@@ -545,7 +545,7 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
     <>
       {/* Sub-tab strip above the panel card — only when there's more than one tab. A
           single-/no-tab view (e.g. Notes) has nothing to switch, so we skip the strip;
-          rendering it anyway showed an empty <select> on mobile (responsive Tabs). */}
+          rendering it anyway showed an empty switcher on mobile (responsive Tabs). */}
       {tabs.length > 1 && (
         // `attached` (DS 0.63) fuses the strip to the panel below as one card — the padding /
         // top-only border / bg-raised the old `.pl-appshell__col > .pl-tabs` override used to
