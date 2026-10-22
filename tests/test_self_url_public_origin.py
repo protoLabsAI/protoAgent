@@ -1,7 +1,9 @@
 """``show_config``'s ``self_url`` public origin follows the canonical console-base
 precedence (#4446 item 3) — ``A2A_PUBLIC_URL`` first, then the configured pairing
 origin — the same derivation the A2A card and ``infra.media`` / ``graph.sdk`` use
-(#4256), so an env-only deployed agent reports the public URL it actually serves on."""
+(#4256), including ``graph.sdk.console_url``'s fleet-member rule (a hub-spawned
+member's ``{hub}/agents/<id>`` tenant URL is its A2A-card address, not a console
+base), so an env-only deployed agent reports the public URL it actually serves on."""
 
 from __future__ import annotations
 
@@ -43,12 +45,15 @@ def test_env_only_public_url_matches_canonical_helpers(monkeypatch):
     """r1: A2A_PUBLIC_URL-only configuration yields the same public/preferred origin as
     the canonical helpers — a deployed agent that sets the env (the common case) but has
     no configured pairing origin must report its public URL, not fall back to local."""
+    from graph import sdk
+
     monkeypatch.setenv("A2A_PUBLIC_URL", "https://roxy.example")
     out = _self_url(LangGraphConfig())
 
     assert out["public"] == "https://roxy.example"
     assert out["preferred"] == "https://roxy.example"
     assert out["public"] == media.console_base_url() == media.configured_public_url()
+    assert out["public"] == sdk.console_url()
 
 
 def test_env_wins_over_config(monkeypatch):
@@ -126,3 +131,46 @@ def test_env_public_url_never_probes(monkeypatch):
     out = _self_url(LangGraphConfig())
 
     assert out["public"] == "https://roxy.example"
+
+
+def test_fleet_member_tenant_url_is_not_the_console(monkeypatch):
+    """A hub-spawned member inherits ``{hub}/agents/<id>`` as its A2A_PUBLIC_URL — its
+    A2A-card address, not a console base — so the member rule shared with
+    ``graph.sdk.console_url`` drops it from the public origin, and ``preferred`` falls
+    back to the member's own bound console (here unbound, so blank)."""
+    import graph.workspaces.manager as mgr
+
+    monkeypatch.setattr(mgr, "is_workspace_member", lambda: True)
+    monkeypatch.setenv("A2A_PUBLIC_URL", "https://hub.example.com/agents/roxy")
+    out = _self_url(LangGraphConfig())
+
+    assert out["public"] == ""
+    assert out["preferred"] == out["local"] == ""
+
+
+def test_fleet_member_tenant_url_falls_back_to_configured(monkeypatch):
+    """Dropping the member's tenant URL falls through to the configured pairing
+    origin when one is set — only the env URL is skipped."""
+    import graph.workspaces.manager as mgr
+
+    monkeypatch.setattr(mgr, "is_workspace_member", lambda: True)
+    cfg = LangGraphConfig()
+    cfg.public_console_url = "https://roxy.example.com"
+    monkeypatch.setenv("A2A_PUBLIC_URL", "https://hub.example.com/agents/roxy")
+    out = _self_url(cfg)
+
+    assert out["public"] == "https://roxy.example.com"
+    assert out["preferred"] == "https://roxy.example.com"
+
+
+def test_non_member_keeps_tenant_shaped_url(monkeypatch):
+    """The skip only applies to workspace members — a non-member whose A2A_PUBLIC_URL
+    merely has the tenant shape keeps it, the same gate as ``graph.sdk.console_url``."""
+    import graph.workspaces.manager as mgr
+
+    monkeypatch.setattr(mgr, "is_workspace_member", lambda: False)
+    monkeypatch.setenv("A2A_PUBLIC_URL", "https://hub.example.com/agents/roxy")
+    out = _self_url(LangGraphConfig())
+
+    assert out["public"] == "https://hub.example.com/agents/roxy"
+    assert out["preferred"] == "https://hub.example.com/agents/roxy"
