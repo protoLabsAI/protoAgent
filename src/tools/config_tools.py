@@ -345,16 +345,21 @@ def _self_url(config) -> dict:
       the runtime bind state (``STATE.bind_host`` / ``STATE.active_port`` via
       :func:`infra.media.bound_base_url`). A wildcard bind (``0.0.0.0`` / ``::``) and
       ``localhost`` normalise to ``127.0.0.1`` — a same-host client reaches it there.
-    - ``public``: the configured HTTPS origin a remote device pairs through
-      (``network.public_console_url``), or ``""`` when none is set.
-    - ``preferred``: the public URL when set, else local — the one address to hand out.
+    - ``public``: the public origin a remote reaches, in the canonical console-base
+      precedence shared with ``infra.media.console_base_url`` / ``graph.sdk.console_url``
+      (#4256): ``A2A_PUBLIC_URL`` when set (the same normalised value the A2A card and the
+      absolute ``/media`` links use), else the configured pairing origin
+      (``network.public_console_url``), else ``""`` when neither is set.
+    - ``preferred``: the public origin when set, else local — the one address to hand out.
 
     Outside a running server the listening port is NOT known (e.g. these tools built
     without a server serving); ``local`` is ``""`` and a ``note`` says why. The port is
     never guessed and no socket is ever opened."""
-    from infra.media import bound_base_url
+    from infra.media import bound_base_url, configured_public_url
 
-    public = str(getattr(config, "public_console_url", "") or "").strip()
+    # Canonical precedence (#4256): A2A_PUBLIC_URL (env) first, then the configured
+    # pairing origin, else no public origin — ``preferred`` falls back to ``local``.
+    public = configured_public_url() or str(getattr(config, "public_console_url", "") or "").strip()
     local = bound_base_url()
     out: dict = {
         "local": local,
