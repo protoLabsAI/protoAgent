@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
 import os
 from pathlib import Path
 from urllib.parse import quote
 
-from . import _config, _media, _render_status, _shell, _store
+from . import _config, _links, _media, _render_status, _shell, _store
 
 log = logging.getLogger("protoagent.plugins.artifact")
 
@@ -49,6 +50,8 @@ def _open_blob(art_id: str, version: int):
             idx = len(vers) - 1
         v = vers[idx]
         blob_name, meta = v.get("blob"), v.get("file") or {}
+        if link := v.get("link"):  # a LINKED version (#4370): re-resolved by path, never a stored blob
+            return _open_linked(link, meta)  # 403/409 on its own terms — no blob retry applies
         if not blob_name:
             raise HTTPException(404, "not a file artifact / no stored blob")
         if blob_name in missing:  # the store still names it, and it isn't on disk
@@ -59,6 +62,62 @@ def _open_blob(art_id: str, version: int):
         except FileNotFoundError:
             missing.add(blob_name)
     raise HTTPException(404, "blob missing")
+
+
+def _sha256_fd(fh) -> str:
+    """The SHA-256 of the file behind ``fh``, read whole from its CURRENT position in
+    blob-sized chunks (the caller seeks back afterwards)."""
+    h = hashlib.sha256()
+    while True:
+        chunk = fh.read(_BLOB_CHUNK)
+        if not chunk:
+            return h.hexdigest()
+        h.update(chunk)
+
+
+def _open_linked(link: dict, meta: dict):
+    """A LINKED version's own serve path (ADR 0092 D2 / #4370): ``(fh, meta, name)`` like
+    ``_open_blob`` so the blob route streams it with the same ``_open_file_response`` (Range/206
+    intact), using the stored ``file`` meta for mime + filename.
+
+    Unlike a stored blob — opened by fd and never re-resolved — a link is RE-RESOLVED by path
+    through the LIVE fs fence (``_links._registry`` → ``registry.resolve``) on EVERY request, and
+    NEVER from a stored absolute path. The fence is therefore the live authority: unregistering
+    the project, or turning the filesystem off, REVOKES access. 403 ``linked file no longer
+    reachable`` when the project is unknown/unregistered, fs is disabled, or the stored path now
+    escapes the project (a symlink out of it — ``resolve`` follows it and refuses).
+
+    TOCTOU is closed by opening the fd FIRST and verifying THAT fd: fstat it (size + mtime_ns),
+    then sha256 it and seek back to 0. A gone file, or any size/mtime/digest mismatch, is 409
+    ``{"state": "changed_or_missing"}`` with the fd closed and NO bytes sent — substituted bytes
+    are never streamed."""
+    from fastapi import HTTPException
+
+    registry = _links._registry()
+    if registry is None:  # no fs toolset on this host at all
+        raise HTTPException(403, "linked file no longer reachable")
+    try:
+        target = registry.resolve(link.get("project") or "", link.get("path") or "")
+    except ValueError:  # unknown/unregistered project, fs disabled (empty registry), or escapes the fence
+        raise HTTPException(403, "linked file no longer reachable") from None
+    try:
+        fh = open(target, "rb")  # OPEN FIRST, then stat/digest this fd — no check-then-open window
+    except OSError:
+        raise HTTPException(409, {"state": "changed_or_missing"}) from None
+    name = meta.get("filename") or os.path.basename(link.get("path") or "") or target.name
+    ok = False
+    try:
+        st = os.fstat(fh.fileno())
+        if st.st_size != link.get("size") or st.st_mtime_ns != link.get("mtime_ns"):
+            raise HTTPException(409, {"state": "changed_or_missing"})
+        if _sha256_fd(fh) != link.get("sha256"):
+            raise HTTPException(409, {"state": "changed_or_missing"})
+        fh.seek(0)
+        ok = True
+    finally:
+        if not ok:
+            fh.close()
+    return fh, meta, name
 
 
 def _attachment(filename: str, disposition: str = "attachment") -> str:
@@ -482,7 +541,12 @@ def _build_data_router():
         A ``Range`` header gets a 206 slice (``Accept-Ranges: bytes`` on every response).
 
         Streamed from a handle opened before the response starts (``_open_blob``), so an
-        eviction in another process can't cut the download short once it's begun."""
+        eviction in another process can't cut the download short once it's begun.
+
+        A LINKED version (#4370) has no stored blob: its bytes are re-resolved by path through
+        the live fs fence on this request (403 if the project is gone / fs is off / the path
+        escapes it) and stamp-checked against the saved size+mtime+sha256 (409
+        ``{"state": "changed_or_missing"}`` on any mismatch) before a single byte goes out."""
         fh, meta, name = _open_blob(art_id, version)
         return _open_file_response()(
             fh, meta.get("mime") or "application/octet-stream", meta.get("filename") or name, range_header=req_range
@@ -493,7 +557,8 @@ def _build_data_router():
         """Mint a short-lived ticket for the PUBLIC media route (#4257) — a <video>/<img> can't
         carry the bearer, so this gated call stands in for it. Bound to one explicit version
         (0/absent resolves to the latest NOW, so a later save doesn't swap what's playing).
-        404 for an unknown artifact/version, 415 for a file that isn't inline image/video."""
+        404 for an unknown artifact/version, 415 for a file that isn't inline image/video — or a
+        LINKED version (#4370), which serves in place from its project, not via a media ticket."""
         store = _store._read_store()
         art = _store._find(store, art_id)
         if art is None:
@@ -502,6 +567,8 @@ def _build_data_router():
         if version and not (1 <= version <= len(vers)):
             raise HTTPException(404, f"no version {version} (have 1..{len(vers)})")
         n = version or len(vers)
+        if n and vers[n - 1].get("link"):  # a LINKED version serves in place, not via an inline ticket (#4370)
+            raise HTTPException(415, "linked files are served in place, not through an inline media ticket")
         if not n or not vers[n - 1].get("blob"):
             raise HTTPException(404, "not a file artifact / no stored blob")
         if _media.media_kind(vers[n - 1].get("file") or {}) is None:
