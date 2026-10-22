@@ -230,9 +230,12 @@ is labelled `kind·model`, e.g. `weekly·opus`), used %, the reset countdown, an
 (`ok` / `warning` / `blocked`). A disconnected account that never reported shows `unknown`;
 an account whose last poll failed shows its last-known windows marked `stale` — the numbers
 are not current, so they are **not** compared against `--warn-at`. A `!` after the used %
-marks a window at or above `--warn-at`. With `--fleet`, accounts reported by more than one
-member are collapsed to a single row that lists those members, and a member that cannot be
-read is named as unreachable on stderr without hiding the others.
+marks a window at or above `--warn-at`. With `--fleet`, one account reported by more than one
+member — matched on its `account_key` — is collapsed to a single row that lists those members;
+an account the provider gives no key for (e.g. a Claude account authed from an env-var token)
+can't be proven the same across members, so it stays its own per-member row rather than merge
+with another member's. A member that cannot be read is named as unreachable on stderr without
+hiding the others.
 
 **Exit code:** `2` when any **live** window is at or above `--warn-at` (default `80`), `0`
 otherwise, and `1` when no server (or, with `--fleet`, no hub) answered — so a cron can alert

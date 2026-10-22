@@ -205,16 +205,26 @@ def _account_record(acct: dict, members: list[str], warn_at: float, now: datetim
     }
 
 
-def _dedupe_key(acct: dict) -> tuple[str, str]:
-    """Group accounts for ``--fleet``: by ``account_key`` when present (the dedupe the task
-    asks for), else by provider id so one disconnected provider collapses to a single row."""
+def _dedupe_key(acct: dict, slug: str, seq: int) -> tuple[str, str, str]:
+    """Group accounts for ``--fleet``. An ``account_key`` is the only thing that proves two
+    members are reporting the *same* account, so dedupe on it when present — that is the
+    dedupe the task asks for. Without one (common for Claude accounts authed from an env-var
+    token or borrowed from Claude Code credentials, whose identity is opaque:
+    ``peek_anthropic_access_token`` returns ``account_id=None``), we cannot prove sameness,
+    so each keyless account stays its OWN row — keyed by the member that reported it and the
+    account's position in that member's list. Collapsing every keyless account of one provider
+    into a single row would merge *different* members' accounts, let :func:`_best_account`
+    keep one member's windows and drop the rest (so a member at/over ``--warn-at`` is hidden
+    and the CLI wrongly exits 0), and misreport unrelated members as sharing one account."""
     key = acct.get("account_key")
-    return ("key", str(key)) if key else ("provider", str(acct.get("provider_id") or ""))
+    return ("key", str(key), "") if key else ("anon", slug, str(seq))
 
 
 def _best_account(accounts: list[dict]) -> dict:
     """The richest representation of one account across the members that reported it: a real
-    (``ok``) read with windows beats an ``unknown``/stale one."""
+    (``ok``) read with windows beats an ``unknown``/stale one. Only ever called on accounts
+    that genuinely share one key (:func:`_dedupe_key` keeps keyless accounts in their own
+    single-element groups), so no member's windows are dropped by this choice."""
     return max(
         accounts,
         key=lambda a: (
@@ -242,8 +252,8 @@ def _collect_fleet(conn: deckhub.Connection, args: argparse.Namespace, now: date
     """Every readable member's usage through the hub proxy, deduped by account. Returns
     (account records, unreachable members). One member failing never loses the others."""
     client, roster = conn.client, conn.roster
-    groups: dict[tuple[str, str], dict] = {}
-    order: list[tuple[str, str]] = []
+    groups: dict[tuple[str, str, str], dict] = {}
+    order: list[tuple[str, str, str]] = []
     unreachable: list[dict] = []
     for row in roster:
         slug = slug_of(row)
@@ -257,10 +267,10 @@ def _collect_fleet(conn: deckhub.Connection, args: argparse.Namespace, now: date
         except deckhub.HubError as exc:
             unreachable.append({"member": member, "slug": slug, "error": _short(exc)})
             continue
-        for acct in accounts:
+        for seq, acct in enumerate(accounts):
             if args.account and not _matches(acct, args.account):
                 continue
-            key = _dedupe_key(acct)
+            key = _dedupe_key(acct, slug, seq)
             g = groups.get(key)
             if g is None:
                 g = {"members": [], "accounts": []}

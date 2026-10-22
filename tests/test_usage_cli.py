@@ -185,6 +185,41 @@ def test_fleet_unreachable_member_shown_beside_a_reachable_one(monkeypatch, caps
     assert reasons["idle"] == "stopped"
 
 
+def test_fleet_keyless_accounts_stay_distinct_and_a_hot_one_is_not_hidden(monkeypatch, capsys):
+    # Claude accounts authed from an env-var token (or borrowed Claude Code credentials) have
+    # NO account_key. Two different members' keyless accounts must NOT collapse into one
+    # provider-id row: that would let _best_account keep one member's windows and drop the
+    # rest — hiding a member at/over --warn-at (wrong exit 0) and falsely showing them as
+    # sharing one account.
+    cool = acct("anthropic-oauth", account_key=None, windows=[win("session", "session", 30.0, SESSION_RESET)])
+    hot = acct("anthropic-oauth", account_key=None, windows=[win("session", "session", 90.0, SESSION_RESET)])
+    roster = [
+        {"name": "hub", "label": "hub", "id": "hub", "running": True, "host": True},
+        {"name": "alpha", "label": "alpha", "id": "alpha-1", "running": True},
+    ]
+    c = FakeClient({"host": [cool], "alpha-1": [hot]}, roster=roster)
+    _live(monkeypatch, c)
+    assert _run(["--fleet", "--json"]) == 2  # the 90% window trips the default --warn-at 80
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["warn_hit"] is True
+    assert len(doc["accounts"]) == 2  # two distinct rows, not one merged row
+    assert sorted(a["members"] for a in doc["accounts"]) == [["alpha"], ["hub"]]  # each names only its own member
+    assert sorted(w["used_pct"] for a in doc["accounts"] for w in a["windows"]) == [30.0, 90.0]  # no window dropped
+
+
+def test_fleet_keyless_accounts_on_one_member_stay_distinct(monkeypatch, capsys):
+    # Even on a single member, two keyless accounts of one provider are different accounts and
+    # must not merge into each other.
+    a1 = acct("anthropic-oauth", account_key=None, windows=[win("session", "session", 12.0, SESSION_RESET)])
+    a2 = acct("anthropic-oauth", account_key=None, windows=[win("session", "session", 34.0, SESSION_RESET)])
+    roster = [{"name": "hub", "label": "hub", "id": "hub", "running": True, "host": True}]
+    _live(monkeypatch, FakeClient({"host": [a1, a2]}, roster=roster))
+    assert _run(["--fleet", "--warn-at", "100", "--json"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert len(doc["accounts"]) == 2
+    assert sorted(w["used_pct"] for a in doc["accounts"] for w in a["windows"]) == [12.0, 34.0]
+
+
 # ── r3: exit codes ──────────────────────────────────────────────────────────────
 
 
