@@ -5,6 +5,7 @@ Uses langchain's create_agent() with AgentMiddleware for the DeerFlow pattern.
 """
 
 import logging
+import re
 from typing import Annotated, Any
 
 from langchain.agents import create_agent
@@ -602,6 +603,19 @@ def _subagent_tools(sub_config, tool_map: dict) -> list:
     return [tool_map[name] for name in sub_config.tools if name in tool_map and name not in HITL_TOOL_NAMES]
 
 
+def _subagent_tool_names(sub_config, resolvable_names) -> list[str]:
+    """The subagent's effective tool NAMES against an arbitrary bound-name vocabulary.
+
+    Same filter ``_subagent_tools`` applies (allowlist order, minus the lead-only HITL
+    interrupt tools and anything not bound), but keyed by NAME so the #4327 guard can resolve
+    a ``run_in_background`` delegation against the FINAL lead toolset. A detached job runs the
+    full lead graph fenced only by its allowlist (ADR 0050 / ``subagent_fence``), so it DOES
+    hold the filesystem/late tools (``read_file``) the in-graph ``task`` snapshot never sees —
+    resolving it against the snapshot would wrongly refuse it before spawn."""
+    names = {str(n) for n in resolvable_names}
+    return [n for n in (sub_config.tools or []) if n in names and n not in HITL_TOOL_NAMES]
+
+
 def _policy_tool_map(config, subagent_type: str, tool_map: dict) -> dict:
     """Apply built-in subagent policy gates before an allowlist resolves."""
     if subagent_type != "self-improve":
@@ -610,6 +624,76 @@ def _policy_tool_map(config, subagent_type: str, tool_map: dict) -> dict:
 
     allowed = review_tool_names(config)
     return {name: tool for name, tool in tool_map.items() if name in allowed}
+
+
+def _prompt_missing_tools(prompt: str, lead_tool_names, sub_tool_names) -> list[str]:
+    """Lead tool names a delegation PROMPT asks for that the subagent was never bound (#4327).
+
+    Fail-fast scan: a subagent told to use a tool it doesn't have runs to completion and
+    comes back "blocked" (a ``researcher`` asked for ``pdf_look``/``read_file`` it never got).
+    A name is flagged only when it is BOTH (a) a real LEAD tool — matched as a whole
+    identifier on a word boundary — and (b) absent from the subagent's resolved toolset.
+    Alphabetic names can also be ordinary prose (including plugin/MCP names), so they
+    require explicit backticks or call syntax: `` `calculator` `` or ``calculator(...)``.
+    Structured names such as ``read_file`` match bare whole identifiers. A name the lead
+    itself lacks is never flagged. Returned in first-mention order for stable messages.
+    """
+    text = prompt or ""
+    gap = {str(n) for n in lead_tool_names} - {str(n) for n in sub_tool_names}
+    hits: list[tuple[int, str]] = []
+    for name in gap:
+        if not name:
+            continue
+        identifier = rf"\b{re.escape(name)}\b"
+        if name.isalpha():
+            identifier = rf"`{identifier}`|{identifier}\("
+        m = re.search(identifier, text)
+        if m:
+            hits.append((m.start(), name))
+    hits.sort()
+    return [name for _pos, name in hits]
+
+
+def _dispatch_tool_gap(
+    config, subagent_type: str, prompt: str, tool_map: dict, lead_tool_names, *, background: bool = False
+) -> str | None:
+    """Not-dispatched refusal (#4327) when a delegation prompt names lead tools the subagent lacks.
+
+    Resolves the subagent's toolset exactly as the matching dispatch will, so ``Its tools``
+    and the flagged gap are what the subagent would actually run with — this only decides
+    whether to START, it never changes what a subagent inherits. ``lead_tool_names`` is the
+    FULL lead vocabulary the prompt is scanned against (the ``task`` tool_map is a
+    pre-filesystem snapshot that can't see ``read_file``/``pdf_look``).
+
+    An IN-GRAPH ``task`` runs the subagent on the pre-filesystem snapshot (``_policy_tool_map``
+    → ``_subagent_tools``), so it is resolved against ``tool_map``. A ``run_in_background``
+    delegation runs the FULL lead graph fenced by its allowlist (ADR 0050), so it is resolved
+    against ``lead_tool_names`` — the final bound toolset — and keeps the ``read_file`` etc. a
+    snapshot resolution would wrongly strip, which would refuse a background delegation to a
+    subagent (e.g. ``codebase-mapper``) that in fact holds the tool.
+
+    Returns the tool result to hand the lead, or ``None`` to dispatch normally. An unknown
+    subagent returns ``None`` — the existing unknown-subagent error path owns that case.
+    """
+    sub_config = SUBAGENT_REGISTRY.get(subagent_type)
+    if not sub_config:
+        return None
+    if background:
+        sub_names = _subagent_tool_names(sub_config, lead_tool_names)
+    else:
+        resolved = _subagent_tools(sub_config, _policy_tool_map(config, subagent_type, tool_map))
+        sub_names = [n for n in (getattr(t, "name", None) for t in resolved) if n]
+    missing = _prompt_missing_tools(prompt, lead_tool_names, sub_names)
+    if not missing:
+        return None
+    its = ", ".join(sorted(sub_names)) or "(none)"
+    return (
+        f"Not dispatched: subagent '{subagent_type}' does not have tool(s) "
+        f"{', '.join(missing)} that the prompt asks for. Its tools: {its}. "
+        "Do the step yourself, or pick a subagent that has them. If the prompt only "
+        'mentions them without asking for them (e.g. "don\'t use X"), re-send it without '
+        "naming those tools."
+    )
 
 
 def _extract_subagent_usage(messages, *, subagent_type: str, fallback_model: str = "") -> list[dict]:
@@ -1317,7 +1401,7 @@ def split_subagent_only(tools: list, config, *, resolvable: frozenset[str] | Non
     return lead, held
 
 
-def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], background_mgr=None):
+def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], background_mgr=None, lead_tool_names=None):
     """Build the subagent-delegation tools: single ``task`` and concurrent ``task_batch``.
 
     Subagents share AuditMiddleware so their tool calls land alongside the
@@ -1330,6 +1414,13 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
     tool — a delegation the agent fires and keeps working past, surfaced back via
     a completion notification on the spawning session's next turn. ``None``
     disables it (the param falls back to synchronous execution).
+
+    ``lead_tool_names`` is the FULL lead tool vocabulary the dispatch guard (#4327)
+    scans a prompt against. ``tool_map`` below is a SNAPSHOT taken before the
+    filesystem/late/MCP tools are appended to the lead set, so on its own it can't
+    see ``read_file``/``pdf_look``; the graph passes a live set it populates with the
+    final lead toolset once assembly finishes (always long before any delegation
+    runs). Falls back to the snapshot for direct callers (tests, scheduler builder).
     """
     import asyncio
     from typing import Literal
@@ -1339,6 +1430,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
     from graph.subagent_model import turn_model_from
 
     tool_map = {t.name: t for t in all_tools}
+    lead_vocab = lead_tool_names if lead_tool_names is not None else tool_map
     subagent_names = list(SUBAGENT_REGISTRY.keys())
     available_subagents = ", ".join(subagent_names) or "(none configured)"
     max_concurrency = max(1, config.subagent_max_concurrency)
@@ -1374,6 +1466,16 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 progress; do not poll or spawn a duplicate. False waits for the result
                 in this turn. Without background support, either setting runs foreground.
         """
+        # Fail fast (#4327): if the prompt tells the subagent to use lead tools it was
+        # never bound, refuse BEFORE spawning — the subagent graph is never invoked,
+        # so it can't run to completion and come back "blocked". A delegation that will
+        # actually run detached (``run_in_background`` with a manager) runs the full lead
+        # graph fenced by its allowlist, so resolve its tools against the final toolset,
+        # not the pre-filesystem ``task`` snapshot the in-graph run uses.
+        will_detach = run_in_background and background_mgr is not None
+        gap = _dispatch_tool_gap(config, subagent_type, prompt, tool_map, lead_vocab, background=will_detach)
+        if gap:
+            return gap
 
         async def _spawn_bg() -> str:
             # Resolve the originating session from injected graph state, not the
@@ -1564,6 +1666,12 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 if st not in SUBAGENT_REGISTRY:
                     lines.append(f"Task {i} ({desc}): skipped — unknown subagent '{st}'.")
                     continue
+                # These specs run detached (full lead graph fenced by the allowlist), so
+                # resolve against the final toolset — not the pre-filesystem snapshot (#4327).
+                gap = _dispatch_tool_gap(config, st, prm, tool_map, lead_vocab, background=True)
+                if gap:
+                    lines.append(f"Task {i} ({desc}): {gap}")
+                    continue
                 job_id = await background_mgr.spawn(
                     origin_session=session_id,
                     subagent_type=st,
@@ -1596,6 +1704,11 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
             prm = spec.get("prompt")
             if not prm:
                 return f"Error: task '{desc}' is missing 'prompt'."
+            # Fail fast (#4327) per item — the offending task returns inline while its
+            # siblings still run; the subagent for this spec is never invoked.
+            gap = _dispatch_tool_gap(config, spec.get("subagent_type", "researcher"), prm, tool_map, lead_vocab)
+            if gap:
+                return gap
             async with sem:
                 try:
                     return await _run_subagent(
@@ -1750,14 +1863,25 @@ def create_agent_graph(
 
     # What an in-graph `task` subagent can resolve: the snapshot _build_task_tools takes.
     task_resolvable = frozenset(t.name for t in all_tools)
+    # The FULL lead tool vocabulary the dispatch guard (#4327) scans prompts against. The
+    # task tool's own tool_map is this pre-filesystem snapshot, so it can't see read_file/
+    # pdf_look; this live set is populated with the final lead toolset once assembly ends
+    # (below), and the task closures read it only at delegation time — long after.
+    lead_tool_name_holder: set[str] = set()
+    # The lead-only delegation controls (``task``/``task_batch``/``stop_task``) a subagent
+    # can NEVER be granted (depth is bounded to one level) — so they must stay OUT of the
+    # vocabulary the #4327 guard scans, or ``\btask\b`` refuses every "Your task is to …"
+    # prompt. Captured from the factory's own output so a new control tool is covered too.
+    delegation_tool_names: set[str] = set()
     if include_subagents:
-        all_tools.extend(
-            _build_task_tools(
-                config,
-                all_tools,
-                background_mgr=background_mgr,
-            )
+        task_tools = _build_task_tools(
+            config,
+            all_tools,
+            background_mgr=background_mgr,
+            lead_tool_names=lead_tool_name_holder,
         )
+        delegation_tool_names = {t.name for t in task_tools}
+        all_tools.extend(task_tools)
 
     # Fenced multi-project filesystem toolset (ADR 0007 — operator primitives).
     # Opt-in; inert unless filesystem.enabled + a non-empty projects registry.
@@ -1838,6 +1962,12 @@ def create_agent_graph(
 
     # Split over the FINAL set, so a held late tool or search_tools is covered too.
     lead_tools, subagent_only_tools = split_subagent_only(all_tools, config, resolvable=task_resolvable)
+    # Publish the final lead vocabulary to the dispatch guard (#4327): now that
+    # filesystem/late/MCP tools are bound, read_file/pdf_look etc. are visible to the
+    # prompt scan. In place so the task closures that already captured this set see it.
+    # The delegation controls are excluded (see ``delegation_tool_names`` above): they're
+    # lead-only, so scanning for them would flag the ordinary word "task" in a prompt.
+    lead_tool_name_holder.update(t.name for t in lead_tools if t.name not in delegation_tool_names)
     # A held tool is still the agent's capability, reached through `task`, so moving a tool
     # into or out of tools.subagent_only is not a toolset change to announce. Announcing it
     # as "No longer available" sent a live agent (Frank, 10-10) off answering the note
