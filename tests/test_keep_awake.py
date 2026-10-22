@@ -145,22 +145,19 @@ def test_windows_backend(monkeypatch, caplog):
     assert not caplog.records
 
 
-@pytest.mark.parametrize("fail_on_release", [False, True])
-def test_windows_null_failure_is_logged_once(monkeypatch, caplog, fail_on_release):
+def test_windows_zero_return_is_not_treated_as_failure(monkeypatch, caplog):
+    """SetThreadExecutionState returns the PREVIOUS state; a fresh thread can return 0 on
+    success, so a zero must still hold and release the assertion, with no warning."""
     monkeypatch.setattr(keep_awake.sys, "platform", "win32")
-    results = [0x80000000, 0] if fail_on_release else [0]
-    state = Mock(side_effect=results * 2)
+    state = Mock(side_effect=[0, 0] * 2)
     monkeypatch.setattr(keep_awake.ctypes, "windll", SimpleNamespace(kernel32=SimpleNamespace(
         SetThreadExecutionState=state)), raising=False)
     with caplog.at_level(logging.INFO):
         for _ in range(2):
             with keep_awake.hold("test"):
                 assert keep_awake._users == 1
-    expected = [(0x80000001,), (0x80000000,)] if fail_on_release else [(0x80000001,)]
-    assert [call.args for call in state.call_args_list] == expected * 2
-    assert len(caplog.records) == 1
-    message = "SetThreadExecutionState reset failed" if fail_on_release else "SetThreadExecutionState failed"
-    assert message in caplog.records[0].message
+    assert [call.args for call in state.call_args_list] == [(0x80000001,), (0x80000000,)] * 2
+    assert not caplog.records
     assert keep_awake._users == 0
     assert keep_awake._release is None
 

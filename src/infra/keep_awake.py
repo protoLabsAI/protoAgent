@@ -39,13 +39,14 @@ def _acquire(reason: str):
         # EXECUTION_STATE is a DWORD, including the high ES_CONTINUOUS bit.
         set_state.argtypes = [ctypes.c_uint32]
         set_state.restype = ctypes.c_uint32
-        # Win32 documents NULL (zero) as failure, not INVALID_HANDLE_VALUE.
-        if set_state(0x80000000 | 0x00000001) == 0:
-            raise OSError("SetThreadExecutionState failed")
+        # The return value is the PREVIOUS state, and NULL means failure, but a
+        # thread with no prior state can also return 0 on success. A zero return is
+        # ambiguous, so don't treat it as failure: keep-awake is best-effort, and
+        # refusing here would silently drop the assertion on a fresh thread.
+        set_state(0x80000000 | 0x00000001)
 
         def release():
-            if set_state(0x80000000) == 0:
-                raise OSError("SetThreadExecutionState reset failed")
+            set_state(0x80000000)
 
         return release
     if sys.platform == "darwin":
