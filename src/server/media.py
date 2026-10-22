@@ -44,3 +44,18 @@ def register_media_routes(app) -> None:
         if link is None:
             raise HTTPException(status_code=404, detail="media not found")
         return {"url": link, "expires_in": OPEN_LINK_TTL_S}
+
+    # Re-mint an EXPIRED signed link this box minted (#4274): a member's old hub-console history
+    # carries expiring links (``media.remote_link_ttl_s``, default 7 days), so once they lapse the
+    # inline image 403s. This hands back a fresh link for the SAME file. Behind the operator bearer
+    # like open-link — a valid signature in the body does NOT exempt it (it is not a media path).
+    # The handler logs nothing: the body carries a ``sig`` (and the full signed URL), and neither
+    # must reach the logs.
+    @app.post("/api/media/remint", include_in_schema=False)
+    async def _media_remint(body: dict) -> dict:
+        from infra.media import remint_link
+
+        link = remint_link(str((body or {}).get("url") or ""))
+        if link is None:
+            raise HTTPException(status_code=404, detail="media not found")
+        return {"url": link}
