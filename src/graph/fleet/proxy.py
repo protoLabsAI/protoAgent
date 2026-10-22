@@ -26,7 +26,7 @@ import secrets
 import time
 
 import httpx
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from a2a_impl.hosts import cross_site_refusal as _cross_site_refusal
 from a2a_impl.hosts import host_allowed as _host_allowed
@@ -137,6 +137,23 @@ _TURN_PATHS = frozenset({"api/chat"})
 # Only MUTATIONS take this lane: the GET polls under api/chat/ (attend, turns) are exactly the
 # traffic the view lane bounds (#2590).
 _TURN_PREFIX = "api/chat/"
+
+# Detached long-turn lane for a member's /api/chat (#4277 slice 2).
+#
+# A member agent turn can run far past the _TURN_TIMEOUT read cap. When the hub waited the whole
+# turn on one socket and hit 600s it answered 504 AND closed the upstream — and that disconnect
+# cancels the member's turn (#4205 cancel-on-disconnect), so a long member turn proxied through
+# the hub could never finish. Instead the hub rewrites a sync POST api/chat into submit-then-poll
+# (bd-bas5 / #4277 slice 1): it adds detach:true, the member answers 202 {turn_id, session_id},
+# and the hub polls GET …/turns/{turn_id} every _DETACHED_POLL_S — each poll on the bounded
+# _READ_TIMEOUT lane — until the turn is terminal or the _DETACHED_TURN_MAX_S ceiling. The turn
+# lives on the member, not on a parked hub socket, and the hub answers its caller in the SAME
+# shape a sync /api/chat returns. See _forward_chat_detach.
+_DETACHED_POLL_S = 2.0
+_DETACHED_TURN_MAX_S = 3600
+
+# Injectable monotonic clock so a test can drive the ceiling without real time.
+_now = time.monotonic
 
 
 def _timeout_for(request, path: str) -> httpx.Timeout:
@@ -272,14 +289,11 @@ def _target_for_slug(slug: str) -> tuple[str, dict] | None:
 _SSE_KEEPALIVE_S = 30.0
 
 
-async def _forward_to_base(
-    base: str, request, path: str, extra_headers: dict | None = None, *, drop_params: frozenset[str] = frozenset(),
-    ticket_binding: tuple[str, str, str] | None = None,
-):
-    """Stream-proxy ``request`` to ``<base>/<path>`` (SSE-safe). ``drop_params`` names query
-    params that must not ride upstream (a remote never gets the hub-signed ``?token=``)."""
-    url = f"{base}/{path}"
-    body = await request.body()
+def _proxy_headers(request, extra_headers: dict | None) -> dict:
+    """App headers for an upstream dial: hop-by-hop stripped, then ``extra_headers`` applied as
+    a case-insensitive override (a value of None drops the caller's header outright, e.g. a
+    tokenless remote's Authorization). Shared by the streaming proxy and the detached-chat
+    poller so both forward byte-identical headers."""
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP}
     if extra_headers:
         # A header in extra REPLACES the caller's — drop any case-variant first, else the
@@ -289,6 +303,18 @@ async def _forward_to_base(
         overridden = {k.lower() for k in extra_headers}
         headers = {k: v for k, v in headers.items() if k.lower() not in overridden}
         headers.update({k: v for k, v in extra_headers.items() if v is not None})
+    return headers
+
+
+async def _forward_to_base(
+    base: str, request, path: str, extra_headers: dict | None = None, *, drop_params: frozenset[str] = frozenset(),
+    ticket_binding: tuple[str, str, str] | None = None,
+):
+    """Stream-proxy ``request`` to ``<base>/<path>`` (SSE-safe). ``drop_params`` names query
+    params that must not ride upstream (a remote never gets the hub-signed ``?token=``)."""
+    url = f"{base}/{path}"
+    body = await request.body()
+    headers = _proxy_headers(request, extra_headers)
 
     client = _get_client()
     upstream_req = client.build_request(
@@ -388,6 +414,236 @@ async def _forward_to_base(
 
     resp_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP}
     return StreamingResponse(_pipe(), status_code=upstream.status_code, headers=resp_headers)
+
+
+def _detach_chat_body(raw: bytes) -> bytes | None:
+    """The request body to forward with ``detach: true`` injected, or None to forward the
+    request verbatim with no polling (#4277 slice 2).
+
+    None when the body is not a JSON object, or the caller already set ``detach`` (true or
+    false is honored exactly as sent — the hub only takes over a plain sync call). Everything
+    else in the body is preserved untouched."""
+    try:
+        data = json.loads(raw or b"")
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict) or "detach" in data:
+        return None
+    return json.dumps({**data, "detach": True}).encode("utf-8")
+
+
+def _passthrough(resp) -> Response:
+    """Hand a non-streamed upstream response back verbatim (hop-by-hop headers stripped). Used
+    when a member ignored ``detach`` and answered a full sync body (an older core), when a 202
+    carried no id to poll, or when a poll itself returned a non-200 the caller should see."""
+    headers = {k: v for k, v in resp.headers.items() if k.lower() not in _HOP}
+    return Response(content=resp.content, status_code=resp.status_code, headers=headers)
+
+
+def _detached_turn_status(err: dict) -> tuple[int, dict[str, str] | None]:
+    """HTTP status (+ any Retry-After) for a detached turn's ``error`` dict — a verbatim mirror
+    of ``operator_api.chat_routes._turn_error_status`` (#3973 policy). Duplicated, not imported:
+    ``graph/`` must never import ``operator_api`` (the import-layering invariant). A sync
+    /api/chat maps the same ``turn_error`` dict this way, so a detached failure answers the
+    caller with the identical status."""
+    upstream = err.get("upstream_status")
+    if upstream == 429:
+        status = 429
+    elif isinstance(upstream, int) or err.get("upstream_unreachable") or err.get("upstream_stream_closed"):
+        status = 502
+    elif err.get("model_unavailable"):
+        status = 503
+    elif err.get("type") == "turn_cancelled":
+        status = 409
+    elif err.get("type") == "invalid_request_error":
+        status = 400
+    else:
+        status = 500
+    headers = {"Retry-After": str(err["retry_after"])} if status in (429, 503) and err.get("retry_after") else None
+    return status, headers
+
+
+def _detached_error_response(data: dict, session_id: str) -> JSONResponse:
+    """A failed/canceled detached turn in the ``{"detail": {...}}`` envelope a sync POST
+    /api/chat raises (``operator_api.chat_routes._api_chat_error``). The turn's own ``error``
+    dict (``turn_error`` shape, carried by the poll body) drives both the status and the
+    detail; a canceled turn with no error bubble is treated as an operator stop (409)."""
+    err = data.get("error")
+    if not isinstance(err, dict):
+        err = (
+            {"type": "turn_cancelled", "message": "Turn stopped.", "upstream_status": None}
+            if data.get("state") == "canceled"
+            else {"type": "server_error", "message": "the turn failed", "upstream_status": None}
+        )
+    status, headers = _detached_turn_status(err)
+    detail = {
+        "code": err.get("type") or "server_error",
+        "message": err.get("message") or "the turn failed",
+        "upstream_status": err.get("upstream_status"),
+        "session_id": session_id,
+        "error_id": secrets.token_hex(4),
+    }
+    for key in ("retry_after", "retry_at", "quota_exhausted", "provider_rate_limited"):
+        if key in err:
+            detail[key] = err[key]
+    return JSONResponse({"detail": detail}, status_code=status, headers=headers)
+
+
+async def _client_gone(request) -> bool:
+    """True when the hub's OWN client has disconnected (Starlette ``is_disconnected``). A
+    request object without the method — or one that errors reading it — is treated as still
+    connected; the ceiling still bounds the poll either way."""
+    check = getattr(request, "is_disconnected", None)
+    if check is None:
+        return False
+    try:
+        return bool(await check())
+    except Exception:  # noqa: BLE001 — a receive hiccup isn't a disconnect; the ceiling bounds us
+        return False
+
+
+async def _cancel_detached_turn(client, base: str, session_id: str, turn_id: str, headers: dict) -> None:
+    """Best-effort Stop of a member's detached turn after the hub's own caller left (#4277 slice 2).
+
+    Restores the #4205 cancel-on-disconnect an interactive sync /api/chat has but a detached
+    turn would otherwise lose: POSTs the member's operator Stop route
+    (``…/local-turns/{turn_id}/cancel`` — the one the console Stop button hits) on the bounded
+    read lane, carrying the auth headers already resolved for this proxied call. The caller's
+    socket is gone, so the outcome can't be surfaced — any failure is swallowed and logged by
+    turn id alone (never the bearer or body)."""
+    cancel_url = f"{base}/api/chat/sessions/{session_id}/local-turns/{turn_id}/cancel"
+    try:
+        await client.send(client.build_request("POST", cancel_url, headers=headers, timeout=_READ_TIMEOUT))
+    except Exception as exc:  # noqa: BLE001 — best effort; the caller is gone, nothing to report
+        log.info("[fleet] stop of abandoned detached turn %s failed: %s", turn_id, type(exc).__name__)
+
+
+async def _forward_chat_detach(slug, base, request, path, extra, drop_params, body: bytes):
+    """Submit a member /api/chat turn detached and poll it to completion (#4277 slice 2).
+
+    ``body`` is the caller's JSON with ``detach: true`` injected; headers (``extra``), auth and
+    the query (minus ``drop_params``) are forwarded exactly as the sync proxy would. The member
+    answers 202 ``{turn_id, session_id}``; the hub then polls ``GET …/turns/{turn_id}`` every
+    ``_DETACHED_POLL_S`` on the bounded read lane until the turn is terminal or
+    ``_DETACHED_TURN_MAX_S`` elapses, and answers its caller in the shape a sync /api/chat
+    returns — 200 ``{response, messages, session_id}``; the sync error envelope for
+    failed/canceled; 504 naming the turn (and a hub-side poll URL) at the ceiling. A transport
+    error on any single poll (or a 200 body that isn't a JSON object) is treated as a slow poll
+    and retried — the turn runs on the member, so one failed poll never aborts the proxy and
+    strands it; only a non-200 answer the caller should see (404/422) or the ceiling ends the loop.
+
+    A member that answers 200 (an older core that ignores ``detach``) is passed through
+    unchanged. If the hub's OWN client disconnects while polling, polling stops and the hub
+    sends the member a best-effort Stop (``…/local-turns/{turn_id}/cancel``) — the interactive
+    REST chat's #4205 cancel-on-disconnect, which the sync proxy got for free (the browser
+    leaving closed the hub's one upstream socket and the member's ``_run_disconnectable_chat``
+    cancelled the turn) and a detached turn would otherwise lose, so an abandoned turn stops
+    spending tokens and releases the session turn lock instead of running on until a manual
+    Stop. Only the hub's own caller leaving triggers this: a hub↔member disconnect DURING the
+    turn still never cancels it (the turn is detached and each poll is its own short request) —
+    that decoupling is the whole point of the lane. Diagnostics name only the turn id and
+    member base, never the body or any bearer."""
+    import asyncio
+
+    client = _get_client()
+    headers = _proxy_headers(request, extra)
+    params = {k: v for k, v in dict(request.query_params).items() if k not in drop_params}
+
+    # Submit on the turn lane: a new core answers 202 at once; an old core (ignores detach)
+    # runs the whole turn here and answers 200 — the same 600s cap it has today, no regression.
+    try:
+        submitted = await client.send(
+            client.build_request("POST", f"{base}/{path}", headers=headers, content=body, params=params, timeout=_TURN_TIMEOUT)
+        )
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return JSONResponse({"detail": "agent is not reachable"}, status_code=502)
+    except httpx.ReadTimeout:
+        log.warning("[fleet] proxied POST %s/%s timed out submitting the turn", base, path)
+        return JSONResponse({"detail": "agent did not respond in time"}, status_code=504)
+    except httpx.HTTPError as exc:
+        # No turn id yet (the submit itself failed), so there is nothing to poll — answer the
+        # honest 502 a sync call gives for a dropped connection rather than letting any other
+        # httpx error (ReadError/RemoteProtocolError/PoolTimeout/…) escape as a generic hub 500.
+        log.warning("[fleet] proxied POST %s/%s failed submitting the turn (%s)", base, path, type(exc).__name__)
+        return JSONResponse({"detail": "agent is not reachable"}, status_code=502)
+
+    if submitted.status_code != 202:
+        return _passthrough(submitted)  # old core answered the turn inline, or rejected the request
+    try:
+        info = json.loads(submitted.content)
+        turn_id = info["turn_id"]
+        session_id = info["session_id"]
+    except (ValueError, KeyError, TypeError):
+        return _passthrough(submitted)  # a 202 we can't poll — hand it back as-is
+    if not isinstance(turn_id, str) or not isinstance(session_id, str):
+        return _passthrough(submitted)
+
+    poll_path = f"api/chat/sessions/{session_id}/turns/{turn_id}"
+    poll_url = f"{base}/{poll_path}"
+    hub_poll_url = f"/agents/{slug}/{poll_path}"  # what the hub's caller GETs to keep polling
+    deadline = _now() + _DETACHED_TURN_MAX_S
+    while True:
+        if await _client_gone(request):
+            # The hub's own caller left. An interactive sync /api/chat cancels on disconnect
+            # (#4205): the browser leaving closed the hub's one upstream socket and the member's
+            # _run_disconnectable_chat stopped the turn. A detached turn has no such socket, so
+            # the hub restores that guarantee explicitly — a best-effort Stop so the abandoned
+            # turn stops spending tokens and frees the session turn lock, instead of running on
+            # until a manual Stop. The 499 we return is dropped (the socket is already gone).
+            await _cancel_detached_turn(client, base, session_id, turn_id, headers)
+            log.info("[fleet] chat client left while polling detached turn %s — sent a Stop", turn_id)
+            return JSONResponse({"detail": "client disconnected"}, status_code=499)
+        try:
+            poll = await client.send(client.build_request("GET", poll_url, headers=headers, timeout=_READ_TIMEOUT))
+        except httpx.HTTPError as exc:
+            # The turn is already running detached on the member, so a transport error on ONE poll
+            # must never abort the proxy and strand it: not a ReadTimeout, and not any of the other
+            # httpx failures a long poll string hits (ConnectError/ConnectTimeout, ReadError,
+            # RemoteProtocolError on a dropped keep-alive, PoolTimeout, WriteError, …). Surfacing
+            # one as a hub 500, or as a bare 502 with no turn id, is the EXACT failure this lane
+            # removes — the member keeps working but the caller loses the id to recover it. Treat
+            # every poll error as a single slow poll: log by type (never the bearer or body), fall
+            # through to the ceiling check, and retry. If the member never answers again the ceiling
+            # hands the caller the poll URL to resume; nothing in the loop becomes a hub 5xx.
+            log.info("[fleet] poll of detached turn %s failed (%s) — retrying", turn_id, type(exc).__name__)
+            poll = None
+        if poll is not None:
+            if poll.status_code != 200:
+                return _passthrough(poll)  # unknown/expired turn (404), bad session (422), …
+            try:
+                state_data = json.loads(poll.content)
+            except (ValueError, TypeError):
+                state_data = None
+            # A 200 body that parsed but is not an object (a bare list / string / null) carries no
+            # state we can read — ``.get`` on it would raise AttributeError and escape as a hub 500.
+            # Treat it like an unfinished poll and retry, same as a transport error above.
+            state = state_data.get("state") if isinstance(state_data, dict) else None
+            if state == "completed":
+                return JSONResponse(
+                    {
+                        "response": state_data.get("response", ""),
+                        "messages": state_data.get("messages") or [],
+                        "session_id": session_id,
+                    },
+                    status_code=200,
+                )
+            if state in ("failed", "canceled"):
+                return _detached_error_response(state_data, session_id)
+        if _now() >= deadline:
+            # The member turn is NOT cancelled — it keeps running; the caller can keep polling
+            # the hub at hub_poll_url. 504 so a fronting proxy/panel renders a real "still working".
+            log.warning("[fleet] detached turn %s still running after %ss ceiling — handing back a poll URL", turn_id, _DETACHED_TURN_MAX_S)
+            return JSONResponse(
+                {
+                    "detail": f"turn {turn_id} still running after {_DETACHED_TURN_MAX_S}s; keep polling {hub_poll_url}",
+                    "turn_id": turn_id,
+                    "session_id": session_id,
+                    "poll_url": hub_poll_url,
+                    "state": "working",
+                },
+                status_code=504,
+            )
+        await asyncio.sleep(_DETACHED_POLL_S)
 
 
 async def forward_to(slug: str, request, path: str):
@@ -509,6 +765,16 @@ async def _forward_member(slug: str, request, path: str, raw_path: str, target):
         # covers agents that are WORKING, not just ones the operator clicked.
         with contextlib.suppress(Exception):
             supervisor.touch(slug)
+    # Long member turns → submit-then-poll (#4277 slice 2): a sync POST api/chat the caller did
+    # NOT already mark detach is forwarded with detach:true and polled to completion, so a turn
+    # longer than the _TURN_TIMEOUT read cap can't 504 the hub (and that 504 + upstream close
+    # can't cancel the member's turn, #4205). The auth (``extra``) and ``drop_params`` resolved
+    # above ride unchanged; an explicit detach, a non-JSON body, or a 200 from an old core all
+    # fall through / pass through. See _forward_chat_detach.
+    if request.method == "POST" and path.strip("/") == "api/chat":
+        detached = _detach_chat_body(await request.body())
+        if detached is not None:
+            return await _forward_chat_detach(slug, base, request, raw_path, extra, drop_params, detached)
     from a2a_impl.socket_guard import request_device_id
 
     device = request_device_id(request)
