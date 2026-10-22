@@ -1,5 +1,6 @@
 import "./hitl.css";
 import { Markdown } from "./LazyMarkdown";
+import { HitlDisplay } from "./HitlDisplay";
 import { Checkbox, DropdownSelect, Input, Textarea } from "@protolabsai/ui/forms";
 import { Button } from "@protolabsai/ui/primitives";
 import { useEffect, useRef, useState } from "react";
@@ -316,6 +317,7 @@ export function HitlForm({
         <div className="hitl-title">{payload.title || "Approve this action?"}</div>
         {payload.description && <HitlProse text={payload.description} />}
         {payload.detail && <pre className="hitl-detail">{payload.detail}</pre>}
+        <HitlDisplay display={payload.display} />
         {payload.options && payload.options.length > 0 ? (
           // Server-supplied choices: each resumes with its own value, verbatim (the
           // server binds them to what the card shows). Never an "always" button here.
@@ -384,6 +386,7 @@ export function HitlForm({
       <div className="hitl-card" role="dialog" aria-label="Input requested" ref={rootRef} onKeyDown={onRootKeyDown}>
         <div className="hitl-title">{payload.title || "Input requested"}</div>
         <HitlProse text={prompt} />
+        <HitlDisplay display={payload.display} />
         {/* No autoFocus: it fires at COMMIT (before effects), which would make the
             restore-focus capture above see this textarea instead of the composer.
             The focus-grab effect owns landing here instead. */}
@@ -457,6 +460,7 @@ export function HitlForm({
         )}
       </div>
       {payload.description && <HitlProse text={payload.description} />}
+      <HitlDisplay display={payload.display} />
 
       <div className="hitl-step" key={stepIdx}>
         {step.title && <div className="hitl-step-title">{step.title}</div>}

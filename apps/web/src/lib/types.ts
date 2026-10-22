@@ -1348,7 +1348,17 @@ export type HitlApprovalOption = {
   primary?: boolean;
 };
 
+export type HitlDisplayTable = {
+  component: "table";
+  props: {
+    columns: string[];
+    rows: (string | number | boolean | null)[][];
+  };
+};
+
 export type HitlPayload = {
+  // Inert presentation only; host actions still own the interrupt response.
+  display?: HitlDisplayTable;
   kind?: "form" | "approval";
   title?: string;
   description?: string;
