@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import hashlib
 import json
 import logging
 import os
@@ -291,6 +292,7 @@ def save_file_artifact(
     title: str = "",
     artifact_id: str = "",
     project: str = "",
+    link: bool = False,
     state: Annotated[Any, InjectedState] = None,
 ) -> str:
     """Save a GENERATED FILE (a .docx / .xlsx / .pptx / .pdf / image / text file you already
@@ -321,10 +323,28 @@ def save_file_artifact(
     must lie inside that project's root; for a file anywhere else, leave ``project`` empty.
 
     This is for FILES on disk. To render HTML/SVG/React/Markdown/charts, use ``show_artifact``.
+
+    ``link=True`` LINKS the file in place instead of copying its bytes (ADR 0092 D2). Use it for
+    reference material you did NOT produce — a long source PDF, a dataset, a spec — that the user
+    should be able to open from the panel without the agent storing a copy. The file must live
+    inside a registered filesystem project (it's served from there through the live project
+    fence); a path outside every project, or a symlink escaping one, is refused. A linked
+    artifact is READ-ONLY: it keeps no copy and no version history, so it can't be revised —
+    don't pass ``artifact_id`` with ``link=True``, and don't try to revise a linked artifact
+    (save it without ``link`` for an editable, versioned copy). The 25 MB ``max_blob_kb`` cap does
+    not apply; a linked file has its own, larger ``max_linked_kb`` cap (200 MB default).
     """
+    if link and artifact_id:
+        return (
+            "link=True can't be combined with artifact_id: a linked artifact serves a file in "
+            "place and is read-only — it has no revisions. Drop artifact_id to link the file, or "
+            "drop link=True to save a new (copied) revision of that artifact."
+        )
     p, why = _resolve_file(path, project)
     if p is None:
         return why
+    if link:
+        return _save_linked_artifact(p, path, project, title, _chat_session(state))
     prepared = _prepare_file(p)
     if isinstance(prepared, str):
         return prepared
@@ -340,6 +360,19 @@ def _too_large(size: int) -> str:
         f"File too large ({size // 1024} KB > {limit // 1024} KB). Raise the artifact "
         f"max_blob_kb setting (Settings → Artifact → max blob size, or ARTIFACT_MAX_BLOB_KB) "
         f"if you really need to store a file this big."
+    )
+
+
+def _too_large_linked(size: int) -> str:
+    """The size gate for a LINKED file (#4370) — the larger ``max_linked_kb`` cap, since a link
+    stores no blob. Shape matches ``_too_large`` so ``_prepare_file`` can take either."""
+    limit = _config._max_linked_bytes()
+    if size <= limit:
+        return ""
+    return (
+        f"File too large to link ({size // 1024} KB > {limit // 1024} KB). Raise the artifact "
+        f"max_linked_kb setting (Settings → Artifact → max linked size, or ARTIFACT_MAX_LINKED_KB) "
+        f"if you really need to link a file this big."
     )
 
 
@@ -361,20 +394,25 @@ class _PreparedFile:
         return {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
 
 
-def _prepare_file(p: Path) -> _PreparedFile | str:
+def _prepare_file(p: Path, too_large=_too_large) -> _PreparedFile | str:
     """Read ``p`` and build everything a file version stores, or the refusal text. Shared by the
     ``save_file_artifact`` tool and the ``artifact.save_file`` service (#4253), so both get the
-    same blob cap, mime guess, preview, thumbnail and per-type preflights.
+    same mime guess, preview, thumbnail and per-type preflights.
+
+    ``too_large`` is the size gate — ``_too_large`` (the ``max_blob_kb`` cap) by default, or
+    ``_too_large_linked`` (the larger ``max_linked_kb`` cap) for a linked save (#4370). It is
+    parameterised rather than duplicated so preview, thumb and the pdf/docx/pptx preflights are
+    built identically for a copied and a linked file.
 
     The size is checked on the STAT before reading, so an oversize file is refused without
     pulling it into memory, and again on the bytes read (the file may have grown since)."""
     try:
-        if err := _too_large(p.stat().st_size):
+        if err := too_large(p.stat().st_size):
             return err
         data = p.read_bytes()
     except OSError as e:
         return f"Couldn't read {p.name!r}: {e}."
-    if err := _too_large(len(data)):
+    if err := too_large(len(data)):
         return err
     # The slow part — reading the file, extracting its preview (up to 50 PDF/DOCX pages),
     # thumbnailing — happens BEFORE the store lock: it touches no store state, and the lock is
@@ -393,6 +431,28 @@ def _prepare_file(p: Path) -> _PreparedFile | str:
     docx = _docx.preflight(data) if _docx.is_docx(p.name, mime) else None
     ext = p.suffix.lower().lstrip(".") or "bin"
     return _PreparedFile(p.name, data, mime, preview, thumb, ext, slides, pdf, docx)
+
+
+def _file_meta(
+    filename: str,
+    mime: str,
+    size: int,
+    thumb: str | None,
+    slides: dict | None,
+    pdf: dict | None,
+    docx: dict | None,
+) -> dict:
+    """The ``file`` metadata a file version stores ({mime, filename, size, thumb} + any per-type
+    preflight). Shared by the copied (``_save_file``) and linked (``_save_linked``) saves so both
+    stamp it identically — only the bytes differ (a sidecar blob vs. an in-place link)."""
+    meta: dict = {"mime": mime, "filename": filename, "size": size, "thumb": thumb or ""}
+    if slides is not None:
+        meta["slides"] = slides
+    if pdf is not None:
+        meta["pdf"] = pdf
+    if docx is not None:
+        meta["docx"] = docx
+    return meta
 
 
 @_store.serialized
@@ -424,6 +484,12 @@ def _save_file(
             f"Artifact {artifact_id!r} is a {art['kind']} artifact, not a file — save_file_artifact "
             f"can only revise a file artifact. Omit artifact_id to create a new one."
         ), None
+    if art is not None and art.get("linked") is True:
+        return (
+            f"Artifact {artifact_id!r} is a linked artifact — it serves a file in place from a "
+            f"project, so it is read-only and has no revisions. Save the file without link=True "
+            f"for an editable, versioned copy."
+        ), None
 
     art_id = art["id"] if art else _store._new_id()
     blob_name = f"{secrets.token_hex(8)}.{ext}"
@@ -431,18 +497,7 @@ def _save_file(
     blob_file.parent.mkdir(parents=True, exist_ok=True)
     blob_file.write_bytes(data)
 
-    file_meta = {
-        "mime": mime,
-        "filename": filename,
-        "size": len(data),
-        "thumb": thumb or "",
-    }
-    if slides is not None:
-        file_meta["slides"] = slides
-    if pdf is not None:
-        file_meta["pdf"] = pdf
-    if docx is not None:
-        file_meta["docx"] = docx
+    file_meta = _file_meta(filename, mime, len(data), thumb, slides, pdf, docx)
     if art is None:
         nv = _store._new_version(preview, extra={"file": file_meta, "blob": blob_name})
         art = {
@@ -470,6 +525,126 @@ def _save_file(
         f"Saved file artifact {art_id} → v{v}: {filename} ({mime}, {kb} KB) — now in the "
         f"Artifact panel with a preview and a Download button."
     ), (art_id, v, _ref.ref_tail(art))
+
+
+# ── linked file artifacts (ADR 0092 D2 extension, #4370) ─────────────────────────────
+# A LINKED version stores no blob — only a fenced (project, project-relative path) reference
+# plus a size/mtime/sha256 stamp. It serves the document in place from the registered project
+# (re-resolved through the live fence when served, card 2), is read-only, and keeps no history.
+
+
+def _project_for(registry, p: Path, prefer: str = "") -> tuple[str, str] | None:
+    """``(project, project-relative path)`` for the registered project that contains the file
+    ``p``, or ``None`` when no project does — the fence a linked save needs: a file outside every
+    project (or a symlink whose target resolves outside the one it sits in) has no home to serve
+    it from and is refused.
+
+    ``p`` is resolved (symlinks followed) and matched to each root by file IDENTITY
+    (``samefile``), the same guard ``_project_relative`` uses: a symlink that escapes its project,
+    and a case-variant of a root on a case-insensitive volume, both fail to look inside one.
+    ``prefer`` (the explicitly passed ``project``) is tried first so an operator's choice wins
+    when project roots overlap."""
+    if registry is None:
+        return None
+    target = p.resolve()
+    names = registry.names()
+    ordered = [prefer, *[n for n in names if n != prefer]] if prefer in names else names
+    for name in ordered:
+        try:
+            root = registry.resolve(name, ".")
+        except ValueError:
+            continue  # unknown / missing-root project — not part of the fence
+        for base in (target, *target.parents):
+            try:
+                same = base == root or base.samefile(root)
+            except OSError:
+                continue
+            if same and base != target:
+                return name, str(target.relative_to(base))
+    return None
+
+
+def _link_meta(p: Path, project: str, rel: str, data: bytes) -> dict | str:
+    """The stored reference for a linked version, or the refusal text. NEVER an absolute path:
+    only (project, project-relative path, size, mtime_ns, sha256). ``data`` is the bytes
+    ``_prepare_file`` already read, so the digest needs no second read of the file."""
+    try:
+        mtime_ns = p.stat().st_mtime_ns
+    except OSError as e:
+        return f"Couldn't read {p.name!r}: {e}."
+    return {
+        "project": project,
+        "path": Path(rel).as_posix(),
+        "size": len(data),
+        "mtime_ns": mtime_ns,
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
+
+
+def _save_linked_artifact(p: Path, path: str, project: str, title: str, session_id: str) -> str:
+    """The ``link=True`` half of ``save_file_artifact``: fence ``p`` to a registered project,
+    build the same preview/thumb/preflights as a copied save (under the larger linked cap), and
+    store a reference-only version. Refuses a file that resolves outside every project."""
+    found = _project_for(_links._registry(), p, prefer=project)
+    if found is None:
+        return (
+            f"link=True needs a file inside a registered filesystem project — it serves the file "
+            f"in place from there, so {path!r} (which resolves outside every project) can't be "
+            f"linked. Pass a path inside a project, or save it without link=True to copy its bytes."
+        )
+    proj_name, rel = found
+    prepared = _prepare_file(p, too_large=_too_large_linked)
+    if isinstance(prepared, str):
+        return prepared
+    link = _link_meta(p, proj_name, rel, prepared.data)
+    if isinstance(link, str):
+        return link
+    return _save_linked(**prepared.fields(), title=title, link=link, session_id=session_id)
+
+
+@_store.serialized
+def _save_linked(
+    filename: str,
+    data: bytes,
+    mime: str,
+    preview: str,
+    thumb: str | None,
+    ext: str,
+    link: dict,
+    title: str = "",
+    slides: dict | None = None,
+    pdf: dict | None = None,
+    docx: dict | None = None,
+    session_id: str = "",
+) -> str:
+    """Store a LINKED file version (#4370): the usual ``file`` meta + a ``link`` reference and NO
+    blob — the bytes stay in the project. Always a NEW artifact (``link=True`` forbids
+    ``artifact_id``), ``kind: "file"`` and marked ``linked: true`` so revision tools refuse it."""
+    store = _store._read_store()
+    art_id = _store._new_id()
+    file_meta = _file_meta(filename, mime, link["size"], thumb, slides, pdf, docx)
+    nv = _store._new_version(preview, extra={"file": file_meta, "link": link})
+    art = {
+        "id": art_id,
+        "title": title or filename,
+        "kind": "file",
+        "linked": True,
+        "versions": [nv],
+        "version_count": 1,
+        "created": nv["ts"],
+        "updated": nv["ts"],
+    }
+    _stamp_ref(art, session_id)
+    store["artifacts"].insert(0, art)
+    store["current"] = art_id
+    _store._write_store(store)
+    _store._emit("created", {"id": art_id, "kind": "file", "title": art["title"]})
+    kb = link["size"] // 1024
+    return (
+        f"Linked file artifact {art_id} → v1: {filename} ({mime}, {kb} KB) from "
+        f"{link['project']}/{link['path']} — now in the Artifact panel, served in place "
+        f"(read-only, no copy)."
+    ) + _ref.ref_tail(art)
 
 
 def _service_roots(plugin_id: str, roots: Any) -> tuple[list[Path], str]:

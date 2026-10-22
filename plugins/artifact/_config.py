@@ -87,6 +87,14 @@ def _max_blob_bytes() -> int:
     return _cfg_int("max_blob_kb", "ARTIFACT_MAX_BLOB_KB", 25 * 1024) * 1024
 
 
+# The size cap for a LINKED file artifact (ADR 0092 D2 extension, #4370) — much larger than
+# max_blob_kb because a linked version stores NO blob: only a fenced (project, project-relative
+# path) reference plus a size/mtime/sha256 stamp, and serves the document in place from the
+# registered project. 200 MB default.
+def _max_linked_bytes() -> int:
+    return _cfg_int("max_linked_kb", "ARTIFACT_MAX_LINKED_KB", 200 * 1024) * 1024
+
+
 # The extracted-text PREVIEW cap for a `file` version — the diffable projection stored in
 # `code` (docx→text, xlsx→CSV per sheet, pptx→outline, pdf→text). Kept well under
 # max_code_kb so a huge document can't bloat history.json (read on every panel poll).
