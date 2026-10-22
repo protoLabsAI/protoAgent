@@ -690,7 +690,9 @@ def _dispatch_tool_gap(
     return (
         f"Not dispatched: subagent '{subagent_type}' does not have tool(s) "
         f"{', '.join(missing)} that the prompt asks for. Its tools: {its}. "
-        "Do the step yourself, or pick a subagent that has them."
+        "Do the step yourself, or pick a subagent that has them. If the prompt only "
+        'mentions them without asking for them (e.g. "don\'t use X"), re-send it without '
+        "naming those tools."
     )
 
 

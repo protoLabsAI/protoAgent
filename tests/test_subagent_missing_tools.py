@@ -149,6 +149,7 @@ def test_r1_missing_tool_refuses_without_invoking_subagent(monkeypatch):
     assert "Its tools:" in out
     assert "web_search" in out  # the subagent's real tools are listed, sorted
     assert "Do the step yourself, or pick a subagent that has them." in out
+    assert "re-send it without naming those tools" in out
     assert called == []  # _run_subagent (and thus the subagent graph) was never reached
 
 
