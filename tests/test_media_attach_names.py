@@ -110,10 +110,49 @@ def test_repark_preserves_distinct_names_and_existing_content_deduplication(
     try:
         files = media.close_turn_files()
         assert len(files) == expected_count
-        assert files[0]["name"] == (first_name or first.path.name)
+        assert files[0]["name"] == (first_name or second_name or first.path.name)
         assert f"/media/{first.path.name}?" in files[0]["url"]
         if expected_count == 2:
             assert files[1]["name"] == second_name
             assert f"/media/{second.path.name}?" in files[1]["url"]
+    finally:
+        media.end_turn_files(token)
+
+
+@pytest.mark.parametrize("names", [("a.png", "b.png"), ("b.png", "a.png")])
+@pytest.mark.parametrize("same_ref", [False, True])
+@pytest.mark.parametrize("park_named_first", [False, True])
+def test_repark_unnamed_and_distinct_names_survive_resume(
+    names, same_ref, park_named_first, monkeypatch
+):
+    monkeypatch.setattr(media, "_PARKED", {})
+    unnamed = media.save_media(b"same", "image/png")
+    named = [unnamed if same_ref else media.save_media(b"same", "image/png") for _ in names]
+    batches = [[(unnamed, "")], list(zip(named, names))]
+    if park_named_first:
+        batches.reverse()
+    for batch in batches:
+        token = media.begin_turn_files()
+        try:
+            for ref, name in batch:
+                assert media.attach_file(ref, name=name)
+            media.park_turn_files("conversation", "principal")
+            media.park_turn_files("conversation", "principal")
+        finally:
+            media.end_turn_files(token)
+    token = media.begin_turn_files(carry="conversation", principal="principal")
+    try:
+        files = media.turn_files()
+        assert [f["name"] for f in files] == list(names)
+        first = named[0] if park_named_first else unnamed
+        assert f"/media/{first.path.name}?" in files[0]["url"]
+        assert f"/media/{named[1].path.name}?" in files[1]["url"]
+        # The adopted name remains explicit after resume and replaces normally.
+        replacement = media.save_media(b"changed", "image/png")
+        assert media.attach_file(replacement, name=names[0])
+        files = media.close_turn_files()
+        assert [f["name"] for f in files] == list(names)
+        assert f"/media/{replacement.path.name}?" in files[0]["url"]
+        assert f"/media/{named[1].path.name}?" in files[1]["url"]
     finally:
         media.end_turn_files(token)
