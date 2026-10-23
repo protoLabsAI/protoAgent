@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/api";
 import { errMsg } from "../lib/format";
+import { UsageMeter } from "./UsageMeter";
 
 // Native OAuth account lifecycle (#2460) — ONE implementation of status /
 // sign-in (device + redirect) / cancel / disconnect, shared by the Setup Wizard
@@ -196,7 +197,7 @@ export function useOauthLifecycle(opts?: { onSignedIn?: () => void; onDisconnect
 /** The standard account card (Settings ▸ Model): status line + sign-in /
  *  disconnect actions + the in-flight device/redirect flow. The wizard renders
  *  its own JSX over the same hook (it interleaves model probing). */
-export function OAuthAccountCard({ provider, onEdit }: { provider: string; onEdit?: () => void }) {
+export function OAuthAccountCard({ provider, onEdit, showUsage = false }: { provider: string; onEdit?: () => void; showUsage?: boolean }) {
   const lc = useOauthLifecycle();
   const { status, refreshStatus } = lc;
   useEffect(() => {
@@ -277,6 +278,7 @@ export function OAuthAccountCard({ provider, onEdit }: { provider: string; onEdi
           </Button>
         </Callout>
       )}
+      {showUsage && st?.signed_in ? <UsageMeter provider={provider} /> : null}
       {lc.statusError ? <Alert status="error">{lc.statusError}</Alert> : null}
       {lc.loginError ? <Alert status="error">{lc.loginError}</Alert> : null}
     </div>

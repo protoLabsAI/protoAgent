@@ -1,6 +1,7 @@
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 
 import { api, currentSlug } from "./api";
+import { request } from "./api/http";
 import { setDevHooksEnabled } from "./storage";
 import type { FleetTelemetry, ReviewState } from "./types";
 
@@ -570,5 +571,34 @@ export function localChatTurnsQuery(sessionId: string) {
     queryKey: queryKeys.localChatTurns(sessionId),
     queryFn: () => api.localChatTurns(sessionId),
     refetchInterval: 1000,
+  });
+}
+
+export type UsageWindow = {
+  id: string;
+  kind: string;
+  used_pct: number;
+  resets_at: string;
+  status: "ok" | "warning" | "blocked";
+  scope?: { model?: string; bucket?: string } | null;
+};
+export type UsageSnapshot = {
+  accounts: {
+    provider_id: string;
+    status: "ok" | "unknown";
+    stale?: boolean;
+    stale_after?: string;
+    windows?: UsageWindow[];
+  }[];
+};
+
+/** Best-effort usage; mounted observers own polling. */
+export function usageQuery(provider: string) {
+  return queryOptions({
+    queryKey: ns("usage", provider),
+    queryFn: ({ signal }) => request<UsageSnapshot>(`/api/usage?account=${encodeURIComponent(provider)}`, { signal }),
+    retry: false,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   });
 }
