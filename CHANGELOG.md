@@ -15,6 +15,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.213.0] - 2026-10-23
+
+### Added
+- **Re-mint an expired media link (#4274).** `POST /api/media/remint` (operator-authenticated, forwarded through the fleet hub like any other member `/api` call) takes an expired signed media link this box minted and hands back a fresh, unexpired link for the same file — repairing a member's old hub-console history, whose expiring image links (`media.remote_link_ttl_s`, default 7 days) 403 once they lapse. The HMAC must still verify, so a caller can only re-mint a link it was handed (a forged, unsigned, traversal or missing-file link is a 404); unlike `open-link`, expiry is deliberately ignored. The route sits behind the normal bearer — a valid signature does not exempt it — and never logs the `sig` or the full URL.
+
+- **Detached `/api/chat` turns — submit, get a turn id, poll it (#4277).** `POST /api/chat` now accepts `detach: true`, which runs the turn as a background task and returns `202 {turn_id, session_id, state: "working"}` at once. A detached turn survives the client disconnecting (operator Stop still cancels it), appears in `GET …/turns` as `live_task_id` while it runs, and is polled by the new `GET /api/chat/sessions/{session_id}/turns/{turn_id}` — `completed` with the response/messages, `failed` with the error, or `canceled`. Queued local turns leave the oldest turn as the live Stop target, and setup-required or signed-out responses remain pollable. Finished outcomes are retained briefly (bounded by count and age) and never include the prompt. The normal, non-detached call is unchanged, including its cancel-on-disconnect behaviour.
+
+- **Keep scheduled desktop runs awake (#4308).** Hold a shared platform sleep assertion while scheduler fires run, releasing it on completion, error, or cancellation. Set `PROTOAGENT_KEEP_AWAKE=0` to opt out; unavailable platform helpers degrade gracefully.
+
+- **Subagent read-tool inheritance foundations (#4327).** Add default-deny tool classification and an opt-out flag for narrow subagent roles. Dispatch behavior is unchanged in this slice.
+
+- **Linked file artifacts now serve their bytes (#4370).** The artifact blob route serves a linked version's file in place: on every request it re-resolves the stored `(project, project-relative path)` reference through the live filesystem fence — never a stored absolute path — so unregistering the project (or disabling the filesystem) revokes access with a 403, and re-registering restores it. It opens the file first, then stamp-checks that same handle against the saved size/mtime/sha256 (a 409 `changed_or_missing`, with no bytes sent, if the file changed, was swapped, or is gone) before streaming, keeping Range/206 downloads intact. The PDF/DOCX/PPTX previews and Download button render linked files unchanged; the inline media-ticket route reports 415 for a linked version, and blob GC/eviction leave a linked file untouched. Linked-file verification runs in a worker thread; a bounded digest cache keyed by POSIX file identity, size, mtime, and ctime avoids re-reading unchanged files for each Range request. Platforms without POSIX change stamps hash in the worker on every request.
+
+- **Linked file artifacts now show in the panel (#4370).** The Artifact panel renders a linked version (`save_file_artifact(link=True)`) in place: its card and page/slide/document views carry a **"Linked · `<project>/<path>` · read-only"** banner, and the version stepper is hidden (a linked artifact is read-only with no history). A linked PDF/`.docx`/`.pptx` over the 25 MB copy cap (under the 40 MB preview cap) streams through the gated blob route and renders real pages/slides. The panel trusts only the server's per-serve verdict — never resolving a path itself: a **403** maps to *"This linked file is no longer reachable (its project was unregistered or the path left the project)."* and a **409** to *"This file changed or is missing since it was linked. Re-link it to view the current file."*, each shown over the stored extracted-text preview so stale bytes are never drawn, and Download flashes the same two messages.
+
+- **Linked file artifacts — save (#4370).** `save_file_artifact(..., link=True)` now LINKS a document in place from a registered filesystem project instead of copying its bytes. A linked version stores only a fenced `(project, project-relative path)` reference plus a size/mtime/sha256 stamp — no blob — so the 25 MB `max_blob_kb` cap does not apply; a linked file has its own larger `max_linked_kb` cap (200 MB default, `ARTIFACT_MAX_LINKED_KB`). The file must resolve inside a registered project: a path outside every project, or a symlink escaping one, is refused. Linked artifacts are read-only: `link=True` can't be combined with `artifact_id`, and a linked artifact can't be revised. Serving the linked bytes through the live project fence lands in a follow-up.
+
+- **Inert tables beside HITL prompts (#4405).** The console renders bounded, scalar-only display tables with the design system Table alongside approval, form, and question prose. Malformed or unsupported displays fall back to the existing text and host actions; approval values and resume behavior are unchanged.
+
+- **HITL table browser proof (#4405).** Exercise the merged careercoach approval payload in desktop and phone browsers, including inert escaped table text, unchanged approve/decline resume values, and text fallback. Document the built-in display contract and fixed bounds; attach light/dark screenshots as test artifacts.
+
+- **HITL `display`: bounded inline table validation (#4405).** A HITL interrupt (`ask_human` / `request_user_input` / a `run_command` approval) may now carry an optional `display={component:"table", props:{columns, rows}}` of inert render data beside the prompt (ADR 0118). `_interrupt_payload` validates it host-side (`server/hitl_display.py`) against fixed documented limits — non-object props, unknown/custom components, ragged rows, non-scalar cells, non-finite numbers, and excessive dimensions/cell lengths/serialized bytes are rejected — and drops only the `display` on failure, leaving the pause's prose, options and resume value untouched. The caller's payload is copied, never mutated; legacy question/form/approval payloads are unchanged.
+
+- **`show_config` exposes the agent's own console URL (#4424).** A new top-level `self_url` key — in the whole-config view, the section list, and selectable directly via `section="self_url"` — reports `{local, public, preferred}` so an agent can learn where it is served without curl-probing localhost ports (which had hung `terminal_run` and hit the live instance). A wildcard bind (`0.0.0.0` / `::`) is reported as `127.0.0.1`; outside a running server `local` is `""` with a `note`, and no socket is ever opened.
+
+- **Subscription usage fetchers (#4431).** Normalize Claude and Codex subscription windows, including model-scoped and weekly-only limits. Read credentials without refreshing or writing; unavailable usage degrades to unknown with bounded retries and rate-limit back-off.
+- **Subscription usage cache + API (#4431).** An on-demand usage cache (`observability/usage_store.py`) polls each native-OAuth provider at most once a minute (five after a 429, honoured even on a forced refresh), merges window observations newest-first, and persists the last good snapshot so a restart shows last-known data marked stale. The `usage.snapshot` op and `GET /api/usage` (operator-tier, with `account`/`refresh` query params) project it, always returning 200 with `unknown` for a disconnected or failing provider; data changes publish a `provider.usage` event.
+
+- **Passive subscription usage capture (#4432).** Claude OAuth and Codex model response headers now refresh the usage cache between polls without extra HTTP requests or consuming streaming bodies. Capture failures leave model calls unchanged.
+
+- **`protoagent usage` CLI (#4433).** A new command shows subscription usage for the native-OAuth providers (Claude, Codex) — per account and per window (used %, reset countdown, status; scoped windows labelled by model), read from the running instance's `GET /api/usage` (ADR 0122). `--fleet` reads every member through the hub and dedupes by account, listing which members share each one and naming any that are unreachable; `--account` narrows to one provider or account key; `--warn-at PCT` sets the exit code (2 when any **live** window is at or above it, 0 otherwise, 1 when no server/hub answered); a stale account's last-known windows are marked `stale` and never trip the threshold. `--json` emits a stable, documented schema.
+
+- **Fleet subscription usage (#4434).** Add the operator-only `GET /api/usage/fleet` rollup, deduplicated by account identity with host snapshots taking precedence, cached member reads over paired bearers, and isolated unreachable members.
+
+- **Subscription usage in Settings (#4435).** Connected native OAuth accounts now show usage windows, model scopes, reset countdowns, and live updates in Providers, with muted unavailable states when usage cannot be read.
+
+### Changed
+- **Distinct attachment names (#4274).** Files attached with different explicit names now remain separate even when their bytes are identical, including after an unnamed attachment of those bytes or re-parking at a HITL pause. Unnamed content deduplication and replacement by the same explicit name are preserved.
+
+- **Subagents inherit the lead's read tools; write tools are opt-in (#4327).** In-graph, background, and manual dispatch share read inheritance, preserve text-only and policy restrictions, and explain missing write grants before dispatch.
+
+- **Delegation fails fast when a prompt names tools the subagent won't have (#4327).** Before a `task`/`task_batch` delegation starts, the prompt is scanned for tool names that are bound to the lead but not to the chosen subagent (whole-identifier match; alphabetic names such as `calculator` or plugin/MCP `search` require backticks or call syntax, so mentioning mortgage calculator sites does not refuse a delegation). If any are found, the delegation is not dispatched: the lead gets an immediate `Not dispatched: …` result naming the missing tools and the subagent's actual toolset, instead of the subagent running to completion and coming back "blocked". A `run_in_background` delegation is checked against the full toolset it will actually run with (detached jobs run the lead graph fenced by their allowlist), so one is never refused for a tool it would in fact hold. In `task_batch` only the offending item fails inline; its siblings still run. What a subagent inherits is unchanged. A prompt that only mentions a tool ("don't use `read_file`") is refused too; the refusal tells the lead to re-send without naming it, a cheaper miss than a wasted subagent run.
+
+- **The settings section switcher and `responsive` tab strips collapse to a DS Menu, not a native `<select>` (#609).** On a phone the Settings rail stacks full-width and now opens a themed Design System `Menu` — a radio row per section — in place of the old `<select>`; the same swap applies everywhere a `responsive` `Tabs`/`SideNav` collapses (plugin sub-tabs, the plugins and MCP catalogs, the prompt viewer). Completes DS card ds-o0k, the follow-on to the Chat-rail TabBar switcher (#4318), and bumps `@protolabsai/ui` + `@protolabsai/ui-css` to 0.68.3.
+
+### Fixed
+- **Hub history keeps text/tool interleaving across media-link rewriting (#4274).** The answer-text fingerprint the executor stamps on a terminal artifact is now taken over a media-normalised copy of the text (query strings stripped from every `…/media/<file>` URL, and scheme+host / `/agents/<slug>` prefixes dropped so relative and absolute forms compare equal), and the console normalises before comparing. A member turn whose final answer is rewritten with expiring absolute media links (`?exp=…&sig=…`) now keeps its reasoning/text/tool interleaving on reload instead of falling back to the frames-then-text view. The new fingerprint carries a `v: 2` marker; turns stamped before it are still compared the old (raw) way. Normalised tool offsets also preserve split positions when rewritten media links precede a tool.
+
+- **Chat history re-mints its expired media images (#4274).** A member's inline images in hub-console history carry expiring signed links (`media.remote_link_ttl_s`, default 7 days); once they lapse the `<img>` 403s and the image vanishes. The console markdown renderer now catches that first load error and re-mints the link through the agent that owns it (`POST /agents/<slug>/api/media/remint` for a member link, else this agent's `/api/media/remint`) via the console's authed fetch, then repaints the fresh URL in place — keeping the DS's image chrome and "Image not available" fallback intact. At most one attempt per image; a 404 or other failure leaves the broken image (no loop, no toast); re-mint results are cached per original URL so a re-render never re-POSTs.
+
+- **Paused-turn file handoffs (#4274).** Deliver scheduler/operator attachments when the operator answers a pause with another owner credential. Warn with context, task, file count, and credential kinds when other mismatches omit attachments, without exposing credentials.
+
+- **Fleet proxy: long member `/api/chat` turns go detach-and-poll instead of parking a 600 s socket (#4277).** A hub-proxied `POST /agents/<slug>/api/chat` without an explicit `detach` is now forwarded with `detach: true`; the hub polls the member's `GET …/turns/{turn_id}` every 2 s (each poll on the bounded read lane) until the turn is terminal or a 3600 s ceiling, then answers in the same shape a sync call returns — 200 `{response, messages, session_id}`, or the sync error status/detail for a failed/canceled turn. A turn longer than the old 600 s read cap no longer 504s, and a hub↔member disconnect during the turn no longer cancels it (each poll is its own short request, so there is no parked socket to drop); the ceiling yields a 504 naming the turn id and a hub-side poll URL, leaving the member turn running. A transient error on any single poll (a dropped keep-alive, a read/connect/pool error, or a 200 body that isn't a JSON object) is retried like a slow poll rather than surfaced as a hub 5xx — the turn is running on the member, so one failed poll never strands it; if polls keep failing to the ceiling the caller still gets that recoverable 504 with the turn id and poll URL. The interactive chat keeps its #4205 cancel-on-disconnect: if the hub's own client disconnects mid-poll, polling stops and the hub sends the member a best-effort Stop (`…/local-turns/{turn_id}/cancel`), so an abandoned turn stops spending tokens and releases the session turn lock instead of running on until a manual Stop. A member that answers 200 (an older core that ignores `detach`) is passed through unchanged, and an explicit `detach` is forwarded verbatim with no polling.
+
+- **Chat scrollback investigation remains open (#4421).** PR #4440 added layout and follow-stream coverage without changing product code or repairing the reported blank lower-answer paint. The scrollback recorder now runs at DPR 2, checks screenshot pixels for every paragraph, and retains screenshots, video, and traces as test artifacts. The runtime defect has not been reproduced in headless Chromium; these diagnostic checks are not a runtime fix.
+
+- **Work tab overview cards no longer overlap in a short rail (#4422).**
+  In the narrow single-column layout, the grid rows squeezed below the cards' height, so
+  each card slid under the next and the empty-state buttons were hidden (Watches' entirely).
+  The rows now fit their cards, and the overview scrolls.
+
+- **A fleet member whose port another process holds now starts on a free port (#4423).**
+  Starting a member launched it onto its recorded port even when another process already
+  held it. The hub counted the other process's socket as the member coming up, reported
+  success, and sent the member's traffic to the wrong server, while the member itself died
+  with `EADDRINUSE`. Start now moves the member to a free port, records it, and reports
+  `port_moved_from`. New members also never get :7871, the dev sandbox's default port.
+
+- **`onboard_project` resolves an already-registered project by repo or name (#4425).**
+  Re-onboarding a repo that is already registered at a non-default path — e.g. a checkout
+  named `protoAgent-team` bound to `protoLabsAI/protoAgent` — now acts on that registered
+  checkout (refreshing it in place with `refresh=true`) instead of cloning a shadow copy
+  into `onboarding.root/<repo-name>` and appending a second registry/`filesystem.projects`
+  entry that shadowed the real one for the agent's filesystem tools. The match is on the
+  GitHub `owner/repo` binding (case-insensitive) first, then the project name. Registering
+  a `name` already held by a different path is now refused — in both `onboard_project` and
+  `register_local_project` — pointing you at an explicit `name=` to register a second
+  checkout.
+  Reusing a GitHub binding preserves its registered name and access mode without
+  promoting fence-only entries or expanding an explicit filesystem fence. Restoring
+  a missing checkout remains restricted to the onboarding root. Home-relative registered
+  paths (such as `~/projects/widget`) are expanded before reuse or refresh.
+
+- **Codex: a system message in a direct model call no longer 400s (#4444).** The Codex
+  backend rejects a system-role input item, and only agent turns moved the system prompt
+  into `instructions`. Direct callers (the goal llm verifier, `sdk.complete(system=...)`,
+  the soul judge) failed every call on `openai-codex`, so goals on a Codex agent could
+  never be judged met. The Codex client now does the move for every caller.
+
+- **Harden detached `/api/chat` turns (#4446).** Bound concurrent detached (submit-then-poll) turns with a finite global cap and refuse an over-cap admission with HTTP 429 before any work is scheduled, leaking neither a task nor a coroutine. Record a `canceled` outcome for every cancellation — operator Stop, process shutdown, and one arriving before the turn's first step — so an authorized poll never degrades to an unknown turn, and keep an incognito turn's assistant response/messages out of the retained outcome (polling returns a content-free terminal state). Ordinary disconnect-survival and Stop semantics are unchanged.
+
+- **`self_url` public origin follows the `A2A_PUBLIC_URL` fallback (#4446).** `show_config`'s `self_url` now reports its `public`/`preferred` in the same precedence as the A2A card and `console_url` (#4256) — `A2A_PUBLIC_URL` when set (a hub-spawned fleet member's tenant URL `{hub}/agents/<id>` is skipped, matching `console_url`'s member rule), else the configured `public_console_url`, else the bound local address — so a deployed agent given only `A2A_PUBLIC_URL` no longer hands out its loopback address. The bound `local` address and the unknown-port `note` are unchanged, and nothing probes ports.
+
+- **Clarify parked-file credential mismatch warnings (#4446).** Warnings now say attachments are withheld and stay parked until TTL expiry, cancellation, or an authorized claim, rather than incorrectly saying they were dropped. Credential binding and retention behavior are unchanged.
+
+- **No more blank band above the chat composer when nothing runs in the background (#4458).**
+  The background-work strip reserved a full line permanently, so most chats showed an empty
+  gap between the goal strip and the roster. It now collapses when idle and takes its line
+  only while a background job is running.
+
+- **Gateway session affinity now reaches every in-session model call, in a value LiteLLM accepts everywhere (#4463).**
+  The `x-litellm-session-id` header is now a 32-hex sha256 prefix of the conversation's
+  thread id (it was `protoagent:<hash>`, which LiteLLM's generic `x-*-session-id`
+  check rejects because of the colon). One-shot aux calls made inside a turn but outside
+  the graph run fall back to the turn's session id, so they stay on that session's
+  replica lane too. The native ChatGPT/Codex client no longer sends the gateway-only
+  header.
+
+- **A background-spawned subagent now binds its declared tools, plugin tools included, the same as a foreground `task()` run (#4472).** On an agent with `tools.deferred.enabled`, a detached job (`task(run_in_background=True)`, `task_batch` in the background, `sdk.spawn_background`) ran the lead graph under its subagent fence, and deferral then hid every fenced tool outside the base set. `search_tools`, the only way to load one, is outside the fence, so the campaign plugin's `campaign_producer` came back "Campaign Studio tools are unavailable in this detached context". Deferral now steps aside on a fenced pass, because the fence already limits the request to the subagent's allowlist. A background spawn of a subagent that declares tools, none of which is bound on the agent, is now refused up front with a message naming them, instead of running with no tools.
+
+### Removed
+- **Remove committed scrollback screenshots from source (#4421).** Delete the three PNGs PR #4440 committed under `apps/web/e2e/evidence/4421/` (`before-scrollback.png`, `scrollback-top.png`, `scrollback-bottom.png`). Binary recordings belong in CI/PR artifact storage, not the repository — the DPR-2 scrollback spec already re-captures them per run via `testInfo.outputPath()`/`testInfo.attach()`, and the before/after repair proof lives in the bd-k4jh runtime-repair PR. A vitest guard keeps the `e2e/evidence` tree free of committed binaries. This cleanup owns the final `Fixes #4421` edge so the issue stays open until the housekeeping ships.
+
+### Security
+- **Signed media links are redacted on every media path in the access log (#4274).**
+  uvicorn's access log records each request's full path, and media links carry a replayable
+  credential in the query. Redaction now lives in core (`infra/access_log_redact.py`) and is
+  installed at server startup, so the `sig`/`exp`-paired `sig` on core `/media/` links and the
+  fleet-proxied `/agents/<slug>/media/` links are scrubbed to `…` too — not just the artifact
+  plugin's `/plugins/artifact/media/` tickets — and redaction runs regardless of which plugins
+  are enabled. Non-media paths are left unchanged; `exp` (a plain timestamp, not a secret) stays.
+
+- **Stop leaking replayable signed-media URLs into hub logs (#4446).** Credential-leak repair (follow-up to #4427): httpx/httpcore are pinned to at least `WARNING` at logging setup so their INFO request lines — which print each request's full URL, including the hub-proxied `…/media/?sig=…` signature — never reach a log sink, and both fleet-proxy timeout/error paths now redact the upstream URL through the same core media redactor. Genuine non-secret diagnostics (connect/stall warnings, the `exp` timestamp) are preserved, and the access-log redaction filter is verified to survive uvicorn's logging initialization.
+
+### Docs
+- **ADR 0122: subscription usage model and routing (#4430).** New architecture decision record for epic #4309: one cache fed by the providers' usage endpoints plus passive response headers, a normalized `Account`/window model, `account_key` identity, the "unknown routes exactly as today" invariant, read-only credentials that never refresh OAuth tokens, and quota-aware routing defaults (warn at 80%, prefer a sibling at 90%, `blocked` down until `resets_at`).
+
 ## [0.212.0] - 2026-10-20
 
 ### Added
