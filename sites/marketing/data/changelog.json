@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.214.0",
+    "date": "2026-10-23",
+    "changes": [
+      "Quota-aware model failover (#4437).",
+      "Per-agent subscription attribution (#4438).",
+      "/usage in chat (#4485).",
+      "The Claude usage meters no longer list the session and weekly windows twice (#4485)."
+    ]
+  },
+  {
     "version": "v0.213.1",
     "date": "2026-10-23",
     "changes": [

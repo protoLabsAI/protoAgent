@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.214.0] - 2026-10-23
+
+### Added
+- **Quota-aware model failover (#4437).** `routing.fallback_models` now reads this instance's own subscription-usage snapshot (ADR 0122 D8, cached — never a forced poll) before failing over: a fallback whose OAuth account has a *blocked* window applying to its model is skipped (and named in the `model.fallback` event's `skipped_blocked`), and when a subscription-quota `429` has a fresh account-wide blocked window only a fallback on a *different* account is tried — a same-account fallback would hit the same exhausted quota. A per-chat model pick that hits its quota no longer degrades to a default on the same account; it surfaces the quota error, naming the reset time when known and preserving the provider’s `429` retry metadata. Model-scoped limits preserve retries to other usable models on the same subscription. Unknown usage (no/stale snapshot, a gateway route, an unresolvable account) fails over in exactly the previous order — additive, with no new config keys.
+
+- **Per-agent subscription attribution (#4438).** Record native OAuth and resolved ACP coder token usage by account, and show each member’s share of attributed tokens with `protoagent usage --by-agent`, including operator-only fleet rollups.
+
+- **`/usage` in chat (#4485).** Posts every connected Claude and ChatGPT / Codex plan in the thread: one line per window with the percent used and when it resets, from the same data as the Settings ▸ Providers meters.
+
+### Fixed
+- **The Claude usage meters no longer list the session and weekly windows twice (#4485).** The usage endpoint and the response headers name the same windows differently (`session:0` vs `5h:0`), and the store merged on that id, so the first turn after each poll added a second copy. Windows now merge on what they measure. Each meter also reads "Weekly · 17% used" rather than "Weekly · Available 17%", which looked like 17% was left.
+
 ## [0.213.1] - 2026-10-23
 
 ### Added
