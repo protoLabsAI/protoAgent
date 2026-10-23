@@ -59,7 +59,7 @@ import functools
 import hashlib
 import logging
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 from graph.llm import _ReasoningChatOpenAI
 
@@ -399,6 +399,10 @@ def _install_reasoning_capture() -> None:
 class CodexChatOpenAI(_ReasoningChatOpenAI):
     """``ChatOpenAI`` for the Codex backend: captures encrypted reasoning on the
     way in, and replays only what this endpoint can verify on the way out."""
+
+    # The ChatGPT/Codex backend is not our LiteLLM gateway: its replica-pinning header
+    # means nothing there, so it stays off this wire (#4463).
+    _send_session_affinity: ClassVar[bool] = False
 
     @property
     def _issuer(self) -> str:
