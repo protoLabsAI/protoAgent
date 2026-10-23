@@ -15,6 +15,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.213.1] - 2026-10-23
+
+### Added
+- **Plugins can read subscription headroom (#4436).** New `graph.sdk.provider_usage(account=None, *, delegate=None, model=None)` is the plugin read path for an OAuth-subscription account's remaining headroom (ADR 0122 D6): it resolves the account from a provider id or from an ACP delegate (`claude-agent-acp` → `anthropic-oauth`, `codex-acp` → `openai-codex`, or an explicit `account:` on the delegate — D7), reads the usage store without forcing a poll, and returns `{usable, headroom_pct, binding_window, resets_at}`. A window scoped to one model never constrains another (a Fable-scoped block leaves Opus usable), and an account that can't be resolved — or a stale/unknown/absent snapshot — reads as `None`, so an unknown route behaves exactly as today.
+
+### Fixed
+- **Subscription usage reads the live provider payloads (#4435).** Both meters read "Usage unavailable": the Claude parser rejected the model-scoped weekly window (its `scope.model` is an object) and filed `weekly_all` under "other", and the Codex parser rejected `additional_rate_limits: null`. The tests now carry the live shapes.
+
+- **A fleet member's stop → start (or a hub restart) no longer moves it off its own port (#4479).**
+  #4423 made `start()` move a member whose recorded port another process holds, but it
+  decided that with a plain bind probe, once, immediately. That probe also fails on a port
+  left only with TIME_WAIT connections, which a member that served the hub's proxy polling
+  leaves for ~30 s after it stops, even though nothing listens there and the member's own
+  `SO_REUSEADDR` bind takes it fine. So projectManager moved :7875 → :7872 at the v0.213.0
+  hub restart and back :7872 → :7875 on a plain restart four seconds after its old process
+  had exited. A port now counts as held only when the bind fails AND something accepts a
+  connection on it, and `start()` waits up to 10 s (outside the fleet state lock, returning
+  as soon as it's released) for a still-listening old process before moving the member.
+
 ## [0.213.0] - 2026-10-23
 
 ### Added

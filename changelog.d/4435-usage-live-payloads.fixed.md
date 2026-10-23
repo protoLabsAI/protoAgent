@@ -1,1 +1,0 @@
-- **Subscription usage reads the live provider payloads (#4435).** Both meters read "Usage unavailable": the Claude parser rejected the model-scoped weekly window (its `scope.model` is an object) and filed `weekly_all` under "other", and the Codex parser rejected `additional_rate_limits: null`. The tests now carry the live shapes.
