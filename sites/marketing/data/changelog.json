@@ -23,7 +23,7 @@
       "Distinct attachment names (#4274).",
       "Subagents inherit the lead's read tools; write tools are opt-in (#4327).",
       "Delegation fails fast when a prompt names tools the subagent won't have (#4327).",
-      "The settings section switcher and responsive tab strips collapse to a DS Menu, not a native <select> (#609).",
+      "The settings section switcher and responsive tab strips collapse to a DS Menu, not a native <select> (#4406).",
       "Hub history keeps text/tool interleaving across media-link rewriting (#4274).",
       "Chat history re-mints its expired media images (#4274).",
       "Paused-turn file handoffs (#4274).",
