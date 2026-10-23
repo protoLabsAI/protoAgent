@@ -15,6 +15,7 @@ import os
 import re
 import time
 from collections.abc import AsyncIterator, Callable
+from typing import ClassVar
 
 import httpcore
 import httpx
@@ -623,6 +624,58 @@ def _record_calibration(measure: tuple[str, int, int] | None, input_tokens: obje
         _CALIBRATIONS.pop(next(iter(_CALIBRATIONS)), None)
 
 
+SESSION_AFFINITY_HEADER = "x-litellm-session-id"
+
+
+def gateway_session_key() -> str | None:
+    """The session-affinity id for the model call in progress, or None (#4210, #4463).
+
+    The protolabs LiteLLM gateway pins every request carrying ``x-litellm-session-id``
+    to the replica lane that served that session's first request (``session_affinity``),
+    so a conversation's growing prefix stays in ONE lane's prefix cache instead of being
+    re-prefilled on alternating lanes. The id must therefore be stable for a whole
+    conversation and differ between conversations — never per request.
+
+    Sources, in order:
+
+    1. ``configurable.thread_id`` of the LangGraph run the call belongs to — the
+       conversation's checkpointer key, identical on every turn. Subagent graphs run
+       inside the parent's tool call and inherit its run config, so a delegation shares
+       its parent conversation's id (and lane); a goal iteration or an aside runs on its
+       own thread, so it gets its own.
+    2. The tracing session id (``observability.tracing.current_session_id``) — for
+       one-shot aux calls made OUTSIDE a graph run but inside a turn's session scope.
+    3. Neither (cache warmer, ingest enrichment, probes): None — no header, and the
+       gateway routes the request without affinity, exactly as before.
+
+    The value is a sha256 prefix (32 hex chars), never the raw id: thread ids can carry
+    arbitrary Unicode, paths, or plugin-chosen strings that do not belong in an HTTP
+    header or a gateway log, and plain hex satisfies LiteLLM's session-id shape
+    (``[A-Za-z0-9_-]{8,}``) for the explicit header and its ``x-*-session-id`` fallback.
+    """
+    source = ""
+    try:
+        from langgraph.config import get_config
+
+        thread_id = ((get_config() or {}).get("configurable") or {}).get("thread_id")
+        if thread_id:
+            source = f"thread:{thread_id}"
+    except RuntimeError:  # no runnable context (probes and standalone calls)
+        pass
+    if not source:
+        try:
+            from observability import tracing
+
+            session_id = tracing.current_session_id()
+        except Exception:  # noqa: BLE001 — affinity is best-effort; never fail a request on it
+            session_id = ""
+        if session_id:
+            source = f"session:{session_id}"
+    if not source:
+        return None
+    return hashlib.sha256(source.encode()).hexdigest()[:32]
+
+
 class _ReasoningChatOpenAI(ChatOpenAI):
     """ChatOpenAI that surfaces the gateway's NATIVE reasoning stream.
 
@@ -658,6 +711,11 @@ class _ReasoningChatOpenAI(ChatOpenAI):
     # Responses-only model is the case that wants it).
     use_responses_api: bool | None = Field(default_factory=_gateway_wire_default)
 
+    # Stamp the LiteLLM session-affinity header (see `gateway_session_key`). A plain
+    # class attribute, not a pydantic field: a subclass that talks to something other
+    # than an OpenAI-compatible gateway (the native Codex backend) turns it off.
+    _send_session_affinity: ClassVar[bool] = True
+
     def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
         gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
         if gen is not None:
@@ -682,20 +740,13 @@ class _ReasoningChatOpenAI(ChatOpenAI):
         every model that doesn't set it, so this never touches Claude/GPT/ungated
         gateway slots."""
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
-        # Resolve at request time: one cached client can serve concurrent threads.
-        # Hash custom thread ids so arbitrary Unicode/paths stay out of HTTP headers.
-        try:
-            from langgraph.config import get_config
-
-            thread_id = ((get_config() or {}).get("configurable") or {}).get("thread_id")
-        except RuntimeError:  # no runnable context (probes and standalone calls)
-            thread_id = None
-        if thread_id:
+        # Gateway session affinity (#4210, #4463). Resolved per REQUEST, never baked into
+        # the client: one cached client serves concurrent threads.
+        session_key = gateway_session_key() if self._send_session_affinity else None
+        if session_key:
             headers = dict(payload.get("extra_headers") or {})
-            if not any(key.lower() == "x-litellm-session-id" for key in headers):
-                headers["x-litellm-session-id"] = (
-                    "protoagent:" + hashlib.sha256(str(thread_id).encode()).hexdigest()
-                )
+            if not any(key.lower() == SESSION_AFFINITY_HEADER for key in headers):
+                headers[SESSION_AFFINITY_HEADER] = session_key
             payload["extra_headers"] = headers
         if (self.extra_body or {}).get("thinking", {}).get("type") == "enabled":
             messages = self._convert_input(input_).to_messages()
