@@ -1,1 +1,0 @@
-- **HITL table browser proof (#4405).** Exercise the merged careercoach approval payload in desktop and phone browsers, including inert escaped table text, unchanged approve/decline resume values, and text fallback. Document the built-in display contract and fixed bounds; attach light/dark screenshots as test artifacts.
