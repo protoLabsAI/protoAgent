@@ -24,7 +24,7 @@ from graph.middleware.knowledge import KnowledgeMiddleware
 from graph.middleware.memory import SessionSummaryMiddleware
 from graph.middleware.message_capture import MessageCaptureMiddleware
 from graph.state import ProtoAgentState
-from graph.subagents.config import SUBAGENT_REGISTRY
+from graph.subagents.config import SUBAGENT_REGISTRY, BackgroundSpawnRefused
 from tools.lg_tools import HITL_TOOL_NAMES, drop_disabled_tools, get_all_tools
 from tools.session import _session_id_from
 
@@ -1529,7 +1529,10 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
         if run_in_background and background_mgr is not None:
             if subagent_type not in SUBAGENT_REGISTRY:
                 return f"Error: Unknown subagent '{subagent_type}'. Available: {available_subagents}"
-            job_id = await _spawn_bg()
+            try:
+                job_id = await _spawn_bg()
+            except BackgroundSpawnRefused as e:  # its declared tools aren't bound (#4472)
+                return str(e)
             return (
                 f"Background agent started: {job_id} ({subagent_type}: {description}). "
                 "It is running detached; you will be notified of the result automatically "
@@ -1576,7 +1579,10 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 await inline
             except BaseException:  # noqa: BLE001 — discard the abandoned inline run
                 pass
-            job_id = await _spawn_bg()
+            try:
+                job_id = await _spawn_bg()
+            except BackgroundSpawnRefused as e:  # its declared tools aren't bound (#4472)
+                return str(e)
             return (
                 f"This '{subagent_type}' delegation ran past the {auto_s:.0f}s inline budget, "
                 f"so I moved it to the background as {job_id}. You'll be notified when it "
@@ -1698,15 +1704,19 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
                 if gap:
                     lines.append(f"Task {i} ({desc}): {gap}")
                     continue
-                job_id = await background_mgr.spawn(
-                    origin_session=session_id,
-                    subagent_type=st,
-                    description=desc,
-                    prompt=prm,
-                    origin_incognito=incognito,
-                    batch_id=batch_id,
-                    turn_model=turn_model_from(state),
-                )
+                try:
+                    job_id = await background_mgr.spawn(
+                        origin_session=session_id,
+                        subagent_type=st,
+                        description=desc,
+                        prompt=prm,
+                        origin_incognito=incognito,
+                        batch_id=batch_id,
+                        turn_model=turn_model_from(state),
+                    )
+                except BackgroundSpawnRefused as e:  # its declared tools aren't bound (#4472)
+                    lines.append(f"Task {i} ({desc}): {e}")
+                    continue
                 started += 1
                 lines.append(f"Task {i}: {job_id} ({st}: {desc})")
             if not started:

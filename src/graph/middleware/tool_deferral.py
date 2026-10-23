@@ -20,6 +20,14 @@ the thread.
 
 OFF by default (the middleware is only added when ``tools.deferred.enabled``);
 when off, the full tool set reaches the model exactly as before.
+
+A FENCED pass is never deferred (#4472). A background subagent runs this graph under a
+``subagent_fence`` naming its declared allowlist, and ``SubagentFenceMiddleware`` (outer)
+already trims the request to it. Deferring on top hid every fenced tool outside the base
+``keep`` set, and ``search_tools`` (the only way to load one) is outside the fence, so
+a background ``campaign_producer`` ran with ``current_time``/``load_skill`` and none of
+its plugin tools. The fence is the subagent's tool budget, exactly as an in-graph
+``task`` run binds its allowlist on a graph with no deferral at all.
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ import re
 
 from langchain.agents.middleware import AgentMiddleware
 
+from graph.middleware.subagent_fence import FENCE_DENY_ALL, _bound_tool_name, _state_fence
 from tools.lg_tools import SEARCH_TOOLS_NAME
 
 log = logging.getLogger(__name__)
@@ -74,6 +83,18 @@ def activated_tool_names(messages) -> set[str]:
     return names
 
 
+def _fence_sizes_request(request) -> bool:
+    """Whether a subagent fence, not deferral, sizes this request's tools.
+
+    True when the pass carries a fence with real names and at least one bound tool is
+    inside it: the case ``fence_tools`` trims to. A deny-all fence, or one naming no
+    bound tool, leaves the request untrimmed, so deferral still applies there."""
+    allowed = {t for t in _state_fence(request) if t != FENCE_DENY_ALL}
+    if not allowed:
+        return False
+    return any(_bound_tool_name(t) in allowed for t in getattr(request, "tools", None) or ())
+
+
 class ToolDeferralMiddleware(AgentMiddleware):
     """Trim the per-call tool set to base + agent-loaded tools."""
 
@@ -85,6 +106,8 @@ class ToolDeferralMiddleware(AgentMiddleware):
         tools = getattr(request, "tools", None)
         if not tools:
             return request
+        if _fence_sizes_request(request):
+            return request  # the fence already bound the subagent's allowlist (#4472)
         state = getattr(request, "state", None) or {}
         messages = state.get("messages") if isinstance(state, dict) else getattr(state, "messages", None)
         allowed = self._keep | activated_tool_names(messages)
