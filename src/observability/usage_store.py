@@ -65,7 +65,8 @@ class _Entry:
     """One provider's cached state. ``last_poll`` is a monotonic timestamp (``None``
     = never polled in this process, so the next read polls); ``stale`` marks data that
     came off disk and has not yet been confirmed by a live poll; ``window_fetched``
-    tracks the ``fetched_at`` per window id for the newest-wins merge."""
+    tracks the ``fetched_at`` per window (keyed by :func:`_window_key`) for the
+    newest-wins merge."""
 
     account: Any
     last_poll: float | None
@@ -73,6 +74,14 @@ class _Entry:
     stale: bool
     window_fetched: dict[str, datetime] = field(default_factory=dict)
     fingerprint: str = ""
+
+
+def _window_key(window: Any) -> str:
+    """What a window measures, not the id its source gave it. The endpoint names
+    Claude's session window ``session:0`` and the response headers name the same
+    window ``5h:0``; keyed by id, a turn after a poll listed it twice."""
+    scope = ",".join(f"{k}={v}" for k, v in sorted((window.scope or {}).items()))
+    return f"{window.kind}|{window.window_seconds}|{scope}"
 
 
 def _parse_dt(value: Any) -> datetime:
@@ -143,13 +152,14 @@ class UsageStore:
         pid = account.provider_id
         prior = self._entries.get(pid)
         window_fetched = dict(prior.window_fetched) if prior else {}
-        by_id = {w.id: w for w in (prior.account.windows if prior else [])}
+        by_key = {_window_key(w): w for w in (prior.account.windows if prior else [])}
         changed = False
         for w in windows:
-            seen = window_fetched.get(w.id)
+            key = _window_key(w)
+            seen = window_fetched.get(key)
             if seen is None or fetched_at > seen:
-                by_id[w.id] = w
-                window_fetched[w.id] = fetched_at
+                by_key[key] = w
+                window_fetched[key] = fetched_at
                 changed = True
         if not changed:
             return None
@@ -162,7 +172,7 @@ class UsageStore:
             account_key=account.account_key or getattr(base, "account_key", None),
             plan=account.plan if account.plan is not None else getattr(base, "plan", None),
             source=source,
-            windows=list(by_id.values()),
+            windows=list(by_key.values()),
             status="ok",
             error=None,
             retry_after=None,
@@ -198,7 +208,7 @@ class UsageStore:
                 last_poll=now,
                 rate_limited=rate_limited,
                 stale=False,
-                window_fetched={w.id: account.fetched_at for w in account.windows},
+                window_fetched={_window_key(w): account.fetched_at for w in account.windows},
                 fingerprint=self._fingerprint(account.to_dict()),
             )
         elif prior is not None and self._has_good_data(prior.account):
@@ -223,7 +233,7 @@ class UsageStore:
                 last_poll=now,
                 rate_limited=rate_limited,
                 stale=False,
-                window_fetched={w.id: account.fetched_at for w in account.windows},
+                window_fetched={_window_key(w): account.fetched_at for w in account.windows},
                 fingerprint=self._fingerprint(account.to_dict()),
             )
         self._entries[provider_id] = entry
@@ -341,7 +351,7 @@ class UsageStore:
                 last_poll=None,  # never polled this process → next read polls
                 rate_limited=False,
                 stale=True,  # last-known off disk: show it, marked stale
-                window_fetched={w.id: account.fetched_at for w in account.windows},
+                window_fetched={_window_key(w): account.fetched_at for w in account.windows},
                 fingerprint=self._fingerprint(account.to_dict()),
             )
 

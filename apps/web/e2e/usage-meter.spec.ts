@@ -60,6 +60,8 @@ for (const theme of ["light", "dark"] as const) {
       await expect(meter.getByRole("group", { name: "Session", exact: true })).toHaveAttribute("data-state", "ok");
       await expect(meter.getByRole("group", { name: "Monthly" })).toHaveAttribute("data-state", "blocked");
       await expect(meter).toContainText("25%");
+      await expect(meter).toContainText("25% used");
+      await expect(meter).not.toContainText("Available");
       await expect(meter).toContainText("80%");
       await expect(meter).toContainText("Blocked until");
       await expect(meter).toContainText("Resets in");
