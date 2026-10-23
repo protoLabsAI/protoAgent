@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.213.1",
+    "date": "2026-10-23",
+    "changes": [
+      "Plugins can read subscription headroom (#4436).",
+      "Subscription usage reads the live provider payloads (#4435).",
+      "A fleet member's stop → start (or a hub restart) no longer moves it off its own port (#4479)."
+    ]
+  },
+  {
     "version": "v0.213.0",
     "date": "2026-10-23",
     "changes": [
