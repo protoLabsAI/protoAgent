@@ -71,21 +71,18 @@ class ModelUnavailableError(RuntimeError):
         super().__init__(f"model {model!r} could not be loaded right now; try again shortly.")
 
 
-class QuotaExceededError(ModelUnavailableError):
-    """A per-turn model pick failed on a *subscription-quota* 429, and the default model
-    shares that account (ADR 0122 D8), so degrading to it would hit the same exhausted
-    quota — better to surface the quota error. A subclass of :class:`ModelUnavailableError`,
-    so ``/v1`` still answers 503 with a ``Retry-After`` and the console treats it as a
-    retryable pick failure; ``str()`` names the account's reset time when the provider
-    reported one, and the cause's own fix-it text rides the trusted ``hint``."""
+class QuotaExceededError(RuntimeError):
+    """A picked model's subscription quota failure, preserving the provider's 429.
+
+    Separate from model-build failures so HTTP adapters retain the cause's
+    rate-limit type, Retry-After and reset time. The hint is operator-only.
+    """
 
     def __init__(self, model: str, *, resets_at: str | None = None, hint: str = ""):
         self.model = model
         self.resets_at = resets_at
         self.hint = hint
         when = f" (resets at {resets_at})" if resets_at else ""
-        # Bypass ModelUnavailableError.__init__ to give a quota-specific message while keeping
-        # the class identity (and RETRY_AFTER_S) that drives the /v1 503 mapping.
         RuntimeError.__init__(
             self, f"model {model!r} is unavailable: its subscription quota is exhausted{when}; try again later."
         )
@@ -275,10 +272,10 @@ class ModelOverrideMiddleware(AgentMiddleware):
         try:
             from graph.middleware.quota_routing import account_for_model, quota_429
 
-            pick_account = account_for_model(picked, self._config)
+            pick_account = account_for_model(swapped.model, self._config)
             if not quota_429(exc, native_oauth=pick_account is not None):
                 return
-            default_account = account_for_model(getattr(self._config, "model_name", "") or "", self._config)
+            default_account = account_for_model(request.model, self._config)
             if pick_account is None or pick_account != default_account:
                 return  # a different / unknown default account can still serve the turn
         except Exception:  # noqa: BLE001 — a classification read, never a second failure

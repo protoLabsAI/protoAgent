@@ -48,7 +48,7 @@ of what the emitting call sites pass; a key may be absent on a given event.
 | `inbox.item` | `id`, `priority`, `source`, `text` | `src/operator_api/console_handlers.py` |
 | `media.saved` | `id`, `mime`, `plugin`, `url` | `src/graph/plugins/registry.py` |
 | `memory.hot_written` | `chunk_id`, `preview`, `source`, `source_type` | `src/knowledge/store.py` |
-| `model.fallback` | `fallback_index`, `fallback_model`, `primary_error` | `src/graph/agent.py` |
+| `model.fallback` | `fallback_index`, `fallback_model`, `primary_error`, `skipped_blocked` | `src/graph/agent.py` |
 | `persona.drift_detected` | `baseline_id`, `baseline_saved_at`, `rationale`, `score`, `signals`, `threshold` | `src/server/maintenance_loops.py` |
 | `persona.untooled_action_detected` | `count`, `findings`, `soul_revision`, `trigger` | `src/server/maintenance_loops.py` |
 | `plugin.changed` | `scope` | `src/server/settings_apply.py` |

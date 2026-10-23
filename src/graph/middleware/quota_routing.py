@@ -8,8 +8,7 @@ usage store (D8). Three tolerant reads:
 - :func:`account_for_model` / :func:`resolve_account` — which native-OAuth account
   (``anthropic-oauth`` / ``openai-codex``) a model burns, via the configured provider
   registry; a gateway / ``openai-compat`` / ``acp:`` / unresolvable route is ``None``.
-- :func:`quota_429` — whether a model-call exception is a *subscription-quota* 429 (as
-  opposed to a transient infra throttle), reusing the status extraction the model-override
+- :func:`quota_429` — whether a model-call exception is a *subscription-quota* 429 (a candidate for quota-aware routing), reusing the status extraction the model-override
   classifier already uses.
 - :func:`is_blocked_for_model` — whether the usage store's CACHED snapshot (no forced poll)
   shows a ``blocked`` window applying to a model on an account (D2).
@@ -65,10 +64,23 @@ def resolve_account(model: Any, config: Any) -> tuple[str | None, str]:
     The bare model id is returned regardless (the window-scope check in
     :func:`is_blocked_for_model` needs it even on an unknown account). Never raises.
 
-    Resolving from a *name string* (the configured slot value) is deliberate: a built
-    instance only exposes its bare model id with the provider prefix already stripped, so an
-    instance alone cannot tell an ``anthropic-oauth:`` slot from a gateway one.
+    Configured names resolve through the registry. Built clients resolve through
+    their explicit provider identity (following bindings), never through the lead
+    config or the requested pick: either can differ from the model actually run.
+    An untagged client has unknown routing identity.
     """
+    if not isinstance(model, str):
+        from graph.providers.identity import model_provider_type
+        from graph.providers import is_native_oauth_provider
+
+        provider = model_provider_type(model)
+        current = model
+        seen = set()
+        while getattr(current, "bound", None) is not None and id(current) not in seen:
+            seen.add(id(current))
+            current = current.bound
+        # Untagged clients are unknown; the lead config cannot identify their route.
+        return (provider if is_native_oauth_provider(provider) else None), _name_of(current)
     name = _name_of(model)
     if not name:
         return None, ""
@@ -93,12 +105,15 @@ def account_for_model(model: Any, config: Any) -> str | None:
 
 
 def quota_429(exc: BaseException | None, *, native_oauth: bool = False) -> bool:
-    """Whether ``exc`` is a *subscription-quota* 429 (not a transient infra throttle).
+    """Whether ``exc`` is a candidate quota 429.
+
+    This does not establish its scope or duration. Routing must consult the cached
+    usage windows before ruling out another model on the same subscription.
 
     A quota 429 is a 429 (status extracted exactly as
     :func:`graph.middleware.model_override.is_transient_build_failure` does, via
     ``upstream_status_in_chain``) that EITHER came from a native-OAuth provider
-    (``native_oauth`` — a subscription 429 is always quota) OR whose body / message / response
+    (``native_oauth``) OR whose body / message / response
     headers name a usage/rate limit. A plain gateway "slow down" 429 with no such marker is
     not a quota 429, so it keeps today's failover behaviour. Never raises.
     """

@@ -83,7 +83,7 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
 
     - A fallback whose account holds a ``blocked`` window applying to its model is SKIPPED
       (logged, named in the event's ``skipped_blocked``) and the next one is tried (D2).
-    - When the primary failed on a subscription-quota 429 and its account is known, only
+    - When a subscription-quota 429 has a fresh account-wide blocked window, only
       fallbacks on a DIFFERENT account are tried — a same-account fallback would hit the
       same exhausted quota, so it is skipped.
     - Unknown usage — no config/snapshot, a stale/unknown snapshot, an unresolvable account —
@@ -112,13 +112,6 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
 
         return default_store()
 
-    def _primary_name(self, request) -> str:
-        """The configured name of the model this call ran on: the turn's per-tab pick when
-        set (it carries the qualified slot), else the config's lead model."""
-        state = getattr(request, "state", None) or {}
-        want = (state.get("model") or "").strip() if isinstance(state, dict) else ""
-        return want or (getattr(self._config, "model_name", "") or "") or _model_label(getattr(request, "model", None))
-
     def _fallback_route(self, index: int, fallback_model) -> tuple[str | None, str]:
         name = self._fallback_names[index] if index < len(self._fallback_names) else _model_label(fallback_model)
         return resolve_account(name, self._config)
@@ -126,9 +119,15 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
     def _fallback_plan(self, request, primary_exc: Exception):
         """``(ordered [(index, model)] to try, skipped_blocked labels)`` under the ADR 0122
         policy. Unknown accounts/usage fall through to today's order (D4)."""
-        primary_account = account_for_model(self._primary_name(request), self._config)
-        cross_account_only = primary_account is not None and quota_429(primary_exc, native_oauth=True)
-        store = None  # resolved lazily — never touched unless a fallback has a known account
+        primary_account = account_for_model(request.model, self._config)
+        store = self._store() if primary_account is not None else None
+        # A native 429 may be a short throttle or a model-scoped limit. D2/D4
+        # require fresh evidence before treating it as account-wide exhaustion.
+        cross_account_only = (
+            primary_account is not None
+            and quota_429(primary_exc, native_oauth=True)
+            and is_blocked_for_model(store, primary_account, None)
+        )
         order: list[tuple[int, Any]] = []
         skipped_blocked: list[str] = []
         for i, fallback_model in enumerate(self.models):
@@ -141,6 +140,7 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
                     _model_label(fallback_model),
                     primary_account,
                 )
+                skipped_blocked.append(_model_label(fallback_model))
                 continue
             if account is not None:
                 if store is None:
