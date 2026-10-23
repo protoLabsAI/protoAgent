@@ -103,7 +103,11 @@ PENDING_WRITES_MAX = 200
 #: entry cap the timeline is abandoned (``None``) rather than cut — a partial one would put
 #: text and tools out of order, and the reply then renders as plain text, as it always did.
 TIMELINE_MAX = 300
-TIMELINE_TOOL_IO_MAX = 2000
+#: Per call, the same preview a native tool card gets (``_TOOL_PREVIEW_CHARS``) — and across
+#: the whole run a budget, past which calls keep their name and status but no input/output:
+#: the timeline is stored in task history and the console's transcript, once per reply.
+TIMELINE_TOOL_IO_MAX = 800
+TIMELINE_IO_BUDGET = 48_000
 #: Seconds between snapshots. A coder can fire dozens of updates a second while it
 #: streams text; the card needs a few frames a second at most.
 MIN_INTERVAL_S = 0.75
@@ -207,6 +211,7 @@ class DelegateProgress:
         # The run in order, for the reply bubble (see the module doc) — ``None`` once over cap.
         self._timeline: list[dict] | None = []
         self._timeline_tools: dict[str, dict] = {}
+        self._timeline_io_left = TIMELINE_IO_BUDGET
 
     # -- the transport seam: normalized feeds (may run on a transport's reader task) --
 
@@ -315,6 +320,9 @@ class DelegateProgress:
         if self._timeline is None:
             return
         row = self._timeline_tools.get(tid)
+        # A coder titles a shell call with the command line itself — `curl -H "Authorization:
+        # Bearer …"` — so the name is redacted like the input it repeats.
+        name = _redacted(name)
         if phase == "start" or (phase == "end" and row is None):
             row = {"type": "tool", "id": tid, "name": name, "kind": kind, "status": "running", "input": "", "output": ""}
             if not self._timeline_add(row):
@@ -327,10 +335,20 @@ class DelegateProgress:
             if kind:
                 row["kind"] = kind
         if event.get("input") not in (None, ""):
-            row["input"] = _timeline_io(event.get("input"))
+            row["input"] = self._spend(row["input"], _timeline_io(event.get("input")))
         if phase == "end":
             row["status"] = "failed" if str(event.get("status") or "") == "failed" else "completed"
-            row["output"] = _timeline_io(event.get("output"))
+            row["output"] = self._spend(row["output"], _timeline_io(event.get("output")))
+
+    def _spend(self, old: str, new: str) -> str:
+        """``new`` if the run's input/output budget still covers it (``old`` is refunded —
+        a refinement replaces the text it refines), else nothing."""
+        left = self._timeline_io_left + len(old)
+        if len(new) > left:
+            self._timeline_io_left = left
+            return ""
+        self._timeline_io_left = left - len(new)
+        return new
 
     def _note_write(self, tid: str, event: dict, status: str, raw_paths: list[str]) -> None:
         """A settled call that WROTE files inside a registered project → ``fs.changed`` on
@@ -452,16 +470,21 @@ class DelegateProgress:
         self._write_flush = None
 
 
-def _timeline_io(value: object) -> str:
-    """A tool call's input/output as card text: redacted (a coder running ``env`` or
-    ``cat .env`` must not land the values in the chat transcript), then capped."""
-    text = value if isinstance(value, str) else str(value or "")
+def _redacted(text: str) -> str:
+    """``text`` with credentials scrubbed — or "" if redaction itself fails (fail closed:
+    no text rather than unredacted text in the chat transcript)."""
     try:
         from graph.middleware.redaction import redact
 
-        text = redact(text)
-    except Exception:  # noqa: BLE001 — fail closed: no text rather than unredacted text
+        return str(redact(text))
+    except Exception:  # noqa: BLE001
         return ""
+
+
+def _timeline_io(value: object) -> str:
+    """A tool call's input/output as card text: redacted (a coder running ``env`` or
+    ``cat .env`` must not land the values in the chat transcript), then capped."""
+    text = _redacted(value if isinstance(value, str) else str(value or ""))
     return text if len(text) <= TIMELINE_TOOL_IO_MAX else text[: TIMELINE_TOOL_IO_MAX - 1] + "…"
 
 
@@ -490,8 +513,8 @@ def reply_timeline(timeline: list[dict] | None, reply: str) -> list[dict] | None
     managed-git PR line). So the timeline's text, joined, must be the reply's opening —
     compared ignoring whitespace, because the reply puts paragraph breaks between runs
     that the stream never sent — and whatever the reply has beyond it becomes a final text
-    run. Anything else (cleaned mid-text, or no tool calls at all) is ``None``: a timeline
-    that disagrees with the reply must never render instead of it.
+    run. Anything else (cleaned mid-text, no streamed text, or no tool calls at all) is
+    ``None``: a timeline that disagrees with the reply must never render instead of it.
     """
     if not timeline or not reply or not any(isinstance(e, dict) and e.get("type") == "tool" for e in timeline):
         return None
@@ -508,7 +531,9 @@ def reply_timeline(timeline: list[dict] | None, reply: str) -> list[dict] | None
         elif entry.get("type") == "tool":
             out.append(dict(entry))
     want, have = _ink(reply), _ink(streamed)
-    if not want.startswith(have):
+    # No streamed text at all proves nothing about WHICH reply this run wrote — every reply
+    # starts with "" — so it is not trusted to sit under one.
+    if not have or not want.startswith(have):
         return None
     extra = len(want) - len(have)
     if extra:

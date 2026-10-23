@@ -86,9 +86,11 @@ export function delegateProgressFromWire(raw: unknown, id?: string): DelegatePro
 // reply frame — text runs and tool calls, as they happened (graph/delegate_progress.py,
 // `reply_timeline`) — and the reply bubble renders it like a native turn: text ↔ tool cards.
 
-const TIMELINE_MAX = 300;
+// The server's entry cap (graph/delegate_progress.py TIMELINE_MAX) plus the one text run
+// `reply_timeline` may append for what the reply has beyond the stream.
+const TIMELINE_MAX = 301;
 const TIMELINE_TEXT_MAX = 200_000;
-const TIMELINE_IO_MAX = 2000;
+const TIMELINE_IO_MAX = 800;
 
 /** Decode a reply frame's `timeline`, or undefined when it is absent, malformed, or has no
  *  tool call in it (then the plain reply text is the whole story). */

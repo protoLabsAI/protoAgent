@@ -687,3 +687,28 @@ async def test_background_lane_never_ships_the_timeline():
     mgr._publish = lambda topic, data, **kw: published.append(data)
     await mgr._progress_sink("bg-1", "s")({"target": "c", "done": True, "timeline": [{"type": "text", "text": "x"}]})
     assert published[0]["progress"] == {"target": "c", "done": True}
+
+
+async def test_the_timeline_redacts_names_and_spends_a_bounded_io_budget(monkeypatch):
+    monkeypatch.setattr(dp, "TIMELINE_IO_BUDGET", 10)
+    snaps = []
+
+    async def sink(s):
+        snaps.append(s)
+
+    t = dp.DelegateProgress("c", sink, min_interval=0)
+    await t.on_text("go")
+    secret = 'curl -H "Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789"'
+    await t.on_tool({"phase": "start", "id": "1", "name": secret, "input": "12345678"})
+    await t.on_tool({"phase": "start", "id": "2", "name": "Read", "input": "abcdefgh"})
+    await t.finish(ok=True)
+    first, second = [e for e in dp.take_timeline(snaps[-1])[1] if e["type"] == "tool"]
+    assert "ghp_" not in first["name"] and "[REDACTED]" in first["name"]
+    assert first["input"] == "12345678"
+    # Over budget: the call keeps its name and status, not its text.
+    assert second["name"] == "Read" and second["input"] == ""
+
+
+def test_a_run_that_streamed_no_text_is_not_trusted_under_a_reply():
+    timeline = [{"type": "tool", "id": "1", "name": "Read", "status": "completed"}]
+    assert dp.reply_timeline(timeline, "Some reply.") is None
