@@ -27,6 +27,10 @@ class Window:
     scope: dict[str, str] | None = None
     binding: bool = False
 
+    def applies_to(self, model: str | None) -> bool:
+        """Only unscoped windows apply when no model is specified."""
+        return self.scope is None or (model is not None and self.scope.get("model") == model)
+
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["resets_at"] = self.resets_at.astimezone(UTC).isoformat()
@@ -76,11 +80,11 @@ def _status(used_pct: float, node: dict[str, Any]) -> str:
     return max(statuses, key={"ok": 0, "warning": 1, "blocked": 2}.__getitem__)
 
 
-def usable_for(account: Account, model: str) -> bool:
+def usable_for(account: Account, model: str | None) -> bool:
     if account.status == "unknown":
         return True
     return not any(
-        window.status == "blocked" and (window.scope is None or window.scope.get("model") == model)
+        window.status == "blocked" and window.applies_to(model)
         for window in account.windows
     )
 

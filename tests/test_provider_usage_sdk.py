@@ -204,16 +204,29 @@ def test_scoped_block_only_affects_its_model():
     assert opus["headroom_pct"] == 80.0
 
 
-def test_model_none_counts_only_unscoped_windows():
+@pytest.mark.parametrize("scope", [{"model": "fable"}, {"bucket": "codex"}, {"model": "fable", "bucket": "codex"}])
+def test_model_none_counts_only_unscoped_windows(scope):
     windows = [
         _window("unscoped", 30.0),
-        _window("fable-block", 100.0, status="blocked", scope={"model": "fable"}),
+        _window("scoped-block", 100.0, status="blocked", scope=scope),
     ]
     _install({"anthropic-oauth": _snapshot("anthropic-oauth", windows)})
     out = sdk.provider_usage("anthropic-oauth")  # model=None
     assert out["usable"] is True  # the scoped block is not an unscoped window
     assert out["binding_window"] == "unscoped"
     assert out["headroom_pct"] == 70.0
+
+
+@pytest.mark.parametrize("model", [None, "codex"])
+def test_bucket_only_block_has_no_applicable_window(model):
+    windows = [_window("bucket-block", 100.0, status="blocked", scope={"bucket": "codex"})]
+    _install({"openai-codex": _snapshot("openai-codex", windows)})
+    assert sdk.provider_usage("openai-codex", model=model) == {
+        "usable": True,
+        "headroom_pct": 100.0,
+        "binding_window": None,
+        "resets_at": None,
+    }
 
 
 # ── r5: never forces a poll ───────────────────────────────────────────────────────────

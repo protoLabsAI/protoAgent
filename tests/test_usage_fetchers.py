@@ -73,6 +73,19 @@ def test_weekly_only():
     assert account.windows[0].kind == "weekly"
 
 
+@pytest.mark.parametrize("model", [None, "test-bucket", "other-model"])
+def test_codex_bucket_only_block_does_not_block_model(model):
+    payload = copy.deepcopy(CODEX)
+    del payload["additional_rate_limits"][0]["model"]
+    account = parse_codex_usage(payload)
+    assert account.status == "ok"
+    assert account.windows[2].scope == {"bucket": "test-bucket"}
+    assert account.windows[2].status == "blocked"
+    assert usable_for(account, model)
+    account.windows[0].status = "blocked"
+    assert not usable_for(account, model)
+
+
 @pytest.mark.parametrize("fetch,parse,peek,payload", PROVIDERS)
 @pytest.mark.parametrize("bad", [None, {}, [], "garbage", {"limits": []}, {"rate_limit": {}},
                                   {"limits": [None]}, {"rate_limit": {"primary_window": "bad"}}])

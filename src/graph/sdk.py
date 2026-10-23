@@ -1802,10 +1802,8 @@ def provider_usage(account: str | None = None, *, delegate: Any = None, model: s
 
         from graph.providers.usage import usable_for
 
-        # The predicate mirrors usable_for's own scope test — a window applies to ``model``
-        # when it is unscoped or scoped to exactly that model — so ``usable`` and the headroom
-        # numbers always agree on which windows count (the 08-11 scoped-block incident).
-        applicable = [w for w in acct.windows if w.scope is None or w.scope.get("model") == model]
+        # Share usable_for's scope predicate so usability and headroom count the same windows.
+        applicable = [w for w in acct.windows if w.applies_to(model)]
         binding = max(applicable, key=lambda w: w.used_pct) if applicable else None
         return {
             "usable": usable_for(acct, model),
