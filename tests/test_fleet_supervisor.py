@@ -14,6 +14,8 @@ from graph.fleet import supervisor
 
 pytestmark = pytest.mark.platform_sensitive
 
+_REAL_PORT_LISTENING = supervisor._port_listening
+
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -47,6 +49,14 @@ def fleet(tmp_path, monkeypatch):
 
     monkeypatch.setattr(supervisor, "signal_tree", fake_kill)
     return alive
+
+
+@pytest.fixture(autouse=True)
+def _short_port_release_grace(monkeypatch):
+    """Keep the restart grace (#4479) short: a held port (a test's squatter, or a live agent
+    on one of the hardcoded test ports) must not cost the real 10 s per start()."""
+    monkeypatch.setattr(supervisor, "_PORT_RELEASE_GRACE_SECONDS", 0.3)
+    monkeypatch.setattr(supervisor, "_PORT_RELEASE_POLL_SECONDS", 0.02)
 
 
 def test_start_status_stop(fleet):
@@ -1340,6 +1350,138 @@ def test_start_moves_a_member_off_a_port_another_process_holds(fleet):
 
     assert r["running"] and r["port_moved_from"] == held and r["port"] != held
     assert manager._find("alpha")["port"] == r["port"]  # recorded, so the next start uses it
+
+
+def _squat(port: int | None = None) -> socket.socket:
+    s = socket.socket()
+    s.bind(("127.0.0.1", port or 0))
+    s.listen()
+    return s
+
+
+def test_start_waits_for_its_own_old_process_to_release_the_port(fleet, monkeypatch):
+    """#4479: a plain stop -> start moved projectManager :7875 -> :7872 because the member's
+    own old tree still held :7875 when start() probed it, and it was free seconds later.
+    A port that frees within the grace keeps the member where it was. Real socket."""
+    import threading
+
+    monkeypatch.setattr(supervisor, "_PORT_RELEASE_GRACE_SECONDS", 5.0)
+    squatter = _squat()
+    held = squatter.getsockname()[1]
+    manager.create("alpha", port=held)
+    timer = threading.Timer(0.3, squatter.close)  # the old process lets go a moment later
+    timer.start()
+    try:
+        t0 = time.monotonic()
+        r = supervisor.start("alpha")
+        waited = time.monotonic() - t0
+    finally:
+        timer.cancel()
+        squatter.close()
+
+    assert r["running"] and r["port"] == held and "port_moved_from" not in r
+    assert manager._find("alpha")["port"] == held
+    assert 0.2 < waited < 4.0  # waited for the release, returned early once it came
+
+
+def _time_wait_port() -> int:
+    """A port with no listener but a server-side TIME_WAIT connection, what a member that
+    served traffic leaves behind when it stops. A plain bind (``_port_is_free``) fails on it."""
+    ls = _squat()
+    port = ls.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    served, _ = ls.accept()
+    served.close()  # the server closes first, so the TIME_WAIT sits on `port`
+    client.recv(1)
+    client.close()
+    ls.close()
+    return port
+
+
+def test_start_keeps_a_port_left_only_in_time_wait(fleet, monkeypatch):
+    """#4479, the live case: projectManager stopped at 01:20:09 (its process finished), and
+    the start at 01:20:13 still moved it, because its port was all TIME_WAIT from the hub's
+    proxy polling. Nothing listens there, and the member's own SO_REUSEADDR bind succeeds,
+    so it keeps its port, without waiting out the grace. Real sockets, real probe."""
+    monkeypatch.setattr(supervisor, "_port_listening", _REAL_PORT_LISTENING)
+    monkeypatch.setattr(supervisor, "_BOOT_WATCH_SECONDS", 0.2)  # the fake child never binds
+    monkeypatch.setattr(supervisor, "_PORT_RELEASE_GRACE_SECONDS", 5.0)
+    port = _time_wait_port()
+    if manager._port_is_free(port):
+        pytest.skip("this platform lets a plain bind reuse a TIME_WAIT port")
+    manager.create("alpha", port=port)
+
+    t0 = time.monotonic()
+    r = supervisor.start("alpha")
+
+    assert r["port"] == port and "port_moved_from" not in r
+    assert time.monotonic() - t0 < 2.0
+
+
+def test_start_moves_only_after_the_grace_runs_out(fleet):
+    """A port still held when the grace ends is genuinely someone else's: move (#4423)."""
+    with _squat() as squatter:
+        held = squatter.getsockname()[1]
+        manager.create("alpha", port=held)
+        t0 = time.monotonic()
+        r = supervisor.start("alpha")
+        waited = time.monotonic() - t0
+
+    assert r["port_moved_from"] == held and r["port"] != held
+    assert waited >= supervisor._PORT_RELEASE_GRACE_SECONDS
+
+
+def test_start_skips_the_grace_when_the_member_is_already_running(fleet, monkeypatch):
+    """A running member holds its own port: start() is the no-op, with no wait."""
+    port = _free_port()
+    manager.create("alpha", port=port)
+    supervisor.start("alpha")
+    monkeypatch.setattr(supervisor, "_PORT_RELEASE_GRACE_SECONDS", 30.0)
+    with _squat(port):  # the member's own listener
+        t0 = time.monotonic()
+        r = supervisor.start("alpha")
+        assert time.monotonic() - t0 < 1.0
+    assert r["already"] and r["port"] == port
+
+
+def test_the_port_grace_holds_neither_the_state_lock_nor_the_event_loop(fleet, monkeypatch):
+    """The wait runs before the fleet.json lock (its 5 s timeout would fail other ops) and,
+    with start() run via asyncio.to_thread as the routes do, the loop keeps ticking."""
+    import asyncio
+
+    monkeypatch.setattr(supervisor, "_PORT_RELEASE_GRACE_SECONDS", 1.0)
+    squatter = _squat()
+    held = squatter.getsockname()[1]
+    manager.create("alpha", port=held)
+    lock_free_during_wait: list[bool] = []
+
+    def probe_lock():
+        lock = supervisor._state_lock()
+        lock.timeout = 0.2
+        try:
+            with lock:
+                lock_free_during_wait.append(True)
+        except Exception:
+            lock_free_during_wait.append(False)
+
+    async def run() -> tuple[dict, int]:
+        ticks = 0
+        task = asyncio.create_task(asyncio.to_thread(supervisor.start, "alpha"))
+        await asyncio.sleep(0.3)
+        await asyncio.to_thread(probe_lock)
+        while not task.done():
+            ticks += 1
+            await asyncio.sleep(0.02)
+        return await task, ticks
+
+    try:
+        r, ticks = asyncio.run(run())
+    finally:
+        squatter.close()
+
+    assert lock_free_during_wait == [True]
+    assert ticks > 10  # the loop ran throughout the ~1 s wait
+    assert r["port_moved_from"] == held
 
 
 def test_start_keeps_a_free_recorded_port(fleet):

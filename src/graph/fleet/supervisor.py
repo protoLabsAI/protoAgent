@@ -204,6 +204,42 @@ def _log_tail_since(log_path: Path, offset: int, limit: int = 500) -> str:
 # pays only its own bind latency and only a hung-but-not-listening child waits it out.
 _BOOT_WATCH_SECONDS = 10.0
 
+# How long start() waits for a stopped member's recorded port to be released before it
+# decides another process holds it and moves the member (#4479): a just-stopped member's
+# OWN old process (a hub restart's shutdown_all doesn't wait for it, and a hung graceful
+# drain outlives a stop) can still be listening for a moment. Returns EARLY the moment
+# the port stops being held, so only a port genuinely held by something else pays it.
+_PORT_RELEASE_GRACE_SECONDS = 10.0
+_PORT_RELEASE_POLL_SECONDS = 0.1
+
+
+def _port_held(port: int) -> bool:
+    """Is a LISTENER holding 127.0.0.1:``port`` — something the member would collide with?
+
+    ``manager._port_is_free`` alone isn't that question (#4479). Its plain bind (no
+    ``SO_REUSEADDR``) also fails on a port that only has TIME_WAIT connections left — and a
+    member that just stopped after serving the hub's proxy polling leaves exactly that for
+    ~30 s on macOS, with no listener at all. The member's own bind (``server/bind.py``) sets
+    ``SO_REUSEADDR`` and takes that port fine, yet the one-shot probe read it as a stranger:
+    a plain stop -> start moved projectManager :7872 -> :7875 four seconds after its old
+    process had finished. So a port counts as held only when the bind fails AND something
+    accepts a connection on it."""
+    return not manager._port_is_free(port) and _port_listening(port)
+
+
+def _await_port_release(port: int) -> bool:
+    """Poll until ``port`` is no longer held or the grace runs out; True if it was released.
+
+    Blocking (``time.sleep``): ``start()`` is sync and its callers run it off the event
+    loop (``asyncio.to_thread``), like the boot watch."""
+    deadline = time.monotonic() + _PORT_RELEASE_GRACE_SECONDS
+    while True:
+        if not _port_held(port):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_PORT_RELEASE_POLL_SECONDS)
+
 
 def start(ident: str, *, stop: threading.Event | None = None) -> dict:
     """Spawn the workspace's agent (by id or display name) as a detached background
@@ -223,6 +259,20 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
         raise FleetError(f"no workspace {ident!r} — create it: workspace new {ident}")
     wid, name = ws["id"], ws["name"]
 
+    # Give a just-stopped member's old process time to release its port (#4479), BEFORE the
+    # state lock so the wait can't starve other state ops (that lock times out at 5 s).
+    # Skipped when the member is already up (it holds its own port; see the no-op below).
+    # The registry forgets a member's pid when it's stopped (stop() / shutdown_all pop the
+    # entry), so the port is the signal left to wait on. The move decision is still made
+    # under the lock below: this only delays it until the port settles. Two starts racing
+    # (a manual start and a console window's /activate) both wait here, then serialize on
+    # the lock, and the second sees the first's live record and returns ``already``.
+    recorded = ws.get("port")
+    if recorded and _port_held(int(recorded)):
+        live = _load_state().get(wid)
+        if not (live and _alive(live.get("pid"))) and _await_port_release(int(recorded)):
+            log.info("[fleet] %s: :%s freed within the restart grace — keeping it", name, recorded)
+
     with _state_lock():
         state = _load_state()
         rec = state.get(wid)
@@ -235,10 +285,10 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
         # dev server, another instance's agent). Spawning onto it fails at bind, and the boot
         # watch below would read the STRANGER's socket as "up": start reported success, the
         # child died a second later, and the hub proxied the member's traffic to the wrong
-        # server. Move the member to a free port first (run_exec reads the new one).
+        # server. Move the member to a free port first (run_exec reads the new one), but
+        # only when a listener still holds it after the restart grace above (#4479).
         moved_from = None
-        recorded = ws.get("port")
-        if recorded and not manager._port_is_free(int(recorded)):
+        if recorded and _port_held(int(recorded)):
             moved_from, new_port = manager.reassign_port(wid)
             ws = {**ws, "port": new_port}
             log.warning("[fleet] %s: port %s is held by another process — moved to :%s", name, moved_from, new_port)
