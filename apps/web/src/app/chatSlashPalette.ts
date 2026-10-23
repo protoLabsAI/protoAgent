@@ -203,6 +203,10 @@ const ROWS: Record<string, RowSpec> = {
     needsThisChat: true,
     find: ["performance", "latency", "cost", "tokens", "usage", "cache", "speed", "spend"],
   },
+  usage: {
+    needsThisChat: true,
+    find: ["quota", "limit", "plan", "subscription", "remaining", "reset", "claude", "codex"],
+  },
   compact: {
     needsThisChat: true,
     find: ["summarize", "condense", "shrink", "trim", "context window", "history"],

@@ -47,7 +47,9 @@ export function UsageMeter({ provider }: { provider: string }) {
           : window.status === "warning" || window.used_pct >= 80 ? "warning" : "ok";
         return (
           <div key={window.id} role="group" aria-label={label} data-state={state}>
-            <Progress value={window.used_pct} showValue label={`${label} · ${state === "ok" ? "Available" : state === "warning" ? "Warning" : "Blocked"}`}
+            {/* The bar fills with what is USED; say so in words, since a bare "17%" next to a
+                status read as 17% left. */}
+            <Progress value={window.used_pct} label={`${label} · ${Math.round(window.used_pct)}% used${state === "blocked" ? " · Limit reached" : state === "warning" ? " · Near limit" : ""}`}
               status={state === "blocked" ? "error" : state === "warning" ? "warning" : "success"} />
             <small style={{ color: "var(--pl-color-fg-muted)" }}>
               {state === "blocked" ? `Blocked until ${new Date(reset).toLocaleString()} · ` : ""}

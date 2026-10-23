@@ -386,3 +386,30 @@ def test_op_snapshot_returns_every_provider(tmp_path):
     assert isinstance(out["fetched_at"], str)
     assert {a["provider_id"] for a in out["accounts"]} == set(usage_store.PROVIDER_IDS)
     assert all(a["status"] == "ok" for a in out["accounts"])
+
+
+def test_headers_after_a_poll_update_the_same_windows_not_add_copies(tmp_path):
+    # The endpoint names Claude's windows session:0 / weekly_all:1 / weekly_scoped:2 and the
+    # response headers name the same session and weekly windows 5h:0 / 7d:1. Keyed by id, the
+    # first turn after a poll listed session and weekly twice in Settings ▸ Providers.
+    from graph.providers.usage.anthropic import parse_anthropic_usage
+    from graph.providers.usage.headers import parse_anthropic_headers
+    from tests.test_usage_fetchers import CLAUDE_LIVE
+
+    polled = parse_anthropic_usage(CLAUDE_LIVE)
+    store = UsageStore({"anthropic-oauth": lambda: polled}, path=tmp_path / "u.json", clock=FakeClock())
+    store.get("anthropic-oauth")
+    headers = {
+        "anthropic-ratelimit-unified-5h-utilization": "0.25",
+        "anthropic-ratelimit-unified-5h-reset": "1792756800",
+        "anthropic-ratelimit-unified-7d-utilization": "0.81",
+        "anthropic-ratelimit-unified-7d-reset": "1792756800",
+    }
+    later = datetime(2099, 1, 1, tzinfo=UTC)
+    store.merge_windows(Account("anthropic-oauth", "anthropic-oauth"), parse_anthropic_headers(headers), "headers", later)
+
+    windows = store.cached("anthropic-oauth")["windows"]
+    assert len(windows) == len(polled.windows)
+    unscoped = {w["kind"]: w["used_pct"] for w in windows if not w.get("scope")}
+    assert unscoped == {"session": 25.0, "weekly": 81.0}  # the newer header reading won
+    assert [w for w in windows if w.get("scope")]  # the scoped weekly window is kept

@@ -21,6 +21,9 @@ import { modelChoices, modelFormPayload, modelPickerData, resolveModelArg, type 
 import { openPromptViewer } from "./PromptViewer";
 import { historyLine, promptNoteMarkdown, retentionLine } from "./promptView";
 import { perfNoteMarkdown } from "./perfView";
+import { request } from "../lib/api/http";
+import type { UsageSnapshot } from "../lib/queries";
+import { usageNoteMarkdown } from "./usageView";
 import { trajectoryNoteMarkdown } from "./trajectoryView";
 
 // Local id for the system notes /compact posts (the command manages messages
@@ -253,6 +256,22 @@ registerSlashCommand({
       .catch((e) => {
         ctx.noteToThread(`Performance snapshot failed — ${errMsg(e)}`, { tone: "danger" });
       });
+    ctx.focusComposer();
+    return true;
+  },
+});
+
+registerSlashCommand({
+  name: "usage",
+  description: "Show how much of each connected Claude and ChatGPT / Codex plan is used",
+  usage: "/usage",
+  run: (ctx) => {
+    if (!ctx.sessionId) return false; // no session → fall through
+    // Instance-wide, like /perf: the same `GET /api/usage` the Settings ▸ Providers meters
+    // read, so the server's 60 s poll floor applies here too.
+    void request<UsageSnapshot>("/api/usage")
+      .then((snapshot) => ctx.noteToThread(usageNoteMarkdown(snapshot), { tone: "info" }))
+      .catch((e) => ctx.noteToThread(`Usage check failed — ${errMsg(e)}`, { tone: "danger" }));
     ctx.focusComposer();
     return true;
   },

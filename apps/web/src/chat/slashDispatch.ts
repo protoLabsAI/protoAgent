@@ -48,8 +48,8 @@
 // SESSION SEMANTICS — the reason this seam exposes more than a run() function. With
 // `sessionId: null` there is a mounted slot but no thread, and dispatching from outside is
 // never useful, whatever the command returns:
-//   • 13 of the 16 core commands (`/clear /export /publish /btw /trajectory /prompt /perf
-//     /compact /effort /model /incognito /help /bypass`) `return false`. IN THE COMPOSER
+//   • 14 of the 17 core commands (`/clear /export /publish /btw /trajectory /prompt /perf
+//     /usage /compact /effort /model /incognito /help /bypass`) `return false`. IN THE COMPOSER
 //     false means "fall through": the token stays in the draft and goes to the server as
 //     ordinary text, which is a visible outcome. From OUTSIDE there is no draft to fall
 //     through to, so the same false is a silent no-op.
@@ -57,7 +57,7 @@
 //     itself a no-op without a session (ChatSessionSlot's `noteToThread` bails on `!session`).
 //     So true is NOT proof that anything was shown; do not treat it as the safe subset.
 //   • only `/new` (open a tab) does something real with no session.
-// The rule for a caller is therefore the simple one, not a 13-command allowlist: with
+// The rule for a caller is therefore the simple one, not a 14-command allowlist: with
 // `sessionId: null`, create or focus a session first (or offer nothing but `/new`) rather
 // than dispatching into the dark. `coreSlashCommands.test.ts` pins that inventory so this
 // note can't quietly go stale.
