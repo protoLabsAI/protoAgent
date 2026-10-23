@@ -18,6 +18,7 @@ from langgraph.prebuilt import InjectedState
 
 from graph.config import LangGraphConfig
 from graph.llm import create_llm
+from graph.middleware.quota_routing import account_for_model, is_blocked_for_model, quota_429, resolve_account
 from graph.prompts import build_system_prompt, build_subagent_prompt
 from graph.middleware.audit import AuditMiddleware
 from graph.middleware.knowledge import KnowledgeMiddleware
@@ -37,12 +38,18 @@ def _model_label(model) -> str:
     return getattr(model, "model_name", None) or getattr(model, "model", None) or model.__class__.__name__
 
 
-def _emit_fallback_event(primary_exc: Exception, fallback_model, index: int) -> None:
+def _emit_fallback_event(
+    primary_exc: Exception, fallback_model, index: int, skipped_blocked: list[str] | None = None
+) -> None:
     """Publish ``model.fallback`` to the event bus (ADR 0039) — best-effort.
 
     The bus is server-owned; graph code reaches it through the plugin-host seam
     (``HOST.publish``), which is ``None`` outside a running server (tests, CLI).
     A missing or failing bus never touches the turn — the fallback already served it.
+
+    ``skipped_blocked`` names any earlier fallbacks skipped because their account held a
+    ``blocked`` window applying to their model (ADR 0122 D2) — so a reader can tell a clean
+    failover from one that had to step over an exhausted subscription on the way.
     """
     try:
         from graph.plugins.host import HOST
@@ -54,6 +61,7 @@ def _emit_fallback_event(primary_exc: Exception, fallback_model, index: int) -> 
                     "primary_error": primary_exc.__class__.__name__,
                     "fallback_model": _model_label(fallback_model),
                     "fallback_index": index,
+                    "skipped_blocked": list(skipped_blocked or []),
                 },
             )
     except Exception:  # noqa: BLE001 — observability must never break the turn
@@ -61,7 +69,8 @@ def _emit_fallback_event(primary_exc: Exception, fallback_model, index: int) -> 
 
 
 class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
-    """langchain's ModelFallbackMiddleware with logging + event emission (#2956).
+    """langchain's ModelFallbackMiddleware with logging, event emission (#2956) and
+    quota-aware routing (ADR 0122 D2/D4/D8, #4437).
 
     The upstream middleware fails over SILENTLY — a successful fallback is
     indistinguishable from a normal turn, so the operator's first clue of a
@@ -70,21 +79,96 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
     fallback actually serves the turn: a WARNING log line and a
     ``model.fallback`` bus event (ADR 0039) for plugins/telemetry.
 
+    Quota-aware failover (ADR 0122), reading core's OWN usage store (D8) — never the board:
+
+    - A fallback whose account holds a ``blocked`` window applying to its model is SKIPPED
+      (logged, named in the event's ``skipped_blocked``) and the next one is tried (D2).
+    - When a subscription-quota 429 has a fresh account-wide blocked window, only
+      fallbacks on a DIFFERENT account are tried — a same-account fallback would hit the
+      same exhausted quota, so it is skipped.
+    - Unknown usage — no config/snapshot, a stale/unknown snapshot, an unresolvable account —
+      fails over in exactly today's order (D4).
+
     Unlike the base class, a ``GraphBubbleUp`` (a HITL interrupt propagating
     out of the model call) is re-raised untouched — it is control flow, not a
     model failure, and must never trigger a fallback retry. All-fallbacks-fail
-    re-raises the PRIMARY exception (the failure worth diagnosing), not the
-    last fallback's.
+    (or every one skipped) re-raises the PRIMARY exception (the failure worth
+    diagnosing), not the last fallback's.
     """
 
-    def _observe_fallback(self, primary_exc: Exception, fallback_model, index: int) -> None:
+    def __init__(self, *models, config: LangGraphConfig | None = None, usage_store=None):
+        super().__init__(*models)
+        self._config = config
+        self._usage_store = usage_store
+        # The configured slot names, index-aligned with ``self.models`` (both call sites build
+        # the instances from ``routing.fallback_models`` in order). The NAME is what resolves
+        # an account — a built instance has its provider prefix stripped (see resolve_account).
+        self._fallback_names = list(getattr(config, "routing_fallback_models", None) or [])
+
+    def _store(self):
+        if self._usage_store is not None:
+            return self._usage_store
+        from observability.usage_store import default_store
+
+        return default_store()
+
+    def _fallback_route(self, index: int, fallback_model) -> tuple[str | None, str]:
+        name = self._fallback_names[index] if index < len(self._fallback_names) else _model_label(fallback_model)
+        return resolve_account(name, self._config)
+
+    def _fallback_plan(self, request, primary_exc: Exception):
+        """``(ordered [(index, model)] to try, skipped_blocked labels)`` under the ADR 0122
+        policy. Unknown accounts/usage fall through to today's order (D4)."""
+        primary_account = account_for_model(request.model, self._config)
+        store = self._store() if primary_account is not None else None
+        # A native 429 may be a short throttle or a model-scoped limit. D2/D4
+        # require fresh evidence before treating it as account-wide exhaustion.
+        cross_account_only = (
+            primary_account is not None
+            and quota_429(primary_exc, native_oauth=True)
+            and is_blocked_for_model(store, primary_account, None)
+        )
+        order: list[tuple[int, Any]] = []
+        skipped_blocked: list[str] = []
+        for i, fallback_model in enumerate(self.models):
+            account, bare = self._fallback_route(i, fallback_model)
+            if cross_account_only and account is not None and account == primary_account:
+                logger.info(
+                    "[routing] skipping same-account fallback[%d] %s on a quota 429 — account %s "
+                    "shares the exhausted quota",
+                    i,
+                    _model_label(fallback_model),
+                    primary_account,
+                )
+                skipped_blocked.append(_model_label(fallback_model))
+                continue
+            if account is not None:
+                if store is None:
+                    store = self._store()
+                if is_blocked_for_model(store, account, bare):
+                    logger.warning(
+                        "[routing] skipping fallback[%d] %s — account %s is blocked for %s",
+                        i,
+                        _model_label(fallback_model),
+                        account,
+                        bare,
+                    )
+                    skipped_blocked.append(_model_label(fallback_model))
+                    continue
+            order.append((i, fallback_model))
+        return order, skipped_blocked
+
+    def _observe_fallback(
+        self, primary_exc: Exception, fallback_model, index: int, skipped_blocked: list[str] | None = None
+    ) -> None:
         logger.warning(
-            "Fallback activated: primary failed (%s), using fallback[%d] %s",
+            "Fallback activated: primary failed (%s), using fallback[%d] %s%s",
             primary_exc.__class__.__name__,
             index,
             _model_label(fallback_model),
+            f" (skipped blocked accounts: {', '.join(skipped_blocked)})" if skipped_blocked else "",
         )
-        _emit_fallback_event(primary_exc, fallback_model, index)
+        _emit_fallback_event(primary_exc, fallback_model, index, skipped_blocked)
 
     def wrap_model_call(self, request, handler):
         try:
@@ -96,14 +180,15 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
                 "Primary model failed, trying fallback models: %s",
                 primary_exc.__class__.__name__,
             )
-            for i, fallback_model in enumerate(self.models):
+            order, skipped_blocked = self._fallback_plan(request, primary_exc)
+            for i, fallback_model in order:
                 try:
                     result = handler(request.override(model=fallback_model))
                 except GraphBubbleUp:
                     raise
                 except Exception:  # noqa: BLE001 — try the next fallback
                     continue
-                self._observe_fallback(primary_exc, fallback_model, i)
+                self._observe_fallback(primary_exc, fallback_model, i, skipped_blocked)
                 return result
             raise primary_exc
 
@@ -117,14 +202,15 @@ class ObservableModelFallbackMiddleware(ModelFallbackMiddleware):
                 "Primary model failed, trying fallback models: %s",
                 primary_exc.__class__.__name__,
             )
-            for i, fallback_model in enumerate(self.models):
+            order, skipped_blocked = self._fallback_plan(request, primary_exc)
+            for i, fallback_model in order:
                 try:
                     result = await handler(request.override(model=fallback_model))
                 except GraphBubbleUp:
                     raise
                 except Exception:  # noqa: BLE001 — try the next fallback
                     continue
-                self._observe_fallback(primary_exc, fallback_model, i)
+                self._observe_fallback(primary_exc, fallback_model, i, skipped_blocked)
                 return result
             raise primary_exc
 
@@ -427,7 +513,7 @@ def _build_middleware(
     # Observable wrapper (#2956): the stock middleware fails over silently.
     if config.routing_fallback_models:
         fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
-        middleware.append(ObservableModelFallbackMiddleware(*fallbacks))
+        middleware.append(ObservableModelFallbackMiddleware(*fallbacks, config=config))
 
     # Self-heal the other thread-bricking history defect (ADR 0097): a replayed
     # encrypted-reasoning blob the provider cannot verify — a cross-issuer replay
@@ -1068,7 +1154,7 @@ async def _run_subagent_inner(
     # routing.fallback_models is empty — the subagent stack is then unchanged.
     if config.routing_fallback_models:
         sub_fallbacks = [create_llm(config, model_name=m) for m in config.routing_fallback_models]
-        sub_middleware.append(ObservableModelFallbackMiddleware(*sub_fallbacks))
+        sub_middleware.append(ObservableModelFallbackMiddleware(*sub_fallbacks, config=config))
     # Same history self-heal as the lead stack, in the same slot: a delegation
     # replays the subagent's own thread, so a rejected reasoning blob bricks it the
     # same way. See the lead chain for why this sits inside the failover wrapper.
