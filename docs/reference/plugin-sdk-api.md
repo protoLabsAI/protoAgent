@@ -51,6 +51,8 @@ the module's own.
 
 **Delegation ledger (who handed what work to whom)** — [`record_delegation()`](#sdk-record-delegation)
 
+**Subscription usage (the plugin↔quota channel, ADR 0122 D6/D7/D8)** — [`provider_usage()`](#sdk-provider-usage)
+
 **Managed Python runtime (ADR 0094 — the provisioned child interpreter)** — [`managed_python_exe()`](#sdk-managed-python-exe)
 
 **Node.js runtime (ADR 0085, amended 2026-10-15 — one resolver for every Node consumer)** — [`node_executable()`](#sdk-node-executable)
@@ -941,6 +943,47 @@ understates every rollup built on the column.
 Best-effort and never raises: a ledger failure must not break a dispatch.
 
 Returns the new `edge_id`, or None when no store is wired or the write failed.
+
+## Subscription usage (the plugin↔quota channel, ADR 0122 D6/D7/D8)
+
+### `sdk.provider_usage` {#sdk-provider-usage}
+
+```python
+sdk.provider_usage(account: str | None = None, *, delegate: Any = None, model: str | None = None) -> dict | None
+```
+
+This OAuth-subscription account's remaining headroom, or `None` when it can't be read.
+
+The plugin read path for subscription usage ([ADR 0122](/adr/0122-subscription-usage-model-and-routing) D6/D8): a router that wants to avoid
+an account near its limit asks here, rather than reaching into core's usage store or
+fetchers. The account is resolved from `account` (a provider id, e.g.
+`"anthropic-oauth"`) or, failing that, from `delegate` via
+`account_for_delegate` (the ACP coder → login
+mapping, D7) — `delegate` is a delegate name or its config entry.
+
+The store is read **without forcing a poll**, so the on-demand ≤1/60 s contract holds: two
+calls inside a minute cause at most one network fetch. Returns `None` — never raises —
+when the account can't be resolved, the store holds no (or a stale/unknown) snapshot for
+it, any window has a missing or invalid usage percentage, or anything throws; the caller
+then behaves exactly as it does today (D4).
+
+With a fresh snapshot, returns:
+
+- `usable`: `usable_for` for `model` — `False` only when
+  a window that applies to `model` is `blocked`. A window scoped to another model is
+  ignored, so a Fable-scoped block never makes Opus unusable (and `model=None` counts
+  only unscoped windows).
+- `headroom_pct`: `0` when the binding window is blocked; otherwise `100` minus its
+  `used_pct` (`100` when none apply).
+- `binding_window`: the id of the applicable blocked window with the latest reset,
+  since every blocking window must reset before the account becomes usable. If none
+  are blocked, the applicable window with the highest `used_pct` (`None` when none
+  apply).
+- `resets_at`: that window's reset time as an ISO-8601 UTC string (`None` when none
+  apply).
+
+Guard the lookup with `getattr(sdk, "provider_usage", None)` on cores older than this
+seam.
 
 ## Managed Python runtime (ADR 0094 — the provisioned child interpreter)
 

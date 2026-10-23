@@ -1747,6 +1747,128 @@ def record_delegation(
     )
 
 
+# ── subscription usage (the plugin↔quota channel, ADR 0122 D6/D7/D8) ────────────────────
+# The board (and any plugin router) reads subscription headroom ONLY through here — never by
+# importing the fetchers or the store, which would cross the layering line. The read is
+# on-demand and tolerant: it polls the store no harder than the ≤1/60 s rule already allows,
+# and an account that can't be resolved, is stale, or is unknown reads as None — an unknown
+# route behaves exactly as today (D4).
+
+
+def provider_usage(account: str | None = None, *, delegate: Any = None, model: str | None = None) -> dict | None:
+    """This OAuth-subscription account's remaining headroom, or ``None`` when it can't be read.
+
+    The plugin read path for subscription usage (ADR 0122 D6/D8): a router that wants to avoid
+    an account near its limit asks here, rather than reaching into core's usage store or
+    fetchers. The account is resolved from ``account`` (a provider id, e.g.
+    ``"anthropic-oauth"``) or, failing that, from ``delegate`` via
+    :func:`~graph.providers.usage.accounts.account_for_delegate` (the ACP coder → login
+    mapping, D7) — ``delegate`` is a delegate name or its config entry.
+
+    The store is read **without forcing a poll**, so the on-demand ≤1/60 s contract holds: two
+    calls inside a minute cause at most one network fetch. Returns ``None`` — never raises —
+    when the account can't be resolved, the store holds no (or a stale/unknown) snapshot for
+    it, any window has a missing or invalid usage percentage, or anything throws; the caller
+    then behaves exactly as it does today (D4).
+
+    With a fresh snapshot, returns:
+
+    - ``usable``: :func:`~graph.providers.usage.usable_for` for ``model`` — ``False`` only when
+      a window that applies to ``model`` is ``blocked``. A window scoped to another model is
+      ignored, so a Fable-scoped block never makes Opus unusable (and ``model=None`` counts
+      only unscoped windows).
+    - ``headroom_pct``: ``0`` when the binding window is blocked; otherwise ``100`` minus its
+      ``used_pct`` (``100`` when none apply).
+    - ``binding_window``: the id of the applicable blocked window with the latest reset,
+      since every blocking window must reset before the account becomes usable. If none
+      are blocked, the applicable window with the highest ``used_pct`` (``None`` when none
+      apply).
+    - ``resets_at``: that window's reset time as an ISO-8601 UTC string (``None`` when none
+      apply).
+
+    Guard the lookup with ``getattr(sdk, "provider_usage", None)`` on cores older than this
+    seam.
+    """
+    try:
+        provider_id = _resolve_usage_account(account, delegate)
+        if not provider_id:
+            return None
+        from observability.usage_store import default_store
+
+        # get() (not force) → the store's own ≤1/60 s poll gate decides whether to fetch.
+        data = default_store().get(provider_id)
+        if not isinstance(data, dict) or data.get("stale") or data.get("status") != "ok":
+            return None
+        acct = _usage_account_from_dict(data)
+        if acct is None or acct.status != "ok":
+            return None
+        from datetime import UTC
+
+        from graph.providers.usage import usable_for
+
+        # Share usable_for's scope predicate so usability and headroom count the same windows.
+        applicable = [w for w in acct.windows if w.applies_to(model)]
+        blocking = [w for w in applicable if w.status == "blocked"]
+        binding = (
+            max(blocking, key=lambda w: w.resets_at)
+            if blocking else max(applicable, key=lambda w: w.used_pct) if applicable else None
+        )
+        return {
+            "usable": usable_for(acct, model),
+            "headroom_pct": 0.0 if blocking else 100.0 - binding.used_pct if binding is not None else 100.0,
+            "binding_window": binding.id if binding is not None else None,
+            "resets_at": binding.resets_at.astimezone(UTC).isoformat() if binding is not None else None,
+        }
+    except Exception:  # noqa: BLE001 — an unresolved/odd read is None, never a raise (D4)
+        log.debug("[sdk] provider_usage failed", exc_info=True)
+        return None
+
+
+def _resolve_usage_account(account: str | None, delegate: Any) -> str | None:
+    """A provider id from an explicit ``account`` or, failing that, a ``delegate`` mapping."""
+    if isinstance(account, str) and account.strip():
+        return account.strip()
+    if delegate is not None:
+        from graph.providers.usage.accounts import account_for_delegate
+
+        return account_for_delegate(delegate)
+    return None
+
+
+def _usage_account_from_dict(data: dict) -> Any:
+    """Rebuild the ``Account``/``Window`` objects ``usable_for`` needs from the store's dict
+    (``Account.to_dict()`` + a ``stale`` flag). Tolerant — a malformed row raises and the
+    caller degrades to None."""
+    from datetime import datetime
+
+    from graph.providers.usage import Account, Window, _number
+
+    windows = []
+    for w in data.get("windows") or []:
+        if not isinstance(w, dict):
+            continue
+        windows.append(
+            Window(
+                id=w["id"],
+                kind=w.get("kind", "other"),
+                window_seconds=w.get("window_seconds"),
+                used_pct=_number(w["used_pct"]),
+                resets_at=datetime.fromisoformat(str(w["resets_at"])),
+                status=w.get("status", "ok"),
+                scope=w.get("scope"),
+                binding=bool(w.get("binding", False)),
+            )
+        )
+    return Account(
+        provider_id=data.get("provider_id", ""),
+        provider_type=data.get("provider_type", data.get("provider_id", "")),
+        account_key=data.get("account_key"),
+        plan=data.get("plan"),
+        status=data.get("status", "unknown"),
+        windows=windows,
+    )
+
+
 # ── managed Python runtime (ADR 0094 — the provisioned child interpreter) ─────────────
 # A plugin that spawns Python of its own (a helper script, a Playwright install) needs the
 # SAME interpreter `execute_code` spawns: on the packaged desktop app `sys.executable` is
