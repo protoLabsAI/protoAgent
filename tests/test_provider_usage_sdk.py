@@ -9,7 +9,7 @@ the no-forced-poll guarantee (two reads inside 60 s → at most one fetch).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -158,6 +158,26 @@ def test_raising_store_is_none():
     assert sdk.provider_usage("anthropic-oauth") is None
 
 
+@pytest.mark.parametrize("value", [None, "", "invalid", True, float("nan"), float("inf")])
+def test_invalid_usage_percentage_degrades_entire_snapshot(value):
+    data = _snapshot("anthropic-oauth", [_window("valid", 42.5), _window("invalid", 10.0)])
+    data["windows"][1]["used_pct"] = value
+    _install({"anthropic-oauth": data})
+    assert sdk.provider_usage("anthropic-oauth") is None
+
+
+def test_missing_usage_percentage_degrades_entire_snapshot():
+    data = _snapshot("anthropic-oauth", [_window("valid", 42.5), _window("missing", 10.0)])
+    del data["windows"][1]["used_pct"]
+    _install({"anthropic-oauth": data})
+    assert sdk.provider_usage("anthropic-oauth") is None
+
+
+def test_zero_usage_percentage_is_valid():
+    _install({"anthropic-oauth": _snapshot("anthropic-oauth", [_window("unused", 0.0)])})
+    assert sdk.provider_usage("anthropic-oauth")["headroom_pct"] == 100.0
+
+
 # ── r3: fresh snapshot → headroom math ────────────────────────────────────────────────
 
 
@@ -178,6 +198,22 @@ def test_resolves_account_from_delegate():
     _install({"anthropic-oauth": _snapshot("anthropic-oauth", windows)})
     out = sdk.provider_usage(delegate={"command": "claude-agent-acp"})
     assert out is not None and out["binding_window"] == "sess" and out["headroom_pct"] == 80.0
+
+
+@pytest.mark.parametrize("multiple_blocks", [False, True])
+def test_blocked_binding_uses_latest_reset_not_highest_usage(multiple_blocks):
+    blocked = _window("late-block", 10.0, status="blocked")
+    blocked.resets_at = RESET + timedelta(hours=2)
+    windows = [_window("higher-usage", 90.0), blocked]
+    if multiple_blocks:
+        windows.append(_window("early-block", 100.0, status="blocked"))
+    _install({"anthropic-oauth": _snapshot("anthropic-oauth", windows)})
+    assert sdk.provider_usage("anthropic-oauth") == {
+        "usable": False,
+        "headroom_pct": 0.0,
+        "binding_window": "late-block",
+        "resets_at": blocked.resets_at.isoformat(),
+    }
 
 
 # ── r4: a scoped block binds only its own model (the 08-11 incident) ─────────────────

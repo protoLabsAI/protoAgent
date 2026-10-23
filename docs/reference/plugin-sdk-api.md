@@ -964,7 +964,8 @@ mapping, D7) — `delegate` is a delegate name or its config entry.
 The store is read **without forcing a poll**, so the on-demand ≤1/60 s contract holds: two
 calls inside a minute cause at most one network fetch. Returns `None` — never raises —
 when the account can't be resolved, the store holds no (or a stale/unknown) snapshot for
-it, or anything throws; the caller then behaves exactly as it does today (D4).
+it, any window has a missing or invalid usage percentage, or anything throws; the caller
+then behaves exactly as it does today (D4).
 
 With a fresh snapshot, returns:
 
@@ -972,9 +973,12 @@ With a fresh snapshot, returns:
   a window that applies to `model` is `blocked`. A window scoped to another model is
   ignored, so a Fable-scoped block never makes Opus unusable (and `model=None` counts
   only unscoped windows).
-- `headroom_pct`: `100` minus the highest `used_pct` among the windows that apply to
-  `model` (`100` when none apply).
-- `binding_window`: the id of that highest window (`None` when none apply).
+- `headroom_pct`: `0` when the binding window is blocked; otherwise `100` minus its
+  `used_pct` (`100` when none apply).
+- `binding_window`: the id of the applicable blocked window with the latest reset,
+  since every blocking window must reset before the account becomes usable. If none
+  are blocked, the applicable window with the highest `used_pct` (`None` when none
+  apply).
 - `resets_at`: that window's reset time as an ISO-8601 UTC string (`None` when none
   apply).
 

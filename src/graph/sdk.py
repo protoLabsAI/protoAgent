@@ -1768,7 +1768,8 @@ def provider_usage(account: str | None = None, *, delegate: Any = None, model: s
     The store is read **without forcing a poll**, so the on-demand ≤1/60 s contract holds: two
     calls inside a minute cause at most one network fetch. Returns ``None`` — never raises —
     when the account can't be resolved, the store holds no (or a stale/unknown) snapshot for
-    it, or anything throws; the caller then behaves exactly as it does today (D4).
+    it, any window has a missing or invalid usage percentage, or anything throws; the caller
+    then behaves exactly as it does today (D4).
 
     With a fresh snapshot, returns:
 
@@ -1776,9 +1777,12 @@ def provider_usage(account: str | None = None, *, delegate: Any = None, model: s
       a window that applies to ``model`` is ``blocked``. A window scoped to another model is
       ignored, so a Fable-scoped block never makes Opus unusable (and ``model=None`` counts
       only unscoped windows).
-    - ``headroom_pct``: ``100`` minus the highest ``used_pct`` among the windows that apply to
-      ``model`` (``100`` when none apply).
-    - ``binding_window``: the id of that highest window (``None`` when none apply).
+    - ``headroom_pct``: ``0`` when the binding window is blocked; otherwise ``100`` minus its
+      ``used_pct`` (``100`` when none apply).
+    - ``binding_window``: the id of the applicable blocked window with the latest reset,
+      since every blocking window must reset before the account becomes usable. If none
+      are blocked, the applicable window with the highest ``used_pct`` (``None`` when none
+      apply).
     - ``resets_at``: that window's reset time as an ISO-8601 UTC string (``None`` when none
       apply).
 
@@ -1804,10 +1808,14 @@ def provider_usage(account: str | None = None, *, delegate: Any = None, model: s
 
         # Share usable_for's scope predicate so usability and headroom count the same windows.
         applicable = [w for w in acct.windows if w.applies_to(model)]
-        binding = max(applicable, key=lambda w: w.used_pct) if applicable else None
+        blocking = [w for w in applicable if w.status == "blocked"]
+        binding = (
+            max(blocking, key=lambda w: w.resets_at)
+            if blocking else max(applicable, key=lambda w: w.used_pct) if applicable else None
+        )
         return {
             "usable": usable_for(acct, model),
-            "headroom_pct": 100.0 - binding.used_pct if binding is not None else 100.0,
+            "headroom_pct": 0.0 if blocking else 100.0 - binding.used_pct if binding is not None else 100.0,
             "binding_window": binding.id if binding is not None else None,
             "resets_at": binding.resets_at.astimezone(UTC).isoformat() if binding is not None else None,
         }
@@ -1833,7 +1841,7 @@ def _usage_account_from_dict(data: dict) -> Any:
     caller degrades to None."""
     from datetime import datetime
 
-    from graph.providers.usage import Account, Window
+    from graph.providers.usage import Account, Window, _number
 
     windows = []
     for w in data.get("windows") or []:
@@ -1844,7 +1852,7 @@ def _usage_account_from_dict(data: dict) -> Any:
                 id=w["id"],
                 kind=w.get("kind", "other"),
                 window_seconds=w.get("window_seconds"),
-                used_pct=float(w.get("used_pct") or 0.0),
+                used_pct=_number(w["used_pct"]),
                 resets_at=datetime.fromisoformat(str(w["resets_at"])),
                 status=w.get("status", "ok"),
                 scope=w.get("scope"),
