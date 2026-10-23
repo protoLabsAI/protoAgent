@@ -17,12 +17,16 @@ def parse_anthropic_usage(payload, *, account: Account | None = None) -> Account
         windows = []
         for index, limit in enumerate(limits):
             raw_kind = limit["kind"]
-            kind, seconds = _DURATIONS.get(raw_kind, ("other", None))
             if not isinstance(raw_kind, str):
                 raise ValueError("invalid kind")
+            # The live payload's kinds are "session"/"weekly_all"/"weekly_scoped"; its
+            # "group" names the period, so prefer it.
+            group = limit.get("group")
+            kind, seconds = _DURATIONS.get(group if isinstance(group, str) else raw_kind,
+                                           _DURATIONS.get(raw_kind, ("other", None)))
             used = min(100, max(0, _number(limit["percent"])))
             scope = _scope(limit.get("scope"))
-            binding = limit.get("binding", False)
+            binding = limit.get("binding", limit.get("is_active", False))
             if not isinstance(binding, bool):
                 raise ValueError("invalid binding")
             windows.append(Window(

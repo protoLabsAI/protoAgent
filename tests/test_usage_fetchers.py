@@ -258,3 +258,55 @@ def test_provider_status(parse, payload, severity, status, expected):
         assert account.status == "unknown"
     else:
         assert account.windows[0].status == expected
+
+
+# Live payload shapes (2026-10-23), values redacted; the hand-built spike shapes above
+# didn't match either provider, so both read "unrecognized usage payload" in production.
+CLAUDE_LIVE = {
+    "five_hour": {"utilization": 5.0, "resets_at": "2026-10-23T11:19:59.759401+00:00"},
+    "seven_day": {"utilization": 14.0, "resets_at": "2026-10-29T09:59:59.759425+00:00"},
+    "extra_usage": {"is_enabled": False, "used_credits": 0.0, "currency": "USD"},
+    "limits": [
+        {"kind": "session", "group": "session", "percent": 5, "severity": "normal",
+         "resets_at": "2026-10-23T11:19:59.759401+00:00", "scope": None, "is_active": False},
+        {"kind": "weekly_all", "group": "weekly", "percent": 14, "severity": "normal",
+         "resets_at": "2026-10-29T09:59:59.759425+00:00", "scope": None, "is_active": True},
+        {"kind": "weekly_scoped", "group": "weekly", "percent": 0, "severity": "normal",
+         "resets_at": "2026-10-29T10:00:00+00:00",
+         "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}, "is_active": False},
+    ],
+}
+CODEX_LIVE = {
+    "plan_type": "prolite",
+    "rate_limit": {"allowed": True, "limit_reached": False,
+                   "primary_window": {"used_percent": 50, "limit_window_seconds": 604800,
+                                      "reset_after_seconds": 553560, "reset_at": 1793296874},
+                   "secondary_window": None},
+    "code_review_rate_limit": None,
+    "additional_rate_limits": None,
+    "credits": {"has_credits": False, "unlimited": False, "balance": "0"},
+}
+
+
+def test_claude_live_payload():
+    account = parse_anthropic_usage(copy.deepcopy(CLAUDE_LIVE))
+    assert account.status == "ok"
+    assert [w.kind for w in account.windows] == ["session", "weekly", "weekly"]
+    assert [w.window_seconds for w in account.windows] == [18000, 604800, 604800]
+    assert [w.used_pct for w in account.windows] == [5, 14, 0]
+    assert [w.binding for w in account.windows] == [False, True, False]
+    assert account.windows[2].scope == {"model": "Fable"}
+    assert all(w.status == "ok" for w in account.windows)
+
+
+def test_claude_scope_prefers_model_id():
+    payload = copy.deepcopy(CLAUDE_LIVE)
+    payload["limits"][2]["scope"]["model"]["id"] = "claude-fable-5-1"
+    assert parse_anthropic_usage(payload).windows[2].scope == {"model": "claude-fable-5-1"}
+
+
+def test_codex_live_payload():
+    account = parse_codex_usage(copy.deepcopy(CODEX_LIVE))
+    assert account.status == "ok"
+    assert account.plan == "prolite"
+    assert [(w.kind, w.used_pct) for w in account.windows] == [("weekly", 50)]
