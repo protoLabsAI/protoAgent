@@ -18,14 +18,24 @@ export function resetsIn(reset: number, now: number): string {
   return `${days ? `${days}d ` : ""}${hours ? `${hours}h ` : ""}${minutes % 60}m`;
 }
 
+/** "Weekly · Fable" — the window's period, plus the model or bucket it is scoped to. */
+export function windowLabel(w: UsageWindow): string {
+  const scope = w.scope?.model || w.scope?.bucket;
+  return `${w.kind.charAt(0).toUpperCase()}${w.kind.slice(1)}${scope ? ` · ${scope}` : ""}`;
+}
+
+/** Near the limit from 80% used, at it from 100% — or whenever the provider says so. */
+export function windowState(w: UsageWindow): "ok" | "warning" | "blocked" {
+  return w.status === "blocked" || w.used_pct >= 100 ? "blocked"
+    : w.status === "warning" || w.used_pct >= 80 ? "warning" : "ok";
+}
+
 /** "Weekly · Fable — 17% used, resets in 5d 15h (near limit)". */
 export function windowLine(w: UsageWindow, now: number): string {
-  const scope = w.scope?.model || w.scope?.bucket;
-  const label = `${w.kind.charAt(0).toUpperCase()}${w.kind.slice(1)}${scope ? ` · ${scope}` : ""}`;
+  const label = windowLabel(w);
   const reset = Date.parse(w.resets_at);
   if (!Number.isFinite(w.used_pct) || !Number.isFinite(reset)) return `${label} — unavailable`;
-  const state = w.status === "blocked" || w.used_pct >= 100 ? " (limit reached)"
-    : w.status === "warning" || w.used_pct >= 80 ? " (near limit)" : "";
+  const state = { ok: "", warning: " (near limit)", blocked: " (limit reached)" }[windowState(w)];
   return `${label} — ${Math.round(w.used_pct)}% used, resets ${reset <= now ? "now" : `in ${resetsIn(reset, now)}`}${state}`;
 }
 
