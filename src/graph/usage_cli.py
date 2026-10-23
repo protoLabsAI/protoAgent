@@ -58,6 +58,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--fleet", action="store_true", help="every fleet member through the hub, deduped by account")
+    p.add_argument("--by-agent", action="store_true", help="member share of attributed tokens per account window (operator only)")
     p.add_argument("--account", metavar="ID", help="only this account (provider id or account key)")
     p.add_argument(
         "--warn-at",
@@ -333,6 +334,20 @@ def _render(payload: dict) -> None:
     for r in rows:
         cells = r[:ncols]
         print("  " + "  ".join(cell.ljust(widths[c]) for c, cell in enumerate(cells)).rstrip())
+    for account in accounts:
+        if "by_agent" not in account:
+            continue
+        print(f"\n  {account['account_key'] or account['provider_id']}: share of attributed tokens (plan % is account-wide)")
+        if not account["by_agent"]:
+            print("    unavailable — no current attributable window")
+        for window in account["by_agent"]:
+            print(f"    {window['window_id']}: {window['attributed_tokens']} attributed tokens")
+            for member in window["members"]:
+                pct = member["share_pct"]
+                share = f"{pct:.1f}%" if pct is not None else "—"
+                print(f"      {member['member']}: {share} ({member['tokens']} tokens)")
+            if window["unavailable"]:
+                print("      attribution unavailable: " + ", ".join(window["unavailable"]))
     if payload["unreachable"]:
         names = ", ".join(f"{u['member']} ({u['error']})" for u in payload["unreachable"])
         print(f"\n  unreachable: {names}", file=sys.stderr)
@@ -367,7 +382,21 @@ def run_usage_cli(argv: list[str]) -> int:
 
     hub_url = conn.client.url
     try:
-        if args.fleet:
+        if args.by_agent:
+            path = "/api/usage/fleet" if args.fleet else "/api/usage"
+            body = conn.client.member_get("host", path, by_agent="true")
+            if not isinstance(body, dict) or not isinstance(body.get("accounts"), list):
+                raise deckhub.HubError(hub_url, "usage answered with an invalid snapshot")
+            records = []
+            for account in body["accounts"]:
+                if args.account and not _matches(account, args.account):
+                    continue
+                record = _account_record(account, account.get("members", []), args.warn_at, now)
+                record["by_agent"] = account.get("by_agent", [])
+                records.append(record)
+            unreachable = [{"member": slug, "slug": slug, "error": "usage unavailable"}
+                           for slug, member in body.get("members", {}).items() if not member.get("reachable")]
+        elif args.fleet:
             records, unreachable = _collect_fleet(conn, args, now)
         else:
             records, unreachable = _collect_local(conn, args, now), []

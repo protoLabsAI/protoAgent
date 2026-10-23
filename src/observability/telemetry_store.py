@@ -37,6 +37,8 @@ _COLUMNS = (
     "success",
     "model",
     "models",
+    "provider_id",
+    "account_key",
     "input_tokens",
     "output_tokens",
     "total_tokens",
@@ -130,6 +132,8 @@ class TelemetryStore:
                     soul_rev                    TEXT,
                     trace_id                    TEXT,
                     tool_durations               TEXT,
+                    provider_id                 TEXT,
+                    account_key                 TEXT,
                     context_tokens              INTEGER DEFAULT 0
                 )
                 """
@@ -138,6 +142,8 @@ class TelemetryStore:
             # Lightweight migrations for stores created before a column existed. Each ALTER is
             # idempotent-guarded by the try/except (fires once on an older DB, no-ops after).
             for _col, _type in (
+                ("provider_id", "TEXT"),
+                ("account_key", "TEXT"),
                 ("models", "TEXT"),  # ADR 0006 4b
                 ("soul_rev", "TEXT"),  # #1691
                 ("trace_id", "TEXT"),  # console→Langfuse pivot
@@ -205,6 +211,8 @@ class TelemetryStore:
                 soul_rev                    TEXT,
                 trace_id                    TEXT,
                 tool_durations              TEXT,
+                provider_id                 TEXT,
+                account_key                 TEXT,
                 context_tokens              INTEGER DEFAULT 0
             )
             """
@@ -230,6 +238,21 @@ class TelemetryStore:
         try:
             db.execute(f"INSERT INTO turns ({cols}) VALUES ({placeholders})", values)
             db.commit()
+        finally:
+            db.close()
+
+    def attributed_tokens(self, account_key: str, since: str, until: str, model: str | None = None) -> int:
+        """Bounded aggregate over one account/window; no turn content leaves the store."""
+        db = self._connect()
+        try:
+            row = db.execute(
+                "SELECT COALESCE(SUM(total_tokens), 0) FROM turns "
+                "WHERE account_key = ? AND julianday(ended_at) >= julianday(?) "
+                "AND julianday(ended_at) < julianday(?) "
+                "AND (? IS NULL OR model = ?)",
+                (account_key, since, until, model, model),
+            ).fetchone()
+            return max(0, int(row[0]))
         finally:
             db.close()
 

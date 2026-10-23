@@ -54,7 +54,7 @@ then exits:
 | `protoagent workspace new` · `ls` · `run` · `rm` | Named, isolated agents on one host. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
 | `protoagent fleet ls` · `up` · `down` · `new` · `rm` · `rename` · `remote add\|edit\|rm` · `pair` · `order` | Inspect, run and **manage** fleet **member** agents — **live from the running hub** when one answers, from this instance's `fleet.json` (through the `ops/` layer) otherwise (see below). `--json` on each. | [0042](../adr/0042-fleet-supervisor-unified-console.md) · [0075](../adr/0075-external-interfaces-cli-mcp-api.md) |
 | `protoagent fleet friction` · `friction resolve <id>` | Read **every member's friction ledger** through the hub (`--kind`, `--severity major`, `--since 7d`, `--agent`, `--resolved`, `--raw`, `-v`, `--json`) — ranked worst-first, with signals several agents hit called out and unreadable members named. `resolve` stamps a signal fixed on the agents you name (`--agent`, or `--all-agents`; `--reason`, `--reopen`). Live hub only. | [friction log](friction-log.md#across-the-fleet-from-the-terminal) |
-| `protoagent usage [--account ID] [--fleet] [--warn-at PCT] [--json]` | **Subscription usage** for the native-OAuth providers (Claude, Codex) — per account and per window (used %, reset countdown, status; scoped windows labelled by model). Reads this instance's `/api/usage`; `--fleet` reads every member through the hub, deduped by account. Exit `2` when any window is ≥ `--warn-at` (default 80), `0` otherwise, `1` with no server/hub. See [below](#subscription-usage-protoagent-usage). | [0122](../adr/0122-subscription-usage-model-and-routing.md) |
+| `protoagent usage [--account ID] [--fleet] [--by-agent] [--warn-at PCT] [--json]` | **Subscription usage** for the native-OAuth providers (Claude, Codex) — per account and per window (used %, reset countdown, status; scoped windows labelled by model). Reads this instance's `/api/usage`; `--fleet` reads every member through the hub, deduped by account. Exit `2` when any window is ≥ `--warn-at` (default 80), `0` otherwise, `1` with no server/hub. See [below](#subscription-usage-protoagent-usage). | [0122](../adr/0122-subscription-usage-model-and-routing.md) |
 | `protoagent fleet --all` | The **hub tree**: every hub on this box (heartbeats, instance roots with a fleet, listeners by port) probed for its version and member counts, plus peers found on the network. `--offline` skips the scan and the probes. Not a member command: it never reads one hub's fleet. | [0042](../adr/0042-fleet-supervisor-unified-console.md) |
 | `protoagent pair` | Print a **one-time code** another agent's hub claims to pair with the protoAgent running on this machine — the headless half of agent pairing (see below). `--device` pairs a **phone** instead: code, console URL and a terminal QR. `--json` for scripts. | [0113](../adr/0113-agent-pairing-for-remote-fleet-members.md) |
 | `protoagent skills ls` · `promote <name>` | Inspect and curate the SKILL.md library. | [0041](../adr/0041-workspaces-and-tiered-stores.md) |
@@ -221,9 +221,19 @@ resolves no tokens and polls no provider itself: it reaches the live server exac
 protoagent usage                        # this instance — one row per account, per window
 protoagent usage --account anthropic-oauth   # one provider id (or account key)
 protoagent usage --fleet                # every member through the hub, deduped by account
+protoagent usage --fleet --by-agent     # member share of attributed tokens per current window
 protoagent usage --warn-at 90           # exit 2 if any window is ≥ 90% used
 protoagent usage --json | jq '.accounts[].windows[] | select(.over_warn)'
 ```
+
+`--by-agent` requires operator credentials and works locally or with `--fleet` through
+`GET /api/usage/fleet`. Each account window lists members' shares of **attributed tokens**,
+which sum to 100% when tokens were observed. The plan's percentage remains account-wide;
+other clients' usage and turns without a resolved account are outside these shares.
+Missing telemetry is labelled unavailable; zero observed tokens have no percentage.
+Only current windows with known duration are included, and model-scoped windows count
+that model only. Unknown provider buckets cannot be attributed.
+
 
 Each row is one **window** of one **account**: provider, plan, the window (a scoped window
 is labelled `kind·model`, e.g. `weekly·opus`), used %, the reset countdown, and status
