@@ -56,6 +56,14 @@ fall inside a registered project is also published as ``fs.changed`` (``graph.fs
 so the console's Diff tab and open file refresh — and follow mode moves — without a manual
 Refresh (ADR 0112).
 
+**The reply's own timeline.** The card is live-only, but the delegate's REPLY is what stays
+in the chat, and a coder's reply text is its narration with every action cut out of it
+("Now executing the edits:" … "The tests pass."). So the tracker also keeps the run as an
+ordered ``timeline`` — text runs and tool calls, as they happened — and the ``done``
+snapshot carries it. It is NOT a card field: the turn drivers lift it off the done snapshot
+(``take_timeline``) and hand it, checked against the reply text (``reply_timeline``), to the
+reply bubble, which then renders text ↔ tool cards in order like a native turn.
+
 Bounded on purpose: list sizes and string lengths are capped, and emission is throttled
 (at most one snapshot per ``min_interval`` seconds, with a trailing flush so the last
 change always lands, and a final ``done`` snapshot). A snapshot is a whole state, never a
@@ -91,6 +99,11 @@ OPEN_WRITES_MAX = 64
 WRITE_EVENT_INTERVAL_S = 0.5
 #: Distinct written paths held between two ``fs.changed`` flushes.
 PENDING_WRITES_MAX = 200
+#: The reply timeline (``timeline``): entries, and per-call input/output text. Past the
+#: entry cap the timeline is abandoned (``None``) rather than cut — a partial one would put
+#: text and tools out of order, and the reply then renders as plain text, as it always did.
+TIMELINE_MAX = 300
+TIMELINE_TOOL_IO_MAX = 2000
 #: Seconds between snapshots. A coder can fire dozens of updates a second while it
 #: streams text; the card needs a few frames a second at most.
 MIN_INTERVAL_S = 0.75
@@ -191,6 +204,9 @@ class DelegateProgress:
         # Raw (unclipped) paths an open call named, by call id: an ACP coder often sends a
         # call's locations on start/update and settles it with a bare status.
         self._open_paths: dict[str, list[str]] = {}
+        # The run in order, for the reply bubble (see the module doc) — ``None`` once over cap.
+        self._timeline: list[dict] | None = []
+        self._timeline_tools: dict[str, dict] = {}
 
     # -- the transport seam: normalized feeds (may run on a transport's reader task) --
 
@@ -214,6 +230,7 @@ class DelegateProgress:
         # Nothing visible changed, so nothing is emitted.
         if not delta or self.done:
             return
+        self._timeline_text(delta)
         self._pending = (self._pending + delta)[-TEXT_TAIL_MAX:]
 
     def _commit_text(self) -> None:
@@ -270,7 +287,50 @@ class DelegateProgress:
             self._note_write(tid, event, status, raw_paths)
         else:
             return
+        self._timeline_tool(phase, tid, name, kind, event)
         await self._changed(urgent=phase != "update")
+
+    # -- the reply timeline ----------------------------------------------------
+
+    def _timeline_add(self, entry: dict) -> bool:
+        if self._timeline is None:
+            return False
+        if len(self._timeline) >= TIMELINE_MAX:
+            log.debug("[delegate-progress] %r: timeline over %d entries — dropped", self.target, TIMELINE_MAX)
+            self._timeline, self._timeline_tools = None, {}
+            return False
+        self._timeline.append(entry)
+        return True
+
+    def _timeline_text(self, delta: str) -> None:
+        if self._timeline is None:
+            return
+        last = self._timeline[-1] if self._timeline else None
+        if last is not None and last["type"] == "text":
+            last["text"] += delta
+        else:
+            self._timeline_add({"type": "text", "text": delta})
+
+    def _timeline_tool(self, phase: str, tid: str, name: str, kind: str, event: dict) -> None:
+        if self._timeline is None:
+            return
+        row = self._timeline_tools.get(tid)
+        if phase == "start" or (phase == "end" and row is None):
+            row = {"type": "tool", "id": tid, "name": name, "kind": kind, "status": "running", "input": "", "output": ""}
+            if not self._timeline_add(row):
+                return
+            self._timeline_tools[tid] = row
+        if row is None:
+            return  # an update for a call this run never opened
+        if phase == "update":
+            row["name"] = name
+            if kind:
+                row["kind"] = kind
+        if event.get("input") not in (None, ""):
+            row["input"] = _timeline_io(event.get("input"))
+        if phase == "end":
+            row["status"] = "failed" if str(event.get("status") or "") == "failed" else "completed"
+            row["output"] = _timeline_io(event.get("output"))
 
     def _note_write(self, tid: str, event: dict, status: str, raw_paths: list[str]) -> None:
         """A settled call that WROTE files inside a registered project → ``fs.changed`` on
@@ -334,11 +394,15 @@ class DelegateProgress:
             "ok": self.ok,
         }
 
-    async def _emit(self) -> None:
+    async def _emit(self, *, final: bool = False) -> None:
         self._dirty = False
         self._last_emit = self._clock()
+        snapshot = self.snapshot()
+        if final and self._timeline:
+            # Only the done snapshot, and only for the turn driver — see ``take_timeline``.
+            snapshot["timeline"] = [dict(e) for e in self._timeline]
         try:
-            await self._sink(self.snapshot())
+            await self._sink(snapshot)
         except Exception:  # noqa: BLE001 — a live view must never cost the delegation
             log.warning("[delegate-progress] sink for %r raised", self.target, exc_info=True)
 
@@ -373,7 +437,10 @@ class DelegateProgress:
         self.done, self.ok = True, ok
         if self.current_tool and self.current_tool.get("status") == "running":
             self.current_tool["status"] = "completed" if ok else "failed"
-        await self._emit()
+        for row in self._timeline_tools.values():
+            if row["status"] == "running":  # never settled: the run ended under it
+                row["status"] = "completed" if ok else "failed"
+        await self._emit(final=True)
 
     def close(self) -> None:
         """Drop a pending trailing flush (synchronous — safe mid-cancellation)."""
@@ -383,3 +450,78 @@ class DelegateProgress:
         if self._write_flush is not None and not self._write_flush.done():
             self._write_flush.cancel()
         self._write_flush = None
+
+
+def _timeline_io(value: object) -> str:
+    """A tool call's input/output as card text: redacted (a coder running ``env`` or
+    ``cat .env`` must not land the values in the chat transcript), then capped."""
+    text = value if isinstance(value, str) else str(value or "")
+    try:
+        from graph.middleware.redaction import redact
+
+        text = redact(text)
+    except Exception:  # noqa: BLE001 — fail closed: no text rather than unredacted text
+        return ""
+    return text if len(text) <= TIMELINE_TOOL_IO_MAX else text[: TIMELINE_TOOL_IO_MAX - 1] + "…"
+
+
+def take_timeline(snapshot: dict) -> tuple[dict, list[dict] | None]:
+    """Split a sink snapshot into ``(card snapshot, timeline)``. The timeline rides only
+    the ``done`` snapshot and belongs to the REPLY, so a turn driver lifts it off before
+    the snapshot goes to the card (it would only bloat every frame that carries it)."""
+    if not isinstance(snapshot, dict) or "timeline" not in snapshot:
+        return snapshot, None
+    card = dict(snapshot)
+    timeline = card.pop("timeline")
+    return card, timeline if isinstance(timeline, list) else None
+
+
+def _ink(text: str) -> str:
+    """``text`` without whitespace — what a reply and its stream must agree on (the reply
+    adds paragraph breaks between runs, a renderer strips edges; neither changes the ink)."""
+    return "".join(text.split())
+
+
+def reply_timeline(timeline: list[dict] | None, reply: str) -> list[dict] | None:
+    """The timeline to render ``reply`` with, or ``None`` to render the reply as plain text.
+
+    The reply text is authoritative: the transport may clean it after streaming (the ACP
+    client collapses a doubled reply, the adapter appends an incomplete-turn marker or a
+    managed-git PR line). So the timeline's text, joined, must be the reply's opening —
+    compared ignoring whitespace, because the reply puts paragraph breaks between runs
+    that the stream never sent — and whatever the reply has beyond it becomes a final text
+    run. Anything else (cleaned mid-text, or no tool calls at all) is ``None``: a timeline
+    that disagrees with the reply must never render instead of it.
+    """
+    if not timeline or not reply or not any(isinstance(e, dict) and e.get("type") == "tool" for e in timeline):
+        return None
+    out: list[dict] = []
+    streamed = ""
+    for entry in timeline:
+        if not isinstance(entry, dict):
+            return None
+        if entry.get("type") == "text":
+            text = str(entry.get("text") or "")
+            streamed += text
+            if text.strip():
+                out.append({"type": "text", "text": text.strip()})
+        elif entry.get("type") == "tool":
+            out.append(dict(entry))
+    want, have = _ink(reply), _ink(streamed)
+    if not want.startswith(have):
+        return None
+    extra = len(want) - len(have)
+    if extra:
+        out.append({"type": "text", "text": _tail_with_ink(reply, extra)})
+    return out
+
+
+def _tail_with_ink(text: str, count: int) -> str:
+    """The suffix of ``text`` holding its last ``count`` non-whitespace characters."""
+    seen = 0
+    for i in range(len(text) - 1, -1, -1):
+        if not text[i].isspace():
+            seen += 1
+            if seen == count:
+                return text[i:].strip()
+    return text.strip()

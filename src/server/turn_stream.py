@@ -554,6 +554,9 @@ class _TurnStreamState:
     tool_started: dict[str, float] = dataclasses.field(default_factory=dict)
     # run_id → delegate name, for delegate_to → room bubble (#3042)
     delegate_targets: dict[str, str] = dataclasses.field(default_factory=dict)
+    # A foreground delegation's ordered text ↔ tool-call timeline, lifted off its coder's
+    # done snapshot (graph/delegate_progress.py) and rendered on the reply bubble. By run_id.
+    delegate_timelines: dict[str, list] = dataclasses.field(default_factory=dict)
     # run_id → a BACKGROUND delegate_to's ask, emitted once it has a job id
     bg_delegations: dict[str, dict] = dataclasses.field(default_factory=dict)
     # tool_call ids already surfaced as a start frame
@@ -686,8 +689,12 @@ def _on_tool_end(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -
         return
     _dtgt = st.delegate_targets.pop(rid, None) if rid else None
     if _dtgt:
+        from graph.delegate_progress import reply_timeline
+
         _dtext = _chat()._coerce_room_text(output)
         _derror = getattr(output, "status", None) == "error"
+        _dtimeline = None if _derror else reply_timeline(st.delegate_timelines.pop(rid, None), _dtext)
+        st.delegate_timelines.pop(rid, None)
         yield (
             "room_reply",
             {
@@ -697,6 +704,8 @@ def _on_tool_end(st: _TurnStreamState, event: dict, name: str, parent_tool_id) -
                 "ok": not _derror,
                 "catchup": 0,
                 "truncated": False,
+                # The reply as it happened — narration and the tool calls between it.
+                **({"timeline": _dtimeline} if _dtimeline else {}),
             },
         )
         return
@@ -966,6 +975,11 @@ def _on_custom_delegate_progress(st: _TurnStreamState, event: dict, name: str, p
     data = event.get("data")
     rid = event.get("run_id")
     if isinstance(data, dict) and rid and rid in st.delegate_targets:
+        from graph.delegate_progress import take_timeline
+
+        data, timeline = take_timeline(data)
+        if timeline:
+            st.delegate_timelines[rid] = timeline
         yield ("delegate_progress", {**data, "id": rid})
 
 

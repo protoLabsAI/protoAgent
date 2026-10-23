@@ -22,7 +22,7 @@ import {
 } from "./chat-store";
 import { applyDelegateProgressTo } from "./delegateProgress";
 import { rendersText, replaceText, textRuns } from "./parts";
-import { isEmptyPlaceholder } from "./roomBubble";
+import { isEmptyPlaceholder, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
 import { isTaskCanceled, isTaskFailed, isTaskPaused, isTaskTerminal } from "./taskState";
 import { applyComponent, applyReasoning, applyText, applyToolEvent, applyUsage, pauseBubble, stopBubble } from "./turnReducers";
 
@@ -121,9 +121,40 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   // frozen ahead of it name it in `splitOf` — one turn, several bubbles (turnText.ts).
   const settled: ChatMessage[] = [];
   const terminal = isTaskTerminal(turn.state);
+  // An `@`-addressed turn's answer is its participants' bubbles; its stored answer text
+  // only restates them for clients that draw no bubbles (#3449), so it must not land too.
+  let answeredByParticipants = false;
+  const freeze = () => {
+    if (!isEmptyPlaceholder(assistant)) {
+      settled.push({
+        ...assistant,
+        id: `${anchorId}-${settled.length}`,
+        status: "done",
+        splitOf: anchorId,
+        toolCalls: assistant.toolCalls?.map((call) =>
+          call.status === "running" ? { ...call, status: "done" as const } : call,
+        ),
+      });
+      assistant = fresh();
+    }
+  };
   replayDurableChatTurn(turn, "", {
     onText: (text, append) => {
+      if (answeredByParticipants) return;
       assistant = applyText(assistant, text, append);
+    },
+    onRoomReply: (reply) => {
+      // A participant's reply / the lead's ask / the room's note, where it happened — the
+      // live stream's insertRoomBubble split, rebuilt: the work before it freezes, the
+      // bubble follows, the lead continues in a fresh one.
+      const bubble = roomReplyBubble(reply, `${anchorId}-room-${settled.length}`, {
+        ...(repliedAt !== undefined ? { createdAt: repliedAt } : {}),
+        turnTaskId: turn.task_id,
+      });
+      if (!bubble) return;
+      freeze();
+      settled.push(bubble);
+      if (replyClaimsAnswer(reply)) answeredByParticipants = true;
     },
     onSteerConsumed: (items) => {
       // The agent read the operator's interjection HERE — between the work above and
@@ -211,7 +242,12 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
     // reconcile it in as the trailing run — the same seam reattach.finalize closes
     // on the live resubscribe path, applied here to durable hydration. A turn that
     // already surfaced the full ordered text is left untouched.
-    if (turn.text && assistant.parts?.length && !rendersText(textRuns(assistant.parts), turn.text)) {
+    if (
+      !answeredByParticipants &&
+      turn.text &&
+      assistant.parts?.length &&
+      !rendersText(textRuns(assistant.parts), turn.text)
+    ) {
       assistant = { ...assistant, content: turn.text, parts: replaceText(assistant.parts, turn.text) };
     }
   } else {
@@ -228,10 +264,16 @@ export function messagesFromDurableTurn(turn: DurableChatTurn): ChatMessage[] {
   // last interjection — would otherwise settle as a blank row under it (the live path's
   // `settleTurnBubbles` folds the same case away). A non-terminal turn keeps its empty
   // trailing bubble: that is the one a reattach streams into.
-  if (settled.length && terminal && isEmptyPlaceholder(assistant) && !assistant.components?.length) {
-    return [...messages, ...settled];
-  }
-  return [...messages, ...settled, assistant];
+  const turnBubbles =
+    settled.length && terminal && isEmptyPlaceholder(assistant) && !assistant.components?.length
+      ? settled
+      : [...settled, assistant];
+  // Stamped on the turn's own bubbles, as the live settle does, so no later producer of
+  // the canonical text (reconcile, reattach, a re-hydration) lands it on them either.
+  const stamped = answeredByParticipants
+    ? turnBubbles.map((m) => (m.author || m.role !== "assistant" ? m : { ...m, answeredByParticipants: true }))
+    : turnBubbles;
+  return [...messages, ...stamped];
 }
 
 /** How the transcript draws a session's durable turns (#3963): `turns` in drawing order,

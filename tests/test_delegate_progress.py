@@ -540,3 +540,150 @@ def test_store_keeps_only_the_latest_snapshot_per_delegation():
     assert stores.prune_superseded_progress(task) == 2
     kept = [m.message_id for m in task.history]
     assert kept == ["u", "b-1", "a-3"]
+
+
+# ── the reply's own timeline: narration AND the tool calls between it ─────────────
+# A coder's reply text is its narration with every action cut out ("Now executing the
+# edits:" … "The tests pass."). The done snapshot carries the run in order; the turn
+# drivers lift it off the card and put it on the reply frame, checked against the text.
+
+
+async def test_the_done_snapshot_alone_carries_the_run_in_order_with_inputs_redacted():
+    snaps = []
+
+    async def sink(s):
+        snaps.append(s)
+
+    t = dp.DelegateProgress("c", sink, min_interval=0)
+    await t.on_text("Reading first. ")
+    await t.on_tool({"phase": "start", "id": "1", "name": "Read File", "kind": "read", "input": "{}"})
+    await t.on_tool({"phase": "update", "id": "1", "name": "Read calc.py", "input": '{"file_path": "calc.py"}'})
+    await t.on_tool({"phase": "end", "id": "1", "status": "completed", "output": "def add(a, b): ..."})
+    await t.on_text("Now testing:")
+    await t.on_tool(
+        {"phase": "start", "id": "2", "name": "Bash", "kind": "execute", "input": "API_KEY=sk-abcdefghijklmnopqrstuvwx pytest"}
+    )
+    await t.on_text("Done.")
+    await t.finish(ok=True)
+    assert all("timeline" not in s for s in snaps[:-1])
+    card, timeline = dp.take_timeline(snaps[-1])
+    assert "timeline" not in card and card["done"] is True
+    assert [(e["type"], e.get("text") or e.get("name")) for e in timeline] == [
+        ("text", "Reading first. "),
+        ("tool", "Read calc.py"),
+        ("text", "Now testing:"),
+        ("tool", "Bash"),
+        ("text", "Done."),
+    ]
+    read, bash = timeline[1], timeline[3]
+    assert read["kind"] == "read" and read["input"] == '{"file_path": "calc.py"}' and read["output"].startswith("def add")
+    assert "sk-abc" not in bash["input"] and "[REDACTED]" in bash["input"]
+    # Never settled before the run ended: it settles with the run.
+    assert bash["status"] == "completed"
+
+
+async def test_an_oversized_run_has_no_timeline_rather_than_a_partial_one(monkeypatch):
+    monkeypatch.setattr(dp, "TIMELINE_MAX", 3)
+    snaps = []
+
+    async def sink(s):
+        snaps.append(s)
+
+    t = dp.DelegateProgress("c", sink, min_interval=0)
+    for i in range(4):
+        await t.on_text(f"step {i}")
+        await t.on_tool({"phase": "start", "id": str(i), "name": "Read"})
+    await t.finish(ok=True)
+    assert dp.take_timeline(snaps[-1])[1] is None
+
+
+def test_reply_timeline_trusts_the_reply_text():
+    timeline = [
+        {"type": "text", "text": "Reading first. "},
+        {"type": "tool", "id": "1", "name": "Read calc.py", "status": "completed"},
+        {"type": "text", "text": "Done."},
+    ]
+    # Paragraph breaks the stream never sent are fine; what the reply has beyond the
+    # stream (an incomplete-turn marker, a managed-git PR line) becomes a last text run.
+    got = dp.reply_timeline(timeline, "Reading first.\n\nDone.\n\n**PR:** https://x/1")
+    assert [e.get("text") or e["name"] for e in got] == ["Reading first.", "Read calc.py", "Done.", "**PR:** https://x/1"]
+    # A reply cleaned mid-text (a collapsed doubling) disagrees with its stream: plain text.
+    assert dp.reply_timeline(timeline, "Done.") is None
+    # No tool calls: nothing a timeline adds over the text.
+    assert dp.reply_timeline([{"type": "text", "text": "Hi"}], "Hi") is None
+    assert dp.reply_timeline(None, "Hi") is None
+
+
+async def test_the_mention_reply_carries_its_timeline_against_a_real_coder(coder, tmp_path, monkeypatch):
+    chat_dispatch = importlib.import_module("server.chat_dispatch")
+    from plugins.delegates.adapters import AcpAdapter
+    from plugins.delegates.registry import DelegateRegistry
+    from runtime.state import STATE
+
+    reg = DelegateRegistry(
+        [
+            {
+                "name": "claude-code",
+                "type": "acp",
+                "command": sys.executable,
+                "args": [str(coder)],
+                "workdir": str(tmp_path),
+                "return_diff": "false",
+            }
+        ]
+    )
+    monkeypatch.setattr(STATE, "delegate_registry", reg, raising=False)
+    monkeypatch.setattr(STATE, "graph", None, raising=False)
+    pre = chat_dispatch._PreTurn("@claude-code add subtract")
+    try:
+        frames = [f async for f in chat_dispatch._pre_turn_dispatch(pre, "sess-tl", None)]
+    finally:
+        await AcpAdapter().teardown(reg.get("claude-code"))
+    assert not any("timeline" in p for k, p in frames if k == "delegate_progress")
+    reply = next(p for k, p in frames if k == "room_reply")
+    assert [(e["type"], e.get("text") or e.get("name")) for e in reply["timeline"]] == [
+        ("text", "I'll look at the existing `calc.py` first."),
+        ("tool", "Read calc.py"),
+        ("text", "Done. Added `subtract`."),
+    ]
+    assert reply["timeline"][1]["output"] == "def add(a, b): ..."
+
+
+async def test_turn_stream_moves_the_timeline_from_the_card_to_the_reply():
+    ts = importlib.import_module("server.turn_stream")
+    from observability import metrics, pricing
+
+    st = ts._TurnStreamState(metrics=metrics, pricing=pricing)
+    start = {
+        "event": "on_tool_start",
+        "name": "delegate_to",
+        "run_id": "run-1",
+        "metadata": {},
+        "data": {"input": {"target": "claude-code", "query": "add subtract"}},
+    }
+    list(ts._on_tool_start(st, start, "delegate_to", None))
+    timeline = [
+        {"type": "text", "text": "Looking."},
+        {"type": "tool", "id": "1", "name": "Read calc.py", "status": "completed"},
+        {"type": "text", "text": "Done."},
+    ]
+    done = {"target": "claude-code", "done": True, "timeline": timeline}
+    ev = {"event": "on_custom_event", "name": "delegate_progress", "run_id": "run-1", "data": done}
+    assert list(ts._on_custom_delegate_progress(st, ev, "delegate_progress", None)) == [
+        ("delegate_progress", {"target": "claude-code", "done": True, "id": "run-1"})
+    ]
+    end = {"event": "on_tool_end", "name": "delegate_to", "run_id": "run-1", "data": {"output": "Looking.\n\nDone."}}
+    frames = list(ts._on_tool_end(st, end, "delegate_to", None))
+    reply = next(p for k, p in frames if k == "room_reply" and p.get("author"))
+    assert [e.get("text") or e.get("name") for e in reply["timeline"]] == ["Looking.", "Read calc.py", "Done."]
+    assert st.delegate_timelines == {}
+
+
+async def test_background_lane_never_ships_the_timeline():
+    from background.manager import BackgroundManager
+
+    published = []
+    mgr = BackgroundManager.__new__(BackgroundManager)
+    mgr._publish = lambda topic, data, **kw: published.append(data)
+    await mgr._progress_sink("bg-1", "s")({"target": "c", "done": True, "timeline": [{"type": "text", "text": "x"}]})
+    assert published[0]["progress"] == {"target": "c", "done": True}

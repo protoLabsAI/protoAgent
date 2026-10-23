@@ -1771,3 +1771,56 @@ describe("a cached chat behind the server reconciles on reload (another client's
     chatStore.deleteSession(session.id);
   });
 });
+
+describe("room replies survive a rebuild from durable turns", () => {
+  const ROOM = "application/vnd.protolabs.room-v1+json";
+  const REPLY = "Reading first.\n\nDone. All pass.";
+  const timeline = [
+    { type: "text", text: "Reading first." },
+    { type: "tool", id: "t1", name: "Read calc.py", kind: "read", status: "completed" },
+    { type: "text", text: "Done. All pass." },
+  ];
+  const room = (data: Record<string, unknown>) => ({ role: "ROLE_AGENT", parts: [{ data, metadata: { mimeType: ROOM } }] });
+
+  it("an `@` address rebuilds as the participant's bubble — byline, tool timeline, no restated answer", () => {
+    const messages = messagesFromDurableTurn(
+      turn({
+        text: REPLY,
+        artifacts: [{ parts: [{ text: REPLY }] }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "@claude-code add clamp" }] },
+          room({ author: "claude-code", from: "operator", text: REPLY, ok: true, in_answer: true, timeline }),
+        ],
+      }),
+    );
+    const replies = messages.filter((m) => m.author?.name === "claude-code");
+    expect(replies).toHaveLength(1);
+    expect(replies[0].parts?.map((p) => p.kind)).toEqual(["text", "tools", "text"]);
+    expect(replies[0].toolCalls?.[0]).toMatchObject({ name: "Read calc.py", status: "done", delegated: { kind: "read" } });
+    // The stored answer only restates the bubble: it lands nowhere else.
+    const restated = messages.filter((m) => !m.author && m.role === "assistant" && m.content.includes("All pass"));
+    expect(restated).toEqual([]);
+  });
+
+  it("a lead's delegation rebuilds as ask → reply → the lead's own answer", () => {
+    const messages = messagesFromDurableTurn(
+      turn({
+        text: "The lead's summary.",
+        artifacts: [{ parts: [{ text: "The lead's summary." }] }],
+        history: [
+          { role: "ROLE_USER", parts: [{ text: "get clamp added" }] },
+          room({ id: "run-1", addressed_to: "claude-code", text: "add clamp", summary: "Add clamp", ok: true }),
+          room({ author: "claude-code", from: "assistant", text: REPLY, ok: true, timeline }),
+        ],
+      }),
+    );
+    expect(messages.map((m) => m.addressedTo ?? m.author?.name ?? m.role)).toEqual([
+      "user",
+      "claude-code",
+      "claude-code",
+      "assistant",
+    ]);
+    expect(messages[2].parts?.some((p) => p.kind === "tools")).toBe(true);
+    expect(messages[3].content).toBe("The lead's summary.");
+  });
+});

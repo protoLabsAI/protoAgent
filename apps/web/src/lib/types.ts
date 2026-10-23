@@ -848,6 +848,9 @@ export type ToolCall = {
   /** An `@`-mention card's addressed coding agents' live state (#3979), keyed by
    *  participant name — `@a @b` is one card over two delegates. */
   delegateProgress?: Record<string, DelegateProgress>;
+  /** A call a DELEGATE made (a coding agent's reply timeline), not one of this agent's own
+   *  tools: no Tools-settings link, and its icon comes from ACP's `kind`, not its name. */
+  delegated?: { kind?: string };
 };
 
 /** A tool call a coding-agent delegate is making, as its live view shows it (#3979). */
@@ -859,6 +862,20 @@ export type DelegateTool = {
   status: "running" | "completed" | "failed" | string;
   locations?: Array<{ path: string; line?: number }>;
 };
+
+/** One step of a delegate reply's run, in order (graph/delegate_progress.py): a run of its
+ *  text, or a tool call it made between runs. Rendered as the reply bubble's parts. */
+export type DelegateTimelineEntry =
+  | { type: "text"; text: string }
+  | {
+      type: "tool";
+      id: string;
+      name: string;
+      kind?: string;
+      status: "completed" | "failed";
+      input?: string;
+      output?: string;
+    };
 
 /** One entry of a coding agent's own plan (its todo list). */
 export type DelegatePlanEntry = { content: string; status: "pending" | "in_progress" | "completed" | string };
@@ -1138,6 +1155,9 @@ export type RoomReply = {
   /** On an outgoing ask: the delegation's one-line summary, which the chat shows instead of
    *  the full query (`text`); a background delegation's job id; the dispatch error. */
   delegation?: Delegation;
+  /** On a coding delegate's reply: its run in order — narration and the tool calls between
+   *  it — so the bubble renders like a native turn instead of narration with gaps. */
+  timeline?: DelegateTimelineEntry[];
 };
 
 /** What the chat shows for a delegation instead of its whole prompt. */
