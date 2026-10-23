@@ -1877,7 +1877,7 @@ class AcpClient:
                 failure = exc
                 raise
             finally:
-                self._record_run_telemetry(state, started, tool_calls, session_id)
+                self._record_run_telemetry(state, started, tool_calls, session_id, usage)
                 io = tracing.io_allowed()
                 if (usage or cost_usd) and not native:
                     self._trace_generation(usage, cost_usd, started, session_id)
@@ -2033,7 +2033,7 @@ class AcpClient:
             return None
         return self._empty_reply_note(self.last_stop_reason, self._turn_tool_calls)
 
-    def _record_run_telemetry(self, state: str, started: float, tool_calls: int, session_id: str) -> None:
+    def _record_run_telemetry(self, state: str, started: float, tool_calls: int, session_id: str, usage: dict | None = None) -> None:
         """One durable telemetry row per coder run (#3015). Best-effort; never raises.
 
         The project-board loop dispatches coders from a background loop rather than from
@@ -2046,13 +2046,9 @@ class AcpClient:
         layer up where half the callers would miss it — and why ``record_runs`` exists to
         exclude the callers here that are *not* coder dispatches.
 
-        Tokens and cost are recorded as ZERO deliberately. The coding agent bills its own
-        subscription and protoAgent never observes those numbers; the ``acp:<name>`` model
-        label is the honest "this turn was not gateway-metered" marker, the same
-        convention ``server.chat_acp._acp_drive_turn`` uses, and #3006 settled that a
-        half-wired or invented field here is worse than an absent one. ``tool_calls`` is
-        the one non-zero effort figure we can honestly claim: it is counted off the wire,
-        not inferred.
+        Reported tokens are attributed only when the delegate's subscription account
+        can be resolved without refreshing credentials. Cost remains zero; the CLI's
+        API-equivalent price is not subscription spend.
 
         Synchronous on purpose. It is called from a ``finally`` that can run while the
         task is already being cancelled, and an ``await`` there would be interrupted
@@ -2064,12 +2060,14 @@ class AcpClient:
             # Lazily, inside the call: `plugins` is outside the import-layering contract,
             # but importing the server package at plugin import time would still drag the
             # whole app in for a module that only ever needs it mid-dispatch.
+            from graph.delegation_usage import acp_usage
             from server.turn_telemetry import local_task_id, record_turn
 
             record_turn(
                 # `coder:<delegate>` origin prefix (#3000's convention) so a coder run is
                 # distinguishable from a console or /v1 turn by its key alone.
                 task_id=local_task_id(f"coder:{self.name}"),
+                **acp_usage(self.name, usage),
                 # The ACP session is the run's stable thread id across turns; empty when
                 # THIS run never opened one (the failure-before-handshake case). Passed
                 # in rather than read off the client: the client is pooled, so its
@@ -2082,10 +2080,7 @@ class AcpClient:
                 # coder time; the row is still worth having (a dispatch that never ran is
                 # a failed dispatch), but its duration means something different.
                 duration_ms=int((time.monotonic() - started) * 1000),
-                # How much the coder actually did. Zero tokens and zero cost are honest
-                # but say nothing about effort, and the issue's own evidence table is
-                # `turns | tool_calls | cost` — this is the column that stops a coder run
-                # reading as a no-op next to a PM turn that made four.
+                # Tool calls remain useful even when no token usage was reported.
                 tool_calls=tool_calls,
                 # The console's fleet roster counts a member running with +1 on
                 # `turn.started` and -1 on the terminal `turn.usage`. A coder run emits no

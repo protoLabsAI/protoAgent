@@ -52,3 +52,50 @@ def note(rows: list[dict]) -> None:
         sink.extend(dict(r) for r in rows if isinstance(r, dict))
     except Exception:  # noqa: BLE001 — telemetry must never break a delegation
         pass
+
+
+def provider_account(provider_id: str) -> tuple[str, str]:
+    """Read native account identity without refreshing credentials. Never raises."""
+    try:
+        from graph.providers import oauth
+
+        peek = {
+            "anthropic-oauth": oauth.peek_anthropic_access_token,
+            "openai-codex": oauth.peek_codex_access_token,
+        }.get(provider_id)
+        creds = peek() if peek else None
+        if creds and creds.account_id:
+            return provider_id, creds.account_id
+    except Exception:  # noqa: BLE001 — attribution must never affect a run
+        pass
+    return "", ""
+
+
+def acp_usage(delegate: str, usage: dict | None) -> dict:
+    """Reported ACP prompt tokens for a resolved delegate, suitable for record_turn.
+
+    ACP inputTokens excludes cache reads/writes; record_turn expects inclusive input.
+    Subscription cost remains zero. Unknown delegates retain the existing empty row.
+    """
+    try:
+        from graph.providers.usage.accounts import account_for_delegate
+
+        provider, key = provider_account(account_for_delegate(delegate) or "")
+        if not key or not usage:
+            return {}
+
+        def count(name):
+            value = usage.get(name, 0)
+            return max(0, int(value or 0))
+
+        read, write = count("cachedReadTokens"), count("cachedWriteTokens")
+        return {
+            "provider_id": provider, "account_key": key, "cost_usd": 0.0,
+            "usage": {
+                "input_tokens": count("inputTokens") + read + write,
+                "output_tokens": count("outputTokens"),
+                "cache_read_input_tokens": read, "cache_creation_input_tokens": write,
+            },
+        }
+    except Exception:  # noqa: BLE001 — preserve today's behavior on malformed reports
+        return {}

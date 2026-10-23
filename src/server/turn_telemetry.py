@@ -159,6 +159,31 @@ def _success_for(state: str) -> int | None:
     return 1 if state == "completed" else 0
 
 
+def _turn_account(model: str, requested: str) -> tuple[str, str]:
+    try:
+        from graph.delegation_usage import provider_account
+        from graph.llm import resolve_slot_target
+
+        config = STATE.graph_config
+        # Prefer an explicit actual route; a requested route is useful only when its
+        # bare model agrees with the observed model (fallback may have changed it).
+        _, _, provider, bare = resolve_slot_target(model, config)
+        if not provider:
+            target = requested or (config.model_name if config else "")
+            _, _, candidate, target_model = resolve_slot_target(target, config)
+            if candidate:
+                if target_model != bare:
+                    return "", ""  # observed fallback cannot be assigned to the requested account
+                provider = candidate
+            elif "/" in target or target.startswith("acp:"):
+                return "", ""
+            if not provider and "/" not in bare:
+                provider = getattr(config, "model_provider", "")
+        return provider_account(provider)
+    except Exception:  # noqa: BLE001 — failed identity reads cannot lose a turn
+        return "", ""
+
+
 def record_turn(
     *,
     task_id: str,
@@ -175,6 +200,8 @@ def record_turn(
     context_tokens: int = 0,
     publish_usage_event: bool = True,
     requested_model: str = "",
+    provider_id: str = "",
+    account_key: str = "",
 ) -> None:
     """Record one finished turn leg: Prometheus, the realtime bus, and the store.
 
@@ -240,6 +267,9 @@ def record_turn(
     configured_model = (STATE.graph_config.model_name if STATE.graph_config else "") or ""
     primary_model = real_models[0] if real_models else (_display_model(requested_model) or configured_model)
 
+    if not account_key and not primary_model.startswith("acp:"):
+        provider_id, account_key = _turn_account(primary_model, requested_model)
+
     ended = datetime.now(timezone.utc)
     created = ended - timedelta(milliseconds=duration_ms)
     row = {
@@ -248,6 +278,8 @@ def record_turn(
         "state": state,
         "success": _success_for(state),
         "model": primary_model,
+        "provider_id": provider_id,
+        "account_key": account_key,
         "models": ",".join(models),
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
