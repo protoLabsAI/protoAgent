@@ -40,6 +40,13 @@ def answered(text: str) -> bool:
     return bool((text or "").strip())
 
 
+class BackgroundSpawnRefused(ValueError):
+    """A background spawn refused a job that could not run as its subagent (#4472), e.g.
+    none of its declared tools is bound on this agent. Raised by
+    ``background.manager.BackgroundManager.spawn``; the message is written for the
+    model/operator, and callers surface it in place of a job id."""
+
+
 @dataclass
 class SubagentConfig:
     """A worker spec; inherit_read_tools opts into lead reads by default.

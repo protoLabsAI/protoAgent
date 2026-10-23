@@ -151,7 +151,20 @@ class BackgroundManager:
         ``turn_model`` is the spawning turn's model override. The job's model follows the
         one subagent precedence (#3944, ``graph/subagent_model.py``): the subagent's own
         pinned model > ``turn_model``; with neither, the fire carries no model and the
-        detached turn runs on the configured default, as before."""
+        detached turn runs on the configured default, as before.
+
+        Raises ``BackgroundSpawnRefused`` before anything is recorded when the subagent
+        declares tools and none of them is bound on this agent (#4472)."""
+        try:
+            refusal = _declared_tool_refusal(subagent_type)
+        except Exception:  # noqa: BLE001 — a check that can't run never blocks a spawn
+            log.exception("[background] declared-tool check failed for %s", subagent_type)
+            refusal = None
+        if refusal:
+            from graph.subagents.config import BackgroundSpawnRefused
+
+            log.warning("[background] refused %s spawn: %s", subagent_type, refusal)
+            raise BackgroundSpawnRefused(refusal)
         spawning_fence = _origin_fence(origin_fence)
         job_id = self.store.create(
             agent_name=self.agent_name,
@@ -838,6 +851,30 @@ def _fence_metadata(fence) -> dict:
     return {"subagent_fence": fence} if fence else {}
 
 
+def _resolved_subagent_def(subagent_type: str):
+    """The registry subagent with any config override of ``tools`` /
+    ``inherit_read_tools`` applied (mirrors ``operator_api.subagents.list_subagents``),
+    or None when the type isn't a registry subagent."""
+    from dataclasses import replace
+
+    from graph.subagents.config import SUBAGENT_REGISTRY
+
+    registry_def = SUBAGENT_REGISTRY.get(subagent_type)
+    if registry_def is None:
+        return None
+    tools = list(registry_def.tools or [])
+    inherit_reads = registry_def.inherit_read_tools
+    try:
+        from runtime.state import STATE
+
+        override = getattr(STATE.graph_config, subagent_type, None) if STATE.graph_config else None
+        tools = list(override.tools) if override is not None and override.tools is not None else tools
+        inherit_reads = getattr(override, "inherit_read_tools", inherit_reads)
+    except Exception:  # noqa: BLE001 — config overlay is best-effort
+        pass
+    return replace(registry_def, tools=tools, inherit_read_tools=inherit_reads)
+
+
 def _subagent_fence(subagent_type: str) -> list[str]:
     """The subagent's resolved tool allowlist for a detached run (#1639): the registry
     ``tools`` with any config override applied — the SAME fence the in-graph ``task``
@@ -845,36 +882,60 @@ def _subagent_fence(subagent_type: str) -> list[str]:
     Empty when the type isn't a registry subagent (no fence). Best-effort: a
     resolution failure means no fence, never a failed fire."""
     try:
-        from graph.subagents.config import SUBAGENT_REGISTRY
-
-        registry_def = SUBAGENT_REGISTRY.get(subagent_type)
-        if registry_def is None:
+        resolved = _resolved_subagent_def(subagent_type)
+        if resolved is None:
             return []
-        tools = list(registry_def.tools or [])
-        inherit_reads = registry_def.inherit_read_tools
-        try:
-            from runtime.state import STATE
-
-            override = getattr(STATE.graph_config, subagent_type, None) if STATE.graph_config else None
-            tools = list(override.tools) if override is not None and override.tools is not None else tools
-            inherit_reads = getattr(override, "inherit_read_tools", inherit_reads)
-        except Exception:  # noqa: BLE001 — config overlay is best-effort
-            pass
-        from dataclasses import replace
-
         from graph.agent import _subagent_tool_names
         from graph.middleware.subagent_fence import FENCE_DENY_ALL
         from runtime.state import STATE
 
-        resolved = replace(registry_def, tools=tools, inherit_read_tools=inherit_reads)
         lead_tools = getattr(STATE.graph, "bound_tools", []) or []
         names = _subagent_tool_names(
-            resolved, [*tools, *(t.name for t in lead_tools)],
+            resolved, [*resolved.tools, *(t.name for t in lead_tools)],
             config=STATE.graph_config, lead_tools=lead_tools,
         )
         return names or [FENCE_DENY_ALL]
     except Exception:  # noqa: BLE001
         return []
+
+
+def _declared_tool_refusal(subagent_type: str) -> str | None:
+    """Why a background run of ``subagent_type`` can't bind its declared tools, or None.
+
+    A detached job runs the lead graph fenced to the subagent's allowlist, so its tools
+    are whatever that graph binds (lead + ``tools.subagent_only``). Resolved with the SAME
+    function the in-graph ``task`` path uses (``graph.agent._effective_subagent_tools``),
+    and refused on the same condition ``_run_subagent`` errors on: the subagent DECLARED
+    tools and none of them resolve. A partly-bound allowlist runs, as in the foreground
+    (a plugin may name another plugin's tools that this agent doesn't have). Without this
+    the job would run tool-less and come back "blocked" a whole turn later.
+
+    None when there's nothing to check against: a non-registry type, a declared-empty
+    (text-only) subagent, or no live graph."""
+    resolved = _resolved_subagent_def(subagent_type)
+    if resolved is None or not resolved.tools:
+        return None
+    from runtime.state import STATE
+
+    graph = STATE.graph
+    graph_tools = [
+        *(getattr(graph, "bound_tools", None) or []),
+        *(getattr(graph, "subagent_only_tools", None) or []),
+    ]
+    if not graph_tools:
+        return None
+    from graph.agent import _effective_subagent_tools
+
+    tool_map = {t.name: t for t in graph_tools if getattr(t, "name", None)}
+    bound = {t.name for t in _effective_subagent_tools(STATE.graph_config, resolved, tool_map)}
+    if any(name in bound for name in resolved.tools):
+        return None
+    return (
+        f"Not dispatched: subagent '{subagent_type}' declares tools "
+        f"{', '.join(resolved.tools)}, but none of them is bound on this agent, so a "
+        "background run would have no tools to work with. Enable the plugin that provides "
+        f"them (or remove them from tools.disabled), or change subagents.{subagent_type}.tools."
+    )
 
 
 def _build_fired_prompt(subagent_type: str, description: str, prompt: str) -> str:

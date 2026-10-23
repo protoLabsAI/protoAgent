@@ -984,13 +984,18 @@ async def spawn_background(
     # ``task(run_in_background=True)`` does (#3955); the subagent's pin still wins. Only
     # passed when there is one — outside a turn the spawn call is exactly as before.
     turn_model = current_turn_model()
-    task_id = await mgr.spawn(
-        origin_session=origin_session,
-        subagent_type=subagent_type,
-        description=description,
-        prompt=prompt,
-        **({"turn_model": turn_model} if turn_model else {}),
-    )
+    from graph.subagents.config import BackgroundSpawnRefused
+
+    try:
+        task_id = await mgr.spawn(
+            origin_session=origin_session,
+            subagent_type=subagent_type,
+            description=description,
+            prompt=prompt,
+            **({"turn_model": turn_model} if turn_model else {}),
+        )
+    except BackgroundSpawnRefused as e:  # its declared tools aren't bound (#4472)
+        return {"ok": False, "task_id": None, "message": str(e)}
     return {
         "ok": True,
         "task_id": task_id,
