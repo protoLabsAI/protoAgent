@@ -71,6 +71,26 @@ class ModelUnavailableError(RuntimeError):
         super().__init__(f"model {model!r} could not be loaded right now; try again shortly.")
 
 
+class QuotaExceededError(ModelUnavailableError):
+    """A per-turn model pick failed on a *subscription-quota* 429, and the default model
+    shares that account (ADR 0122 D8), so degrading to it would hit the same exhausted
+    quota — better to surface the quota error. A subclass of :class:`ModelUnavailableError`,
+    so ``/v1`` still answers 503 with a ``Retry-After`` and the console treats it as a
+    retryable pick failure; ``str()`` names the account's reset time when the provider
+    reported one, and the cause's own fix-it text rides the trusted ``hint``."""
+
+    def __init__(self, model: str, *, resets_at: str | None = None, hint: str = ""):
+        self.model = model
+        self.resets_at = resets_at
+        self.hint = hint
+        when = f" (resets at {resets_at})" if resets_at else ""
+        # Bypass ModelUnavailableError.__init__ to give a quota-specific message while keeping
+        # the class identity (and RETRY_AFTER_S) that drives the /v1 503 mapping.
+        RuntimeError.__init__(
+            self, f"model {model!r} is unavailable: its subscription quota is exhausted{when}; try again later."
+        )
+
+
 def _unknown_prefix(model: str, config) -> str:
     """The ``<prefix>`` of ``model`` when it names no known connection, else ``""``.
 
@@ -207,10 +227,15 @@ class ModelOverrideMiddleware(AgentMiddleware):
     def wrap_model_call(self, request, handler):
         swapped, pick = self._swap(request)
         if pick is None:
-            return handler(swapped)
+            try:
+                return handler(swapped)
+            except Exception as exc:  # noqa: BLE001 — classified below
+                self._raise_if_same_account_quota(request, swapped, exc)
+                raise
         try:
             return handler(swapped)
         except Exception as exc:  # noqa: BLE001 — classified below
+            self._raise_if_same_account_quota(request, swapped, exc)
             if not _rejects_pick(exc):
                 raise
             self._fell_back(pick, exc)
@@ -219,14 +244,59 @@ class ModelOverrideMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request, handler):
         swapped, pick = self._swap(request)
         if pick is None:
-            return await handler(swapped)
+            try:
+                return await handler(swapped)
+            except Exception as exc:  # noqa: BLE001 — classified below
+                self._raise_if_same_account_quota(request, swapped, exc)
+                raise
         try:
             return await handler(swapped)
         except Exception as exc:  # noqa: BLE001 — classified below
+            self._raise_if_same_account_quota(request, swapped, exc)
             if not _rejects_pick(exc):
                 raise
             self._fell_back(pick, exc)
             return await handler(request)
+
+    def _raise_if_same_account_quota(self, request, swapped, exc: BaseException) -> None:
+        """When an EXPLICIT per-tab pick fails on a subscription-quota 429 and the default
+        model is on the SAME account (ADR 0122 D8), raise a clear :class:`QuotaExceededError`
+        instead of letting the turn degrade to a default that shares the exhausted quota.
+
+        A no-op for an effort-only override (no pick), a non-quota failure, or a pick whose
+        account differs from (or can't be matched to) the default's — those keep today's
+        handling. Classification is tolerant; it never raises its own error."""
+        if swapped is request:
+            return  # nothing was overridden — effort-only / no-op turn
+        state = getattr(request, "state", None) or {}
+        picked = (state.get("model") or "").strip() if isinstance(state, dict) else ""
+        if not picked:
+            return  # effort-only on the current model — no explicit pick to protect
+        try:
+            from graph.middleware.quota_routing import account_for_model, quota_429
+
+            pick_account = account_for_model(picked, self._config)
+            if not quota_429(exc, native_oauth=pick_account is not None):
+                return
+            default_account = account_for_model(getattr(self._config, "model_name", "") or "", self._config)
+            if pick_account is None or pick_account != default_account:
+                return  # a different / unknown default account can still serve the turn
+        except Exception:  # noqa: BLE001 — a classification read, never a second failure
+            return
+        raise self._quota_error(picked, exc) from exc
+
+    @staticmethod
+    def _quota_error(model: str, exc: BaseException) -> "QuotaExceededError":
+        """A :class:`QuotaExceededError` for ``model``, naming the reset time when the 429's
+        own ``Retry-After`` carried one."""
+        resets_at = None
+        try:
+            from graph.upstream_errors import rate_limit_details
+
+            resets_at = (rate_limit_details(exc) or {}).get("retry_at")
+        except Exception:  # noqa: BLE001 — the reset time is a nicety, not required
+            resets_at = None
+        return QuotaExceededError(model, resets_at=resets_at, hint=_fix_it_hint(exc))
 
     def _swap(self, request):
         """``(request to run, the turn's inherited pick when THIS call runs on it)``.

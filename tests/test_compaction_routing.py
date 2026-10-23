@@ -155,6 +155,7 @@ def test_fallback_emits_event(monkeypatch):
         "primary_error": "RuntimeError",
         "fallback_model": "fallback-a",
         "fallback_index": 0,
+        "skipped_blocked": [],
     }
 
 
@@ -172,7 +173,15 @@ def test_fallback_async_path_emits_event(monkeypatch):
 
     assert asyncio.run(mw.awrap_model_call(_FakeRequest(), _primary_fails_async)) == "ok"
     assert published == [
-        ("model.fallback", {"primary_error": "TimeoutError", "fallback_model": "fallback-a", "fallback_index": 0})
+        (
+            "model.fallback",
+            {
+                "primary_error": "TimeoutError",
+                "fallback_model": "fallback-a",
+                "fallback_index": 0,
+                "skipped_blocked": [],
+            },
+        )
     ]
 
 

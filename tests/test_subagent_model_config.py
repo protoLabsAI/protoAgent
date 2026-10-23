@@ -224,9 +224,9 @@ def test_subagent_fallback_is_built_from_configured_models(monkeypatch):
     seen: dict = {}
     orig_fallback = agent_mod.ObservableModelFallbackMiddleware
 
-    def record_fallback(*models):
+    def record_fallback(*models, **kwargs):
         seen["count"] = len(models)
-        return orig_fallback(*models)
+        return orig_fallback(*models, **kwargs)
 
     monkeypatch.setattr(agent_mod, "ObservableModelFallbackMiddleware", record_fallback)
 
