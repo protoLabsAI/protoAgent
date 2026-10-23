@@ -117,10 +117,15 @@ def _scope(value: Any) -> dict[str, str] | None:
         raise ValueError("invalid scope")
     result = {}
     for key in ("model", "bucket"):
-        if key in value:
-            if not isinstance(value[key], str) or not value[key]:
-                raise ValueError("invalid scope value")
-            result[key] = value[key]
+        item = value.get(key)
+        if item is None:
+            continue
+        if isinstance(item, dict):
+            # Claude names a scoped model as {"id": ..., "display_name": ...}; id may be null.
+            item = next((item[k] for k in ("id", "display_name") if isinstance(item.get(k), str) and item[k]), None)
+        if not isinstance(item, str) or not item:
+            raise ValueError("invalid scope value")
+        result[key] = item
     if not result:
         raise ValueError("unknown scope")
     return result

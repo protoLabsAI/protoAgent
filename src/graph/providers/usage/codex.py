@@ -34,7 +34,7 @@ def parse_codex_usage(payload, *, account: Account | None = None) -> Account:
     account = account or Account("openai-codex", "openai-codex")
     try:
         windows = _windows(payload["rate_limit"], "rate_limit")
-        additional = payload.get("additional_rate_limits", [])
+        additional = payload.get("additional_rate_limits") or []  # the live payload sends null
         if not isinstance(additional, list):
             raise ValueError("invalid additional limits")
         for index, bucket in enumerate(additional):
