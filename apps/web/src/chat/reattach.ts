@@ -173,12 +173,16 @@ export function settleAnsweredPause(messages: ChatMessage[], messageId: string |
 
 /** Stable dependency key for the session slot's reattach effect. Hydration can
  * fill an already-mounted empty fixed-id tab, so sessionId alone is not enough
- * to trigger the effect when its durable streaming assistant appears later. */
-export function reattachKeyForMessages(messages: ChatMessage[] | undefined): string {
+ * to trigger the effect when its durable streaming assistant appears later.
+ *
+ * Empty while the bubble is a server-turn preview this console is WATCHING (see
+ * shouldReattach), so the key changes when that turn's `turn.finished` lands with the
+ * preview still streaming. A turn that PARKED on an approval ends exactly like that —
+ * no `chat.resumed` settles a park — and before, the key never moved, so nothing
+ * reattached and the approval card only appeared after a reload. */
+export function reattachKeyForMessages(messages: ChatMessage[] | undefined, sessionId = ""): string {
   const last = leadAssistantMessage(messages);
-  return last?.status === "streaming" && last.taskId && last.id
-    ? `${last.id}:${last.taskId}`
-    : "";
+  return shouldReattach(last, sessionId) ? `${last.id}:${last.taskId}` : "";
 }
 
 function updateMessage(sessionId: string, assistantId: string, fn: (m: any) => any) {

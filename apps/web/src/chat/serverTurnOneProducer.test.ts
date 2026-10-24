@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { foldProgressEvent } from "../app/ServerTurnWatch";
 import { api } from "../lib/api";
 import { chatStore } from "./chat-store";
-import { isReattaching, reattachTurn, shouldReattach } from "./reattach";
+import { isReattaching, reattachKeyForMessages, reattachOrReconcile, reattachTurn, shouldReattach } from "./reattach";
 import { liveMessageId, noteTurnFinished, noteTurnStarted, resetServerTurns } from "./server-turn-store";
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -125,6 +125,31 @@ describe("a server-fired turn's preview has one producer", () => {
     noteTurnFinished(session.id); // …but chat.resumed never settled it
 
     expect(shouldReattach(bubble(session.id), session.id)).toBe(true);
+  });
+
+  it("re-keys the slot's reattach effect when the watched turn ends with its preview still streaming", async () => {
+    // A server-fired turn that PARKS on an approval: the bus fed the preview its tool card,
+    // then `turn.finished` landed, but no `chat.resumed` settles a park. The reattach is
+    // what surfaces the approval card, and the slot only runs it when this key changes.
+    const session = chatStore.createSession();
+    const messagesOf = () => chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages;
+    noteTurnStarted(session.id, "Background task finished");
+    foldProgressEvent({ session_id: session.id, task_id: TASK, phase: "tool_start", tool: "run_command", tool_call_id: "c1" });
+    const watched = reattachKeyForMessages(messagesOf(), session.id);
+    noteTurnFinished(session.id);
+
+    expect(reattachKeyForMessages(messagesOf(), session.id)).not.toBe(watched);
+    expect(reattachKeyForMessages(messagesOf(), session.id)).toBe(`${liveMessageId(TASK, session.id)}:${TASK}`);
+
+    // …and the effect's re-run resubscribes to the parked task, which hands over the card.
+    resumeTask.mockImplementation(async (_task, _session, handlers) => {
+      handlers?.onInputRequired?.({ kind: "approval", title: "Approve shell command?" });
+    });
+    const onHitl = vi.fn();
+    const cancel = reattachOrReconcile(session.id, { onHitl });
+    if (cancel) cancels.push(cancel);
+    await settle();
+    expect(onHitl).toHaveBeenCalledWith(expect.objectContaining({ kind: "approval" }));
   });
 
   it("keeps reattaching an ordinary streaming turn while a server turn runs in the same session", () => {
