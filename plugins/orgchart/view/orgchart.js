@@ -78,6 +78,7 @@ let SEL = null;             // selected node id (drawer)
 const STICKY = new Map();
 let POLL_S = 8;
 let lastSeq = -1;
+let PEERS = 0;              // readable fleet peers: their work arrives by poll, not bus
 let eventsSeen = false;
 const HIDE_KEY = "orgchart.hidden";
 const store = {
@@ -115,11 +116,21 @@ const clip = (s, n) => { s = String(s ?? "").replace(/\s+/g, " ").trim(); return
 function nodeKey(kind, name) { return LEDGER_KIND[kind] + ":" + lc(name); }
 
 /** The topology node a live edge or ledger row lands on — or a synthetic one, so work
- *  reaching a delegate the crawl hasn't drawn (a subagent's first run) still shows. */
-function targetOf(toKind, toName, index) {
-  const hit = index.get(toKind + ":" + lc(toName));
+ *  reaching a delegate the crawl hasn't drawn (a subagent's first run) still shows.
+ *  `owner` is the node that dispatched it: a member's `coder` is a different process from
+ *  this agent's `coder`, so a peer's work is matched among THAT peer's delegates first. */
+function targetOf(toKind, toName, index, owner) {
+  const key = toKind + ":" + lc(toName);
+  const mine = !owner || owner === SELF;
+  const hit = mine ? index.get(key) : index.children?.get(owner)?.get(key);
   if (hit) return hit;
   const kind = CHART_KIND[toKind] || "agent";
+  if (!mine) {
+    // A member delegating to an a2a agent the chart already draws (the hub, a peer).
+    const anyAgent = toKind === "a2a" ? index.get(key) : null;
+    if (anyAgent) return anyAgent;
+    return { id: "live:" + owner + ":" + key, name: toName, kind, up: null, synthetic: true, owner };
+  }
   return { id: (kind === "subagent" ? "subagent:" : "live:" + toKind + ":") + lc(toName), name: toName, kind, up: null, synthetic: true };
 }
 
@@ -130,26 +141,35 @@ function buildGraph() {
     nodes.set(n.id, n);
     if (n.kind !== "self") index.set(nodeKey(n.kind, n.name), n);
   }
+  index.children = new Map();   // owner node id → (ledger key → its delegate node)
   for (const e of TOPO?.edges || []) {
     if (nodes.has(e.from) && nodes.has(e.to)) edges.set(e.from + ">" + e.to, { ...e });
+    const child = nodes.get(e.to);
+    if (child && child.kind !== "self") {
+      if (!index.children.has(e.from)) index.children.set(e.from, new Map());
+      index.children.get(e.from).set(nodeKey(child.kind, child.name), child);
+    }
   }
   for (const [id, n] of STICKY) {
-    if (index.has(nodeKey(n.kind, n.name)) || nodes.has(id)) { STICKY.delete(id); continue; }
+    const from = n.owner && nodes.has(n.owner) ? n.owner : SELF;
+    const drawn = from === SELF ? index.get(nodeKey(n.kind, n.name)) : index.children.get(from)?.get(nodeKey(n.kind, n.name));
+    if (drawn || nodes.has(id)) { STICKY.delete(id); continue; }
     if (HIDDEN.has(n.kind)) continue;
     nodes.set(id, n);
-    edges.set(SELF + ">" + id, { from: SELF, to: id, kind: "task" });
+    edges.set(from + ">" + id, { from, to: id, kind: "task" });
   }
   // Live edges: from the parent edge's target (a subagent that called a coder) or self.
   const flows = [];
   for (const le of LIVE.values()) {
-    const tgt = targetOf(le.to_kind, le.to_name, index);
+    const owner = le.owner && nodes.has(le.owner) ? le.owner : SELF;
+    const tgt = targetOf(le.to_kind, le.to_name, index, owner);
     if (tgt.kind !== "self" && HIDDEN.has(tgt.kind)) continue;
     if (!nodes.has(tgt.id)) nodes.set(tgt.id, tgt);
     if (tgt.synthetic) STICKY.set(tgt.id, tgt);
-    let from = SELF;
+    let from = owner;
     const parent = le.parent_id && LIVE.get(le.parent_id);
     if (parent) {
-      const p = targetOf(parent.to_kind, parent.to_name, index);
+      const p = targetOf(parent.to_kind, parent.to_name, index, parent.owner && nodes.has(parent.owner) ? parent.owner : SELF);
       if (nodes.has(p.id)) from = p.id;
     }
     if (!nodes.has(from)) continue;
@@ -324,11 +344,14 @@ function render() {
   if (!TOPO) return;
   GRAPH = buildGraph();
   LAYOUT = layout(GRAPH);
-  // Fill the canvas: a two-node fleet shouldn't be a postage stamp in a big empty box, and
-  // a big one shouldn't shrink past legibility (it scrolls instead).
+  // Fill the canvas: a two-node fleet shouldn't be a postage stamp in a big empty box, a
+  // three-column fleet should fit without a scrollbar, and a big one shouldn't shrink past
+  // legibility (below 0.7 it scrolls instead).
   const box = $("canvas").getBoundingClientRect();
   const fit = Math.min((box.width - 8) / LAYOUT.width, (box.height - 8) / LAYOUT.height);
-  const scale = Math.max(1, Math.min(1.45, isFinite(fit) ? fit : 1));
+  // With the drawer open the canvas is narrower; the node being inspected must still fit.
+  const scale = Math.max(SEL ? 0.55 : 0.7, Math.min(1.45, isFinite(fit) ? fit : 1));
+  LAYOUT.scale = scale;
   svg.setAttribute("width", Math.round(LAYOUT.width * scale));
   svg.setAttribute("height", Math.round(LAYOUT.height * scale));
   svg.setAttribute("viewBox", `0 0 ${LAYOUT.width} ${LAYOUT.height}`);
@@ -460,7 +483,7 @@ function feedItems() {
   const liveIds = new Set();
   for (const e of LIVE.values()) {
     liveIds.add(e.id);
-    items.push({ id: e.id, live: true, from: e.from, to: e.to_name, kind: e.to_kind, what: e.what,
+    items.push({ id: e.id, live: true, from: e.from, to: e.to_name, kind: e.to_kind, what: e.what, owner: e.owner || "",
       status: e.status, start: e.started_at, ms: e.duration_ms, cost: e.cost_usd });
   }
   for (const r of RECENT) {
@@ -489,7 +512,7 @@ function renderFeed() {
     const t = i.status === "running"
       ? `<span class="t" data-start="${i.start}">${dur(serverNow() - i.start)}</span>`
       : `<span class="t">${i.ms ? dur(i.ms / 1000) : ""}${i.at ? (i.ms ? " · " : "") + ago(i.at) : ""}</span>`;
-    return `<li class="row ${esc(i.status)}${FRESH.has(i.id) ? " fresh" : ""}" data-kind="${esc(i.kind)}" data-name="${esc(i.to)}" tabindex="0">
+    return `<li class="row ${esc(i.status)}${FRESH.has(i.id) ? " fresh" : ""}" data-kind="${esc(i.kind)}" data-name="${esc(i.to)}" data-owner="${esc(i.owner || "")}" tabindex="0">
       <span class="st">${statusIcon(i.status)}</span>
       <span class="who"><b>${esc(i.from || "agent")}</b><span class="arr">→</span><b>${esc(i.to)}</b></span>${t}
       <span class="what">${esc(clip(i.what, 160))}</span></li>`;
@@ -502,7 +525,8 @@ function tickFeed() {
 $("feed").addEventListener("click", (e) => {
   const row = e.target.closest(".row");
   if (!row || !GRAPH) return;
-  const n = targetOf(row.dataset.kind, row.dataset.name, GRAPH.index);
+  const owner = row.dataset.owner && GRAPH.nodes.has(row.dataset.owner) ? row.dataset.owner : SELF;
+  const n = targetOf(row.dataset.kind, row.dataset.name, GRAPH.index, owner);
   if (GRAPH.nodes.has(n.id)) openDrawer(n.id);
 });
 $("feed").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.closest(".row")?.click(); });
@@ -514,36 +538,72 @@ function openDrawer(id) {
   DRAWER_SIG = "";
   $("drawer").classList.add("open");
   $("drawer").setAttribute("aria-hidden", "false");
+  document.querySelector(".stage").classList.add("drilled");
   renderDrawer();
   render();
+  revealNode(id);
   $("d-close").focus({ preventScroll: true });
+}
+/** Scroll the canvas so a node is in view (a fleet wider than the canvas scrolls). */
+function revealNode(id) {
+  const p = LAYOUT?.pos.get(id);
+  if (!p) return;
+  const c = $("canvas"), k = LAYOUT.scale || 1;
+  const x = p.x * k, y = p.y * k, w = NODE_W * k, h = NODE_H * k;
+  if (x < c.scrollLeft || x + w > c.scrollLeft + c.clientWidth) c.scrollLeft = Math.max(0, x + w / 2 - c.clientWidth / 2);
+  if (y < c.scrollTop || y + h > c.scrollTop + c.clientHeight) c.scrollTop = Math.max(0, y + h / 2 - c.clientHeight / 2);
 }
 function closeDrawer() {
   const was = SEL;
   SEL = null;
   $("drawer").classList.remove("open");
   $("drawer").setAttribute("aria-hidden", "true");
+  document.querySelector(".stage").classList.remove("drilled");
   render();
   NODE_EL.get(was)?.g.focus({ preventScroll: true });
 }
 $("d-close").addEventListener("click", closeDrawer);
 addEventListener("keydown", (e) => { if (e.key === "Escape" && SEL) closeDrawer(); });
 
+/** The node that delegates to `n` — whose ledger holds `n`'s history. A coder records its
+ *  owner; otherwise it is the source of the topology edge into it. */
+function ownerOf(n) {
+  if (n.kind === "self") return SELF;
+  if (n.owner) return n.owner;
+  const into = (TOPO?.edges || []).find((e) => e.to === n.id && e.kind !== "member");
+  return into ? into.from : SELF;
+}
+// A peer's ledger, read through the plugin (it holds the token): owner → {at, rows}.
+const PEER_HISTORY = new Map();
+function peerHistory(owner) {
+  const hit = PEER_HISTORY.get(owner);
+  if (!hit || Date.now() - hit.at > 15000) {
+    PEER_HISTORY.set(owner, { at: Date.now(), rows: hit ? hit.rows : null });
+    api("/api/plugins/orgchart/history?owner=" + encodeURIComponent(owner))
+      .then((d) => { PEER_HISTORY.set(owner, { at: Date.now(), rows: d.readable ? d.edges || [] : [] }); DRAWER_SIG = ""; renderDrawer(); })
+      .catch(() => { PEER_HISTORY.set(owner, { at: Date.now(), rows: [] }); });
+  }
+  return PEER_HISTORY.get(owner).rows;
+}
 function historyFor(n) {
   const kind = LEDGER_KIND[n.kind];
   if (n.kind === "self") return RECENT.slice(0, 20);
-  return RECENT.filter((r) => r.to_kind === kind && lc(r.to_name) === lc(n.name)).slice(0, 20);
+  const owner = ownerOf(n);
+  const rows = owner === SELF ? RECENT : peerHistory(owner);
+  if (rows == null) return null;   // loading
+  return rows.filter((r) => r.to_kind === kind && lc(r.to_name) === lc(n.name)).slice(0, 20);
 }
 
 function renderDrawer() {
   if (!SEL || !GRAPH) return;
   const n = GRAPH.nodes.get(SEL);
   if (!n) return closeDrawer();
-  const busy = n.kind === "self"
-    ? [...LIVE.values()].filter((e) => e.status === "running")
-    : runningOn(n.id, GRAPH.flows);
+  // What this node is doing: work it was handed, and — for an agent that delegates
+  // onward (this agent, a fleet member) — the work it has handed out right now.
+  const handedOut = GRAPH.flows.filter((f) => f.from === n.id && f.edge.status === "running").map((f) => f.edge);
+  const busy = [...runningOn(n.id, GRAPH.flows), ...handedOut.filter((e) => !runningOn(n.id, GRAPH.flows).includes(e))];
   const hist = historyFor(n);
-  const sig = JSON.stringify([n, busy.map((e) => [e.id, e.progress, e.status]), hist.map((r) => r.edge_id), RECENT.length]);
+  const sig = JSON.stringify([n, busy.map((e) => [e.id, e.progress, e.status]), hist && hist.map((r) => r.edge_id), RECENT.length]);
   if (sig === DRAWER_SIG) return tickDrawer();
   DRAWER_SIG = sig;
   const body = $("d-body");
@@ -552,12 +612,12 @@ function renderDrawer() {
   $("d-name").textContent = n.name;
   const ring = $("d-ring");
   ring.className = "d-ring" + (busy.length ? " busy" : n.up === true ? " up" : n.up === false ? " down" : "");
-  const statusWord = busy.length ? (n.kind === "self" ? `${busy.length} delegation${busy.length > 1 ? "s" : ""} in flight` : "Working")
+  const statusWord = busy.length ? (handedOut.length && busy.length === handedOut.length ? `${busy.length} delegation${busy.length > 1 ? "s" : ""} in flight` : "Working")
     : n.kind === "self" ? "This agent" : n.up === false ? "Down" : n.up === true ? "Idle · up" : "Idle";
   $("d-sub").textContent = [TAG[n.kind], statusWord].filter(Boolean).join(" · ");
 
   const sec = [];
-  for (const e of busy.slice(0, 4)) sec.push(nowCard(e, n.kind === "self"));
+  for (const e of busy.slice(0, 4)) sec.push(nowCard(e, handedOut.includes(e)));
 
   const w = n.work;
   if (w && w.dispatches) {
@@ -572,7 +632,12 @@ function renderDrawer() {
     </div></section>`);
   }
 
-  sec.push(`<section class="sec"><h3>Recent work</h3>${hist.length ? `<ul class="hist">${hist.map(histRow).join("")}</ul>` : `<p class="quiet">No delegations recorded${n.kind === "self" ? "" : " to " + esc(n.name)} yet.</p>`}</section>`);
+  const owner = ownerOf(n);
+  const ownerName = owner !== SELF ? GRAPH.nodes.get(owner)?.name : "";
+  sec.push(`<section class="sec"><h3>Recent work${ownerName ? ` <span class="quiet">· from ${esc(ownerName)}</span>` : ""}</h3>${
+    hist == null ? `<p class="quiet">Loading…</p>`
+    : hist.length ? `<ul class="hist">${hist.map(histRow).join("")}</ul>`
+    : `<p class="quiet">No delegations recorded${n.kind === "self" ? "" : " to " + esc(n.name)} yet.</p>`}</section>`);
   sec.push(factsSection(n));
   body.innerHTML = sec.join("");
   body.scrollTop = scroll;
@@ -642,7 +707,7 @@ function finishLive(d) {
 }
 function landNode(e) {
   if (!GRAPH) return;
-  const n = targetOf(e.to_kind, e.to_name, GRAPH.index);
+  const n = targetOf(e.to_kind, e.to_name, GRAPH.index, e.owner && GRAPH.nodes.has(e.owner) ? e.owner : SELF);
   const h = NODE_EL.get(n.id);
   if (!h || REDUCED) return;
   const cls = e.status === "failed" ? "landed-failed" : "landed-ok";
@@ -656,7 +721,7 @@ function onEvent(topic, d) {
   if (!d || !d.id) return;
   eventsSeen = true;
   setLive("live");
-  if (topic === "delegation.started") { FRESH.add(d.id); upsertLive(d); }
+  if (topic === "delegation.started") { FRESH.add(d.id); upsertLive({ ...d, owner: SELF }); }
   else if (topic === "delegation.progress") {
     const e = LIVE.get(d.id);
     if (!e) return;
@@ -669,8 +734,11 @@ function onEvent(topic, d) {
 }
 
 async function loadLive() {
-  const d = await api("/api/ledger/live");
+  // The fleet fan-in: this agent's in-flight work plus every readable peer's, each tagged
+  // with its owner node. The bus only carries this agent's own frames.
+  const d = await api("/api/plugins/orgchart/live");
   if (typeof d.now === "number") skew = d.now - now();
+  PEERS = d.peers || 0;
   const seen = new Set();
   for (const e of d.edges || []) {
     seen.add(e.id);
@@ -733,7 +801,9 @@ async function boot() {
   setInterval(async () => {
     if (document.hidden) return;
     const busy = [...LIVE.values()].some((e) => e.status === "running");
-    if (Date.now() - last < (busy ? 4000 : 12000)) return;
+    // Peers' work only arrives this way, so a fleet view polls briskly; a lone agent has
+    // the bus and only needs this to catch a dropped frame.
+    if (Date.now() - last < (PEERS ? 2500 : busy ? 4000 : 12000)) return;
     last = Date.now();
     try { await loadLive(); render(); renderFeed(); if (SEL) renderDrawer(); }
     catch { setLive("off"); }

@@ -535,3 +535,67 @@ def test_leaves_do_not_starve_the_agent_graph_under_max_nodes(monkeypatch):
     nodes = {n["id"]: n for n in asyncio.run(topo.get_topology({"max_nodes": 3}))["nodes"]}
     assert ALPHA in nodes, "a peer lost its slot to coders listed ahead of it"
     assert len(nodes) == 3
+
+
+# ── live work across the fleet ───────────────────────────────────────────────
+
+
+def _wire_fleet(monkeypatch, calls):
+    """alpha (tokened, readable) reports live work, a ledger and its aggregates; beta is
+    dead. Every ledger read must carry alpha's bearer — the crawl's own, never a new one."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        host, path = request.url.host, request.url.path
+        if host == "alpha":
+            if path == "/.well-known/agent-card.json":
+                return httpx.Response(200, json={"name": "Alpha"})
+            assert request.headers.get("Authorization") == "Bearer tok-alpha"
+            if path == "/api/delegates":
+                return httpx.Response(200, json={"delegates": [{"type": "acp", "name": "coder", "command": "claude"}]})
+            if path == "/api/ledger/live":
+                return httpx.Response(200, json={"edges": [{"id": "e1", "to_kind": "acp", "to_name": "coder", "what": "fix it", "started_at": 1.0}]})
+            if path == "/api/ledger":
+                return httpx.Response(200, json={"edges": [{"edge_id": 9, "to_kind": "acp", "to_name": "coder", "outcome": "ok"}]})
+            if path == "/api/ledger/edges":
+                return httpx.Response(200, json={"edges": [{"to_kind": "acp", "to_name": "coder", "dispatches": 4, "ok": 4}]})
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(topo, "_make_client", lambda cfg: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(
+        topo,
+        "_roster",
+        lambda: [
+            {"type": "a2a", "name": "alpha", "url": ALPHA + "/a2a", "auth": {"token": "tok-alpha"}},
+            {"type": "a2a", "name": "beta", "url": BETA},
+        ],
+    )
+    monkeypatch.setattr(topo, "_health", lambda: {})
+    monkeypatch.setattr(topo, "_fleet_remotes", lambda: [])
+    monkeypatch.setattr(topo, "_self_identity", lambda: ("ava", "http://self:7870", "org head"))
+    monkeypatch.setattr(topo, "_ledger_edges", lambda: [])
+
+
+def test_live_fans_in_each_readable_peers_work_tagged_with_its_owner(monkeypatch):
+    from graph import ledger
+
+    calls: list[str] = []
+    _wire_fleet(monkeypatch, calls)
+    monkeypatch.setattr(ledger, "live_edges", lambda: [{"id": "mine", "to_kind": "subagent", "to_name": "researcher"}])
+    data = asyncio.run(topo.get_live({}))
+    owners = {e["id"]: e["owner"] for e in data["edges"]}
+    assert owners == {"mine": "http://self:7870", "e1": ALPHA}
+    assert data["peers"] == 1  # beta is dead and tokenless: never asked
+    assert not any("beta" in u and "/api/ledger" in u for u in calls)
+
+
+def test_a_peers_coder_wears_the_peers_record_and_its_history_is_readable(monkeypatch):
+    calls: list[str] = []
+    _wire_fleet(monkeypatch, calls)
+    data = asyncio.run(topo.get_topology({}))
+    coder = next(n for n in data["nodes"] if n["id"] == f"acp:{ALPHA}#coder")
+    assert coder["work"]["dispatches"] == 4
+    hist = asyncio.run(topo.get_history({}, ALPHA + "/a2a"))
+    assert hist["readable"] is True and hist["edges"][0]["edge_id"] == 9
+    # A node the crawl couldn't read has no history to give — and no token is invented.
+    assert asyncio.run(topo.get_history({}, BETA)) == {"owner": BETA, "edges": [], "readable": False}

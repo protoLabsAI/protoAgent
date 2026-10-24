@@ -55,4 +55,12 @@ def build_data_router(live_config):
     async def _topology(refresh: int = 0) -> dict:
         return await topology.get_topology(live_config() or {}, force=bool(refresh))
 
+    @router.get("/live")
+    async def _live() -> dict:
+        return await topology.get_live(live_config() or {})
+
+    @router.get("/history")
+    async def _history(owner: str, limit: int = 60) -> dict:
+        return await topology.get_history(live_config() or {}, owner, limit=limit)
+
     return router
