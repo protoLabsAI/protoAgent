@@ -369,7 +369,7 @@ def register_telemetry_routes(app) -> None:
             return {"enabled": False, "turns": [], "tracing_enabled": _tracing_enabled()}
         return {
             "enabled": True,
-            "turns": STATE.telemetry_store.recent(limit=min(max(1, limit), 500)),
+            "turns": await asyncio.to_thread(STATE.telemetry_store.recent, limit=min(max(1, limit), 500)),
             "langfuse_trace_url_template": await _trace_url_template(),
             "tracing_enabled": _tracing_enabled(),
         }
@@ -477,7 +477,7 @@ def register_telemetry_routes(app) -> None:
         )
 
     @app.get("/api/telemetry/insights")
-    async def _api_telemetry_insights():
+    def _api_telemetry_insights():
         # Advise-only flywheel signal (ADR 0006 Slice 4): flag outlier turns +
         # prove the levers we can measure from the per-turn store. Read-only.
         return _local_insights_payload()
