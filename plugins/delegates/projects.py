@@ -76,6 +76,22 @@ def resolve(project: str) -> ProjectScope:
     return ProjectScope(name=name, root=str(root), write=True)
 
 
+def describe_for_peer(project: str) -> str:
+    """A line naming ``project`` for a delegate that isn't a coder — an a2a peer or a model
+    runs its own tools, so there is nothing to fence; it just needs to know where the work
+    is. The root is included when the project is registered (a peer on this host can use
+    it); an unknown name is passed through as the model wrote it."""
+    from runtime.state import STATE
+    from tools.fs_tools import live_project_registry
+
+    name = str(project or "").strip()
+    try:
+        root = live_project_registry(getattr(STATE, "graph_config", None)).resolve(name, ".")
+    except Exception:  # noqa: BLE001 — unknown project, or no fs registry: the name alone
+        return f"(This concerns the project {name!r}.)"
+    return f"(This concerns the project {name!r}, at {root} on the sender's machine.)"
+
+
 _SCOPE: ContextVar[ProjectScope | None] = ContextVar("protoagent_delegate_project_scope", default=None)
 
 

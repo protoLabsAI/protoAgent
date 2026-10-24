@@ -113,7 +113,8 @@ def _build_delegate_to(registry: DelegateRegistry):
                 project to a coder. The project must be read-write (not no-delete). For a
                 git project the reply ends with what the coder changed (a diff stat plus
                 the diff), so you can check the work instead of trusting the coder's
-                summary. Leave empty to use the delegate's own directory.
+                summary. Leave empty to use the delegate's own directory. Sent to any
+                other delegate, the project is named in the ask instead.
         """
         if not str(query).strip():
             return "Error: `query` is empty — give the delegate something to do."
@@ -135,16 +136,19 @@ def _build_delegate_to(registry: DelegateRegistry):
             if d is None:
                 return f"Error: unknown delegate {target!r}. Available: {registry.listing() or '(none)'}."
             if d.type != "acp":
-                return (
-                    f"Error: delegate {target!r} is type {d.type!r} — `project` only applies to acp "
-                    "coding delegates. Describe the project in the query instead."
-                )
-            from .projects import resolve
+                # Only a coder's workdir can be scoped. Any other delegate runs its own
+                # tools, so the project travels as words in the ask rather than failing a
+                # call the model will just retry without it.
+                from .projects import describe_for_peer
 
-            try:
-                scope = resolve(project)
-            except DelegateError as exc:
-                return f"Error: {exc}"
+                query = f"{query}\n\n{describe_for_peer(project)}"
+            else:
+                from .projects import resolve
+
+                try:
+                    scope = resolve(project)
+                except DelegateError as exc:
+                    return f"Error: {exc}"
         if background:
             return await _spawn_background_delegation(
                 registry,
