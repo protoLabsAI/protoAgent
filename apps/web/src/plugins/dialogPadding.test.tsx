@@ -10,13 +10,13 @@
 import { describe, expect, it } from "vitest";
 
 import installSrc from "./InstallPluginDialog.tsx?raw";
-import pluginSettingsSrc from "./PluginSettingsDialog.tsx?raw";
 import depsInstallSrc from "./depsInstall.tsx?raw";
 import playbooksSrc from "../playbooks/PlaybooksSurface.tsx?raw";
 
+// PluginSettingsDialog.tsx is intentionally absent: its per-plugin Configure surface became a
+// Settings PANE (not a <Dialog>) in #4488, so it no longer opts into roomy dialog padding.
 const FILES: Array<[string, string]> = [
   ["InstallPluginDialog.tsx", installSrc],
-  ["PluginSettingsDialog.tsx", pluginSettingsSrc],
   ["depsInstall.tsx", depsInstallSrc],
   ["PlaybooksSurface.tsx", playbooksSrc],
 ];

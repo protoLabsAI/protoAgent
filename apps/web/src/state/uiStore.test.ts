@@ -431,6 +431,46 @@ describe("openToolSettings", () => {
   });
 });
 
+// openPluginConfig (#4488): Configure opens the plugin's own PANE inside Settings ▸ Plugins
+// (superseding the ADR 0059 modal). The action selects the pane AND opens Settings on the
+// Plugins section in one atomic set — so a Configure deep-link from the palette, a plugin's own
+// "Configure…", or a rail context menu opens Settings directly on that plugin while Settings is
+// closed (r4). Closing Settings drops the selected pane so a later plain open lands on the list.
+describe("openPluginConfig", () => {
+  beforeEach(() => {
+    useUI.setState({
+      configurePlugin: undefined,
+      globalSettingsOpen: false,
+      globalSettingsSection: undefined,
+      settingsSection: "identity",
+    });
+  });
+
+  it("selects the plugin pane and opens Settings on the Plugins section", () => {
+    useUI.getState().openPluginConfig("boardy", "Boardy");
+    const s = useUI.getState();
+    expect(s.configurePlugin).toEqual({ id: "boardy", name: "Boardy" });
+    expect(s.globalSettingsOpen).toBe(true);
+    expect(s.globalSettingsSection).toBe("plugins"); // the overlay re-seeds to Plugins
+    expect(s.settingsSection).toBe("plugins"); // same landing-site rule as openGlobalSettings
+  });
+
+  it("closePluginConfig returns to the list but leaves Settings open", () => {
+    useUI.getState().openPluginConfig("boardy", "Boardy");
+    useUI.getState().closePluginConfig();
+    const s = useUI.getState();
+    expect(s.configurePlugin).toBeUndefined();
+    expect(s.globalSettingsOpen).toBe(true); // back to the list, Settings stays open
+    expect(s.settingsSection).toBe("plugins");
+  });
+
+  it("closing Settings drops the selected pane so a plain reopen lands on the list", () => {
+    useUI.getState().openPluginConfig("boardy", "Boardy");
+    useUI.getState().closeGlobalSettings();
+    expect(useUI.getState().configurePlugin).toBeUndefined();
+  });
+});
+
 // showChatUsage (#2931): the per-turn token/cost footer under chat answers is OFF for fresh
 // installs. The initializer only applies when there is no persisted state — zustand/persist
 // hydrates existing installs from localStorage, so flipping the default never touches them

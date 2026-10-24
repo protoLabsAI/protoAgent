@@ -7,16 +7,18 @@ import { useEffect, type ReactNode } from "react";
 
 import { SideNav, Tabs } from "@protolabsai/ui/navigation";
 import { StatusDot } from "@protolabsai/ui/data";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 
 import { IdentityPanel } from "../agent/IdentityPanel";
-import { pythonRuntimeQuery } from "../lib/queries";
+import { pythonRuntimeQuery, runtimeStatusQuery } from "../lib/queries";
 import { pythonRuntimeView } from "../app/pythonRuntime";
 import { McpPanel } from "../app/McpPanel";
+import { StagePanel } from "../app/ErrorBoundary";
 import { SubagentsPanel } from "../app/SubagentsPanel";
 import { ToolsPanel } from "../app/ToolsPanel";
 import { isHostConsole } from "../lib/api";
 import { PluginsSurface } from "../plugins/PluginsSurface";
+import { PluginSettingsPane } from "../plugins/PluginSettingsDialog";
 import { PlaybooksSurface } from "../playbooks/PlaybooksSurface";
 import { TelemetrySurface } from "../telemetry/TelemetrySurface";
 import { useIsMobile } from "../lib/useIsMobile";
@@ -42,11 +44,47 @@ import { ThemeSurface } from "./ThemeSurface";
 // the name → glyph map lives in ./sectionIcons, so they can DRAW one just as cheaply. This
 // file supplies the half that genuinely needs the tree: what each id renders.
 
+// Per-plugin Configure pane (settings-ux C1, #4488) — looks up the plugin's runtime meta
+// (settings_tabs / loaded / error / incomplete) inside a Suspense boundary and hands it to the
+// presentational pane. Kept separate from `PluginSettingsHome` so the suspense query lives
+// under its own StagePanel, not above it.
+function PluginConfigLoader({ pluginId, pluginName, onBack }: { pluginId: string; pluginName: string; onBack: () => void }) {
+  const { data: runtime } = useSuspenseQuery(runtimeStatusQuery());
+  const plugin = runtime.plugins?.find((p) => p.id === pluginId);
+  return (
+    <PluginSettingsPane
+      pluginId={pluginId}
+      pluginName={pluginName}
+      needsConfig={plugin?.incomplete ? plugin.needs_config : undefined}
+      settingsTabs={plugin?.settings_tabs}
+      pluginLoaded={plugin?.loaded}
+      pluginError={plugin?.error}
+      onBack={onBack}
+    />
+  );
+}
+
 // The Plugins manager (install · enable · configure, plus the Discover directory) — the
-// Plugins domain. Per-plugin config is inline per row (ADR 0059).
+// Plugins domain. Configure opens the plugin's own PANE here (Settings ▸ Plugins ▸ <plugin>,
+// #4488), replacing the modal that stacked over Settings (ADR 0059); `configurePlugin` selects
+// the pane vs the list.
 function PluginSettingsHome() {
   const pluginsTab = useUI((s) => s.pluginsTab);
   const setPluginsTab = useUI((s) => s.setPluginsTab);
+  const configurePlugin = useUI((s) => s.configurePlugin);
+  const closePluginConfig = useUI((s) => s.closePluginConfig);
+  if (configurePlugin) {
+    return (
+      <StagePanel label="plugin-config">
+        <PluginConfigLoader
+          key={configurePlugin.id}
+          pluginId={configurePlugin.id}
+          pluginName={configurePlugin.name}
+          onBack={closePluginConfig}
+        />
+      </StagePanel>
+    );
+  }
   return (
     <>
       <Tabs

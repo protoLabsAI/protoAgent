@@ -15,7 +15,7 @@ import { StagePanel } from "../app/ErrorBoundary";
 import { errMsg } from "../lib/format";
 import { StatusPill } from "../app/StatusPill";
 import { InstallPluginDialog } from "./InstallPluginDialog";
-import { PluginSettingsDialog } from "./PluginSettingsDialog";
+import { useUI } from "../state/uiStore";
 import { useTrustAck } from "./TrustAckDialog";
 import { optionalOnlyNames, useDepsPrompt } from "./depsInstall";
 import { PluginFreshness } from "./PluginFreshness";
@@ -66,6 +66,7 @@ function PluginRow({
   onUpdate,
   updating,
   configurable,
+  onConfigure,
   removable,
   onRemove,
   removing,
@@ -85,6 +86,8 @@ function PluginRow({
   onUpdate: (p: Plugin) => void;
   updating: boolean;
   configurable: boolean;
+  /** open this plugin's Configure pane (Settings ▸ Plugins ▸ <plugin>, #4488) */
+  onConfigure: (p: Plugin) => void;
   removable: boolean;
   onRemove: (p: Plugin) => void;
   removing: boolean;
@@ -95,7 +98,6 @@ function PluginRow({
   depsBlockedBy?: string | null;
 }) {
   const on = p.enabled;
-  const [configOpen, setConfigOpen] = useState(false);
   return (
     <Tr>
       {/* Name · version · bundle chip · (only-when-actionable) freshness badge. */}
@@ -181,16 +183,17 @@ function PluginRow({
               Install deps
             </Button>
           ) : null}
-          {/* Configure opens a per-plugin settings dialog (ADR 0059) rather than expanding
-              the row, so the row stays one line and the form gets room. An INCOMPLETE
-              plugin (#1719) gets a prominent labeled "Set up" instead of the gear icon —
-              it's the primary thing to do on that row. */}
+          {/* Configure opens the plugin's own Settings pane (Settings ▸ Plugins ▸ <plugin>,
+              #4488 — superseding the ADR 0059 modal) rather than expanding the row, so the row
+              stays one line and the form gets the full pane width. An INCOMPLETE plugin (#1719)
+              gets a prominent labeled "Set up" instead of the gear icon — it's the primary thing
+              to do on that row. */}
           {p.incomplete ? (
             <Button
               type="button"
               variant="default"
               size="sm"
-              onClick={() => setConfigOpen(true)}
+              onClick={() => onConfigure(p)}
               title={`Finish setting up ${p.name}`}
             >
               Set up
@@ -200,7 +203,7 @@ function PluginRow({
               type="button"
               icon
               variant="ghost"
-              onClick={() => setConfigOpen(true)}
+              onClick={() => onConfigure(p)}
               title={`Configure ${p.name}`}
               aria-label={`Configure ${p.name}`}
             >
@@ -235,18 +238,6 @@ function PluginRow({
             </Button>
           ) : null}
         </div>
-        {configurable || p.incomplete ? (
-          <PluginSettingsDialog
-            pluginId={p.id}
-            pluginName={p.name}
-            needsConfig={p.incomplete ? p.needs_config : undefined}
-            settingsTabs={p.settings_tabs}
-            pluginLoaded={p.loaded}
-            pluginError={p.error}
-            open={configOpen}
-            onClose={() => setConfigOpen(false)}
-          />
-        ) : null}
       </Td>
     </Tr>
   );
@@ -291,6 +282,9 @@ type PluginsTab = "local" | "market";
 // missing ones; and an Install-from-URL dialog. (ADR 0027 + ADR 0059.)
 function LocalTab() {
   const { data: runtime } = useSuspenseQuery(runtimeStatusQuery());
+  // Configure opens the plugin's own pane inside Settings ▸ Plugins (#4488); the store action
+  // also makes sure Settings is open on the Plugins section.
+  const openPluginConfig = useUI((s) => s.openPluginConfig);
   // Update status (ADR 0027) — joined per plugin id; degrades gracefully (non-suspense,
   // retry:false) so a missing updates API never blanks the list.
   const updates = useQuery(pluginUpdatesQuery());
@@ -528,6 +522,7 @@ function LocalTab() {
       onUpdate={onUpdate}
       updating={updatingId === row.p.id}
       configurable={configurableIds.has(row.p.id) || Boolean(row.p.settings_tabs?.some((tab) => tab.path))}
+      onConfigure={(pl) => openPluginConfig(pl.id, pl.name)}
       removable={removableIds.has(row.p.id)}
       onRemove={onRemove}
       removing={removingId === row.p.id}

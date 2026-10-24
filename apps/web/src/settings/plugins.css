@@ -144,6 +144,35 @@
 }
 .plugin-discover-controls .pl-tabs--segmented > * { flex: 0 0 auto; }
 
+/* Per-plugin Configure PANE (Settings ▸ Plugins ▸ <plugin>, #4488 — superseding the ADR 0059
+   modal). display:contents dissolves this wrapper so its PanelHeader + .stage-body land as the
+   two direct grid rows `.stage-panel` lays out (header · scrolling body) — the same trick as
+   WorkPanel's `.work-view`. */
+.plugin-settings-pane { display: contents; }
+/* The scroll row (the grid's 1fr). SettingsCategory renders its own full-width header and
+   padded body inside, so this wrapper owns the scroll but adds no padding of its own. */
+.plugin-settings-pane-body { min-height: 0; overflow-y: auto; }
+/* Only the setup banner needs insetting to line up with the header + field rows. */
+.plugin-settings-pane-banner { padding: var(--pl-space-3) var(--pl-space-4) 0; }
+
+/* Breadcrumb in the pane header: a "← Plugins" back link, a separator, then the plugin name.
+   Lets the header read as the Settings ▸ Plugins ▸ <plugin> trail. */
+.plugin-settings-crumbs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pl-space-1_5);
+  min-width: 0;
+}
+/* Pull the ghost back-button's padding back so "Plugins" aligns with the title baseline. */
+.plugin-settings-back { margin-left: calc(-1 * var(--pl-space-2)); }
+.plugin-settings-crumb-sep { color: var(--pl-color-fg-muted); }
+.plugin-settings-crumb-current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 /* Install-time "install these Python packages?" dialog (plugins/depsInstall.tsx). */
 .plugin-deps-list {
   margin: var(--pl-space-1) 0 var(--pl-space-3);
