@@ -107,6 +107,37 @@ def test_manifest_settings_tabs_reject_invalid_duplicates_and_unknown_refs(tmp_p
     assert "unknown settings tab" in caplog.text
 
 
+def test_manifest_settings_tabs_apply_live_kept_invalid_dropped(tmp_path, caplog) -> None:
+    # settings-ux C2 (#4489): `apply: live` opts a tab into the live save model. The literal
+    # `live` is kept (on a schema tab and a path-backed one); any other value is warned and
+    # dropped so the tab keeps save-then-apply; a tab with no `apply:` is untouched.
+    import logging as _logging
+
+    _make_plugin(
+        tmp_path,
+        "tabbed",
+        manifest_extra=(
+            "settings_tabs:\n"
+            "  - {id: overview, label: Overview, apply: live}\n"
+            "  - {id: runtime, label: Runtime}\n"
+            "  - {id: review, label: Review, apply: later}\n"
+            "  - {id: projects, label: Projects, path: /plugins/tabbed/config/projects, apply: live}\n"
+            "settings:\n"
+            "  - {key: greeting, label: Greeting, type: string, tab: overview}\n"
+        ),
+    )
+    with caplog.at_level(_logging.WARNING, logger="protoagent.plugins"):
+        manifest = load_manifest(tmp_path / "tabbed")
+    assert manifest is not None
+    by_id = {tab["id"]: tab for tab in manifest.settings_tabs}
+    assert by_id["overview"].get("apply") == "live"
+    assert by_id["projects"].get("apply") == "live"
+    assert by_id["projects"].get("path") == "/plugins/tabbed/config/projects"
+    assert "apply" not in by_id["runtime"]          # default save-then-apply, untouched
+    assert "apply" not in by_id["review"]           # invalid value dropped
+    assert "is not 'live'" in caplog.text
+
+
 # --- Optional dep tier (#1953) — `requires_pip:` entries may be {pkg, optional} ---
 
 

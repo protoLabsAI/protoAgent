@@ -136,7 +136,7 @@ Settings-schema field specs ({key, label, type, ...}); `spawns: true` marks one 
 
 - **Type** `list[dict]` · **Default** `[]`
 
-Ordered Configure-dialog tabs ([#3179](https://github.com/protoLabsAI/protoAgent/issues/3179)/#3180). A schema-backed `{id, label}` descriptor is targeted by `settings[].tab`; a path-backed `{id, label, path}` descriptor embeds plugin-owned UI from /plugins/&lt;id&gt;/... through the sandboxed view bridge. One descriptor has one kind — settings cannot target a path-backed tab. Plugins that omit this keep the flat Configuration form.
+Ordered Configure-dialog tabs ([#3179](https://github.com/protoLabsAI/protoAgent/issues/3179)/#3180). A schema-backed `{id, label}` descriptor is targeted by `settings[].tab`; a path-backed `{id, label, path}` descriptor embeds plugin-owned UI from /plugins/&lt;id&gt;/... through the sandboxed view bridge. One descriptor has one kind — settings cannot target a path-backed tab. An optional `apply: live` (settings-ux C2, [#4489](https://github.com/protoLabsAI/protoAgent/issues/4489)) switches a schema tab to the live save model (fields save on change, no Save & apply bar); path-backed tabs are always live. Plugins that omit this keep the flat Configuration form with save-then-apply.
 
 ### `test` {#field-test}
 

@@ -6,6 +6,34 @@
 .settings-banner {
   margin-bottom: var(--pl-space-2_5);
 }
+/* Pending-restart banner (settings-ux C2, #4489): the collected list + the slot C3
+   fills with a Restart now control. Stack the three lines so the field list and the
+   how-to-restart line each read on their own. */
+.settings-restart-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1);
+}
+.settings-restart-items {
+  font-size: var(--pl-font-size-sm);
+}
+.settings-restart-action {
+  font-size: var(--pl-font-size-xs);
+  color: var(--pl-color-fg-subtle);
+}
+/* Inline "Saved" / error for a live-tab field (settings-ux C2, #4489) — sits under the
+   control so a save-on-change tab confirms without a toast. */
+.setting-live-status {
+  display: inline-block;
+  margin-top: var(--pl-space-1);
+  font-size: var(--pl-font-size-xs);
+}
+.setting-live-status--success {
+  color: var(--pl-color-status-success);
+}
+.setting-live-status--error {
+  color: var(--pl-color-status-error);
+}
 /* QuickSetting dialog (ADR 0048) — contextual settings shortcut. Reuses the
    .setting-row chrome; the dialog just stacks the rows with breathing room. */
 

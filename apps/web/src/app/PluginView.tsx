@@ -72,13 +72,29 @@ export { consoleTheme, PL_TOKEN_VARS } from "./pluginFrameHandshake";
 // host-owned container such as the per-plugin Configure dialog: it keeps the same iframe
 // isolation/bridge but does not let the page opt into App's rail background-mount policy
 // or offer the redundant Configure context-menu action from inside Configure itself.
-export function PluginView({ view, embedded = false }: { view: PluginViewType; embedded?: boolean }) {
+export function PluginView({
+  view,
+  embedded = false,
+  onRestartPending,
+}: {
+  view: PluginViewType;
+  embedded?: boolean;
+  // A Configure page (embedded settings tab) can post
+  // `protoagent:settings:restart-pending {keys:[labels]}` to fold its restart-only changes
+  // into the settings pane's one banner (settings-ux C2, #4489). Validated with the same
+  // source+origin checks as every other page→host message below.
+  onRestartPending?: (labels: string[]) => void;
+}) {
   const tabs = view.tabs ?? [];
   // Feedback for a `protoagent:code:open` that had nowhere to go (no pane, no editor). Held in a
   // ref so the message effect below reads the current one without re-subscribing.
   const toast = useOptionalToast();
   const toastRef = useRef(toast);
   toastRef.current = toast;
+  // Held in a ref (like toastRef) so the message effect reads the current callback without
+  // re-subscribing the window listener each render.
+  const onRestartPendingRef = useRef(onRestartPending);
+  onRestartPendingRef.current = onRestartPending;
   const [activeTab, setActiveTab] = useState(tabs[0]?.id ?? "");
   const src = useMemo(() => {
     const t = tabs.find((x) => x.id === activeTab);
@@ -484,6 +500,15 @@ export function PluginView({ view, embedded = false }: { view: PluginViewType; e
           },
           body: JSON.stringify({ topic, data: m.data || {} }),
         }).catch(() => {});
+      } else if (m.type === "protoagent:settings:restart-pending") {
+        // "These changes of mine need a restart" — a Configure page folding restart-only
+        // settings into the settings pane's one banner (settings-ux C2, #4489). Trusted as
+        // far as the source + origin checks above take it (this plugin iframe at its own
+        // origin). `keys` carries operator-facing labels; drop blanks and non-strings.
+        const labels = Array.isArray(m.keys)
+          ? m.keys.filter((k: unknown): k is string => typeof k === "string" && k.trim() !== "")
+          : [];
+        if (labels.length) onRestartPendingRef.current?.(labels);
       }
     };
     window.addEventListener("message", onWindowMessage);

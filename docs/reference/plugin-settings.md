@@ -66,8 +66,36 @@ settings:
 Tab ids must match `[A-Za-z0-9][A-Za-z0-9_-]*` and be unique within the
 manifest. An invalid descriptor or an unknown field reference is ignored with a
 warning; the affected field falls back to Configuration rather than disappearing.
-Tab switching retains one shared dirty state, so **Save & apply** submits pending
-changes from every tab together.
+
+**One save model per tab — `apply: live` (#4489).** By default a schema tab is
+*save-then-apply*: tab switching retains one shared dirty state and the tab's **Save &
+apply** button submits every tab's pending changes together. Add `apply: live` to a tab
+descriptor to switch it to the *live* model instead — its fields save the moment they
+change, with a small inline "Saved" (or the error, saying nothing changed), and the tab
+shows no Save or Discard. A plugin-owned (path-backed) tab is **always live**; its page
+owns its own writes. `live` is the only value honored — any other (a typo, `true`) is
+ignored with a warning and the tab keeps save-then-apply — and the key is additive, so a
+plugin that omits it is unchanged. Never put a live control next to a Save button: give
+each tab one model.
+
+```yaml
+settings_tabs:
+  - { id: overview, label: Overview, apply: live }   # fields save on change
+  - { id: runtime,  label: Runtime }                 # save-then-apply (the default)
+  - { id: projects, label: Projects, path: /plugins/boardy/config/projects }  # path = live
+```
+
+**Restart-only changes are collected, not badged (#4489).** A setting marked
+`restart: true` no longer carries a per-field "restart" badge. After it saves, its label
+joins a single banner at the top of the pane — *"N changes take effect after a
+restart"* — one list per plugin pane, fed by the `restart_required` keys of every save. A
+plugin-owned page can add its own restart-only changes to the same banner by posting
+`{type: "protoagent:settings:restart-pending", keys: [<labels>]}` to its host
+(`window.parent`); the host trusts it only from the page's own origin, the same check
+every page→host message passes. The banner holds a slot for a **Restart now** action
+where the host offers one (protoAgent#4490); until then it explains how to restart. Prefer
+making a setting live-reloadable over marking it `restart: true`. See the full
+[settings standard](/guides/plugin-settings).
 
 **Conditional fields** — add `depends_on` to show a field only once a sibling is set
 (e.g. an "enable X" toggle gates X's options); reactive to the in-form value:

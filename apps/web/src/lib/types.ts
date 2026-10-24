@@ -173,6 +173,12 @@ export type PluginSettingsTabDescriptor = {
   id: string;
   label: string;
   path?: string;
+  // Live save model (settings-ux C2, #4489): the tab's schema fields save on change
+  // with an inline "Saved" and no Save & apply bar. Only "live" is honored by the
+  // manifest parser; absent → today's save-then-apply. Path-backed tabs are always
+  // live regardless (the plugin page owns its own writes), so this is read only for
+  // schema tabs.
+  apply?: "live";
 };
 
 // A plugin-contributed console surface (ADR 0026): a rail icon opening an iframe
