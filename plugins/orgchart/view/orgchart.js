@@ -742,7 +742,8 @@ function finishLive(d) {
     to_name: e.to_name, what: e.what, outcome: e.status, duration_ms: e.duration_ms, cost_usd: e.cost_usd, error: e.error, origin: e.origin });
   if (GRAPH) {
     const n = targetOf(e.to_kind, e.to_name, GRAPH.index, e.owner && GRAPH.nodes.has(e.owner) ? e.owner : SELF);
-    if (!n.synthetic) {
+    // A background job's row is written when it is spawned, so the snapshot already counts it.
+    if (!n.synthetic && e.origin !== "background") {
       // The snapshot has absorbed this run once its count reaches what it was at landing,
       // plus every run still waiting on this node, plus this one.
       const waiting = [...LANDED.values()].filter((l) => l.node === n.id).length;
