@@ -402,6 +402,18 @@ def register_telemetry_routes(app) -> None:
             return {"enabled": False, "edges": []}
         return {"enabled": True, "edges": store.edges(since_days=days)}
 
+    @app.get("/api/ledger/live")
+    async def _api_ledger_live():
+        """Every delegation in flight right now, oldest first, each with its latest progress
+        snapshot when the delegate reports one. The catch-up for a live view: the
+        ``delegation.*`` bus frames are live-only, so a view that opens mid-run starts here
+        and follows the bus from then on. In-memory — empty after a restart, by design."""
+        import time as _time
+
+        from graph import ledger
+
+        return {"now": _time.time(), "edges": ledger.live_edges()}
+
     @app.get("/api/telemetry/export")
     async def _api_telemetry_export(since: str | None = None):
         """Download every recorded turn as CSV, streamed in chunks from a

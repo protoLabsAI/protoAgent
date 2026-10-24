@@ -127,8 +127,25 @@ def progress_sink(sink: Sink | None) -> Iterator[None]:
         _SINK.reset(token)
 
 
+async def _no_card(_snapshot: dict) -> None:
+    """The sink for a delegation no card owns: its snapshots still reach the ledger's live
+    record (``delegation.progress``), they just have no chat card to update."""
+
+
 def current_sink() -> Sink | None:
-    return _SINK.get()
+    """The bound card sink — or, when none is bound but the dispatch is inside an open
+    ledger edge, a no-op one, so every delegation reports its live work to the ledger
+    (the org chart's drill-in), not only the ones a chat card is watching. An explicit
+    ``progress_sink(None)`` unbinds the CARD only; the ledger edge is still the edge."""
+    sink = _SINK.get()
+    if sink is not None:
+        return sink
+    try:
+        from graph.ledger import current_edge_id
+
+        return _no_card if current_edge_id() else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _clip(value: object, limit: int) -> str:
@@ -212,6 +229,14 @@ class DelegateProgress:
         self._timeline: list[dict] | None = []
         self._timeline_tools: dict[str, dict] = {}
         self._timeline_io_left = TIMELINE_IO_BUDGET
+        # The ledger edge this delegation runs inside (graph/ledger.py) — captured NOW, in
+        # the dispatching task: the feeds arrive on a transport's reader task.
+        try:
+            from graph.ledger import current_edge_id
+
+            self._edge_id = current_edge_id()
+        except Exception:  # noqa: BLE001
+            self._edge_id = None
 
     # -- the transport seam: normalized feeds (may run on a transport's reader task) --
 
@@ -416,6 +441,10 @@ class DelegateProgress:
         self._dirty = False
         self._last_emit = self._clock()
         snapshot = self.snapshot()
+        if self._edge_id:
+            from graph.ledger import note_progress
+
+            note_progress(self._edge_id, snapshot)
         if final and self._timeline:
             # Only the done snapshot, and only for the turn driver — see ``take_timeline``.
             snapshot["timeline"] = [dict(e) for e in self._timeline]
