@@ -61,6 +61,7 @@ Choose a task area below. For a shorter starting point, use [the task navigation
 
 - [Build plugins](/guides/plugins)
 - [Build a plugin view](/guides/build-a-plugin-view)
+- [Design plugin settings](/guides/plugin-settings)
 - [Plugin view integration](/guides/building-react-plugin-views)
 - [Build a communication plugin](/guides/communication-plugins)
 - [Publish a plugin](/guides/publish-a-plugin)

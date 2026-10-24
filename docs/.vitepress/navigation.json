@@ -535,6 +535,7 @@
         "/tutorials/first-tool",
         "/guides/plugins",
         "/guides/build-a-plugin-view",
+        "/guides/plugin-settings",
         "/guides/building-react-plugin-views",
         "/guides/communication-plugins",
         "/guides/publish-a-plugin",
@@ -591,6 +592,10 @@
             {
               "text": "Build a plugin view",
               "link": "/guides/build-a-plugin-view"
+            },
+            {
+              "text": "Design plugin settings",
+              "link": "/guides/plugin-settings"
             },
             {
               "text": "Plugin view integration",
