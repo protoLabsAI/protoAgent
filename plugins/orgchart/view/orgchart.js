@@ -154,6 +154,9 @@ function buildGraph() {
       index.children.get(e.from).set(nodeKey(child.kind, child.name), child);
     }
   }
+  // Every member may run a `claude-code`; this agent's own work lands on ITS coder, never on
+  // whichever same-named node the crawl listed last.
+  for (const [k, n] of index.children.get(SELF) || []) index.set(k, n);
   for (const [id, n] of STICKY) {
     const from = n.owner && nodes.has(n.owner) ? n.owner : SELF;
     const drawn = from === SELF ? index.get(nodeKey(n.kind, n.name)) : index.children.get(from)?.get(nodeKey(n.kind, n.name));
