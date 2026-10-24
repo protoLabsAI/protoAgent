@@ -6,7 +6,7 @@ import { Badge, Button } from "@protolabsai/ui/primitives";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronUp, RotateCcw, Save } from "lucide-react";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 
 import { Accordion, AccordionItem, PanelHeader, Tabs } from "@protolabsai/ui/navigation";
@@ -31,13 +31,19 @@ export function pluginSettingsTabs(
   descriptors: PluginSettingsTabDescriptor[] = [],
 ): PluginSettingsTab[] {
   const fallback = groups.filter((group) => !group.settings_tab);
+  // The `apply` save model (settings-ux C2, #4489) rides on the manifest descriptors, not
+  // on a group's settings_tab meta — so a schema tab reads its save model from here by id.
+  const descriptorById = new Map(descriptors.map((d) => [d.id, d]));
   const declared = new Map<string, PluginSettingsTab & { order: number }>();
   for (const group of groups) {
     const meta = group.settings_tab;
     if (!meta) continue;
     const tab = declared.get(meta.id);
     if (tab) tab.groups.push(group);
-    else declared.set(meta.id, { id: meta.id, label: meta.label, order: meta.order, groups: [group] });
+    else {
+      const apply = descriptorById.get(meta.id)?.apply;
+      declared.set(meta.id, { id: meta.id, label: meta.label, order: meta.order, ...(apply ? { apply } : {}), groups: [group] });
+    }
   }
   // Path-backed descriptors have no settings group, but share the SAME ordered
   // registry so schema and plugin-owned tabs compose deterministically (#3180).
@@ -47,8 +53,21 @@ export function pluginSettingsTabs(
   }
   const tabs: PluginSettingsTab[] = [...declared.values()]
     .sort((a, b) => a.order - b.order)
-    .map(({ id, label, path, groups: tabGroups }) => ({ id, label, ...(path ? { path } : {}), groups: tabGroups }));
+    .map(({ id, label, path, apply, groups: tabGroups }) => ({
+      id,
+      label,
+      ...(path ? { path } : {}),
+      ...(apply ? { apply } : {}),
+      groups: tabGroups,
+    }));
   return fallback.length ? [{ id: "__configuration", label: "Configuration", groups: fallback }, ...tabs] : tabs;
+}
+
+// A tab uses the LIVE save model (settings-ux C2, #4489) when it is a plugin-owned page
+// (its own UI owns its writes) or a schema tab the manifest marked `apply: live`. A live
+// tab never shows Save & apply — its fields apply on change — so no tab renders both.
+export function isLiveSettingsTab(tab: Pick<PluginSettingsTab, "path" | "apply">): boolean {
+  return Boolean(tab.path) || tab.apply === "live";
 }
 
 // Drop-in full-panel wrapper (section + Suspense + ErrorBoundary) so any surface can
@@ -95,8 +114,14 @@ export function SettingsCategory({
   // Ordered manifest registry plus a lazy renderer for path-backed plugin-owned
   // tabs (#3180). The settings layer owns shared tab/dirty state; the caller owns
   // the sandbox host so arbitrary plugin React never crosses into this component.
+  // The renderer gets an `onRestartPending` helper so a plugin page's
+  // restart-pending frame message can join this pane's one restart banner (#4489).
   pluginTabs,
   renderPluginTab,
+  // Slot for the restart action (settings-ux C2/C3, #4489/protoAgent#4490). When the
+  // host offers a restart route, C3 passes a "Restart now" control here; until then the
+  // banner explains how to restart.
+  restartAction,
 }: {
   category: string;
   categories?: string[];
@@ -107,7 +132,8 @@ export function SettingsCategory({
   leadTitle?: string;
   pluginId?: string;
   pluginTabs?: PluginSettingsTabDescriptor[];
-  renderPluginTab?: (tab: PluginSettingsTab) => ReactNode;
+  renderPluginTab?: (tab: PluginSettingsTab, helpers: { onRestartPending: (labels: string[]) => void }) => ReactNode;
+  restartAction?: ReactNode;
 }) {
   const queryClient = useQueryClient();
   const { data, isFetching } = useSuspenseQuery(settingsSchemaQuery());
@@ -121,6 +147,14 @@ export function SettingsCategory({
   }, [data.groups, category, categories, pluginId]);
   const [dirty, setDirty] = useState<Record<string, unknown>>({});
   const dirtyKeys = Object.keys(dirty);
+  // Live-tab edits never enter `dirty` — there's no Save button to clear them — so each
+  // field keeps its own optimistic value plus an inline "Saved"/error here (#4489).
+  const [liveValues, setLiveValues] = useState<Record<string, unknown>>({});
+  const [liveFeedback, setLiveFeedback] = useState<Record<string, { tone: "success" | "error"; text: string }>>({});
+  // ONE pending-restart list per pane (settings-ux C2, #4489) — labels, deduped — fed by
+  // the restart_required keys of every save AND by plugin pages' restart-pending frame
+  // messages. Replaces the per-field "restart" badge as the signal that a restart is due.
+  const [restartLabels, setRestartLabels] = useState<string[]>([]);
   const configureTabs = useMemo(() => pluginSettingsTabs(groups, pluginTabs), [groups, pluginTabs]);
   const [activeSettingsTab, setActiveSettingsTab] = useState("");
   useEffect(() => {
@@ -130,6 +164,10 @@ export function SettingsCategory({
   const activeConfigureTab =
     configureTabs.find((tab) => tab.id === activeSettingsTab) ?? configureTabs[0];
   const effectiveSettingsTab = activeConfigureTab?.id ?? "";
+  // Is the ACTIVE tab live? Only meaningful inside a plugin pane (that's where tabs with a
+  // save model exist). When true the pane hides Save & apply and its schema fields save on
+  // change — so a live control is never shown beside a Save button (settings-ux C2 §2).
+  const activeTabLive = Boolean(pluginId) && !!activeConfigureTab && isLiveSettingsTab(activeConfigureTab);
   const configureTabListRef = useRef<HTMLDivElement>(null);
   const configureTabPanelId = `${useId()}-plugin-settings-panel`;
   useEffect(() => {
@@ -194,11 +232,22 @@ export function SettingsCategory({
     : null;
   const acpAgent = activeRuntime && activeRuntime.startsWith("acp:") ? activeRuntime.slice(4) : null;
 
-  const pendingRestart = useMemo(() => {
-    const labels: string[] = [];
-    for (const g of groups) for (const f of g.fields) if (f.restart && f.key in dirty) labels.push(f.label);
-    return labels;
-  }, [groups, dirty]);
+  // Resolve a saved field KEY to its human label for the restart banner; the frame
+  // channel (#4489) already posts labels, so both sources read as labels in the list.
+  const labelForKey = useCallback(
+    (key: string) => groups.flatMap((g) => g.fields).find((f) => f.key === key)?.label ?? key,
+    [groups],
+  );
+  const addRestartLabels = useCallback((labels: string[]) => {
+    setRestartLabels((prev) => {
+      const next = [...prev];
+      for (const raw of labels) {
+        const label = String(raw).trim();
+        if (label && !next.includes(label)) next.push(label);
+      }
+      return next;
+    });
+  }, []);
 
   // Which layer a Save lands in (ADR 0047). On the HOST console a host-scoped field sets the
   // box default (host layer) while an agent-scoped field is the host agent's own (agent leaf)
@@ -224,8 +273,10 @@ export function SettingsCategory({
     },
     onSuccess: (r) => {
       if (!r.ok) { toast({ tone: "error", title: "Save failed", message: r.messages.join(" · ") }); return; }
-      const restartNote = r.restart_required.length ? `Restart required for: ${r.restart_required.join(", ")}` : "";
-      toast({ tone: "success", title: "Settings saved", message: restartNote || r.messages.join(" · ") || "Applied." });
+      // Restart-only changes are COLLECTED in the one banner (settings-ux C2, #4489),
+      // not announced as a one-off toast line that scrolls away.
+      if (r.restart_required.length) addRestartLabels(r.restart_required.map(labelForKey));
+      toast({ tone: "success", title: "Settings saved", message: r.messages.join(" · ") || "Applied." });
       setDirty({});
       void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
       // The runtime status reports config-derived capabilities the shell gates on (e.g.
@@ -234,6 +285,59 @@ export function SettingsCategory({
     },
     onError: (e) => toast({ tone: "error", title: "Save failed", message: errMsg(e) }),
   });
+
+  // Free-form controls commit on blur; discrete choices commit immediately.
+  // Serialize writes across the pane and suppress feedback for obsolete edits.
+  const liveDrafts = useRef<Record<string, { value: unknown; revision: number }>>({});
+  const liveRevisions = useRef<Record<string, number>>({});
+  const liveWrites = useRef<Promise<void>>(Promise.resolve());
+  const commitLive = (field: SettingsField) => {
+    const draft = liveDrafts.current[field.key];
+    if (!draft) return;
+    delete liveDrafts.current[field.key];
+    // Blank secrets keep the existing value; empty numbers are unfinished edits.
+    if ((field.type === "secret" && !draft.value) ||
+        (field.type === "number" && (draft.value === null || !Number.isFinite(draft.value)))) return;
+    liveWrites.current = liveWrites.current.then(async () => {
+      if (liveRevisions.current[field.key] !== draft.revision) return;
+      let feedback: { tone: "success" | "error"; text: string };
+      try {
+        const r = await api.saveSettings(
+          { [field.key]: draft.value }, onHost && field.scope === "host" ? "host" : "agent",
+        );
+        if (r.ok) {
+          addRestartLabels(r.restart_required.map(labelForKey));
+          feedback = { tone: "success", text: "Saved" };
+          void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.runtime });
+        } else {
+          feedback = { tone: "error", text: `Nothing changed. ${r.messages.join(" · ")}`.trim() };
+        }
+      } catch (e) {
+        feedback = { tone: "error", text: `Nothing changed. ${errMsg(e)}` };
+      }
+      if (liveRevisions.current[field.key] === draft.revision) {
+        setLiveFeedback((f) => ({ ...f, [field.key]: feedback }));
+      }
+    });
+  };
+  const onLiveChange = (field: SettingsField, value: unknown) => {
+    const revision = (liveRevisions.current[field.key] ?? 0) + 1;
+    liveRevisions.current[field.key] = revision;
+    liveDrafts.current[field.key] = { value, revision };
+    setLiveValues((m) => ({ ...m, [field.key]: value }));
+    setLiveFeedback((f) => { const next = { ...f }; delete next[field.key]; return next; });
+    if (field.type === "bool" || field.type === "select") commitLive(field);
+  };
+
+  // Preserve the pre-save warning on core categories too. Discard removes draft
+  // labels while successful saves and frame messages remain collected.
+  const pendingRestartLabels = [...new Set([
+    ...restartLabels,
+    ...groups.flatMap((g) => g.fields)
+      .filter((f) => f.restart && f.key in dirty)
+      .map((f) => f.label),
+  ])];
 
   // ADR 0047 reset-to-inherited — pop one (or more) overridden keys from the agent
   // leaf so each falls back to the Host/App layer. Invalidate the schema on success
@@ -287,19 +391,24 @@ export function SettingsCategory({
 
   // The fields + Test/Connect for one group — rendered inside an AccordionItem in the
   // full Settings view, or flat (no accordion) when folded into a plugin's row (ADR 0059).
-  const renderGroupBody = (group: SettingsGroup) => (
+  const renderGroupBody = (group: SettingsGroup, live = false) => (
     <>
       {group.fields.filter(isVisible).map((field) => (
         <SettingRow
           key={field.key}
           field={field}
-          dirty={field.key in dirty}
-          value={field.key in dirty ? dirty[field.key] : field.value}
+          live={live}
+          dirty={!live && field.key in dirty}
+          value={live
+            ? (field.key in liveValues ? liveValues[field.key] : field.value)
+            : (field.key in dirty ? dirty[field.key] : field.value)}
           showInheritance
           onHost={onHost}
-          onChange={(v) => setDirty((d) => ({ ...d, [field.key]: v }))}
+          onChange={(v) => (live ? onLiveChange(field, v) : setDirty((d) => ({ ...d, [field.key]: v })))}
           onReset={() => reset.mutate([field.key])}
           resetting={reset.isPending}
+          feedback={live ? liveFeedback[field.key] : undefined}
+          onCommit={live ? () => commitLive(field) : undefined}
         />
       ))}
       {/* Generic, data-driven group actions (ADR 0059) — a Test button from the
@@ -325,27 +434,36 @@ export function SettingsCategory({
       {(!pluginId || groups.length > 0) ? <PanelHeader
         title={title}
         kicker={
+          // A pending edit on a save-then-apply tab still announces itself from any tab (so
+          // switching to a live tab doesn't hide that you have unsaved work elsewhere); an
+          // otherwise-clean live tab says its changes apply as you edit (settings-ux C2, #4489).
           dirtyKeys.length
             ? `${dirtyKeys.length} unsaved change${dirtyKeys.length === 1 ? "" : "s"}`
-            : runtimeField
-              ? `runtime: ${acpAgent ? `${acpAgent} (ACP)` : "native"}`
-              : "applies on save"
+            : activeTabLive
+              ? "changes apply as you edit"
+              : runtimeField
+                ? `runtime: ${acpAgent ? `${acpAgent} (ACP)` : "native"}`
+                : "applies on save"
         }
+        // A live tab owns no Save/Discard — its fields apply on change (settings-ux C2,
+        // #4489) — so the pane never shows a live control next to a Save button.
         actions={
-          <>
-            {/* "Get models" and "Test connection" lived here when there was exactly ONE
-                gateway to probe — the form's api_base/key (#1386). With a registry of
-                connections (ADR 0106) neither has an answer: "test WHICH connection?"
-                Both moved onto the connection rows in Settings ▸ Model ▸ Connections,
-                where the question is unambiguous and the result belongs to a row. */}
-            {/* Pilot of the protoLabs design system (ADR 0037 D7) — the real @protolabsai/ui Button. */}
-            <Button type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
-              <RotateCcw size={15} /> Discard
-            </Button>
-            <Button variant="primary" type="button" onClick={() => save.mutate()} disabled={save.isPending || !dirtyKeys.length}>
-              <Save size={16} /> Save &amp; apply
-            </Button>
-          </>
+          activeTabLive ? undefined : (
+            <>
+              {/* "Get models" and "Test connection" lived here when there was exactly ONE
+                  gateway to probe — the form's api_base/key (#1386). With a registry of
+                  connections (ADR 0106) neither has an answer: "test WHICH connection?"
+                  Both moved onto the connection rows in Settings ▸ Model ▸ Connections,
+                  where the question is unambiguous and the result belongs to a row. */}
+              {/* Pilot of the protoLabs design system (ADR 0037 D7) — the real @protolabsai/ui Button. */}
+              <Button type="button" onClick={discard} disabled={save.isPending || !dirtyKeys.length}>
+                <RotateCcw size={15} /> Discard
+              </Button>
+              <Button variant="primary" type="button" onClick={() => save.mutate()} disabled={save.isPending || !dirtyKeys.length}>
+                <Save size={16} /> Save &amp; apply
+              </Button>
+            </>
+          )
         }
       /> : null}
       <div className="stage-body">
@@ -357,9 +475,20 @@ export function SettingsCategory({
             subscription) below. The model settings power protoAgent's own calls either way.
           </Alert>
         ) : null}
-        {pendingRestart.length ? (
-          <Alert status="warning" className="settings-banner">
-            Needs a restart to take effect: {pendingRestart.join(", ")}
+        {pendingRestartLabels.length ? (
+          <Alert status="warning" className="settings-banner settings-restart-banner" data-testid="settings-restart-banner">
+            <div className="settings-restart-body">
+              <strong>
+                {pendingRestartLabels.length} change{pendingRestartLabels.length === 1 ? "" : "s"}{" "}
+                take{pendingRestartLabels.length === 1 ? "s" : ""} effect after a restart
+              </strong>
+              <span className="settings-restart-items">{pendingRestartLabels.join(", ")}</span>
+              {/* The slot C3 fills with a "Restart now" control (protoAgent#4490). Until a
+                  restart route exists, say how to restart rather than offer a dead button. */}
+              <span className="settings-restart-action">
+                {restartAction ?? "Restart protoAgent to apply — stop the server and start it again (python -m server)."}
+              </span>
+            </div>
           </Alert>
         ) : null}
         {/* While a background refetch is in flight (the #1643 fresh-install hydration
@@ -395,7 +524,7 @@ export function SettingsCategory({
             id={configureTabs.length > 1 ? configureTabPanelId : undefined}
             aria-labelledby={configureTabs.length > 1 ? `${configureTabPanelId}-tab-${effectiveSettingsTab}` : undefined}
           >
-            {renderPluginTab?.(activeConfigureTab)}
+            {renderPluginTab?.(activeConfigureTab, { onRestartPending: addRestartLabels })}
           </div>
         ) : pluginId ? (
           <div
@@ -405,7 +534,7 @@ export function SettingsCategory({
             aria-labelledby={configureTabs.length > 1 ? `${configureTabPanelId}-tab-${effectiveSettingsTab}` : undefined}
           >
             {visiblePluginGroups.map((group) => (
-              <div className="settings-flat-group" key={`${group.section}:${group.settings_tab?.id || "configuration"}`}>{renderGroupBody(group)}</div>
+              <div className="settings-flat-group" key={`${group.section}:${group.settings_tab?.id || "configuration"}`}>{renderGroupBody(group, activeTabLive)}</div>
             ))}
           </div>
         ) : (
@@ -475,15 +604,23 @@ function SettingRow({
   onHost = false,
   onReset,
   resetting = false,
+  // Live save model (settings-ux C2, #4489): the field saved on change rather than into
+  // the shared dirty state, so it shows its own inline feedback and no dirty highlight.
+  live = false,
+  feedback,
+  onCommit,
 }: {
   field: SettingsField;
   value: unknown;
   dirty: boolean;
   onChange: (value: unknown) => void;
+  onCommit?: () => void;
   showInheritance?: boolean;
   onHost?: boolean;
   onReset?: () => void;
   resetting?: boolean;
+  live?: boolean;
+  feedback?: { tone: "success" | "error"; text: string };
 }) {
   const inherit = showInheritance ? inheritance(field, onHost) : null;
   return (
@@ -495,7 +632,9 @@ function SettingRow({
               indicator a saved key looks identical to an empty one ("did it save?").
               Mirror the Delegates panel's "secret set" pill. */}
           {field.type === "secret" && field.is_set ? <Badge status="success">set</Badge> : null}
-          {field.restart ? <Badge status="warning">restart</Badge> : null}
+          {/* The per-field "restart" badge is gone (settings-ux C2, #4489): a restart-only
+              change is COLLECTED in the one pending-restart banner after it saves, so the
+              badge is never the only signal. */}
         </label>
         {field.description ? <p className="setting-desc">{field.description}</p> : null}
         {inherit ? (
@@ -523,8 +662,15 @@ function SettingRow({
           </p>
         ) : null}
       </div>
-      <div className="setting-control">
+      <div className="setting-control" onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onCommit?.();
+      }}>
         <SettingInput field={field} value={value} onChange={onChange} />
+        {live && feedback ? (
+          <span className={`setting-live-status setting-live-status--${feedback.tone}`} role="status">
+            {feedback.text}
+          </span>
+        ) : null}
       </div>
     </div>
   );

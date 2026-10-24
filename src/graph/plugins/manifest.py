@@ -81,7 +81,10 @@ class PluginManifest:
     # descriptor is targeted by ``settings[].tab``; a path-backed ``{id, label,
     # path}`` descriptor embeds plugin-owned UI from /plugins/<id>/... through the
     # sandboxed view bridge. One descriptor has one kind — settings cannot target a
-    # path-backed tab. Plugins that omit this keep the flat Configuration form.
+    # path-backed tab. An optional ``apply: live`` (settings-ux C2, #4489) switches a
+    # schema tab to the live save model (fields save on change, no Save & apply bar);
+    # path-backed tabs are always live. Plugins that omit this keep the flat
+    # Configuration form with save-then-apply.
     settings_tabs: list[dict] = field(default_factory=list)
     # Test action (ADR 0029) — when true, the plugin serves a credential check at
     # `POST /api/config/test-<config_section>` (e.g. the chat_surface wirer mounts
@@ -300,6 +303,14 @@ def _parse_settings_tabs(tabs, plugin_id: str) -> list[dict]:
     extensions. ``path`` is the sandboxed plugin-owned kind (#3180) and is kept
     only when it is a root-relative page inside this plugin's exact public
     ``/plugins/<id>/...`` namespace.
+
+    ``apply: live`` (settings-ux C2, #4489) opts a schema-backed tab into the live
+    save model — its fields save on change in the console, with no Save & apply bar —
+    rather than the default save-then-apply. The ONLY honored value is the literal
+    ``live``; any other (a typo, ``true``) is dropped with a warning so the tab keeps
+    today's save-then-apply behavior rather than silently misbehaving. Path-backed
+    tabs are always live (the plugin's own page owns its writes), so ``apply`` is
+    additive data the console reads — a plugin that omits it is unchanged.
     """
     if not isinstance(tabs, (list, tuple)):
         return []
@@ -321,6 +332,19 @@ def _parse_settings_tabs(tabs, plugin_id: str) -> list[dict]:
             log.warning("[plugins] %s: duplicate settings tab id %r — keeping first", plugin_id, tab_id)
             continue
         normalized = {**raw, "id": tab_id, "label": label}
+        if "apply" in normalized:
+            apply = str(normalized.get("apply") or "").strip().lower()
+            if apply == "live":
+                normalized["apply"] = "live"
+            else:
+                log.warning(
+                    "[plugins] %s: settings tab %r apply %r is not 'live' — ignored "
+                    "(the tab keeps save-then-apply)",
+                    plugin_id,
+                    tab_id,
+                    raw.get("apply"),
+                )
+                normalized.pop("apply", None)
         if "path" in raw:
             path = str(raw.get("path") or "").strip()
             route = _iframe_page_route(path)

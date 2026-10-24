@@ -124,10 +124,13 @@ export function PluginSettingsPane({
             pluginId={pluginId}
             pluginTabs={settingsTabs}
             title="Configuration"
-            renderPluginTab={(tab) => tab.path ? (
+            renderPluginTab={(tab, { onRestartPending }) => tab.path ? (
               <PluginView
                 key={`plugin:${pluginId}:settings:${tab.id}`}
                 embedded
+                // A path-backed Configure page is always live (settings-ux C2, #4489): it
+                // folds any restart-only change it reports into the pane's one banner.
+                onRestartPending={onRestartPending}
                 view={{
                   id: tab.id,
                   label: tab.label,
