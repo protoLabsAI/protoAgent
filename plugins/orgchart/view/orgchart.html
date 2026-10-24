@@ -1,0 +1,43 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Org Chart</title>
+<script>
+  var BASE = location.pathname.split("/plugins/")[0];   // slug-aware (fleet proxy)
+  (function(){ var l=document.createElement("link"); l.rel="stylesheet";
+    l.href=BASE+"/_ds/plugin-kit.css"; document.head.appendChild(l); })();
+</script>
+<style>__ORGCHART_CSS__</style>
+</head><body>
+<div class="shell">
+  <header class="top">
+    <div class="title">
+      <h1>Org Chart</h1>
+      <span class="live" id="live" data-state="connecting"><i></i><span id="live-label">Connecting</span></span>
+    </div>
+    <div class="stats" id="stats" aria-live="polite"></div>
+    <div class="spacer"></div>
+    <div class="filters" id="filters" role="group" aria-label="Show node kinds"></div>
+    <button class="pl-btn pl-btn--sm pl-btn--ghost" type="button" id="refresh" title="Drop caches and re-crawl the fleet">Refresh</button>
+  </header>
+  <div id="err" class="err" role="alert" hidden></div>
+  <main class="stage">
+    <section class="canvas" id="canvas" aria-label="Delegation graph">
+      <svg id="graph" role="presentation"></svg>
+      <div class="empty" id="empty" hidden></div>
+    </section>
+    <aside class="feed" aria-label="Live activity">
+      <div class="feed-head"><h2>Activity</h2><span class="feed-sub" id="feed-sub"></span></div>
+      <ol class="feed-list" id="feed"></ol>
+    </aside>
+    <aside class="drawer" id="drawer" aria-hidden="true" aria-labelledby="d-name" role="dialog">
+      <header class="d-head">
+        <span class="d-ring" id="d-ring"></span>
+        <div class="d-title"><h2 id="d-name"></h2><div class="d-sub" id="d-sub"></div></div>
+        <button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" type="button" id="d-close" aria-label="Close">✕</button>
+      </header>
+      <div class="d-body" id="d-body"></div>
+    </aside>
+  </main>
+</div>
+<script type="module">__ORGCHART_JS__</script>
+</body></html>

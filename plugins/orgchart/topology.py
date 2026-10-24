@@ -62,6 +62,15 @@ _card_cache: dict[str, tuple[float, dict | None]] = {}
 _peer_cache: dict[str, tuple[float, list | None]] = {}
 # the assembled snapshot: served stale-while-revalidate
 _snap: dict = {"expires": 0.0, "data": None}
+# The peers the last crawl could read (reachable, token held): base -> bearer. Kept for the
+# live fan-in, so it asks exactly the agents the chart draws and never learns a new token.
+_live_peers: dict[str, str] = {}
+# base -> (expires_monotonic, edges|None): a peer's in-flight delegations, briefly cached.
+_live_cache: dict[str, tuple[float, list | None]] = {}
+_LIVE_TTL = 1.5
+# A missed live read is retried soon: the topology's 30 s negative cache would blank a
+# busy member's work for most of a short run after one slow answer.
+_LIVE_NEG_TTL = 4.0
 _build_lock: asyncio.Lock | None = None
 _refresh_task: asyncio.Task | None = None
 
@@ -70,6 +79,9 @@ def reset() -> None:
     """Drop every cache — for tests and hot-reload."""
     global _build_lock, _refresh_task
     _card_cache.clear()
+    _live_peers.clear()
+    _live_cache.clear()
+    _work_cache.clear()
     _peer_cache.clear()
     _snap.update(expires=0.0, data=None)
     _build_lock = None
@@ -123,13 +135,24 @@ def _fleet_remotes() -> list[dict]:
         return []
 
 
+def _configured_name() -> str:
+    """The running config's identity name — the same name the ledger stamps as ``from``,
+    so the chart's own node and the activity feed agree on who "this agent" is."""
+    try:
+        from runtime.state import STATE
+
+        return str(getattr(getattr(STATE, "graph_config", None), "identity_name", "") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _self_identity() -> tuple[str, str, str]:
     """(name, base, role) for the host agent. The base prefers ``A2A_PUBLIC_URL`` (what
     peers would report back, so edge de-dup works), else the local listener."""
     from graph.config_io import load_yaml_doc
 
     doc = load_yaml_doc() or {}
-    name = (doc.get("identity") or {}).get("name") or os.environ.get("AGENT_NAME") or "this agent"
+    name = (doc.get("identity") or {}).get("name") or os.environ.get("AGENT_NAME") or _configured_name() or "this agent"
     role = _short(((doc.get("a2a") or {}).get("description") or "").strip()) or "orchestrator"
     base = _norm(os.environ.get("A2A_PUBLIC_URL") or "")
     if not base:
@@ -328,7 +351,7 @@ def _work_index(rows: list[dict]) -> dict[tuple[str, str], dict]:
         name = str(r.get("to_name") or "").strip().lower()
         if not kind or not name:
             continue
-        out[(kind, name)] = {
+        row = {
             "dispatches": int(r.get("dispatches") or 0),
             "ok": int(r.get("ok") or 0),
             "failed": int(r.get("failed") or 0),
@@ -340,10 +363,36 @@ def _work_index(rows: list[dict]) -> dict[tuple[str, str], dict]:
             "duration_ms": int(r.get("duration_ms") or 0),
             "last_at": r.get("last_at"),
         }
+        # The ledger also keys by target instance, so one delegate whose URL changed (or
+        # that was reached two ways) arrives as several rows: they are one node's record.
+        out[(kind, name)] = _add_work(out[(kind, name)], row) if (kind, name) in out else row
     return out
 
 
-def _apply_work(nodes: dict[str, dict], edges: list[dict], self_base: str, rows: list[dict]) -> None:
+#: Chart node kind → the ledger's ``to_kind`` for the same delegate.
+LEDGER_KIND = {"self": "a2a", "agent": "a2a", "coder": "acp", "model": "openai", "subagent": "subagent"}
+
+
+def _add_work(a: dict, b: dict) -> dict:
+    """Two owners' records of one shared node, combined."""
+    out = dict(a)
+    for k in ("dispatches", "ok", "failed", "cancelled", "priced", "duration_ms"):
+        out[k] = int(a.get(k) or 0) + int(b.get(k) or 0)
+    costs = [c for c in (a.get("cost_usd"), b.get("cost_usd")) if c is not None]
+    out["cost_usd"] = sum(costs) if costs else None
+    out["last_at"] = max((x for x in (a.get("last_at"), b.get("last_at")) if x), default=None)
+    return out
+
+
+def _apply_work(
+    nodes: dict[str, dict],
+    edges: list[dict],
+    self_base: str,
+    rows: list[dict],
+    *,
+    owner_is_self: bool = True,
+    hub_own: set[str] | frozenset = frozenset(),
+) -> None:
     """Overlay real delegation volume onto the capability graph, and add the subagent
     nodes the graph has never had.
 
@@ -359,18 +408,34 @@ def _apply_work(nodes: dict[str, dict], edges: list[dict], self_base: str, rows:
     with roles nobody has ever delegated to. For many agents this is the whole picture:
     an agent whose delegation is all in-process shows an empty chart without it.
     """
+    # ``self_base`` is whose ledger ``rows`` came from: this agent, or a crawled peer (whose
+    # own delegates get ITS record — the same rule from the other side).
     index = _work_index(rows)
+    # The ledger is THIS agent's record, so it describes only this agent's own delegates:
+    # a member's `claude-code` is a different process from ours that happens to share the
+    # name, and must not wear our coder's run count.
+    own = {e["to"] for e in edges if e.get("from") == self_base}
     for node in nodes.values():
-        key = (str(node.get("kind") or "").lower(), str(node.get("name") or "").strip().lower())
-        # a2a peers are drawn with kind "agent"/"self"; the ledger calls them "a2a".
-        work = index.get(key) or index.get(("a2a", key[1]))
+        if node.get("id") not in own:
+            continue
+        # A node several owners delegate to (a shared peer, a shared model endpoint) is one
+        # node: this agent's own record wins over a peer's, and peers' records add up.
+        if not owner_is_self and node.get("id") in hub_own:
+            continue
+        kind = str(node.get("kind") or "").lower()
+        name = str(node.get("name") or "").strip().lower()
+        # The chart names a node by what it IS (agent / coder / model); the ledger by the
+        # delegate TYPE that carried the work (a2a / acp / openai). Matching the chart's
+        # kind against the ledger's left every coder and model node without its work.
+        work = index.get((LEDGER_KIND.get(kind, kind), name))
         if work:
-            node["work"] = work
+            node["work"] = _add_work(node["work"], work) if (not owner_is_self and node.get("work")) else work
 
     for (kind, name), work in index.items():
         if kind != "subagent":
             continue
-        nid = f"subagent:{name}"
+        # Ours keep the bare id (stable since v0.3); a peer's subagent is its own worker.
+        nid = f"subagent:{name}" if owner_is_self else f"subagent:{self_base}#{name}"
         if nid in nodes:
             continue
         nodes[nid] = {
@@ -513,6 +578,7 @@ async def _build(cfg: dict) -> dict:
                 e["scope"] = scope
             edges.append(e)
 
+    readable: dict[str, str] = {}
     async with _make_client(cfg) as client:
         frontier: list[tuple[str, list[dict]]] = [(self_base, seed)]
         while frontier and len(nodes) < max_nodes:
@@ -583,6 +649,7 @@ async def _build(cfg: dict) -> dict:
                 nodes[tid] = node
                 if node["kind"] == "agent" and node["up"] and tokens.get(tid):
                     crawlable.append(tid)
+            readable.update({b: tokens[b] for b in crawlable})
             peer_lists = await asyncio.gather(
                 *[_peer_delegates(client, b, tokens[b]) for b in crawlable], return_exceptions=True
             )
@@ -593,8 +660,18 @@ async def _build(cfg: dict) -> dict:
                 if isinstance(pl, list) and pl
             ]
 
+        # Each readable peer's own record, for ITS delegates — so a member's coder shows the
+        # member's runs instead of "no work yet" on a hub that never dispatched to it.
+        peer_rows = await asyncio.gather(*[_peer_work(client, b, t) for b, t in readable.items()], return_exceptions=True)
+
     # Overlay what actually happened on top of what is merely possible (the ledger).
     _apply_work(nodes, edges, self_base, _ledger_edges())
+    hub_own = {e["to"] for e in edges if e.get("from") == self_base}
+    for b, rows in zip(readable, peer_rows):
+        if isinstance(rows, list) and rows:
+            _apply_work(nodes, edges, b, rows, owner_is_self=False, hub_own=hub_own)
+    _live_peers.clear()
+    _live_peers.update(readable)
 
     return {
         "self": self_base,
@@ -646,6 +723,7 @@ async def get_topology(cfg: dict, *, force: bool = False) -> dict:
         _snap.update(expires=0.0)
         _card_cache.clear()
         _peer_cache.clear()
+        _work_cache.clear()
         return {**(await _rebuild(cfg)), "stale": False}
     if _snap["data"] is not None:
         if time.monotonic() < _snap["expires"]:
@@ -654,3 +732,140 @@ async def get_topology(cfg: dict, *, force: bool = False) -> dict:
         _kick_refresh(cfg)
         return {**stale, "stale": True}
     return {**(await _rebuild(cfg)), "stale": False}
+
+
+# base -> (expires_monotonic, aggregated ledger edges|None)
+_work_cache: dict[str, tuple[float, list | None]] = {}
+
+
+async def _peer_work(client: httpx.AsyncClient, base: str, token: str) -> list | None:
+    """A peer's aggregated delegation record (its ``GET /api/ledger/edges``)."""
+    now = time.monotonic()
+    hit = _work_cache.get(base)
+    if hit and now < hit[0]:
+        return hit[1]
+    rows: list | None = None
+    try:
+        r = await client.get(base + "/api/ledger/edges", headers={"Authorization": "Bearer " + token})
+        if r.status_code == 200:
+            rows = [e for e in (r.json() or {}).get("edges") or [] if isinstance(e, dict)]
+    except Exception:  # noqa: BLE001
+        rows = None
+    _work_cache[base] = (now + (_PEER_TTL if rows is not None else _NEG_TTL), rows)
+    return rows
+
+
+# ── live work across the fleet ───────────────────────────────────────────────────────
+async def _peer_live(client: httpx.AsyncClient, base: str, token: str) -> list | None:
+    """A peer's in-flight delegations (its ``GET /api/ledger/live``). ``None`` when it can't
+    say — unreachable, or a core that predates the endpoint — negatively cached so an old
+    member can't slow every poll."""
+    now = time.monotonic()
+    hit = _live_cache.get(base)
+    if hit and now < hit[0]:
+        return hit[1]
+    edges: list | None = None
+    try:
+        r = await client.get(base + "/api/ledger/live", headers={"Authorization": "Bearer " + token})
+        if r.status_code == 200:
+            edges = [e for e in (r.json() or {}).get("edges") or [] if isinstance(e, dict)]
+    except Exception:  # noqa: BLE001
+        edges = None
+    _live_cache[base] = (now + (_LIVE_TTL if edges is not None else _LIVE_NEG_TTL), edges)
+    return edges
+
+
+def _num(v, default=0.0) -> float:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    return f if f == f and abs(f) != float("inf") else default
+
+
+def _clean_progress(p) -> dict | None:
+    """A peer's progress snapshot, rebuilt field by field with known types: a peer's
+    payload is untrusted input to every console that renders it."""
+    if not isinstance(p, dict):
+        return None
+    s = lambda v, n=300: str(v or "")[:n]  # noqa: E731
+
+    def tool(t):
+        if not isinstance(t, dict):
+            return None
+        locs = [{"path": s(loc.get("path"), 300)} for loc in (t.get("locations") or [])[:3] if isinstance(loc, dict)]
+        return {"id": s(t.get("id"), 80), "name": s(t.get("name"), 120), "kind": s(t.get("kind"), 32),
+                "status": s(t.get("status"), 16), "locations": locs}
+
+    return {
+        "plan": [{"content": s(e.get("content"), 140), "status": s(e.get("status"), 16)}
+                 for e in (p.get("plan") or [])[:20] if isinstance(e, dict)],
+        "current_tool": tool(p.get("current_tool")),
+        "recent_tools": [x for x in (tool(t) for t in (p.get("recent_tools") or [])[:6]) if x],
+        "text": s(p.get("text"), 400),
+        "tool_count": int(_num(p.get("tool_count"))),
+        "done": bool(p.get("done")),
+        "ok": bool(p.get("ok", True)),
+    }
+
+
+def _clean_live(e, owner: str) -> dict | None:
+    """One of a peer's in-flight edges, whitelisted and typed, tagged with its owner."""
+    if not isinstance(e, dict) or not e.get("id"):
+        return None
+    s = lambda k, n=120: str(e.get(k) or "")[:n]  # noqa: E731
+    return {
+        "id": s("id", 64), "parent_id": s("parent_id", 64), "from": s("from"), "to_kind": s("to_kind", 16),
+        "to_name": s("to_name"), "to_instance": s("to_instance", 300), "what": s("what", 400),
+        "origin": s("origin", 32), "started_at": _num(e.get("started_at"), time.time()),
+        "progress": _clean_progress(e.get("progress")), "owner": owner,
+    }
+
+
+async def get_live(cfg: dict) -> dict:
+    """Every delegation in flight across the drawn fleet, each tagged with the ``owner``
+    node that dispatched it: this agent's from its own ledger, each readable peer's from
+    that peer. The bus only carries this agent's events, so on a hub this is how a member's
+    work shows up live. Peers are the ones the last topology crawl could read — the same
+    tokens, never a new one; the browser never sees them."""
+    cfg = {**DEFAULTS, **(cfg or {})}
+    if _snap["data"] is None:
+        await get_topology(cfg)
+    self_base = (_snap["data"] or {}).get("self", "")
+    try:
+        from graph import ledger
+
+        edges = [{**e, "owner": self_base} for e in ledger.live_edges()]
+    except Exception:  # noqa: BLE001 — an old host: no live record, peers still count
+        edges = []
+    peers = dict(_live_peers)
+    if peers:
+        async with _make_client(cfg) as client:
+            results = await asyncio.gather(*[_peer_live(client, b, t) for b, t in peers.items()], return_exceptions=True)
+        for base, res in zip(peers, results):
+            if isinstance(res, list):
+                edges.extend(e for e in (_clean_live(x, base) for x in res) if e)
+    return {"now": time.time(), "self": self_base, "edges": edges, "peers": len(peers)}
+
+
+async def get_history(cfg: dict, owner: str, *, limit: int = 60) -> dict:
+    """A drawn peer's recent delegations (its ``GET /api/ledger``), for the drawer of a node
+    that peer owns — its ``claude-code`` is not ours, so our ledger has nothing to say about
+    it. Only peers the last crawl could read; anything else is an empty answer."""
+    cfg = {**DEFAULTS, **(cfg or {})}
+    token = _live_peers.get(_norm(owner or ""))
+    if not token:
+        return {"owner": owner, "edges": [], "readable": False}
+    edges: list = []
+    try:
+        async with _make_client(cfg) as client:
+            r = await client.get(
+                _norm(owner) + "/api/ledger",
+                params={"limit": max(1, min(int(limit), 200))},
+                headers={"Authorization": "Bearer " + token},
+            )
+            if r.status_code == 200:
+                edges = [e for e in (r.json() or {}).get("edges") or [] if isinstance(e, dict)]
+    except Exception:  # noqa: BLE001 — a peer that can't answer just has no history here
+        log.debug("[orgchart] history read from %s failed", owner, exc_info=True)
+    return {"owner": owner, "edges": edges, "readable": True}

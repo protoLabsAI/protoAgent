@@ -23,15 +23,182 @@ The three producers today, each an already-existing single funnel:
 - ``background/manager.py::spawn`` — background subagent jobs, which do NOT pass through
   ``_run_subagent``: they are fired as a self-directed A2A turn, which is exactly the kind
   of side path that goes unmeasured when a writer is bolted onto one funnel only.
+
+**It is also the live record of work in flight.** The same funnels that write an edge open
+it here first: an in-memory registry of open edges, announced on the bus as
+``delegation.started`` → ``delegation.progress`` (a coder's plan / current tool / narration,
+from ``graph.delegate_progress``) → ``delegation.finished``. All three are live-only
+(``retain=False``) — a replayed "started" for work that ended long ago is worse than none —
+so a view opened mid-run catches up from ``live_edges()`` (``GET /api/ledger/live``)
+instead. An edge opened inside another (a subagent that delegates to a coder) names it as
+``parent_id``, so the chain of who-asked-whom survives into the view.
 """
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import time
+import uuid
 from contextlib import contextmanager
 
 log = logging.getLogger("protoagent.ledger")
+
+#: Open edges, by edge id. Bounded: an edge whose close never arrives (a process that lost a
+#: background job's settle) must not grow it forever — the oldest goes first.
+_LIVE: dict[str, dict] = {}
+_LIVE_MAX = 256
+#: Edge id by the task id it was recorded with — a background job is settled by job id.
+_LIVE_BY_TASK: dict[str, str] = {}
+#: The open edge the current task is working inside, for nesting and for progress.
+_CURRENT: contextvars.ContextVar[str | None] = contextvars.ContextVar("ledger_current_edge", default=None)
+#: What the caller ASKED, when the text a funnel dispatches wraps it (``describing``).
+_DESCRIBING: contextvars.ContextVar[str | None] = contextvars.ContextVar("ledger_describing", default=None)
+#: Bus payload caps — every frame is fanned out to every open console.
+_WHAT_MAX = 240
+_ERROR_MAX = 300
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _publish(topic: str, data: dict) -> None:
+    """Live-only publish on the host bus; a no-op without a host (tests, tooling)."""
+    try:
+        from graph.plugins.host import HOST
+
+        if HOST.publish is not None:
+            HOST.publish(topic, data, retain=False)
+    except Exception:  # noqa: BLE001 — the live view must never cost a dispatch
+        log.debug("[ledger] publish %s failed", topic, exc_info=True)
+
+
+@contextmanager
+def describing(text: str):
+    """Record ``text`` as the ``what`` of the next edge opened inside this block, instead of
+    the prompt the funnel dispatches. For a caller that wraps the ask before it reaches the
+    funnel (the room's catch-up preamble): the record should say what was asked."""
+    token = _DESCRIBING.set(text)
+    try:
+        yield
+    finally:
+        _DESCRIBING.reset(token)
+
+
+def current_edge_id() -> str | None:
+    """The open edge the calling task is dispatching inside, or None."""
+    return _CURRENT.get()
+
+
+def open_edge(
+    *,
+    to_kind: str,
+    to_name: str,
+    to_instance: str = "",
+    what: str = "",
+    session_id: str = "",
+    parent_task_id: str = "",
+    task_id: str = "",
+    origin: str = "",
+) -> str:
+    """Register a delegation as in flight and announce ``delegation.started``. Never raises;
+    returns the edge id (the key ``delegation.progress`` / ``.finished`` carry)."""
+    edge_id = uuid.uuid4().hex[:16]
+    try:
+        try:
+            from graph.middleware.redaction import redact
+
+            what = str(redact(what or ""))
+        except Exception:  # noqa: BLE001 — fail closed on the free text
+            what = ""
+        edge = {
+            "id": edge_id,
+            "parent_id": _CURRENT.get() or "",
+            "from": _agent_name(),
+            "to_kind": to_kind,
+            "to_name": to_name,
+            "to_instance": to_instance,
+            "what": _clip(what, _WHAT_MAX),
+            "session_id": session_id,
+            "parent_task_id": parent_task_id,
+            "task_id": task_id,
+            "origin": origin,
+            "started_at": time.time(),
+        }
+        while len(_LIVE) >= _LIVE_MAX:
+            # Out of room: drop the oldest — and say so, or a view keeps drawing it running.
+            close_edge(next(iter(_LIVE)), outcome="cancelled", error="no longer tracked (live registry full)")
+        _LIVE[edge_id] = edge
+        if task_id:
+            _LIVE_BY_TASK[task_id] = edge_id
+        _publish("delegation.started", dict(edge))
+    except Exception:  # noqa: BLE001
+        log.exception("[ledger] open_edge failed")
+    return edge_id
+
+
+def _forget(edge_id: str) -> dict | None:
+    edge = _LIVE.pop(edge_id, None)
+    if edge and edge.get("task_id") and _LIVE_BY_TASK.get(edge["task_id"]) == edge_id:
+        _LIVE_BY_TASK.pop(edge["task_id"], None)
+    return edge
+
+
+def close_edge(
+    edge_id: str,
+    *,
+    outcome: str,
+    duration_ms: int | None = None,
+    error: str = "",
+    cost_usd: float | None = None,
+) -> None:
+    """Take an edge out of flight and announce ``delegation.finished``. Never raises; an
+    unknown id (already closed, or opened before a restart) is a no-op."""
+    try:
+        edge = _forget(edge_id)
+        if edge is None:
+            return
+        if duration_ms is None:
+            duration_ms = int((time.time() - float(edge.get("started_at") or time.time())) * 1000)
+        _publish(
+            "delegation.finished",
+            {
+                "id": edge_id,
+                "parent_id": edge.get("parent_id", ""),
+                "from": edge.get("from", ""),
+                "to_kind": edge.get("to_kind", ""),
+                "to_name": edge.get("to_name", ""),
+                "to_instance": edge.get("to_instance", ""),
+                "outcome": outcome,
+                "duration_ms": int(duration_ms),
+                "cost_usd": cost_usd,
+                "error": _clip(error, _ERROR_MAX),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("[ledger] close_edge failed")
+
+
+def note_progress(edge_id: str, snapshot: dict) -> None:
+    """Attach a delegate's latest progress snapshot (``graph.delegate_progress``, already
+    bounded and throttled) to its open edge and announce ``delegation.progress``."""
+    try:
+        edge = _LIVE.get(edge_id)
+        if edge is None:
+            return
+        progress = {k: v for k, v in snapshot.items() if k not in ("timeline", "id")}
+        edge["progress"] = progress
+        _publish("delegation.progress", {"id": edge_id, "to_name": edge.get("to_name", ""), "progress": progress})
+    except Exception:  # noqa: BLE001
+        log.debug("[ledger] note_progress failed", exc_info=True)
+
+
+def live_edges() -> list[dict]:
+    """Every edge in flight right now, oldest first — the catch-up for a view that opens
+    mid-run, since the bus frames are live-only."""
+    return [dict(e) for e in list(_LIVE.values())]
 
 
 def _store():
@@ -119,6 +286,9 @@ def settle_delegation(
     every background edge reads ``ok`` with a zero duration forever, which is a claim
     about an outcome nobody observed.
     """
+    edge_id = _LIVE_BY_TASK.get(task_id)
+    if edge_id:
+        close_edge(edge_id, outcome=outcome, duration_ms=duration_ms, error=error, cost_usd=cost_usd)
     store = _store()
     if store is None:
         return False
@@ -163,12 +333,27 @@ def dispatch(
     import asyncio
     from types import SimpleNamespace
 
+    described = _DESCRIBING.get()
+    if described is not None:
+        what = described
+        _DESCRIBING.set(None)  # one edge — a nested dispatch describes its own ask
     started = time.monotonic()
     # A SimpleNamespace, not a class body: a class body does not close over the enclosing
     # function's locals, so `task_id = task_id` inside one raises NameError rather than
     # seeding the default from the argument.
     edge = SimpleNamespace(cost_usd=None, task_id=task_id, to_instance=to_instance)
     outcome, error = "ok", ""
+    edge.id = open_edge(
+        to_kind=to_kind,
+        to_name=to_name,
+        to_instance=to_instance,
+        what=what,
+        session_id=session_id,
+        parent_task_id=parent_task_id,
+        task_id=task_id,
+        origin=origin,
+    )
+    token = _CURRENT.set(edge.id)
     try:
         yield edge
     except asyncio.CancelledError:
@@ -178,6 +363,9 @@ def dispatch(
         outcome, error = "failed", str(exc) or type(exc).__name__
         raise
     finally:
+        _CURRENT.reset(token)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        close_edge(edge.id, outcome=outcome, duration_ms=elapsed_ms, error=error, cost_usd=edge.cost_usd)
         record_delegation(
             to_kind=to_kind,
             to_name=to_name,
@@ -188,7 +376,7 @@ def dispatch(
             task_id=edge.task_id,
             outcome=outcome,
             error=error,
-            duration_ms=int((time.monotonic() - started) * 1000),
+            duration_ms=elapsed_ms,
             cost_usd=edge.cost_usd,
             origin=origin,
         )

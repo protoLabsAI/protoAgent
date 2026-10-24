@@ -40,41 +40,31 @@ def test_register_mounts_page_and_data_routers():
 
 
 def test_view_page_is_self_contained_and_kit_backed():
-    from plugins.orgchart.view import _VIEW_PAGE
+    from plugins.orgchart.view import view_page
 
-    page = _VIEW_PAGE.read_text(encoding="utf-8")
-    # Single-file on purpose: a split-out sub-resource would need public_paths (the
-    # artifact plugin's documented fleet-wide 401 incident).
+    page = view_page()
+    # Authored as three files, served as ONE document: a split-out sub-resource would need
+    # public_paths (the artifact plugin's documented fleet-wide 401 incident).
+    assert "__ORGCHART_CSS__" not in page and "__ORGCHART_JS__" not in page
     assert "plugin-kit.js" in page and "initPluginView" in page
-    assert '<script src="/plugins/' not in page
+    assert '<script src="/plugins/' not in page and '<link rel="stylesheet" href="/plugins/' not in page
     assert "/api/plugins/orgchart/topology" in page
+    # Live: it follows the ledger's in-flight edges on the bus, with a catch-up endpoint.
+    assert '"delegation.#"' in page and "/api/ledger/live" in page
 
 
 def test_action_buttons_use_the_ds_plugin_kit_classes():
     """protoContent#551 (card 5): ACTION buttons must be the DS button. This view is plain
-    HTML backed by the kit's CSS, so Refresh and panel-Close carry `pl-btn` classes — the
-    ds_audit hand-rolled-control rule flags a raw styled <button>, not these."""
-    from plugins.orgchart.view import _VIEW_PAGE
+    HTML backed by the kit's CSS, so Refresh and the drawer's Close carry `pl-btn` classes —
+    the ds_audit hand-rolled-control rule flags a raw styled <button>, not these."""
+    from plugins.orgchart.view import view_page
 
-    page = _VIEW_PAGE.read_text(encoding="utf-8")
-
-    # Refresh: sized DS button, type=button, id + title preserved so the click handler binds.
-    assert '<button class="pl-btn pl-btn--sm" type="button" id="refresh"' in page
+    page = view_page()
+    assert '<button class="pl-btn pl-btn--sm pl-btn--ghost" type="button" id="refresh"' in page
     assert 'title="Drop caches and re-crawl the fleet"' in page
-
-    # Panel close: ghost icon DS button, type=button, aria-label, id + title preserved.
-    assert (
-        '<button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" type="button" '
-        'id="panel-close" title="Close" aria-label="Close"' in page
-    )
-
-    # The hand-rolled control styling is gone — only the close-button float layout may stay,
-    # and no local button rule reintroduces a literal colour/size.
-    assert "button.refresh" not in page
-    assert ".panel .close" not in page
-
-    # The script still binds both controls by id (behaviour unchanged).
-    assert '$("refresh")' in page and '$("panel-close")' in page
+    assert '<button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" type="button" id="d-close" aria-label="Close"' in page
+    # The script binds both controls by id.
+    assert '$("refresh")' in page and '$("d-close")' in page
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -545,3 +535,89 @@ def test_leaves_do_not_starve_the_agent_graph_under_max_nodes(monkeypatch):
     nodes = {n["id"]: n for n in asyncio.run(topo.get_topology({"max_nodes": 3}))["nodes"]}
     assert ALPHA in nodes, "a peer lost its slot to coders listed ahead of it"
     assert len(nodes) == 3
+
+
+# ── live work across the fleet ───────────────────────────────────────────────
+
+
+def _wire_fleet(monkeypatch, calls):
+    """alpha (tokened, readable) reports live work, a ledger and its aggregates; beta is
+    dead. Every ledger read must carry alpha's bearer — the crawl's own, never a new one."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        host, path = request.url.host, request.url.path
+        if host == "alpha":
+            if path == "/.well-known/agent-card.json":
+                return httpx.Response(200, json={"name": "Alpha"})
+            assert request.headers.get("Authorization") == "Bearer tok-alpha"
+            if path == "/api/delegates":
+                return httpx.Response(200, json={"delegates": [{"type": "acp", "name": "coder", "command": "claude"}]})
+            if path == "/api/ledger/live":
+                return httpx.Response(200, json={"edges": [{"id": "e1", "to_kind": "acp", "to_name": "coder", "what": "fix it", "started_at": 1.0}]})
+            if path == "/api/ledger":
+                return httpx.Response(200, json={"edges": [{"edge_id": 9, "to_kind": "acp", "to_name": "coder", "outcome": "ok"}]})
+            if path == "/api/ledger/edges":
+                return httpx.Response(200, json={"edges": [{"to_kind": "acp", "to_name": "coder", "dispatches": 4, "ok": 4}]})
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(topo, "_make_client", lambda cfg: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(
+        topo,
+        "_roster",
+        lambda: [
+            {"type": "a2a", "name": "alpha", "url": ALPHA + "/a2a", "auth": {"token": "tok-alpha"}},
+            {"type": "a2a", "name": "beta", "url": BETA},
+        ],
+    )
+    monkeypatch.setattr(topo, "_health", lambda: {})
+    monkeypatch.setattr(topo, "_fleet_remotes", lambda: [])
+    monkeypatch.setattr(topo, "_self_identity", lambda: ("ava", "http://self:7870", "org head"))
+    monkeypatch.setattr(topo, "_ledger_edges", lambda: [])
+
+
+def test_live_fans_in_each_readable_peers_work_tagged_with_its_owner(monkeypatch):
+    from graph import ledger
+
+    calls: list[str] = []
+    _wire_fleet(monkeypatch, calls)
+    monkeypatch.setattr(ledger, "live_edges", lambda: [{"id": "mine", "to_kind": "subagent", "to_name": "researcher"}])
+    data = asyncio.run(topo.get_live({}))
+    owners = {e["id"]: e["owner"] for e in data["edges"]}
+    assert owners == {"mine": "http://self:7870", "e1": ALPHA}
+    assert data["peers"] == 1  # beta is dead and tokenless: never asked
+    assert not any("beta" in u and "/api/ledger" in u for u in calls)
+
+
+def test_a_peers_coder_wears_the_peers_record_and_its_history_is_readable(monkeypatch):
+    calls: list[str] = []
+    _wire_fleet(monkeypatch, calls)
+    data = asyncio.run(topo.get_topology({}))
+    coder = next(n for n in data["nodes"] if n["id"] == f"acp:{ALPHA}#coder")
+    assert coder["work"]["dispatches"] == 4
+    hist = asyncio.run(topo.get_history({}, ALPHA + "/a2a"))
+    assert hist["readable"] is True and hist["edges"][0]["edge_id"] == 9
+    # A node the crawl couldn't read has no history to give — and no token is invented.
+    assert asyncio.run(topo.get_history({}, BETA)) == {"owner": BETA, "edges": [], "readable": False}
+
+
+def test_a_peers_live_edges_are_whitelisted_and_typed():
+    """A peer's payload is untrusted input to every console that renders it: unknown keys
+    are dropped and numbers are numbers — a string `started_at` can't smuggle markup."""
+    dirty = {
+        "id": "e1", "to_kind": "acp", "to_name": "coder", "started_at": '"><img src=x onerror=alert(1)>',
+        "evil": "<script>", "progress": {"tool_count": "<b>9</b>", "plan": [{"content": "x", "status": "pending", "x": 1}],
+                                         "current_tool": {"name": "Edit", "kind": "edit", "locations": [{"path": "a.py", "line": "<i>"}]}},
+    }
+    e = topo._clean_live(dirty, "http://peer")
+    assert "evil" not in e and e["owner"] == "http://peer"
+    assert isinstance(e["started_at"], float)
+    assert e["progress"]["tool_count"] == 0 and e["progress"]["plan"] == [{"content": "x", "status": "pending"}]
+    assert e["progress"]["current_tool"]["locations"] == [{"path": "a.py"}]
+    assert topo._clean_live({"to_name": "no id"}, "http://peer") is None
+
+
+def test_a_missed_live_read_is_retried_within_seconds(monkeypatch):
+    """One slow answer from a busy member must not blank its work for half a minute —
+    the topology's 30 s negative cache is for crawling, not for watching."""
+    assert topo._LIVE_NEG_TTL <= 5 < topo._NEG_TTL

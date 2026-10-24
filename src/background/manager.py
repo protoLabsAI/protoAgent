@@ -211,6 +211,16 @@ class BackgroundManager:
                 task_id=job_id,
                 origin="background",
             )
+            # In flight until the store settles it (`settle_delegation` closes it by job id).
+            ledger.open_edge(
+                to_kind="subagent",
+                to_name=subagent_type,
+                what=description,
+                session_id=origin_session or "",
+                parent_task_id=batch_id or "",
+                task_id=job_id,
+                origin="background",
+            )
         except Exception:  # noqa: BLE001 — the record must never break the spawn
             log.exception("[background] ledger record failed for %s", job_id)
         # Live push so a still-open spawning chat shows the job starting (ADR 0050).
