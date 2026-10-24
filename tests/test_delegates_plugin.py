@@ -275,7 +275,7 @@ async def test_registry_applies_readonly_as_internal_acp_ceiling(monkeypatch):
         last_stop_reason = None
         _permission = None
 
-        async def prompt(self, query, timeout=None):
+        async def prompt(self, query, timeout=None, **_callbacks):
             seen["query"] = query
             return "done"
 
@@ -752,7 +752,7 @@ async def test_acp_dispatch_reuses_client(monkeypatch):
     class _StubClient:
         _permission = None
 
-        async def prompt(self, query, timeout=600.0):
+        async def prompt(self, query, timeout=600.0, **_callbacks):
             return "coding done"
 
     monkeypatch.setattr(CA, "_client_for", lambda spec: _StubClient())
@@ -785,7 +785,7 @@ def _stub_acp_prompt(monkeypatch, seen):
         last_stop_reason = None
         _permission = None
 
-        async def prompt(self, query, timeout=None):
+        async def prompt(self, query, timeout=None, **_callbacks):
             seen["timeout"] = timeout
             return "done"
 
@@ -1256,7 +1256,7 @@ class _StopReasonClient:
         self.last_stop_reason = stop_reason
         self._permission = None
 
-    async def prompt(self, query, timeout=None):
+    async def prompt(self, query, timeout=None, **_callbacks):
         return self._reply
 
 

@@ -597,6 +597,20 @@ async def test_an_oversized_run_has_no_timeline_rather_than_a_partial_one(monkey
     assert dp.take_timeline(snaps[-1])[1] is None
 
 
+async def test_endless_streamed_text_has_no_timeline_rather_than_an_unbounded_one(monkeypatch):
+    monkeypatch.setattr(dp, "TIMELINE_TEXT_BUDGET", 10)
+    snaps = []
+
+    async def sink(s):
+        snaps.append(s)
+
+    t = dp.DelegateProgress("c", sink, min_interval=0)
+    for _ in range(4):
+        await t.on_text("abcd")
+    await t.finish(ok=True)
+    assert dp.take_timeline(snaps[-1])[1] is None
+
+
 def test_reply_timeline_trusts_the_reply_text():
     timeline = [
         {"type": "text", "text": "Reading first. "},

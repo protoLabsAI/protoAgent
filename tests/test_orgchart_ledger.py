@@ -23,9 +23,17 @@ def _no_host(monkeypatch):
 def _nodes():
     return {
         "http://self": {"id": "http://self", "name": "gina", "kind": "self", "up": True},
-        "acp:http://self#coder": {"id": "acp:http://self#coder", "name": "coder", "kind": "acp", "up": True},
+        "acp:http://self#coder": {"id": "acp:http://self#coder", "name": "coder", "kind": "coder", "up": True},
         "http://peer": {"id": "http://peer", "name": "hermes", "kind": "agent", "up": True},
     }
+
+
+def _edges():
+    # This agent's own delegates — the only nodes its ledger can describe.
+    return [
+        {"from": "http://self", "to": "acp:http://self#coder", "kind": "delegate"},
+        {"from": "http://self", "to": "http://peer", "kind": "delegate"},
+    ]
 
 
 def _rows(**over):
@@ -38,7 +46,7 @@ def _rows(**over):
 
 
 def test_work_lands_on_the_delegate_it_belongs_to():
-    nodes, edges = _nodes(), []
+    nodes, edges = _nodes(), _edges()
     topology._apply_work(nodes, edges, "http://self", [_rows()])
 
     work = nodes["acp:http://self#coder"]["work"]
@@ -48,7 +56,7 @@ def test_work_lands_on_the_delegate_it_belongs_to():
 
 def test_a_configured_but_unused_delegate_carries_no_work():
     # The distinction a capability graph cannot draw: wired up versus actually used.
-    nodes, edges = _nodes(), []
+    nodes, edges = _nodes(), _edges()
     topology._apply_work(nodes, edges, "http://self", [_rows()])
 
     assert "work" not in nodes["http://peer"]
@@ -56,7 +64,7 @@ def test_a_configured_but_unused_delegate_carries_no_work():
 
 def test_an_a2a_peer_matches_despite_the_graph_calling_it_an_agent():
     # The ledger records a peer as `a2a`; the chart draws it with kind "agent".
-    nodes, edges = _nodes(), []
+    nodes, edges = _nodes(), _edges()
     topology._apply_work(nodes, edges, "http://self", [_rows(to_kind="a2a", to_name="hermes")])
 
     assert nodes["http://peer"]["work"]["dispatches"] == 7
@@ -65,7 +73,7 @@ def test_an_a2a_peer_matches_despite_the_graph_calling_it_an_agent():
 def test_subagents_appear_as_nodes_because_the_chart_never_had_them():
     # For an agent whose delegation is all in-process, this is the entire picture — the
     # chart would otherwise show none of its actual work.
-    nodes, edges = _nodes(), []
+    nodes, edges = _nodes(), _edges()
     topology._apply_work(
         nodes, edges, "http://self", [_rows(to_kind="subagent", to_name="researcher")]
     )
@@ -79,14 +87,14 @@ def test_subagents_appear_as_nodes_because_the_chart_never_had_them():
 def test_a_subagent_has_no_liveness_because_it_runs_inside_its_owner():
     # `up: None` is "unknown/not applicable", which the view already renders differently
     # from a confident red. An in-process subagent has nothing to probe.
-    nodes, edges = _nodes(), []
+    nodes, edges = _nodes(), _edges()
     topology._apply_work(nodes, edges, "http://self", [_rows(to_kind="subagent", to_name="r")])
 
     assert nodes["subagent:r"]["up"] is None
 
 
 def test_subagent_nodes_are_not_duplicated_across_rebuilds():
-    nodes, edges = _nodes(), []
+    nodes, edges = _nodes(), _edges()
     rows = [_rows(to_kind="subagent", to_name="researcher")]
     topology._apply_work(nodes, edges, "http://self", rows)
     topology._apply_work(nodes, edges, "http://self", rows)
@@ -95,7 +103,7 @@ def test_subagent_nodes_are_not_duplicated_across_rebuilds():
 
 
 def test_priced_travels_with_cost_so_partial_sums_are_not_read_as_totals():
-    nodes, edges = _nodes(), []
+    nodes, edges = _nodes(), _edges()
     topology._apply_work(nodes, edges, "http://self", [_rows(dispatches=10, cost_usd=1.0, priced=2)])
 
     work = nodes["acp:http://self#coder"]["work"]
@@ -108,10 +116,76 @@ def test_the_overlay_is_a_no_op_without_a_ledger():
 
 
 def test_malformed_ledger_rows_are_skipped_rather_than_drawn():
-    nodes, edges = _nodes(), []
+    nodes, edges = _nodes(), _edges()
     topology._apply_work(
         nodes, edges, "http://self",
         [{"to_kind": "", "to_name": "x"}, {"to_kind": "subagent", "to_name": ""}],
     )
 
     assert not any(n.startswith("subagent:") for n in nodes)
+
+
+def test_a_members_same_named_coder_does_not_wear_our_coders_work():
+    # A peer's `coder` is a different process from ours; our ledger says nothing about it.
+    nodes, edges = _nodes(), _edges()
+    nodes["acp:http://peer#coder"] = {"id": "acp:http://peer#coder", "name": "coder", "kind": "coder", "up": True}
+    edges.append({"from": "http://peer", "to": "acp:http://peer#coder", "kind": "delegate"})
+    topology._apply_work(nodes, edges, "http://self", [_rows()])
+
+    assert nodes["acp:http://self#coder"]["work"]["dispatches"] == 7
+    assert "work" not in nodes["acp:http://peer#coder"]
+
+
+def test_a_peers_own_record_lands_on_its_own_delegates_and_subagents():
+    nodes, edges = _nodes(), _edges()
+    nodes["acp:http://peer#coder"] = {"id": "acp:http://peer#coder", "name": "coder", "kind": "coder", "up": True}
+    edges.append({"from": "http://peer", "to": "acp:http://peer#coder", "kind": "delegate"})
+    topology._apply_work(nodes, edges, "http://self", [_rows()])
+    topology._apply_work(
+        nodes, edges, "http://peer",
+        [_rows(dispatches=3, ok=3, failed=0), _rows(to_kind="subagent", to_name="researcher", dispatches=1)],
+        owner_is_self=False,
+    )
+    assert nodes["acp:http://self#coder"]["work"]["dispatches"] == 7
+    assert nodes["acp:http://peer#coder"]["work"]["dispatches"] == 3
+    # The peer's subagent is the peer's worker, not ours: its own id, an edge from the peer.
+    assert "subagent:http://peer#researcher" in nodes
+    assert {"from": "http://peer", "to": "subagent:http://peer#researcher", "kind": "task"} in edges
+
+
+def test_a_shared_node_keeps_our_record_and_sums_the_peers():
+    nodes, edges = _nodes(), _edges()
+    model = {"id": "model:gw/v1/big", "name": "brain", "kind": "model", "up": None}
+    shared_peer = {"id": "model:gw/v1/small", "name": "small", "kind": "model", "up": None}
+    nodes[model["id"]], nodes[shared_peer["id"]] = model, shared_peer
+    nodes["http://peer2"] = {"id": "http://peer2", "name": "p2", "kind": "agent", "up": True}
+    edges += [
+        {"from": "http://self", "to": model["id"], "kind": "delegate"},
+        {"from": "http://peer", "to": model["id"], "kind": "delegate"},
+        {"from": "http://peer", "to": shared_peer["id"], "kind": "delegate"},
+        {"from": "http://peer2", "to": shared_peer["id"], "kind": "delegate"},
+    ]
+    mine = _rows(to_kind="openai", to_name="brain", dispatches=2, ok=2, failed=0)
+    topology._apply_work(nodes, edges, "http://self", [mine])
+    hub_own = {e["to"] for e in edges if e["from"] == "http://self"}
+    for peer in ("http://peer", "http://peer2"):
+        topology._apply_work(
+            nodes, edges, peer,
+            [_rows(to_kind="openai", to_name="brain", dispatches=50), _rows(to_kind="openai", to_name="small", dispatches=3, ok=3, failed=0)],
+            owner_is_self=False, hub_own=hub_own,
+        )
+    assert nodes[model["id"]]["work"]["dispatches"] == 2       # ours wins on a node we use
+    assert nodes[shared_peer["id"]]["work"]["dispatches"] == 6  # two peers' records add up
+
+
+def test_one_delegate_reached_at_two_urls_is_one_record():
+    # The ledger groups by target instance too: a peer whose URL was corrected shows up as
+    # two rows. Keeping only the last one painted a healthy peer red.
+    nodes, edges = _nodes(), _edges()
+    rows = [
+        _rows(to_kind="a2a", to_name="hermes", dispatches=4, ok=4, failed=0),
+        _rows(to_kind="a2a", to_name="hermes", dispatches=2, ok=0, failed=2),
+    ]
+    topology._apply_work(nodes, edges, "http://self", rows)
+    work = nodes["http://peer"]["work"]
+    assert (work["dispatches"], work["ok"], work["failed"]) == (6, 4, 2)

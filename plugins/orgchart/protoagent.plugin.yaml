@@ -1,9 +1,12 @@
 id: orgchart
 name: Org Chart
-version: 0.3.0
+version: 0.4.0
 description: >-
-  Live diagram of the agent fleet — every delegate a node, a directed edge wherever one
-  agent can delegate to another (dashed where the hub merely supervises a member).
+  Live diagram of the agent fleet and the work moving through it — every delegate a node,
+  a directed edge wherever one agent can delegate to another (dashed where the hub merely
+  supervises a member). Edges animate while a delegation runs, nodes show what they are
+  doing right now, and a drawer per agent shows its live plan, tools and record, across
+  the fleet.
   Draws all three delegate types: a2a peers (crawled outward), acp coding agents, and
   OpenAI-compatible model endpoints — the last two as leaves, badged by their owner's
   probe result.

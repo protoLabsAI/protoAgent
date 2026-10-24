@@ -1,16 +1,26 @@
 """orgChart routers — the PAGE (public) and the DATA (gated), per the view contract.
 
-The page is a self-contained ``view.html`` beside this module (one file on purpose:
-a page split into ``.js``/``.css`` sub-resources would need each one added to the
-manifest's ``public_paths`` or 401 behind the bearer gate — the artifact plugin's
-documented fleet-wide incident). Topology assembly lives in :mod:`.topology`.
+The page is authored as three files under ``view/`` and served as ONE self-contained
+document: the CSS and JS are inlined here. A page that loaded ``.js``/``.css``
+sub-resources would need each one added to the manifest's ``public_paths`` or 401 behind
+the bearer gate — the artifact plugin's documented fleet-wide incident. Topology assembly
+lives in :mod:`.topology`.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-_VIEW_PAGE = Path(__file__).parent / "view.html"
+_VIEW_DIR = Path(__file__).parent / "view"
+
+
+def view_page() -> str:
+    """The assembled page. Read per request, so an edited view shows on reload."""
+    html = (_VIEW_DIR / "orgchart.html").read_text(encoding="utf-8")
+    css = (_VIEW_DIR / "orgchart.css").read_text(encoding="utf-8")
+    js = (_VIEW_DIR / "orgchart.js").read_text(encoding="utf-8")
+    # Replace the JS last and by split/join: the script body could contain the CSS marker.
+    return html.replace("__ORGCHART_CSS__", css).replace("__ORGCHART_JS__", js)
 
 
 def build_view_router():
@@ -26,7 +36,7 @@ def build_view_router():
     # for every agent with orgChart enabled.
     @router.get("/view", response_class=HTMLResponse)
     async def _view():  # served at /plugins/orgchart/view
-        return HTMLResponse(_VIEW_PAGE.read_text(encoding="utf-8"))
+        return HTMLResponse(view_page())
 
     return router
 
@@ -44,5 +54,13 @@ def build_data_router(live_config):
     @router.get("/topology")
     async def _topology(refresh: int = 0) -> dict:
         return await topology.get_topology(live_config() or {}, force=bool(refresh))
+
+    @router.get("/live")
+    async def _live() -> dict:
+        return await topology.get_live(live_config() or {})
+
+    @router.get("/history")
+    async def _history(owner: str, limit: int = 60) -> dict:
+        return await topology.get_history(live_config() or {}, owner, limit=limit)
 
     return router

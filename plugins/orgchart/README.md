@@ -1,10 +1,34 @@
 # orgChart
 
-A console rail view that renders a **live diagram of the agent fleet**: every delegate is
-a node, a directed edge A→B means "A can delegate to B", a dashed edge means "A
-supervises B" (a hub-registered fleet member). Green = up, red = down/unreachable, grey =
-not probed yet, the accent-outlined node is the agent you're looking from. Click any node
-for details.
+A console rail view that renders a **live diagram of the agent fleet and the work moving
+through it**: every delegate is a node, a directed edge A→B means "A can delegate to B", a
+dashed edge means "A supervises B" (a hub-registered fleet member). The ring is liveness
+(green up, red down/unreachable, grey not probed yet); the bar under a node is its record
+(runs that succeeded vs failed).
+
+**While work runs, you watch it happen.** An edge carrying a delegation animates, with a
+spark travelling along it; the target lights up with what it is doing right now ("Editing
+calc.py") and a clock; when it lands, the node flashes green or red and its stats tick. An
+**Activity** column lists every hand-off, in flight and recent. Click any node for its
+drawer: **Now** (the task, the coder's plan, its current tool, recent tools and narration —
+streamed as it works), **Lifetime** stats, **Recent work**, and details. The drawer is
+non-modal and sits beside the graph, so the work stays in view while you inspect it.
+
+## Where the live picture comes from
+
+- **This agent's work** — the delegation ledger's open edges (`graph/ledger.py`): every
+  dispatch funnel opens an edge before it runs and announces `delegation.started` →
+  `delegation.progress` → `delegation.finished` on the bus. The view subscribes to
+  `delegation.#` (and stays subscribed in the background), catching up from
+  `GET /api/ledger/live` when it opens mid-run.
+- **The fleet's work** — the bus only carries this agent's events, so `GET
+  /api/plugins/orgchart/live` fans in each readable peer's `/api/ledger/live` (the peers the
+  crawl already holds tokens for — never a new one), tagging every edge with the node that
+  owns it. A member's own coder lights up under that member, not under ours.
+- **Records** — each node's stats are its **owner's** ledger: ours for our delegates, each
+  readable peer's (`/api/ledger/edges`) for its own. A member's `claude-code` is a
+  different process from ours and never wears our run count. The drawer's history for a
+  peer-owned node is read through `GET /api/plugins/orgchart/history?owner=…`.
 
 ## The three kinds of node
 
@@ -77,9 +101,10 @@ plugins:
 ```
 
 Drop the plugin dir in `plugins/` (bundled) or `<config>/plugins/`, restart, and an
-**Org Chart** item appears in the console rail. No build step — the view is one
-self-contained HTML page (kept single-file on purpose: split-out `.js` would need
-`public_paths` or 401 behind the bearer gate).
+**Org Chart** item appears in the console rail. No build step — the view is authored as
+`view/orgchart.{html,css,js}` and served as ONE self-contained page (the CSS and JS are
+inlined at request time: split-out sub-resources would need `public_paths` or 401 behind
+the bearer gate).
 
 Tunables live in **Settings → Org Chart**: cache TTL, poll interval, probe timeout,
 max nodes, whether supervised fleet members are drawn, and whether coding agents and
@@ -92,7 +117,11 @@ so when a class is excluded in Settings.
 - `protoagent.plugin.yaml` — manifest (`views:` declares the rail item; `config`/`settings`).
 - `__init__.py` — `register()` mounts the two routers (public page, gated data).
 - `topology.py` — the crawl engine: sources, caches, BFS, stale-while-revalidate.
-- `view.py` — the two routers.
-- `view.html` — the page (inline SVG, BFS-layered so delegation cycles render fine).
+- `view.py` — the two routers (`/view`; `/topology`, `/live`, `/history`).
+- `view/` — the page: `orgchart.html` (skeleton), `orgchart.css` (tokens only, with a
+  reduced-motion branch), `orgchart.js` (a keyed SVG whose node moves, edges and sparks
+  all run in one rAF loop that stops when nothing moves; BFS-layered so delegation cycles
+  render fine).
 
-Tests: `tests/test_orgchart_plugin.py`.
+Tests: `tests/test_orgchart_plugin.py`, `tests/test_orgchart_ledger.py`, and the live
+ledger in `tests/test_ledger_live.py`.

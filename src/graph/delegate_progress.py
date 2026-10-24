@@ -108,6 +108,9 @@ TIMELINE_MAX = 300
 #: the timeline is stored in task history and the console's transcript, once per reply.
 TIMELINE_TOOL_IO_MAX = 800
 TIMELINE_IO_BUDGET = 48_000
+#: Reply text the timeline holds across the run; past it the timeline is abandoned like the
+#: entry cap, so a delegate that streams without end can't grow the snapshot without bound.
+TIMELINE_TEXT_BUDGET = 200_000
 #: Seconds between snapshots. A coder can fire dozens of updates a second while it
 #: streams text; the card needs a few frames a second at most.
 MIN_INTERVAL_S = 0.75
@@ -127,8 +130,33 @@ def progress_sink(sink: Sink | None) -> Iterator[None]:
         _SINK.reset(token)
 
 
+async def _no_card(_snapshot: dict) -> None:
+    """The sink for a delegation no card owns: its snapshots still reach the ledger's live
+    record (``delegation.progress``), they just have no chat card to update."""
+
+
+def is_card_sink(sink: Sink | None) -> bool:
+    """True for a sink a CARD bound — false for none, and for the ledger-only no-op sink.
+    An adapter gives a card-less run only what is free: a coder's existing stream feeds
+    the ledger, but nothing a card would add (``fs.changed`` for the code pane, an extra
+    A2A watch connection) is spent on a run nobody is watching in chat."""
+    return sink is not None and sink is not _no_card
+
+
 def current_sink() -> Sink | None:
-    return _SINK.get()
+    """The bound card sink — or, when none is bound but the dispatch is inside an open
+    ledger edge, a no-op one, so every delegation reports its live work to the ledger
+    (the org chart's drill-in), not only the ones a chat card is watching. An explicit
+    ``progress_sink(None)`` unbinds the CARD only; the ledger edge is still the edge."""
+    sink = _SINK.get()
+    if sink is not None:
+        return sink
+    try:
+        from graph.ledger import current_edge_id
+
+        return _no_card if current_edge_id() else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _clip(value: object, limit: int) -> str:
@@ -212,6 +240,15 @@ class DelegateProgress:
         self._timeline: list[dict] | None = []
         self._timeline_tools: dict[str, dict] = {}
         self._timeline_io_left = TIMELINE_IO_BUDGET
+        self._timeline_text_left = TIMELINE_TEXT_BUDGET
+        # The ledger edge this delegation runs inside (graph/ledger.py) — captured NOW, in
+        # the dispatching task: the feeds arrive on a transport's reader task.
+        try:
+            from graph.ledger import current_edge_id
+
+            self._edge_id = current_edge_id()
+        except Exception:  # noqa: BLE001
+            self._edge_id = None
 
     # -- the transport seam: normalized feeds (may run on a transport's reader task) --
 
@@ -309,6 +346,11 @@ class DelegateProgress:
 
     def _timeline_text(self, delta: str) -> None:
         if self._timeline is None:
+            return
+        self._timeline_text_left -= len(delta)
+        if self._timeline_text_left < 0:
+            log.debug("[delegate-progress] %r: timeline text over %d chars — dropped", self.target, TIMELINE_TEXT_BUDGET)
+            self._timeline, self._timeline_tools = None, {}
             return
         last = self._timeline[-1] if self._timeline else None
         if last is not None and last["type"] == "text":
@@ -416,6 +458,13 @@ class DelegateProgress:
         self._dirty = False
         self._last_emit = self._clock()
         snapshot = self.snapshot()
+        if self._edge_id:
+            from graph.ledger import note_progress
+
+            try:
+                note_progress(self._edge_id, snapshot)
+            except Exception:  # noqa: BLE001 — a live view must never cost the delegation
+                log.warning("[delegate-progress] ledger note for %r raised", self.target, exc_info=True)
         if final and self._timeline:
             # Only the done snapshot, and only for the turn driver — see ``take_timeline``.
             snapshot["timeline"] = [dict(e) for e in self._timeline]

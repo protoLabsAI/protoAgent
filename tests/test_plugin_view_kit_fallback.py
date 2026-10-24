@@ -17,7 +17,7 @@ VIEW_SOURCES = [
     REPO / "plugins" / "docs" / "__init__.py",
     # The page moved out of view.py's inline string in the v0.2 rebuild — the kit
     # boot (and its loud failure path) lives in the standalone page file.
-    REPO / "plugins" / "orgchart" / "view.html",
+    REPO / "plugins" / "orgchart" / "view" / "orgchart.js",
     # Found while fixing the issue: artifact carried the same shim (on by default).
     # The shell moved out of __init__.py in the #2817 decomposition; the kit boot
     # (and its loud failure path) lives in the extracted module script.
