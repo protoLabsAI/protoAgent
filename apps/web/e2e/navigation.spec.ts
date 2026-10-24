@@ -89,14 +89,17 @@ test("plugins section: Installed / Discover (config + advanced install folded in
     .getByRole("button", { name: "Enable" }).click();
   await expect(page.locator(".pl-toast", { hasText: "Zzz Disabled" })).toBeVisible();
 
-  // Configure opens a per-plugin settings DIALOG now (2026-06) — not an inline row expander.
-  // The (icon-only) Configure button is labelled "Configure <name>"; the dialog is
-  // role="dialog" named by the plugin.
+  // Configure opens a per-plugin settings PANE now (#4488) — Settings ▸ Plugins ▸ <plugin>, not
+  // an inline row expander and not a modal over Settings. The (icon-only) Configure button is
+  // labelled "Configure <name>"; the pane is crumbed by the plugin's display name, with a back
+  // link to the plugin list.
   const demoRow = page.locator(".plugin-table tbody tr", { hasText: "Demo Plugin" });
   await demoRow.getByRole("button", { name: "Configure" }).click();
-  const configDialog = page.getByRole("dialog", { name: "Demo Plugin" });
-  await expect(configDialog.locator('.setting-row[data-key="demo.greeting"]')).toBeVisible();
-  await configDialog.locator(".pl-dialog__close").click(); // close so it doesn't overlay later steps
+  const configPane = page.locator(".plugin-settings-pane");
+  await expect(configPane.locator(".plugin-settings-crumb-current")).toHaveText("Demo Plugin");
+  await expect(configPane.locator('.setting-row[data-key="demo.greeting"]')).toBeVisible();
+  await page.getByTestId("plugin-config-back").click(); // back to the plugin list for the later steps
+  await expect(configPane).toHaveCount(0);
 
   // Install-from-URL is a dialog opened from the Installed toolbar (2026-06 consolidation).
   // The DS Dialog title is role="dialog" (not a heading); assert via the URL field, which

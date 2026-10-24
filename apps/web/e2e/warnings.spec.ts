@@ -32,7 +32,7 @@ test("no warnings → no alert strip (the default fixture)", async ({ page }) =>
 // tests/test_console_handlers.py asserts that against the real handler. The first version of this
 // spec mocked gap OBJECTS inside `warnings[]`, a shape the server never sends, so it stayed green
 // while every real gap rendered as a plain alert with no Configure button and no dismiss (QA of
-// v0.164.0). `boardy` is the enabled+loaded plugin in the e2e fixture, so its Configure dialog
+// v0.164.0). `boardy` is the enabled+loaded plugin in the e2e fixture, so its Configure pane
 // resolves cleanly.
 type Gap = { plugin: string; key: string; label: string; message: string; actions?: unknown[] };
 type GapFields = { warnings: string[]; setup_gaps: Gap[] };
@@ -71,7 +71,7 @@ async function routeStatus(page: Page, fields: (agent: string) => Partial<GapFie
 const storedDismissals = (page: Page, agent = "host") =>
   page.evaluate((key) => JSON.parse(window.sessionStorage.getItem(key) || "[]") as string[], `protoagent.setupGapDismissals:${agent}`);
 
-test("a real setup gap renders ONE actionable banner, and Configure opens the plugin-config dialog", async ({ page }) => {
+test("a real setup gap renders ONE actionable banner, and Configure opens the plugin-config pane", async ({ page }) => {
   await routeStatus(page, () => gapStatus(["coder"]));
   await page.goto("/app/", { waitUntil: "load" });
 
@@ -84,8 +84,13 @@ test("a real setup gap renders ONE actionable banner, and Configure opens the pl
   await expect(page.locator(".shell-warning-banner")).toHaveCount(1);
 
   await banner.getByRole("button", { name: "Configure Project Board" }).click();
-  // Opens the reporting plugin's existing Configure dialog (titled by the gap label).
-  await expect(page.getByRole("dialog", { name: "Project Board" })).toBeVisible();
+  // While Settings is closed, this deep-links into Settings on the reporting plugin's Configure
+  // PANE (Settings ▸ Plugins ▸ <plugin>, #4488), crumbed by the gap label — not a modal over Settings.
+  const overlay = page.locator(".settings-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay.locator(".pl-sidenav__item--active")).toHaveText(/Plugins/);
+  await expect(overlay.locator(".plugin-settings-crumb-current")).toHaveText("Project Board");
+  await expect(page.getByRole("dialog", { name: "Project Board" })).toHaveCount(0);
 });
 
 test("a gap whose action the host sanitized away renders message + dismiss, and no CTA", async ({ page }) => {

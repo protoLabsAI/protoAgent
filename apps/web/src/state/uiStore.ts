@@ -77,9 +77,12 @@ type UIState = {
   globalSettingsSection?: string;
   openGlobalSettings: (section?: string) => void;
   closeGlobalSettings: () => void;
-  // Per-plugin Configure dialog (ADR 0059), opened from the plugin manager OR a rail
-  // context-menu "Configure…" (ADR 0036). EPHEMERAL — partialized out of persistence so a
-  // refresh never reopens it. App mounts one root `PluginSettingsDialog` driven by this.
+  // Per-plugin Configure PANE (settings-ux C1, #4488 — supersedes ADR 0059's dialog on the
+  // container), opened from the plugin manager, a plugin's own "Configure…", a rail context-menu
+  // "Configure…" (ADR 0036), or a setup-gap banner. Selects the plugin's pane inside Settings ▸
+  // Plugins rather than stacking a modal over Settings; `openPluginConfig` opens Settings on the
+  // Plugins section too, so a deep-link works while Settings is closed. EPHEMERAL — partialized
+  // out of persistence so a refresh never reopens it.
   configurePlugin?: { id: string; name: string };
   openPluginConfig: (id: string, name: string) => void;
   closePluginConfig: () => void;
@@ -367,9 +370,25 @@ export const useUI = create<UIState>()(
       // persistence for the same reason), and a stale one outliving its dialog is the shape
       // the bug above wore. The section the operator last SELECTED lives in `settingsSection`,
       // which is what a later plain open (⌘, / the utility pill) correctly resumes on.
-      closeGlobalSettings: () => set({ globalSettingsOpen: false, globalSettingsSection: undefined }),
+      // Closing Settings also drops the selected plugin pane, so a later plain open (⌘, / the
+      // utility pill) lands on the plugin LIST, not a pane the operator already left — only a
+      // fresh `openPluginConfig` deep-link re-selects one.
+      closeGlobalSettings: () => set({ globalSettingsOpen: false, globalSettingsSection: undefined, configurePlugin: undefined }),
       configurePlugin: undefined,
-      openPluginConfig: (id, name) => set({ configurePlugin: { id, name } }),
+      // Select the plugin's pane AND open Settings on the Plugins section (mirrors
+      // openToolSettings' atomic open) — the store creator exposes only `set`, so this writes
+      // the active `settingsSection` too, for the same landing-site reason openGlobalSettings
+      // does. This is what makes a Configure deep-link open Settings directly on the pane while
+      // Settings is closed (#4488 r4). SettingsSurface ▸ Plugins reads `configurePlugin` to show
+      // the pane vs the list.
+      openPluginConfig: (id, name) =>
+        set({
+          configurePlugin: { id, name },
+          globalSettingsOpen: true,
+          globalSettingsSection: "plugins",
+          settingsSection: "plugins",
+        }),
+      // Back link / Escape — return to the plugin list, leaving Settings open.
       closePluginConfig: () => set({ configurePlugin: undefined }),
       setupStepWatch: undefined,
       watchSetupStep: (plugin, key) => {

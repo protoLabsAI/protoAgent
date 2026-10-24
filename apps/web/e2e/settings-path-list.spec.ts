@@ -10,9 +10,11 @@ async function openDemoConfig(page) {
   await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
   await page.locator(".plugin-table tbody tr", { hasText: "Demo Plugin" }).getByRole("button", { name: "Configure" }).click();
-  const dialog = page.getByRole("dialog", { name: "Demo Plugin" });
-  await expect(dialog.locator('.setting-row[data-key="demo.data_dirs"]')).toBeVisible();
-  return dialog;
+  // Configure opens a settings PANE now (#4488), crumbed by the plugin name — not a modal.
+  const pane = page.locator(".plugin-settings-pane");
+  await expect(pane.locator(".plugin-settings-crumb-current")).toHaveText("Demo Plugin");
+  await expect(pane.locator('.setting-row[data-key="demo.data_dirs"]')).toBeVisible();
+  return pane;
 }
 
 test("Data folders: a legacy comma value loads as rows; Add folder browses; save posts a \\n-joined string", async ({ page }) => {

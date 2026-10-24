@@ -65,7 +65,6 @@ import {
 } from "../codeviewer/enabled";
 import { CODE_SURFACE_ID } from "../codeviewer/open";
 import { SettingsOverlay } from "../settings/SettingsOverlay";
-import { PluginSettingsDialog } from "../plugins/PluginSettingsDialog";
 import { PluginRailManage } from "../plugins/PluginRailManage";
 import { AppDrawer } from "./AppDrawer";
 import { HamburgerMenu } from "./HamburgerMenu";
@@ -386,9 +385,6 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   const globalSettingsSection = useUI((s) => s.globalSettingsSection);
   const openGlobalSettings = useUI((s) => s.openGlobalSettings);
   const closeGlobalSettings = useUI((s) => s.closeGlobalSettings);
-  const configurePlugin = useUI((s) => s.configurePlugin);
-  const configurePluginRuntime = runtime?.plugins?.find((plugin) => plugin.id === configurePlugin?.id);
-  const closePluginConfig = useUI((s) => s.closePluginConfig);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
   const [projectPath, setProjectPath] = useLocalStorageState("protoagent.projectPath", "");
@@ -1422,19 +1418,9 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
       section={globalSettingsSection}
       onClose={closeGlobalSettings}
     />
-    {/* Per-plugin Configure dialog (ADR 0059) — opened from a rail context-menu "Configure…"
-        (ADR 0036). Store-driven so it can be triggered from anywhere; one root mount. */}
-    {configurePlugin && (
-      <PluginSettingsDialog
-        pluginId={configurePlugin.id}
-        pluginName={configurePlugin.name}
-        settingsTabs={configurePluginRuntime?.settings_tabs}
-        pluginLoaded={configurePluginRuntime?.loaded}
-        pluginError={configurePluginRuntime?.error}
-        open
-        onClose={closePluginConfig}
-      />
-    )}
+    {/* Per-plugin Configure now opens as a Settings PANE (Settings ▸ Plugins ▸ <plugin>, #4488 —
+        superseding the ADR 0059 modal): `openPluginConfig` opens Settings on the Plugins section
+        and SettingsSurface renders the pane, so there is no longer a root dialog mount here. */}
     {/* Rail context-menu plugin actions (#1521 / #1522) — fires an Update, or renders the
         Uninstall confirm, for a plugin right-clicked on its rail icon. One root mount. */}
     <PluginRailManage />

@@ -265,13 +265,19 @@ test("right-click the empty rail → 'Manage plugins…' opens Settings ▸ Plug
   await expect(overlay.locator(".pl-sidenav__item--active")).toHaveText(/Plugins/);
 });
 
-test("right-click a plugin view → Configure opens that plugin's settings dialog", async ({ page }) => {
-  // ADR 0036/0059 — a plugin view's rail menu offers "Configure…", which opens the owning
-  // plugin's per-plugin settings dialog (titled with the plugin's display name, "Boardy").
+test("right-click a plugin view → Configure opens that plugin's settings pane", async ({ page }) => {
+  // ADR 0036 + #4488 — a plugin view's rail menu offers "Configure…", which (while Settings is
+  // closed) opens Settings directly on the owning plugin's Configure PANE (Settings ▸ Plugins ▸
+  // <plugin>), crumbed with the plugin's display name "Boardy" — not a modal over Settings.
   await page.goto("/app/", { waitUntil: "load" });
   await page.locator(".pl-rail").getByRole("button", { name: "Board", exact: true }).click({ button: "right" });
   await page.locator(".pl-menu").getByText("Configure", { exact: false }).click();
-  await expect(page.getByRole("dialog", { name: "Boardy" })).toBeVisible();
+  const overlay = page.locator(".settings-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay.locator(".pl-sidenav__item--active")).toHaveText(/Plugins/);
+  await expect(overlay.locator(".plugin-settings-crumb-current")).toHaveText("Boardy");
+  // It's a pane, not a stacked dialog — there is no per-plugin dialog named after the plugin.
+  await expect(page.getByRole("dialog", { name: "Boardy" })).toHaveCount(0);
 });
 
 test("right-click a rail icon → 'Manage plugins…' opens Settings ▸ Plugins", async ({ page }) => {
@@ -285,12 +291,16 @@ test("right-click a rail icon → 'Manage plugins…' opens Settings ▸ Plugins
   await expect(overlay.locator(".pl-sidenav__item--active")).toHaveText(/Plugins/);
 });
 
-test("right-click a plugin's util-bar widget → Configure opens its settings dialog", async ({ page }) => {
-  // ADR 0036/0059 — the util-bar widget context menu mirrors the rail-icon Configure.
+test("right-click a plugin's util-bar widget → Configure opens its settings pane", async ({ page }) => {
+  // ADR 0036 + #4488 — the util-bar widget context menu mirrors the rail-icon Configure, opening
+  // Settings on the plugin's Configure pane.
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("util-widget-snap").click({ button: "right" });
   await page.locator(".pl-menu").getByText("Configure", { exact: false }).click();
-  await expect(page.getByRole("dialog", { name: "Boardy" })).toBeVisible();
+  const overlay = page.locator(".settings-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay.locator(".plugin-settings-crumb-current")).toHaveText("Boardy");
+  await expect(page.getByRole("dialog", { name: "Boardy" })).toHaveCount(0);
 });
 
 test("a plugin view with placement:right becomes a right-sidebar panel", async ({ page }) => {
