@@ -40,41 +40,31 @@ def test_register_mounts_page_and_data_routers():
 
 
 def test_view_page_is_self_contained_and_kit_backed():
-    from plugins.orgchart.view import _VIEW_PAGE
+    from plugins.orgchart.view import view_page
 
-    page = _VIEW_PAGE.read_text(encoding="utf-8")
-    # Single-file on purpose: a split-out sub-resource would need public_paths (the
-    # artifact plugin's documented fleet-wide 401 incident).
+    page = view_page()
+    # Authored as three files, served as ONE document: a split-out sub-resource would need
+    # public_paths (the artifact plugin's documented fleet-wide 401 incident).
+    assert "__ORGCHART_CSS__" not in page and "__ORGCHART_JS__" not in page
     assert "plugin-kit.js" in page and "initPluginView" in page
-    assert '<script src="/plugins/' not in page
+    assert '<script src="/plugins/' not in page and '<link rel="stylesheet" href="/plugins/' not in page
     assert "/api/plugins/orgchart/topology" in page
+    # Live: it follows the ledger's in-flight edges on the bus, with a catch-up endpoint.
+    assert '"delegation.#"' in page and "/api/ledger/live" in page
 
 
 def test_action_buttons_use_the_ds_plugin_kit_classes():
     """protoContent#551 (card 5): ACTION buttons must be the DS button. This view is plain
-    HTML backed by the kit's CSS, so Refresh and panel-Close carry `pl-btn` classes — the
-    ds_audit hand-rolled-control rule flags a raw styled <button>, not these."""
-    from plugins.orgchart.view import _VIEW_PAGE
+    HTML backed by the kit's CSS, so Refresh and the drawer's Close carry `pl-btn` classes —
+    the ds_audit hand-rolled-control rule flags a raw styled <button>, not these."""
+    from plugins.orgchart.view import view_page
 
-    page = _VIEW_PAGE.read_text(encoding="utf-8")
-
-    # Refresh: sized DS button, type=button, id + title preserved so the click handler binds.
-    assert '<button class="pl-btn pl-btn--sm" type="button" id="refresh"' in page
+    page = view_page()
+    assert '<button class="pl-btn pl-btn--sm pl-btn--ghost" type="button" id="refresh"' in page
     assert 'title="Drop caches and re-crawl the fleet"' in page
-
-    # Panel close: ghost icon DS button, type=button, aria-label, id + title preserved.
-    assert (
-        '<button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" type="button" '
-        'id="panel-close" title="Close" aria-label="Close"' in page
-    )
-
-    # The hand-rolled control styling is gone — only the close-button float layout may stay,
-    # and no local button rule reintroduces a literal colour/size.
-    assert "button.refresh" not in page
-    assert ".panel .close" not in page
-
-    # The script still binds both controls by id (behaviour unchanged).
-    assert '$("refresh")' in page and '$("panel-close")' in page
+    assert '<button class="pl-btn pl-btn--ghost pl-btn--icon pl-btn--sm" type="button" id="d-close" aria-label="Close"' in page
+    # The script binds both controls by id.
+    assert '$("refresh")' in page and '$("d-close")' in page
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

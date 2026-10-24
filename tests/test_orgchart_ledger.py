@@ -23,7 +23,7 @@ def _no_host(monkeypatch):
 def _nodes():
     return {
         "http://self": {"id": "http://self", "name": "gina", "kind": "self", "up": True},
-        "acp:http://self#coder": {"id": "acp:http://self#coder", "name": "coder", "kind": "acp", "up": True},
+        "acp:http://self#coder": {"id": "acp:http://self#coder", "name": "coder", "kind": "coder", "up": True},
         "http://peer": {"id": "http://peer", "name": "hermes", "kind": "agent", "up": True},
     }
 

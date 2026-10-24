@@ -504,14 +504,20 @@ async def dispatch_into_room(
             dispatch_kwargs["origin_session_id"] = origin_session_id
         if timeout is not None:
             dispatch_kwargs["timeout"] = timeout
-        reply = str(
-            await registry.dispatch(
-                target,
-                _prompt(window, truncated, target, message, may_pass=drop_silence),
-                **dispatch_kwargs,
-            )
-            or ""
-        ).strip()
+        from graph import ledger
+
+        # The delegate gets the room's catch-up wrapped around the message; the ledger and
+        # the live view record what was ASKED, not the wrapper's "You are taking part in a
+        # group chat…" preamble.
+        with ledger.describing(message):
+            reply = str(
+                await registry.dispatch(
+                    target,
+                    _prompt(window, truncated, target, message, may_pass=drop_silence),
+                    **dispatch_kwargs,
+                )
+                or ""
+            ).strip()
     except Exception as exc:  # noqa: BLE001 — surfaced in the room, not raised at the operator
         # Bare `str(exc)` — this string is read by an operator, and the exception TYPE
         # is noise to them. The type goes to the log, which is who wants it.

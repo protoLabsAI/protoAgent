@@ -52,6 +52,8 @@ _LIVE_MAX = 256
 _LIVE_BY_TASK: dict[str, str] = {}
 #: The open edge the current task is working inside, for nesting and for progress.
 _CURRENT: contextvars.ContextVar[str | None] = contextvars.ContextVar("ledger_current_edge", default=None)
+#: What the caller ASKED, when the text a funnel dispatches wraps it (``describing``).
+_DESCRIBING: contextvars.ContextVar[str | None] = contextvars.ContextVar("ledger_describing", default=None)
 #: Bus payload caps — every frame is fanned out to every open console.
 _WHAT_MAX = 240
 _ERROR_MAX = 300
@@ -71,6 +73,18 @@ def _publish(topic: str, data: dict) -> None:
             HOST.publish(topic, data, retain=False)
     except Exception:  # noqa: BLE001 — the live view must never cost a dispatch
         log.debug("[ledger] publish %s failed", topic, exc_info=True)
+
+
+@contextmanager
+def describing(text: str):
+    """Record ``text`` as the ``what`` of the next edge opened inside this block, instead of
+    the prompt the funnel dispatches. For a caller that wraps the ask before it reaches the
+    funnel (the room's catch-up preamble): the record should say what was asked."""
+    token = _DESCRIBING.set(text)
+    try:
+        yield
+    finally:
+        _DESCRIBING.reset(token)
 
 
 def current_edge_id() -> str | None:
@@ -319,6 +333,10 @@ def dispatch(
     import asyncio
     from types import SimpleNamespace
 
+    described = _DESCRIBING.get()
+    if described is not None:
+        what = described
+        _DESCRIBING.set(None)  # one edge — a nested dispatch describes its own ask
     started = time.monotonic()
     # A SimpleNamespace, not a class body: a class body does not close over the enclosing
     # function's locals, so `task_id = task_id` inside one raises NameError rather than

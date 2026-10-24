@@ -123,13 +123,24 @@ def _fleet_remotes() -> list[dict]:
         return []
 
 
+def _configured_name() -> str:
+    """The running config's identity name — the same name the ledger stamps as ``from``,
+    so the chart's own node and the activity feed agree on who "this agent" is."""
+    try:
+        from runtime.state import STATE
+
+        return str(getattr(getattr(STATE, "graph_config", None), "identity_name", "") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _self_identity() -> tuple[str, str, str]:
     """(name, base, role) for the host agent. The base prefers ``A2A_PUBLIC_URL`` (what
     peers would report back, so edge de-dup works), else the local listener."""
     from graph.config_io import load_yaml_doc
 
     doc = load_yaml_doc() or {}
-    name = (doc.get("identity") or {}).get("name") or os.environ.get("AGENT_NAME") or "this agent"
+    name = (doc.get("identity") or {}).get("name") or os.environ.get("AGENT_NAME") or _configured_name() or "this agent"
     role = _short(((doc.get("a2a") or {}).get("description") or "").strip()) or "orchestrator"
     base = _norm(os.environ.get("A2A_PUBLIC_URL") or "")
     if not base:
@@ -343,6 +354,10 @@ def _work_index(rows: list[dict]) -> dict[tuple[str, str], dict]:
     return out
 
 
+#: Chart node kind → the ledger's ``to_kind`` for the same delegate.
+LEDGER_KIND = {"self": "a2a", "agent": "a2a", "coder": "acp", "model": "openai", "subagent": "subagent"}
+
+
 def _apply_work(nodes: dict[str, dict], edges: list[dict], self_base: str, rows: list[dict]) -> None:
     """Overlay real delegation volume onto the capability graph, and add the subagent
     nodes the graph has never had.
@@ -361,9 +376,12 @@ def _apply_work(nodes: dict[str, dict], edges: list[dict], self_base: str, rows:
     """
     index = _work_index(rows)
     for node in nodes.values():
-        key = (str(node.get("kind") or "").lower(), str(node.get("name") or "").strip().lower())
-        # a2a peers are drawn with kind "agent"/"self"; the ledger calls them "a2a".
-        work = index.get(key) or index.get(("a2a", key[1]))
+        kind = str(node.get("kind") or "").lower()
+        name = str(node.get("name") or "").strip().lower()
+        # The chart names a node by what it IS (agent / coder / model); the ledger by the
+        # delegate TYPE that carried the work (a2a / acp / openai). Matching the chart's
+        # kind against the ledger's left every coder and model node without its work.
+        work = index.get((LEDGER_KIND.get(kind, kind), name))
         if work:
             node["work"] = work
 

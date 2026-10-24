@@ -119,3 +119,18 @@ async def test_the_live_endpoint_returns_what_is_in_flight(bus):
     edge_id = ledger.open_edge(to_kind="acp", to_name="claude-code", what="go")
     body = TestClient(app).get("/api/ledger/live").json()
     assert [e["id"] for e in body["edges"]] == [edge_id] and body["now"] > 0
+
+
+async def test_a_wrapped_ask_is_recorded_as_what_was_asked(bus, tmp_path, monkeypatch):
+    import runtime.state as rs
+    from observability.ledger_store import LedgerStore
+
+    store = LedgerStore(str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(rs.STATE, "ledger_store", store, raising=False)
+    with ledger.describing("add clamp"):
+        with ledger.dispatch(to_kind="acp", to_name="claude-code", what="You are taking part in a group chat…\n\nadd clamp"):
+            with ledger.dispatch(to_kind="subagent", to_name="inner", what="inner ask"):
+                pass
+    started = {d["to_name"]: d["what"] for t, d, _ in bus if t == "delegation.started"}
+    assert started == {"claude-code": "add clamp", "inner": "inner ask"}
+    assert {r["to_name"]: r["what"] for r in store.recent()} == {"claude-code": "add clamp", "inner": "inner ask"}
