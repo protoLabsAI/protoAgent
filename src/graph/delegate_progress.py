@@ -452,7 +452,10 @@ class DelegateProgress:
         if self._edge_id:
             from graph.ledger import note_progress
 
-            note_progress(self._edge_id, snapshot)
+            try:
+                note_progress(self._edge_id, snapshot)
+            except Exception:  # noqa: BLE001 — a live view must never cost the delegation
+                log.warning("[delegate-progress] ledger note for %r raised", self.target, exc_info=True)
         if final and self._timeline:
             # Only the done snapshot, and only for the turn driver — see ``take_timeline``.
             snapshot["timeline"] = [dict(e) for e in self._timeline]

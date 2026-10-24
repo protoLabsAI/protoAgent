@@ -151,3 +151,20 @@ async def test_an_evicted_edge_is_announced_as_gone(bus, monkeypatch):
     ledger.open_edge(to_kind="acp", to_name="new")
     gone = [d for t, d, _ in bus if t == "delegation.finished"]
     assert [d["id"] for d in gone] == [first] and gone[0]["outcome"] == "cancelled"
+
+
+async def test_a_failing_ledger_note_still_reaches_the_card(bus, monkeypatch):
+    def boom(*_a, **_kw):
+        raise RuntimeError("ledger down")
+
+    monkeypatch.setattr(ledger, "note_progress", boom)
+    frames: list[dict] = []
+
+    async def card(snapshot):
+        frames.append(snapshot)
+
+    with ledger.dispatch(to_kind="acp", to_name="claude-code"):
+        t = dp.DelegateProgress("claude-code", card, min_interval=0)
+        await t.on_text("Reading.")
+        await t.finish(ok=True)
+    assert frames and frames[-1]["done"] is True
