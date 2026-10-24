@@ -139,15 +139,15 @@ function targetOf(toKind, toName, index, owner) {
 }
 
 // Runs that finished since the topology snapshot was taken (it is cached server-side for
-// a few seconds): counted on their node at once, and dropped when a snapshot whose
-// `last_at` covers them arrives — so a node reads "1 run · 100% ok" the moment it lands.
-const LANDED = new Map();   // live edge id → {node, outcome, ms, cost, at}
+// a few seconds): counted on their node at once, and dropped once a snapshot's run count
+// has caught up with them — so a node reads "1 run · 100% ok" the moment it lands.
+const LANDED = new Map();   // live edge id → {node, outcome, ms, cost, at, upTo}
 function withLanded(n) {
   let w = n.work;
-  const last = w?.last_at ? Date.parse(w.last_at) / 1000 + skew : 0;
+  const runs = w?.dispatches || 0;
   for (const [k, l] of LANDED) {
     if (l.node !== n.id) continue;
-    if (last >= l.at - 2) { LANDED.delete(k); continue; }
+    if (runs >= l.upTo) { LANDED.delete(k); continue; }
     w = { dispatches: 0, ok: 0, failed: 0, cancelled: 0, cost_usd: null, priced: 0, duration_ms: 0, ...w };
     w.dispatches += 1;
     const o = l.outcome === "failed" || l.outcome === "cancelled" ? l.outcome : "ok";
@@ -733,14 +733,22 @@ function finishLive(d) {
   const e = LIVE.get(d.id);
   // Idempotent: a frame and a reconcile can both report the same end.
   if (!e || e.status !== "running") return;
-  Object.assign(e, { status: d.outcome || "ok", duration_ms: d.duration_ms, cost_usd: d.cost_usd, error: d.error, endedAt: now() });
+  // A member's edge that ended between polls carries no duration: it ran from its start until now.
+  const ms = d.duration_ms != null ? d.duration_ms : e.started_at ? Math.max(0, (serverNow() - Number(e.started_at)) * 1000) : null;
+  Object.assign(e, { status: d.outcome || "ok", duration_ms: ms, cost_usd: d.cost_usd, error: d.error, endedAt: now() });
   // The finished edge is recorded now — add it to the history the feed + drawer read,
   // without waiting for the next ledger poll.
   RECENT.unshift({ edge_id: "live-" + e.id, _live: e.id, at: new Date().toISOString(), from_agent: e.from, to_kind: e.to_kind,
     to_name: e.to_name, what: e.what, outcome: e.status, duration_ms: e.duration_ms, cost_usd: e.cost_usd, error: e.error, origin: e.origin });
   if (GRAPH) {
     const n = targetOf(e.to_kind, e.to_name, GRAPH.index, e.owner && GRAPH.nodes.has(e.owner) ? e.owner : SELF);
-    if (!n.synthetic) LANDED.set(e.id, { node: n.id, outcome: e.status, ms: e.duration_ms, cost: e.cost_usd, at: serverNow() });
+    if (!n.synthetic) {
+      // The snapshot has absorbed this run once its count reaches what it was at landing,
+      // plus every run still waiting on this node, plus this one.
+      const waiting = [...LANDED.values()].filter((l) => l.node === n.id).length;
+      const seen = (TOPO?.nodes || []).find((x) => x.id === n.id)?.work?.dispatches || 0;
+      LANDED.set(e.id, { node: n.id, outcome: e.status, ms: e.duration_ms, cost: e.cost_usd, at: serverNow(), upTo: seen + waiting + 1 });
+    }
     if (LANDED.size > 200) LANDED.delete(LANDED.keys().next().value);
   }
   landNode(e);
