@@ -18,8 +18,46 @@ import asyncio
 import logging
 import os
 import signal
+import uuid
+
+from fastapi import Body, HTTPException, Request
 
 log = logging.getLogger("protoagent.server.restart")
+_BOOT_ID = uuid.uuid4().hex
+
+
+def restart_readiness() -> dict:
+    """Read existing work registries; never infer idle from an unavailable store."""
+    from runtime.state import STATE
+    from runtime.turn_activity import active_sessions
+
+    busy = []
+    if active_sessions():
+        busy.append("a chat turn is running")
+    if STATE.background_mgr is not None:
+        jobs = STATE.background_mgr.store.list(status="running", limit=500, include_dismissed=True)
+        if jobs:
+            count = f"{len(jobs)}" if len(jobs) < 500 else "500 or more"
+            busy.append(f"{count} background job{'s' if len(jobs) != 1 else ''}")
+    supervised = STATE.uvicorn_server is not None or bool(os.environ.get("PROTOAGENT_FLEET_TOKEN"))
+    return {
+        "idle": not busy, "busy": busy, "supervised": supervised,
+        "how_to": "" if supervised else "Stop the server and start it again the way you launched it.",
+        "boot_id": _BOOT_ID,
+    }
+
+
+def audit_restart(request: Request, reason: str, *, target: str = "self") -> None:
+    from observability.audit import audit_logger
+
+    actor = getattr(request.state, "device_id", None) or "operator"
+    reason = " ".join(reason.split())[:1000]
+    audit_logger.log(
+        session_id="operator", tool="restart", args={"actor": actor, "reason": reason, "target": target},
+        result_summary="Restart requested", duration_ms=0, success=True,
+    )
+    log.info("[restart] actor=%s target=%s reason=%s", actor, target, reason)
+
 
 
 def reexec_command(executable: str, argv: list[str], frozen: bool) -> list[str]:
@@ -64,18 +102,41 @@ def register_runtime_control_routes(app) -> None:
 
     router = APIRouter()
 
+    @router.get("/api/restart/readiness")
+    async def _readiness():
+        return restart_readiness()
+
     @router.post("/api/restart")
-    async def _restart():
+    async def _restart(request: Request, body: dict = Body(default={})):
         """Gracefully restart the server. Returns 202 immediately; the process drains
         and re-execs a moment later, and the console reconnects via the boot gate."""
         from runtime.state import STATE
 
+        audit_restart(request, str(body.get("reason", "operator request")))
+        # Existing callers retain their graceful restart; Settings explicitly requests
+        # the idle guard, rechecked here after the operator's confirmation.
+        if body.get("when_idle"):
+            readiness = restart_readiness()
+            if not readiness["supervised"]:
+                raise HTTPException(409, readiness["how_to"])
+            if not readiness["idle"]:
+                raise HTTPException(409, "; ".join(readiness["busy"]))
         STATE.restart_requested = True
 
         async def _drain_then_signal():
             # Let the 202 flush to the client, then ask the server to wind down; _main
             # re-execs once its run() returns.
             await asyncio.sleep(0.3)
+            if body.get("when_idle"):
+                # A turn may have started while the response flushed. Keep the
+                # accepted restart queued until the existing registries are idle.
+                try:
+                    while not restart_readiness()["idle"]:
+                        await asyncio.sleep(1)
+                except Exception:
+                    STATE.restart_requested = False
+                    log.exception("[restart] could not verify idle; restart abandoned")
+                    return
             if request_server_exit():
                 return
             # No live Server reference (an embedding host that runs the app itself).

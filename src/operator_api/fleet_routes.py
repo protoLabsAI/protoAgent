@@ -294,7 +294,31 @@ def register_fleet_routes(app) -> None:
             raise HTTPException(400, str(exc))
 
     @app.post("/api/fleet/{name}/stop")
-    async def _stop_agent(name: str):
+    async def _stop_agent(name: str, request: Request, body: dict = Body(default={})):
+        if body.get("reason"):
+            from operator_api.runtime_routes import audit_restart
+
+            audit_restart(request, str(body["reason"]), target=name)
+        if body.get("when_idle"):
+            # Recheck on the hub immediately before stopping, using the same bounded,
+            # authenticated member read as the console. Unreachable is never idle.
+            target = proxy._resolve_slug(name)
+            if target is None or target[0] != "local":
+                raise HTTPException(409, "The agent is not reachable; no restart was attempted.")
+            from graph.fleet.service_token import resolve_service_token
+
+            _, base, _ = target
+            headers = {"authorization": f"Bearer {resolve_service_token()}"}
+            try:
+                response = await proxy._get_client().get(
+                    f"{base}/api/restart/readiness", headers=headers, timeout=5,
+                )
+                response.raise_for_status()
+                readiness = response.json()
+            except Exception as exc:
+                raise HTTPException(409, "Could not check whether the agent is idle; no restart was attempted.") from exc
+            if readiness.get("idle") is not True:
+                raise HTTPException(409, "The agent became busy; choose Restart when idle again.")
         try:
             res = await asyncio.to_thread(supervisor.stop, name)  # #6 — off the loop
         except supervisor.FleetError as exc:

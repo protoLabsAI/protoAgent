@@ -19,6 +19,7 @@ import { queryKeys, settingsSchemaQuery } from "../lib/queries";
 import type { PluginSettingsTabDescriptor, SettingsField, SettingsGroup } from "../lib/types";
 import { PathListPicker } from "./PathListPicker";
 import { PathPicker } from "./PathPicker";
+import { RestartNow } from "./RestartNow";
 import { fieldVisible } from "./visibility";
 
 export type PluginSettingsTab = PluginSettingsTabDescriptor & { groups: SettingsGroup[] };
@@ -118,9 +119,7 @@ export function SettingsCategory({
   // restart-pending frame message can join this pane's one restart banner (#4489).
   pluginTabs,
   renderPluginTab,
-  // Slot for the restart action (settings-ux C2/C3, #4489/protoAgent#4490). When the
-  // host offers a restart route, C3 passes a "Restart now" control here; until then the
-  // banner explains how to restart.
+  // Hosts may override the shared, idle-checked restart control.
   restartAction,
 }: {
   category: string;
@@ -155,6 +154,11 @@ export function SettingsCategory({
   // the restart_required keys of every save AND by plugin pages' restart-pending frame
   // messages. Replaces the per-field "restart" badge as the signal that a restart is due.
   const [restartLabels, setRestartLabels] = useState<string[]>([]);
+  useEffect(() => {
+    const clear = () => setRestartLabels([]);
+    window.addEventListener("protoagent:settings-restarted", clear);
+    return () => window.removeEventListener("protoagent:settings-restarted", clear);
+  }, []);
   const configureTabs = useMemo(() => pluginSettingsTabs(groups, pluginTabs), [groups, pluginTabs]);
   const [activeSettingsTab, setActiveSettingsTab] = useState("");
   useEffect(() => {
@@ -483,10 +487,11 @@ export function SettingsCategory({
                 take{pendingRestartLabels.length === 1 ? "s" : ""} effect after a restart
               </strong>
               <span className="settings-restart-items">{pendingRestartLabels.join(", ")}</span>
-              {/* The slot C3 fills with a "Restart now" control (protoAgent#4490). Until a
-                  restart route exists, say how to restart rather than offer a dead button. */}
+              {/* Never offer to restart with unsaved changes still in this pane. */}
               <span className="settings-restart-action">
-                {restartAction ?? "Restart protoAgent to apply — stop the server and start it again (python -m server)."}
+                {restartAction ?? (dirtyKeys.length
+                  ? "Save or discard your changes before restarting."
+                  : <RestartNow labels={restartLabels} />)}
               </span>
             </div>
           </Alert>

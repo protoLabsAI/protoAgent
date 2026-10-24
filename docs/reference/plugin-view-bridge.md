@@ -20,6 +20,7 @@ URL escapes that origin and the handshake silently never completes — which is 
 
 | Message | Direction | Payload |
 |---|---|---|
+| `protoagent:restart-request` | page → host | *(none)* — open the host restart confirmation |
 | `protoagent:init` | host → page | `{ token: string \| null, theme: object }` |
 | `protoagent:ready` | page → host | *(none)* |
 | `protoagent:theme` | host → page | `{ theme: object }` |
@@ -34,6 +35,10 @@ URL escapes that origin and the handshake silently never completes — which is 
 | `protoagent:contextmenu:action` | host → page | `{ itemId: string }` |
 | `protoagent:code:open` | page → host | `{ project: string, path: string, line?: number, end_line?: number, note?: string, open_in?: "pane" \| "editor" }` |
 | `protoagent:chat:compose` | page → host | `{ text: string }` — plain text, ≤ 4 KB; **drafts**, never sends |
+
+Plugin pages may send `{type: "protoagent:restart-request"}` to open the host's restart
+confirmation. The host validates the frame source and origin, checks active work, and
+waits for idle before restarting. The message never grants consent on the operator's behalf.
 
 ## The handshake — `init` / `ready`
 

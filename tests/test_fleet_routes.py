@@ -1084,3 +1084,41 @@ def test_discovery_and_activation_status_run_without_event_loop(client, monkeypa
     monkeypatch.setattr(supervisor, "status", status)
     monkeypatch.setattr(discovery, "discover", discover)
     assert getattr(client, method)(path).status_code == 200
+
+
+def test_settings_restart_checks_idle_and_audits_actor(client, monkeypatch):
+    from unittest.mock import AsyncMock, Mock
+
+    import httpx
+
+    from graph.fleet import proxy, supervisor
+    from observability.audit import audit_logger
+
+    audit = Mock()
+    stop = Mock(return_value={"stopped": True})
+    monkeypatch.setattr(audit_logger, "log", audit)
+    monkeypatch.setattr(supervisor, "stop", stop)
+    monkeypatch.setattr(proxy, "_resolve_slug", lambda name: ("local", "http://member", None))
+    monkeypatch.setattr("graph.fleet.service_token.resolve_service_token", lambda: "service")
+    upstream = Mock()
+    upstream.get = AsyncMock(return_value=httpx.Response(
+        200, json={"idle": False}, request=httpx.Request("GET", "http://member/api/restart/readiness"),
+    ))
+    monkeypatch.setattr(proxy, "_get_client", lambda: upstream)
+    body = {"when_idle": True, "reason": "settings: Self update"}
+    assert client.post("/api/fleet/member/stop", json=body).status_code == 409
+    stop.assert_not_called()
+    assert audit.call_args.kwargs["args"] == {
+        "actor": "operator", "reason": "settings: Self update", "target": "member",
+    }
+    upstream.get.return_value = httpx.Response(
+        200, json={"idle": True}, request=httpx.Request("GET", "http://member/api/restart/readiness"),
+    )
+    assert client.post("/api/fleet/member/stop", json=body).json()["ok"]
+    stop.assert_called_once_with("member")
+    upstream.get.assert_awaited_with("http://member/api/restart/readiness",
+                                   headers={"authorization": "Bearer service"}, timeout=5)
+    stop.reset_mock()
+    upstream.get.side_effect = OSError("offline")
+    assert client.post("/api/fleet/member/stop", json=body).status_code == 409
+    stop.assert_not_called()

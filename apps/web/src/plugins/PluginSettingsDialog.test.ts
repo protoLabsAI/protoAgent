@@ -80,6 +80,7 @@ let container: HTMLElement;
 let root: Root;
 
 beforeEach(() => {
+  vi.spyOn(api, "restartReadiness").mockResolvedValue({ idle: true, busy: [], supervised: true, how_to: "", boot_id: "old" });
   window.history.replaceState({}, "", "/app/agent/member/");
   vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200 })));
   container = document.createElement("div");
@@ -450,4 +451,31 @@ describe("one save model per plugin tab (#4489)", () => {
     expect(banner!.textContent).toContain("Self update");
     expect(banner!.textContent).not.toContain("Evil");
   });
+});
+
+it("opens host restart confirmation only for this plugin frame at its origin", async () => {
+  await renderPane([automation], tabs);
+  await waitForIframe();
+  const iframe = document.body.querySelector("iframe")!;
+  const send = async (origin: string, source: Window | null) => act(async () => {
+    window.dispatchEvent(new MessageEvent("message", {
+      data: { type: "protoagent:restart-request" }, origin, source,
+    }));
+  });
+  await send("https://evil.example", iframe.contentWindow);
+  expect(document.body.textContent).not.toContain("Restart this agent?");
+  await send(window.location.origin, window);
+  expect(document.body.textContent).not.toContain("Restart this agent?");
+  await act(async () => window.dispatchEvent(new MessageEvent("message", {
+    data: { type: "protoagent:settings:restart-pending", keys: ["Self update"] },
+    origin: window.location.origin, source: iframe.contentWindow,
+  })));
+  await send(window.location.origin, iframe.contentWindow);
+  expect(document.body.textContent).toContain("Restart this agent?");
+  expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain("Self update");
+  await act(async () => window.dispatchEvent(new Event("protoagent:settings-restarted")));
+  expect(document.body.textContent).not.toContain("Restart this agent?");
+  expect(document.body.querySelector(".settings-restart-banner")).toBeNull();
+  await send(window.location.origin, iframe.contentWindow);
+  expect(document.body.querySelector('[role="dialog"]')?.textContent).not.toContain("Self update");
 });

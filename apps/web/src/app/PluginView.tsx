@@ -31,6 +31,7 @@ import { pluginViewIcon } from "../lib/pluginIcon";
 import { createPluginChatComposer, defaultComposeDeps } from "./pluginChatCompose";
 import { applyNavIntent } from "./palette/nav";
 import { parseForwardedKey, parsePluginKeybindings } from "../lib/pluginKeybindings";
+import { RestartNow } from "../settings/RestartNow";
 import { useUI } from "../state/uiStore";
 import { Tabs } from "@protolabsai/ui/navigation";
 import type { PluginView as PluginViewType } from "../lib/types";
@@ -109,6 +110,14 @@ export function PluginView({
   // bare {"detail":"Not Found"} body as the "view".
   const [reachable, setReachable] = useState(false);
   const [probeAttempt, setProbeAttempt] = useState(0);
+  const [restartRequest, setRestartRequest] = useState(0);
+  const restartLabels = useRef<string[]>([]);
+  useEffect(() => {
+    const clear = () => { restartLabels.current = []; setRestartRequest(0); };
+    clear();
+    window.addEventListener("protoagent:settings-restarted", clear);
+    return () => window.removeEventListener("protoagent:settings-restarted", clear);
+  }, [src]);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   // Pending init re-post timers (see handleLoad) — cleared on unmount / src change.
   const initTimers = useRef<number[]>([]);
@@ -500,6 +509,8 @@ export function PluginView({
           },
           body: JSON.stringify({ topic, data: m.data || {} }),
         }).catch(() => {});
+      } else if (m.type === "protoagent:restart-request") {
+        setRestartRequest((value) => value + 1);
       } else if (m.type === "protoagent:settings:restart-pending") {
         // "These changes of mine need a restart" — a Configure page folding restart-only
         // settings into the settings pane's one banner (settings-ux C2, #4489). Trusted as
@@ -508,7 +519,10 @@ export function PluginView({
         const labels = Array.isArray(m.keys)
           ? m.keys.filter((k: unknown): k is string => typeof k === "string" && k.trim() !== "")
           : [];
-        if (labels.length) onRestartPendingRef.current?.(labels);
+        if (labels.length) {
+          restartLabels.current = [...new Set([...restartLabels.current, ...labels])];
+          onRestartPendingRef.current?.(labels);
+        }
       }
     };
     window.addEventListener("message", onWindowMessage);
@@ -568,6 +582,7 @@ export function PluginView({
   // Federation + the in-process `ui: react` path were retired; rich plugins serve their own UI.
   return (
     <>
+      {restartRequest > 0 && <RestartNow labels={restartLabels.current.length ? restartLabels.current : [view.label]} requestId={restartRequest} />}
       {/* Sub-tab strip above the panel card — only when there's more than one tab. A
           single-/no-tab view (e.g. Notes) has nothing to switch, so we skip the strip;
           rendering it anyway showed an empty switcher on mobile (responsive Tabs). */}
