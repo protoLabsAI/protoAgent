@@ -411,16 +411,8 @@ async def _call(tool, args):
     return getattr(result, "content", result)
 
 
-async def test_tool_refuses_project_for_non_acp_and_unknown_project(monkeypatch, projects_config):
-    tool = _tool(
-        [
-            {"name": "peer", "type": "a2a", "url": "http://127.0.0.1:9/a2a"},
-            {"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"},
-        ],
-        monkeypatch,
-    )
-    out = await _call(tool, {"target": "peer", "query": "hi", "project": "rw"})
-    assert "only applies to acp" in out
+async def test_tool_refuses_an_unknown_or_fenced_project_for_a_coder(monkeypatch, projects_config):
+    tool = _tool([{"name": "coder", "type": "acp", "command": "proto", "workdir": "/tmp"}], monkeypatch)
     out = await _call(tool, {"target": "coder", "query": "hi", "project": "ghost"})
     assert "unknown project 'ghost'" in out and "rw (rw)" in out
     out = await _call(tool, {"target": "coder", "query": "hi", "project": "ro"})
@@ -461,3 +453,22 @@ async def test_room_path_carries_the_project_across_mention_op(coder_registry, p
     from plugins.delegates.projects import current_scope
 
     assert current_scope() is None  # the scope never leaks past the call
+
+
+async def test_a_peer_handed_a_project_gets_it_named_in_the_ask(monkeypatch, projects_config):
+    # Only a coder's workdir can be scoped; refusing a peer just made the model retry
+    # without the project. The peer hears where the work is and nothing is fenced.
+    tool = _tool([{"name": "peer", "type": "a2a", "url": "http://127.0.0.1:9/a2a"}], monkeypatch)
+    sent = {}
+
+    async def fake_dispatch(registry, target, query, state, **kw):
+        sent.update(target=target, query=query, project=kw.get("project"))
+        return "done"
+
+    monkeypatch.setattr(P, "_dispatch_into_room", fake_dispatch)
+    out = await _call(tool, {"target": "peer", "query": "write the tests", "project": "rw"})
+    assert out == "done" and sent["project"] is None
+    assert sent["query"].startswith("write the tests")
+    assert "'rw'" in sent["query"] and str(projects_config["rw"].resolve()) in sent["query"]
+    await _call(tool, {"target": "peer", "query": "hi", "project": "ghost"})
+    assert "'ghost'" in sent["query"]
