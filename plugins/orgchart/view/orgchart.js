@@ -483,12 +483,21 @@ function renderStats() {
   $("stats").innerHTML = parts.join("");
 }
 
+let FILTER_SIG = "";
 function renderFilters() {
   const counts = {};
   for (const n of TOPO?.nodes || []) counts[n.kind] = (counts[n.kind] || 0) + 1;
-  $("filters").innerHTML = KINDS.filter((k) => counts[k.kind] || HIDDEN.has(k.kind))
+  // Rebuild only when the chips would change: a topology poll otherwise replaces the
+  // button a keyboard user is focused on, and focus falls back to the page.
+  const sig = JSON.stringify([counts, [...HIDDEN].sort()]);
+  if (sig === FILTER_SIG) return;
+  FILTER_SIG = sig;
+  const box = $("filters");
+  const focused = box.contains(document.activeElement) ? document.activeElement.dataset.kind : null;
+  box.innerHTML = KINDS.filter((k) => counts[k.kind] || HIDDEN.has(k.kind))
     .map((k) => `<button class="chip" type="button" data-kind="${k.kind}" aria-pressed="${!HIDDEN.has(k.kind)}">${k.label}<span class="n">${counts[k.kind] || 0}</span></button>`)
     .join("");
+  if (focused) box.querySelector(`button[data-kind="${focused}"]`)?.focus();
 }
 let resizeT = 0;
 addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(render, 120); });
