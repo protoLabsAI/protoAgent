@@ -212,7 +212,7 @@ async def test_project_dispatch_sets_only_workdir_and_never_mutates_the_roster(c
     class _Stub:
         last_stop_reason = "end_turn"
 
-        async def prompt(self, query, timeout=None):
+        async def prompt(self, query, timeout=None, **_callbacks):
             return "ok"
 
     def _client_for(spec):

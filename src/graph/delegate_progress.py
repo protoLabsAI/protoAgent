@@ -132,6 +132,14 @@ async def _no_card(_snapshot: dict) -> None:
     record (``delegation.progress``), they just have no chat card to update."""
 
 
+def is_card_sink(sink: Sink | None) -> bool:
+    """True for a sink a CARD bound — false for none, and for the ledger-only no-op sink.
+    An adapter gives a card-less run only what is free: a coder's existing stream feeds
+    the ledger, but nothing a card would add (``fs.changed`` for the code pane, an extra
+    A2A watch connection) is spent on a run nobody is watching in chat."""
+    return sink is not None and sink is not _no_card
+
+
 def current_sink() -> Sink | None:
     """The bound card sink — or, when none is bound but the dispatch is inside an open
     ledger edge, a no-op one, so every delegation reports its live work to the ledger

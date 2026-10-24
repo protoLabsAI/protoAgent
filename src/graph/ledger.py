@@ -128,8 +128,8 @@ def open_edge(
             "started_at": time.time(),
         }
         while len(_LIVE) >= _LIVE_MAX:
-            stale = next(iter(_LIVE))
-            _forget(stale)
+            # Out of room: drop the oldest — and say so, or a view keeps drawing it running.
+            close_edge(next(iter(_LIVE)), outcome="cancelled", error="no longer tracked (live registry full)")
         _LIVE[edge_id] = edge
         if task_id:
             _LIVE_BY_TASK[task_id] = edge_id

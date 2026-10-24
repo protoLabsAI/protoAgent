@@ -875,14 +875,16 @@ class A2aAdapter(Adapter):
             # Live progress for the delegation card (#3979): only when whoever owns the card
             # bound a sink AND the peer's card advertises streaming — a non-streaming peer
             # keeps the spinner and the final reply, exactly as before.
-            from graph.delegate_progress import DelegateProgress, current_sink
+            from graph.delegate_progress import DelegateProgress, current_sink, is_card_sink
 
             from .a2a_progress import LiveView
 
             sink = current_sink()
             live = (
                 LiveView(DelegateProgress(d.name, sink, announce_writes=_writes_are_local(d.url)))
-                if sink is not None and info.get("streaming")
+                # A card only: the watch is an extra connection per dispatch, and a peer that
+                # is itself protoAgent reports its own work to the org chart from its ledger.
+                if is_card_sink(sink) and info.get("streaming")
                 else None
             )
             try:

@@ -599,3 +599,19 @@ def test_a_peers_coder_wears_the_peers_record_and_its_history_is_readable(monkey
     assert hist["readable"] is True and hist["edges"][0]["edge_id"] == 9
     # A node the crawl couldn't read has no history to give — and no token is invented.
     assert asyncio.run(topo.get_history({}, BETA)) == {"owner": BETA, "edges": [], "readable": False}
+
+
+def test_a_peers_live_edges_are_whitelisted_and_typed():
+    """A peer's payload is untrusted input to every console that renders it: unknown keys
+    are dropped and numbers are numbers — a string `started_at` can't smuggle markup."""
+    dirty = {
+        "id": "e1", "to_kind": "acp", "to_name": "coder", "started_at": '"><img src=x onerror=alert(1)>',
+        "evil": "<script>", "progress": {"tool_count": "<b>9</b>", "plan": [{"content": "x", "status": "pending", "x": 1}],
+                                         "current_tool": {"name": "Edit", "kind": "edit", "locations": [{"path": "a.py", "line": "<i>"}]}},
+    }
+    e = topo._clean_live(dirty, "http://peer")
+    assert "evil" not in e and e["owner"] == "http://peer"
+    assert isinstance(e["started_at"], float)
+    assert e["progress"]["tool_count"] == 0 and e["progress"]["plan"] == [{"content": "x", "status": "pending"}]
+    assert e["progress"]["current_tool"]["locations"] == [{"path": "a.py"}]
+    assert topo._clean_live({"to_name": "no id"}, "http://peer") is None

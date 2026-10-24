@@ -151,3 +151,28 @@ def test_a_peers_own_record_lands_on_its_own_delegates_and_subagents():
     # The peer's subagent is the peer's worker, not ours: its own id, an edge from the peer.
     assert "subagent:http://peer#researcher" in nodes
     assert {"from": "http://peer", "to": "subagent:http://peer#researcher", "kind": "task"} in edges
+
+
+def test_a_shared_node_keeps_our_record_and_sums_the_peers():
+    nodes, edges = _nodes(), _edges()
+    model = {"id": "model:gw/v1/big", "name": "brain", "kind": "model", "up": None}
+    shared_peer = {"id": "model:gw/v1/small", "name": "small", "kind": "model", "up": None}
+    nodes[model["id"]], nodes[shared_peer["id"]] = model, shared_peer
+    nodes["http://peer2"] = {"id": "http://peer2", "name": "p2", "kind": "agent", "up": True}
+    edges += [
+        {"from": "http://self", "to": model["id"], "kind": "delegate"},
+        {"from": "http://peer", "to": model["id"], "kind": "delegate"},
+        {"from": "http://peer", "to": shared_peer["id"], "kind": "delegate"},
+        {"from": "http://peer2", "to": shared_peer["id"], "kind": "delegate"},
+    ]
+    mine = _rows(to_kind="openai", to_name="brain", dispatches=2, ok=2, failed=0)
+    topology._apply_work(nodes, edges, "http://self", [mine])
+    hub_own = {e["to"] for e in edges if e["from"] == "http://self"}
+    for peer in ("http://peer", "http://peer2"):
+        topology._apply_work(
+            nodes, edges, peer,
+            [_rows(to_kind="openai", to_name="brain", dispatches=50), _rows(to_kind="openai", to_name="small", dispatches=3, ok=3, failed=0)],
+            owner_is_self=False, hub_own=hub_own,
+        )
+    assert nodes[model["id"]]["work"]["dispatches"] == 2       # ours wins on a node we use
+    assert nodes[shared_peer["id"]]["work"]["dispatches"] == 6  # two peers' records add up

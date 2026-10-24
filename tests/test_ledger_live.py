@@ -134,3 +134,20 @@ async def test_a_wrapped_ask_is_recorded_as_what_was_asked(bus, tmp_path, monkey
     started = {d["to_name"]: d["what"] for t, d, _ in bus if t == "delegation.started"}
     assert started == {"claude-code": "add clamp", "inner": "inner ask"}
     assert {r["to_name"]: r["what"] for r in store.recent()} == {"claude-code": "add clamp", "inner": "inner ask"}
+
+
+async def test_a_ledger_only_sink_is_not_a_card(bus):
+    async def card(_s):
+        pass
+
+    assert dp.is_card_sink(card) and not dp.is_card_sink(None)
+    with ledger.dispatch(to_kind="acp", to_name="c"):
+        assert not dp.is_card_sink(dp.current_sink())
+
+
+async def test_an_evicted_edge_is_announced_as_gone(bus, monkeypatch):
+    monkeypatch.setattr(ledger, "_LIVE_MAX", 1)
+    first = ledger.open_edge(to_kind="acp", to_name="old")
+    ledger.open_edge(to_kind="acp", to_name="new")
+    gone = [d for t, d, _ in bus if t == "delegation.finished"]
+    assert [d["id"] for d in gone] == [first] and gone[0]["outcome"] == "cancelled"

@@ -78,7 +78,8 @@ let SEL = null;             // selected node id (drawer)
 const STICKY = new Map();
 let POLL_S = 8;
 let lastSeq = -1;
-let PEERS = 0;              // readable fleet peers: their work arrives by poll, not bus
+let PEERS = 0;
+let staleRetry = 0;              // readable fleet peers: their work arrives by poll, not bus
 let eventsSeen = false;
 const HIDE_KEY = "orgchart.hidden";
 const store = {
@@ -109,7 +110,10 @@ function ago(iso) {
   if (s < 86400) return Math.round(s / 3600) + "h ago";
   return Math.round(s / 86400) + "d ago";
 }
-const money = (v) => (v == null ? "" : v < 0.01 ? "<$0.01" : "$" + v.toFixed(v < 10 ? 2 : 0));
+const money = (v) => {
+  v = v == null ? NaN : Number(v);
+  return !isFinite(v) ? "" : v < 0.01 ? "<$0.01" : "$" + v.toFixed(v < 10 ? 2 : 0);
+};
 const clip = (s, n) => { s = String(s ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
 
 // ── the merged graph ────────────────────────────────────────────────────────────────
@@ -510,7 +514,7 @@ function renderFeed() {
   if (!items.length) { $("feed").innerHTML = '<li class="none">No delegations yet.</li>'; return; }
   $("feed").innerHTML = items.map((i) => {
     const t = i.status === "running"
-      ? `<span class="t" data-start="${i.start}">${dur(serverNow() - i.start)}</span>`
+      ? `<span class="t" data-start="${Number(i.start) || 0}">${dur(serverNow() - Number(i.start))}</span>`
       : `<span class="t">${i.ms ? dur(i.ms / 1000) : ""}${i.at ? (i.ms ? " · " : "") + ago(i.at) : ""}</span>`;
     return `<li class="row ${esc(i.status)}${FRESH.has(i.id) ? " fresh" : ""}" data-kind="${esc(i.kind)}" data-name="${esc(i.to)}" data-owner="${esc(i.owner || "")}" tabindex="0">
       <span class="st">${statusIcon(i.status)}</span>
@@ -647,9 +651,10 @@ function nowCard(e, showTarget) {
   const p = e.progress || {};
   const plan = Array.isArray(p.plan) ? p.plan : [];
   const tool = p.current_tool;
+  const toolCount = Math.max(0, Math.floor(Number(p.tool_count) || 0));
   const recent = (p.recent_tools || []).slice(-5).reverse().filter((t) => !tool || t.id !== tool.id || tool.status !== "running");
   const parts = [`<div class="now">`,
-    `<div class="when">${showTarget ? `→ <b>${esc(e.to_name)}</b> · ` : ""}<span data-start="${e.started_at}">${dur(serverNow() - e.started_at)}</span>${p.tool_count ? ` · ${p.tool_count} tool call${p.tool_count > 1 ? "s" : ""}` : ""}</div>`,
+    `<div class="when">${showTarget ? `→ <b>${esc(e.to_name)}</b> · ` : ""}<span data-start="${Number(e.started_at) || 0}">${dur(serverNow() - Number(e.started_at))}</span>${toolCount ? ` · ${toolCount} tool call${toolCount > 1 ? "s" : ""}` : ""}</div>`,
     `<div class="task">${esc(clip(e.what, 400)) || "<span class=quiet>Working</span>"}</div>`];
   if (tool && tool.status === "running") {
     parts.push(`<div class="tool-now"><span class="spin"></span>${tool.kind ? `<span class="k">${esc(tool.kind)}</span>` : ""}<span class="nm">${esc(tool.name)}</span></div>`);
@@ -695,7 +700,8 @@ function upsertLive(d) {
 }
 function finishLive(d) {
   const e = LIVE.get(d.id);
-  if (!e) return;
+  // Idempotent: a frame and a reconcile can both report the same end.
+  if (!e || e.status !== "running") return;
   Object.assign(e, { status: d.outcome || "ok", duration_ms: d.duration_ms, cost_usd: d.cost_usd, error: d.error, endedAt: now() });
   // The finished edge is recorded now — add it to the history the feed + drawer read,
   // without waiting for the next ledger poll.
@@ -734,6 +740,10 @@ function onEvent(topic, d) {
 }
 
 async function loadLive() {
+  // Only an edge we already knew BEFORE asking may be concluded "ended" by its absence:
+  // one whose `started` frame arrived while the (fleet-wide, slower) request was out is
+  // simply newer than the answer, not finished.
+  const known = new Set([...LIVE.values()].filter((e) => e.status === "running").map((e) => e.id));
   // The fleet fan-in: this agent's in-flight work plus every readable peer's, each tagged
   // with its owner node. The bus only carries this agent's own frames.
   const d = await api("/api/plugins/orgchart/live");
@@ -745,7 +755,7 @@ async function loadLive() {
     upsertLive(e);
   }
   // A running edge the server no longer has ended while we weren't listening.
-  for (const e of LIVE.values()) if (e.status === "running" && !seen.has(e.id)) finishLive({ id: e.id, outcome: "ok" });
+  for (const id of known) if (!seen.has(id)) finishLive({ id, outcome: "ok" });
 }
 async function loadRecent() {
   const d = await api("/api/ledger?limit=200");
@@ -758,7 +768,9 @@ async function loadTopo(force) {
   SELF = d.self || (d.nodes || []).find((n) => n.kind === "self")?.id || "";
   if (d.poll_s) POLL_S = d.poll_s;
   renderFilters();
-  if (d.stale) setTimeout(() => loadTopo().then(render).catch(() => {}), 2500);
+  if (d.stale && !staleRetry) {
+    staleRetry = setTimeout(() => { staleRetry = 0; loadTopo().then(render).catch(() => {}); }, 2500);
+  }
 }
 
 function setLive(state) {
@@ -771,7 +783,11 @@ function setLive(state) {
 function subscribe() {
   addEventListener("message", (e) => {
     if (e.source !== window.parent || e.data?.type !== "protoagent:event") return;
-    if (typeof e.data.seq === "number") { if (e.data.seq <= lastSeq) return; lastSeq = e.data.seq; }
+    if (typeof e.data.seq === "number") {
+      // A bus that restarted counts from zero again: a big step backwards is a reset, not a replay.
+      if (e.data.seq <= lastSeq && lastSeq - e.data.seq < 64) return;
+      lastSeq = e.data.seq;
+    }
     onEvent(e.data.topic, e.data.data);
   });
   // `background: true` keeps the chart mounted while another view is up, so it is current

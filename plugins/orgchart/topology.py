@@ -367,8 +367,25 @@ def _work_index(rows: list[dict]) -> dict[tuple[str, str], dict]:
 LEDGER_KIND = {"self": "a2a", "agent": "a2a", "coder": "acp", "model": "openai", "subagent": "subagent"}
 
 
+def _add_work(a: dict, b: dict) -> dict:
+    """Two owners' records of one shared node, combined."""
+    out = dict(a)
+    for k in ("dispatches", "ok", "failed", "cancelled", "priced", "duration_ms"):
+        out[k] = int(a.get(k) or 0) + int(b.get(k) or 0)
+    costs = [c for c in (a.get("cost_usd"), b.get("cost_usd")) if c is not None]
+    out["cost_usd"] = sum(costs) if costs else None
+    out["last_at"] = max((x for x in (a.get("last_at"), b.get("last_at")) if x), default=None)
+    return out
+
+
 def _apply_work(
-    nodes: dict[str, dict], edges: list[dict], self_base: str, rows: list[dict], *, owner_is_self: bool = True
+    nodes: dict[str, dict],
+    edges: list[dict],
+    self_base: str,
+    rows: list[dict],
+    *,
+    owner_is_self: bool = True,
+    hub_own: set[str] | frozenset = frozenset(),
 ) -> None:
     """Overlay real delegation volume onto the capability graph, and add the subagent
     nodes the graph has never had.
@@ -395,6 +412,10 @@ def _apply_work(
     for node in nodes.values():
         if node.get("id") not in own:
             continue
+        # A node several owners delegate to (a shared peer, a shared model endpoint) is one
+        # node: this agent's own record wins over a peer's, and peers' records add up.
+        if not owner_is_self and node.get("id") in hub_own:
+            continue
         kind = str(node.get("kind") or "").lower()
         name = str(node.get("name") or "").strip().lower()
         # The chart names a node by what it IS (agent / coder / model); the ledger by the
@@ -402,7 +423,7 @@ def _apply_work(
         # kind against the ledger's left every coder and model node without its work.
         work = index.get((LEDGER_KIND.get(kind, kind), name))
         if work:
-            node["work"] = work
+            node["work"] = _add_work(node["work"], work) if (not owner_is_self and node.get("work")) else work
 
     for (kind, name), work in index.items():
         if kind != "subagent":
@@ -639,9 +660,10 @@ async def _build(cfg: dict) -> dict:
 
     # Overlay what actually happened on top of what is merely possible (the ledger).
     _apply_work(nodes, edges, self_base, _ledger_edges())
+    hub_own = {e["to"] for e in edges if e.get("from") == self_base}
     for b, rows in zip(readable, peer_rows):
         if isinstance(rows, list) and rows:
-            _apply_work(nodes, edges, b, rows, owner_is_self=False)
+            _apply_work(nodes, edges, b, rows, owner_is_self=False, hub_own=hub_own)
     _live_peers.clear()
     _live_peers.update(readable)
 
@@ -747,6 +769,53 @@ async def _peer_live(client: httpx.AsyncClient, base: str, token: str) -> list |
     return edges
 
 
+def _num(v, default=0.0) -> float:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    return f if f == f and abs(f) != float("inf") else default
+
+
+def _clean_progress(p) -> dict | None:
+    """A peer's progress snapshot, rebuilt field by field with known types: a peer's
+    payload is untrusted input to every console that renders it."""
+    if not isinstance(p, dict):
+        return None
+    s = lambda v, n=300: str(v or "")[:n]  # noqa: E731
+
+    def tool(t):
+        if not isinstance(t, dict):
+            return None
+        locs = [{"path": s(loc.get("path"), 300)} for loc in (t.get("locations") or [])[:3] if isinstance(loc, dict)]
+        return {"id": s(t.get("id"), 80), "name": s(t.get("name"), 120), "kind": s(t.get("kind"), 32),
+                "status": s(t.get("status"), 16), "locations": locs}
+
+    return {
+        "plan": [{"content": s(e.get("content"), 140), "status": s(e.get("status"), 16)}
+                 for e in (p.get("plan") or [])[:20] if isinstance(e, dict)],
+        "current_tool": tool(p.get("current_tool")),
+        "recent_tools": [x for x in (tool(t) for t in (p.get("recent_tools") or [])[:6]) if x],
+        "text": s(p.get("text"), 400),
+        "tool_count": int(_num(p.get("tool_count"))),
+        "done": bool(p.get("done")),
+        "ok": bool(p.get("ok", True)),
+    }
+
+
+def _clean_live(e, owner: str) -> dict | None:
+    """One of a peer's in-flight edges, whitelisted and typed, tagged with its owner."""
+    if not isinstance(e, dict) or not e.get("id"):
+        return None
+    s = lambda k, n=120: str(e.get(k) or "")[:n]  # noqa: E731
+    return {
+        "id": s("id", 64), "parent_id": s("parent_id", 64), "from": s("from"), "to_kind": s("to_kind", 16),
+        "to_name": s("to_name"), "to_instance": s("to_instance", 300), "what": s("what", 400),
+        "origin": s("origin", 32), "started_at": _num(e.get("started_at"), time.time()),
+        "progress": _clean_progress(e.get("progress")), "owner": owner,
+    }
+
+
 async def get_live(cfg: dict) -> dict:
     """Every delegation in flight across the drawn fleet, each tagged with the ``owner``
     node that dispatched it: this agent's from its own ledger, each readable peer's from
@@ -769,7 +838,7 @@ async def get_live(cfg: dict) -> dict:
             results = await asyncio.gather(*[_peer_live(client, b, t) for b, t in peers.items()], return_exceptions=True)
         for base, res in zip(peers, results):
             if isinstance(res, list):
-                edges.extend({**e, "owner": base} for e in res)
+                edges.extend(e for e in (_clean_live(x, base) for x in res) if e)
     return {"now": time.time(), "self": self_base, "edges": edges, "peers": len(peers)}
 
 

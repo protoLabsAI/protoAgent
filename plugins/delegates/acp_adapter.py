@@ -288,7 +288,7 @@ class AcpAdapter(Adapter):
         from plugins.coding_agent import _client_for, _drop_client, _make_permission
         from plugins.coding_agent.acp_client import AcpError
 
-        from graph.delegate_progress import DelegateProgress, current_sink
+        from graph.delegate_progress import DelegateProgress, current_sink, is_card_sink
 
         spec = self._spec(d)
         client = _client_for(spec)
@@ -299,8 +299,16 @@ class AcpAdapter(Adapter):
         sink = current_sink()
         # workdir: what the coder's RELATIVE tool locations are relative to, so a write it
         # reports can be mapped onto a registered project for the code pane (ADR 0112).
+        # A ledger-only sink (no card) still tracks — the org chart's drill-in reads it —
+        # but announces no writes: the code pane follows work someone is watching in chat,
+        # not every board or workflow coder on the box.
         tracker = (
-            DelegateProgress(d.name, sink, workdir=os.path.expanduser(d.workdir) if d.workdir else None)
+            DelegateProgress(
+                d.name,
+                sink,
+                workdir=os.path.expanduser(d.workdir) if d.workdir else None,
+                announce_writes=is_card_sink(sink),
+            )
             if sink is not None
             else None
         )
