@@ -138,12 +138,34 @@ function targetOf(toKind, toName, index, owner) {
   return { id: (kind === "subagent" ? "subagent:" : "live:" + toKind + ":") + lc(toName), name: toName, kind, up: null, synthetic: true };
 }
 
+// Runs that finished since the topology snapshot was taken (it is cached server-side for
+// a few seconds): counted on their node at once, and dropped when a snapshot whose
+// `last_at` covers them arrives — so a node reads "1 run · 100% ok" the moment it lands.
+const LANDED = new Map();   // live edge id → {node, outcome, ms, cost, at}
+function withLanded(n) {
+  let w = n.work;
+  const last = w?.last_at ? Date.parse(w.last_at) / 1000 + skew : 0;
+  for (const [k, l] of LANDED) {
+    if (l.node !== n.id) continue;
+    if (last >= l.at - 2) { LANDED.delete(k); continue; }
+    w = { dispatches: 0, ok: 0, failed: 0, cancelled: 0, cost_usd: null, priced: 0, duration_ms: 0, ...w };
+    w.dispatches += 1;
+    const o = l.outcome === "failed" || l.outcome === "cancelled" ? l.outcome : "ok";
+    w[o] = (w[o] || 0) + 1;
+    w.duration_ms = (w.duration_ms || 0) + (Number(l.ms) || 0);
+    if (l.cost != null && isFinite(Number(l.cost))) { w.cost_usd = (w.cost_usd || 0) + Number(l.cost); w.priced = (w.priced || 0) + 1; }
+    w.last_at = new Date((l.at - skew) * 1000).toISOString();
+  }
+  return w === n.work ? n : { ...n, work: w };
+}
+
 function buildGraph() {
   const nodes = new Map(), edges = new Map(), index = new Map();
   for (const n of TOPO?.nodes || []) {
     if (n.kind !== "self" && HIDDEN.has(n.kind)) continue;
-    nodes.set(n.id, n);
-    if (n.kind !== "self") index.set(nodeKey(n.kind, n.name), n);
+    const m = withLanded(n);
+    nodes.set(n.id, m);
+    if (n.kind !== "self") index.set(nodeKey(n.kind, n.name), m);
   }
   index.children = new Map();   // owner node id → (ledger key → its delegate node)
   for (const e of TOPO?.edges || []) {
@@ -373,7 +395,7 @@ function render() {
     paintNode(h, n, runningOn(n.id, GRAPH.flows));
   }
 
-  const usedTargets = new Set((TOPO.nodes || []).filter((n) => n.work && n.work.dispatches).map((n) => n.id));
+  const usedTargets = new Set([...GRAPH.nodes.values()].filter((n) => n.work && n.work.dispatches).map((n) => n.id));
   for (const [k, p] of EDGE_EL) if (!GRAPH.edges.has(k)) { p.remove(); EDGE_EL.delete(k); }
   for (const [k, e] of GRAPH.edges) {
     let p = EDGE_EL.get(k);
@@ -716,6 +738,11 @@ function finishLive(d) {
   // without waiting for the next ledger poll.
   RECENT.unshift({ edge_id: "live-" + e.id, _live: e.id, at: new Date().toISOString(), from_agent: e.from, to_kind: e.to_kind,
     to_name: e.to_name, what: e.what, outcome: e.status, duration_ms: e.duration_ms, cost_usd: e.cost_usd, error: e.error, origin: e.origin });
+  if (GRAPH) {
+    const n = targetOf(e.to_kind, e.to_name, GRAPH.index, e.owner && GRAPH.nodes.has(e.owner) ? e.owner : SELF);
+    if (!n.synthetic) LANDED.set(e.id, { node: n.id, outcome: e.status, ms: e.duration_ms, cost: e.cost_usd, at: serverNow() });
+    if (LANDED.size > 200) LANDED.delete(LANDED.keys().next().value);
+  }
   landNode(e);
   setTimeout(() => { e.gone = true; render(); }, FINISH_LINGER_MS - 900);
   setTimeout(() => { LIVE.delete(e.id); render(); renderFeed(); renderDrawer(); }, FINISH_LINGER_MS);
