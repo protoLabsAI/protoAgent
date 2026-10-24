@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft } from "lucide-react";
 import { Suspense, useEffect } from "react";
 
+import { escapeCloseAllowed, isTopmostOverlay } from "../lib/overlayStack";
 import { queryKeys } from "../lib/queries";
 import type { PluginSettingsTabDescriptor, SettingsGroup } from "../lib/types";
 import { PluginView } from "../app/PluginView";
@@ -57,13 +58,23 @@ export function PluginSettingsPane({
 
   // Escape backs out to the plugin list — and must NOT also close Settings on the same press.
   // The pane is a sub-view inside the Settings DS Dialog, whose own Escape→close listener lives
-  // on the document (radix). Sampling on WINDOW capture runs first (window is the first stop of
-  // the dispatch, before any document listener — the same timing rationale as SettingsOverlay's
-  // #2466 arbitration), so stopping the event here means the dialog's listener never fires and
-  // Settings keeps its state. We back out of the pane instead.
+  // on the document (radix). We arbitrate on WINDOW capture — the first stop of the dispatch,
+  // before any document listener — with the SAME #2466 checks SettingsOverlay applies (see
+  // lib/overlayStack), so a press only backs out the pane when it genuinely belongs to it:
+  //   • a DropdownSelect/Combobox open in the SettingsCategory form owns the Escape — defer so
+  //     radix dismisses it (escapeCloseAllowed). Crucially we DON'T stop the event in that case,
+  //     or the dropdown's own document listener never fires and it stays open;
+  //   • a DS dialog stacked ABOVE Settings owns it — defer so that top layer closes
+  //     (isTopmostOverlay);
+  //   • otherwise the pane is the top layer: stop the press so the Settings dialog's radix
+  //     listener never fires (Settings keeps its state) and back out to the plugin list.
+  // Guarding the stop also keeps us from ever leaving SettingsOverlay's one-shot `escapeConsumed`
+  // flag set for a press we swallowed — that flag only arms when a nested layer is open, which is
+  // exactly the case we now defer on (so the next mouse close of Settings can't be eaten).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      if (!escapeCloseAllowed() || !isTopmostOverlay(".settings-overlay")) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       onBack();

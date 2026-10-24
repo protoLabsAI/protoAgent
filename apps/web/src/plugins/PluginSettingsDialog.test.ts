@@ -137,6 +137,60 @@ describe("plugin Configure pane", () => {
     expect(settingsClose).not.toHaveBeenCalled();
   });
 
+  it("Escape defers to an open dropdown in the form — pane stays, press not swallowed", async () => {
+    const onBack = vi.fn();
+    await renderPane([automation], tabs, onBack);
+
+    // An open DropdownSelect/Combobox in the SettingsCategory form renders a radix popper whose
+    // OWN document listener owns this Escape (#2466). The pane must not back out — and must not
+    // stop the press, or the dropdown's listener never fires and it stays stuck open (#4488 r2).
+    const popper = document.createElement("div");
+    popper.setAttribute("data-radix-popper-content-wrapper", "");
+    const listbox = document.createElement("div");
+    listbox.setAttribute("role", "listbox");
+    popper.appendChild(listbox);
+    document.body.appendChild(popper);
+
+    // Registered AFTER the pane's window-capture listener — in the simple case the pane swallows
+    // the press and this never fires; here the pane defers, so the press reaches it (stand-in for
+    // radix's own dismiss listener dispatching down the capture path).
+    const radixClose = vi.fn();
+    window.addEventListener("keydown", radixClose, true);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    window.removeEventListener("keydown", radixClose, true);
+    popper.remove();
+
+    expect(onBack).not.toHaveBeenCalled();
+    expect(radixClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Escape defers to a dialog stacked above Settings — pane stays", async () => {
+    const onBack = vi.fn();
+    await renderPane([automation], tabs, onBack);
+
+    // A DS dialog opened ON TOP of Settings is a later `.pl-overlay`; that top layer owns the
+    // Escape (isTopmostOverlay), so the pane must not back out from under it (#4488 r2).
+    const settings = document.createElement("div");
+    settings.className = "pl-overlay";
+    const inner = document.createElement("div");
+    inner.className = "settings-overlay";
+    settings.appendChild(inner);
+    const stacked = document.createElement("div");
+    stacked.className = "pl-overlay";
+    document.body.appendChild(settings);
+    document.body.appendChild(stacked);
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    settings.remove();
+    stacked.remove();
+
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
   it("renders projectBoard's five tabs (schema + path-backed) with no manifest change", async () => {
     await renderPane([automation, maintenance], fiveTabDescriptors);
 
