@@ -187,7 +187,12 @@ def _short_tool_name(title: str) -> str:
     # bare tool name like the native runtime, not the wire-namespaced one. Non-greedy so it
     # peels only the mcp+server segment; a non-namespaced name (`read_file`) is untouched.
     label = re.sub(r"^mcp__.+?__", "", label).strip()
-    return (label or (title or "").strip() or "tool")[:80]
+    # Redacted BEFORE the cut: a shell call is titled with its command line, and a token
+    # straddling the 80-char boundary would no longer match its pattern once truncated —
+    # leaving a fragment of it on the card and in the reply timeline.
+    from graph.middleware.redaction import redact
+
+    return str(redact(label or (title or "").strip() or "tool"))[:80]
 
 
 #: How long a closed coding agent's relay registration outlives it (its exit-time flush).

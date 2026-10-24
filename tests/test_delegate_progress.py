@@ -713,3 +713,14 @@ async def test_the_timeline_redacts_names_and_spends_a_bounded_io_budget(monkeyp
 def test_a_run_that_streamed_no_text_is_not_trusted_under_a_reply():
     timeline = [{"type": "tool", "id": "1", "name": "Read", "status": "completed"}]
     assert dp.reply_timeline(timeline, "Some reply.") is None
+
+
+def test_a_tool_title_is_redacted_before_it_is_cut_to_a_label():
+    from plugins.coding_agent.acp_client import _short_tool_name
+
+    token = "ghp_" + "abcdefghij" * 4
+    # The token starts just before the 80-char cut: truncating first would leave a fragment
+    # too short for its pattern to recognise.
+    title = "x" * 70 + " " + token
+    label = _short_tool_name(title)
+    assert "ghp_abc" not in label and len(label) <= 80
