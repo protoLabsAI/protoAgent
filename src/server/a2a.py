@@ -1195,6 +1195,12 @@ def _surface_resumed_chat_turn(outcome) -> None:
     text = extract_output(outcome.text) or outcome.text
     state = str(getattr(outcome, "state", "") or "completed")
     error = str(getattr(outcome, "error", "") or "")
+    if state == "input_required":
+        # A HITL park is not the end of the turn: the console reads any non-completed
+        # state as a failure, so publishing the park leg's narration settled the live
+        # preview as "Task failed" — and a settled preview is never reattached, which is
+        # how the open chat learns of the approval. The answered leg publishes its own.
+        return
     if not text.strip() and (state == "completed" or not error.strip()):
         return
     _event_bus.publish(

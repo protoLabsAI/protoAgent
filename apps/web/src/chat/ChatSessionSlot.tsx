@@ -609,7 +609,7 @@ export function ChatSessionSlot({
   // turn that already ended falls back to one snapshot replay + finalize.
   // Settled-but-stale local transcripts from an agent switch are not reattached;
   // durable boot hydration repairs their rendered answer parts in the store.
-  const reattachKey = reattachKeyForMessages(session?.messages);
+  const reattachKey = reattachKeyForMessages(session?.messages, sessionId);
   useEffect(() => {
     if (abortRef.current) return; // a live turn in this slot owns the stream
     // With nothing to reattach, this reconciles instead, which is what an opened sixth
@@ -622,7 +622,9 @@ export function ChatSessionSlot({
       },
     });
     // `reattachKey` changes when boot hydration fills an ALREADY-MOUNTED empty
-    // fixed-id tab; sessionId alone would strand that recovered HITL/live turn.
+    // fixed-id tab; sessionId alone would strand that recovered HITL/live turn. It also
+    // changes when a watched server turn ends with its preview still streaming (a parked
+    // approval) — this re-render comes from useServerTurn — and the reattach surfaces the card.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- callbacks intentionally bind this slot
   }, [sessionId, reattachKey]);
 

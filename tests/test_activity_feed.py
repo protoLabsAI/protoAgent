@@ -181,6 +181,26 @@ def test_terminal_hook_surfaces_scheduler_resume_into_chat(tmp_path, monkeypatch
     assert log.recent() == []  # a chat-session turn, not logged to the Activity feed
 
 
+def test_terminal_hook_does_not_surface_a_parked_resume_as_resumed(tmp_path, monkeypatch):
+    # A background push-resume that parks on an approval fires the terminal hook with
+    # state input_required. That is not the turn's end: publishing it settled the open
+    # chat's live preview as a failure, so the approval card never reached it.
+    monkeypatch.setattr(server.STATE, "activity_log", ActivityLog(str(tmp_path / "a.db")))
+    published: list = []
+    monkeypatch.setattr(server._event_bus, "publish", lambda ev, data: published.append((ev, data)))
+    server._a2a_terminal(
+        TurnOutcome(
+            task_id="t11",
+            context_id="chat-xyz",
+            state="input_required",
+            text="All three reports are in; running the check now.",
+            origin="background-resume",
+            trigger="batch-1",
+        )
+    )
+    assert not any(ev == "chat.resumed" for ev, _ in published)
+
+
 def test_terminal_hook_skips_non_scheduler_chat_turn(tmp_path, monkeypatch):
     # An operator/A2A chat turn the browser already streamed must NOT be re-pushed.
     log = ActivityLog(str(tmp_path / "a.db"))
