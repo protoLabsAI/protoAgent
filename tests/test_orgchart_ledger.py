@@ -176,3 +176,16 @@ def test_a_shared_node_keeps_our_record_and_sums_the_peers():
         )
     assert nodes[model["id"]]["work"]["dispatches"] == 2       # ours wins on a node we use
     assert nodes[shared_peer["id"]]["work"]["dispatches"] == 6  # two peers' records add up
+
+
+def test_one_delegate_reached_at_two_urls_is_one_record():
+    # The ledger groups by target instance too: a peer whose URL was corrected shows up as
+    # two rows. Keeping only the last one painted a healthy peer red.
+    nodes, edges = _nodes(), _edges()
+    rows = [
+        _rows(to_kind="a2a", to_name="hermes", dispatches=4, ok=4, failed=0),
+        _rows(to_kind="a2a", to_name="hermes", dispatches=2, ok=0, failed=2),
+    ]
+    topology._apply_work(nodes, edges, "http://self", rows)
+    work = nodes["http://peer"]["work"]
+    assert (work["dispatches"], work["ok"], work["failed"]) == (6, 4, 2)

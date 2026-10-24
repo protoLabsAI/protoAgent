@@ -351,7 +351,7 @@ def _work_index(rows: list[dict]) -> dict[tuple[str, str], dict]:
         name = str(r.get("to_name") or "").strip().lower()
         if not kind or not name:
             continue
-        out[(kind, name)] = {
+        row = {
             "dispatches": int(r.get("dispatches") or 0),
             "ok": int(r.get("ok") or 0),
             "failed": int(r.get("failed") or 0),
@@ -363,6 +363,9 @@ def _work_index(rows: list[dict]) -> dict[tuple[str, str], dict]:
             "duration_ms": int(r.get("duration_ms") or 0),
             "last_at": r.get("last_at"),
         }
+        # The ledger also keys by target instance, so one delegate whose URL changed (or
+        # that was reached two ways) arrives as several rows: they are one node's record.
+        out[(kind, name)] = _add_work(out[(kind, name)], row) if (kind, name) in out else row
     return out
 
 
