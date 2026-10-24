@@ -68,6 +68,9 @@ _live_peers: dict[str, str] = {}
 # base -> (expires_monotonic, edges|None): a peer's in-flight delegations, briefly cached.
 _live_cache: dict[str, tuple[float, list | None]] = {}
 _LIVE_TTL = 1.5
+# A missed live read is retried soon: the topology's 30 s negative cache would blank a
+# busy member's work for most of a short run after one slow answer.
+_LIVE_NEG_TTL = 4.0
 _build_lock: asyncio.Lock | None = None
 _refresh_task: asyncio.Task | None = None
 
@@ -765,7 +768,7 @@ async def _peer_live(client: httpx.AsyncClient, base: str, token: str) -> list |
             edges = [e for e in (r.json() or {}).get("edges") or [] if isinstance(e, dict)]
     except Exception:  # noqa: BLE001
         edges = None
-    _live_cache[base] = (now + (_LIVE_TTL if edges is not None else _NEG_TTL), edges)
+    _live_cache[base] = (now + (_LIVE_TTL if edges is not None else _LIVE_NEG_TTL), edges)
     return edges
 
 

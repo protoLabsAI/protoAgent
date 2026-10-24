@@ -615,3 +615,9 @@ def test_a_peers_live_edges_are_whitelisted_and_typed():
     assert e["progress"]["tool_count"] == 0 and e["progress"]["plan"] == [{"content": "x", "status": "pending"}]
     assert e["progress"]["current_tool"]["locations"] == [{"path": "a.py"}]
     assert topo._clean_live({"to_name": "no id"}, "http://peer") is None
+
+
+def test_a_missed_live_read_is_retried_within_seconds(monkeypatch):
+    """One slow answer from a busy member must not blank its work for half a minute —
+    the topology's 30 s negative cache is for crawling, not for watching."""
+    assert topo._LIVE_NEG_TTL <= 5 < topo._NEG_TTL
