@@ -485,18 +485,24 @@ $("filters").addEventListener("click", (e) => {
 const FEED_MAX = 40;
 let FEED_SIG = "";
 const FRESH = new Set();   // ids that should play the arrival animation once
+// Who handed the work out, named as the chart names that node: a ledger's `from` is the
+// sender's config identity, which a fleet of copied configs can leave the same everywhere.
+function nodeName(id) {
+  const n = (TOPO?.nodes || []).find((x) => x.id === (id || SELF));
+  return n ? n.name : "";
+}
 function feedItems() {
   const items = [];
   const liveIds = new Set();
   for (const e of LIVE.values()) {
     liveIds.add(e.id);
-    items.push({ id: e.id, live: true, from: e.from, to: e.to_name, kind: e.to_kind, what: e.what, owner: e.owner || "",
+    items.push({ id: e.id, live: true, from: nodeName(e.owner) || e.from, to: e.to_name, kind: e.to_kind, what: e.what, owner: e.owner || "",
       status: e.status, start: e.started_at, ms: e.duration_ms, cost: e.cost_usd });
   }
   for (const r of RECENT) {
     if (items.length >= FEED_MAX) break;
     if (r._live && liveIds.has(r._live)) continue;
-    items.push({ id: "r" + r.edge_id, from: r.from_agent, to: r.to_name, kind: r.to_kind, what: r.what,
+    items.push({ id: "r" + r.edge_id, from: nodeName(SELF) || r.from_agent, to: r.to_name, kind: r.to_kind, what: r.what,
       status: r.origin === "background" && !r.duration_ms && r.outcome === "ok" ? "dispatched" : r.outcome,
       at: r.at, ms: r.duration_ms, cost: r.cost_usd });
   }
