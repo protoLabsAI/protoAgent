@@ -108,6 +108,9 @@ TIMELINE_MAX = 300
 #: the timeline is stored in task history and the console's transcript, once per reply.
 TIMELINE_TOOL_IO_MAX = 800
 TIMELINE_IO_BUDGET = 48_000
+#: Reply text the timeline holds across the run; past it the timeline is abandoned like the
+#: entry cap, so a delegate that streams without end can't grow the snapshot without bound.
+TIMELINE_TEXT_BUDGET = 200_000
 #: Seconds between snapshots. A coder can fire dozens of updates a second while it
 #: streams text; the card needs a few frames a second at most.
 MIN_INTERVAL_S = 0.75
@@ -237,6 +240,7 @@ class DelegateProgress:
         self._timeline: list[dict] | None = []
         self._timeline_tools: dict[str, dict] = {}
         self._timeline_io_left = TIMELINE_IO_BUDGET
+        self._timeline_text_left = TIMELINE_TEXT_BUDGET
         # The ledger edge this delegation runs inside (graph/ledger.py) — captured NOW, in
         # the dispatching task: the feeds arrive on a transport's reader task.
         try:
@@ -342,6 +346,11 @@ class DelegateProgress:
 
     def _timeline_text(self, delta: str) -> None:
         if self._timeline is None:
+            return
+        self._timeline_text_left -= len(delta)
+        if self._timeline_text_left < 0:
+            log.debug("[delegate-progress] %r: timeline text over %d chars — dropped", self.target, TIMELINE_TEXT_BUDGET)
+            self._timeline, self._timeline_tools = None, {}
             return
         last = self._timeline[-1] if self._timeline else None
         if last is not None and last["type"] == "text":
