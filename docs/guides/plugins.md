@@ -79,6 +79,7 @@ def register(registry):
 | React to another component | [Event bus](#event-bus) / [lifecycle events](/guides/lifecycle-events) |
 | Call the agent or persist plugin data | [Host services](#host-services-—-registry-host) / [SDK](#consumption-sdk) |
 | Add a console view | [Plugin-view quickstart](/guides/build-a-plugin-view) |
+| Add settings or a Configure tab | [Design plugin settings](/guides/plugin-settings) |
 
 The [registry reference](/reference/plugin-registry-api) owns the full method list,
 signatures, and lifecycle contracts, including chat commands, knowledge backends,

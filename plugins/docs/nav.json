@@ -313,6 +313,10 @@
               "title": "Build a plugin view"
             },
             {
+              "path": "guides/plugin-settings.md",
+              "title": "Design plugin settings"
+            },
+            {
               "path": "guides/building-react-plugin-views.md",
               "title": "Plugin view integration"
             },

@@ -153,6 +153,7 @@
           "pages": [
             "guides/plugins.md",
             "guides/build-a-plugin-view.md",
+            "guides/plugin-settings.md",
             "guides/building-react-plugin-views.md",
             "guides/communication-plugins.md",
             "guides/publish-a-plugin.md",
@@ -463,6 +464,10 @@
     },
     "guides/build-a-plugin-view.md": {
       "title": "Build a plugin view",
+      "status": "current"
+    },
+    "guides/plugin-settings.md": {
+      "title": "Design plugin settings",
       "status": "current"
     },
     "guides/building-react-plugin-views.md": {

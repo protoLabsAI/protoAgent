@@ -247,6 +247,11 @@
       "decision": "media",
       "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
     },
+    "guides/plugin-settings.md": {
+      "journey": "build",
+      "decision": "text",
+      "reason": "A rules checklist; the overhaul epic's PRs carry the screenshots, which would go stale here as the tabs change."
+    },
     "guides/building-react-plugin-views.md": {
       "journey": "build",
       "decision": "text",
