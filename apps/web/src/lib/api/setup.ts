@@ -23,7 +23,26 @@ import type {
 import { apiUrl, applyAuth } from "./routing";
 import { request, requestForm } from "./http";
 
+export type RestartReadiness = {
+  idle: boolean; busy: string[]; supervised: boolean; how_to: string; boot_id: string;
+};
+
 export const setupApi = {
+  async restartReadiness() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      return await request<RestartReadiness>("/api/restart/readiness", { signal: controller.signal });
+    } finally { clearTimeout(timeout); }
+  },
+  restartForSettings(reason: string) {
+    return request<{ ok: boolean }>("/api/restart", { method: "POST", body: { reason, when_idle: true } });
+  },
+  stopForSettings(member: string, reason: string) {
+    return request<{ ok: boolean }>(`/api/fleet/${encodeURIComponent(member)}/stop`, {
+      method: "POST", body: { reason, when_idle: true },
+    });
+  },
   setupStatus() {
     return request<SetupStatus>("/api/config/setup-status");
   },

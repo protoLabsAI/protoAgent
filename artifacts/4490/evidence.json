@@ -1,0 +1,17 @@
+{
+  "issue": 4490,
+  "surface": "Chromium desktop browser, 1280x1000",
+  "isolation": {
+    "box_root": "<worktree>/.tmp/restart-4490",
+    "instance": "review",
+    "port": 17891,
+    "environment": "env -i; test-only OPENAI_API_KEY placeholder; gateway http://127.0.0.1:9/v1"
+  },
+  "scenario": "Saved the isolated instance\u2019s Vision (native images) setting and opened host confirmation. No restart was executed during screenshot capture.",
+  "screenshots": {
+    "restart-banner.png": "Actual saved-settings banner and readiness from the isolated Python server",
+    "restart-confirm.png": "Actual host-owned idle confirmation",
+    "restart-busy.png": "Same isolated console; readiness mocked to one active chat turn and two background jobs"
+  },
+  "runtime_cleanup": "The isolated review server was stopped after capture; its temporary configuration was removed."
+}
