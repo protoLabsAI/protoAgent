@@ -968,3 +968,19 @@ def test_reset_setup_offloaded(monkeypatch):
     monkeypatch.setattr("graph.config_io.reset_setup", lambda: seen.append(1))
     body = _client().post("/api/config/reset-setup").json()
     assert body["ok"] is True and seen == [1]
+
+
+def test_save_plugin_restart_field_reports_real_restart_keys(monkeypatch):
+    from types import SimpleNamespace
+
+    import graph.settings_schema as schema
+    import server.agent_init as agent_init
+
+    plugin = SimpleNamespace(section="boardy", defaults={"workers": 2}, test=False)
+    monkeypatch.setattr(schema, "_plugin_field_specs", lambda: [
+        (plugin, "boardy.workers", "workers", {"key": "workers", "type": "number", "restart": True}),
+    ])
+    monkeypatch.setattr(agent_init, "_apply_settings_changes", lambda config=None, layer="agent": (True, []))
+    resp = _client().post("/api/settings", json={"updates": {"boardy.workers": 4}}).json()
+    assert resp["ok"] is True
+    assert resp["restart_required"] == ["boardy.workers"]

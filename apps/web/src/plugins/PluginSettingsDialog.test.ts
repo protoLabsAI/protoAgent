@@ -313,6 +313,89 @@ describe("one save model per plugin tab (#4489)", () => {
     expect(save).toHaveBeenCalledWith({ "boardy.coder": "claude" }, "agent");
   });
 
+  async function blur(key: string) {
+    const control = document.body.querySelector(`[data-key="${key}"] input, [data-key="${key}"] textarea`)!;
+    await act(async () => control.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+  }
+
+  it.each(["string", "secret", "number", "text", "string_list"] as const)(
+    "commits complete %s edits on blur without saving intermediate values",
+    async (type) => {
+      const save = vi.spyOn(api, "saveSettings").mockResolvedValue({ ok: true, messages: [], restart_required: [] });
+      const group = { ...overview, fields: [{ ...overview.fields[0], type }] };
+      await renderPane([group], threeKindTabs);
+      const control = document.body.querySelector<HTMLInputElement | HTMLTextAreaElement>('[data-key="boardy.greeting"] input, [data-key="boardy.greeting"] textarea')!;
+      const prototype = control.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(prototype, "value")!.set!;
+      for (const value of ["", "4", "42"]) {
+        await act(async () => {
+          setter.call(control, value);
+          control.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      }
+      expect(save).not.toHaveBeenCalled();
+      await blur("boardy.greeting");
+      expect(save).toHaveBeenCalledExactlyOnceWith(
+        { "boardy.greeting": type === "number" ? 42 : type === "string_list" ? ["42"] : "42" }, "agent",
+      );
+      expect(document.body.querySelector(".setting-live-status")?.textContent).toBe("Saved");
+    },
+  );
+
+  it.each(["secret", "number"] as const)("does not persist an empty %s on blur", async (type) => {
+    const save = vi.spyOn(api, "saveSettings");
+    await renderPane([{ ...overview, fields: [{ ...overview.fields[0], type, value: "12" }] }], threeKindTabs);
+    await setInput("boardy.greeting", "");
+    await blur("boardy.greeting");
+    expect(save).not.toHaveBeenCalled();
+    expect(document.body.querySelector(".setting-live-status")).toBeNull();
+  });
+
+  it("serializes live saves and suppresses stale success and error feedback", async () => {
+    type Result = Awaited<ReturnType<typeof api.saveSettings>>;
+    const replies: Array<(r: Result) => void> = [];
+    const save = vi.spyOn(api, "saveSettings").mockImplementation(() => new Promise((resolve) => replies.push(resolve)));
+    await renderPane([overview], threeKindTabs);
+    await setInput("boardy.greeting", "first");
+    await blur("boardy.greeting");
+    await setInput("boardy.greeting", "second");
+    await blur("boardy.greeting");
+    expect(save).toHaveBeenCalledTimes(1);
+    await act(async () => replies[0]({ ok: true, messages: [], restart_required: [] }));
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(document.body.querySelector(".setting-live-status")).toBeNull();
+    await setInput("boardy.greeting", "third");
+    await blur("boardy.greeting");
+    await act(async () => replies[1]({ ok: false, messages: ["old error"], restart_required: [] }));
+    expect(save).toHaveBeenCalledTimes(3);
+    expect(document.body.querySelector(".setting-live-status")).toBeNull();
+    await act(async () => replies[2]({ ok: false, messages: ["current error"], restart_required: [] }));
+    expect(document.body.querySelector(".setting-live-status")?.textContent).toBe("Nothing changed. current error");
+    expect(save.mock.calls.map(([updates]) => updates)).toEqual([
+      { "boardy.greeting": "first" }, { "boardy.greeting": "second" }, { "boardy.greeting": "third" },
+    ]);
+  });
+
+  it("warns before saving a restart field and removes the draft warning on discard", async () => {
+    await renderPane([runtimeGroup], [{ id: "runtime", label: "Runtime" }]);
+    await setInput("boardy.workers", "4");
+    expect(document.body.querySelector(".settings-restart-body")?.textContent).toContain("Workers");
+    await click("Discard");
+    expect(document.body.querySelector(".settings-restart-body")).toBeNull();
+  });
+
+  it("saves switches immediately and collects restart keys from live saves", async () => {
+    const save = vi.spyOn(api, "saveSettings").mockResolvedValue({
+      ok: true, messages: [], restart_required: ["boardy.greeting"],
+    });
+    await renderPane([{ ...overview, fields: [{ ...overview.fields[0], type: "bool", value: false, restart: true }] }], threeKindTabs);
+    const control = document.body.querySelector<HTMLElement>('[data-key="boardy.greeting"] input[type="checkbox"]')!;
+    await act(async () => control.click());
+    expect(save).toHaveBeenCalledExactlyOnceWith({ "boardy.greeting": true }, "agent");
+    expect(document.body.querySelector(".settings-restart-body")?.textContent).toContain("Greeting");
+    expect(document.body.querySelector(".setting-live-status")?.textContent).toBe("Saved");
+  });
+
   // r3 — saving a restart:true field collects it into the ONE banner; no per-field badge.
   it("collects a saved restart:true field into the one restart banner", async () => {
     const save = vi.spyOn(api, "saveSettings").mockResolvedValue({ ok: true, messages: [], restart_required: ["boardy.workers"] });
@@ -322,7 +405,7 @@ describe("one save model per plugin tab (#4489)", () => {
     await renderPane([runtimeGroup], [{ id: "runtime", label: "Runtime" }]);
 
     // The per-field "restart" badge is gone — the row carries no "restart" marker, and the
-    // banner only appears once a restart-only change has saved.
+    // banner appears while editing and remains after a successful save.
     expect(document.body.querySelector('[data-key="boardy.workers"]')!.textContent).not.toContain("restart");
     expect(document.body.querySelector(".settings-restart-body")).toBeNull();
 

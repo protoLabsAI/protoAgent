@@ -70,8 +70,9 @@ warning; the affected field falls back to Configuration rather than disappearing
 **One save model per tab — `apply: live` (#4489).** By default a schema tab is
 *save-then-apply*: tab switching retains one shared dirty state and the tab's **Save &
 apply** button submits every tab's pending changes together. Add `apply: live` to a tab
-descriptor to switch it to the *live* model instead — its fields save the moment they
-change, with a small inline "Saved" (or the error, saying nothing changed), and the tab
+descriptor to switch it to the *live* model instead — switches and selections save
+immediately; free-form fields save when focus leaves the control, with a small inline
+"Saved" (or the error, saying nothing changed), and the tab
 shows no Save or Discard. A plugin-owned (path-backed) tab is **always live**; its page
 owns its own writes. `live` is the only value honored — any other (a typo, `true`) is
 ignored with a warning and the tab keeps save-then-apply — and the key is additive, so a

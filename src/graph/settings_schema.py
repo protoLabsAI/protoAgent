@@ -2581,7 +2581,11 @@ def nest_updates(updates: dict[str, Any]) -> dict[str, Any]:
 
 def restart_keys(updates: dict[str, Any]) -> list[str]:
     """Keys in the payload that need a process restart to take effect."""
-    return [k for k in updates if (_BY_KEY.get(k) and _BY_KEY[k].restart)]
+    plugin_specs = {full: spec for _, full, _, spec in _plugin_field_specs()}
+    return [
+        k for k in updates
+        if (_BY_KEY[k].restart if k in _BY_KEY else plugin_specs.get(k, {}).get("restart", False))
+    ]
 
 
 def _jsonable(val: Any) -> Any:

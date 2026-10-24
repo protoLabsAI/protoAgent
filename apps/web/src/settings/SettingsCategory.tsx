@@ -286,32 +286,58 @@ export function SettingsCategory({
     onError: (e) => toast({ tone: "error", title: "Save failed", message: errMsg(e) }),
   });
 
-  // Live tabs (settings-ux C2, #4489): a field saves the MOMENT it changes, through the
-  // SAME settings endpoint as Save & apply — no shared dirty state, no Save button. The
-  // field shows an inline "Saved" (or the error, saying nothing changed), and any
-  // restart_required joins the pane's one restart banner.
-  const saveLive = useMutation({
-    mutationFn: (vars: { key: string; value: unknown; scope: "agent" | "host" }) =>
-      api.saveSettings({ [vars.key]: vars.value }, onHost && vars.scope === "host" ? "host" : "agent"),
-    onSuccess: (r, vars) => {
-      if (!r.ok) {
-        setLiveFeedback((f) => ({ ...f, [vars.key]: { tone: "error", text: r.messages.join(" · ") || "Nothing changed." } }));
-        return;
+  // Free-form controls commit on blur; discrete choices commit immediately.
+  // Serialize writes across the pane and suppress feedback for obsolete edits.
+  const liveDrafts = useRef<Record<string, { value: unknown; revision: number }>>({});
+  const liveRevisions = useRef<Record<string, number>>({});
+  const liveWrites = useRef<Promise<void>>(Promise.resolve());
+  const commitLive = (field: SettingsField) => {
+    const draft = liveDrafts.current[field.key];
+    if (!draft) return;
+    delete liveDrafts.current[field.key];
+    // Blank secrets keep the existing value; empty numbers are unfinished edits.
+    if ((field.type === "secret" && !draft.value) ||
+        (field.type === "number" && (draft.value === null || !Number.isFinite(draft.value)))) return;
+    liveWrites.current = liveWrites.current.then(async () => {
+      if (liveRevisions.current[field.key] !== draft.revision) return;
+      let feedback: { tone: "success" | "error"; text: string };
+      try {
+        const r = await api.saveSettings(
+          { [field.key]: draft.value }, onHost && field.scope === "host" ? "host" : "agent",
+        );
+        if (r.ok) {
+          addRestartLabels(r.restart_required.map(labelForKey));
+          feedback = { tone: "success", text: "Saved" };
+          void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+          void queryClient.invalidateQueries({ queryKey: queryKeys.runtime });
+        } else {
+          feedback = { tone: "error", text: `Nothing changed. ${r.messages.join(" · ")}`.trim() };
+        }
+      } catch (e) {
+        feedback = { tone: "error", text: `Nothing changed. ${errMsg(e)}` };
       }
-      if (r.restart_required.length) addRestartLabels(r.restart_required.map(labelForKey));
-      setLiveFeedback((f) => ({ ...f, [vars.key]: { tone: "success", text: "Saved" } }));
-      void queryClient.invalidateQueries({ queryKey: queryKeys.settings });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.runtime });
-    },
-    onError: (e, vars) => setLiveFeedback((f) => ({ ...f, [vars.key]: { tone: "error", text: errMsg(e) } })),
-  });
-
-  const onLiveChange = (field: SettingsField, value: unknown) => {
-    setLiveValues((m) => ({ ...m, [field.key]: value }));
-    // Clear the prior "Saved"/error while the next change is in flight.
-    setLiveFeedback((f) => { const next = { ...f }; delete next[field.key]; return next; });
-    saveLive.mutate({ key: field.key, value, scope: field.scope });
+      if (liveRevisions.current[field.key] === draft.revision) {
+        setLiveFeedback((f) => ({ ...f, [field.key]: feedback }));
+      }
+    });
   };
+  const onLiveChange = (field: SettingsField, value: unknown) => {
+    const revision = (liveRevisions.current[field.key] ?? 0) + 1;
+    liveRevisions.current[field.key] = revision;
+    liveDrafts.current[field.key] = { value, revision };
+    setLiveValues((m) => ({ ...m, [field.key]: value }));
+    setLiveFeedback((f) => { const next = { ...f }; delete next[field.key]; return next; });
+    if (field.type === "bool" || field.type === "select") commitLive(field);
+  };
+
+  // Preserve the pre-save warning on core categories too. Discard removes draft
+  // labels while successful saves and frame messages remain collected.
+  const pendingRestartLabels = [...new Set([
+    ...restartLabels,
+    ...groups.flatMap((g) => g.fields)
+      .filter((f) => f.restart && f.key in dirty)
+      .map((f) => f.label),
+  ])];
 
   // ADR 0047 reset-to-inherited — pop one (or more) overridden keys from the agent
   // leaf so each falls back to the Host/App layer. Invalidate the schema on success
@@ -382,6 +408,7 @@ export function SettingsCategory({
           onReset={() => reset.mutate([field.key])}
           resetting={reset.isPending}
           feedback={live ? liveFeedback[field.key] : undefined}
+          onCommit={live ? () => commitLive(field) : undefined}
         />
       ))}
       {/* Generic, data-driven group actions (ADR 0059) — a Test button from the
@@ -448,14 +475,14 @@ export function SettingsCategory({
             subscription) below. The model settings power protoAgent's own calls either way.
           </Alert>
         ) : null}
-        {restartLabels.length ? (
+        {pendingRestartLabels.length ? (
           <Alert status="warning" className="settings-banner settings-restart-banner" data-testid="settings-restart-banner">
             <div className="settings-restart-body">
               <strong>
-                {restartLabels.length} change{restartLabels.length === 1 ? "" : "s"}{" "}
-                take{restartLabels.length === 1 ? "s" : ""} effect after a restart
+                {pendingRestartLabels.length} change{pendingRestartLabels.length === 1 ? "" : "s"}{" "}
+                take{pendingRestartLabels.length === 1 ? "s" : ""} effect after a restart
               </strong>
-              <span className="settings-restart-items">{restartLabels.join(", ")}</span>
+              <span className="settings-restart-items">{pendingRestartLabels.join(", ")}</span>
               {/* The slot C3 fills with a "Restart now" control (protoAgent#4490). Until a
                   restart route exists, say how to restart rather than offer a dead button. */}
               <span className="settings-restart-action">
@@ -581,11 +608,13 @@ function SettingRow({
   // the shared dirty state, so it shows its own inline feedback and no dirty highlight.
   live = false,
   feedback,
+  onCommit,
 }: {
   field: SettingsField;
   value: unknown;
   dirty: boolean;
   onChange: (value: unknown) => void;
+  onCommit?: () => void;
   showInheritance?: boolean;
   onHost?: boolean;
   onReset?: () => void;
@@ -633,7 +662,9 @@ function SettingRow({
           </p>
         ) : null}
       </div>
-      <div className="setting-control">
+      <div className="setting-control" onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) onCommit?.();
+      }}>
         <SettingInput field={field} value={value} onChange={onChange} />
         {live && feedback ? (
           <span className={`setting-live-status setting-live-status--${feedback.tone}`} role="status">

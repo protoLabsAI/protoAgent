@@ -440,3 +440,19 @@ def test_plugin_path_setting_emits_multiple_and_saves_a_newline_joined_string(mo
     assert validate_flat({"artifact.data_dirs": "/srv/a\n/srv/b"}) == (True, None)
     ok, msg = validate_flat({"artifact.data_dirs": ["/srv/a", "/srv/b"]})
     assert ok is False and "string path" in (msg or "")
+
+
+def test_restart_keys_includes_plugin_fields(monkeypatch):
+    _fake_plugin_specs(monkeypatch, [
+        {"key": "workers", "type": "number", "restart": True},
+        {"key": "title", "type": "string", "restart": False},
+    ])
+    from graph.settings_schema import _plugin_field_specs
+
+    keys = {key.rsplit(".", 1)[1]: key for _, key, _, _ in _plugin_field_specs()}
+    assert restart_keys({
+        keys["workers"]: 4,
+        keys["title"]: "new",
+        "runtime.autostart_on_boot": True,
+        "unknown.field": True,
+    }) == [keys["workers"], "runtime.autostart_on_boot"]
