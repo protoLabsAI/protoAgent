@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.215.0",
+    "date": "2026-10-24",
+    "changes": [
+      "Restart now for settings that need a restart (#4490).",
+      "The Org Chart is live: watch the fleet work, and drill into any agent (#4492).",
+      "Plugin Configure opens as a Settings pane (#4488).",
+      "One save model per plugin settings tab (#4489).",
+      "A coding delegate's reply shows its tool calls in order, live and after a reload (#4487).",
+      "A project handed to a peer is named in the ask, not refused (#4494).",
+      "An approval a server-resumed turn stops on now shows in the open chat (#4495).",
+      "Org chart filter chips keep keyboard focus (#4499).",
+      "Design plugin settings (#4491)."
+    ]
+  },
+  {
     "version": "v0.214.0",
     "date": "2026-10-23",
     "changes": [

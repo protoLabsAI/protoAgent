@@ -15,6 +15,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.215.0] - 2026-10-24
+
+### Added
+- **Restart now for settings that need a restart (#4490).** The settings banner checks for active turns and background jobs, offers to restart when idle, and reconnects after a guarded self-restart or a fleet member stop/start. Plugin pages can request the same operator-confirmed flow.
+
+- **The Org Chart is live: watch the fleet work, and drill into any agent (#4492).** It used
+  to be a wiring diagram — who could delegate to whom, refreshed every 8 seconds. Now an
+  edge carrying a delegation animates while the work runs, the agent on the end shows what
+  it is doing right now ("Editing calc.py") with a clock, and it flashes green or red when
+  the work lands. An Activity column lists every hand-off. Click an agent for its live
+  plan, current tool, narration, lifetime record and recent work, beside the graph. On a
+  hub it covers the fleet: a member's own coders and subagents light up under that member,
+  with that member's record. Underneath, the delegation ledger now announces work as it
+  happens (`delegation.started` / `.progress` / `.finished` on the event bus, catch-up at
+  `GET /api/ledger/live`), and a room-routed `delegate_to` is recorded as what was asked
+  rather than the room's catch-up preamble. Coder and model nodes also finally show their
+  run counts — the chart had been matching them against the wrong ledger kind.
+
+### Changed
+- **Plugin Configure opens as a Settings pane (#4488).** Settings ▸ Plugins ▸ ⚙ Configure no
+  longer opens a modal stacked on top of the Settings dialog — it opens the plugin's own
+  full-width pane inside Settings (Settings ▸ Plugins ▸ <plugin>), with a "← Plugins" back link
+  to the list. A plugin with many tabs (projectBoard has five) gets the whole pane instead of a
+  760px box over another box with two close buttons. Escape and the back link return to the
+  plugin list without closing Settings. Configure from the command palette, a plugin's own
+  "Configure…", or a rail context menu now opens Settings directly on that plugin's pane, even
+  when Settings was closed. Schema tabs and plugin-owned `settings_tabs[].path` pages both render
+  unchanged — no manifest change — and save/validate behaviour is untouched in this slice (ADR
+  0048 domain-first IA; supersedes the ADR 0059 modal on the container only).
+
+- **One save model per plugin settings tab (#4489).** A plugin Configure tab is now either save-then-apply or live — never both. A path-backed tab, or a schema tab the manifest marks `apply: live`, hides Save & apply and saves switches and selections immediately and free-form fields on blur, with ordered writes and an inline "Saved"; tabs without `apply:` keep today's Save & apply. Restart-only changes are no longer badged per field — after a save they collect into one banner ("N changes take effect after a restart") per plugin pane, which a plugin page can add to via a `protoagent:settings:restart-pending` frame message and which holds a slot for a Restart now action.
+
+### Fixed
+- **A coding delegate's reply shows its tool calls in order, live and after a reload (#4487).**
+  When protoAgent handed work to Claude Code or another ACP coder, the reply bubble was the
+  coder's narration with every action cut out ("Now executing the edits:" … "The tests
+  pass."). The reply now renders like a native turn: each Read, Edit and test run sits
+  between the sentences around it, with icons from the coder's own tool kinds and inputs
+  redacted. A chat rebuilt from the server (a fresh browser, another device) keeps the
+  participant's bubble, byline and tool timeline instead of dropping them, and cards that
+  aren't tools (`@name`, `/workflow`, `/subagent`, a delegate's calls) no longer offer a
+  "Manage in Tools settings" link that led nowhere.
+
+- **A project handed to a peer is named in the ask, not refused (#4494).** `delegate_to(project=…)` on an a2a delegate used to error, so a fan-out to peers opened with a red error card while the model retried; the peer now hears which project in its ask.
+
+- **An approval a server-resumed turn stops on now shows in the open chat (#4495).**
+  When background delegates reported back and the server resumed the turn by itself, a
+  command that needed approval in that turn showed only a spinning tool card, and the
+  composer looked idle. The Approve / Deny card appeared only after a reload. The open chat
+  now picks up the paused turn as soon as it stops and shows the card. A turn that paused
+  after saying something first no longer shows a false "Task failed" toast either.
+
+- **Org chart filter chips keep keyboard focus (#4499).**
+  The chips were rebuilt on every topology poll, so a keyboard user focused on one lost
+  focus every few seconds. They now rebuild only when the counts or the hidden kinds change.
+
+### Docs
+- **Design plugin settings (#4491).** A new guide, `guides/plugin-settings`, sets the standard for every plugin's settings: tabs built around what the operator is trying to do, one save model per tab, plain labels with one-sentence help, pickers for known values, and health shown on every list row. It ends with a checklist to run before opening the PR.
+
 ## [0.214.0] - 2026-10-23
 
 ### Added
