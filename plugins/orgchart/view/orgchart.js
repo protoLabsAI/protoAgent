@@ -80,7 +80,6 @@ let POLL_S = 8;
 let lastSeq = -1;
 let PEERS = 0;
 let staleRetry = 0;              // readable fleet peers: their work arrives by poll, not bus
-let eventsSeen = false;
 const HIDE_KEY = "orgchart.hidden";
 const store = {
   get() { try { return new Set(JSON.parse(localStorage.getItem(HIDE_KEY) || "[]")); } catch { return new Set(); } },
@@ -781,7 +780,6 @@ function landNode(e) {
 
 function onEvent(topic, d) {
   if (!d || !d.id) return;
-  eventsSeen = true;
   setLive("live");
   if (topic === "delegation.started") { FRESH.add(d.id); upsertLive({ ...d, owner: SELF }); }
   else if (topic === "delegation.progress") {
