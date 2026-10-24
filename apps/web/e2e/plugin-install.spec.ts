@@ -32,11 +32,12 @@ test("install a plugin from a git URL, then uninstall it from its row", async ({
 
   // #1643 — the fresh install is configurable IMMEDIATELY (no page refresh): install
   // invalidates the settings schema, so the row grows a Configure button and the
-  // dialog opens with the plugin's fields, not empty.
+  // Configure PANE (#4488) opens with the plugin's fields, not empty.
   await row.getByRole("button", { name: "Configure protoagent-plugin-widgets" }).click();
-  const config = page.getByRole("dialog", { name: "protoagent-plugin-widgets" });
+  const config = page.locator(".plugin-settings-pane");
+  await expect(config.locator(".plugin-settings-crumb-current")).toHaveText("protoagent-plugin-widgets");
   await expect(config.locator('.setting-row[data-key="protoagent-plugin-widgets.greeting"]')).toBeVisible();
-  await config.locator(".pl-dialog__close").click();
+  await page.getByTestId("plugin-config-back").click(); // back to the plugin list
 
   // Uninstall from the row — a DS ConfirmDialog guards it; confirm and the row disappears.
   await row.getByRole("button", { name: /uninstall/i }).click();
@@ -117,7 +118,7 @@ test("Discover never offers Install for a bundled plugin, and shows its real on/
   await expect(card("Discord").locator(".plugin-card-foot")).toContainText("installed · on");
 });
 
-test("Discover install → Configure dialog hydrates without a page refresh (#1643)", async ({ page }) => {
+test("Discover install → Configure pane hydrates without a page refresh (#1643)", async ({ page }) => {
   await page.goto("/app/", { waitUntil: "load" });
   await page.getByTestId("settings-widget").click();
   await page.locator(".pl-sidenav").getByRole("tab", { name: "Plugins", exact: true }).click();
@@ -133,14 +134,15 @@ test("Discover install → Configure dialog hydrates without a page refresh (#16
   await expect(page.locator(".pl-toast", { hasText: "Plugin installed" })).toBeVisible();
 
   // Back on Installed: the new row offers Configure NOW — no page refresh — and the
-  // dialog carries the plugin's fields (the schema was refetched after install).
+  // pane carries the plugin's fields (the schema was refetched after install).
   await page.locator(".pl-tabs").getByRole("tab", { name: "Installed", exact: true }).click();
   const row = page.locator(".plugin-table tbody tr", { hasText: "artifact-plugin" });
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "Configure artifact-plugin" }).click();
-  const config = page.getByRole("dialog", { name: "artifact-plugin" });
+  const config = page.locator(".plugin-settings-pane");
+  await expect(config.locator(".plugin-settings-crumb-current")).toHaveText("artifact-plugin");
   await expect(config.locator('.setting-row[data-key="artifact-plugin.greeting"]')).toBeVisible();
-  await config.locator(".pl-dialog__close").click();
+  await page.getByTestId("plugin-config-back").click(); // back to the plugin list
 
   // Clean up the shared mock state: uninstall the plugin again.
   await row.getByRole("button", { name: /uninstall/i }).click();
