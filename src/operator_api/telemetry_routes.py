@@ -341,8 +341,9 @@ def register_telemetry_routes(app) -> None:
     # Per-turn cost/latency rollups from the local store. Powers the operator
     # console's cost/latency surface (Slice 3) and ad-hoc "what's expensive"
     # queries. Read-only; returns {enabled:false} when the store is off.
+    # Plain ``def``: the store reads are blocking SQLite, so FastAPI runs them in its threadpool.
     @app.get("/api/telemetry/summary")
-    async def _api_telemetry_summary(since: str | None = None):
+    def _api_telemetry_summary(since: str | None = None):
         return _local_summary_payload(since)
 
     # Gateway in-flight limiter lane telemetry (ADR 0115 D8). Reads the per-process
@@ -379,7 +380,7 @@ def register_telemetry_routes(app) -> None:
     # can answer the other's question — the turns table has no actor column and no edge.
 
     @app.get("/api/ledger")
-    async def _api_ledger(limit: int = 100, session: str = ""):
+    def _api_ledger(limit: int = 100, session: str = ""):
         """Recent delegation edges, newest first; optionally one originating session."""
         store = getattr(STATE, "ledger_store", None)
         if store is None:
@@ -390,7 +391,7 @@ def register_telemetry_routes(app) -> None:
         }
 
     @app.get("/api/ledger/edges")
-    async def _api_ledger_edges(days: int | None = None):
+    def _api_ledger_edges(days: int | None = None):
         """Edges aggregated per target — the shape a graph draws.
 
         ``cost_usd`` sums only rows that HAVE a cost and ``priced`` says how many those
