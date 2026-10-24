@@ -717,6 +717,17 @@ function factsSection(n) {
   add("Workdir", n.workdir, true);
   add("Version", n.version);
   add("Via", n.via);
+  // Why a node is down, and how it's wired: the old detail panel's health + edge rows.
+  if (Number.isFinite(n.latency_ms)) add("Latency", n.latency_ms + " ms");
+  if (Number.isFinite(n.checked_at)) add("Checked", ago(n.checked_at));
+  add("Error", n.error);
+  const edges = TOPO?.edges || [];
+  if (n.kind === "agent" || n.kind === "self") {
+    const out = edges.filter((e) => e.from === n.id).length;
+    add("Delegates", out ? out + " outbound" : n.kind === "self" ? "0" : "unknown (no token)");
+  }
+  const ins = edges.filter((e) => e.to === n.id).length;
+  add("Delegated by", ins + (ins === 1 ? " agent" : " agents"));
   if (!rows.length) return "";
   return `<section class="sec"><h3>Details</h3><dl class="facts">${rows.join("")}</dl></section>`;
 }
