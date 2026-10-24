@@ -10,7 +10,8 @@
  *  fresh empty placeholder (same id) for the lead's continued streaming.
  */
 
-import type { ChatMessage } from "../lib/types";
+import { delegateTimelineMessage } from "../lib/delegateProgress";
+import type { ChatMessage, RoomReply } from "../lib/types";
 
 export function isEmptyPlaceholder(m: ChatMessage | undefined): boolean {
   return !m?.content && !m?.parts?.length && !m?.toolCalls?.length && !m?.reasoning;
@@ -65,4 +66,50 @@ export function insertRoomBubble(
   newId: string,
 ): ChatMessage[] {
   return insertConversationBubbles(messages, assistantId, [bubble], newId);
+}
+
+/** Does this reply render words the turn's canonical answer text also carries (#3449)?
+ *  Then the turn is stamped answered-by-participants and no producer of that text lands
+ *  it. Three conditions, all load-bearing:
+ *    - a REPLY, not an ask (an ask's text is the question) and not the room's own note
+ *      (which is the part of the answer NO bubble carries);
+ *    - the server claimed it (`inAnswer`);
+ *    - the OPERATOR did the addressing. A reply the LEAD addressed (`delegate_to`,
+ *      `from: "assistant"`) can never be the whole of the turn's answer — the lead's
+ *      answer is its own synthesis — so honouring a claim there would delete the lead's
+ *      words. The mention path is the only producer that sets both, and nothing stops a
+ *      fork or plugin from emitting room frames, so this is checked rather than assumed. */
+export function replyClaimsAnswer(reply: RoomReply): boolean {
+  return Boolean(reply.author) && reply.inAnswer === true && reply.from === "operator";
+}
+
+/** The bubble a room frame renders as — a participant's reply, the lead's ask, or the
+ *  room's own note — or null when it has no text to show. Shared by the live stream and
+ *  the rebuild from durable turns, so a reloaded transcript draws what the live one did. */
+export function roomReplyBubble(
+  reply: RoomReply,
+  id: string,
+  opts: { createdAt?: number; turnTaskId?: string } = {},
+): ChatMessage | null {
+  if (!reply.text) return null;
+  return {
+    id,
+    role: "assistant",
+    content: reply.text,
+    // A coding delegate's reply in the order it happened — its narration with the tool
+    // calls between it — instead of the narration alone, which reads in jumps.
+    ...(reply.timeline ? delegateTimelineMessage(reply.timeline, id) : {}),
+    ...(opts.createdAt !== undefined ? { createdAt: opts.createdAt } : {}),
+    status: "done",
+    ...(reply.author ? { author: reply.author } : {}),
+    ...(reply.addressedTo ? { addressedTo: reply.addressedTo } : {}),
+    ...(reply.delegation ? { delegation: reply.delegation } : {}),
+    // Bubbles that carry the turn's own answer carry its task id too, so Copy / Fork /
+    // Rewind / View prompt land on the message that actually shows the answer (#3449 C).
+    // The turn's other half is a work card with no prose, and the action row needs
+    // `content`. Read paths that group a turn by task id all skip `author`-bearing bubbles
+    // by design, so this cannot make one an anchor for canonical text — `turnBubbleIndexes`
+    // keys on `splitOf`, never on the task.
+    ...(replyClaimsAnswer(reply) && opts.turnTaskId ? { taskId: opts.turnTaskId } : {}),
+  };
 }

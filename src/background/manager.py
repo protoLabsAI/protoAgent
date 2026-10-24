@@ -314,12 +314,15 @@ class BackgroundManager:
         if self._publish is None:
             return None
 
+        from graph.delegate_progress import take_timeline
+
         async def _sink(snapshot: dict) -> None:
             data = {
                 "job_id": job_id,
                 "origin_session": origin_session,
                 "phase": "delegate_progress",
-                "progress": snapshot,
+                # The reply timeline is for a reply bubble, not this live lane — drop it.
+                "progress": take_timeline(snapshot)[0],
             }
             try:
                 try:

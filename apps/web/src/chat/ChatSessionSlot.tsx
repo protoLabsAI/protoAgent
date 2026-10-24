@@ -24,7 +24,7 @@ import {
 import { PublishDialog } from "./PublishDialog";
 import { findSlashCommand } from "../ext/slashRegistry";
 import { continueRun, leadingRun, runHas, toggleMention } from "./mentionRun";
-import { insertRoomBubble } from "./roomBubble";
+import { insertRoomBubble, replyClaimsAnswer, roomReplyBubble } from "./roomBubble";
 import type { ComposerFormSpec } from "../ext/slashRegistry";
 import { registeredComposerActions } from "../ext/composerRegistry";
 import { ChatTranscript } from "./ChatTranscript";
@@ -1383,37 +1383,9 @@ export function ChatSessionSlot({
           if (!reply.text) return; // an ask with no query — nothing to show
 
           roomReplies.current += 1;
-          // Does this bubble render words the turn's canonical answer text also carries
-          // (#3449)? Then the turn is stamped below and no producer of that text will
-          // land it. Three conditions, all load-bearing:
-          //   - a REPLY, not an ask (an ask's text is the question) and not the room's
-          //     own note (which is the part of the answer NO bubble carries);
-          //   - the server claimed it (`inAnswer`);
-          //   - the OPERATOR did the addressing. A reply the LEAD addressed
-          //     (`delegate_to`, `from: "assistant"`) can never be the whole of the
-          //     turn's answer — the lead's answer is its own synthesis — so honouring a
-          //     claim there would delete the lead's words. The mention path is the only
-          //     producer that sets both, and nothing stops a fork or plugin from
-          //     emitting room frames, so this is checked rather than assumed.
-          const claimsAnswer = Boolean(reply.author) && reply.inAnswer === true && reply.from === "operator";
-          const authored: ChatMessage = {
-            id: messageId(),
-            role: "assistant",
-            content: reply.text,
-            createdAt: Date.now(),
-            status: "done",
-            ...(reply.author ? { author: reply.author } : {}),
-            ...(reply.addressedTo ? { addressedTo: reply.addressedTo } : {}),
-            ...(reply.delegation ? { delegation: reply.delegation } : {}),
-            // Bubbles that carry the turn's own answer carry its task id too, so Copy /
-            // Fork / Rewind / View prompt land on the message that actually shows the
-            // answer (#3449 C). The turn's other half is a work card with no prose, and
-            // the action row needs `content`. Read paths that group a turn by task id
-            // all skip `author`-bearing bubbles by design, so this cannot make one an
-            // anchor for canonical text — `turnBubbleIndexes` keys on `splitOf`, never
-            // on the task.
-            ...(claimsAnswer && turnTaskId ? { taskId: turnTaskId } : {}),
-          };
+          const claimsAnswer = replyClaimsAnswer(reply);
+          const authored = roomReplyBubble(reply, messageId(), { createdAt: Date.now(), turnTaskId });
+          if (!authored) return;
           const withBubble = insertRoomBubble(latest.messages, assistantId, authored, messageId());
           chatStore.updateMessages(
             session.id,

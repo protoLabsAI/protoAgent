@@ -898,6 +898,8 @@ def _publish_chat_progress(context_id: str, task_id: str, frame: dict) -> None:
                 # turn an authored answer back into a preview.
                 "text": text,
                 "ok": bool(frame.get("ok")),
+                # The reply's text ↔ tool-call order (graph/delegate_progress.py), when known.
+                **({"timeline": frame["timeline"]} if isinstance(frame.get("timeline"), list) else {}),
             }
         elif addressed_to:
             # The lead's outgoing delegation ask — a delegation made DURING a server-fired

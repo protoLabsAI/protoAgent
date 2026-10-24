@@ -426,9 +426,14 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
     # collector instead and it comes out as `usage` frames — the lane a `/<subagent>`
     # run bills through (#3957). Without it the row read 0 calls, 0 tokens (#4004).
     _mention_usage: list[dict] = []
+    # Each addressed run's ordered text ↔ tool-call timeline, per participant in dispatch
+    # order — lifted off the coder's final progress snapshot, rendered on its reply bubble.
+    _mention_timelines: dict[str, list] = {}
     try:
         with delegation_usage.collect() as _mention_usage:
-            async for _frame in _mention_exchange_with_progress(message, session_id, request_metadata, _mention_tool):
+            async for _frame in _mention_exchange_with_progress(
+                message, session_id, request_metadata, _mention_tool, _mention_timelines
+            ):
                 if _frame[0] == "__result__":
                     _at_reply, _at_outcome = _frame[1]
                 else:
@@ -490,6 +495,10 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
         )
     if _at_reply is not None:
         for _exchange in _at_outcome or []:
+            # Every dispatched run finished one tracker, in this same order — consume its
+            # timeline even for a silence, so a later round's reply gets its own.
+            _runs = _mention_timelines.get(str(_exchange.get("author") or ""))
+            _timeline = _runs.pop(0) if _runs else None
             if _exchange.get("silent"):
                 continue  # a `pass` is not a message — no thread record, no frame
             # One authorship frame per exchange: the answer is that participant's
@@ -517,6 +526,9 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
                     "catchup": int(_exchange.get("catchup") or 0),
                     "truncated": bool(_exchange.get("truncated")),
                     **({"in_answer": True} if _exchange.get("in_answer") else {}),
+                    # The reply as it happened — narration and the tool calls between it —
+                    # when the run reported one that agrees with the reply text.
+                    **_timeline_field(_timeline, _exchange.get("reply") if _exchange.get("ok") else ""),
                 },
             )
         # The part of the answer NO participant's bubble carries (#3449) — a
@@ -779,7 +791,11 @@ async def _pre_turn_dispatch(pre: _PreTurn, session_id: str, request_metadata: d
 
 
 async def _mention_exchange_with_progress(
-    message: str, session_id: str, request_metadata: dict | None, mention_tool: dict | None
+    message: str,
+    session_id: str,
+    request_metadata: dict | None,
+    mention_tool: dict | None,
+    timelines: dict[str, list] | None = None,
 ):
     """Run the ``@`` exchange, yielding the addressed coder's live progress meanwhile (#3979).
 
@@ -795,12 +811,15 @@ async def _mention_exchange_with_progress(
     the exchange, exactly as cancelling the old inline await did — the ACP adapter kills
     its coder on that cancellation.
     """
-    from graph.delegate_progress import progress_sink
+    from graph.delegate_progress import progress_sink, take_timeline
 
     frames: asyncio.Queue = asyncio.Queue()
 
     async def _sink(snapshot: dict) -> None:
         if mention_tool is not None:
+            snapshot, timeline = take_timeline(snapshot)
+            if timelines is not None and snapshot.get("done"):
+                timelines.setdefault(str(snapshot.get("target") or ""), []).append(timeline)
             frames.put_nowait(("delegate_progress", {**snapshot, "id": mention_tool["id"]}))
 
     async def _exchange():
@@ -827,6 +846,15 @@ async def _mention_exchange_with_progress(
     finally:
         if not task.done():
             task.cancel()
+
+
+def _timeline_field(timeline: list | None, reply: object) -> dict:
+    """``{"timeline": …}`` for a reply frame, or ``{}`` when the run reported none that
+    agrees with the reply text (``graph.delegate_progress.reply_timeline``)."""
+    from graph.delegate_progress import reply_timeline
+
+    checked = reply_timeline(timeline, str(reply or ""))
+    return {"timeline": checked} if checked else {}
 
 
 def _usage_frames(rows: list[dict]) -> list[tuple[str, dict]]:

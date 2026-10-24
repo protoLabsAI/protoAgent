@@ -4,12 +4,13 @@
  * dispatcher shared by the live turn, the reattach stream and durable-turn replay.
  * Pure — no fetch, no routing — and must never import `lib/api.ts`.
  */
-import { delegateProgressFromWire } from "../delegateProgress";
+import { delegateProgressFromWire, delegateTimelineFromWire } from "../delegateProgress";
 import type {
   ComponentSpec,
   ContextWindow,
   ConsumedSteer,
   DelegateProgressEvent,
+  DelegateTimelineEntry,
   HitlPayload,
   RoomReply,
   ToolEvent,
@@ -323,6 +324,7 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
         in_answer?: boolean;
         note?: boolean;
         id?: string;
+        timeline?: unknown;
       }
     | undefined;
   if (!d) return null;
@@ -346,7 +348,13 @@ export function roomReplyFromParts(parts?: RawPart[]): RoomReply | null {
     // frame IS the part of the answer no bubble carries.
     inAnswer: d.in_answer === true,
     note: d.note === true,
+    ...(author ? optionalTimeline(d.timeline) : {}),
   };
+}
+
+function optionalTimeline(raw: unknown): { timeline?: DelegateTimelineEntry[] } {
+  const timeline = delegateTimelineFromWire(raw);
+  return timeline ? { timeline } : {};
 }
 
 
@@ -703,6 +711,11 @@ function replayTaskSnapshot(
     if (opts.replaySteers) {
       const consumed = consumedSteersFromParts(msg.parts);
       if (consumed) handlers.onSteerConsumed?.(consumed);
+      // The same holds for a room frame — a participant's reply, the lead's ask, the
+      // room's note: a live bubble already drew it (a reattach would draw it twice), and a
+      // rebuild without it drops the participant's bubble, byline and reply timeline.
+      const room = roomReplyFromParts(msg.parts);
+      if (room) handlers.onRoomReply?.(room);
     }
   }
   for (const artifact of arts) {

@@ -1,16 +1,22 @@
 import "./tool-calls.css";
 import {
+  ArrowRightLeft,
+  Brain,
   Calculator,
   Clock,
   Database,
+  FileText,
   Globe,
   Hourglass,
   Network,
   PauseCircle,
+  Pencil,
   Search,
   CircleSlash,
   SlidersHorizontal,
   Square,
+  SquareTerminal,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -31,7 +37,28 @@ import { CHARS_PER_TOKEN, toolCostTokens } from "./toolCost";
 import { humanizeSeconds, parseWaitInput } from "./waitInfo";
 
 /** Map a tool name to a recognizable icon; falls back to a generic wrench. */
-function iconFor(name: string): LucideIcon {
+/** A delegate's call, by ACP's own classification of it — its name is free text
+ *  ("Edit calc.py", "python -m pytest -q"), so the name says nothing about the icon. */
+const DELEGATE_KIND_ICONS: Record<string, LucideIcon> = {
+  read: FileText,
+  edit: Pencil,
+  delete: Trash2,
+  move: ArrowRightLeft,
+  search: Search,
+  execute: SquareTerminal,
+  think: Brain,
+  fetch: Globe,
+};
+
+/** A card the server opens for a direct address rather than a tool call
+ *  (server/chat_dispatch.py: `mention:` / `workflow:` / `subagent:` ids). */
+export function isDirectAddressCard(call: ToolCall): boolean {
+  return /^(mention|workflow|subagent):/.test(call.id);
+}
+
+function iconFor(call: ToolCall): LucideIcon {
+  if (call.delegated) return DELEGATE_KIND_ICONS[call.delegated.kind ?? ""] ?? Wrench;
+  const name = call.name;
   if (name === "calculator") return Calculator;
   if (name === "web_search") return Search;
   if (name === "fetch_url") return Globe;
@@ -338,7 +365,7 @@ function ToolGroup({
   // Collapsed by default; expanding reveals the args/result AND the subagent's nested
   // tools (the `.pl-toolcard__children` indented rail, but here gated by the card's open
   // state instead of always-on — so the header row stays a stable height as kids stream in).
-  const Icon = iconFor(call.name);
+  const Icon = iconFor(call);
   // A coding delegate's live view (#3979) — on an `@` mention card. While the card runs it
   // renders OUTSIDE the collapsed body, under the header, so the plan and current tool are
   // visible without expanding (the whole point: the card used to be a bare spinner); once
@@ -394,7 +421,10 @@ function ToolGroup({
   // separate settings panel. A deep-link, not an inline toggle, so Tools settings stays the
   // single source of truth for wiring. Sits in the same header actions slot as Stop; quiet
   // until hover so the card reads as activity first, curation on intent.
-  const manageBtn = (
+  // Only a real tool of ours has a row in Tools settings. A delegate's call ran on ITS tools,
+  // and the cards a direct address opens (`@name`, `/<workflow>`, `/<subagent>`) are not
+  // tools at all — "Manage @claude-code in Tools settings" led nowhere.
+  const manageBtn = call.delegated || isDirectAddressCard(call) ? null : (
     <button
       type="button"
       className="pl-iconbtn tool-manage-btn"
