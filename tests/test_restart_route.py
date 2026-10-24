@@ -230,3 +230,94 @@ def test_guard_rechecks_work_that_starts_while_response_flushes(monkeypatch):
         exited.assert_called_once()
     finally:
         turn_activity.end("flush-race")
+
+
+def _drive_when_idle_drain(monkeypatch, sleep):
+    """Run the when-idle restart drain with a stubbed asyncio.sleep, returning the
+    captured request_server_exit mock. The route 202s at request time (idle), schedules
+    the drain task, and we await exactly that task — no real server, no delay."""
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from operator_api import runtime_routes
+    from starlette.requests import Request
+
+    exited = Mock()
+    monkeypatch.setattr(runtime_routes.asyncio, "sleep", sleep)
+    monkeypatch.setattr(runtime_routes, "request_server_exit", exited)
+    routers = []
+    register_runtime_control_routes(SimpleNamespace(include_router=routers.append))
+    route = next(r for r in routers[0].routes if r.path == "/api/restart")
+    pending = []
+
+    async def invoke():
+        with monkeypatch.context() as patch:
+            patch.setattr(runtime_routes.asyncio, "create_task", pending.append)
+            response = await route.endpoint(Request({"type": "http"}), {"when_idle": True})
+        assert response.status_code == 202
+        await pending.pop()
+
+    asyncio.run(invoke())
+    return exited
+
+
+def test_idle_wait_abandons_restart_when_shutdown_starts(monkeypatch):
+    """A Ctrl-C or a hub supervisor stop during the when-idle wait must NOT re-exec.
+    The flag that arms _main's re-exec is set only after idle is reconfirmed; if the
+    server is already winding down, the wait bails and leaves it unset."""
+    from types import SimpleNamespace
+
+    from runtime import turn_activity
+
+    server = SimpleNamespace(should_exit=False)
+    monkeypatch.setattr(STATE, "uvicorn_server", server)
+    monkeypatch.setattr(STATE, "background_mgr", None)
+    monkeypatch.setattr(STATE, "restart_requested", False)
+
+    sleep_calls = []
+
+    async def sleep(seconds):
+        sleep_calls.append(seconds)
+        if seconds == 0.3:
+            turn_activity.begin("shutdown-race")  # a turn races in during the flush
+        else:
+            server.should_exit = True  # Ctrl-C / hub stop arrives while we wait for idle
+
+    try:
+        exited = _drive_when_idle_drain(monkeypatch, sleep)
+    finally:
+        turn_activity.end("shutdown-race")
+
+    assert sleep_calls == [0.3, 1]
+    assert STATE.restart_requested is False  # re-exec never armed → _main exits cleanly
+    exited.assert_not_called()
+
+
+def test_idle_wait_gives_up_and_never_restarts_if_agent_stays_busy(monkeypatch):
+    """A turn that raced in during the flush and never finishes must not leave a
+    restart queued indefinitely. After the bounded grace the drain abandons without
+    arming the re-exec, so no restart can fire later once the operator moved on."""
+    from operator_api import runtime_routes
+    from runtime import turn_activity
+
+    monkeypatch.setattr(STATE, "uvicorn_server", object())
+    monkeypatch.setattr(STATE, "background_mgr", None)
+    monkeypatch.setattr(STATE, "restart_requested", False)
+    monkeypatch.setattr(runtime_routes, "_RESTART_IDLE_GRACE_S", 3)
+
+    sleep_calls = []
+
+    async def sleep(seconds):
+        sleep_calls.append(seconds)
+        if seconds == 0.3:
+            turn_activity.begin("stuck")  # busy for the whole grace — never ends
+
+    try:
+        exited = _drive_when_idle_drain(monkeypatch, sleep)
+    finally:
+        turn_activity.end("stuck")
+
+    assert sleep_calls == [0.3, 1, 1, 1]  # flush + exactly _RESTART_IDLE_GRACE_S polls
+    assert STATE.restart_requested is False
+    exited.assert_not_called()

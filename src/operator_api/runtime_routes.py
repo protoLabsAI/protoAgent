@@ -25,6 +25,13 @@ from fastapi import Body, HTTPException, Request
 log = logging.getLogger("protoagent.server.restart")
 _BOOT_ID = uuid.uuid4().hex
 
+# A when-idle restart only waits for a turn that raced in during the response
+# flush (the route 409s unless idle at request time). Bound that wait so it never
+# outlives the operator watching for the restart — the console gives up after
+# ~120 one-second polls, so the server abandons at or before that and leaves the
+# re-exec flag unset, rather than firing a restart the operator was told failed.
+_RESTART_IDLE_GRACE_S = 120
+
 
 def restart_readiness() -> dict:
     """Read existing work registries; never infer idle from an unavailable store."""
@@ -96,6 +103,18 @@ def request_server_exit() -> bool:
     return True
 
 
+def _shutdown_started() -> bool:
+    """True once the live uvicorn Server has already been asked to wind down — by a
+    Ctrl-C, a hub supervisor stop, or an earlier restart. The when-idle wait watches
+    this so it drops a not-yet-armed restart instead of re-launching on a shutdown that
+    is already underway (``_main`` only re-execs when ``STATE.restart_requested`` is set,
+    and this path leaves it unset)."""
+    from runtime.state import STATE
+
+    server = getattr(STATE, "uvicorn_server", None)
+    return bool(server is not None and getattr(server, "should_exit", False))
+
+
 def register_runtime_control_routes(app) -> None:
     from fastapi import APIRouter
     from fastapi.responses import JSONResponse
@@ -113,30 +132,48 @@ def register_runtime_control_routes(app) -> None:
         from runtime.state import STATE
 
         audit_restart(request, str(body.get("reason", "operator request")))
+        when_idle = bool(body.get("when_idle"))
         # Existing callers retain their graceful restart; Settings explicitly requests
         # the idle guard, rechecked here after the operator's confirmation.
-        if body.get("when_idle"):
+        if when_idle:
             readiness = restart_readiness()
             if not readiness["supervised"]:
                 raise HTTPException(409, readiness["how_to"])
             if not readiness["idle"]:
                 raise HTTPException(409, "; ".join(readiness["busy"]))
-        STATE.restart_requested = True
+            # Don't arm the re-exec yet. STATE.restart_requested is the authoritative
+            # "re-exec once uvicorn.run() returns" signal; setting it before the
+            # bounded wait below would re-launch the server on an unrelated Ctrl-C or
+            # hub supervisor stop during that wait. It is armed only once idle is
+            # reconfirmed, just before the graceful exit is triggered.
+        else:
+            STATE.restart_requested = True  # no wait — commit as the self-restart always has
 
         async def _drain_then_signal():
             # Let the 202 flush to the client, then ask the server to wind down; _main
-            # re-execs once its run() returns.
+            # re-execs once its run() returns (iff STATE.restart_requested is set).
             await asyncio.sleep(0.3)
-            if body.get("when_idle"):
-                # A turn may have started while the response flushed. Keep the
-                # accepted restart queued until the existing registries are idle.
+            if when_idle:
+                # A turn may have started while the response flushed. Give it a bounded
+                # grace to finish, and bail the instant the process is already winding
+                # down for another reason. In both the time-out and the shutdown case
+                # we return WITHOUT arming the re-exec, so the server exits cleanly
+                # instead of re-launching on a restart the operator never saw through.
                 try:
-                    while not restart_readiness()["idle"]:
+                    for _ in range(_RESTART_IDLE_GRACE_S):
+                        if _shutdown_started():
+                            log.info("[restart] shutdown already underway; restart abandoned")
+                            return
+                        if restart_readiness()["idle"]:
+                            break
                         await asyncio.sleep(1)
+                    else:
+                        log.warning("[restart] agent stayed busy; when-idle restart abandoned")
+                        return
                 except Exception:
-                    STATE.restart_requested = False
                     log.exception("[restart] could not verify idle; restart abandoned")
                     return
+                STATE.restart_requested = True  # idle reconfirmed — arm the re-exec now
             if request_server_exit():
                 return
             # No live Server reference (an embedding host that runs the app itself).
