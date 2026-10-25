@@ -677,3 +677,42 @@ def test_empty_overlay_can_actually_hide():
     # Hiding it also drops the stale text, and a filter-emptied chart says so.
     assert '$("empty").innerHTML = !empty ? ""' in js
     assert "Everything is filtered out" in js
+
+
+def test_leaves_group_under_their_owner_and_fold_but_work_never_hides():
+    # Josh 10-25: one shared leaf column fanned every agent's coders into one stack; with
+    # projectManager's eight coders crawled it became unreadable. The view lays out a tree
+    # (each agent's leaves beside it) and folds an agent's leaves into one chip.
+    from pathlib import Path
+
+    js = (Path(topo.__file__).parent / "view" / "orgchart.js").read_text()
+    assert "function treeParents(g)" in js and "function fold(g)" in js
+    assert "GRAPH = fold(buildGraph());" in js
+    # Working, just-finished and selected leaves stay out of the fold.
+    assert "for (const f of g.flows) { active.add(f.to); active.add(f.from); }" in js
+    assert "if (SEL) active.add(SEL);" in js
+    # The operator's unfold choice is remembered; a feed click still reaches a folded leaf.
+    assert 'const OPEN_KEY = "orgchart.unfolded";' in js
+    assert "GRAPH.folded?.has(n.id)" in js
+    # ...and the drawer opens on it: render (which unfolds the selection) runs before the
+    # drawer looks the node up, or a folded leaf isn't in GRAPH and the drawer closes again.
+    opener = js[js.index("function openDrawer(id)") :]
+    assert opener.index("render();") < opener.index("renderDrawer();")
+
+
+def test_the_canvas_zooms_and_pans_like_a_map():
+    # Josh 10-25: with the tree laid out, a big fleet must be navigable, not scrolled.
+    from pathlib import Path
+
+    view = Path(topo.__file__).parent / "view"
+    js, css, html = ((view / f).read_text() for f in ("orgchart.js", "orgchart.css", "orgchart.html"))
+    assert "const CAM = { x: 0, y: 0, k: 1, user: false };" in js
+    assert "CAM.user ? applyCam() : fitCam();" in js  # a poll never yanks a view the operator moved
+    reveal = js[js.index("function revealNode(id)") :]
+    assert reveal.index("CAM.user = true;") < reveal.index("applyCam();")  # nor one a reveal moved
+    assert 'svg.addEventListener("focusin"' in js  # tabbing to an off-canvas node brings it into view
+    assert 'c.addEventListener("wheel"' in js and "zoomAt(Math.exp(-e.deltaY * px * rate), ...at(e));" in js
+    assert 'c.addEventListener("gesturechange"' in js  # the desktop webview's pinch
+    assert 'c.addEventListener("click", (e) => { if (dragged)' in js  # the click ending a pan isn't a card click
+    assert 'id="zoom-in"' in html and 'id="zoom-out"' in html and 'id="zoom-fit"' in html
+    assert "touch-action: none; user-select: none; -webkit-user-select: none;" in css  # a pan never selects text

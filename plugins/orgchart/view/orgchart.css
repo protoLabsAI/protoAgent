@@ -57,10 +57,15 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
   border-radius: var(--radius); background:
     radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--fg) 7%, transparent) 1px, transparent 0) 0 0 / 22px 22px,
     var(--bg-subtle); }
-/* Centered while it fits; scrolls from the top-left once it doesn't (margin:auto in a
-   flex box never clips the overflowing start edge, unlike place-items:center). */
-.canvas { display: flex; }
-#graph { display: block; margin: auto; flex: none; }
+/* The canvas is a camera: the SVG fills it and the viewBox pans and zooms (orgchart.js
+   CAM), so a big fleet is navigated, never scrolled. */
+/* No text selection: a drag is a pan, and a double-click on a card shouldn't select its name. */
+.canvas { overflow: hidden; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.canvas.panning { cursor: grabbing; }
+#graph { display: block; position: absolute; inset: 0; }
+.cam { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 2px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg-raised); cursor: default; }
+.cam-k { min-width: 42px; text-align: center; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 6px;
   color: var(--muted); padding: 24px; pointer-events: none; }
 .empty[hidden] { display: none; }
@@ -72,6 +77,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 .edge.member { stroke-dasharray: 4 5; }
 .edge.used { stroke: color-mix(in srgb, var(--accent) 35%, var(--border-strong)); }
 .edge.dim { opacity: .25; }
+.edge.fold { stroke-dasharray: 2 4; }
 .arrow { fill: var(--border-strong); }
 .flow { fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-linecap: round; stroke-dasharray: 2 9;
   filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent) 70%, transparent));
@@ -112,6 +118,12 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 .node .bar-bg { fill: var(--border); }
 .node .bar-ok { fill: var(--ok); }
 .node .bar-bad { fill: var(--bad); }
+/* The fold chip: a control, not an agent — dashed, quieter, no status ring. */
+.node.fold .card { fill: var(--bg-inset); stroke-dasharray: 4 4; }
+.node.fold:hover .card { stroke: var(--accent); }
+.node.fold .ring { stroke: var(--border-strong); }
+.node.fold .name { font-weight: 500; }
+.node.fold .meta .hint { fill: var(--accent); font-weight: 600; }
 
 /* ── activity feed ──────────────────────────────────────────────────────── */
 .feed { width: 320px; flex: none; display: flex; flex-direction: column; min-height: 0;
