@@ -228,6 +228,17 @@ def _token_for(raw: dict) -> str:
     return os.environ.get(env, "") if env else ""
 
 
+def _fleet_token() -> str:
+    """The box's fleet service token, or "" outside a fleet — the credential dispatch sends a
+    tokenless loopback delegate (`delegates.a2a._a2a_headers`)."""
+    try:
+        from graph.fleet.service_token import resolve_service_token
+
+        return str(resolve_service_token() or "")
+    except Exception:  # noqa: BLE001 — not in a fleet / unreadable token: crawl as before
+        return ""
+
+
 def _endpoint(url: str) -> str:
     """A model endpoint's base URL. Deliberately NOT ``_norm`` — that strips a trailing
     ``/a2a``, which is an A2A convention and would mangle a ``/v1`` gateway path."""
@@ -545,6 +556,15 @@ async def _build(cfg: dict) -> dict:
     for t in seed:
         name_of.setdefault(t["id"], t["name"])
     tokens = {t["id"]: t["token"] for t in seed if t["token"]}
+    # A loopback delegate with no credential of its own is a local member: dispatch presents
+    # the box's fleet service token to it (`delegates.a2a._a2a_headers`, ADR 0089 D4), so the
+    # crawl must too, or every local member stays a leaf and its own delegates never draw.
+    # Our own roster only: a peer's list is redacted and its loopback is not ours.
+    fleet = _fleet_token()
+    if fleet:
+        for t in seed:
+            if t["kind"] == "agent" and not t["token"] and not t.get("proxied") and _is_loopback(t["id"]):
+                tokens.setdefault(t["id"], fleet)
     for rec in remotes:
         b = _norm(str(rec.get("url")))
         if b and b != self_base and b not in {t["id"] for t in seed}:

@@ -621,3 +621,45 @@ def test_a_missed_live_read_is_retried_within_seconds(monkeypatch):
     """One slow answer from a busy member must not blank its work for half a minute —
     the topology's 30 s negative cache is for crawling, not for watching."""
     assert topo._LIVE_NEG_TTL <= 5 < topo._NEG_TTL
+
+
+# ── local members: crawled with the fleet service token, like dispatch ──────────────
+
+
+def _local_member_wire(monkeypatch, roster, seen):
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("authorization", "")))
+        if request.url.path == "/.well-known/agent-card.json":
+            return httpx.Response(200, json={"name": "projectManager"})
+        if request.url.path == "/api/delegates":
+            if request.headers.get("authorization") != "Bearer fleet-tok":
+                return httpx.Response(401)
+            return httpx.Response(200, json={"delegates": [{"type": "acp", "name": "codex", "command": "codex-acp"}]})
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(topo, "_make_client", lambda cfg: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(topo, "_roster", lambda: roster)
+    monkeypatch.setattr(topo, "_health", lambda: {})
+    monkeypatch.setattr(topo, "_fleet_remotes", lambda: [])
+    monkeypatch.setattr(topo, "_fleet_token", lambda: "fleet-tok")
+    monkeypatch.setattr(topo, "_self_identity", lambda: ("protoagent", "http://127.0.0.1:7870", "org head"))
+
+
+def test_a_tokenless_local_member_is_crawled_with_the_fleet_token(monkeypatch):
+    # The hub's "Add as delegate" row for a local member has no auth: dispatch presents the
+    # fleet service token (ADR 0089 D4). The crawl didn't, so projectManager's coders never drew.
+    seen: list = []
+    pm = "http://127.0.0.1:7875"
+    _local_member_wire(monkeypatch, [{"type": "a2a", "name": "projectManager", "url": pm + "/a2a"}], seen)
+    topo_ = asyncio.run(topo.get_topology({}))
+    nodes = {n["id"]: n for n in topo_["nodes"]}
+    assert f"acp:{pm}#codex" in nodes
+    assert {"from": pm, "to": f"acp:{pm}#codex", "kind": "delegate"} in topo_["edges"]
+
+
+def test_the_fleet_token_never_leaves_the_box(monkeypatch):
+    seen: list = []
+    _local_member_wire(monkeypatch, [{"type": "a2a", "name": "far", "url": "http://10.0.0.9:7870/a2a"}], seen)
+    asyncio.run(topo.get_topology({}))
+    assert seen and all("fleet-tok" not in auth for _url, auth in seen)
+    assert not any(url.endswith("/api/delegates") for url, _auth in seen)  # tokenless off-box peer: not crawled
