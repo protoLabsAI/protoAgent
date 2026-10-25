@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.215.1",
+    "date": "2026-10-25",
+    "changes": [
+      "The org chart shows a local member's own delegates (#4502)."
+    ]
+  },
+  {
     "version": "v0.215.0",
     "date": "2026-10-24",
     "changes": [

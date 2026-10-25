@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.215.1] - 2026-10-25
+
+### Fixed
+- **The org chart shows a local member's own delegates (#4502).** projectManager and designSystem appeared on the hub's chart with none of their coders or peers, because the crawl had no credential to read them. It now uses the same fleet service token that delegation already sends to a local member. That token never leaves the box.
+
 ## [0.215.0] - 2026-10-24
 
 ### Added
