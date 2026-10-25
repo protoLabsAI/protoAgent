@@ -5,7 +5,9 @@ ADR 0025); these two helpers stay because the a2a adapter reuses them to read a
 reply off an A2A 1.0 SendMessage/GetTask result.
 """
 
-from tools.a2a_parse import _extract_text, _is_terminal
+import pytest
+
+from tools.a2a_parse import _extract_text, _is_terminal, extract_park_question
 
 
 def test_extract_text_unwraps_a2a_1_0_task_envelope():
@@ -76,3 +78,100 @@ def test_is_terminal_handles_1_0_and_legacy_states():
     assert _is_terminal("completed")  # v0.3 lowercase
     assert not _is_terminal("TASK_STATE_WORKING")
     assert not _is_terminal(None)
+
+
+# Park questions deliberately have different precedence from ordinary answers (#4506).
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    "artifact,status,expected",
+    [
+        ("Let me check gh", " Approve shell command?\n\ngh auth status\n", "Approve shell command?\n\ngh auth status"),
+        ("\n", "Approve shell command?\n\ngh auth status", "Approve shell command?\n\ngh auth status"),
+        (" fallback question \n", " \n", "fallback question"),
+        ("\n", " \t", ""),
+        ("", "", ""),
+    ],
+)
+def test_extract_park_question(wrapped, artifact, status, expected):
+    task = _parked_task(artifact, status)
+    result = {"task": task} if wrapped else task
+    assert extract_park_question(result) == expected
+    # Ordinary answers retain artifact-first order and original whitespace.
+    assert _extract_text(result) == (artifact or status or None)
+
+
+def _parked_task(artifact, status):
+    return {
+        "id": "park-4506",
+        "status": {
+            "state": "TASK_STATE_INPUT_REQUIRED",
+            "message": {"parts": [{"text": status[:8]}, {"data": {"schema": "hitl-v1"}}, {"text": status[8:]}]},
+        },
+        "artifacts": [{"parts": [{"text": artifact}]}],
+    }
+
+
+@pytest.mark.parametrize("result", [None, {}, {"task": {}}, {"task": {"status": {"message": None}}}])
+def test_extract_park_question_missing(result):
+    assert extract_park_question(result) == ""
+
+
+@pytest.mark.parametrize("question", ["", "\n \t"])
+def test_park_message_missing_question_keeps_resume_handle(question):
+    from plugins.delegates.a2a import _park_message
+
+    message = _park_message("peer", "park-4506", question)
+    assert "Question: (the delegate sent no readable question" in message
+    assert "resume_task_id='park-4506'" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["dispatch", "pending", "keyless"])
+@pytest.mark.parametrize(
+    "artifact,status,expected",
+    [
+        ("Let me check gh", "Approve shell command?\n\ngh auth status", "Approve shell command?\n\ngh auth status"),
+        ("\n", "Approve shell command?\n\ngh auth status", "Approve shell command?\n\ngh auth status"),
+        ("\n", " \n", "(the delegate sent no readable question"),
+        (" fallback question \n", "", "fallback question"),
+    ],
+)
+async def test_park_paths_use_status_question(monkeypatch, path, artifact, status, expected):
+    from unittest.mock import AsyncMock
+
+    from plugins.delegates import conversations, late
+    from plugins.delegates.a2a import A2aAdapter
+    from plugins.delegates.adapters import Delegate
+
+    d = Delegate(name="peer", type="a2a", url="https://peer.example/a2a")
+    task = _parked_task(artifact, status)
+    if path == "dispatch":
+        rpc = AsyncMock(return_value={"task": task})
+        message = await A2aAdapter()._dispatch_traced(
+            d, "check auth", send_timeout=1, poll_timeout=1, _rpc=rpc
+        )
+        assert rpc.await_count == 1
+        assert rpc.call_args.args[1] == "SendMessage"
+    else:
+        get_task = AsyncMock(return_value=task)
+        monkeypatch.setattr(late.ADAPTERS["a2a"], "get_task", get_task)
+        sleep = AsyncMock()
+        if path == "pending":
+            conv_id = "conv-4506"
+            conversations.remember_pending(conv_id, d.name, d.url, task["id"])
+            pending = conversations.pending_for(conv_id, d.name, d.url)
+            try:
+                outcome, message = await late.collect(d, conv_id, "", pending, sleep=sleep)
+                assert conversations.pending_for(conv_id, d.name, d.url) is None
+            finally:
+                conversations.forget_pending(conv_id, d.name, d.url)
+        else:
+            outcome, message, state, question = await late.collect_task(d, task["id"], sleep=sleep)
+            assert state == "TASK_STATE_INPUT_REQUIRED"
+            assert question == extract_park_question(task)
+        assert outcome == late.PARKED
+        get_task.assert_awaited_once_with(d, task["id"])
+    assert f"Question: {expected}" in message
+    assert "Let me check gh" not in message
+    assert "resume_task_id='park-4506'" in message

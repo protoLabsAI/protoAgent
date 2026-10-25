@@ -78,9 +78,12 @@ def _continuity_credential(d) -> str:
 def _park_message(name: str, task_id: str, question: str) -> str:
     """What a delegation that PARKED on a question returns: the question plus the resume
     handle, phrased for the calling agent (the HITL delegation chain)."""
+    question = str(question).strip() or (
+        "(the delegate sent no readable question — ask it to restate, or approve in its own console)"
+    )
     return (
         f"⏸ delegate {name!r} needs input before it can continue.\n"
-        + (f"Question: {str(question)[:1000]}\n" if question else "")
+        + f"Question: {question[:1000]}\n"
         + f"Parked task: {task_id}\n\n"
         f"To continue: answer with delegate_to(target={name!r}, "
         f"query='<your answer>', resume_task_id={str(task_id)!r}). "
@@ -925,6 +928,7 @@ class A2aAdapter(Adapter):
             _is_input_required,
             _is_terminal,
             classify_answer,
+            extract_park_question,
             state_name,
         )
 
@@ -1198,7 +1202,7 @@ class A2aAdapter(Adapter):
                 # parking another task. Dropping the pointer restores the pre-#3360
                 # outcome — the next address opens a clean context and is answered.
                 _drop()
-                question = _extract_text(result) or ""
+                question = extract_park_question(result)
                 if not task_id:
                     raise DelegateError(
                         f"delegate {d.name!r} asked for input but returned no task id to resume"

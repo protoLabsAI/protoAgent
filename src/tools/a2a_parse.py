@@ -92,6 +92,18 @@ def _extract_text(result) -> str | None:
     return text or None
 
 
+def extract_park_question(result) -> str:
+    """Read a parked task's prompt before any answer text streamed before the pause.
+
+    Status message parts carry the HITL prompt; artifacts may contain stale progress
+    or whitespace. Preserve the generic text fallback for peers without a status prompt.
+    """
+    task = _task_of(result)
+    msg = (task.get("status") or {}).get("message") or {}
+    text = "".join(p.get("text", "") for p in (msg.get("parts") or []) if p.get("text")).strip()
+    return text or (_extract_text(result) or "").strip()
+
+
 def _extract_context_id(result) -> str:
     """The A2A ``contextId`` off a ``SendMessage`` / ``GetTask`` result, or ``""``.
 
