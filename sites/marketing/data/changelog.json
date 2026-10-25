@@ -1,5 +1,15 @@
 [
   {
+    "version": "v0.217.0",
+    "date": "2026-10-25",
+    "changes": [
+      "Browser tools can give each chat session its own page (#4509).",
+      "Readable parked delegate questions (#4506).",
+      "A board coder's run now lights up the org chart, and a coder's drawer lists its real history (#4512).",
+      "Delegate approval forwarding design (#4506)."
+    ]
+  },
+  {
     "version": "v0.216.0",
     "date": "2026-10-25",
     "changes": [

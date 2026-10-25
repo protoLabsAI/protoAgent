@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.217.0] - 2026-10-25
+
+### Added
+- **Browser tools can give each chat session its own page (#4509).** The `browser_*` tools all drove one shared agent-browser session keyed off `AGENT_BROWSER_SESSION`, so two chats browsing at once collided — designSystem's `browser_eval` landed on another task's résumé tab. A new `agent_browser` config key, `session_scope`, adds an opt-in `per_session` mode: the CLI's session (and the per-session serialisation lock) is keyed off a `pa-<hash>` name derived from the calling chat's injected graph-state session id (with a tracing fallback for direct calls), passed to the CLI in a per-call env copy — `os.environ` is never mutated — so concurrent chats run on separate pages and `browser_close` closes only the caller's own. The default stays `shared` (today's behaviour), because the console Browser panel and screencast still follow the shared/default session. Follow-ups, out of scope here: reaping idle per-session daemons, and letting the panel follow a non-default session.
+
+### Fixed
+- **Readable parked delegate questions (#4506).** Prefer the HITL status prompt over pre-pause streamed answer text in delegation and late collection, and explicitly report missing questions while retaining the resume handle.
+
+- **A board coder's run now lights up the org chart, and a coder's drawer lists its real history (#4512).** The board launched coders through the adapter directly, around the one funnel that opens a live ledger edge, so codex could run for hours with nothing on the chart and no row recorded. Plugins now have `sdk.delegation(...)`, a context manager that keeps the edge live for the whole dispatch and writes one row on any exit. `GET /api/ledger` takes `to_kind` and `to_name`, and the drawer reads by target. Before, it showed "No delegations recorded" for a coder with 16 runs because a review panel's subagents filled the newest 200 rows.
+
+### Docs
+- **Delegate approval forwarding design (#4506).** Record ADR 0123's accepted structured approval-card protocol, single-use trust boundary, replay-safe forwarding scheme, and ordered implementation slices. Runtime behavior is unchanged by this documentation change.
+
 ## [0.216.0] - 2026-10-25
 
 ### Changed
