@@ -148,7 +148,14 @@ async def collect(
     defines it now; when given, a re-pointed, re-credentialed or removed delegate withdraws
     the collection. Never raises ``DelegateError``.
     """
-    from tools.a2a_parse import _extract_context_id, _extract_text, _is_input_required, classify_answer, state_name
+    from tools.a2a_parse import (
+        _extract_context_id,
+        _extract_text,
+        _is_input_required,
+        classify_answer,
+        extract_park_question,
+        state_name,
+    )
 
     adapter = ADAPTERS["a2a"]
     # Resolved per call, not bound as defaults at import, so the running module's own
@@ -204,7 +211,7 @@ async def collect(
         state = ((result.get("task", result) or {}).get("status") or {}).get("state")
         if _is_input_required(state):
             release()
-            return PARKED, _park_message(d.name, pending.task_id, _extract_text(result) or "")
+            return PARKED, _park_message(d.name, pending.task_id, extract_park_question(result))
         verdict = classify_answer(result)
         if verdict.answerable:
             release()
@@ -270,7 +277,7 @@ async def collect_task(
     pending-handle / continuity bookkeeping layered on top — here there is no key, so none of
     that applies.
     """
-    from tools.a2a_parse import _extract_text, _is_input_required, classify_answer, state_name
+    from tools.a2a_parse import _extract_text, _is_input_required, classify_answer, extract_park_question, state_name
 
     from .adapters import _status_message_text
 
@@ -305,7 +312,7 @@ async def collect_task(
             return WITHDRAWN, "", last_state, last_msg
         state = ((result.get("task", result) or {}).get("status") or {}).get("state")
         if _is_input_required(state):
-            question = (_extract_text(result) or "").strip()
+            question = extract_park_question(result)
             return PARKED, _park_message(d.name, task_id, question), state, question
         verdict = classify_answer(result)
         if verdict.answerable:
