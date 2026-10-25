@@ -49,8 +49,10 @@ import subprocess
 import threading
 import time
 import weakref
+from typing import Annotated, Any
 
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 
 from . import cli_fetch, forms, preflight, storage
 from .runtime import bad_operand, flag, launch_flags, number
@@ -129,10 +131,7 @@ def _session_name_for(session_id: str) -> str:
 
 
 def _current_session_id() -> str:
-    """The calling turn's chat session id, or ``""`` when there isn't one. Isolated so a missing
-    ``observability`` package — or an empty contextvar — degrades to the shared session rather
-    than raising. (The id reads empty inside a tool body in some graph contexts; per_session then
-    simply falls back to the shared session, never worse than today.)"""
+    """Tracing fallback for direct callers without injected graph state."""
     try:
         from observability import tracing
         return tracing.current_session_id() or ""
@@ -140,7 +139,7 @@ def _current_session_id() -> str:
         return ""
 
 
-def _resolve_session_name(scope: str) -> str:
+def _resolve_session_name(scope: str, state: dict | None = None) -> str:
     """The agent-browser session name for THIS tool call, per the plugin's ``session_scope``:
 
     * ``shared`` (default) — today's behaviour: ``AGENT_BROWSER_SESSION`` env, or ``"default"``.
@@ -149,7 +148,9 @@ def _resolve_session_name(scope: str) -> str:
       when that id is empty (a call outside a graph turn).
     """
     if scope == "per_session":
-        sid = _current_session_id()
+        # Graph state is authoritative, including an empty id: an enclosing trace may
+        # belong to another turn. Only direct calls without state use the tracing fallback.
+        sid = state.get("session_id", "") if state is not None else _current_session_id()
         if sid:
             return _session_name_for(sid)
     return _shared_session_name()
@@ -227,10 +228,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         """Run the async tool ``fn`` while holding its session's lock (see above). The session
         name is resolved and pinned for the WHOLE call FIRST — in the event-loop thread, before
         any ``asyncio.to_thread`` — so the lock key and the CLI env (_run) agree on one name, and
-        so per_session reads ``current_session_id()`` where the turn's contextvars are visible."""
+        so per_session reads the injected ProtoAgentState before entering a worker thread."""
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
-            token = _SESSION_NAME.set(_resolve_session_name(scope))
+            token = _SESSION_NAME.set(_resolve_session_name(scope, kwargs.pop("state", None)))
             try:
                 async with _session_lock():
                     return await fn(*args, **kwargs)
@@ -560,7 +561,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     # ── navigation ────────────────────────────────────────────────────────────
     @tool
     @_serialized
-    async def browser_open(url: str = "") -> str:
+    async def browser_open(url: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Launch the browser (or navigate the current session). Pass a `url` to go
         there, or leave blank to open about:blank. Start every browsing task here.
         The configured runtime options (headed/profile/device/allowed_domains/stealth/…)
@@ -572,26 +573,26 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_back() -> str:
+    async def browser_back(*, state: Annotated[Any, InjectedState] = None) -> str:
         """Navigate back in history."""
         return await _ab("back")
 
     @tool
     @_serialized
-    async def browser_forward() -> str:
+    async def browser_forward(*, state: Annotated[Any, InjectedState] = None) -> str:
         """Navigate forward in history."""
         return await _ab("forward")
 
     @tool
     @_serialized
-    async def browser_reload() -> str:
+    async def browser_reload(*, state: Annotated[Any, InjectedState] = None) -> str:
         """Reload the current page."""
         return await _ab("reload")
 
     # ── perception ────────────────────────────────────────────────────────────
     @tool
     @_serialized
-    async def browser_snapshot() -> str:
+    async def browser_snapshot(*, state: Annotated[Any, InjectedState] = None) -> str:
         """Get the page's accessibility tree with compact `@eN` element refs. Call
         this before clicking/filling — the refs (e.g. `@e2`) are what the action
         tools target. The canonical way to 'see' the page for the agent."""
@@ -599,14 +600,14 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_get_text(selector: str = "body") -> str:
+    async def browser_get_text(selector: str = "body", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Get the visible text of an element (a `@eN` ref or a CSS selector;
         defaults to the whole `body`). Use to extract/read page content."""
         return _bad_operand(selector=selector) or await _ab("get", "text", selector)
 
     @tool
     @_serialized
-    async def browser_get_html(selector: str = "") -> str:
+    async def browser_get_html(selector: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Get the HTML of an element (a `@eN` ref or CSS selector), or the page."""
         if (bad := _bad_operand(selector=selector)):
             return bad
@@ -614,7 +615,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_get_value(selector: str) -> str:
+    async def browser_get_value(selector: str, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Get the current value of a form field by its visible LABEL (re-resolved in the page
         each call, so it survives re-renders), a `@eN` ref, or a CSS selector. For a whole-form
         view (every field, committed values included) prefer `browser_form_read`."""
@@ -623,7 +624,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_form_read(scope: str = "") -> str:
+    async def browser_form_read(scope: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Read every form field on the page in ONE call — the reliable way to see a form
         before filling it, and to verify it afterwards.
 
@@ -656,7 +657,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     # ── interaction ───────────────────────────────────────────────────────────
     @tool
     @_serialized
-    async def browser_click(selector: str, js_fallback: bool = False) -> str:
+    async def browser_click(selector: str, js_fallback: bool = False, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Click a form field by its visible LABEL (re-resolved in the page each call, so it
         survives re-renders — a checkbox, radio or combobox by label), a `@eN` ref (from
         `browser_snapshot`), or a CSS selector (e.g. `#submit`). Address buttons and links,
@@ -703,7 +704,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_fill(selector: str, text: str) -> str:
+    async def browser_fill(selector: str, text: str, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Clear a field and fill it with `text`. Address the field by its visible LABEL
         (re-resolved in the page each call, so it survives re-renders), a `@eN` ref, or a CSS
         selector. A label that matches no field, or more than one, is a clear error — call
@@ -715,7 +716,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_type(selector: str, text: str) -> str:
+    async def browser_type(selector: str, text: str, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Type `text` into a field without clearing it first. Address the field by its visible
         LABEL (re-resolved each call, so it survives re-renders), a `@eN` ref, or a CSS
         selector."""
@@ -726,7 +727,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_select(field: str, option_text: str) -> str:
+    async def browser_select(field: str, option_text: str, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Set a CHOICE field to the option whose visible text is `option_text`, then PROVE it
         by reading the committed value back. Handles a native `<select>`, a react-select-style
         combobox, and an intl-tel-input country picker — the widgets a plain `browser_fill`
@@ -777,7 +778,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_upload(field: str, file_path: str) -> str:
+    async def browser_upload(field: str, file_path: str, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Attach a local file to a form's file input and VERIFY it took. Use this for an
         application form that wants a résumé/CV FILE (Ashby, Greenhouse) — a plain
         `browser_fill` cannot set a file input.
@@ -865,14 +866,14 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_press(key: str) -> str:
+    async def browser_press(key: str, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Press a key or chord on the focused element (e.g. `Enter`, `Tab`,
         `Control+a`)."""
         return _bad_operand(key=key) or await _ab("press", key)
 
     @tool
     @_serialized
-    async def browser_hover(selector: str) -> str:
+    async def browser_hover(selector: str, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Hover the pointer over a form field by its visible LABEL (re-resolved each call, so
         it survives re-renders), a `@eN` ref, or a CSS selector."""
         sel, err = await _resolve_field(selector)
@@ -880,7 +881,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_eval(expression: str) -> str:
+    async def browser_eval(expression: str, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Evaluate a JavaScript `expression` in the page and return the result.
         Use sparingly — prefer snapshot + the action tools. An expression that starts with
         a dash and a letter (`-a`) must be wrapped, `(-a)`, or the CLI reads it as an
@@ -893,7 +894,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     # ── capture + session ─────────────────────────────────────────────────────
     @tool
     @_serialized
-    async def browser_screenshot(path: str = "") -> str:
+    async def browser_screenshot(path: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Save a PNG screenshot of the current page. Returns the absolute file path —
         hand that to `save_file_artifact` to put the image in the Artifact panel.
 
@@ -905,7 +906,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_pdf(path: str = "") -> str:
+    async def browser_pdf(path: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Print the current page to PDF (Chrome's print-to-PDF) and return the absolute
         file path. This is the HTML→PDF path: open a page — or an artifact/report you
         rendered — then `browser_pdf`, then hand the file to `save_file_artifact` so the
@@ -923,7 +924,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
 
     @tool
     @_serialized
-    async def browser_close() -> str:
+    async def browser_close(*, state: Annotated[Any, InjectedState] = None) -> str:
         """Close the browser session. Call when the task is done to free the daemon."""
         return await _ab("close")
 
