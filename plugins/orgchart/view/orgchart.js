@@ -796,8 +796,9 @@ function openDrawer(id) {
   $("drawer").classList.add("open");
   $("drawer").setAttribute("aria-hidden", "false");
   document.querySelector(".stage").classList.add("drilled");
-  renderDrawer();
+  // Render first: a selected leaf unfolds, so it is in GRAPH before the drawer looks it up.
   render();
+  renderDrawer();
   revealNode(id);
   $("d-close").focus({ preventScroll: true });
 }
@@ -810,8 +811,14 @@ function revealNode(id) {
   if (inside) return;
   CAM.x = p.x + NODE_W / 2 - w / CAM.k / 2;
   CAM.y = p.y + NODE_H / 2 - h / CAM.k / 2;
+  CAM.user = true; // a reveal is a camera move, so the next poll's fit doesn't undo it
   applyCam();
 }
+// Tabbing onto a node off the canvas brings it into view.
+svg.addEventListener("focusin", (e) => {
+  const id = e.target.closest?.(".node")?.dataset.id;
+  if (id) revealNode(id);
+});
 function closeDrawer() {
   const was = SEL;
   SEL = null;
