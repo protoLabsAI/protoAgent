@@ -38,7 +38,9 @@ Three things the in-tree copy adds (#3451):
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import functools
+import hashlib
 import logging
 import os
 import secrets
@@ -93,8 +95,10 @@ def _kill_tree(proc) -> None:
 # are equally unsafe to interleave. So every tool holds its session's lock for its WHOLE
 # body: parallel calls run one at a time, in arrival order (asyncio.Lock is FIFO).
 #
-# Keyed by the agent-browser session name (AGENT_BROWSER_SESSION, read per call — the CLI
-# reads the same variable), so DIFFERENT sessions still run concurrently. Read-only tools
+# Keyed by the agent-browser session name RESOLVED for the call (see _resolve_session_name):
+# normally AGENT_BROWSER_SESSION, but under `session_scope: per_session` a name derived from
+# the calling chat session — the CLI is pointed at the SAME name via its env, so the lock and
+# the daemon session always agree. DIFFERENT sessions still run concurrently. Read-only tools
 # take the lock too: a snapshot taken mid-fill is a torn read, and simplicity beats the
 # little parallelism a read would win. asyncio.Lock binds to one event loop, so the table is
 # per loop; parallel tool calls from one graph step always share the step's loop. No tool
@@ -102,9 +106,60 @@ def _kill_tree(proc) -> None:
 # (#3400).
 _SESSION_LOCKS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
+# The agent-browser session name resolved for the in-flight tool call. `_serialized` sets it
+# ONCE per call in the event-loop thread, before any `asyncio.to_thread`, so the lock key and
+# the CLI env (_run) key off one agreed name. A contextvar because `asyncio.to_thread` copies
+# the current context into its worker thread, so `_run` reads the same value there. Unset
+# (None) outside a tool call — `_session_key` then falls back to the shared env name, exactly
+# as before (and the direct `_session_lock()` callers in the tests keep working).
+_SESSION_NAME: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "agent_browser_session_name", default=None)
+
+
+def _shared_session_name() -> str:
+    """Today's session name: the ``AGENT_BROWSER_SESSION`` env, or ``"default"`` (what the CLI
+    itself falls back to). This is the whole of ``session_scope: shared``."""
+    return os.environ.get("AGENT_BROWSER_SESSION") or "default"
+
+
+def _session_name_for(session_id: str) -> str:
+    """A CLI-safe agent-browser session name for a chat session id: ``pa-`` + a short, stable
+    sha1 prefix. Deterministic for a given id, and made only of ``[a-z0-9-]`` (hex is lower)."""
+    return "pa-" + hashlib.sha1(session_id.encode("utf-8")).hexdigest()[:12]
+
+
+def _current_session_id() -> str:
+    """The calling turn's chat session id, or ``""`` when there isn't one. Isolated so a missing
+    ``observability`` package — or an empty contextvar — degrades to the shared session rather
+    than raising. (The id reads empty inside a tool body in some graph contexts; per_session then
+    simply falls back to the shared session, never worse than today.)"""
+    try:
+        from observability import tracing
+        return tracing.current_session_id() or ""
+    except Exception:  # noqa: BLE001 — a telemetry read must never break a browser call
+        return ""
+
+
+def _resolve_session_name(scope: str) -> str:
+    """The agent-browser session name for THIS tool call, per the plugin's ``session_scope``:
+
+    * ``shared`` (default) — today's behaviour: ``AGENT_BROWSER_SESSION`` env, or ``"default"``.
+    * ``per_session`` — a name derived from the calling chat session id, so two chats driving
+      the browser at once land on two different pages (#4509). Falls back to the shared name
+      when that id is empty (a call outside a graph turn).
+    """
+    if scope == "per_session":
+        sid = _current_session_id()
+        if sid:
+            return _session_name_for(sid)
+    return _shared_session_name()
+
 
 def _session_key() -> str:
-    return os.environ.get("AGENT_BROWSER_SESSION") or "default"
+    """The name the lock table and the CLI env key off: the in-flight call's resolved name
+    (set by ``_serialized``), or the shared env name when no call is in flight."""
+    name = _SESSION_NAME.get()
+    return name if name is not None else _shared_session_name()
 
 
 def _session_lock() -> asyncio.Lock:
@@ -116,15 +171,6 @@ def _session_lock() -> asyncio.Lock:
     if lock is None:
         lock = per_loop[key] = asyncio.Lock()
     return lock
-
-
-def _serialized(fn):
-    """Run the async tool ``fn`` while holding its session's lock (see above)."""
-    @functools.wraps(fn)
-    async def wrapper(*args, **kwargs):
-        async with _session_lock():
-            return await fn(*args, **kwargs)
-    return wrapper
 
 
 # Setup re-probe rate limits (see _recheck). A probe is ~40 ms, but it is two subprocesses,
@@ -170,6 +216,28 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
             log.warning("[agent_browser] ignoring max_response_bytes=%r (must be > 0); using %d",
                         cfg.get("max_response_bytes"), _DEFAULT_MAX_RESPONSE_BYTES)
         max_bytes = _DEFAULT_MAX_RESPONSE_BYTES
+    # How the agent-browser SESSION is named per tool call (#4509). `shared` (default) keeps
+    # one session for everyone — the console Browser panel and screencast follow it, so
+    # changing the default would leave the operator's live view on an empty session; hence
+    # opt-in. `per_session` derives a session from the calling chat so two chats driving the
+    # browser at once don't share one page. Anything unrecognised falls back to `shared`.
+    scope = str(cfg.get("session_scope") or "shared").strip().lower()
+
+    def _serialized(fn):
+        """Run the async tool ``fn`` while holding its session's lock (see above). The session
+        name is resolved and pinned for the WHOLE call FIRST — in the event-loop thread, before
+        any ``asyncio.to_thread`` — so the lock key and the CLI env (_run) agree on one name, and
+        so per_session reads ``current_session_id()`` where the turn's contextvars are visible."""
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            token = _SESSION_NAME.set(_resolve_session_name(scope))
+            try:
+                async with _session_lock():
+                    return await fn(*args, **kwargs)
+            finally:
+                _SESSION_NAME.reset(token)
+        return wrapper
+
     # What the operator's banner currently says (seeded by the boot probe), and when each
     # direction last re-probed. See _recheck.
     gap = {"up": bool(start_gap), "fail_at": float("-inf"), "ok_at": float("-inf")}
@@ -254,13 +322,18 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         # PATH > pinned path > the fetched CLI; on first use with none, the pinned download.
         exe = preflight.cli_for_run(binary, autofetch=autofetch,
                                     on_done=refresh_gaps if callable(refresh_gaps) else None)
+        # per_session pins the CLI's daemon session to THIS call's resolved name through a COPY
+        # of the env — never a mutation of os.environ, which is process-global and would race
+        # across concurrent sessions. `shared` leaves the child's env exactly as today (env=None
+        # inherits it unchanged; the CLI itself defaults AGENT_BROWSER_SESSION to "default").
+        child_env = {**os.environ, "AGENT_BROWSER_SESSION": _session_key()} if scope == "per_session" else None
         try:
             # Its own session: its pid becomes a process-group id, so a timeout can kill
             # everything it started (see _kill_tree). Ignored on Windows.
             proc = subprocess.Popen([exe, *args],
                                     stdin=subprocess.PIPE if stdin is not None else None,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    start_new_session=True)
+                                    start_new_session=True, env=child_env)
         except OSError as e:
             # Surface it to the OPERATOR too, not just into the model's loop: the console
             # showed `warnings: []` while every browser call failed, which is the gap the
