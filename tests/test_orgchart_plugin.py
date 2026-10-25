@@ -663,3 +663,17 @@ def test_the_fleet_token_never_leaves_the_box(monkeypatch):
     asyncio.run(topo.get_topology({}))
     assert seen and all("fleet-tok" not in auth for _url, auth in seen)
     assert not any(url.endswith("/api/delegates") for url, _auth in seen)  # tokenless off-box peer: not crawled
+
+
+def test_empty_overlay_can_actually_hide():
+    """The empty-state overlay sets ``display: grid``, which beats the ``hidden`` attribute —
+    so once shown (every node type filtered off) it stayed over the graph until a refresh."""
+    from pathlib import Path
+
+    view = Path(__file__).resolve().parents[1] / "plugins" / "orgchart" / "view"
+    css = (view / "orgchart.css").read_text()
+    js = (view / "orgchart.js").read_text()
+    assert ".empty[hidden] { display: none; }" in css
+    # Hiding it also drops the stale text, and a filter-emptied chart says so.
+    assert '$("empty").innerHTML = !empty ? ""' in js
+    assert "Everything is filtered out" in js
