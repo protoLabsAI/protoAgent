@@ -59,7 +59,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
     var(--bg-subtle); }
 /* The canvas is a camera: the SVG fills it and the viewBox pans and zooms (orgchart.js
    CAM), so a big fleet is navigated, never scrolled. */
-.canvas { overflow: hidden; cursor: grab; touch-action: none; }
+/* No text selection: a drag is a pan, and a double-click on a card shouldn't select its name. */
+.canvas { overflow: hidden; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
 .canvas.panning { cursor: grabbing; }
 #graph { display: block; position: absolute; inset: 0; }
 .cam { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 2px; padding: 3px;

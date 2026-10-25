@@ -706,6 +706,6 @@ def test_the_canvas_zooms_and_pans_like_a_map():
     assert "CAM.user ? applyCam() : fitCam();" in js  # a poll never yanks a view the operator moved
     assert 'c.addEventListener("wheel"' in js and "zoomAt(Math.exp(-e.deltaY * px * rate), ...at(e));" in js
     assert 'c.addEventListener("gesturechange"' in js  # the desktop webview's pinch
-    assert 'e.target.closest(".node, .cam")' in js  # a press on a node stays a click
+    assert 'c.addEventListener("click", (e) => { if (dragged)' in js  # the click ending a pan isn't a card click
     assert 'id="zoom-in"' in html and 'id="zoom-out"' in html and 'id="zoom-fit"' in html
-    assert ".canvas { overflow: hidden; cursor: grab; touch-action: none; }" in css
+    assert "touch-action: none; user-select: none; -webkit-user-select: none;" in css  # a pan never selects text

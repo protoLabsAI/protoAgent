@@ -539,22 +539,38 @@ const zoomCentre = (f) => { const { w, h } = viewSize(); zoomAt(f, w / 2, h / 2)
   let g0 = 1;
   c.addEventListener("gesturestart", (e) => { e.preventDefault(); g0 = e.scale; });
   c.addEventListener("gesturechange", (e) => { e.preventDefault(); zoomAt(e.scale / g0, ...at(e)); g0 = e.scale; });
-  // Drag the background to pan; a press on a node stays a click.
-  let drag = null;
+  // Drag anywhere to pan, cards included (they cover most of the chart). A press that
+  // doesn't move past a few pixels is still a click on whatever it landed on.
+  const SLOP = 4;
+  let drag = null, dragged = false;
   c.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || e.target.closest(".node, .cam")) return;
-    drag = { x: e.clientX, y: e.clientY, cx: CAM.x, cy: CAM.y, id: e.pointerId };
-    c.setPointerCapture(e.pointerId);
-    c.classList.add("panning");
+    if (e.button !== 0 || e.target.closest(".cam")) return;
+    e.preventDefault();   // a drag must never begin a text selection
+    drag = { x: e.clientX, y: e.clientY, cx: CAM.x, cy: CAM.y, id: e.pointerId, moved: false };
+    dragged = false;
   });
   c.addEventListener("pointermove", (e) => {
     if (!drag || e.pointerId !== drag.id) return;
-    CAM.x = drag.cx - (e.clientX - drag.x) / CAM.k;
-    CAM.y = drag.cy - (e.clientY - drag.y) / CAM.k;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.moved) {
+      if (Math.hypot(dx, dy) < SLOP) return;
+      drag.moved = true;
+      c.setPointerCapture(e.pointerId);
+      c.classList.add("panning");
+    }
+    CAM.x = drag.cx - dx / CAM.k;
+    CAM.y = drag.cy - dy / CAM.k;
     CAM.user = true;
     applyCam();
   });
-  const end = (e) => { if (drag && e.pointerId === drag.id) { drag = null; c.classList.remove("panning"); } };
+  const end = (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    dragged = drag.moved;
+    drag = null;
+    c.classList.remove("panning");
+  };
+  // The click that ends a pan is not a click on the card it ended over.
+  c.addEventListener("click", (e) => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
   c.addEventListener("pointerup", end);
   c.addEventListener("pointercancel", end);
   $("zoom-in").addEventListener("click", () => zoomCentre(K_STEP));
