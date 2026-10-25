@@ -63,15 +63,19 @@ def launch_flags(cfg: dict | None) -> list[str]:
     # Extra Chrome launch args (comma/newline separated); anti-detection + anti-throttle
     # flags get merged in below.
     args = [a.strip() for a in str(cfg.get("browser_args") or "").replace("\n", ",").split(",") if a.strip()]
+    # Keep the page rendering even when it isn't the focused, on-screen window. Chrome
+    # throttles/pauses backgrounded, occluded or unfocused pages: their timers and
+    # requestAnimationFrame stall and `document.visibilityState` reads "hidden", so rAF
+    # animations never start (#4510). That hits a headed window the operator has clicked away
+    # from AND every headless session — headless is the DEFAULT and is "unfocused" by
+    # definition, so it needs these just as much. Merge them in BOTH modes, de-duped, after
+    # any user args so the argv order stays stable. `--headed` itself stays headed-only.
+    for a in ("--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+              "--disable-background-timer-throttling"):
+        if a not in args:
+            args.append(a)
     if headed:
         f.append("--headed")
-        # A headed window gets throttled/paused when it loses focus or is occluded, which
-        # stalls the live screencast. Keep it rendering so the panel updates even when the
-        # operator is looking at another window.
-        for a in ("--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
-                  "--disable-background-timer-throttling"):
-            if a not in args:
-                args.append(a)
     if str(cfg.get("profile") or "").strip():
         f += ["--profile", str(cfg["profile"]).strip()]
     if str(cfg.get("device") or "").strip():
