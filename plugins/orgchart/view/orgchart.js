@@ -54,7 +54,7 @@ const KINDS = [
   { kind: "coder", label: "Coders" },
   { kind: "model", label: "Models" },
 ];
-const TAG = { self: "YOU", agent: "AGENT", coder: "ACP", model: "MODEL", subagent: "SUBAGENT" };
+const TAG = { self: "YOU", agent: "AGENT", coder: "ACP", model: "MODEL", subagent: "SUBAGENT", fold: "" };
 // Lucide-style glyphs, drawn at 16px around (0,0).
 const GLYPH = {
   self: "M-2 -7h4M0 -7v3M-6 -4h12a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-12a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM-3 1v1M3 1v1",
@@ -62,6 +62,7 @@ const GLYPH = {
   coder: "M-7 -6h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-14a1 1 0 0 1-1-1v-10a1 1 0 0 1 1-1zM-4 -2l3 2.5-3 2.5M1 3h3",
   model: "M0 -8l2 5 5 2-5 2-2 5-2-5-5-2 5-2z",
   subagent: "M-6 -6h4v4h-4zM2 2h4v4h-4zM-4 -2v4a2 2 0 0 0 2 2h4",
+  fold: "M-7 -5h14M-7 0h14M-7 5h9",
 };
 const TOOL_VERB = { read: "Reading", edit: "Editing", execute: "Running", search: "Searching", fetch: "Fetching",
   delete: "Deleting", move: "Moving", think: "Thinking" };
@@ -86,6 +87,15 @@ const store = {
   set(v) { try { localStorage.setItem(HIDE_KEY, JSON.stringify([...v])); } catch { /* not fatal */ } },
 };
 let HIDDEN = store.get();
+// Agents whose coders and subagents are unfolded (folded is the default), remembered.
+const OPEN_KEY = "orgchart.unfolded";
+const openStore = {
+  get() { try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || "[]")); } catch { return new Set(); } },
+  set(v) { try { localStorage.setItem(OPEN_KEY, JSON.stringify([...v])); } catch { /* not fatal */ } },
+};
+let UNFOLDED = openStore.get();
+// More leaves than this under one agent fold into a chip; this many or fewer just draw.
+const FOLD_OVER = 2;
 
 // ── time ────────────────────────────────────────────────────────────────────────────
 // The server stamps live edges with ITS clock (epoch seconds); `skew` maps it onto ours
@@ -208,34 +218,108 @@ function buildGraph() {
   return { nodes, edges, flows, index };
 }
 
-/** Columns by BFS distance from self; rows in a stable order (topology order, then name). */
-function layout(g) {
-  const depth = new Map([[SELF, 0]]);
+/** Each node's parent in a spanning tree rooted at self (first edge to reach it, BFS). A
+ *  node with two parents (a member that is also another member's delegate) is PLACED under
+ *  the first; its other edges still draw. */
+function treeParents(g) {
   const out = new Map();
   for (const e of g.edges.values()) { if (!out.has(e.from)) out.set(e.from, []); out.get(e.from).push(e.to); }
+  const parent = new Map([[SELF, null]]);
   const q = [SELF];
   while (q.length) {
     const id = q.shift();
-    for (const t of out.get(id) || []) if (!depth.has(t)) { depth.set(t, depth.get(id) + 1); q.push(t); }
+    for (const t of out.get(id) || []) if (!parent.has(t) && g.nodes.has(t)) { parent.set(t, id); q.push(t); }
   }
-  const cols = [];
-  let order = 0;
+  return parent;
+}
+
+const isLeaf = (n) => n && n.kind !== "self" && n.kind !== "agent" && n.kind !== "fold";
+const PLURAL = { coder: ["coder", "coders"], subagent: ["subagent", "subagents"], model: ["model", "models"] };
+
+/** Fold each agent's leaves (coders, subagents, models) into one chip, unless the operator
+ *  unfolded it. A leaf that is working, just finished, or selected stays out of the fold —
+ *  the chart's job is to show work, so work is never hidden. Mutates `g`. */
+function fold(g) {
+  const parent = treeParents(g);
+  const leaves = new Map();   // owner → its leaf nodes, in topology order
   for (const n of g.nodes.values()) {
-    const d = depth.has(n.id) ? depth.get(n.id) : 1;
-    (cols[d] ||= []).push({ n, order: order++ });
+    if (!isLeaf(n)) continue;
+    const owner = parent.get(n.id);
+    if (owner == null) continue;
+    if (!leaves.has(owner)) leaves.set(owner, []);
+    leaves.get(owner).push(n);
   }
-  const tallest = Math.max(1, ...cols.map((c) => (c ? c.length : 0)));
-  const height = PAD * 2 + tallest * NODE_H + (tallest - 1) * GAP_Y;
+  const active = new Set();
+  for (const f of g.flows) { active.add(f.to); active.add(f.from); }
+  if (SEL) active.add(SEL);
+  g.folded = new Map();   // folded leaf id → its chip id
+  for (const [owner, ls] of leaves) {
+    if (ls.length <= FOLD_OVER) continue;
+    const id = "fold:" + owner, open = UNFOLDED.has(owner);
+    const tucked = open ? [] : ls.filter((n) => !active.has(n.id));
+    const counts = {};
+    for (const n of ls) counts[n.kind] = (counts[n.kind] || 0) + 1;
+    const work = { dispatches: 0, ok: 0, failed: 0, cancelled: 0 };
+    for (const n of tucked) for (const k in work) work[k] += n.work?.[k] || 0;
+    g.nodes.set(id, { id, kind: "fold", owner, open, counts, total: ls.length, tucked: tucked.length, work, up: null });
+    g.edges.set(owner + ">" + id, { from: owner, to: id, kind: "fold" });
+    for (const n of tucked) { g.nodes.delete(n.id); g.folded.set(n.id, id); }
+  }
+  // An edge into or out of a folded leaf now ends at its chip (one edge per chip pair).
+  for (const [k, e] of [...g.edges]) {
+    const from = g.folded.get(e.from) || e.from, to = g.folded.get(e.to) || e.to;
+    if (from === e.from && to === e.to) continue;
+    g.edges.delete(k);
+    if (from !== to && !g.edges.has(from + ">" + to)) g.edges.set(from + ">" + to, { ...e, from, to });
+  }
+  for (const f of g.flows) { f.from = g.folded.get(f.from) || f.from; f.to = g.folded.get(f.to) || f.to; }
+  return g;
+}
+
+function foldLabel(n) {
+  const bits = Object.entries(n.counts).map(([k, c]) => c + " " + (PLURAL[k] || [k, k + "s"])[c === 1 ? 0 : 1]);
+  return bits.join(" · ");
+}
+
+/** A tidy tree: each node's children sit beside it in one contiguous band, the parent
+ *  centred on them, so whose coder is whose reads straight off the chart. Columns are
+ *  tree depth; within a parent, agents first, then leaves, then the fold chip, each in
+ *  topology order (stable, so a poll never reshuffles rows). */
+function layout(g) {
+  const parent = treeParents(g);
+  const kids = new Map();
+  let order = 0;
+  const rank = new Map();
+  for (const n of g.nodes.values()) {
+    rank.set(n.id, order++);
+    if (n.id === SELF) continue;
+    const p = parent.has(n.id) ? parent.get(n.id) : SELF;   // unreachable: hang off self
+    if (!kids.has(p)) kids.set(p, []);
+    kids.get(p).push(n);
+  }
+  const cls = (n) => (n.kind === "agent" ? 0 : n.kind === "fold" ? 2 : n.synthetic ? 1.5 : 1);
+  for (const list of kids.values()) list.sort((a, b) => cls(a) - cls(b) || rank.get(a.id) - rank.get(b.id));
   const pos = new Map();
-  cols.forEach((col, d) => {
-    if (!col) return;
-    // Busy-first is tempting and wrong: it would reshuffle the column on every start.
-    col.sort((a, b) => (a.n.synthetic === b.n.synthetic ? a.order - b.order : a.n.synthetic ? 1 : -1));
-    const colH = col.length * NODE_H + (col.length - 1) * GAP_Y;
-    const top = (height - colH) / 2;
-    col.forEach(({ n }, i) => pos.set(n.id, { x: PAD + d * (NODE_W + GAP_X), y: top + i * (NODE_H + GAP_Y) }));
-  });
-  const width = PAD * 2 + Math.max(1, cols.length) * NODE_W + Math.max(0, cols.length - 1) * GAP_X;
+  const ROW = NODE_H + GAP_Y, BAND = GAP_Y * 1.5;   // extra air between one agent's band and the next
+  let cursor = PAD, depthMax = 0;
+  const place = (id, d) => {
+    depthMax = Math.max(depthMax, d);
+    const x = PAD + d * (NODE_W + GAP_X);
+    const ch = kids.get(id) || [];
+    if (!ch.length) { pos.set(id, { x, y: cursor }); cursor += ROW; return; }
+    const top = cursor;
+    ch.forEach((c, i) => {
+      if (i && (kids.get(ch[i - 1].id) || []).length) cursor += BAND;
+      place(c.id, d + 1);
+    });
+    const first = pos.get(ch[0].id).y, last = pos.get(ch[ch.length - 1].id).y;
+    const y = Math.max(top, (first + last) / 2);
+    pos.set(id, { x, y });
+    cursor = Math.max(cursor, y + ROW);
+  };
+  place(SELF, 0);
+  const height = Math.max(PAD * 2 + NODE_H, cursor - GAP_Y + PAD);
+  const width = PAD * 2 + (depthMax + 1) * NODE_W + depthMax * GAP_X;
   return { pos, width, height };
 }
 
@@ -282,8 +366,9 @@ function ensureNode(n) {
   const count = el("g", { transform: `translate(${NODE_W - 4} 4)`, visibility: "hidden" }, g);
   el("circle", { class: "count", r: 9 }, count);
   const countText = el("text", { class: "count-text", "text-anchor": "middle", y: 3.5 }, count);
-  g.addEventListener("click", () => openDrawer(n.id));
-  g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDrawer(n.id); } });
+  const act = () => (n.kind === "fold" ? toggleFold(n.owner) : openDrawer(n.id));
+  g.addEventListener("click", act);
+  g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); } });
   g.addEventListener("animationend", (e) => { if (e.animationName === "node-in") g.classList.remove("entering"); });
   h = { g, glyph, name, meta, tag, bar, count, countText, sig: "", cur: null, from: null, to: null, t0: 0 };
   NODE_EL.set(n.id, h);
@@ -331,6 +416,7 @@ function doingLine(le) {
 }
 
 function paintNode(h, n, busyEdges) {
+  if (n.kind === "fold") return paintFold(h, n);
   const busy = busyEdges.length > 0;
   const lead = busyEdges[0];
   const sig = JSON.stringify([n.name, n.kind, n.up, n.work, busy, lead && doingLine(lead), busyEdges.length, SEL === n.id]);
@@ -366,11 +452,40 @@ function paintNode(h, n, busyEdges) {
   h.countText.textContent = "×" + busyEdges.length;
 }
 
+function paintFold(h, n) {
+  h.g.setAttribute("class", ["node", "fold", n.open ? "open" : "shut", ...[...h.g.classList].filter((c) => c === "entering")].join(" "));
+  const label = foldLabel(n);
+  h.g.setAttribute("aria-label", `${n.open ? "Fold" : "Show"} ${label}`);
+  h.g.setAttribute("aria-expanded", String(n.open));
+  const sig = JSON.stringify([label, n.open, n.tucked, n.total, n.work]);
+  if (sig === h.sig) return;
+  h.sig = sig;
+  h.glyph.setAttribute("d", GLYPH.fold);
+  h.name.textContent = clip(label, 26);
+  // The hint rides the meta line: a corner tag would collide with a long label.
+  h.tag.textContent = "";
+  const w = n.work;
+  const hint = el("tspan", { class: "hint" });
+  hint.textContent = n.open ? "fold ▴" : "show ▸";
+  h.meta.textContent = n.open ? ""
+    : n.tucked < n.total ? `${n.tucked} folded · `
+    : w.dispatches ? workLine({ work: w }) + " · " : "";
+  h.meta.appendChild(hint);
+  h.bar.textContent = "";
+  h.count.setAttribute("visibility", "hidden");
+}
+function toggleFold(owner) {
+  UNFOLDED.has(owner) ? UNFOLDED.delete(owner) : UNFOLDED.add(owner);
+  openStore.set(UNFOLDED);
+  render();
+  NODE_EL.get("fold:" + owner)?.g.focus({ preventScroll: true });
+}
+
 // ── render ──────────────────────────────────────────────────────────────────────────
 let GRAPH = null, LAYOUT = null;
 function render() {
   if (!TOPO) return;
-  GRAPH = buildGraph();
+  GRAPH = fold(buildGraph());
   LAYOUT = layout(GRAPH);
   // Fill the canvas: a two-node fleet shouldn't be a postage stamp in a big empty box, a
   // three-column fleet should fit without a scrollbar, and a big one shouldn't shrink past
@@ -401,6 +516,7 @@ function render() {
     if (!p) { p = el("path", { "marker-end": "url(#arw)" }, L_EDGES); EDGE_EL.set(k, p); }
     const cls = ["edge"];
     if (e.kind === "member") cls.push("member");
+    if (e.kind === "fold") cls.push("fold");
     if (usedTargets.has(e.to) || e.kind === "task") cls.push("used");
     p.setAttribute("class", cls.join(" "));
     p._e = e;
@@ -574,7 +690,7 @@ $("feed").addEventListener("click", (e) => {
   if (!row || !GRAPH) return;
   const owner = row.dataset.owner && GRAPH.nodes.has(row.dataset.owner) ? row.dataset.owner : SELF;
   const n = targetOf(row.dataset.kind, row.dataset.name, GRAPH.index, owner);
-  if (GRAPH.nodes.has(n.id)) openDrawer(n.id);
+  if (GRAPH.nodes.has(n.id) || GRAPH.folded?.has(n.id)) openDrawer(n.id);
 });
 $("feed").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.closest(".row")?.click(); });
 

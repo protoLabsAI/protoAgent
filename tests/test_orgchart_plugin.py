@@ -677,3 +677,20 @@ def test_empty_overlay_can_actually_hide():
     # Hiding it also drops the stale text, and a filter-emptied chart says so.
     assert '$("empty").innerHTML = !empty ? ""' in js
     assert "Everything is filtered out" in js
+
+
+def test_leaves_group_under_their_owner_and_fold_but_work_never_hides():
+    # Josh 10-25: one shared leaf column fanned every agent's coders into one stack; with
+    # projectManager's eight coders crawled it became unreadable. The view lays out a tree
+    # (each agent's leaves beside it) and folds an agent's leaves into one chip.
+    from pathlib import Path
+
+    js = (Path(topo.__file__).parent / "view" / "orgchart.js").read_text()
+    assert "function treeParents(g)" in js and "function fold(g)" in js
+    assert "GRAPH = fold(buildGraph());" in js
+    # Working, just-finished and selected leaves stay out of the fold.
+    assert "for (const f of g.flows) { active.add(f.to); active.add(f.from); }" in js
+    assert "if (SEL) active.add(SEL);" in js
+    # The operator's unfold choice is remembered; a feed click still reaches a folded leaf.
+    assert 'const OPEN_KEY = "orgchart.unfolded";' in js
+    assert "GRAPH.folded?.has(n.id)" in js
