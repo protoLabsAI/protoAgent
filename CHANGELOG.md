@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.216.0] - 2026-10-25
+
+### Changed
+- **The org chart groups each agent's coders and subagents beside it and folds them into a chip, and the canvas zooms and pans (#4507).** Before, every agent's leaves shared one column with crossing edges, so you couldn't tell whose coder was whose. A chip such as "8 coders · 5 subagents" opens on click, and the choice is remembered. A coder or subagent that is working, has just finished, or is selected always shows on its own card. To move around, the wheel or a pinch zooms at the pointer, dragging the background pans, and +, −, Fit (keys `+` `-` `0`) are in the corner.
+
+### Fixed
+- **Workflow steps no longer refuse to start because earlier output mentions a tool name (#4501).** The #4327 dispatch scan read the interpolated prompt (finder reports, a PR diff, comments) as a request for the tool, so a PR that named `wait` or `github_get_pr` exhausted the review panel with no verdict. `sdk.run_subagent` takes `check_prompt_tools` (default `True`); the workflows engine passes `False`.
+
+- **The org chart no longer leaves "This chart lights up as work flows" over your graph (#4504).** Filtering out every node type showed the empty-state message, and re-enabling a type could not hide it again until a page refresh (the overlay's `display: grid` beat its `hidden` attribute). It now hides properly, clears its text, and says "Everything is filtered out" when the filters are why the chart is empty.
+
 ## [0.215.1] - 2026-10-25
 
 ### Fixed

@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.216.0",
+    "date": "2026-10-25",
+    "changes": [
+      "The org chart groups each agent's coders and subagents beside it and folds them into a chip, and the canvas zooms and pans (#4507).",
+      "Workflow steps no longer refuse to start because earlier output mentions a tool name (#4501).",
+      "The org chart no longer leaves \"This chart lights up as work flows\" over your graph (#4504)."
+    ]
+  },
+  {
     "version": "v0.215.1",
     "date": "2026-10-25",
     "changes": [
