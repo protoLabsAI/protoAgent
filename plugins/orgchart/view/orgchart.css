@@ -63,6 +63,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 #graph { display: block; margin: auto; flex: none; }
 .empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 6px;
   color: var(--muted); padding: 24px; pointer-events: none; }
+.empty[hidden] { display: none; }
 .empty strong { color: var(--fg); font-size: 14px; font-weight: 600; }
 .empty code { font-family: var(--mono); color: var(--fg); background: var(--bg-raised); padding: 1px 5px; border-radius: 5px; }
 

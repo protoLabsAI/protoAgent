@@ -423,10 +423,14 @@ function render() {
   }
   for (const [id, fl] of FLOW_EL) if (!live.has(id)) { fl.path.remove(); fl.spark?.remove(); FLOW_EL.delete(id); }
 
-  $("empty").hidden = GRAPH.nodes.size > 1 || LIVE.size > 0;
-  if (!$("empty").hidden) {
-    $("empty").innerHTML = "<strong>Nothing delegated yet</strong><span>This chart lights up as work flows: try <code>@claude-code</code> in chat, or ask the agent to hand something off.</span>";
-  }
+  // Empty because the filters hid everything is a different story from a fleet that has
+  // delegated nothing; and clear the text when it hides, so it can't linger over the graph.
+  const empty = GRAPH.nodes.size <= 1 && LIVE.size === 0;
+  $("empty").hidden = !empty;
+  $("empty").innerHTML = !empty ? ""
+    : HIDDEN.size && (TOPO?.nodes || []).some((n) => n.kind !== "self")
+      ? "<strong>Everything is filtered out</strong><span>Turn a node type back on in the filters above to see the chart.</span>"
+      : "<strong>Nothing delegated yet</strong><span>This chart lights up as work flows: try <code>@claude-code</code> in chat, or ask the agent to hand something off.</span>";
   renderStats();
   kick();
 }
