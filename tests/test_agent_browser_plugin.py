@@ -47,6 +47,7 @@ import pytest
 import yaml
 
 from graph.plugins.testkit import FakeRegistry, load_plugin
+from observability import tracing
 
 pytestmark = pytest.mark.platform_sensitive
 
@@ -1337,6 +1338,233 @@ async def test_different_sessions_are_not_serialised_against_each_other(monkeypa
         assert other is not held and not other.locked()
         monkeypatch.setenv("AGENT_BROWSER_SESSION", "s-one")
         assert tools._session_lock() is held
+
+
+# ── #4509: session_scope — opt-in per-chat-session browser isolation ───────────────
+# Two chats driving the browser at once shared ONE page because the CLI's session and the
+# serialisation lock both keyed off the process-wide AGENT_BROWSER_SESSION. `per_session`
+# gives each chat its own CLI session (and its own lock); `shared` is unchanged.
+
+
+def _popen_capturing(records, out=b"(ok)"):
+    """A Popen stand-in that records ``(argv, env)`` per call — the session-scope tests need
+    the ``env=`` kwarg the arg-recording ``fake_popen`` deliberately swallows."""
+    def _popen(argv, **kw):
+        records.append((list(argv), kw.get("env")))
+        return _FakeProc(argv, out=out)
+    return _popen
+
+
+def test_derived_session_name_is_deterministic_and_cli_safe():
+    """r5: the per-session name is a pure function of the chat id and lands in [a-z0-9-]."""
+    a = tools._session_name_for("session-XYZ/•weird id")
+    assert a == tools._session_name_for("session-XYZ/•weird id")          # deterministic
+    assert a != tools._session_name_for("another session")               # id-sensitive
+    for sid in ["", "A", "chat-123", "sess/with spaces", "🙂", "sid:colon", "s" * 500]:
+        name = tools._session_name_for(sid)
+        assert re.fullmatch(r"[a-z0-9-]+", name), name                   # CLI-safe charset
+        assert name.startswith("pa-") and len(name) == len("pa-") + 12
+
+
+def test_session_scope_defaults_to_shared():
+    """r1: default and manifest wiring — `shared`, exposed as an operator setting."""
+    m = _manifest()
+    assert m["config"]["session_scope"] == "shared"
+    by_key = {f["key"]: f for f in m["settings"]}
+    assert by_key["session_scope"]["type"] == "string"
+
+
+@pytest.mark.parametrize("cfg", [{"binary": "ab"}, {"binary": "ab", "session_scope": "shared"}])
+async def test_shared_scope_leaves_argv_and_env_exactly_as_today(monkeypatch, cfg):
+    """r1: `shared` (default, or explicit) passes the same argv and NO env override — the
+    child inherits os.environ unchanged — and the lock still keys off AGENT_BROWSER_SESSION."""
+    monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+    records = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
+    await _toolmap(cfg)["browser_snapshot"].ainvoke({})
+    argv, env = records[-1]
+    assert argv == ["ab", "snapshot"]            # argv unchanged
+    assert env is None                           # env inherited verbatim — no override kwarg
+    # the lock key is the shared env name, exactly as before (no in-flight call sets it)
+    assert tools._session_key() == "default"
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "opname")
+    assert tools._session_key() == "opname"
+
+
+async def test_per_session_passes_a_distinct_derived_env_per_chat(monkeypatch):
+    """r2: two different current_session_id values → two different AGENT_BROWSER_SESSION
+    values in the Popen env; the name rides the env, never the argv."""
+    monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+    records = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
+    t = _toolmap({"binary": "ab", "session_scope": "per_session"})
+
+    async with tracing.trace_session("chat-A"):
+        await t["browser_snapshot"].ainvoke({})
+    argv_a, env_a = records[-1]
+    async with tracing.trace_session("chat-B"):
+        await t["browser_snapshot"].ainvoke({})
+    argv_b, env_b = records[-1]
+
+    assert argv_a == argv_b == ["ab", "snapshot"]                        # argv identical
+    assert env_a["AGENT_BROWSER_SESSION"] == tools._session_name_for("chat-A")
+    assert env_b["AGENT_BROWSER_SESSION"] == tools._session_name_for("chat-B")
+    assert env_a["AGENT_BROWSER_SESSION"] != env_b["AGENT_BROWSER_SESSION"]
+    # the env is a COPY of the process env, not a replacement — PATH etc. survive
+    assert env_a.get("PATH") == os.environ.get("PATH")
+
+
+@pytest.mark.parametrize("injected", [False, True])
+async def test_per_session_runs_two_chats_concurrently_but_serialises_within_one(monkeypatch, injected):
+    """r2: calls from different sessions hold different locks (they overlap), while two calls
+    from the SAME session still serialise. Each gathered call runs in its own contextvars
+    copy, so a per-task session id drives the resolution — exactly the concurrent shape #4509
+    is about."""
+    monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+
+    gate = __import__("threading").Lock()
+    active: dict[str, int] = {}
+    peak: dict[str, int] = {}
+    cross = {"active": 0, "max": 0}
+
+    class _SlowProc(_FakeProc):
+        def __init__(self, argv, name):
+            super().__init__(argv, out=b"(ok)")
+            self._name = name
+
+        def wait(self, timeout=None):
+            time.sleep(0.03)                   # hold the "session" so a racer can arrive
+            with gate:
+                active[self._name] -= 1
+                cross["active"] -= 1
+            return super().wait(timeout)
+
+    def _popen(argv, **kw):
+        name = kw["env"]["AGENT_BROWSER_SESSION"]
+        with gate:
+            active[name] = active.get(name, 0) + 1
+            peak[name] = max(peak.get(name, 0), active[name])
+            cross["active"] += 1
+            cross["max"] = max(cross["max"], cross["active"])
+        return _SlowProc(argv, name)
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen)
+    t = _toolmap({"binary": "ab", "session_scope": "per_session"})
+
+    async def call(sid):
+        if injected:
+            from langchain_core.messages import AIMessage
+            from langgraph.graph import END, START, StateGraph
+            from langgraph.prebuilt import ToolNode
+
+            from graph.state import ProtoAgentState
+
+            builder = StateGraph(ProtoAgentState)
+            builder.add_node("tools", ToolNode(list(t.values())))
+            builder.add_edge(START, "tools")
+            builder.add_edge("tools", END)
+            return await builder.compile().ainvoke({
+                "session_id": sid,
+                "messages": [AIMessage(content="", tool_calls=[{
+                    "name": "browser_snapshot", "args": {}, "id": "snapshot", "type": "tool_call",
+                }])],
+            })
+        async with tracing.trace_session(sid):
+            return await t["browser_snapshot"].ainvoke({})
+
+    await asyncio.gather(call("A"), call("A"), call("B"), call("B"))
+    name_a, name_b = tools._session_name_for("A"), tools._session_name_for("B")
+    assert peak[name_a] == 1 and peak[name_b] == 1    # same session → serialised
+    assert cross["max"] == 2                           # different sessions → NOT serialised
+
+
+async def test_per_session_with_an_empty_id_falls_back_to_the_shared_name(monkeypatch):
+    """r3: no chat session id (e.g. a call outside a graph turn) → the shared session name,
+    so per_session never breaks a browse that today's shared mode would have run."""
+    records = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
+    t = _toolmap({"binary": "ab", "session_scope": "per_session"})
+
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "opname")
+    await t["browser_snapshot"].ainvoke({})
+    assert records[-1][1]["AGENT_BROWSER_SESSION"] == "opname"   # the shared env name, no pa- hash
+
+    monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+    records.clear()
+    await t["browser_snapshot"].ainvoke({})
+    assert records[-1][1]["AGENT_BROWSER_SESSION"] == "default"  # …and "default" with none set
+
+
+async def test_a_tool_call_never_mutates_os_environ(monkeypatch):
+    """r4: the per-session name reaches the CLI only via the Popen env copy — os.environ is
+    process-global and racy, so a tool call must leave it untouched."""
+    monkeypatch.delenv("AGENT_BROWSER_SESSION", raising=False)
+    monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="(ok)"))
+    before = dict(os.environ)
+    async with tracing.trace_session("chat-A"):
+        await _toolmap({"binary": "ab", "session_scope": "per_session"})["browser_snapshot"].ainvoke({})
+    assert "AGENT_BROWSER_SESSION" not in os.environ   # the override rode the child env only
+    assert dict(os.environ) == before
+
+
+async def test_browser_close_targets_only_the_callers_own_session(monkeypatch):
+    """Change #4: with the session pinned per call, `browser_close` passes the caller's own
+    resolved name — it can't tear down another chat's page."""
+    records = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
+    async with tracing.trace_session("chat-A"):
+        await _toolmap({"binary": "ab", "session_scope": "per_session"})["browser_close"].ainvoke({})
+    argv, env = records[-1]
+    assert argv == ["ab", "close"]
+    assert env["AGENT_BROWSER_SESSION"] == tools._session_name_for("chat-A")
+
+
+@pytest.mark.parametrize("scope", ["shared", "per_session"])
+@pytest.mark.parametrize("trace_id", ["", "outer-session"])
+@pytest.mark.parametrize("session_id", ["chat-A", "chat-B", ""])
+async def test_graph_turn_uses_injected_browser_session(monkeypatch, scope, trace_id, session_id):
+    """A real model → ToolNode → model turn uses state even without tracing context."""
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from graph.state import ProtoAgentState
+
+    class BrowserModel(GenericFakeChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    browser_tools = _toolmap({"binary": "ab", "session_scope": scope})
+    for browser_tool in browser_tools.values():
+        assert "state" not in browser_tool.tool_call_schema.model_json_schema()["properties"]
+    model = BrowserModel(messages=iter([
+        AIMessage(content="", tool_calls=[
+            {"name": name, "args": {}, "id": name, "type": "tool_call"}
+            for name in ("browser_snapshot", "browser_close")
+        ]),
+        AIMessage(content="done"),
+    ]))
+    graph = create_agent(model, tools=list(browser_tools.values()), state_schema=ProtoAgentState)
+    records = []
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "operator-browser")
+    monkeypatch.setattr(tools.subprocess, "Popen", _popen_capturing(records))
+    async with tracing.trace_session(trace_id):
+        result = await graph.ainvoke({
+            "messages": [HumanMessage(content="Inspect and close my browser")],
+            "session_id": session_id,
+        })
+    replies = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert len(replies) == 2
+    assert all(m.content == "(ok)" for m in replies)
+    expected = tools._session_name_for(session_id) if session_id and scope == "per_session" else "operator-browser"
+    assert len(records) == 2
+    if scope == "per_session":
+        assert {env["AGENT_BROWSER_SESSION"] for _, env in records} == {expected}
+    else:
+        assert all(env is None for _, env in records)
+    assert {tuple(argv) for argv, _ in records} == {("ab", "snapshot"), ("ab", "close")}
+    assert expected in tools._SESSION_LOCKS[asyncio.get_running_loop()]
+    assert tools._SESSION_NAME.get() is None
 
 
 async def test_click_and_get_value_resolve_labels_too(monkeypatch):

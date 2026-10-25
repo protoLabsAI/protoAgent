@@ -44,6 +44,12 @@ config:
   max_response_bytes: 200000  # aggregate stdout+stderr byte cap per command; untrusted page
                             # output over this is dropped and the tool returns a bounded error
                             # (memory + model-context safety). Read/enforced by the plugin wrapper.
+  session_scope: shared     # how the agent-browser SESSION is scoped across concurrent chats
+                            # (#4509): `shared` (default) = one session for everyone, which the
+                            # console Browser panel + screencast follow; `per_session` = each
+                            # chat session drives its own page, so two chats at once don't land
+                            # on each other's tab. Opt-in: the panel still follows the shared
+                            # session, so per_session leaves the operator's live view on it.
   home_url: ""              # homepage the panel opens to. When set, the panel auto-opens it if
                             # no browser page is open; the empty state also shows a Start button.
                             # Blank → the Start button opens about:blank (no auto-open).
@@ -83,6 +89,7 @@ settings:
   - { key: max_response_bytes, label: "Max response bytes", type: number, description: "Aggregate stdout+stderr byte cap per browser command. Output beyond this is dropped and the tool returns a bounded error — protects process memory and the model's context from unbounded page content. Default 200000." }
   - { key: binary, label: "agent-browser binary", type: string, description: "The agent-browser CLI on PATH (override with a pinned absolute path if needed)." }
   - { key: cli_autofetch, label: "Download the CLI on first use", type: bool, description: "When no agent-browser CLI is on PATH, download the pinned, checksum-verified release the first time the browser is used. Off = install it yourself (npm i -g agent-browser) or use the setup banner's Download button. Chrome is never downloaded automatically." }
+  - { key: session_scope, label: "Session scope", type: string, description: "How the browser session is scoped across concurrent chats. 'shared' (default) = one browser session for everyone, which the console Browser panel and screencast follow. 'per_session' = each chat session drives its own page so two chats at once don't share one browser — the panel still follows the shared session." }
 
 # Console view (ADR 0026) — an interactive, drivable browser viewport (CDP screencast + input).
 views:

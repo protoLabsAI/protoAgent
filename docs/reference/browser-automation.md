@@ -126,8 +126,12 @@ disk.
 The plugin ships a console view ([ADR 0026](/adr/0026-plugin-contributed-console-surfaces)) that is a
 **fully drivable viewport**, not a screenshot poll: a live CDP **screencast** (event-driven
 JPEG frames) painted onto a `<canvas>`, with your mouse, keyboard and scroll forwarded
-back into the page as `Input.dispatch*`. You and the agent are in the same browser — take
-over a login wall by hand, then let it continue.
+back into the page as `Input.dispatch*`. With the default `session_scope: shared`, you and the agent are in the same browser —
+take over a login wall by hand, then let it continue. With `session_scope: per_session`,
+each chat drives its own `pa-<hash>` session. The panel still follows the shared session,
+so it may remain empty while the agent browses; it cannot display or control those
+per-chat pages. Following a non-default session and reaping idle per-chat daemons
+are future work.
 
 It resizes Chrome's layout viewport to your dock (× device-pixel-ratio) so pages reflow to
 fill rather than sitting letterboxed, re-arms the screencast on every navigation so you see
@@ -154,6 +158,7 @@ Editable in **Settings ▸ Plugins ▸ Agent Browser**, or under `agent_browser:
 | Setting | What it does |
 |---|---|
 | `binary` | The `agent-browser` CLI. Override with an absolute path when PATH isn't enough. |
+| `session_scope` | `shared` (default) uses one browser across chats; `per_session` isolates each chat. The Browser panel and screencast still follow the shared session. |
 | `cli_autofetch` | With no CLI on PATH, download the pinned, checksum-verified release on first use (default on). The banner's Download button works either way. |
 | `timeout_s` · `max_response_bytes` | Per-command subprocess timeout; the aggregate stdout+stderr byte cap. |
 | `home_url` | The page the panel opens to. Set it and the panel auto-opens it when nothing is open; blank gives a Start button. |
