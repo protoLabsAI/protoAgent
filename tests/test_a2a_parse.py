@@ -158,14 +158,14 @@ async def test_park_paths_use_status_question(monkeypatch, path, artifact, statu
         monkeypatch.setattr(late.ADAPTERS["a2a"], "get_task", get_task)
         sleep = AsyncMock()
         if path == "pending":
-            key = "park-question-4506"
-            conversations.remember_pending(key, d.name, d.url, task["id"])
-            pending = conversations.pending_for(key, d.name, d.url)
+            conv_id = "conv-4506"
+            conversations.remember_pending(conv_id, d.name, d.url, task["id"])
+            pending = conversations.pending_for(conv_id, d.name, d.url)
             try:
-                outcome, message = await late.collect(d, key, "", pending, sleep=sleep)
-                assert conversations.pending_for(key, d.name, d.url) is None
+                outcome, message = await late.collect(d, conv_id, "", pending, sleep=sleep)
+                assert conversations.pending_for(conv_id, d.name, d.url) is None
             finally:
-                conversations.forget_pending(key, d.name, d.url)
+                conversations.forget_pending(conv_id, d.name, d.url)
         else:
             outcome, message, state, question = await late.collect_task(d, task["id"], sleep=sleep)
             assert state == "TASK_STATE_INPUT_REQUIRED"
