@@ -101,7 +101,7 @@ def test_load_missing_or_corrupt_returns_none(tmp_path):
 
 
 def test_execute_persists_a_completed_run(tmp_path, monkeypatch):
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         return f"<{description.rsplit(':', 1)[-1]}-out>"
 
     _patch_sdk(monkeypatch, run_subagent)
@@ -125,7 +125,7 @@ def test_execute_with_seeded_steps_dispatches_only_what_is_downstream(tmp_path, 
     # handed in, so only `brief` is dispatched — and it sees the seeded text, not a rerun.
     dispatched = []
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         dispatched.append((description.rsplit(":", 1)[-1], prompt))
         return "brief-from-seed"
 
@@ -149,7 +149,7 @@ def test_the_record_says_what_each_step_was_handed(tmp_path, monkeypatch):
     # against data: the rendered prompt's length and digest are on the record.
     import hashlib
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         return "x"
 
     _patch_sdk(monkeypatch, run_subagent)
@@ -202,7 +202,7 @@ def test_state_workflow_run_takes_seed_outputs(monkeypatch, tmp_path):
 
 
 def test_execute_persists_a_failed_run(tmp_path, monkeypatch):
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         if description.endswith(":gather"):
             raise RuntimeError("boom")
         return "brief-out"
@@ -222,7 +222,7 @@ def test_execute_persists_a_failed_run(tmp_path, monkeypatch):
 
 
 def test_execute_default_store_lands_under_writable_dir(tmp_path, monkeypatch):
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         return "out"
 
     _patch_sdk(monkeypatch, run_subagent, workflow_dir=str(tmp_path / "wfdir"))
@@ -233,7 +233,7 @@ def test_execute_default_store_lands_under_writable_dir(tmp_path, monkeypatch):
 
 
 def test_validation_failure_creates_no_run_file(tmp_path, monkeypatch):
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         raise AssertionError("should never run")
 
     _patch_sdk(monkeypatch, run_subagent)
@@ -267,7 +267,7 @@ def test_step_outputs_drop_the_subagent_completed_header(tmp_path, monkeypatch):
     # into every downstream prompt. The clean-finish header is dropped; warning headers stay.
     prompts: dict[str, str] = {}
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         step = description.rsplit(":", 1)[-1]
         prompts[step] = prompt
         return f"[{subagent_type} completed: {description}]\n\n<{step}-out>"
@@ -326,7 +326,7 @@ def test_workflows_plugin_config_section_does_not_collide_with_core(caplog):
 
 
 def _blocking_gather(started: asyncio.Event):
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         if description.endswith(":gather"):
             started.set()
             await asyncio.sleep(3600)
@@ -374,7 +374,7 @@ def test_a_run_that_raises_is_still_recorded_failed(tmp_path, monkeypatch):
     """Only a cancel is ``cancelled`` — a run that crashes outside the engine's inline
     step-failure handling is still ``failed``."""
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         return "out"
 
     _patch_sdk(monkeypatch, run_subagent)

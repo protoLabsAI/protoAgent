@@ -40,7 +40,7 @@ def fake_langfuse(monkeypatch):
 
 
 def _subagent(seen: list):
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         # What the real one does: a boundary span in whatever trace is current.
         seen.append(tracing.current_trace_id())
         with tracing.trace_span(f"subagent:{subagent_type}", as_type="agent"):

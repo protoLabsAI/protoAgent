@@ -517,7 +517,7 @@ def test_execute_pauses_at_gated_step_and_persists_paused_state(tmp_path, monkey
 
     spawned = []
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         sid = description.rsplit(":", 1)[-1]
         spawned.append(sid)
         return f"<{sid}-out>"
@@ -554,7 +554,7 @@ def test_execute_ungated_recipe_still_finishes_done(tmp_path, monkeypatch):
     import plugins.workflows as wf
     from plugins.workflows.run_state import STATUS_DONE, WorkflowRunStore
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         return f"<{description.rsplit(':', 1)[-1]}-out>"
 
     ungated = {**GATED, "name": "ungated", "steps": [dict(s) for s in GATED["steps"]]}
@@ -679,7 +679,7 @@ async def test_run_workflow_tool_pause_return_is_actionable_status_block(tmp_pat
 
     spawned = []
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         sid = description.rsplit(":", 1)[-1]
         spawned.append(sid)
         return f"<{sid}-out>"
@@ -715,7 +715,7 @@ async def test_save_workflow_round_trips_human_gate(tmp_path, monkeypatch):
     the gated step, and the saved recipe carries the gate — durably, on disk."""
     import runtime.state as rs
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         return "unused"
 
     tools = _register_plugin(tmp_path, monkeypatch, run_subagent)
@@ -738,7 +738,7 @@ async def test_save_workflow_round_trips_human_gate(tmp_path, monkeypatch):
 
 
 async def test_save_workflow_rejects_unsupported_gate(tmp_path, monkeypatch):
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         return "unused"
 
     tools = _register_plugin(tmp_path, monkeypatch, run_subagent)
@@ -905,3 +905,21 @@ def test_render_template_substitutes_structured_values_as_json():
     assert '{"name": "Alice", "n": 2}' in out
     assert '["a", "b"]' in out
     assert "'" not in out  # never Python repr
+
+
+def test_a_step_is_dispatched_with_the_prompt_tool_scan_off(monkeypatch):
+    """A step prompt is the recipe template plus earlier steps' output. A tool name inside that
+    data (a finder reporting on `github_get_pr`, a PR that documents `wait`) asks for nothing,
+    and the #4327 dispatch scan refused the step anyway, exhausting the review panel (#4501)."""
+    import plugins.workflows as wf
+
+    seen = []
+
+    async def run_subagent(subagent_type, prompt, description="", **kwargs):
+        seen.append(kwargs)
+        return "ok"
+
+    _patch_sdk(monkeypatch, run_subagent)
+    out = asyncio.run(wf._traced_step("demo", "researcher", "summarise `wait` and github_get_pr", "s1"))
+    assert out == "ok"
+    assert seen == [{"check_prompt_tools": False}]

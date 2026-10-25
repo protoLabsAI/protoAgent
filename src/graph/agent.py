@@ -1332,6 +1332,7 @@ async def run_manual_subagent(
     reload_callback=None,
     session_id: str = "",
     turn_model: str = "",
+    check_prompt_tools: bool = True,
 ) -> str:
     """Run a subagent outside the lead agent's ``task`` tool.
 
@@ -1347,6 +1348,12 @@ async def run_manual_subagent(
 
     ``turn_model`` is the calling turn's model override (a ``/<subagent>`` slash run's
     request ``metadata.model``); the subagent's own pinned model still wins (#3944).
+
+    ``check_prompt_tools`` runs the #4327 fail-fast scan: refuse to start when the prompt
+    names a lead tool the subagent was never bound. It exists for a prompt an LLM wrote,
+    where naming a tool is a request to use it. A caller whose prompt is a fixed template
+    with other steps' output interpolated into it (a workflow step) turns it off: a tool
+    name inside that DATA asks for nothing, and the scan refused the step anyway (#4501).
     """
     # Mirror the lead graph's tool set so a subagent run OUTSIDE the lead's
     # `task` tool (slash `/distill`, scheduled `/dream`, the console fan-out) sees
@@ -1400,7 +1407,7 @@ async def run_manual_subagent(
     # create_agent_graph).
     all_tools = drop_disabled_tools(all_tools)
     tool_map = {t.name: t for t in all_tools}
-    gap = _dispatch_tool_gap(config, subagent_type, prompt, tool_map, tool_map)
+    gap = _dispatch_tool_gap(config, subagent_type, prompt, tool_map, tool_map) if check_prompt_tools else None
     if gap:
         return gap
     if self_improvement_run and subagent_type in SUBAGENT_REGISTRY:

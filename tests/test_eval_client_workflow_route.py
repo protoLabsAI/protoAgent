@@ -38,7 +38,7 @@ def _app(tmp_path, monkeypatch, *, mount: bool = True) -> FastAPI:
     import plugins.workflows as wf
     import runtime.state as rs
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         return f"echo: {prompt}"
 
     monkeypatch.setattr(wf.sdk, "subagent_types", lambda: {"researcher"})

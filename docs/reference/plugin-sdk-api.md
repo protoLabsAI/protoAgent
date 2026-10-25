@@ -160,7 +160,7 @@ Ids of the configured subagents — for validating/listing recipe steps.
 ### `sdk.run_subagent` {#sdk-run-subagent}
 
 ```python
-await sdk.run_subagent(subagent_type: str, prompt: str, *, description: str, extra_tools: Any = None, truncate: int | None = None, turn_model: str | None = None) -> str
+await sdk.run_subagent(subagent_type: str, prompt: str, *, description: str, extra_tools: Any = None, truncate: int | None = None, turn_model: str | None = None, check_prompt_tools: bool = True) -> str
 ```
 
 Run a subagent to completion and return its text output.
@@ -181,6 +181,12 @@ chat drivers), so a workflow step follows the model the operator picked for the
 turn — under the one precedence: the subagent's pin > the override >
 `routing.aux_model` > the main model ([#3944](https://github.com/protoLabsAI/protoAgent/issues/3944), [#3955](https://github.com/protoLabsAI/protoAgent/issues/3955)). Outside a turn there is
 none and the step resolves pin > aux > main, as before.
+
+`check_prompt_tools` (default `True`) refuses to start the subagent when the prompt
+names a tool it was never given, instead of letting it run to a "blocked" finish ([#4327](https://github.com/protoLabsAI/protoAgent/issues/4327)).
+Pass `False` when the prompt is your own fixed template with other steps' output
+interpolated into it: a tool name inside that data is not a request for the tool, and
+the check would refuse a step whose input merely mentions one ([#4501](https://github.com/protoLabsAI/protoAgent/issues/4501)).
 
 ### `sdk.renders_ui` {#sdk-renders-ui}
 

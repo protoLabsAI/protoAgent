@@ -179,6 +179,7 @@ async def run_subagent(
     extra_tools: Any = None,
     truncate: int | None = None,
     turn_model: str | None = None,
+    check_prompt_tools: bool = True,
 ) -> str:
     """Run a subagent to completion and return its text output.
 
@@ -198,6 +199,12 @@ async def run_subagent(
     turn — under the one precedence: the subagent's pin > the override >
     ``routing.aux_model`` > the main model (#3944, #3955). Outside a turn there is
     none and the step resolves pin > aux > main, as before.
+
+    ``check_prompt_tools`` (default ``True``) refuses to start the subagent when the prompt
+    names a tool it was never given, instead of letting it run to a "blocked" finish (#4327).
+    Pass ``False`` when the prompt is your own fixed template with other steps' output
+    interpolated into it: a tool name inside that data is not a request for the tool, and
+    the check would refuse a step whose input merely mentions one (#4501).
     """
     from graph.agent import run_manual_subagent
     from graph.subagent_model import current_turn_model
@@ -215,6 +222,7 @@ async def run_subagent(
         extra_tools=extra_tools,
         truncate=truncate,
         turn_model=current_turn_model() if turn_model is None else turn_model,
+        check_prompt_tools=check_prompt_tools,
     )
 
 

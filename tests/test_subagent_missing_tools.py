@@ -170,7 +170,7 @@ def test_r1_missing_tool_seen_via_full_lead_vocabulary(monkeypatch):
 
 def test_r2_present_tool_dispatches(monkeypatch):
     called: list = []
-    tools = _task_tools(monkeypatch, all_tools=_lead_tools(["read_file"]), recorder=called)
+    tools = _task_tools(monkeypatch, all_tools=_lead_tools(["pdf_look"]), recorder=called)
     out = _call(
         tools["task"],
         description="survey",
@@ -186,7 +186,7 @@ def test_r2_present_tool_dispatches(monkeypatch):
 
 def test_r3_prose_and_unknown_names_dispatch(monkeypatch):
     called: list = []
-    tools = _task_tools(monkeypatch, all_tools=_lead_tools(["read_file"]), recorder=called)
+    tools = _task_tools(monkeypatch, all_tools=_lead_tools(["pdf_look"]), recorder=called)
     out = _call(
         tools["task"],
         description="survey",
@@ -231,7 +231,7 @@ def test_r5_subagent_inheritance_unchanged():
 
 def test_r5_guard_is_read_only_on_resolution():
     # Running the guard must not mutate a subagent's resolved toolset.
-    tool_map = {t.name: t for t in _lead_tools(["read_file"])}
+    tool_map = {t.name: t for t in _lead_tools(["pdf_look"])}
     before = [t.name for t in _subagent_tools(SUBAGENT_REGISTRY["researcher"], tool_map)]
     _dispatch_tool_gap(LangGraphConfig(), "researcher", "Use read_file now.", tool_map, set(tool_map) | {"read_file"})
     after = [t.name for t in _subagent_tools(SUBAGENT_REGISTRY["researcher"], tool_map)]
@@ -421,3 +421,37 @@ def test_batch_plain_word_tools_dispatch_but_explicit_references_refuse(monkeypa
     else:
         assert "OUT:prose" in out
         assert [call["description"] for call in called] == ["prose"]
+
+
+# ── check_prompt_tools=False (#4501) ──────────────────────────────────────────
+
+
+def _manual_run(monkeypatch, *, prompt: str, **kwargs) -> list[str]:
+    """Drive `run_manual_subagent` with a lead that holds `pdf_look` and a stub runner; return
+    the prompts the (faked) subagent runner was actually started with."""
+    started: list[str] = []
+
+    async def fake_run(**kw):
+        started.append(kw["prompt"])
+        return "ran"
+
+    monkeypatch.setattr(agent_mod, "_run_subagent", fake_run)
+    monkeypatch.setattr(agent_mod, "get_all_tools", lambda *a, **k: _lead_tools(["pdf_look"]))
+    monkeypatch.setattr(agent_mod, "drop_disabled_tools", lambda tools: tools)
+    result = asyncio.run(
+        agent_mod.run_manual_subagent(
+            LangGraphConfig(), description="d", prompt=prompt, subagent_type="researcher", **kwargs
+        )
+    )
+    return [result, *started]
+
+
+def test_manual_run_refuses_a_prompt_naming_a_missing_tool_by_default(monkeypatch):
+    result, *started = _manual_run(monkeypatch, prompt="Use `pdf_look` on it.")
+    assert result.startswith("Not dispatched") and started == []
+
+
+def test_manual_run_with_the_scan_off_starts_the_subagent(monkeypatch):
+    """A workflow step: the tool name is in interpolated data, not a request."""
+    result, *started = _manual_run(monkeypatch, prompt="Use `pdf_look` on it.", check_prompt_tools=False)
+    assert result == "ran" and started == ["Use `pdf_look` on it."]

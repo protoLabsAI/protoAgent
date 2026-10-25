@@ -50,7 +50,7 @@ def _echo_runner(prompts):
     as the step's output — so an edited prompt is visible in the downstream step's input
     (and the final output)."""
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         sid = description.rsplit(":", 1)[-1]
         prompts[sid] = prompt
         return prompt
@@ -314,7 +314,7 @@ def test_a_resumed_run_cancelled_mid_step_is_recorded_cancelled(tmp_path, monkey
     async def scenario():
         started = asyncio.Event()
 
-        async def run_subagent(subagent_type, prompt, description=""):
+        async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
             started.set()
             await asyncio.sleep(3600)
 
