@@ -60,7 +60,7 @@ def build_data_router(live_config):
         return await topology.get_live(live_config() or {})
 
     @router.get("/history")
-    async def _history(owner: str, limit: int = 60) -> dict:
-        return await topology.get_history(live_config() or {}, owner, limit=limit)
+    async def _history(owner: str, limit: int = 60, to_kind: str = "", to_name: str = "") -> dict:
+        return await topology.get_history(live_config() or {}, owner, limit=limit, to_kind=to_kind, to_name=to_name)
 
     return router

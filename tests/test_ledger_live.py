@@ -168,3 +168,28 @@ async def test_a_failing_ledger_note_still_reaches_the_card(bus, monkeypatch):
         await t.on_text("Reading.")
         await t.finish(ok=True)
     assert frames and frames[-1]["done"] is True
+
+
+async def test_the_sdk_delegation_seam_is_live_while_it_runs_and_lands_a_row(bus, tmp_path, monkeypatch):
+    # Josh 10-25: a board coder's run never lit up on the org chart — the board dispatched
+    # through the adapter, around the one funnel that opens a live edge. `sdk.delegation`
+    # is that funnel for a plugin.
+    import runtime.state as rs
+    from observability.ledger_store import LedgerStore
+
+    from graph import sdk
+
+    store = LedgerStore(str(tmp_path / "ledger.db"))
+    monkeypatch.setattr(rs.STATE, "ledger_store", store, raising=False)
+    with sdk.delegation(to_kind="acp", to_name="codex", what="bd-rwnf", origin="project_board") as edge:
+        assert [e["to_name"] for e in ledger.live_edges()] == ["codex"]
+        edge.cost_usd = 0.3
+    with pytest.raises(RuntimeError):
+        with sdk.delegation(to_kind="acp", to_name="codex", origin="project_board"):
+            raise RuntimeError("coder crashed")
+
+    assert ledger.live_edges() == []
+    assert _topics(bus) == ["delegation.started", "delegation.finished"] * 2
+    rows = store.recent()
+    assert [(r["outcome"], r["origin"]) for r in rows] == [("failed", "project_board"), ("ok", "project_board")]
+    assert rows[1]["what"] == "bd-rwnf" and rows[1]["cost_usd"] == 0.3

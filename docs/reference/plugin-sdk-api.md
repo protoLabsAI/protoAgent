@@ -49,7 +49,7 @@ the module's own.
 
 **Run tracing (one Langfuse trace per multi-step plugin run)** — [`trace_attributes()`](#sdk-trace-attributes), [`trace_run()`](#sdk-trace-run)
 
-**Delegation ledger (who handed what work to whom)** — [`record_delegation()`](#sdk-record-delegation)
+**Delegation ledger (who handed what work to whom)** — [`delegation()`](#sdk-delegation), [`record_delegation()`](#sdk-record-delegation)
 
 **Subscription usage (the plugin↔quota channel, ADR 0122 D6/D7/D8)** — [`provider_usage()`](#sdk-provider-usage)
 
@@ -949,6 +949,28 @@ understates every rollup built on the column.
 Best-effort and never raises: a ledger failure must not break a dispatch.
 
 Returns the new `edge_id`, or None when no store is wired or the write failed.
+
+### `sdk.delegation` {#sdk-delegation}
+
+```python
+sdk.delegation(*, to_kind: str, to_name: str, to_instance: str = '', what: str = '', session_id: str = '', origin: str = '')
+```
+
+Wrap a plugin's own dispatch so it is on the record WHILE it runs, not just after.
+
+`record_delegation` writes a finished edge; this is the funnel `delegate_to`
+itself uses. The edge is live for the whole block — `GET /api/ledger/live` and the
+`delegation.*` bus frames carry it, so the org chart lights the delegate up as it
+works — and one row is written on every exit: `ok`, `failed` (the block raised,
+re-raised unchanged) or `cancelled`. Use it around any dispatch outside the built-in
+funnels, such as a board loop's coder run::
+
+    with sdk.delegation(to_kind="acp", to_name=coder.name, what=card_title, origin="project_board") as edge:
+        reply = await adapter.dispatch(coder, prompt)
+        edge.cost_usd = measured_cost  # optional; leave None when unmeasured
+
+The yielded handle takes `cost_usd`, `task_id` and `to_instance` for what the
+caller only learns during the dispatch. A ledger failure never breaks the block.
 
 ## Subscription usage (the plugin↔quota channel, ADR 0122 D6/D7/D8)
 

@@ -868,7 +868,7 @@ async def get_live(cfg: dict) -> dict:
     return {"now": time.time(), "self": self_base, "edges": edges, "peers": len(peers)}
 
 
-async def get_history(cfg: dict, owner: str, *, limit: int = 60) -> dict:
+async def get_history(cfg: dict, owner: str, *, limit: int = 60, to_kind: str = "", to_name: str = "") -> dict:
     """A drawn peer's recent delegations (its ``GET /api/ledger``), for the drawer of a node
     that peer owns — its ``claude-code`` is not ours, so our ledger has nothing to say about
     it. Only peers the last crawl could read; anything else is an empty answer."""
@@ -881,7 +881,13 @@ async def get_history(cfg: dict, owner: str, *, limit: int = 60) -> dict:
         async with _make_client(cfg) as client:
             r = await client.get(
                 _norm(owner) + "/api/ledger",
-                params={"limit": max(1, min(int(limit), 200))},
+                # A target filter rides along; a peer on an older core ignores it and the
+                # view filters what comes back.
+                params={
+                    "limit": max(1, min(int(limit), 200)),
+                    **({"to_kind": to_kind} if to_kind else {}),
+                    **({"to_name": to_name} if to_name else {}),
+                },
                 headers={"Authorization": "Bearer " + token},
             )
             if r.status_code == 200:

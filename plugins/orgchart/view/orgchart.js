@@ -839,25 +839,36 @@ function ownerOf(n) {
   const into = (TOPO?.edges || []).find((e) => e.to === n.id && e.kind !== "member");
   return into ? into.from : SELF;
 }
-// A peer's ledger, read through the plugin (it holds the token): owner → {at, rows}.
-const PEER_HISTORY = new Map();
-function peerHistory(owner) {
-  const hit = PEER_HISTORY.get(owner);
+// One target's ledger rows, read filtered at the source: a busy neighbour (a review
+// panel's subagents) fills any newest-N window, and a quieter coder beside it read as
+// never used. Ours from our ledger, a peer's through the plugin (it holds the token):
+// "owner|kind|name" → {at, rows}.
+const HISTORY = new Map();
+function targetHistory(owner, kind, name) {
+  const key = owner + "|" + kind + "|" + lc(name);
+  const hit = HISTORY.get(key);
   if (!hit || Date.now() - hit.at > 15000) {
-    PEER_HISTORY.set(owner, { at: Date.now(), rows: hit ? hit.rows : null });
-    api("/api/plugins/orgchart/history?owner=" + encodeURIComponent(owner))
-      .then((d) => { PEER_HISTORY.set(owner, { at: Date.now(), rows: d.readable ? d.edges || [] : [] }); DRAWER_SIG = ""; renderDrawer(); })
-      .catch(() => { PEER_HISTORY.set(owner, { at: Date.now(), rows: [] }); });
+    HISTORY.set(key, { at: Date.now(), rows: hit ? hit.rows : null });
+    const q = "to_kind=" + encodeURIComponent(kind) + "&to_name=" + encodeURIComponent(name) + "&limit=20";
+    const url = owner === SELF ? "/api/ledger?" + q : "/api/plugins/orgchart/history?owner=" + encodeURIComponent(owner) + "&" + q;
+    api(url)
+      .then((d) => { HISTORY.set(key, { at: Date.now(), rows: owner === SELF || d.readable ? d.edges || [] : [] }); DRAWER_SIG = ""; renderDrawer(); })
+      .catch(() => { HISTORY.set(key, { at: Date.now(), rows: [] }); });
   }
-  return PEER_HISTORY.get(owner).rows;
+  return HISTORY.get(key).rows;
 }
 function historyFor(n) {
   const kind = LEDGER_KIND[n.kind];
   if (n.kind === "self") return RECENT.slice(0, 20);
   const owner = ownerOf(n);
-  const rows = owner === SELF ? RECENT : peerHistory(owner);
-  if (rows == null) return null;   // loading
-  return rows.filter((r) => r.to_kind === kind && lc(r.to_name) === lc(n.name)).slice(0, 20);
+  const match = (r) => r.to_kind === kind && lc(r.to_name) === lc(n.name);
+  // Our newest rows (live ones included) come first; the targeted read adds the older
+  // ones. A peer on an older core ignores the filter, hence the match on its rows too.
+  const mine = owner === SELF ? RECENT.filter(match) : [];
+  const rows = targetHistory(owner, kind, n.name);
+  if (rows == null) return mine.length ? mine.slice(0, 20) : null;   // loading
+  const seen = new Set(mine.map((r) => r.edge_id));
+  return [...mine, ...rows.filter((r) => match(r) && !seen.has(r.edge_id))].slice(0, 20);
 }
 
 function renderDrawer() {
