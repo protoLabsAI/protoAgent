@@ -50,3 +50,11 @@ async def test_tolerates_missing_state_fields(monkeypatch, capture):
     monkeypatch.setattr(STATE, "mcp_tools", None, raising=False)
     await sdk.run_subagent("researcher", "p", description="d")
     assert capture["extra_tools"] == []
+
+
+async def test_prompt_tool_scan_is_on_by_default_and_forwarded_when_off(capture):
+    """#4501: the workflows engine turns the prompt scan off; everyone else keeps it."""
+    await sdk.run_subagent("researcher", "p", description="d")
+    assert capture["check_prompt_tools"] is True
+    await sdk.run_subagent("researcher", "p", description="d", check_prompt_tools=False)
+    assert capture["check_prompt_tools"] is False
