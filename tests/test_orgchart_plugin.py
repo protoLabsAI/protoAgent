@@ -694,3 +694,18 @@ def test_leaves_group_under_their_owner_and_fold_but_work_never_hides():
     # The operator's unfold choice is remembered; a feed click still reaches a folded leaf.
     assert 'const OPEN_KEY = "orgchart.unfolded";' in js
     assert "GRAPH.folded?.has(n.id)" in js
+
+
+def test_the_canvas_zooms_and_pans_like_a_map():
+    # Josh 10-25: with the tree laid out, a big fleet must be navigable, not scrolled.
+    from pathlib import Path
+
+    view = Path(topo.__file__).parent / "view"
+    js, css, html = ((view / f).read_text() for f in ("orgchart.js", "orgchart.css", "orgchart.html"))
+    assert "const CAM = { x: 0, y: 0, k: 1, user: false };" in js
+    assert "CAM.user ? applyCam() : fitCam();" in js  # a poll never yanks a view the operator moved
+    assert 'c.addEventListener("wheel"' in js and "zoomAt(Math.exp(-e.deltaY * px * rate), ...at(e));" in js
+    assert 'c.addEventListener("gesturechange"' in js  # the desktop webview's pinch
+    assert 'e.target.closest(".node, .cam")' in js  # a press on a node stays a click
+    assert 'id="zoom-in"' in html and 'id="zoom-out"' in html and 'id="zoom-fit"' in html
+    assert ".canvas { overflow: hidden; cursor: grab; touch-action: none; }" in css

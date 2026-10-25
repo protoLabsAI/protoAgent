@@ -23,6 +23,12 @@
   <main class="stage">
     <section class="canvas" id="canvas" aria-label="Delegation graph">
       <svg id="graph" role="presentation"></svg>
+      <div class="cam" role="toolbar" aria-label="Zoom">
+        <button class="pl-btn pl-btn--sm pl-btn--ghost" type="button" id="zoom-out" title="Zoom out (−)" aria-label="Zoom out">−</button>
+        <span class="cam-k" id="zoom-k" aria-live="polite">100%</span>
+        <button class="pl-btn pl-btn--sm pl-btn--ghost" type="button" id="zoom-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
+        <button class="pl-btn pl-btn--sm pl-btn--ghost" type="button" id="zoom-fit" title="Fit the chart (0)">Fit</button>
+      </div>
       <div class="empty" id="empty" hidden></div>
     </section>
     <aside class="feed" aria-label="Live activity">

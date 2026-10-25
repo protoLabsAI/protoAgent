@@ -481,23 +481,101 @@ function toggleFold(owner) {
   NODE_EL.get("fold:" + owner)?.g.focus({ preventScroll: true });
 }
 
+// ── camera: zoom + pan ──────────────────────────────────────────────────────────────
+// The viewBox is the camera: `x,y` its top-left in chart units, `k` the zoom. `user` turns
+// true once the operator zooms or pans, and from then on a poll never yanks the view.
+const CAM = { x: 0, y: 0, k: 1, user: false };
+const K_MIN = 0.2, K_MAX = 2.5, K_FIT_MAX = 1.45, K_STEP = 1.25;
+function viewSize() { const c = $("canvas"); return { w: c.clientWidth || 1, h: c.clientHeight || 1 }; }
+function clampCam() {
+  if (!LAYOUT) return;
+  // Keep a quarter of the view on the chart, so it can't be flung out of sight.
+  const { w, h } = viewSize(), vw = w / CAM.k, vh = h / CAM.k;
+  CAM.x = Math.min(Math.max(CAM.x, -vw * 0.75), LAYOUT.width - vw * 0.25);
+  CAM.y = Math.min(Math.max(CAM.y, -vh * 0.75), LAYOUT.height - vh * 0.25);
+}
+function applyCam() {
+  clampCam();
+  const { w, h } = viewSize();
+  svg.setAttribute("width", w);
+  svg.setAttribute("height", h);
+  svg.setAttribute("viewBox", `${CAM.x} ${CAM.y} ${w / CAM.k} ${h / CAM.k}`);
+  $("zoom-k").textContent = Math.round(CAM.k * 100) + "%";
+}
+function fitCam() {
+  if (!LAYOUT) return;
+  const { w, h } = viewSize();
+  const fit = Math.min((w - 16) / LAYOUT.width, (h - 16) / LAYOUT.height);
+  CAM.k = Math.min(K_FIT_MAX, Math.max(K_MIN, isFinite(fit) ? fit : 1));
+  CAM.x = (LAYOUT.width - w / CAM.k) / 2;
+  CAM.y = (LAYOUT.height - h / CAM.k) / 2;
+  CAM.user = false;
+  applyCam();
+}
+/** Zoom by `f` keeping the chart point under (`sx`,`sy`) — canvas pixels — where it is. */
+function zoomAt(f, sx, sy) {
+  const k = Math.min(K_MAX, Math.max(K_MIN, CAM.k * f));
+  if (k === CAM.k) return;
+  CAM.x += sx / CAM.k - sx / k;
+  CAM.y += sy / CAM.k - sy / k;
+  CAM.k = k;
+  CAM.user = true;
+  applyCam();
+}
+const zoomCentre = (f) => { const { w, h } = viewSize(); zoomAt(f, w / 2, h / 2); };
+{
+  const c = $("canvas");
+  const at = (e) => { const r = c.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  // Map-style: the wheel (and a trackpad pinch, which Chromium reports as ctrl+wheel)
+  // zooms at the pointer; dragging the background pans.
+  c.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const px = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    // A pinch sends small deltas, so it gets a steeper curve than a notched wheel.
+    const rate = e.ctrlKey ? 0.01 : 0.0025;
+    zoomAt(Math.exp(-e.deltaY * px * rate), ...at(e));
+  }, { passive: false });
+  // WebKit (the desktop app's webview) reports a pinch as gesture events, not ctrl+wheel.
+  let g0 = 1;
+  c.addEventListener("gesturestart", (e) => { e.preventDefault(); g0 = e.scale; });
+  c.addEventListener("gesturechange", (e) => { e.preventDefault(); zoomAt(e.scale / g0, ...at(e)); g0 = e.scale; });
+  // Drag the background to pan; a press on a node stays a click.
+  let drag = null;
+  c.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.target.closest(".node, .cam")) return;
+    drag = { x: e.clientX, y: e.clientY, cx: CAM.x, cy: CAM.y, id: e.pointerId };
+    c.setPointerCapture(e.pointerId);
+    c.classList.add("panning");
+  });
+  c.addEventListener("pointermove", (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    CAM.x = drag.cx - (e.clientX - drag.x) / CAM.k;
+    CAM.y = drag.cy - (e.clientY - drag.y) / CAM.k;
+    CAM.user = true;
+    applyCam();
+  });
+  const end = (e) => { if (drag && e.pointerId === drag.id) { drag = null; c.classList.remove("panning"); } };
+  c.addEventListener("pointerup", end);
+  c.addEventListener("pointercancel", end);
+  $("zoom-in").addEventListener("click", () => zoomCentre(K_STEP));
+  $("zoom-out").addEventListener("click", () => zoomCentre(1 / K_STEP));
+  $("zoom-fit").addEventListener("click", fitCam);
+  addEventListener("keydown", (e) => {
+    if (e.target.closest?.("input, textarea, select, [contenteditable]") || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "+" || e.key === "=") zoomCentre(K_STEP);
+    else if (e.key === "-" || e.key === "_") zoomCentre(1 / K_STEP);
+    else if (e.key === "0") fitCam();
+  });
+}
+
 // ── render ──────────────────────────────────────────────────────────────────────────
 let GRAPH = null, LAYOUT = null;
 function render() {
   if (!TOPO) return;
   GRAPH = fold(buildGraph());
   LAYOUT = layout(GRAPH);
-  // Fill the canvas: a two-node fleet shouldn't be a postage stamp in a big empty box, a
-  // three-column fleet should fit without a scrollbar, and a big one shouldn't shrink past
-  // legibility (below 0.7 it scrolls instead).
-  const box = $("canvas").getBoundingClientRect();
-  const fit = Math.min((box.width - 8) / LAYOUT.width, (box.height - 8) / LAYOUT.height);
-  // With the drawer open the canvas is narrower; the node being inspected must still fit.
-  const scale = Math.max(SEL ? 0.55 : 0.7, Math.min(1.45, isFinite(fit) ? fit : 1));
-  LAYOUT.scale = scale;
-  svg.setAttribute("width", Math.round(LAYOUT.width * scale));
-  svg.setAttribute("height", Math.round(LAYOUT.height * scale));
-  svg.setAttribute("viewBox", `0 0 ${LAYOUT.width} ${LAYOUT.height}`);
+  // Until the operator moves the camera, it keeps the whole chart in view as it changes.
+  CAM.user ? applyCam() : fitCam();
   const t = performance.now();
 
   for (const [id, h] of NODE_EL) if (!GRAPH.nodes.has(id)) { h.g.remove(); NODE_EL.delete(id); }
@@ -707,14 +785,16 @@ function openDrawer(id) {
   revealNode(id);
   $("d-close").focus({ preventScroll: true });
 }
-/** Scroll the canvas so a node is in view (a fleet wider than the canvas scrolls). */
+/** Pan the camera so a node is in view, centring it, without changing the zoom. */
 function revealNode(id) {
   const p = LAYOUT?.pos.get(id);
   if (!p) return;
-  const c = $("canvas"), k = LAYOUT.scale || 1;
-  const x = p.x * k, y = p.y * k, w = NODE_W * k, h = NODE_H * k;
-  if (x < c.scrollLeft || x + w > c.scrollLeft + c.clientWidth) c.scrollLeft = Math.max(0, x + w / 2 - c.clientWidth / 2);
-  if (y < c.scrollTop || y + h > c.scrollTop + c.clientHeight) c.scrollTop = Math.max(0, y + h / 2 - c.clientHeight / 2);
+  const { w, h } = viewSize();
+  const inside = p.x >= CAM.x && p.y >= CAM.y && p.x + NODE_W <= CAM.x + w / CAM.k && p.y + NODE_H <= CAM.y + h / CAM.k;
+  if (inside) return;
+  CAM.x = p.x + NODE_W / 2 - w / CAM.k / 2;
+  CAM.y = p.y + NODE_H / 2 - h / CAM.k / 2;
+  applyCam();
 }
 function closeDrawer() {
   const was = SEL;

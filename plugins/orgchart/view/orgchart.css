@@ -57,10 +57,14 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
   border-radius: var(--radius); background:
     radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--fg) 7%, transparent) 1px, transparent 0) 0 0 / 22px 22px,
     var(--bg-subtle); }
-/* Centered while it fits; scrolls from the top-left once it doesn't (margin:auto in a
-   flex box never clips the overflowing start edge, unlike place-items:center). */
-.canvas { display: flex; }
-#graph { display: block; margin: auto; flex: none; }
+/* The canvas is a camera: the SVG fills it and the viewBox pans and zooms (orgchart.js
+   CAM), so a big fleet is navigated, never scrolled. */
+.canvas { overflow: hidden; cursor: grab; touch-action: none; }
+.canvas.panning { cursor: grabbing; }
+#graph { display: block; position: absolute; inset: 0; }
+.cam { position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 2px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--bg-raised); cursor: default; }
+.cam-k { min-width: 42px; text-align: center; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 6px;
   color: var(--muted); padding: 24px; pointer-events: none; }
 .empty[hidden] { display: none; }
