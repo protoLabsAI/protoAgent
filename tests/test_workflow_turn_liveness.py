@@ -255,7 +255,7 @@ def _blocking_plugin_run(monkeypatch, store):
     import plugins.workflows as wf
     from tests.test_workflow_run_state import _FakeReg, _patch_sdk
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         await asyncio.sleep(3600)
 
     _patch_sdk(monkeypatch, run_subagent)

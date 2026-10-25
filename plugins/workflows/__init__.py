@@ -287,7 +287,10 @@ async def _traced_step(name: str, subagent_type: str, prompt: str, step_id: str)
     with sdk.trace_attributes(
         {"workflow": name, "step_id": step_id, "subagent": subagent_type}, tags=[f"step:{step_id}"]
     ):
-        out = await sdk.run_subagent(subagent_type, prompt, description=description)
+        # A step prompt is the recipe's template with earlier steps' output (finder reports,
+        # a PR diff, comments) interpolated in. A tool name inside that data is not a request
+        # for the tool, and the dispatch-time scan refused the step on it (#4501).
+        out = await sdk.run_subagent(subagent_type, prompt, description=description, check_prompt_tools=False)
     return _strip_completed_header(out, subagent_type, description)
 
 

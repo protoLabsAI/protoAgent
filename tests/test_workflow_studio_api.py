@@ -60,7 +60,7 @@ async def _drain_bg():
 async def test_start_background_returns_immediately_with_live_step_state(tmp_path, monkeypatch):
     release = asyncio.Event()
 
-    async def fake_run(subagent, prompt, description=""):
+    async def fake_run(subagent, prompt, description="", **_sdk_kwargs):
         await release.wait()
         return f"out:{description.rsplit(':', 1)[-1]}"
 
@@ -95,7 +95,7 @@ async def test_start_background_returns_immediately_with_live_step_state(tmp_pat
 
 
 async def test_start_background_validation_fails_caller_and_mints_no_run(tmp_path, monkeypatch):
-    async def fake_run(subagent, prompt, description=""):
+    async def fake_run(subagent, prompt, description="", **_sdk_kwargs):
         return "x"
 
     _patch_sdk(monkeypatch, fake_run)
@@ -106,7 +106,7 @@ async def test_start_background_validation_fails_caller_and_mints_no_run(tmp_pat
 
 
 async def test_background_failure_lands_in_record_and_notify(tmp_path, monkeypatch):
-    async def fake_run(subagent, prompt, description=""):
+    async def fake_run(subagent, prompt, description="", **_sdk_kwargs):
         raise RuntimeError("boom")
 
     _patch_sdk(monkeypatch, fake_run)
@@ -134,7 +134,7 @@ async def test_background_gate_pause_notifies_and_stays_resumable(tmp_path, monk
         ],
     }
 
-    async def fake_run(subagent, prompt, description=""):
+    async def fake_run(subagent, prompt, description="", **_sdk_kwargs):
         return "gathered"
 
     _patch_sdk(monkeypatch, fake_run)
@@ -267,7 +267,7 @@ def client(tmp_path, monkeypatch):
 
     from runtime.state import STATE
 
-    async def fake_run(subagent, prompt, description=""):
+    async def fake_run(subagent, prompt, description="", **_sdk_kwargs):
         return "ok"
 
     _patch_sdk(monkeypatch, fake_run, workflow_dir=str(tmp_path / "wfdir"))

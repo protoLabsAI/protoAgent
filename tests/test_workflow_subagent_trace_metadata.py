@@ -74,7 +74,7 @@ def real_subagent(monkeypatch):
     monkeypatch.setattr(agent_mod, "build_subagent_prompt", lambda *_a, **_k: "sys")
     monkeypatch.setattr(agent_mod, "create_agent", lambda **_k: _FakeGraph())
 
-    async def run_subagent(subagent_type, prompt, description=""):
+    async def run_subagent(subagent_type, prompt, description="", **_sdk_kwargs):
         return await agent_mod._run_subagent(
             config=LangGraphConfig(),
             tool_map={},
