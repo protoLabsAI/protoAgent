@@ -50,6 +50,19 @@ def test_recent_can_scope_to_one_session(client):
     assert len(c.get("/api/ledger?session=s1").json()["edges"]) == 1
 
 
+def test_recent_can_scope_to_one_target_so_a_busy_neighbour_cannot_crowd_it_out(client):
+    # Josh 10-25: projectManager's codex had 16 runs, but its drawer said "No delegations
+    # recorded" — the review panel's subagents filled every newest-N window.
+    c, store = client
+    _edge(store, to_kind="acp", to_name="codex", what="audit")
+    for _ in range(5):
+        _edge(store, to_kind="subagent", to_name="review-finder")
+
+    edges = c.get("/api/ledger?limit=2&to_kind=acp&to_name=Codex").json()["edges"]
+    assert [(e["to_name"], e["what"]) for e in edges] == [("codex", "audit")]  # name is case-insensitive
+    assert c.get("/api/ledger?to_kind=subagent&to_name=codex").json()["edges"] == []
+
+
 def test_the_aggregate_groups_by_target_and_reports_how_many_were_priced(client):
     # Without `priced`, a partial sum reads as a total and "cheap" is indistinguishable
     # from "mostly unmeasured".

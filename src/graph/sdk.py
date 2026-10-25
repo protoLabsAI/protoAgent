@@ -1755,6 +1755,45 @@ def record_delegation(
     )
 
 
+@contextlib.contextmanager
+def delegation(
+    *,
+    to_kind: str,
+    to_name: str,
+    to_instance: str = "",
+    what: str = "",
+    session_id: str = "",
+    origin: str = "",
+):
+    """Wrap a plugin's own dispatch so it is on the record WHILE it runs, not just after.
+
+    :func:`record_delegation` writes a finished edge; this is the funnel ``delegate_to``
+    itself uses. The edge is live for the whole block — ``GET /api/ledger/live`` and the
+    ``delegation.*`` bus frames carry it, so the org chart lights the delegate up as it
+    works — and one row is written on every exit: ``ok``, ``failed`` (the block raised,
+    re-raised unchanged) or ``cancelled``. Use it around any dispatch outside the built-in
+    funnels, such as a board loop's coder run::
+
+        with sdk.delegation(to_kind="acp", to_name=coder.name, what=card_title, origin="project_board") as edge:
+            reply = await adapter.dispatch(coder, prompt)
+            edge.cost_usd = measured_cost  # optional; leave None when unmeasured
+
+    The yielded handle takes ``cost_usd``, ``task_id`` and ``to_instance`` for what the
+    caller only learns during the dispatch. A ledger failure never breaks the block.
+    """
+    from graph import ledger
+
+    with ledger.dispatch(
+        to_kind=to_kind,
+        to_name=to_name,
+        to_instance=to_instance,
+        what=what,
+        session_id=session_id,
+        origin=origin,
+    ) as edge:
+        yield edge
+
+
 # ── subscription usage (the plugin↔quota channel, ADR 0122 D6/D7/D8) ────────────────────
 # The board (and any plugin router) reads subscription headroom ONLY through here — never by
 # importing the fetchers or the store, which would cross the layering line. The read is

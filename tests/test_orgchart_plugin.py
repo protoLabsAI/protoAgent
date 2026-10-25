@@ -597,6 +597,9 @@ def test_a_peers_coder_wears_the_peers_record_and_its_history_is_readable(monkey
     assert coder["work"]["dispatches"] == 4
     hist = asyncio.run(topo.get_history({}, ALPHA + "/a2a"))
     assert hist["readable"] is True and hist["edges"][0]["edge_id"] == 9
+    # A drawer asks for one target's rows, and the filter reaches the peer.
+    asyncio.run(topo.get_history({}, ALPHA, to_kind="acp", to_name="coder"))
+    assert any("/api/ledger?" in u and "to_kind=acp" in u and "to_name=coder" in u for u in calls)
     # A node the crawl couldn't read has no history to give — and no token is invented.
     assert asyncio.run(topo.get_history({}, BETA)) == {"owner": BETA, "edges": [], "readable": False}
 
@@ -694,6 +697,8 @@ def test_leaves_group_under_their_owner_and_fold_but_work_never_hides():
     # The operator's unfold choice is remembered; a feed click still reaches a folded leaf.
     assert 'const OPEN_KEY = "orgchart.unfolded";' in js
     assert "GRAPH.folded?.has(n.id)" in js
+    # A drawer's history is read filtered by target, not picked out of the newest rows.
+    assert 'const q = "to_kind=" + encodeURIComponent(kind) + "&to_name=" + encodeURIComponent(name)' in js
     # ...and the drawer opens on it: render (which unfolds the selection) runs before the
     # drawer looks the node up, or a folded leaf isn't in GRAPH and the drawer closes again.
     opener = js[js.index("function openDrawer(id)") :]

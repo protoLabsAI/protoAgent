@@ -236,14 +236,26 @@ class LedgerStore:
         finally:
             db.close()
 
-    def recent(self, limit: int = 100, *, session_id: str = "") -> list[dict]:
-        """Newest edges first, optionally scoped to one originating session."""
+    def recent(self, limit: int = 100, *, session_id: str = "", to_kind: str = "", to_name: str = "") -> list[dict]:
+        """Newest edges first, optionally scoped to one originating session and/or one
+        target. A target's history must be filtered HERE, not by the caller over the
+        newest N rows: a busy delegate (a review panel's subagents) fills any window, and
+        a quieter one beside it reads as never used."""
         limit = max(1, min(int(limit), 1000))
         sql = "SELECT * FROM delegations"
+        where: list[str] = []
         args: list[object] = []
         if session_id:
-            sql += " WHERE session_id = ?"
+            where.append("session_id = ?")
             args.append(session_id)
+        if to_kind:
+            where.append("to_kind = ?")
+            args.append(to_kind)
+        if to_name:
+            where.append("lower(to_name) = lower(?)")
+            args.append(to_name)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY edge_id DESC LIMIT ?"
         args.append(limit)
         db = self._connect()

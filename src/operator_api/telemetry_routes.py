@@ -380,14 +380,20 @@ def register_telemetry_routes(app) -> None:
     # can answer the other's question — the turns table has no actor column and no edge.
 
     @app.get("/api/ledger")
-    def _api_ledger(limit: int = 100, session: str = ""):
-        """Recent delegation edges, newest first; optionally one originating session."""
+    def _api_ledger(limit: int = 100, session: str = "", to_kind: str = "", to_name: str = ""):
+        """Recent delegation edges, newest first; optionally one originating session and/or
+        one target (``to_kind`` + ``to_name``, the name matched case-insensitively)."""
         store = getattr(STATE, "ledger_store", None)
         if store is None:
             return {"enabled": False, "edges": []}
         return {
             "enabled": True,
-            "edges": store.recent(limit=min(max(1, limit), 1000), session_id=session.strip()),
+            "edges": store.recent(
+                limit=min(max(1, limit), 1000),
+                session_id=session.strip(),
+                to_kind=to_kind.strip(),
+                to_name=to_name.strip(),
+            ),
         }
 
     @app.get("/api/ledger/edges")
