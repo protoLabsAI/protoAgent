@@ -199,18 +199,23 @@ def fake_run(rc=0, stdout="ok", stderr="", record=None):
 async def test_open_passes_url_and_curated_launch_flags(monkeypatch):
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(out="OPENED", record=rec))
-    # headless so argv is clean (headed injects anti-throttle --args; covered below)
+    # headless, but the anti-throttle --args now ride every session (#4510), before `open`
     t = _toolmap({"binary": "ab", "allowed_domains": "x.com", "max_output": 500})
     out = await t["browser_open"].ainvoke({"url": "https://x.com"})
     assert "OPENED" in out
-    assert rec[-1] == ["ab", "--allowed-domains", "x.com", "--max-output", "500", "open", "https://x.com"]
+    anti = ("--disable-backgrounding-occluded-windows,--disable-renderer-backgrounding,"
+            "--disable-background-timer-throttling")
+    assert rec[-1] == ["ab", "--allowed-domains", "x.com", "--max-output", "500",
+                       "--args", anti, "open", "https://x.com"]
 
 
 async def test_open_blank_url_omits_it(monkeypatch):
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
     await _toolmap({"binary": "ab"})["browser_open"].ainvoke({})
-    assert rec[-1] == ["ab", "open"]
+    # no url operand after `open`; the launch flags (anti-throttle --args) still precede it
+    assert rec[-1][-1] == "open" and "https://x.com" not in rec[-1]
+    assert rec[-1][:2] == ["ab", "--args"]
 
 
 async def test_action_tools_pass_refs(monkeypatch):
@@ -3702,30 +3707,48 @@ def test_viewport_metrics_floors_degenerate():
 
 # ── the launch-flag builder (incl. the anti-detection layer, vendored UNCHANGED) ──
 
+# The three anti-backgrounding Chrome args merged into every session (#4510): a
+# backgrounded/occluded/unfocused page — including every headless one, since headless is
+# the default and "unfocused" by definition — reports visibilityState "hidden" and has its
+# timers + requestAnimationFrame throttled, so rAF animations never start.
+_ANTI_THROTTLE = {"--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+                  "--disable-background-timer-throttling"}
+_ANTI_THROTTLE_ARGS = ("--disable-backgrounding-occluded-windows,"
+                       "--disable-renderer-backgrounding,--disable-background-timer-throttling")
 
-def test_default_is_empty():
-    assert rt.launch_flags({}) == []
-    assert rt.launch_flags(None) == []
+
+def test_headless_default_injects_anti_throttle_args():
+    # r1 (#4510): headless is the default and is "unfocused", so it carries the same three
+    # anti-backgrounding args a headed window does — else visibilityState is "hidden" and
+    # rAF animations never start. (Was `== []` before #4510.)
+    for cfg in ({}, None):
+        f = rt.launch_flags(cfg)
+        assert f == ["--args", _ANTI_THROTTLE_ARGS]  # just the anti-throttle args, no --headed
+        assert "--headed" not in f
 
 
 def test_curated_flags_stable_order():
-    # headless keeps the argv clean (headed injects anti-throttle --args, tested separately)
+    # headless now also appends the anti-throttle --args, after the curated flags (#4510)
     f = rt.launch_flags({"profile": "P", "device": "iPhone 16 Pro",
                          "allowed_domains": "x.com", "confirm_actions": "nav", "max_output": 500})
     assert f == ["--profile", "P", "--device", "iPhone 16 Pro",
-                 "--allowed-domains", "x.com", "--confirm-actions", "nav", "--max-output", "500"]
+                 "--allowed-domains", "x.com", "--confirm-actions", "nav", "--max-output", "500",
+                 "--args", _ANTI_THROTTLE_ARGS]
 
 
 def test_headed_injects_anti_throttle_args():
+    # r2: headed output is unchanged from before #4510 (pinned exactly).
     f = rt.launch_flags({"headed": True})
-    assert f[0] == "--headed" and f[1] == "--args"
-    aset = set(f[2].split(","))
-    assert {"--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
-            "--disable-background-timer-throttling"} <= aset  # keep a headed window rendering unfocused
+    assert f == ["--headed", "--args", _ANTI_THROTTLE_ARGS]
+    assert set(f[2].split(",")) == _ANTI_THROTTLE  # keep a headed window rendering unfocused
 
 
-def test_headless_stays_clean():
-    assert rt.launch_flags({"allowed_domains": "x.com"}) == ["--allowed-domains", "x.com"]  # no --args
+def test_headless_also_injects_anti_throttle_args():
+    # r1 (#4510): used to be a clean argv (no --args); now the three args ride headless too,
+    # appended after the curated flags.
+    f = rt.launch_flags({"allowed_domains": "x.com"})
+    assert f == ["--allowed-domains", "x.com", "--args", _ANTI_THROTTLE_ARGS]
+    assert "--headed" not in f
 
 
 def test_stealth_headless_adds_automation_arg_and_real_ua():
@@ -3752,8 +3775,20 @@ def test_explicit_ua_wins_and_browser_args_merge():
 
 def test_browser_args_without_stealth_passes_through():
     f = rt.launch_flags({"browser_args": "--mute-audio"})
-    assert f == ["--args", "--mute-audio"]
+    args = f[f.index("--args") + 1].split(",")
+    assert args[0] == "--mute-audio"  # the user arg leads; the anti-throttle args merge after
+    assert set(args[1:]) == _ANTI_THROTTLE
     assert "--user-agent" not in f  # no stealth → no UA injection
+
+
+@pytest.mark.parametrize("extra", [{}, {"headed": True}], ids=["headless", "headed"])
+def test_user_supplied_anti_throttle_arg_is_not_duplicated(extra):
+    # r3: a browser_args value that already names one of the three is merged once, not twice,
+    # in either mode; the other two still get added.
+    f = rt.launch_flags({"browser_args": "--disable-renderer-backgrounding", **extra})
+    args = f[f.index("--args") + 1].split(",")
+    assert args.count("--disable-renderer-backgrounding") == 1
+    assert _ANTI_THROTTLE <= set(args)  # the other two are still merged in
 
 
 def test_the_stealth_surface_is_intact_and_unedited():
@@ -4489,8 +4524,9 @@ def test_register_still_contributes_everything_with_garbage_numbers(monkeypatch)
 
 
 def test_a_non_numeric_max_output_never_breaks_launch_flags():
-    assert rt.launch_flags({"max_output": "lots"}) == []
-    assert rt.launch_flags({"max_output": "250"}) == ["--max-output", "250"]
+    # junk → no --max-output, no crash (the anti-throttle --args still rides along, #4510)
+    assert rt.launch_flags({"max_output": "lots"}) == ["--args", _ANTI_THROTTLE_ARGS]
+    assert rt.launch_flags({"max_output": "250"}) == ["--max-output", "250", "--args", _ANTI_THROTTLE_ARGS]
 
 
 def test_the_panel_router_builds_with_garbage_numbers():
