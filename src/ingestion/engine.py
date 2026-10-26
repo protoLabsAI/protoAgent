@@ -592,6 +592,9 @@ def _release_docx_memory(nodes_used: int) -> None:
     counting. CPython's GC triggers on OBJECT COUNTS, not on those megabytes, so nothing
     forces one: measured +130 MiB per extraction, ~900 MiB over six, flat once collected.
 
+    Collection releases the graphs, but the native allocator may retain freed pages:
+    current RSS need not return to its import-only baseline after each extraction.
+
     The debt is CUMULATIVE rather than per-document. A threshold on one document's size
     left everything under it behaving exactly as before — ~95k units is an ordinary
     ~50-page document (a 300-page report is ~560k), and a run of them retained ~12 MiB

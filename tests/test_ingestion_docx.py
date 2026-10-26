@@ -500,7 +500,8 @@ def test_a_hostile_docx_cannot_drive_memory_past_the_budget(tmp_path):
 
 def _rss_after_extractions(data: bytes, tmp_path, *, repeats: int) -> int:
     """Resident size (MiB) of a fresh interpreter after extracting ``data`` ``repeats``
-    times — the footprint left behind, which a peak-only reading can't show."""
+    times — the footprint left behind, which a peak-only reading can't show.
+    Zero repeats measures the import-only baseline with the same payload loaded."""
     path = tmp_path / f"resident-{repeats}.docx"
     path.write_bytes(data)
     program = textwrap.dedent(
@@ -660,6 +661,29 @@ def test_concurrent_extractions_cannot_multiply_the_memory_ceiling(monkeypatch):
     assert peak[0] <= 2, f"{peak[0]} of {len(threads)} extractions ran at once"
 
 
+def test_repeated_extractions_release_document_graphs(monkeypatch):
+    """Check live trees independently of the allocator retaining freed RSS pages."""
+    import weakref
+
+    docx = _docx_lib()
+    original = docx.Document
+    parts = []
+
+    def tracked_document(*args, **kwargs):
+        document = original(*args, **kwargs)
+        parts.append(weakref.ref(document.part))
+        return document
+
+    monkeypatch.setattr(docx, "Document", tracked_document)
+    data = _worst_accepted_docx()
+    assert engine._repack_docx(data)[2] >= engine._DOCX_GC_NODES
+    for _ in range(6):
+        extract_bytes("probe.docx", data)
+        # Do not collect here: the production release must have reclaimed the graph.
+        assert all(part() is None for part in parts)
+    assert len(parts) == 6
+
+
 def test_repeated_extractions_do_not_accumulate_memory(tmp_path):
     """python-docx's package graph is cyclic, so a document's tree is only freed by a
     CYCLIC collection — and CPython's GC counts objects, not the megabytes libxml2 holds
@@ -673,11 +697,16 @@ def test_repeated_extractions_do_not_accumulate_memory(tmp_path):
     # CURRENT RSS, not ru_maxrss: a high-water mark can't show memory coming back, and
     # where the interpreter's own start-up peak already covers one extraction its delta
     # reads 0 (CI's Linux runners). What matters here is the footprint left behind.
+    baseline = _rss_after_extractions(data, tmp_path, repeats=0)
     after_one = _rss_after_extractions(data, tmp_path, repeats=1)
     after_six = _rss_after_extractions(data, tmp_path, repeats=6)
+    growth_one = after_one - baseline
+    growth_six = after_six - baseline
 
-    assert after_six <= 2 * after_one, (
-        f"six extractions left {after_six} MiB resident vs {after_one} MiB after one — "
+    assert growth_one > 0, f"one extraction left no measurable growth above {baseline} MiB baseline"
+    assert growth_six <= 2 * growth_one, (
+        f"six extractions left {after_six} MiB resident vs {after_one} MiB after one "
+        f"({baseline} MiB import baseline; growth {growth_six} vs {growth_one} MiB) — "
         "the per-document tree is accumulating again"
     )
 
