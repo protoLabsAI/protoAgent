@@ -690,7 +690,8 @@ def test_leaves_group_under_their_owner_and_fold_but_work_never_hides():
 
     js = (Path(topo.__file__).parent / "view" / "orgchart.js").read_text()
     assert "function treeParents(g)" in js and "function fold(g)" in js
-    assert "GRAPH = fold(buildGraph());" in js
+    # buildGraph → (Active filter) → fold is the pipeline; fold still runs on the graph.
+    assert "const g = buildGraph();" in js and "GRAPH = fold(g);" in js
     # Working, just-finished and selected leaves stay out of the fold.
     assert "for (const f of g.flows) { active.add(f.to); active.add(f.from); }" in js
     assert "if (SEL) active.add(SEL);" in js
@@ -721,3 +722,152 @@ def test_the_canvas_zooms_and_pans_like_a_map():
     assert 'c.addEventListener("click", (e) => { if (dragged)' in js  # the click ending a pan isn't a card click
     assert 'id="zoom-in"' in html and 'id="zoom-out"' in html and 'id="zoom-fit"' in html
     assert "touch-action: none; user-select: none; -webkit-user-select: none;" in css  # a pan never selects text
+
+
+# ── Active / All mode (#4517) ─────────────────────────────────────────────────
+
+
+def _view_files():
+    from pathlib import Path
+
+    view = Path(topo.__file__).parent / "view"
+    return (view / "orgchart.js").read_text(), (view / "orgchart.css").read_text(), (view / "orgchart.html").read_text()
+
+
+def test_mode_switch_is_an_aria_pressed_segmented_control_defaulting_active():
+    """#4517: a header Active/All switch, Active the default. A segmented button pair with
+    aria-pressed, bound by id, so a keyboard user hears which mode is on."""
+    js, css, html = _view_files()
+    # The control: two buttons, Active pressed by default.
+    assert '<div class="seg" id="mode"' in html
+    assert '<button class="seg-btn" type="button" data-mode="active" aria-pressed="true">Active</button>' in html
+    assert '<button class="seg-btn" type="button" data-mode="all" aria-pressed="false">All</button>' in html
+    # Default is Active; stored value "all" is the only thing that flips it.
+    assert 'return localStorage.getItem(MODE_KEY) === "all" ? "all" : "active";' in js
+    assert 'let MODE = modeStore.get();' in js
+    # aria-pressed tracks MODE, and clicking a segment switches.
+    assert 'b.setAttribute("aria-pressed", String(b.dataset.mode === MODE));' in js
+    assert '$("mode").addEventListener("click"' in js
+    # Styled with existing tokens (no raw hex beyond the shared shadow mix).
+    assert ".seg {" in css and ".seg-btn[aria-pressed=\"true\"]" in css
+    assert "var(--bg-raised)" in css
+
+
+def test_mode_persists_in_localstorage_under_a_guarded_key():
+    """The choice survives a reload via localStorage `orgchart.mode`, every access wrapped
+    in try/catch like HIDE_KEY/OPEN_KEY — a locked-down storage must not throw the view down."""
+    js, _css, _html = _view_files()
+    assert 'const MODE_KEY = "orgchart.mode";' in js
+    # get() and set() both catch.
+    mode_store = js[js.index("const modeStore = {") : js.index("let MODE = modeStore.get();")]
+    assert mode_store.count("try {") == 2 and mode_store.count("catch") == 2
+    assert "localStorage.setItem(MODE_KEY, v)" in mode_store
+
+
+def test_the_a_key_toggles_mode_but_not_while_typing():
+    """`a` flips modes, and — sharing the zoom keys' guard — is ignored in an input,
+    textarea, select or contenteditable (and under a modifier)."""
+    js, _css, _html = _view_files()
+    assert 'const toggleMode = () => setMode(MODE === "active" ? "all" : "active");' in js
+    assert 'else if (e.key === "a" || e.key === "A") toggleMode();' in js
+    # The handler the `a` branch lives in bails on an editable target / modifier first.
+    handler = js[js.rindex('if (e.key === "+"') - 400 : js.index('else if (e.key === "a"')]
+    assert 'input, textarea, select, [contenteditable]' in handler
+    assert "e.metaKey || e.ctrlKey || e.altKey" in handler
+
+
+def test_switching_mode_hands_the_camera_back_and_refits():
+    """A mode change reframes the whole chart, so the camera is released (CAM.user=false)
+    and re-fit — not left wherever the operator last panned."""
+    js, _css, _html = _view_files()
+    set_mode = js[js.index("function setMode(m)") : js.index("const toggleMode")]
+    assert 'if ((m !== "active" && m !== "all") || m === MODE) return;' in set_mode  # guarded + no-op on same
+    assert "modeStore.set(MODE);" in set_mode  # persisted
+    assert "CAM.user = false;" in set_mode
+    assert set_mode.index("CAM.user = false;") < set_mode.index("fitCam();")
+
+
+def test_active_filter_runs_before_fold_with_the_documented_keep_rules():
+    """The one filter pass sits between buildGraph() and fold(), only in Active, and keeps:
+    self, flow endpoints, last-run-within-5-min, the selection, and the treeParents path to
+    self. Edges to dropped nodes are removed."""
+    js, _css, _html = _view_files()
+    assert "function activeFilter(g)" in js
+    # Wired into render in the right place and only when Active.
+    render = js[js.index("function render()") : js.index("function activeEmpty()")]
+    assert "const g = buildGraph();" in render
+    assert 'if (MODE === "active") activeFilter(g);' in render
+    assert render.index("activeFilter(g)") < render.index("GRAPH = fold(g);")
+    # The keep set: self, both ends of every flow, the selection, and recent work.
+    flt = js[js.index("function activeFilter(g)") : js.index("const isLeaf =")]
+    assert "const parent = treeParents(g);" in flt
+    assert "seed(SELF);" in flt
+    assert "for (const f of g.flows) { seed(f.from); seed(f.to); }" in flt
+    assert "if (SEL && g.nodes.has(SEL)) seed(SEL);" in flt
+    assert "const cutoff = now() - ACTIVE_MS / 1000;" in flt
+    assert "Date.parse(n.work.last_at)" in flt
+    # seed() walks a kept node up its spanning-tree parents to self — a peer keeps its slot.
+    assert "c = parent.has(c) ? parent.get(c) : null;" in flt
+    # Dropped nodes, then any edge touching one, then orphaned flows.
+    assert "if (!keep.has(id)) g.nodes.delete(id);" in flt
+    assert "if (!g.nodes.has(e.from) || !g.nodes.has(e.to)) g.edges.delete(k);" in flt
+    # The 5-minute window is a fixed constant.
+    assert "const ACTIVE_MS = 5 * 60 * 1000;" in js
+
+
+def test_active_combines_with_the_kind_filters_and_leaves_all_mode_whole():
+    """Kind filtering happens inside buildGraph (HIDDEN), so the Active pass runs on an
+    already-kind-filtered graph — they combine. All mode never calls the filter."""
+    js, _css, _html = _view_files()
+    # HIDDEN is applied in buildGraph (unchanged), the Active pass after it.
+    assert 'if (n.kind !== "self" && HIDDEN.has(n.kind)) continue;' in js
+    # All mode: activeFilter is gated on MODE === "active", so All is the original graph.
+    assert 'if (MODE === "active") activeFilter(g);' in js
+
+
+def test_header_shows_n_of_m_shown_and_clicking_show_all_switches():
+    """Active's stats lead with "N of M shown · show all"; the whole thing is a button that
+    switches to All. The counts are drawn-of-total, measured around the filter pass."""
+    js, _css, _html = _view_files()
+    assert "if (MODE === \"active\" && TOTAL)" in js
+    assert 'id="show-all"' in js and "of ${TOTAL} shown · <span class=\"link\">show all</span>" in js
+    assert '$("stats").addEventListener("click", (e) => { if (e.target.closest("#show-all")) setMode("all"); });' in js
+    # SHOWN/TOTAL are the non-self node counts before and after the filter.
+    render = js[js.index("function render()") : js.index("GRAPH = fold(g);")]
+    assert "TOTAL = nonSelf();" in render and "SHOWN = nonSelf();" in render
+    assert render.index("TOTAL = nonSelf();") < render.index("activeFilter(g)") < render.index("SHOWN = nonSelf();")
+
+
+def test_a_leaving_node_fades_and_a_returning_one_cancels_the_fade():
+    """A node leaving the drawn set fades (CSS opacity) then is removed; if it re-enters
+    mid-fade the fade is cancelled rather than the node blinking."""
+    js, css, _html = _view_files()
+    assert "GRAPH.nodes.has(id) ? cancelLeave(h) : leaveNode(id, h);" in js
+    leave = js[js.index("function leaveNode(id, h)") : js.index("function cancelLeave(h)")]
+    assert 'h.g.classList.add("leaving");' in leave
+    assert "if (REDUCED) { h.g.remove(); NODE_EL.delete(id); return; }" in leave  # reduced-motion snaps
+    cancel = js[js.index("function cancelLeave(h)") :][:300]
+    assert "clearTimeout(h.leaveT);" in cancel and 'h.g.classList.remove("leaving");' in cancel
+    assert ".node.leaving { opacity: 0; pointer-events: none; }" in css
+    assert "transition: opacity" in css
+
+
+def test_active_empty_state_names_the_last_handoff_with_a_show_all_button():
+    """Idle-but-populated Active says "Nothing working right now", names the last handoff
+    from RECENT, and offers Show all. No history at all still says "Nothing delegated yet",
+    and the filtered-out message is untouched. The empty overlay can still hide."""
+    js, css, _html = _view_files()
+    # The ternary the hide-test pins is preserved, with the Active branch inserted.
+    assert '$("empty").innerHTML = !empty ? ""' in js
+    assert 'MODE === "active" && RECENT.length' in js
+    assert "? activeEmpty()" in js
+    empty = js[js.index("function activeEmpty()") : js.index("function activeEmpty()") + 700]
+    assert "<strong>Nothing working right now</strong>" in empty
+    assert "const r = RECENT.find((x) => x.to_name);" in empty
+    assert "`Last: ${esc(r.to_name)} ${verb}" in empty
+    assert 'id="empty-show-all"' in empty
+    # The no-history and filtered-out messages survive unchanged.
+    assert "Nothing delegated yet" in js and "Everything is filtered out" in js
+    # The overlay ignores pointer events, but its button must not.
+    assert ".empty button { pointer-events: auto;" in css
+    assert '$("empty").addEventListener("click", (e) => { if (e.target.closest("#empty-show-all")) setMode("all"); });' in js
