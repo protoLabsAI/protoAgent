@@ -48,6 +48,11 @@ Active keeps:
 - Their **ancestors back to self** along the chart's spanning tree. A running
   peer-owned coder therefore keeps its peer visible too.
 
+**Active never folds.** Every kept node is drawn individually. The fold grouping —
+which tucks a crowded agent's coders, subagents and models behind a single chip you
+expand on demand — runs **only in All mode**. In Active there is nothing idle left to
+tuck away (the filter already dropped it), so the whole kept set is shown node by node.
+
 The **kind-filter chips apply on top** of the mode: a hidden kind stays hidden in
 both Active and All. In Active, the header shows **“N of M shown · show all”** when
 there are delegates remaining after the kind filters. The count excludes self:
