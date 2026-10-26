@@ -276,6 +276,10 @@ const PLURAL = { coder: ["coder", "coders"], subagent: ["subagent", "subagents"]
  *  unfolded it. A leaf that is working, just finished, or selected stays out of the fold —
  *  the chart's job is to show work, so work is never hidden. Mutates `g`. */
 function fold(g) {
+  g.folded = new Map();   // folded leaf id → its chip id
+  // Active already dropped every idle node; what's left is all work, and a chip would
+  // only tuck away delegates that finished minutes ago (or tuck nothing at all).
+  if (MODE === "active") return g;
   const parent = treeParents(g);
   const leaves = new Map();   // owner → its leaf nodes, in topology order
   for (const n of g.nodes.values()) {
@@ -288,7 +292,6 @@ function fold(g) {
   const active = new Set();
   for (const f of g.flows) { active.add(f.to); active.add(f.from); }
   if (SEL) active.add(SEL);
-  g.folded = new Map();   // folded leaf id → its chip id
   for (const [owner, ls] of leaves) {
     if (ls.length <= FOLD_OVER) continue;
     const id = "fold:" + owner, open = UNFOLDED.has(owner);
@@ -630,6 +633,7 @@ function leaveNode(id, h) {
   if (REDUCED) { h.g.remove(); NODE_EL.delete(id); return; }
   if (h.leaveT) return;
   h.g.classList.add("leaving");
+  h.g.setAttribute("tabindex", "-1");   // a fading node is out of the tab order
   h.leaveT = setTimeout(() => { h.g.remove(); NODE_EL.delete(id); }, LEAVE_MS);
 }
 function cancelLeave(h) {
@@ -637,6 +641,7 @@ function cancelLeave(h) {
   clearTimeout(h.leaveT);
   h.leaveT = 0;
   h.g.classList.remove("leaving");
+  h.g.setAttribute("tabindex", "0");
 }
 function render() {
   if (!TOPO) return;
@@ -925,7 +930,10 @@ function closeDrawer() {
   $("drawer").setAttribute("aria-hidden", "true");
   document.querySelector(".stage").classList.remove("drilled");
   render();
-  NODE_EL.get(was)?.g.focus({ preventScroll: true });
+  // A node Active kept only because it was selected is fading out now: focus the mode
+  // switch instead of an element that's about to be removed.
+  if (GRAPH?.nodes.has(was)) NODE_EL.get(was)?.g.focus({ preventScroll: true });
+  else document.querySelector("#mode [aria-pressed=\"true\"]")?.focus();
 }
 $("d-close").addEventListener("click", closeDrawer);
 addEventListener("keydown", (e) => { if (e.key === "Escape" && SEL) closeDrawer(); });

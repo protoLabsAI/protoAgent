@@ -871,3 +871,23 @@ def test_active_empty_state_names_the_last_handoff_with_a_show_all_button():
     # The overlay ignores pointer events, but its button must not.
     assert ".empty button { pointer-events: auto;" in css
     assert '$("empty").addEventListener("click", (e) => { if (e.target.closest("#empty-show-all")) setMode("all"); });' in js
+
+
+def test_active_mode_never_folds_what_it_kept():
+    """Active keeps leaves that ran in the past five minutes; folding them back into a chip
+    (or drawing a chip that tucks nothing) would hide the work the mode exists to show."""
+    js, _css, _html = _view_files()
+    fold = js[js.index("function fold(g) {") : js.index("function foldLabel(n)")]
+    assert 'if (MODE === "active") return g;' in fold
+    assert fold.index("g.folded = new Map();") < fold.index('if (MODE === "active") return g;')
+
+
+def test_closing_the_drawer_never_focuses_a_node_that_is_leaving():
+    """A node kept only by the selection leaves when the drawer closes: focus goes to the
+    mode switch, and a fading node drops out of the tab order (and back in if it returns)."""
+    js, _css, _html = _view_files()
+    close = js[js.index("function closeDrawer() {") : js.index('$("d-close").addEventListener')]
+    assert "if (GRAPH?.nodes.has(was)) NODE_EL.get(was)?.g.focus({ preventScroll: true });" in close
+    assert 'document.querySelector("#mode [aria-pressed=\\"true\\"]")?.focus();' in close
+    leave = js[js.index("function leaveNode(id, h) {") : js.index("function render() {")]
+    assert 'h.g.setAttribute("tabindex", "-1");' in leave and 'h.g.setAttribute("tabindex", "0");' in leave
