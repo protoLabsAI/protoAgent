@@ -8,9 +8,9 @@ import "./app-drawer.css";
 type SurfaceItem = { id: string; label: string; icon: ReactNode };
 
 /**
- * The app menu drawer — a right-side sheet opened by the header hamburger. One drawer for
- * both modes: on desktop it holds the single Settings door + the Docs/Changelog/GitHub links;
- * on mobile it ALSO lists the surfaces (it's the mobile "more").
+ * The app menu drawer, opened on the hamburger's side: right on desktop, left on mobile. One
+ * drawer for both modes: on desktop it holds the single Settings door + the Docs/Changelog/GitHub
+ * links; on mobile it ALSO lists the surfaces (it's the mobile "more").
  */
 export function AppDrawer({
   open,
@@ -48,7 +48,7 @@ export function AppDrawer({
   // this component is just the menu content now. The e2e hook (data-testid) rides the
   // body wrapper — every spec targets body content through it, never the chrome.
   return (
-    <Drawer open={open} onClose={onClose} side="right" title="Menu" width="min(320px, 88vw)"
+    <Drawer open={open} onClose={onClose} side={mobile ? "left" : "right"} title="Menu" width="min(320px, 88vw)"
       footer={
         <div className="app-drawer-foot">
           {version ? <span className="app-drawer-version">v{version}</span> : null}
