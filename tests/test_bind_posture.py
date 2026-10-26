@@ -63,3 +63,26 @@ def test_server_boot_logs_the_public_url_warning():
 
     src = (Path(__file__).resolve().parents[1] / "src" / "server" / "__init__.py").read_text()
     assert 'auth.evaluate_public_url(args.host, os.environ.get("A2A_PUBLIC_URL"))' in src
+
+
+def _status_warnings(monkeypatch, bind: str, extra: list[str]) -> list[str]:
+    import asyncio
+
+    from operator_api import console_handlers as ch
+    from operator_api import pairing_routes as pr
+
+    monkeypatch.setattr(pr, "_BIND_HOST", [bind])
+    monkeypatch.setattr(pr, "_EXTRA_LISTEN", list(extra))
+    status = asyncio.run(ch._operator_runtime_status())
+    return status.get("warnings") or []
+
+
+def test_runtime_status_is_silent_when_a_picked_ip_also_serves_loopback(monkeypatch):
+    # #4336 S4: a tailnet-IP bind listens on 127.0.0.1 too, so the #2147 banner is false.
+    warnings = _status_warnings(monkeypatch, "100.119.239.8", ["127.0.0.1"])
+    assert not any("EXCLUDES loopback" in w for w in warnings)
+
+
+def test_runtime_status_warns_when_the_loopback_listener_did_not_come_up(monkeypatch):
+    warnings = _status_warnings(monkeypatch, "100.119.239.8", [])
+    assert any("EXCLUDES loopback" in w for w in warnings)

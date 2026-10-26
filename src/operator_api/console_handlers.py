@@ -82,14 +82,14 @@ async def _operator_runtime_status():
             warnings.append(skew)
     except Exception:  # noqa: BLE001 — status must never raise
         pass
-    # Bind posture (#2147) — a single-IP bind excludes loopback. Anyone reading this
-    # over the LAN/tailnet can still see the banner (loopback is what's cut off), and
-    # it self-clears the moment the bind widens. Pure string work, no probe.
+    # Bind posture (#2147) — a single-IP bind excluded loopback before #4336 S4; now the
+    # server also listens on 127.0.0.1 beside a picked IP, so only warn when that extra
+    # loopback listener didn't come up (mirrors the boot-time check). Pure state, no probe.
     try:
         from a2a_impl.auth import evaluate_bind_reachability
-        from operator_api.pairing_routes import bind_host
+        from operator_api.pairing_routes import _loopback_served, bind_host
 
-        posture = evaluate_bind_reachability(bind_host())
+        posture = None if _loopback_served() else evaluate_bind_reachability(bind_host())
         if posture:
             warnings.append(posture)
     except Exception:  # noqa: BLE001 — status must never raise
