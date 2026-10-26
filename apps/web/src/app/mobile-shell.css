@@ -146,11 +146,19 @@
    itself (the grid that stacks the message list over the composer), NOT the shell frame:
    padding a non-scrolling wrapper would only shorten the viewport, whereas insetting the
    surface lifts the composer clear while the message list keeps scrolling above it.
-   `max(…, 12px)` keeps a comfortable gutter where there is no home indicator. The pushed
-   rail/plugin surfaces inset their own scroll body (`.stage-body`) at the same breakpoint —
-   see theme.css. */
+   The full inset (34pt on a Face ID iPhone) left the composer visibly floating: the home
+   indicator is a 5pt bar near the bottom edge, so clear it by the inset less 12px, never under
+   an 8px gutter. The pushed rail/plugin surfaces inset their own scroll body (`.stage-body`)
+   at the same breakpoint — see theme.css.
+
+   The composer also gets a side gutter: edge to edge, its border and rounded corners ran
+   under the curved screen corners and the focus ring was clipped. Only the composer — the
+   message list keeps its own padding. */
 .mshell .chat-session-slot {
-  padding-bottom: max(env(safe-area-inset-bottom), 12px);
+  padding-bottom: max(calc(env(safe-area-inset-bottom) - 12px), 8px);
+}
+.mshell .composer-wrap {
+  padding-inline: max(env(safe-area-inset-left), 10px) max(env(safe-area-inset-right), 10px);
 }
 
 /* ── Session sheet ───────────────────────────────────────────────────────────

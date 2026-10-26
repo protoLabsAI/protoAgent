@@ -13,8 +13,8 @@ import { describe, expect, it } from "vitest";
 // swept — positioning is off this sweep's scope even though this card tokenized it by hand).
 //
 // The one deliberate carve-out is the mobile shell's home-indicator gutter
-// `padding-bottom: max(env(safe-area-inset-bottom), 12px)` (mobile-shell.css): its 12px is a
-// hardware safe-area fallback pinned verbatim by mobileBottomInset.test.ts, not a density token
+// `padding-bottom: max(calc(env(safe-area-inset-bottom) - 12px), 8px)` (mobile-shell.css): its px are a
+// hardware safe-area adjustment pinned verbatim by mobileBottomInset.test.ts, not a density token
 // candidate. `offendersIn` skips any spacing value that reads an `env(safe-area-inset*)`.
 //
 // Vite `?raw` globs rather than node:fs, for the same reason as fontSizeGuard.test.ts /
@@ -164,15 +164,15 @@ describe("no exact-scale px spacing literal in the mobile-shell/tool-calls/deleg
   });
 
   it("carves out the pinned safe-area gutter — the raw matcher sees its 12px, the sweep clears it", () => {
-    // mobile-shell.css keeps `padding-bottom: max(env(safe-area-inset-bottom), 12px)` verbatim
-    // (mobileBottomInset.test.ts pins it). The RAW matcher still flags the 12px…
+    // mobile-shell.css keeps an env(safe-area-inset-bottom) gutter with px literals beside it
+    // (mobileBottomInset.test.ts pins it). The RAW matcher still flags a 12px…
     const inset = "  padding-bottom: max(env(safe-area-inset-bottom), 12" + "px);";
     expect(spacingHits(inset).map((h) => h.value)).toEqual(["12px"]);
     // …but offendersIn skips any env(safe-area-inset*) value, so it never reaches the sweep.
     expect(offendersIn("./mobile-shell.css", ".x {\n" + inset + "\n}")).toEqual([]);
     // And the pinned declaration is genuinely still in the file (not accidentally tokenized).
     expect(CSS_SOURCES["./mobile-shell.css"]).toContain(
-      "padding-bottom: max(env(safe-area-inset-bottom), 12px)",
+      "padding-bottom: max(calc(env(safe-area-inset-bottom) - 12px), 8px)",
     );
   });
 

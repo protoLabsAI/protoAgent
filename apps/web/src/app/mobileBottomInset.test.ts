@@ -16,6 +16,8 @@ import themeCss from "./theme.css?raw";
 // The exact inset value shared by both rules. `max(…, 12px)` keeps the pre-fix 12px gutter on
 // devices with no home indicator and grows to clear the indicator where present.
 const INSET = /padding-bottom:\s*max\(\s*env\(safe-area-inset-bottom\)\s*,\s*12px\s*\)/;
+// The chat slot clears the home indicator by the inset less 12px (the full 34pt floated it).
+const CHAT_INSET = /padding-bottom:\s*max\(\s*calc\(\s*env\(safe-area-inset-bottom\)\s*-\s*12px\s*\)\s*,\s*8px\s*\)/;
 
 // Return the body of a top-level `@media` block by brace-matching, so assertions can be scoped
 // to "inside the mobile breakpoint" vs "everywhere else".
@@ -37,7 +39,15 @@ describe("mobile bottom safe-area inset (#2086)", () => {
     // `.mshell …` is scoped by the shell ancestor, which only mounts under 768px.
     const rule = /\.mshell\s+\.chat-session-slot\s*\{[^}]*\}/.exec(mobileShellCss);
     expect(rule, "expected a `.mshell .chat-session-slot` rule in mobile-shell.css").not.toBeNull();
-    expect(rule![0]).toMatch(INSET);
+    expect(rule![0]).toMatch(CHAT_INSET);
+  });
+
+  it("gives the mobile composer a side gutter so its border clears the curved screen corners", () => {
+    const rule = /\.mshell\s+\.composer-wrap\s*\{[^}]*\}/.exec(mobileShellCss);
+    expect(rule, "expected a `.mshell .composer-wrap` rule in mobile-shell.css").not.toBeNull();
+    expect(rule![0]).toMatch(
+      /padding-inline:\s*max\(\s*env\(safe-area-inset-left\)\s*,\s*10px\s*\)\s+max\(\s*env\(safe-area-inset-right\)\s*,\s*10px\s*\)/,
+    );
   });
 
   it("insets the pushed rail/plugin scroll body (.stage-body) at the mobile breakpoint", () => {
