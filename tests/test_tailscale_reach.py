@@ -143,6 +143,20 @@ def test_the_mac_app_binary_runs_in_cli_mode_without_a_terminal(tmp_path, monkey
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shebang stand-in")
+def test_a_lowercase_link_to_the_mac_app_binary_runs_in_cli_mode(tmp_path, monkeypatch):
+    # The app's "Install CLI" puts a `tailscale` link to the bundled binary on PATH.
+    monkeypatch.delenv("TERM", raising=False)
+    monkeypatch.delenv("TAILSCALE_BE_CLI", raising=False)
+    (tmp_path / "bin").mkdir()
+    link = tmp_path / "bin" / "tailscale"
+    link.symlink_to(_gui_or_cli_binary(tmp_path, "Tailscale"))
+    monkeypatch.setenv("PROTOAGENT_TAILSCALE_BIN", str(link))
+    tailscale.clear_cache()
+    st = tailscale.status()
+    assert st.available and st.running, st.error
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shebang stand-in")
 def test_a_plain_tailscale_cli_keeps_the_inherited_environment(tmp_path, monkeypatch):
     monkeypatch.delenv("TERM", raising=False)
     monkeypatch.delenv("TAILSCALE_BE_CLI", raising=False)

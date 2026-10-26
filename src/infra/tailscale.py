@@ -128,8 +128,9 @@ def _cli_env(exe: str) -> dict[str, str] | None:
     """The macOS app's bundled binary is the GUI too: with no ``TERM`` (a desktop app
     launched from the Dock or Finder) it tries to start the GUI and fails with "The
     Tailscale GUI failed to start" instead of answering. ``TAILSCALE_BE_CLI=1`` forces
-    CLI mode. Other installs get the inherited environment unchanged."""
-    if os.path.basename(exe) != "Tailscale":
+    CLI mode. Resolved through links, so the app's "Install CLI" ``tailscale`` link to it
+    counts too. Other installs get the inherited environment unchanged."""
+    if os.path.basename(os.path.realpath(exe)) != "Tailscale":
         return None
     return {**os.environ, "TAILSCALE_BE_CLI": "1"}
 
