@@ -653,7 +653,8 @@ def _public_url(value) -> str:
         raise ValueError(f"network.public_url is not a valid URL ({exc})") from None
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ValueError(f"network.public_url must start with http:// or https:// and name a host (got {raw!r})")
-    if parts.username or parts.password or parts.query or parts.fragment:
+    # The delimiter itself, not just a non-empty part: `https://box?` would put `/a2a` in the query.
+    if parts.username or parts.password or "?" in raw or "#" in raw:
         raise ValueError(f"network.public_url must not carry a user name, query or fragment (got {raw!r})")
     return raw
 

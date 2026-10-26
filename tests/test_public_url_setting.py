@@ -67,7 +67,7 @@ def test_a_cleared_setting_drops_the_seeded_value_on_restart(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "bad", ["box.tail1234.ts.net", "ftp://box.example", "https://u:p@box.example", "https://box.example/?x=1"]
+    "bad", ["box.tail1234.ts.net", "ftp://box.example", "https://u:p@box.example", "https://box.example/?x=1", "https://box.example?"]
 )
 def test_a_malformed_url_is_refused(tmp_path, bad):
     ok, err = validate_flat({"network.public_url": bad})
