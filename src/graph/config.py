@@ -632,6 +632,33 @@ def _public_console_url(value) -> str:
     return normalize_public_console_url(value)
 
 
+def _public_url(value) -> str:
+    """``network.public_url`` (#4336) normalised to ``http(s)://host[:port][/path]``, no
+    trailing ``/``. Raises ``ValueError`` naming the key for anything else: it becomes the agent
+    card's URL and the base of every absolute link, so a bare host or a typo must fail loudly at
+    load rather than advertise a broken address."""
+    from urllib.parse import urlsplit
+
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("network.public_url must be a string like https://box.tailnet.ts.net")
+    raw = value.strip().rstrip("/")
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        parts.port  # raises ValueError on a non-numeric or out-of-range port
+    except ValueError as exc:
+        raise ValueError(f"network.public_url is not a valid URL ({exc})") from None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(f"network.public_url must start with http:// or https:// and name a host (got {raw!r})")
+    # The delimiter itself, not just a non-empty part: `https://box?` would put `/a2a` in the query.
+    if parts.username or parts.password or "?" in raw or "#" in raw:
+        raise ValueError(f"network.public_url must not carry a user name, query or fragment (got {raw!r})")
+    return raw
+
+
 def _non_negative_int(value, default: int) -> int:
     """A whole number ≥ 0, else ``default``. ``devices.idle_ttl_days`` (ADR 0121 D2): a
     hand-edited negative, fractional-string or junk value falls back to the default rather
@@ -1529,6 +1556,12 @@ class LangGraphConfig:
     # pairs through it. Agent-scoped (each agent on a box has its own URL). Validated at load
     # (https, origin only, not loopback); "" = nothing public. env: PROTOAGENT_PUBLIC_CONSOLE_URL.
     public_console_url: str = ""
+    # The address other agents and clients reach this agent at (``A2A_PUBLIC_URL``): the
+    # agent card's interface URL and every absolute link an answer carries (media, console
+    # links). Seeded into ``A2A_PUBLIC_URL`` at boot when that env var is unset, so a desktop
+    # install can set it without an env var; an explicit env value wins. Per agent: a fleet
+    # member gets ``{hub}/agents/<id>`` from the supervisor instead. "" = advertise loopback.
+    public_url: str = ""
     # Idle expiry for ``device``-scope tokens (ADR 0121 D2/D5): a paired phone unused for longer
     # than this many days stops authenticating and shows "Expired" in Devices. ``0`` = never.
     # Full-scope and legacy device rows never expire. Read per request by
@@ -2344,6 +2377,7 @@ class LangGraphConfig:
             public_console_url=_public_console_url(
                 network.get("public_console_url", _env_default("PROTOAGENT_PUBLIC_CONSOLE_URL", ""))
             ),
+            public_url=_public_url(network.get("public_url")),
             device_idle_ttl_days=_non_negative_int(
                 devices_cfg.get("idle_ttl_days", cls.device_idle_ttl_days), cls.device_idle_ttl_days
             ),

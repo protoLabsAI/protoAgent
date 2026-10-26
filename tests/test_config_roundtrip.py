@@ -105,6 +105,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "bind_host": "127.0.0.1",
     "network_trusted_proxies": [],
     "public_console_url": "",
+    "public_url": "",
     "device_idle_ttl_days": 30,
     "cache_warming_enabled": False,
     "cache_warming_interval_seconds": 3300,

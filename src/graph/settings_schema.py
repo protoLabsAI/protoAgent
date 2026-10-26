@@ -1574,6 +1574,23 @@ FIELDS: list[Field] = [
         "console private. Env fallback: PROTOAGENT_PUBLIC_CONSOLE_URL.",
         credential_plane=True,
     ),
+    # A2A_PUBLIC_URL as a setting (#4336): the desktop app has no way to set an env var for
+    # its sidecar. Seeded at boot, so it needs a restart. On the credential plane: it is the
+    # card URL peers dial with their bearer, so a paired phone or the agent must not move it.
+    Field(
+        "network.public_url",
+        "public_url",
+        "Public URL",
+        "string",
+        "Network",
+        "The address other agents and your other devices reach this agent at, such as "
+        "https://box.tailnet.ts.net (Tailscale HTTPS) or http://100.x.y.z:7870. The agent card "
+        "advertises it, and links in answers (images, files, console links) use it instead of "
+        "127.0.0.1, so they open on a phone. Fleet members advertise <this>/agents/<id>. Leave "
+        "empty on a machine only reached locally. Env A2A_PUBLIC_URL wins when set.",
+        restart=True,
+        credential_plane=True,
+    ),
     # Idle expiry for paired phones (ADR 0121 D2/D5). On the credential plane by section
     # (``devices.*``), so a device-scope caller can't lengthen its own lifetime.
     Field(
@@ -2559,6 +2576,13 @@ def validate_flat(updates: dict[str, Any], hidden: list[str] | None = None) -> t
 
             try:
                 normalize_public_console_url(val)
+            except ValueError as exc:
+                return False, str(exc)
+        if key == "network.public_url":
+            from graph.config import _public_url
+
+            try:
+                _public_url(val)
             except ValueError as exc:
                 return False, str(exc)
     return True, None
