@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import errno
 import json
+import sys
 
 import pytest
 
@@ -110,6 +111,42 @@ def test_absent_cli_is_graceful():
 
 def test_a_hung_cli_is_bounded_and_graceful(monkeypatch):
     monkeypatch.setattr(tailscale, "_run", lambda args, timeout: (-2, "", ""))
+    tailscale.clear_cache()
+    assert not tailscale.status().available
+
+
+def _gui_or_cli_binary(tmp_path, name: str) -> str:
+    """A stand-in for the macOS app binary: GUI mode (and no JSON) unless it's told it's a CLI."""
+    exe = tmp_path / name  # Python, not sh: macOS /bin/sh invents TERM=dumb when it's unset
+    exe.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "if os.environ.get('TAILSCALE_BE_CLI') or os.environ.get('TERM'):\n"
+        '    print(\'{"BackendState": "Running"}\')\n'
+        "else:\n"
+        "    print('The Tailscale GUI failed to start', file=sys.stderr)\n"
+    )
+    exe.chmod(0o755)
+    return str(exe)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shebang stand-in")
+def test_the_mac_app_binary_runs_in_cli_mode_without_a_terminal(tmp_path, monkeypatch):
+    # A desktop app launched from the Dock has no TERM; the bundled binary then tries to
+    # start the GUI and prints no JSON, so the Devices panel said Tailscale was missing.
+    monkeypatch.delenv("TERM", raising=False)
+    monkeypatch.delenv("TAILSCALE_BE_CLI", raising=False)
+    monkeypatch.setenv("PROTOAGENT_TAILSCALE_BIN", _gui_or_cli_binary(tmp_path, "Tailscale"))
+    tailscale.clear_cache()
+    st = tailscale.status()
+    assert st.available and st.running, st.error
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shebang stand-in")
+def test_a_plain_tailscale_cli_keeps_the_inherited_environment(tmp_path, monkeypatch):
+    monkeypatch.delenv("TERM", raising=False)
+    monkeypatch.delenv("TAILSCALE_BE_CLI", raising=False)
+    monkeypatch.setenv("PROTOAGENT_TAILSCALE_BIN", _gui_or_cli_binary(tmp_path, "tailscale"))
     tailscale.clear_cache()
     assert not tailscale.status().available
 
