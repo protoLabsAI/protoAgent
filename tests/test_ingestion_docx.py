@@ -500,12 +500,23 @@ def test_a_hostile_docx_cannot_drive_memory_past_the_budget(tmp_path):
 
 def _rss_after_extractions(data: bytes, tmp_path, *, repeats: int) -> int:
     """Resident size (MiB) of a fresh interpreter after extracting ``data`` ``repeats``
-    times — the footprint left behind, which a peak-only reading can't show."""
+    times — the footprint left behind, which a peak-only reading can't show.
+    Zero repeats measures the import-only baseline with the same payload loaded."""
+    return _docx_rss_samples(data, tmp_path, repeats=repeats)[-1]
+
+
+def _docx_rss_samples(data: bytes, tmp_path, *, repeats: int, collect: bool = True) -> tuple[int, ...]:
+    """MiB at import, before the first release, and after each extraction.
+
+    Sample the first live tree before production collects it: the freed residue after
+    one extraction is allocator-dependent and isn't a document's working set.
+    No test-side collection or allocator trimming may hide abandoned trees.
+    """
     path = tmp_path / f"resident-{repeats}.docx"
     path.write_bytes(data)
     program = textwrap.dedent(
         """
-        import os, subprocess, sys
+        import gc, os, subprocess, sys
         import docx  # noqa: F401
         from ingestion import engine
 
@@ -517,24 +528,39 @@ def _rss_after_extractions(data: bytes, tmp_path, *, repeats: int) -> int:
                 return int(subprocess.check_output(["ps", "-o", "rss=", "-p", str(os.getpid())]).strip())
 
         payload = open(sys.argv[1], "rb").read()
+        samples = [resident_kb() // 1024]
+        release = engine._release_docx_memory
+
+        def measured_release(nodes_used):
+            if len(samples) == 1:
+                samples.append(resident_kb() // 1024)
+            release(nodes_used)
+
+        engine._release_docx_memory = measured_release
+        # Only the explicit production collection should reclaim these graphs.
+        gc.disable()
+        if sys.argv[3] == "0":
+            gc.collect = lambda: 0  # negative control: production reaches a no-op
         for _ in range(int(sys.argv[2])):
             try:
                 engine.extract_bytes("probe.docx", payload)
             except engine.IngestionError:
                 pass
-        print(resident_kb() // 1024)
+            samples.append(resident_kb() // 1024)
+        print(*samples)
         """
     )
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")}
+    root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root / "src"), str(root)))}
     done = subprocess.run(
-        [sys.executable, "-c", program, str(path), str(repeats)],
+        [sys.executable, "-c", program, str(path), str(repeats), str(int(collect))],
         capture_output=True,
         text=True,
         timeout=600,
         env=env,
     )
     assert done.returncode == 0, f"probe failed: {done.stderr[-800:]}"
-    return int(done.stdout.split()[0])
+    return tuple(map(int, done.stdout.split()))
 
 
 def _header_declared_docx() -> bytes:
@@ -660,7 +686,31 @@ def test_concurrent_extractions_cannot_multiply_the_memory_ceiling(monkeypatch):
     assert peak[0] <= 2, f"{peak[0]} of {len(threads)} extractions ran at once"
 
 
-def test_repeated_extractions_do_not_accumulate_memory(tmp_path):
+def test_repeated_extractions_release_document_graphs(monkeypatch):
+    """Check live trees independently of the allocator retaining freed RSS pages."""
+    import weakref
+
+    docx = _docx_lib()
+    original = docx.Document
+    parts = []
+
+    def tracked_document(*args, **kwargs):
+        document = original(*args, **kwargs)
+        parts.append(weakref.ref(document.part))
+        return document
+
+    monkeypatch.setattr(docx, "Document", tracked_document)
+    data = _worst_accepted_docx()
+    assert engine._repack_docx(data)[2] >= engine._DOCX_GC_NODES
+    for _ in range(6):
+        extract_bytes("probe.docx", data)
+        # Do not collect here: the production release must have reclaimed the graph.
+        assert all(part() is None for part in parts)
+    assert len(parts) == 6
+
+
+@pytest.mark.parametrize("collect", [True, False], ids=["production", "collection-disabled"])
+def test_repeated_extractions_do_not_accumulate_memory(tmp_path, collect):
     """python-docx's package graph is cyclic, so a document's tree is only freed by a
     CYCLIC collection — and CPython's GC counts objects, not the megabytes libxml2 holds
     behind them, so nothing forced one: six worst-case extractions grew RSS to ~900 MiB
@@ -673,13 +723,27 @@ def test_repeated_extractions_do_not_accumulate_memory(tmp_path):
     # CURRENT RSS, not ru_maxrss: a high-water mark can't show memory coming back, and
     # where the interpreter's own start-up peak already covers one extraction its delta
     # reads 0 (CI's Linux runners). What matters here is the footprint left behind.
-    after_one = _rss_after_extractions(data, tmp_path, repeats=1)
-    after_six = _rss_after_extractions(data, tmp_path, repeats=6)
+    # Compare against ONE LIVE document, not the allocator's residue after freeing
+    # it. Linux CI left 37 MiB after one and 74 after six (28 MiB imports), even
+    # though the weakref regression above showed the graphs were reclaimed. Taking
+    # imports away made that unstable residue ratio worse: 46 / 9 instead of 74 / 37.
+    # Use the same process for the baseline and all samples, keeping the 2x bound
+    # on one document's measured working set above imports. Six uncollected trees
+    # must still exceed it; the separate peak test also caps the working set itself.
+    baseline, live_one, *retained = _docx_rss_samples(data, tmp_path, repeats=6, collect=collect)
+    working_set = live_one - baseline
+    growth = max(retained) - baseline
 
-    assert after_six <= 2 * after_one, (
-        f"six extractions left {after_six} MiB resident vs {after_one} MiB after one — "
-        "the per-document tree is accumulating again"
-    )
+    assert working_set > 0, f"one live document left no measurable growth above {baseline} MiB baseline"
+    # Exercise the very same assertion with production collection disabled. This
+    # guards against a future probe/bound change accidentally masking a real leak.
+    expected = contextlib.nullcontext() if collect else pytest.raises(AssertionError, match="accumulating again")
+    with expected:
+        assert growth <= 2 * working_set, (
+            f"extractions left {retained} MiB resident; first live document {live_one} MiB "
+            f"({baseline} MiB import baseline; retained growth {growth} vs working set {working_set} MiB) — "
+            "the per-document tree is accumulating again"
+        )
 
 
 def test_an_upload_over_the_wire_ceiling_is_refused_before_unzipping(monkeypatch):
