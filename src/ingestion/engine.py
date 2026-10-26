@@ -594,6 +594,8 @@ def _release_docx_memory(nodes_used: int) -> None:
 
     Collection releases the graphs, but the native allocator may retain freed pages:
     current RSS need not return to its import-only baseline after each extraction.
+    In particular, the residue after one collect is not a stable measure of a
+    document's working set; memory regression probes must distinguish the two.
 
     The debt is CUMULATIVE rather than per-document. A threshold on one document's size
     left everything under it behaving exactly as before — ~95k units is an ordinary
