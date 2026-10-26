@@ -1,6 +1,7 @@
 import { ArrowLeftRight, ChevronDown, ChevronsLeft, ChevronsRight, ChevronUp, Download, Eye, EyeOff, Pencil, Plus, Puzzle, RefreshCw, Share2, SlidersHorizontal, SquareArrowOutUpRight, Trash2, X } from "lucide-react";
 
 import { openView } from "../app/usePaletteRegistry";
+import { openViewWindow } from "../lib/viewWindow";
 import { useUI } from "../state/uiStore";
 import { registerContextMenu } from "./registry";
 import type { MenuEntry } from "./types";
@@ -27,6 +28,7 @@ registerContextMenu({
     pluginBuiltin?: boolean;
     pluginRemovable?: boolean;
     pluginUpdatable?: boolean;
+    viewLabel?: string;
   }): MenuEntry[] => {
     if (!ctx) return [];
     const ui = useUI.getState();
@@ -54,6 +56,15 @@ registerContextMenu({
     // render with no rail icon.
     // Built-in / uninstall / update, all gated on the plugin's origin, cluster under Configure.
     const manage: MenuEntry[] = [];
+    // Pop a plugin view out into its own window (spike) — the docked copy stays put.
+    if (ctx.id.startsWith("plugin:")) {
+      manage.push({
+        id: "open-window",
+        label: "Open in new window",
+        icon: <SquareArrowOutUpRight size={14} />,
+        run: () => void openViewWindow(ctx.id, ctx.viewLabel),
+      });
+    }
     if (ctx.pluginId) {
       const pid = ctx.pluginId;
       const pname = ctx.pluginName ?? ctx.pluginId;

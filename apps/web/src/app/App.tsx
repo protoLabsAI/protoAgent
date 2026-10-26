@@ -1137,6 +1137,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
             pluginBuiltin: rec?.builtin,
             pluginRemovable: removable,
             pluginUpdatable: updatable,
+            viewLabel: allPluginViews.find((v) => v.key === id)?.label,
           });
         }}
         onRailReorder={(next) => {

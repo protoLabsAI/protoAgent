@@ -1,0 +1,44 @@
+/* A popped-out plugin view (ViewWindow.tsx): a thin title bar over one full-bleed surface. */
+.view-window {
+  height: 100vh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--pl-color-bg);
+  color: var(--pl-color-fg);
+}
+.view-window-bar {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--pl-space-3);
+  border-bottom: 1px solid var(--pl-color-border);
+  background: var(--pl-color-bg-raised);
+  user-select: none;
+}
+/* macOS desktop: the native traffic lights float top-left over the bar. */
+.view-window.is-tauri-mac .view-window-bar {
+  padding-left: 76px;
+}
+.view-window-title {
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.view-window-body {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.view-window-body > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.view-window-empty {
+  display: grid;
+  place-items: center;
+  color: var(--pl-color-fg-subtle);
+  font-size: var(--pl-font-size-sm);
+}
