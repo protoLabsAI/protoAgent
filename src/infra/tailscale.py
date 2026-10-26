@@ -124,6 +124,16 @@ def cli_path() -> str | None:
     return None
 
 
+def _cli_env(exe: str) -> dict[str, str] | None:
+    """The macOS app's bundled binary is the GUI too: with no ``TERM`` (a desktop app
+    launched from the Dock or Finder) it tries to start the GUI and fails with "The
+    Tailscale GUI failed to start" instead of answering. ``TAILSCALE_BE_CLI=1`` forces
+    CLI mode. Other installs get the inherited environment unchanged."""
+    if os.path.basename(exe) != "Tailscale":
+        return None
+    return {**os.environ, "TAILSCALE_BE_CLI": "1"}
+
+
 def _run(args: list[str], timeout: float) -> tuple[int, str, str]:
     """Run the tailscale CLI → ``(returncode, stdout, stderr)``.
 
@@ -140,6 +150,7 @@ def _run(args: list[str], timeout: float) -> tuple[int, str, str]:
             text=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
+            env=_cli_env(exe),
         )
     except subprocess.TimeoutExpired as exc:
         out = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
