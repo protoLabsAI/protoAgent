@@ -42,7 +42,20 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 .stat b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
 .stat.hot { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
 .stat.hot b { color: var(--accent); }
+/* "N of M shown · show all" is a real button — a stat you can click back to the full chart. */
+.stat-mode { font: inherit; font-size: 12px; cursor: pointer; }
+.stat-mode .link { color: var(--accent); font-weight: 600; }
+.stat-mode:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.stat-mode:focus-visible { outline: 2px solid var(--pl-color-focus, var(--accent)); outline-offset: 1px; }
 .spacer { flex: 1; }
+/* The Active / All switch: a segmented pair, one pressed, using the chip/stat tokens. */
+.seg { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-subtle); }
+.seg-btn { font: inherit; font-size: 11px; padding: 3px 11px; border: none; border-radius: 999px; cursor: pointer;
+  background: none; color: var(--muted); }
+.seg-btn:hover { color: var(--fg); }
+.seg-btn[aria-pressed="true"] { background: var(--bg-raised); color: var(--fg);
+  box-shadow: 0 1px 2px color-mix(in srgb, #000 22%, transparent); }
+.seg-btn:focus-visible { outline: 2px solid var(--pl-color-focus, var(--accent)); outline-offset: 1px; }
 .filters { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { font: inherit; font-size: 11px; padding: 3px 10px; border-radius: 999px; cursor: pointer;
   background: none; border: 1px solid var(--border); color: var(--fg); display: inline-flex; gap: 6px; align-items: center; }
@@ -71,6 +84,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 .empty[hidden] { display: none; }
 .empty strong { color: var(--fg); font-size: 14px; font-weight: 600; }
 .empty code { font-family: var(--mono); color: var(--fg); background: var(--bg-raised); padding: 1px 5px; border-radius: 5px; }
+/* The overlay ignores pointer events so a pan passes through; its Show all button must not. */
+.empty button { pointer-events: auto; margin-top: 4px; }
 
 /* edges */
 .edge { fill: none; stroke: var(--border-strong); stroke-width: 1.4; transition: stroke .3s, opacity .3s; }
@@ -89,7 +104,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 .spark { fill: var(--accent); filter: drop-shadow(0 0 6px var(--accent)); }
 
 /* nodes */
-.node { cursor: pointer; outline: none; }
+.node { cursor: pointer; outline: none; transition: opacity .3s var(--ease); }
+/* Active drops a node when its work ends — fade it out (JS removes it once faded). */
+.node.leaving { opacity: 0; pointer-events: none; }
 .node .card { fill: var(--bg-raised); stroke: var(--border); stroke-width: 1; transition: stroke .3s, fill .3s; }
 .node:hover .card { stroke: var(--border-strong); }
 .node:focus-visible .card { stroke: var(--pl-color-focus, var(--accent)); stroke-width: 2; }
@@ -220,6 +237,7 @@ dl.facts dd.mono { font-family: var(--mono); font-size: 11.5px; }
   .flow { animation: none; stroke-dasharray: none; }
   .node.busy .halo, .live[data-state="live"] i, .d-ring.busy, .spin { animation: none; }
   .node.entering, .row.fresh, .node.landed-ok .card, .node.landed-failed .card { animation: none; }
+  .node { transition: none; }   /* a leaving node is removed outright (orgchart.js) */
   .drawer.open { animation: none; }
 }
 /* Docked beside chat (the right rail) the chart is narrow: the graph keeps the room and the

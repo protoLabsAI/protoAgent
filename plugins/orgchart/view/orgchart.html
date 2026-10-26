@@ -16,6 +16,10 @@
     </div>
     <div class="stats" id="stats" aria-live="polite"></div>
     <div class="spacer"></div>
+    <div class="seg" id="mode" role="group" aria-label="Which delegates to show">
+      <button class="seg-btn" type="button" data-mode="active" aria-pressed="true">Active</button>
+      <button class="seg-btn" type="button" data-mode="all" aria-pressed="false">All</button>
+    </div>
     <div class="filters" id="filters" role="group" aria-label="Show node kinds"></div>
     <button class="pl-btn pl-btn--sm pl-btn--ghost" type="button" id="refresh" title="Drop caches and re-crawl the fleet">Refresh</button>
   </header>

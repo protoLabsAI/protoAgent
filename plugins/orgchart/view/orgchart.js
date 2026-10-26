@@ -94,6 +94,18 @@ const openStore = {
   set(v) { try { localStorage.setItem(OPEN_KEY, JSON.stringify([...v])); } catch { /* not fatal */ } },
 };
 let UNFOLDED = openStore.get();
+// Active (default) draws only the delegates that are working right now (plus whatever is
+// needed to place them); All draws the whole chart. Remembered like the other choices.
+const MODE_KEY = "orgchart.mode";
+const modeStore = {
+  get() { try { return localStorage.getItem(MODE_KEY) === "all" ? "all" : "active"; } catch { return "active"; } },
+  set(v) { try { localStorage.setItem(MODE_KEY, v); } catch { /* not fatal */ } },
+};
+let MODE = modeStore.get();   // "active" | "all"
+let SHOWN = 0, TOTAL = 0;     // Active header: delegates drawn of the fleet's total
+// A node whose last run is no older than this stays in Active even after its edge clears,
+// so a just-finished coder lingers instead of blinking out the instant work ends.
+const ACTIVE_MS = 5 * 60 * 1000;
 // More leaves than this under one agent fold into a chip; this many or fewer just draw.
 const FOLD_OVER = 2;
 
@@ -233,6 +245,30 @@ function treeParents(g) {
   return parent;
 }
 
+/** Active mode (the default): keep only self, the nodes a live flow touches, nodes whose
+ *  last run is within ACTIVE_MS, the selected node — and every ancestor on their path back
+ *  to self via `treeParents` (so a peer keeps its slot while one of its coders runs). Edges
+ *  into or out of a dropped node go too. Mutates `g`; runs before `fold()`, so folding and
+ *  the kind-filter chips still combine on top. */
+function activeFilter(g) {
+  const parent = treeParents(g);
+  const keep = new Set();
+  // Walk a kept node up to self, marking each ancestor the spanning tree knows.
+  const seed = (id) => { let c = id; while (c != null && !keep.has(c)) { keep.add(c); c = parent.has(c) ? parent.get(c) : null; } };
+  seed(SELF);
+  for (const f of g.flows) { seed(f.from); seed(f.to); }
+  if (SEL && g.nodes.has(SEL)) seed(SEL);
+  const cutoff = now() - ACTIVE_MS / 1000;   // last_at is an ISO stamp, read like ago()
+  for (const n of g.nodes.values()) {
+    const t = n.work?.last_at ? Date.parse(n.work.last_at) / 1000 : NaN;
+    if (isFinite(t) && t >= cutoff) seed(n.id);
+  }
+  for (const id of [...g.nodes.keys()]) if (!keep.has(id)) g.nodes.delete(id);
+  for (const [k, e] of [...g.edges]) if (!g.nodes.has(e.from) || !g.nodes.has(e.to)) g.edges.delete(k);
+  g.flows = g.flows.filter((f) => g.nodes.has(f.from) && g.nodes.has(f.to));
+  return g;
+}
+
 const isLeaf = (n) => n && n.kind !== "self" && n.kind !== "agent" && n.kind !== "fold";
 const PLURAL = { coder: ["coder", "coders"], subagent: ["subagent", "subagents"], model: ["model", "models"] };
 
@@ -240,6 +276,10 @@ const PLURAL = { coder: ["coder", "coders"], subagent: ["subagent", "subagents"]
  *  unfolded it. A leaf that is working, just finished, or selected stays out of the fold —
  *  the chart's job is to show work, so work is never hidden. Mutates `g`. */
 function fold(g) {
+  g.folded = new Map();   // folded leaf id → its chip id
+  // Active already dropped every idle node; what's left is all work, and a chip would
+  // only tuck away delegates that finished minutes ago (or tuck nothing at all).
+  if (MODE === "active") return g;
   const parent = treeParents(g);
   const leaves = new Map();   // owner → its leaf nodes, in topology order
   for (const n of g.nodes.values()) {
@@ -252,7 +292,6 @@ function fold(g) {
   const active = new Set();
   for (const f of g.flows) { active.add(f.to); active.add(f.from); }
   if (SEL) active.add(SEL);
-  g.folded = new Map();   // folded leaf id → its chip id
   for (const [owner, ls] of leaves) {
     if (ls.length <= FOLD_OVER) continue;
     const id = "fold:" + owner, open = UNFOLDED.has(owner);
@@ -370,7 +409,7 @@ function ensureNode(n) {
   g.addEventListener("click", act);
   g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); act(); } });
   g.addEventListener("animationend", (e) => { if (e.animationName === "node-in") g.classList.remove("entering"); });
-  h = { g, glyph, name, meta, tag, bar, count, countText, sig: "", cur: null, from: null, to: null, t0: 0 };
+  h = { g, glyph, name, meta, tag, bar, count, countText, sig: "", cur: null, from: null, to: null, t0: 0, leaveT: 0 };
   NODE_EL.set(n.id, h);
   return h;
 }
@@ -581,20 +620,44 @@ const zoomCentre = (f) => { const { w, h } = viewSize(); zoomAt(f, w / 2, h / 2)
     if (e.key === "+" || e.key === "=") zoomCentre(K_STEP);
     else if (e.key === "-" || e.key === "_") zoomCentre(1 / K_STEP);
     else if (e.key === "0") fitCam();
+    else if (e.key === "a" || e.key === "A") toggleMode();
   });
 }
 
 // ── render ──────────────────────────────────────────────────────────────────────────
 let GRAPH = null, LAYOUT = null;
+// Fading a node out (opacity transition) then removing it — Active drops nodes as work
+// ends, and a blink would read as the chart glitching. reduced-motion snaps instead.
+const LEAVE_MS = 340;
+function leaveNode(id, h) {
+  if (REDUCED) { h.g.remove(); NODE_EL.delete(id); return; }
+  if (h.leaveT) return;
+  h.g.classList.add("leaving");
+  h.g.setAttribute("tabindex", "-1");   // a fading node is out of the tab order
+  h.leaveT = setTimeout(() => { h.g.remove(); NODE_EL.delete(id); }, LEAVE_MS);
+}
+function cancelLeave(h) {
+  if (!h.leaveT) return;
+  clearTimeout(h.leaveT);
+  h.leaveT = 0;
+  h.g.classList.remove("leaving");
+  h.g.setAttribute("tabindex", "0");
+}
 function render() {
   if (!TOPO) return;
-  GRAPH = fold(buildGraph());
+  const g = buildGraph();
+  const nonSelf = () => g.nodes.size - (g.nodes.has(SELF) ? 1 : 0);
+  TOTAL = nonSelf();
+  if (MODE === "active") activeFilter(g);
+  SHOWN = nonSelf();
+  GRAPH = fold(g);
   LAYOUT = layout(GRAPH);
   // Until the operator moves the camera, it keeps the whole chart in view as it changes.
   CAM.user ? applyCam() : fitCam();
   const t = performance.now();
 
-  for (const [id, h] of NODE_EL) if (!GRAPH.nodes.has(id)) { h.g.remove(); NODE_EL.delete(id); }
+  // A node leaving the drawn set fades out, then goes; one that re-enters mid-fade is kept.
+  for (const [id, h] of NODE_EL) GRAPH.nodes.has(id) ? cancelLeave(h) : leaveNode(id, h);
   for (const n of GRAPH.nodes.values()) {
     const h = ensureNode(n);
     const p = LAYOUT.pos.get(n.id);
@@ -635,14 +698,31 @@ function render() {
 
   // Empty because the filters hid everything is a different story from a fleet that has
   // delegated nothing; and clear the text when it hides, so it can't linger over the graph.
+  // In Active an idle-but-populated fleet gets its own line (nothing's wrong, just quiet).
   const empty = GRAPH.nodes.size <= 1 && LIVE.size === 0;
   $("empty").hidden = !empty;
   $("empty").innerHTML = !empty ? ""
     : HIDDEN.size && (TOPO?.nodes || []).some((n) => n.kind !== "self")
       ? "<strong>Everything is filtered out</strong><span>Turn a node type back on in the filters above to see the chart.</span>"
-      : "<strong>Nothing delegated yet</strong><span>This chart lights up as work flows: try <code>@claude-code</code> in chat, or ask the agent to hand something off.</span>";
+      : MODE === "active" && RECENT.length
+        ? activeEmpty()
+        : "<strong>Nothing delegated yet</strong><span>This chart lights up as work flows: try <code>@claude-code</code> in chat, or ask the agent to hand something off.</span>";
   renderStats();
   kick();
+}
+
+/** Active's quiet state: nothing is running, but the fleet has a history — name the last
+ *  handoff and offer the way back to the full chart. */
+function activeEmpty() {
+  const r = RECENT.find((x) => x.to_name);
+  let last = "";
+  if (r) {
+    const verb = r.outcome === "failed" ? "failed" : r.outcome === "cancelled" ? "cancelled" : "finished";
+    const when = ago(r.at);
+    last = `Last: ${esc(r.to_name)} ${verb}${when ? " " + when : ""}`;
+  }
+  return `<strong>Nothing working right now</strong>${last ? `<span>${last}</span>` : ""}`
+    + `<button class="pl-btn pl-btn--sm pl-btn--ghost" type="button" id="empty-show-all">Show all</button>`;
 }
 
 // One loop for every moving part: node tweens, the edges glued to them, and the sparks.
@@ -694,6 +774,9 @@ function renderStats() {
     `<span class="stat"><b>${today.length}</b>handoffs today</span>`,
   ];
   if (priced.length) parts.push(`<span class="stat"><b>${money(spend)}</b>spent today</span>`);
+  // Active names how much of the fleet it is hiding, with the way back to the whole chart.
+  if (MODE === "active" && TOTAL)
+    parts.unshift(`<button class="stat stat-mode" type="button" id="show-all"><b>${SHOWN}</b>of ${TOTAL} shown · <span class="link">show all</span></button>`);
   $("stats").innerHTML = parts.join("");
 }
 
@@ -724,6 +807,27 @@ $("filters").addEventListener("click", (e) => {
   renderFilters();
   render();
 });
+
+// ── Active / All mode switch ──────────────────────────────────────────────────────────
+function renderMode() {
+  for (const b of document.querySelectorAll("#mode [data-mode]")) b.setAttribute("aria-pressed", String(b.dataset.mode === MODE));
+}
+function setMode(m) {
+  if ((m !== "active" && m !== "all") || m === MODE) return;
+  MODE = m;
+  modeStore.set(MODE);
+  renderMode();
+  // A mode change reframes the chart: hand the camera back and fit the new picture.
+  CAM.user = false;
+  render();
+  fitCam();
+}
+const toggleMode = () => setMode(MODE === "active" ? "all" : "active");
+$("mode").addEventListener("click", (e) => { const b = e.target.closest("button[data-mode]"); if (b) setMode(b.dataset.mode); });
+// "N of M shown · show all" in the header stats, and the empty-state button, both go to All.
+$("stats").addEventListener("click", (e) => { if (e.target.closest("#show-all")) setMode("all"); });
+$("empty").addEventListener("click", (e) => { if (e.target.closest("#empty-show-all")) setMode("all"); });
+renderMode();
 
 // ── activity feed ───────────────────────────────────────────────────────────────────
 const FEED_MAX = 40;
@@ -826,7 +930,10 @@ function closeDrawer() {
   $("drawer").setAttribute("aria-hidden", "true");
   document.querySelector(".stage").classList.remove("drilled");
   render();
-  NODE_EL.get(was)?.g.focus({ preventScroll: true });
+  // A node Active kept only because it was selected is fading out now: focus the mode
+  // switch instead of an element that's about to be removed.
+  if (GRAPH?.nodes.has(was)) NODE_EL.get(was)?.g.focus({ preventScroll: true });
+  else document.querySelector("#mode [aria-pressed=\"true\"]")?.focus();
 }
 $("d-close").addEventListener("click", closeDrawer);
 addEventListener("keydown", (e) => { if (e.key === "Escape" && SEL) closeDrawer(); });
