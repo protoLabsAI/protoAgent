@@ -45,7 +45,9 @@ describe("mobile bottom safe-area inset (#2086)", () => {
   it("gives the mobile composer a side gutter so its border clears the curved screen corners", () => {
     const rule = /\.mshell\s+\.composer-wrap\s*\{[^}]*\}/.exec(mobileShellCss);
     expect(rule, "expected a `.mshell .composer-wrap` rule in mobile-shell.css").not.toBeNull();
-    expect(rule![0]).toMatch(/padding-inline:\s*max\(\s*env\(safe-area-inset-left\)/);
+    expect(rule![0]).toMatch(
+      /padding-inline:\s*max\(\s*env\(safe-area-inset-left\)\s*,\s*10px\s*\)\s+max\(\s*env\(safe-area-inset-right\)\s*,\s*10px\s*\)/,
+    );
   });
 
   it("insets the pushed rail/plugin scroll body (.stage-body) at the mobile breakpoint", () => {
