@@ -118,15 +118,28 @@ from server.settings_apply import (  # noqa: E402,F401 — re-export (#3848); pa
 
 
 
+# The value seed_public_url last wrote. The in-app restart is an ``execv`` that keeps the
+# env, so without this marker a seeded URL would read as "explicit" on the next boot and a
+# changed or cleared setting would never apply.
+_SEEDED_ENV = "PROTOAGENT_PUBLIC_URL_SEEDED"
+
+
 def seed_public_url(config) -> None:
     """``network.public_url`` → ``A2A_PUBLIC_URL`` (#4336), at boot, before the card is built
     or a member is spawned (the supervisor derives each member's URL from it). An explicit
     env var wins: a member's own ``A2A_PUBLIC_URL`` is its hub tenant path, set by the
     supervisor, and must not be replaced by the hub URL in a shared config."""
     url = str(getattr(config, "public_url", "") or "")
-    if url and not (os.environ.get("A2A_PUBLIC_URL") or "").strip():
-        os.environ["A2A_PUBLIC_URL"] = url
+    current = (os.environ.get("A2A_PUBLIC_URL") or "").strip()
+    seeded = os.environ.get(_SEEDED_ENV, "")
+    if current and current != seeded:
+        return
+    if url:
+        os.environ["A2A_PUBLIC_URL"] = os.environ[_SEEDED_ENV] = url
         log.info("[a2a] public URL %s (network.public_url)", url)
+    elif seeded:
+        os.environ.pop("A2A_PUBLIC_URL", None)
+        os.environ.pop(_SEEDED_ENV, None)
 
 
 @contextmanager

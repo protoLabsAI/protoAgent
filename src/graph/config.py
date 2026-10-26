@@ -632,6 +632,32 @@ def _public_console_url(value) -> str:
     return normalize_public_console_url(value)
 
 
+def _public_url(value) -> str:
+    """``network.public_url`` (#4336) normalised to ``http(s)://host[:port][/path]``, no
+    trailing ``/``. Raises ``ValueError`` naming the key for anything else: it becomes the agent
+    card's URL and the base of every absolute link, so a bare host or a typo must fail loudly at
+    load rather than advertise a broken address."""
+    from urllib.parse import urlsplit
+
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("network.public_url must be a string like https://box.tailnet.ts.net")
+    raw = value.strip().rstrip("/")
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        parts.port  # raises ValueError on a non-numeric or out-of-range port
+    except ValueError as exc:
+        raise ValueError(f"network.public_url is not a valid URL ({exc})") from None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(f"network.public_url must start with http:// or https:// and name a host (got {raw!r})")
+    if parts.username or parts.password or parts.query or parts.fragment:
+        raise ValueError(f"network.public_url must not carry a user name, query or fragment (got {raw!r})")
+    return raw
+
+
 def _non_negative_int(value, default: int) -> int:
     """A whole number ≥ 0, else ``default``. ``devices.idle_ttl_days`` (ADR 0121 D2): a
     hand-edited negative, fractional-string or junk value falls back to the default rather
@@ -2350,7 +2376,7 @@ class LangGraphConfig:
             public_console_url=_public_console_url(
                 network.get("public_console_url", _env_default("PROTOAGENT_PUBLIC_CONSOLE_URL", ""))
             ),
-            public_url=str(network.get("public_url") or "").strip().rstrip("/"),
+            public_url=_public_url(network.get("public_url")),
             device_idle_ttl_days=_non_negative_int(
                 devices_cfg.get("idle_ttl_days", cls.device_idle_ttl_days), cls.device_idle_ttl_days
             ),
