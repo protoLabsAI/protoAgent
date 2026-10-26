@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.218.1] - 2026-10-26
+
+### Fixed
+- **Phone console: menu opens from the left, composer fits the screen (#4336):** on a phone the menu drawer now slides in from the left, beside its hamburger, instead of from the right. The chat composer gets a side gutter so its border no longer runs under the curved screen corners, and it sits closer to the home indicator instead of floating a full inset above it.
+
 ## [0.218.0] - 2026-10-26
 
 ### Added

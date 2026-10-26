@@ -1,5 +1,12 @@
 [
   {
+    "version": "v0.218.1",
+    "date": "2026-10-26",
+    "changes": [
+      "Phone console: menu opens from the left, composer fits the screen (#4336):"
+    ]
+  },
+  {
     "version": "v0.218.0",
     "date": "2026-10-26",
     "changes": [

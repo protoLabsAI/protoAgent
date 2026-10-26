@@ -1,1 +1,0 @@
-- **Phone console: menu opens from the left, composer fits the screen (#4336):** on a phone the menu drawer now slides in from the left, beside its hamburger, instead of from the right. The chat composer gets a side gutter so its border no longer runs under the curved screen corners, and it sits closer to the home indicator instead of floating a full inset above it.
