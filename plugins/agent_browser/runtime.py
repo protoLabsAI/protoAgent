@@ -76,6 +76,13 @@ def launch_flags(cfg: dict | None) -> list[str]:
             args.append(a)
     if headed:
         f.append("--headed")
+    # Headed windows get throttled/paused when they lose focus or are occluded (stalling the
+    # live screencast), and a headless page can report visibilityState "hidden" so rAF
+    # animations start offscreen (#4510). Keep pages rendering as foreground either way.
+    for a in ("--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+              "--disable-background-timer-throttling"):
+        if a not in args:
+            args.append(a)
     if str(cfg.get("profile") or "").strip():
         f += ["--profile", str(cfg["profile"]).strip()]
     if str(cfg.get("device") or "").strip():

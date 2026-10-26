@@ -470,7 +470,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         match = forms.resolve_target(selector, forms.parse_resolve(out))
         return ("", match.error) if not match.ok else (match.selector, "")
 
-    async def _capture(verb: str, path: str, default_name: str) -> str:
+    async def _capture(verb: str, path: str, default_name: str, *, view: bool = False) -> str:
         """Run a file-producing command (``screenshot`` / ``pdf``) inside the fence.
 
         The fence is resolved BEFORE the subprocess, so a rejected path never reaches
@@ -556,6 +556,14 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
                     f"{storage.ARTIFACT_BLOB_LIMIT_BYTES // (1024 * 1024)} MB limit — raise the "
                     f"artifact plugin's max_blob_kb, or capture a smaller page.")
         body = f"{out}\nSaved to {target}" if out and out != "(ok)" else f"Saved to {target}"
+        if view:
+            # Let the model SEE the capture (vision models get the image; text-only models get
+            # this text). The seam enforces the byte/pixel bounds; a refusal keeps the path.
+            try:
+                from graph.sdk import multimodal_tool_result
+                return multimodal_tool_result(body + note, images=[{"path": str(target)}])
+            except Exception as e:  # noqa: BLE001 — the file is saved; viewing is best-effort
+                log.warning("screenshot not attached for viewing: %s", e)
         return body + note
 
     # ── navigation ────────────────────────────────────────────────────────────
@@ -896,13 +904,14 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @_serialized
     async def browser_screenshot(path: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Save a PNG screenshot of the current page. Returns the absolute file path —
-        hand that to `save_file_artifact` to put the image in the Artifact panel.
+        hand that to `save_file_artifact` to put the image in the Artifact panel. On a
+        vision model the image is also attached so you can inspect it yourself.
 
         `path` is an optional FILENAME or relative path (`shots/home.png`); leave it blank
         and the file is named for you, which is what you want when you just need the image
         (two unnamed captures never overwrite each other). Files land in this plugin's own
         capture directory; an absolute path outside it is refused."""
-        return await _capture("screenshot", path, "page.png")
+        return await _capture("screenshot", path, "page.png", view=True)
 
     @tool
     @_serialized

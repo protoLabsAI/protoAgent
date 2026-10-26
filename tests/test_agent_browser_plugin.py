@@ -732,6 +732,26 @@ async def test_screenshot_passes_the_fenced_path_to_the_cli(monkeypatch):
     assert str(root / "shot.png") in out   # the absolute path, for save_file_artifact
 
 
+async def test_screenshot_attaches_the_image_for_the_model_to_view(monkeypatch):
+    # #4510: the agent must be able to SEE its own screenshot — the result is the
+    # multimodal envelope the middleware rewrites, and the text half keeps the path.
+    from graph.multimodal import is_multimodal_result, parse_multimodal_result
+
+    rec = []
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(record=rec))
+    out = await _toolmap({"binary": "ab"})["browser_screenshot"].ainvoke({"path": "view.png"})
+    assert is_multimodal_result(out)
+    assert str(storage.capture_root().resolve() / "view.png") in str(parse_multimodal_result(out))
+
+
+async def test_pdf_stays_plain_text(monkeypatch):
+    from graph.multimodal import is_multimodal_result
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(record=[]))
+    out = await _toolmap({"binary": "ab"})["browser_pdf"].ainvoke({"path": "p.pdf"})
+    assert not is_multimodal_result(out)
+
+
 async def test_screenshot_refuses_an_escaping_path_without_running_the_cli(monkeypatch):
     rec = []
     monkeypatch.setattr(tools.subprocess, "Popen", fake_popen(record=rec))
