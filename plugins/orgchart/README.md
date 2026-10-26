@@ -30,6 +30,37 @@ non-modal and sits beside the graph, so the work stays in view while you inspect
   different process from ours and never wears our run count. The drawer's history for a
   peer-owned node is read through `GET /api/plugins/orgchart/history?owner=…`.
 
+## Active / All mode
+
+Use the **Active / All** switch in the chart header to choose how much of the fleet
+to show. **Active** is the default; **All** shows the full chart, subject to the
+kind-filter chips. Press **`a`** to toggle modes while focused in the chart view
+(outside inputs and editable fields). The choice persists per browser in
+localStorage under `orgchart.mode` (`active` or `all`).
+
+Active keeps:
+
+- **Self** — the agent hosting the chart.
+- Nodes touched by **running or lingering flows**, at either end of the flow.
+- Nodes whose **`work.last_at` is within the past 5 minutes**, so recently finished
+  work stays visible after its flow clears.
+- The **selected node**.
+- Their **ancestors back to self** along the chart's spanning tree. A running
+  peer-owned coder therefore keeps its peer visible too.
+
+The **kind-filter chips apply on top** of the mode: a hidden kind stays hidden in
+both Active and All. In Active, the header shows **“N of M shown · show all”** when
+there are delegates remaining after the kind filters. The count excludes self:
+N is the number kept by Active, and M is the number available before the Active
+filter. Click **show all** to switch to All without changing the kind filters.
+
+When Active has only self left, no running or lingering flows, and recent handoff
+history, its empty state says **“Nothing working right now”**, names the last
+handoff's target, outcome and age when available, and offers **Show all**. Without
+recent history, it shows **“Nothing delegated yet”** instead. If kind filters are
+set and the topology contains delegates, the empty state takes precedence as
+**“Everything is filtered out”**, with a prompt to turn a node type back on.
+
 ## The three kinds of node
 
 All three delegate types are drawn, and the chip row above the chart hides or shows a
