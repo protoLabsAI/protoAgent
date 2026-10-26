@@ -82,6 +82,11 @@ Use the agent's own port; the desktop app may not use `7870`. If something else 
 already uses HTTPS port 443, use `--https=8443` (the panel does this for you). On Linux, if
 `tailscale serve` says access is denied, run `sudo tailscale set --operator=$USER` once.
 
+**Then set the agent's public URL** to the same HTTPS address: **Settings ▸ Box ▸ Network ▸
+Public URL** (`network.public_url`), then restart. Without it, links in answers (images, files,
+links into the console) point at `127.0.0.1`, which opens nothing on a phone. Fleet members pick
+up their own `…/agents/<id>` address from it.
+
 Without `tailscale serve`, a phone on your tailnet can still use the agent's plain-http
 **Tailnet** address. That needs the agent to listen on its tailnet address, set up the same way
 as [Same Wi-Fi](#listen-on-a-network-address), and it can't be installed as an app.

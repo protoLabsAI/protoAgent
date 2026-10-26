@@ -1529,6 +1529,12 @@ class LangGraphConfig:
     # pairs through it. Agent-scoped (each agent on a box has its own URL). Validated at load
     # (https, origin only, not loopback); "" = nothing public. env: PROTOAGENT_PUBLIC_CONSOLE_URL.
     public_console_url: str = ""
+    # The address other agents and clients reach this agent at (``A2A_PUBLIC_URL``): the
+    # agent card's interface URL and every absolute link an answer carries (media, console
+    # links). Seeded into ``A2A_PUBLIC_URL`` at boot when that env var is unset, so a desktop
+    # install can set it without an env var; an explicit env value wins. Per agent: a fleet
+    # member gets ``{hub}/agents/<id>`` from the supervisor instead. "" = advertise loopback.
+    public_url: str = ""
     # Idle expiry for ``device``-scope tokens (ADR 0121 D2/D5): a paired phone unused for longer
     # than this many days stops authenticating and shows "Expired" in Devices. ``0`` = never.
     # Full-scope and legacy device rows never expire. Read per request by
@@ -2344,6 +2350,7 @@ class LangGraphConfig:
             public_console_url=_public_console_url(
                 network.get("public_console_url", _env_default("PROTOAGENT_PUBLIC_CONSOLE_URL", ""))
             ),
+            public_url=str(network.get("public_url") or "").strip().rstrip("/"),
             device_idle_ttl_days=_non_negative_int(
                 devices_cfg.get("idle_ttl_days", cls.device_idle_ttl_days), cls.device_idle_ttl_days
             ),

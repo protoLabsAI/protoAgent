@@ -118,6 +118,17 @@ from server.settings_apply import (  # noqa: E402,F401 — re-export (#3848); pa
 
 
 
+def seed_public_url(config) -> None:
+    """``network.public_url`` → ``A2A_PUBLIC_URL`` (#4336), at boot, before the card is built
+    or a member is spawned (the supervisor derives each member's URL from it). An explicit
+    env var wins: a member's own ``A2A_PUBLIC_URL`` is its hub tenant path, set by the
+    supervisor, and must not be replaced by the hub URL in a shared config."""
+    url = str(getattr(config, "public_url", "") or "")
+    if url and not (os.environ.get("A2A_PUBLIC_URL") or "").strip():
+        os.environ["A2A_PUBLIC_URL"] = url
+        log.info("[a2a] public URL %s (network.public_url)", url)
+
+
 @contextmanager
 def _timed_boot_phase(phase: str, sink: dict[str, float] | None = None):
     """Time one agent-construction phase (#2674) — same ``time.monotonic()`` idiom
@@ -238,6 +249,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # instead of being shadowed forever by "Replace this file". No-op once authored.
     ensure_live_soul()
     STATE.graph_config = LangGraphConfig.from_yaml(config_yaml_path())
+    seed_public_url(STATE.graph_config)
     # Fork tool denylist (config ``tools.disabled``) — applied before any
     # get_all_tools() call so dropped tools never reach the graph.
     from tools.lg_tools import set_disabled_tools
