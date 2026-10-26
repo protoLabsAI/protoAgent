@@ -1,1 +1,0 @@
-- **Tailscale found through the app's CLI link (#4336):** a `tailscale` command that links to the macOS app's binary (the app's "Install CLI") now also runs in CLI mode, so Settings ▸ Devices sees Tailscale when the desktop app is opened from the Dock.

@@ -1,5 +1,19 @@
 [
   {
+    "version": "v0.218.0",
+    "date": "2026-10-26",
+    "changes": [
+      "network.public_url sets the agent's public address from Settings (#4336).",
+      "Org Chart: an Active / All header switch that draws only the delegates that are working (#4517).",
+      "Tailscale found through the app's CLI link (#4336):",
+      "Settings ▸ Devices finds Tailscale on a Mac when the desktop app is launched from the Dock (#4336).",
+      "The \"bind EXCLUDES loopback\" banner no longer fires on a picked-IP bind that serves loopback (#4336, #2147).",
+      "DOCX memory regression coverage (#4496).",
+      "Headless browser sessions no longer report a hidden page (#4510).",
+      "Org Chart docs: the README now explains Active / All mode (#4517)."
+    ]
+  },
+  {
     "version": "v0.217.0",
     "date": "2026-10-25",
     "changes": [

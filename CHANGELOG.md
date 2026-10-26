@@ -15,6 +15,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.218.0] - 2026-10-26
+
+### Added
+- **`network.public_url` sets the agent's public address from Settings (#4336).** It is seeded into `A2A_PUBLIC_URL` at boot when that env var is unset, so a desktop install (which can't set env vars for its sidecar) can advertise its Tailscale HTTPS address. The agent card then carries that address, and links in answers (images, files, console links) open on a phone instead of pointing at `127.0.0.1`. Fleet members advertise `<public_url>/agents/<id>`. An explicit `A2A_PUBLIC_URL` still wins.
+
+- **Org Chart: an Active / All header switch that draws only the delegates that are working (#4517).** Active — now the default — keeps just the agent itself, whatever a live flow touches, anything whose last run was within the past 5 minutes, the selected node, and the ancestors needed to place them (so a peer stays while one of its coders runs); All is the full chart as before. Nodes fade out as their work ends rather than blinking away, the header reads "N of M shown · show all", and the choice persists in `localStorage` and toggles with the `a` key. Kind-filter chips still combine on top.
+
+### Fixed
+- **Tailscale found through the app's CLI link (#4336):** a `tailscale` command that links to the macOS app's binary (the app's "Install CLI") now also runs in CLI mode, so Settings ▸ Devices sees Tailscale when the desktop app is opened from the Dock.
+
+- **Settings ▸ Devices finds Tailscale on a Mac when the desktop app is launched from the Dock (#4336).** The Tailscale app's bundled binary is the GUI too: with no `TERM` it tried to start the GUI instead of answering `status --json`, so pairing reported "tailscale status returned no JSON" and offered no MagicDNS name or `tailscale serve` HTTPS. protoAgent now runs that binary with `TAILSCALE_BE_CLI=1`.
+
+- **The "bind EXCLUDES loopback" banner no longer fires on a picked-IP bind that serves loopback (#4336, #2147).** Since Settings ▸ Devices began listening on `127.0.0.1` alongside a picked tailnet or LAN IP, the console's runtime-status banner still judged the bind string alone and told operators to widen to `0.0.0.0`. It now mirrors the boot check and warns only when the loopback listener did not come up.
+
+- **DOCX memory regression coverage (#4496).** Bound repeated-extraction RSS growth by a live document's measured working set above imports, rather than allocator-dependent residue after collection. Retain direct checks that each large document's cyclic package graph is reclaimed.
+
+- **Headless browser sessions no longer report a hidden page (#4510).** The three anti-backgrounding Chrome args (`--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`, `--disable-background-timer-throttling`) are now applied in headless mode too, not only when `--headed` — so `document.visibilityState` isn't stuck "hidden" and requestAnimationFrame animations start, making animation timing judgeable on a review page.
+
+### Docs
+- **Org Chart docs: the README now explains Active / All mode (#4517).** Documents the Active / All header switch (Active is the default), what Active keeps (self, nodes a live flow touches, anything whose last run was within the past 5 minutes, the selected node, and their ancestors back to self — so a peer stays while one of its coders runs), that Active never folds (the coder/subagent/model chip grouping is All-mode only), how the kind-filter chips combine on top, the "N of M shown · show all" count, the `a` toggle, persistence in `localStorage` under `orgchart.mode`, and the Active empty state.
+
 ## [0.217.0] - 2026-10-25
 
 ### Added
