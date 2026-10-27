@@ -22,7 +22,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from tools.fs_tools import _approved
+
+# ``tools.fs_tools`` branches on ``sys.platform``/``os.name`` (its Windows shell
+# paths), so importing it obliges this module to carry the mark — the Windows CI
+# lane runs only ``-m platform_sensitive`` and would otherwise skip the file.
+# See ``tests/test_platform_sensitive_marks.py``.
+pytestmark = pytest.mark.platform_sensitive
 
 REPO = Path(__file__).resolve().parent.parent
 A2A_REF = REPO / "docs" / "reference" / "a2a-endpoints.md"
