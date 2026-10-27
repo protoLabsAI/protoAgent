@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import base64
 import importlib
 import io
 import json
@@ -46,6 +47,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from graph.multimodal import is_multimodal_result, parse_multimodal_result
 from graph.plugins.testkit import FakeRegistry, load_plugin
 from observability import tracing
 
@@ -729,7 +731,45 @@ async def test_screenshot_passes_the_fenced_path_to_the_cli(monkeypatch):
     written = Path(rec[-1][2])     # the CLI writes a short temp name beside the target…
     assert written.parent == root and written.suffix == ".png" and written.name.startswith(".")
     assert (root / "shot.png").is_file() and not written.exists()   # …swapped into place
-    assert str(root / "shot.png") in out   # the absolute path, for save_file_artifact
+    # browser_screenshot returns a multimodal envelope now; the saved path lives in its text
+    # part. Assert against the decoded text — the raw envelope is JSON, which escapes the
+    # backslashes in a Windows path and would never match a bare `str(path)` substring.
+    assert str(root / "shot.png") in parse_multimodal_result(out)["text"]   # for save_file_artifact
+
+
+async def test_screenshot_attaches_saved_image_and_preserves_artifact_warning(monkeypatch):
+    from PIL import Image
+
+    png = io.BytesIO()
+    Image.new("RGB", (2, 2), "red").save(png, format="PNG")
+    data = png.getvalue()
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen(data=data))
+    monkeypatch.setattr(storage, "ARTIFACT_BLOB_LIMIT_BYTES", 1)
+    out = await _toolmap({"binary": "ab"})["browser_screenshot"].ainvoke({"path": "view.png"})
+
+    target = storage.capture_root().resolve() / "view.png"
+    assert is_multimodal_result(out)
+    envelope = parse_multimodal_result(out)
+    assert f"Saved to {target}" in envelope["text"]
+    assert "exceeds save_file_artifact's default" in envelope["text"]
+    assert len(envelope["images"]) == 1
+    assert envelope["images"][0]["mime"] == "image/png"
+    assert base64.b64decode(envelope["images"][0]["b64"]) == target.read_bytes() == data
+
+
+async def test_screenshot_attachment_failure_preserves_saved_result(monkeypatch, caplog):
+    def fail_attachment(text, *, images):
+        raise RuntimeError("attachment unavailable")
+
+    monkeypatch.setattr(tools.subprocess, "Popen", _writing_popen())
+    monkeypatch.setattr(tools, "multimodal_tool_result", fail_attachment)
+    out = await _toolmap({"binary": "ab"})["browser_screenshot"].ainvoke({"path": "saved.png"})
+
+    target = storage.capture_root().resolve() / "saved.png"
+    assert not is_multimodal_result(out)
+    assert f"Saved to {target}" in out
+    assert target.read_bytes() == b"bytes"
+    assert "Could not attach screenshot for viewing: attachment unavailable" in caplog.text
 
 
 async def test_screenshot_refuses_an_escaping_path_without_running_the_cli(monkeypatch):
@@ -879,6 +919,7 @@ async def test_pdf_wraps_the_cli_pdf_command(monkeypatch):
     assert rec[-1][:2] == ["ab", "pdf"]
     assert (storage.capture_root().resolve() / "resume.pdf").read_bytes() == b"%PDF-1.4"
     assert "Saved to" in out
+    assert not is_multimodal_result(out)
 
 
 async def test_pdf_defaults_to_a_collision_free_filename(monkeypatch):

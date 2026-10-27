@@ -54,6 +54,8 @@ from typing import Annotated, Any
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
+from graph.sdk import multimodal_tool_result
+
 from . import cli_fetch, forms, preflight, storage
 from .runtime import bad_operand, flag, launch_flags, number
 
@@ -470,7 +472,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         match = forms.resolve_target(selector, forms.parse_resolve(out))
         return ("", match.error) if not match.ok else (match.selector, "")
 
-    async def _capture(verb: str, path: str, default_name: str) -> str:
+    async def _capture(verb: str, path: str, default_name: str, *, view: bool = False) -> str:
         """Run a file-producing command (``screenshot`` / ``pdf``) inside the fence.
 
         The fence is resolved BEFORE the subprocess, so a rejected path never reaches
@@ -556,6 +558,11 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
                     f"{storage.ARTIFACT_BLOB_LIMIT_BYTES // (1024 * 1024)} MB limit — raise the "
                     f"artifact plugin's max_blob_kb, or capture a smaller page.")
         body = f"{out}\nSaved to {target}" if out and out != "(ok)" else f"Saved to {target}"
+        if view:
+            try:
+                return multimodal_tool_result(body + note, images=[{"path": str(target)}])
+            except Exception as e:  # noqa: BLE001 — the capture is already saved
+                log.warning("Could not attach screenshot for viewing: %s", e)
         return body + note
 
     # ── navigation ────────────────────────────────────────────────────────────
@@ -897,12 +904,13 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     async def browser_screenshot(path: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Save a PNG screenshot of the current page. Returns the absolute file path —
         hand that to `save_file_artifact` to put the image in the Artifact panel.
+        The image is also attached for vision models.
 
         `path` is an optional FILENAME or relative path (`shots/home.png`); leave it blank
         and the file is named for you, which is what you want when you just need the image
         (two unnamed captures never overwrite each other). Files land in this plugin's own
         capture directory; an absolute path outside it is refused."""
-        return await _capture("screenshot", path, "page.png")
+        return await _capture("screenshot", path, "page.png", view=True)
 
     @tool
     @_serialized
