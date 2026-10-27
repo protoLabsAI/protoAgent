@@ -145,6 +145,26 @@ A Wi-Fi address works only while the phone is on that Wi-Fi, and anything else o
 can reach it too. In a container, publish the port in your compose file instead; the bind
 inside the container doesn't decide what a phone can reach.
 
+### Keep the computer awake {#keep-awake}
+
+Whatever route you pick, the agent only answers while the computer is awake. A Mac that goes
+to sleep suspends protoAgent along with Tailscale, so a phone that was reaching the agent fine
+suddenly can't — the address stops answering until someone wakes the machine.
+
+To keep a computer that serves other devices from sleeping, turn on **Settings ▸ Runtime ▸
+Stay awake while serving** (`runtime.stay_awake`), then restart. While it's on, the server holds
+the computer awake for as long as it runs.
+
+- **On a Mac it applies only on AC power.** On battery the computer sleeps as usual, so plug in
+  a Mac you want reachable. Closing a laptop's lid can still sleep it even on AC power.
+- **No-code alternative on macOS:** open **System Settings ▸ Battery** (or **Energy** on an
+  Intel Mac) and turn on **Prevent automatic sleeping when the display is off**. This keeps the
+  machine awake without touching protoAgent's config.
+- **To disable it without changing the setting,** start the server with the environment variable
+  `PROTOAGENT_KEEP_AWAKE=0`.
+- **Not supported on Windows** — the toggle has no effect there; keep the PC awake through its
+  own power settings.
+
 ## 2. Pair the phone {#_2-reach-it-from-the-phone}
 
 Pairing gives the phone its own token, so you never type the agent's auth token on it. Pick
@@ -321,6 +341,7 @@ Don't wait for expiry: 30 days unused is a backstop, not a lock.
 | **Too many attempts — try again in N s** (`429`) | Too many wrong codes arrived, from this phone or from anywhere. Your code wasn't checked. | Wait, then try the same code again if it hasn't expired. Behind a proxy on another address, set [`network.trusted_proxies`](/reference/configuration#network). See [Too many attempts](/guides/pairing#too-many-attempts). |
 | **That code didn't work** | The code is mistyped, expired or already used. | See [If the code doesn't work](/guides/pairing#if-the-code-doesnt-work). |
 | **Couldn't reach this agent**, or the page doesn't load | A network problem, not the code. | Check the agent is running, the phone is on the same Wi-Fi or Tailscale is connected on it, and the address works. Guest-network isolation or a firewall can block a Wi-Fi address. |
+| The phone can't reach the agent after the computer has been idle | The computer slept, which suspends protoAgent and Tailscale, so the address stopped answering. | Wake the computer, then [keep it awake while serving](#keep-awake). |
 | `protoagent pair --device` says the agent runs with `--ui none` (`no_console`) | There is no console for the phone to open, so no code is made. | Restart the agent with `--ui console`, the default. |
 | **Restart protoAgent to finish** in Devices | A new bind address is saved but applies only at startup. | Select **Restart now**, or stop and start the agent the way you launched it. |
 | "This agent was started with `--host` …, which overrides the bind setting" | The command line pins the address, and a restart keeps it. | Start the agent again without `--host`, or with the address you want. |

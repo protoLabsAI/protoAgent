@@ -685,6 +685,21 @@ security:
 | `callback_allowlist` | `[]` | CIDRs an outbound callback / peer destination may resolve into. **Empty = off.** When set it becomes the policy: a destination is allowed iff **every** resolved IP is inside a listed range (overrides the default callback denylist, so you can permit a specific internal/tailnet range; everything else is rejected). Hot-reloads. |
 | `redact_tool_output` | `true` | Scrub credential patterns from tool output **before** it reaches the model, session transcript, and checkpoints. Patterns include OpenAI keys (`sk-…`), GitHub tokens (`ghp_…`), Bearer tokens, env-var assignments (`OPENAI_API_KEY=…`), AWS access keys, Slack/Discord tokens, and any value the [external secrets manager](./configuration.md#secrets_manager) has fetched. Audit logging is always redacted regardless of this flag. Set `false` only when debugging a credential issue that requires seeing the raw output. |
 
+## `runtime`
+
+Knobs for the server process itself — whether it launches on login, and whether it holds the computer awake while it runs. Edit them in **Settings ▸ Runtime**. Both apply on **restart** (they are read once at startup). `autostart_on_boot` is per agent; `stay_awake` is host-scoped (`host-config.yaml`, [ADR 0047](../adr/0047-layered-settings-cascade.md) D8), so it is the box-wide default every co-located agent inherits.
+
+```yaml
+runtime:
+  autostart_on_boot: false
+  stay_awake: false
+```
+
+| Key | Default | What |
+|---|---|---|
+| `autostart_on_boot` | `false` | Launch the server on login. On macOS this installs (or removes) a per-user login LaunchAgent. **Not yet supported on Windows or Linux** — the toggle reports unsupported there instead of silently failing. |
+| `stay_awake` | `false` | Hold the computer awake for as long as the server runs, so paired phones and other devices can always reach it ([Keep the computer awake](../guides/phone-access.md#keep-awake)). Best-effort: `caffeinate -s -w <pid>` on macOS, `systemd-inhibit` on Linux, and **unsupported on Windows** (logged once). **On a Mac it applies only on AC power** — on battery the computer sleeps as usual, and closing a laptop lid can still sleep it. The environment variable `PROTOAGENT_KEEP_AWAKE=0` disables the hold even when this is on. Host-scoped, so a fleet member inherits the box default. |
+
 ## `routing`
 
 Wires langchain's `ModelFallbackMiddleware`: on a primary-model error, retry on each fallback model (same gateway) in order. Opt-in (empty = no fallback). `aux_model` is a separate, optional cheap/fast alias for non-reasoning calls.
