@@ -185,6 +185,84 @@ and a consumer discovers it by reading the part's mimeType. (Earlier revisions o
 this page and ADR 0014 referred to a `hitl-mode-v1` card capability; no such
 extension is declared or implemented.)
 
+#### Approval prompts (shell commands)
+
+`run_command` can also park a task on `input-required` when shell approval is
+required. The status frame's `status.message.parts` includes this DataPart
+(A2A 1.0 wire shape):
+
+```json
+{
+  "data": {
+    "kind": "approval",
+    "title": "Approve shell command?",
+    "detail": "git status\n\nruns via: /bin/sh -c",
+    "project": "workspace"
+  },
+  "metadata": {"mimeType": "application/vnd.protolabs.hitl-v1+json"},
+  "mediaType": "application/json"
+}
+```
+
+`kind` identifies an approval; `title` is the prompt, `detail` contains the
+command and its actual executable chain, and `project` identifies the target
+project. A caller without a console can display or speak the prompt and answer
+in-task: send `message/send` or `message/stream` with the **same `taskId` and
+`contextId`**, as in the continuation example above.
+
+Over A2A the resume value is always the **text** of the reply message's text
+parts: the handler joins the text parts (`get_user_input()`) and drops everything
+else, and the resume path does not parse JSON. So a caller without a console
+approves by sending a **text part** whose content is one of these accepted
+answers (case-insensitive, surrounding whitespace stripped):
+
+- `approve`, `approved`, `yes`, `y`, `true`, or `ok`.
+
+Any other text declines — `false`, `no`, `deny`, or an empty answer. A declined
+command is not run; the tool tells the model not to retry and to wait for further
+instructions or ask how to proceed. A reply without the parked task's IDs does
+not answer that approval.
+
+The literal text `true` works only because it matches the accepted string above —
+it is not a JSON boolean. The console (a non-A2A client) may resume with typed
+values the same parser also accepts — a boolean `true`, or a data object
+`{"approved": true}` / `{"approved": false}` / `{"decision": "approve"}` /
+`{"answer": "yes"}` — but **those shapes do not work over A2A**: a DataPart is
+dropped before the resume, and a JSON object typed into a text part arrives as
+the literal string (e.g. `{"approved": true}`), which matches no accepted answer
+and therefore declines. Over A2A, approve with one of the answer strings above.
+
+For a fully trusted caller, set **`message.metadata.bypass_permissions: true`**
+on the request to skip `run_command` approval for that turn:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "trusted-delegation-1",
+  "method": "message/send",
+  "params": {
+    "message": {
+      "messageId": "caller-message-1",
+      "role": "user",
+      "parts": [{"text": "Run git status in the workspace project."}],
+      "metadata": {"bypass_permissions": true}
+    }
+  }
+}
+```
+
+This approves **every shell command for that turn**, not just the command named
+in the message. It is honoured only when the host's `filesystem.bypass_allowed`
+is `true` (the default); set it to `false` to prevent caller bypass. Each command
+whose approval is bypassed is logged at WARNING. `delete_file` and onboarding
+approvals **always ask**, regardless of this flag.
+
+Prefer the host's [safe-command allowlist](/guides/sandboxing#run-auto-approve)
+for routine reads. These filesystem approval policies are **host-wide, not
+per-caller**; a per-caller policy is being designed separately in ADR 0124.
+See [Delegated and voice callers](/guides/sandboxing#delegated-and-voice-callers)
+for choosing among the three options.
+
 ### `tasks/cancel`
 
 ```json
