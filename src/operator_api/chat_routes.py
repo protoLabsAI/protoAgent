@@ -9,7 +9,7 @@ registrar.
 
 The turn logic lives in ``server.chat`` (``chat``); these handlers are the thin
 HTTP layer over it. ``ui`` (the deployment tier) is passed in because
-``/healthz`` echoes it.
+``/healthz`` echoes it, along with the package version and process uptime in seconds.
 """
 
 from __future__ import annotations
@@ -30,11 +30,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 
 from a2a_impl.stores import CHAT_TOMBSTONE_TABLE, task_newest_first
+from infra.paths import package_version
 from infra.publish import list_published_links
 from runtime.session_ids import SessionId, require_session_id, session_id_problem
 from runtime.state import STATE
 
 log = logging.getLogger("protoagent.server")
+_PROCESS_STARTED_AT = time.monotonic()
 
 # Per-session delete locks (see _api_delete_session). An entry lives only while a delete of
 # that session is running or queued, so the map never grows with deleted chats.
@@ -1499,6 +1501,7 @@ def register_chat_routes(app, ui: str) -> None:
     # --- Health / readiness (ADR 0010) -------------------------------------
     # Reflects whether the graph actually compiled — the only readiness signal
     # in the 'none' tier (no UI to eyeball). 503 until ready, for k8s probes.
+    # Both states include the public package version and monotonic uptime_s.
     @app.get("/healthz", include_in_schema=False)
     async def _healthz():
         from graph.config_io import is_setup_complete
@@ -1510,6 +1513,8 @@ def register_chat_routes(app, ui: str) -> None:
                 "graph_compiled": ready,
                 "setup_complete": is_setup_complete(),
                 "ui": ui,
+                "version": package_version(),
+                "uptime_s": int(time.monotonic() - _PROCESS_STARTED_AT),
                 # Surface the active model so eval reports can be tagged with the
                 # model under test without guessing (evals.runner auto-detects).
                 "model": STATE.graph_config.model_name if STATE.graph_config else None,
