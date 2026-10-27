@@ -25,8 +25,10 @@ test("mobile: New agent → pick → set-up dialog fits the phone and creates", 
   await page.getByTestId("app-drawer").getByRole("button", { name: "Settings", exact: true }).click();
   // The side nav collapses to a DS Menu switcher on a phone (ds-o0k): open the ghost trigger
   // (named "<active section> Settings sections" via aria-labelledby) and pick the Fleet radio row.
-  await page.getByRole("button", { name: /Settings sections/ }).click();
-  await page.getByRole("menuitemradio", { name: "Fleet", exact: true }).click();
+  await page.getByRole("button", { name: /Settings sections/ }).tap();
+  await expect(page.getByRole("menuitemradio", { name: "Fleet", exact: true })).toBeVisible();
+  await page.getByRole("menuitemradio", { name: "Fleet", exact: true }).tap();
+  await expect(page.getByRole("menuitemradio", { name: "Fleet", exact: true })).toBeHidden();
   await page.getByRole("button", { name: "New agent" }).click();
 
   await page.locator(".pl-radiocard", { hasText: "Product Manager" }).tap();

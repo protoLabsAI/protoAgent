@@ -206,13 +206,19 @@ const primary = () =>
     | HTMLButtonElement
     | undefined;
 
-// Open a repoint DropdownSelect. Radix opens on `pointerdown` (a synthetic `.click()` never
-// reaches its trigger), so drive that; its options render as `menuitemradio`, not `option`.
+// Drive a complete touch tap: the DS defers opening until click (#4534).
+// Its options render as `menuitemradio`, not `option`.
 const openLaneMenu = (label: string) => {
   const trigger = document.querySelector(`[aria-label="New target for ${label}"]`) as HTMLElement;
   act(() => {
-    trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+    trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "touch" }));
   });
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  act(() => {
+    trigger.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0, pointerType: "touch" }));
+    trigger.click();
+  });
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
 };
 
 const laneItems = () => [...document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
@@ -223,7 +229,7 @@ const laneTrigger = (label: string) =>
 const laneOptionText = () => laneItems().map((option) => option.textContent ?? "").join(" ");
 
 // The schema-backed repoint DropdownSelect is disabled until its cross-provider lanes are loaded.
-// Radix swallows `pointerdown` while disabled, so wait on the trigger before opening the menu.
+// Wait on the trigger before attempting to open the disabled menu.
 const waitForLaneTrigger = (label: string) =>
   waitForAct(() => {
     const trigger = laneTrigger(label);

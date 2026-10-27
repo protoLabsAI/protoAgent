@@ -62,8 +62,11 @@
 --pl-gradient-brand
 --pl-gradient-brand-light
 --pl-motion-base
+--pl-motion-duration-bumper-fade
+--pl-motion-duration-shot
 --pl-motion-ease
 --pl-motion-ease-in-out
+--pl-motion-ease-video
 --pl-motion-fast
 --pl-motion-linear
 --pl-motion-loading
