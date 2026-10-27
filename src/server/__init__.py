@@ -746,6 +746,14 @@ def _main():
         import asyncio
 
         STATE.main_loop = asyncio.get_running_loop()
+        if STATE.graph_config is not None and STATE.graph_config.stay_awake:
+            try:
+                from infra import keep_awake
+
+                held = keep_awake.start_serving_hold()
+                log.info("[keep-awake] serving hold: %s", "held" if held else "not held")
+            except Exception:
+                log.exception("[keep-awake] serving hold startup failed")
         if STATE.scheduler is not None:
             try:
                 await STATE.scheduler.start()
@@ -958,6 +966,12 @@ def _main():
             STATE.memory_guard_task.cancel()
         if _ORPHAN_SWEEP_TASK is not None:
             _ORPHAN_SWEEP_TASK.cancel()
+        try:
+            from infra import keep_awake
+
+            keep_awake.stop_serving_hold()
+        except Exception:
+            log.exception("[keep-awake] serving hold shutdown failed")
         # Drop the co-location heartbeat (#706). Best-effort.
         try:
             from infra import paths as _paths
