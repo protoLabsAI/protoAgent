@@ -21,6 +21,8 @@ def isolated(monkeypatch):
     monkeypatch.setattr(keep_awake, "_users", 0)
     monkeypatch.setattr(keep_awake, "_release", None)
     monkeypatch.setattr(keep_awake, "_warned", False)
+    monkeypatch.setattr(keep_awake, "_serving_release", None)
+    monkeypatch.setattr(keep_awake, "_serving_warned", False)
 
 
 @pytest.mark.asyncio
@@ -187,3 +189,113 @@ async def test_backend_failure_does_not_interrupt_fire(monkeypatch, tmp_path):
     await scheduler._fire_and_settle(job, True)
     assert fired == ["job"]
     settled.assert_called_once_with(job)
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_serving_hold_backend(monkeypatch, platform):
+    monkeypatch.setattr(keep_awake.sys, "platform", platform)
+    process = Mock()
+    spawn = Mock(return_value=process)
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
+    assert keep_awake.start_serving_hold() is True
+    expected = (["caffeinate", "-s", "-w", str(os.getpid())] if platform == "darwin" else
+                ["systemd-inhibit", "--what=sleep", "--why=protoAgent serving", "--mode=block", "sleep", "infinity"])
+    assert spawn.call_args.args[0] == expected
+    process.terminate.assert_not_called()
+    keep_awake.stop_serving_hold()
+    process.terminate.assert_called_once()
+    process.wait.assert_called_once_with(timeout=1)
+
+
+def test_serving_hold_idempotent(monkeypatch):
+    monkeypatch.setattr(keep_awake.sys, "platform", "darwin")
+    processes = [Mock(), Mock()]
+    spawn = Mock(side_effect=processes)
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
+    # A second start while one is held spawns nothing and returns True.
+    assert keep_awake.start_serving_hold() is True
+    assert keep_awake.start_serving_hold() is True
+    assert spawn.call_count == 1
+    keep_awake.stop_serving_hold()
+    processes[0].terminate.assert_called_once()
+    # Stop with nothing held is a no-op; a later start spawns a fresh process.
+    keep_awake.stop_serving_hold()
+    assert keep_awake.start_serving_hold() is True
+    assert spawn.call_count == 2
+    processes[1].terminate.assert_not_called()
+
+
+def test_serving_stop_with_nothing_is_noop(monkeypatch):
+    spawn = Mock()
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
+    keep_awake.stop_serving_hold()
+    spawn.assert_not_called()
+
+
+def test_serving_hold_independent_of_scheduled(monkeypatch):
+    """Entering and exiting hold() leaves the serving process untouched."""
+    monkeypatch.setattr(keep_awake.sys, "platform", "darwin")
+    serving, scheduled = Mock(), Mock()
+    spawn = Mock(side_effect=[serving, scheduled])
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
+    assert keep_awake.start_serving_hold() is True
+    with keep_awake.hold("scheduled run job"):
+        pass
+    scheduled.terminate.assert_called_once()
+    serving.terminate.assert_not_called()
+    keep_awake.stop_serving_hold()
+    serving.terminate.assert_called_once()
+
+
+def test_stop_serving_inside_hold_leaves_scheduled(monkeypatch):
+    """Stopping the serving hold inside hold() does not call the scheduled release."""
+    monkeypatch.setattr(keep_awake.sys, "platform", "darwin")
+    serving, scheduled = Mock(), Mock()
+    spawn = Mock(side_effect=[serving, scheduled])
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
+    assert keep_awake.start_serving_hold() is True
+    with keep_awake.hold("scheduled run job"):
+        keep_awake.stop_serving_hold()
+        serving.terminate.assert_called_once()
+        scheduled.terminate.assert_not_called()
+    scheduled.terminate.assert_called_once()
+
+
+def test_serving_disabled(monkeypatch):
+    monkeypatch.setenv("PROTOAGENT_KEEP_AWAKE", "0")
+    spawn = Mock()
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
+    assert keep_awake.start_serving_hold() is False
+    spawn.assert_not_called()
+
+
+def test_serving_ignores_parent_pid(monkeypatch):
+    """An unset PROTOAGENT_PARENT_PID does not disable the serving hold."""
+    monkeypatch.delenv("PROTOAGENT_KEEP_AWAKE", raising=False)
+    monkeypatch.delenv("PROTOAGENT_PARENT_PID", raising=False)
+    monkeypatch.setattr(keep_awake.sys, "platform", "darwin")
+    spawn = Mock(return_value=Mock())
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
+    assert keep_awake.start_serving_hold() is True
+    spawn.assert_called_once()
+
+
+def test_serving_unsupported_platform(monkeypatch, caplog):
+    monkeypatch.setattr(keep_awake.sys, "platform", "win32")
+    spawn = Mock()
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", spawn)
+    with caplog.at_level(logging.INFO):
+        assert keep_awake.start_serving_hold() is False
+        assert keep_awake.start_serving_hold() is False
+    spawn.assert_not_called()
+    assert len(caplog.records) == 1
+
+
+def test_serving_popen_error_logged_once(monkeypatch, caplog):
+    monkeypatch.setattr(keep_awake.sys, "platform", "darwin")
+    monkeypatch.setattr(keep_awake.subprocess, "Popen", Mock(side_effect=FileNotFoundError("missing")))
+    with caplog.at_level(logging.INFO):
+        assert keep_awake.start_serving_hold() is False
+        assert keep_awake.start_serving_hold() is False
+    assert len(caplog.records) == 1
+    assert keep_awake._serving_release is None

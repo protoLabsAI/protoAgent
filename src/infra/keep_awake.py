@@ -1,4 +1,11 @@
-"""Best-effort, process-wide sleep inhibition for scheduled desktop runs."""
+"""Best-effort, process-wide sleep inhibition for scheduled desktop runs.
+
+Two independent holds share this module. ``hold(reason)`` is the ref-counted,
+per-fire assertion used by the scheduler. ``start_serving_hold()`` /
+``stop_serving_hold()`` is a process-lifetime assertion so a plugged-in hub
+stays reachable by paired phones. They keep separate state and never release
+each other.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +22,10 @@ _lock = threading.Lock()
 _users = 0
 _release = None
 _warned = False
+# Serving hold: its own release handle, guarded by the shared _lock but kept
+# wholly separate from _users/_release so the two holds never touch each other.
+_serving_release = None
+_serving_warned = False
 
 
 def _log_failure(exc: Exception) -> None:
@@ -22,6 +33,22 @@ def _log_failure(exc: Exception) -> None:
     if not _warned:
         _warned = True
         log.info("Scheduled-run keep-awake unavailable: %s", exc)
+
+
+def _log_serving_unsupported() -> None:
+    global _serving_warned
+    if not _serving_warned:
+        _serving_warned = True
+        log.info("Serving keep-awake is unsupported on %s", sys.platform)
+
+
+def _terminate(process) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=1)
 
 
 def _enabled() -> bool:
@@ -58,12 +85,7 @@ def _acquire(reason: str):
     process = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def release():
-        process.terminate()
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=1)
+        _terminate(process)
 
     return release
 
@@ -97,3 +119,59 @@ def hold(reason: str):
                         release()
                     except Exception as exc:
                         _log_failure(exc)
+
+
+def start_serving_hold() -> bool:
+    """Hold a process-lifetime sleep assertion so a plugged-in hub stays reachable.
+
+    Separate from ``hold()``'s ref-counted scheduled-run assertion: the two keep
+    distinct state and never release each other. Idempotent (a second start while
+    one is held returns True without spawning another process), best-effort, and
+    never raises — a missing binary or spawn error is logged once and returns
+    False. The caller opts in explicitly, so PROTOAGENT_PARENT_PID is not required;
+    only an explicit PROTOAGENT_KEEP_AWAKE=0 disables it.
+    """
+    global _serving_release
+    if os.environ.get("PROTOAGENT_KEEP_AWAKE") == "0":
+        return False
+    if sys.platform == "darwin":
+        # -s inhibits system sleep only on AC power (a no-op on battery, which is
+        # intentional); -w makes caffeinate exit if this server dies.
+        argv = ["caffeinate", "-s", "-w", str(os.getpid())]
+    elif sys.platform.startswith("linux"):
+        argv = ["systemd-inhibit", "--what=sleep", "--why=protoAgent serving", "--mode=block", "sleep", "infinity"]
+    else:
+        # SetThreadExecutionState is per-thread, so a lifetime hold needs its own
+        # design; out of scope here.
+        _log_serving_unsupported()
+        return False
+    with _lock:
+        if _serving_release is not None:
+            return True
+        try:
+            process = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as exc:
+            _log_failure(exc)
+            return False
+
+        def release():
+            _terminate(process)
+
+        _serving_release = release
+    return True
+
+
+def stop_serving_hold() -> None:
+    """Release the serving hold if one is held; a no-op otherwise.
+
+    Terminates the process with the same terminate/wait/kill pattern the
+    scheduled hold uses, and never raises.
+    """
+    global _serving_release
+    with _lock:
+        release, _serving_release = _serving_release, None
+    if release is not None:
+        try:
+            release()
+        except Exception as exc:
+            _log_failure(exc)
