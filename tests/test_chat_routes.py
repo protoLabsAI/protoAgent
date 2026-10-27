@@ -4,6 +4,9 @@ import json
 import re
 import sqlite3
 import time
+from types import SimpleNamespace
+
+import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -913,6 +916,39 @@ def test_healthz_503_when_graph_none(monkeypatch):
     c = _client(monkeypatch, graph=None)
     r = c.get("/healthz")
     assert r.status_code == 503 and r.json()["ok"] is False
+
+
+@pytest.mark.parametrize("ready", [True, False])
+def test_healthz_public_version_and_monotonic_uptime(monkeypatch, ready):
+    import operator_api.chat_routes as cr
+    from a2a_impl import auth
+    from infra.paths import package_version
+
+    c = _client(monkeypatch, graph=object() if ready else None)
+    c.app.add_middleware(auth.A2AAuthMiddleware)
+    monkeypatch.setattr(auth, "_BEARER", ["console-token"])
+    monkeypatch.setattr(cr, "_PROCESS_STARTED_AT", 100.0)
+    # Replace only the route module's clock, leaving the test client's clock intact.
+    clock = SimpleNamespace(monotonic=lambda: 100.9)
+    monkeypatch.setattr(cr, "time", clock)
+    monkeypatch.setattr("graph.config_io.is_setup_complete", lambda: True)
+
+    r = c.get("/healthz")
+    assert r.status_code == (200 if ready else 503)
+    body = r.json()
+    assert body == {
+        "ok": ready,
+        "graph_compiled": ready,
+        "setup_complete": True,
+        "ui": "none",
+        "model": None,
+        "version": package_version(),
+        "uptime_s": 0,
+    }
+    assert isinstance(body["version"], str)
+    assert type(body["uptime_s"]) is int
+    clock.monotonic = lambda: 103.4
+    assert c.get("/healthz").json()["uptime_s"] == 3
 
 
 def test_steer_enqueue_then_cancel_roundtrip(monkeypatch):
