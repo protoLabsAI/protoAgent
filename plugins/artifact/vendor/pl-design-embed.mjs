@@ -1,5 +1,5 @@
 /**
- * VENDORED — @protolabsai/design@0.13.0, the `./embed` entry (src/embed.js), byte-for-byte.
+ * VENDORED — @protolabsai/design@0.14.0, the `./embed` entry (src/embed.js), byte-for-byte.
  *
  * The artifact shell serves this file as-is from /plugins/artifact/vendor and loads it as a
  * same-origin module (there is no bundler / node_modules at runtime). Its `./tokens.js` import

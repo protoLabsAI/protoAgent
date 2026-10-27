@@ -802,12 +802,12 @@ def test_animejs_is_vendored_sri_pinned_and_served(monkeypatch, tmp_path):
     assert b"export{" in served and b" as animate" in served  # an ES module exporting animate()
 
 
-# ── the DS embed module pair (embed.js + its ./tokens.js relative dep) ───────────
+# ── the DS embed module and its transitive relative dependencies ───────────
 
 _VENDOR = ROOT / "vendor"
 # @protolabsai/design is installed under the console workspace (apps/web). ROOT is
 # <repo>/plugins/artifact, so ROOT.parent.parent is the repo root; DS resolution walks up
-# from apps/web/src, so the pinned 0.12.0 copy lives here (mirrors test_artifact_vega.py).
+# from apps/web/src, so the console copy lives here (mirrors test_artifact_vega.py).
 _DESIGN_PKG = ROOT.parent.parent / "apps" / "web" / "node_modules" / "@protolabsai" / "design"
 
 
@@ -820,30 +820,37 @@ def _strip_vendor_header(text: str) -> str:
 
 def test_the_embed_module_relative_imports_are_all_vendored_and_allowlisted(monkeypatch, tmp_path):
     """The gotcha guard (no node_modules needed): embed.js is NOT self-contained — it imports
-    `./tokens.js`. Every relative import specifier in the vendored module must name a FLAT sibling
+    `./tokens.js`, which imports `./video-motion.js`. Every transitive import must name a FLAT sibling
     that is vendored on disk AND in _VENDOR_FILES, or the sandbox 404s that subresource at load
     time (the flat /vendor/{name} route can't serve a nested path)."""
     art = _load(monkeypatch, tmp_path)
-    mod = (_VENDOR / "pl-design-embed.mjs").read_text(encoding="utf-8")
-    # static `… from "./x"` and dynamic `import("./x")` specifiers that are relative (start with `.`)
-    specs = re.findall(r"""(?:from|import)\s*\(?\s*["'](\.[^"']+)["']""", mod)
-    assert "./tokens.js" in specs  # the known dependency is actually present (guard isn't vacuous)
-    for spec in specs:
-        assert spec.startswith("./") and "/" not in spec[2:], f"{spec} is not a flat sibling"
-        name = spec[2:]
-        assert (_VENDOR / name).exists(), f"{spec} not vendored in plugins/artifact/vendor/"
-        assert name in art._VENDOR_FILES, f"{spec} not in _VENDOR_FILES"
+    pending = ["pl-design-embed.mjs"]
+    visited = set()
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        assert (_VENDOR / name).exists(), f"{name} not vendored in plugins/artifact/vendor/"
+        assert name in art._VENDOR_FILES, f"{name} not in _VENDOR_FILES"
+        mod = (_VENDOR / name).read_text(encoding="utf-8")
+        # Follow transitive static and dynamic imports, including side-effect imports.
+        specs = re.findall(r"""(?:from|import)\s*\(?\s*["'](\.[^"']+)["']""", mod)
+        for spec in specs:
+            assert spec.startswith("./") and "/" not in spec[2:], f"{spec} is not a flat sibling"
+            pending.append(spec[2:])
+    assert {"tokens.js", "video-motion.js"} <= visited
 
 
 def test_the_embed_module_pair_is_vendored_and_served_same_origin(monkeypatch, tmp_path):
-    """Both the embed module and its ./tokens.js dep are allowlisted and served 200 as JavaScript
+    """The embed module and its transitive deps are allowlisted and served 200 as JavaScript
     with the vendor route's CORS header (the shell loads them same-origin, like pl-design-vega.mjs).
     Not SRI-pinned in the LIB map — a same-origin load, not an opaque-sandbox subresource."""
     from fastapi.testclient import TestClient
 
     art = _load(monkeypatch, tmp_path)
     c = TestClient(_app(art))
-    for name in ("pl-design-embed.mjs", "tokens.js"):
+    for name in ("pl-design-embed.mjs", "tokens.js", "video-motion.js"):
         assert name in art._VENDOR_FILES
         r = c.get(f"/plugins/artifact/vendor/{name}")
         assert r.status_code == 200, name
@@ -856,15 +863,19 @@ def test_the_embed_module_pair_is_vendored_and_served_same_origin(monkeypatch, t
 
 
 def test_the_vendored_embed_pair_matches_the_installed_package():
-    """Drift guard: pl-design-embed.mjs / tokens.js are a VERBATIM copy of @protolabsai/design's
-    src/embed.js / src/tokens.js. Where the package is installed (apps/web/node_modules), each
+    """Drift guard: the embed module, tokens and video-motion are VERBATIM package copies.
+    Where the package is installed (apps/web/node_modules), each
     vendored file must be byte-identical to the package source once the vendored header is stripped,
     and the headers must name the installed version — a DS bump that touches embed/tokens has to be
     re-vendored here. Skips cleanly on the web-less lanes that don't install the console deps."""
     if not (_DESIGN_PKG / "src" / "embed.js").exists():
         pytest.skip("@protolabsai/design not installed (apps/web/node_modules)")
     version = json.loads((_DESIGN_PKG / "package.json").read_text(encoding="utf-8"))["version"]
-    for vend_name, src_name in (("pl-design-embed.mjs", "embed.js"), ("tokens.js", "tokens.js")):
+    for vend_name, src_name in (
+        ("pl-design-embed.mjs", "embed.js"),
+        ("tokens.js", "tokens.js"),
+        ("video-motion.js", "video-motion.js"),
+    ):
         vend = (_VENDOR / vend_name).read_text(encoding="utf-8")
         src = (_DESIGN_PKG / "src" / src_name).read_text(encoding="utf-8")
         assert _strip_vendor_header(vend) == src, f"{vend_name} drifted from @protolabsai/design"

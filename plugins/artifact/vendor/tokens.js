@@ -1,10 +1,10 @@
 /**
- * VENDORED — @protolabsai/design@0.13.0, the token tree (src/tokens.js), byte-for-byte.
+ * VENDORED — @protolabsai/design@0.14.0, the token tree (src/tokens.js), byte-for-byte.
  *
  * The relative dependency of the vendored `./embed` module (pl-design-embed.mjs), which does
  * `import { tokens, flatten } from "./tokens.js"`. The browser resolves that specifier against
  * the flat /plugins/artifact/vendor route, so this file MUST keep the name `tokens.js` and sit
- * beside the embed module. It has no imports of its own, so the pair is closed.
+ * beside the embed module. Its ./video-motion.js dependency is vendored alongside it.
  *
  * DO NOT EDIT BY HAND — copy verbatim from the package. tests/test_artifact_plugin.py asserts
  * this file is byte-identical to the installed @protolabsai/design (header aside) when present.
@@ -31,6 +31,8 @@
  * White-label: a consumer overrides the `--pl-color-*` (esp. accent/bg/fg) under
  * their own scope — our values are the default, theirs win where set.
  */
+
+import { VIDEO_MOTION_MS, videoEaseLinearStops } from "./video-motion.js";
 
 export const tokens = {
   color: {
@@ -156,9 +158,20 @@ export const tokens = {
     theme: "400ms", // theme switch
     loading: "1000ms",
     status: "2000ms", // status pulses
+    // ── Video bookends (protoLabs bookends v1, #606 slice 1) ──
+    // Additive foundation for the video motion contract; no renderer consumes
+    // these yet (that lands in a later slice). Durations and the easing are
+    // derived from the single pure source in ./video-motion.js so the exact
+    // runtime curve and this generated CSS can't drift apart.
+    durationShot: `${VIDEO_MOTION_MS.shot}ms`, // 600ms — Edge Sweep "shot"
+    durationBumperFade: `${VIDEO_MOTION_MS.bumperFade}ms`, // 300ms — bumper fade
     ease: "ease",
     easeInOut: "ease-in-out",
     linear: "linear",
+    // CSS `linear()` APPROXIMATION of the exact easeInOutCubic (videoEase).
+    // The runtime curve is videoEase() itself; this stop list is the browser-
+    // interpolated approximation — never a cubic-bezier lookalike.
+    easeVideo: videoEaseLinearStops(),
   },
 };
 

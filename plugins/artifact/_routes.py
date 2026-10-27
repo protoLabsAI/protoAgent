@@ -277,6 +277,7 @@ _VENDOR_FILES = {
     # browser resolves that relative import against this module. tests/test_artifact_plugin.py
     # guards the closure and the DS drift.
     "pl-design-embed.mjs",
+    "video-motion.js",  # tokens.js relative dependency — must resolve same-origin
     "tokens.js",  # the embed module's relative dependency (./tokens.js) — must resolve same-origin
     # The DS element-default stylesheet (@protolabsai/ui-css /styles/embed.css). FRAME-ONLY
     # :where() zero-specificity defaults, embedded in the sandboxed frame beside the embed

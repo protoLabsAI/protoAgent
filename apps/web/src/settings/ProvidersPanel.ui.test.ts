@@ -229,7 +229,7 @@ const laneTrigger = (label: string) =>
 const laneOptionText = () => laneItems().map((option) => option.textContent ?? "").join(" ");
 
 // The schema-backed repoint DropdownSelect is disabled until its cross-provider lanes are loaded.
-// Wait on the trigger before attempting to open the disabled menu.
+// Wait until the trigger is enabled before attempting to open the menu.
 const waitForLaneTrigger = (label: string) =>
   waitForAct(() => {
     const trigger = laneTrigger(label);
