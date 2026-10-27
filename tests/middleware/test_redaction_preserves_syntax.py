@@ -246,6 +246,18 @@ def test_url_userinfo_password_containing_at_is_redacted_to_the_last_at():
     assert out == "https://bob:[REDACTED]@example.com/x"
 
 
+@pytest.mark.parametrize("ref", ["${GH_TOKEN}", "$GH_TOKEN", "{token}", "{{ secrets.GH_TOKEN }}"])
+def test_url_userinfo_template_ref_is_not_a_secret(ref):
+    """#4546: frank#6 FAILed on a 'hardcoded token' that was `${GH_TOKEN}` behind the mask."""
+    line = f'git config --global url."https://x-access-token:{ref}@github.com/".insteadOf "https://github.com/"'
+    assert redact(line) == line
+
+
+def test_url_userinfo_password_merely_containing_a_ref_is_still_redacted():
+    out = redact("https://bob:hunter2${SUFFIX}@example.com/x")
+    assert out == "https://bob:[REDACTED]@example.com/x"
+
+
 def test_redaction_is_idempotent():
     """A second pass (audit after transcript redaction) must not grow or re-wrap marks."""
     for _tok_id, carrier, secret in _ALL:
