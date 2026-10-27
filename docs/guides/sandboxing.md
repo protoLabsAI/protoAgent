@@ -89,6 +89,37 @@ launcher counts as the launcher (`/bin/sh`), and a wrapper — `sudo`, `env`, `x
 - `/bypass` still skips the gate for everything; the allowlist is only consulted when you'd
   otherwise be asked.
 
+## Delegated and voice callers
+
+A delegated A2A client or voice caller needs an approval strategy even when it
+has no console. With filesystem tools enabled and a target project configured,
+choose one of these options so a `run_command` approval does not strand the task:
+
+1. **Prefer `filesystem.run_auto_approve`** for routine read-only commands such
+   as `gh issue view` and `git status`. The [allowlist rules and caveats](#run-auto-approve)
+   above apply to all callers equally; commands outside the list still ask.
+2. **Answer in-task** when the task reaches `input-required`: present the approval
+   prompt and send the answer with the same `taskId` and `contextId`.
+3. **Use `message.metadata.bypass_permissions: true` only from a caller you fully
+   trust.** It approves **every shell command for that turn**. It does not bypass
+   `delete_file` or onboarding approvals.
+
+The [A2A approval reference](/reference/a2a-endpoints#approval-prompts-shell-commands)
+provides the prompt payload, accepted answers, and a bypass request example.
+Hosts that must never allow caller bypass set:
+
+```yaml
+filesystem:
+  bypass_allowed: false
+```
+
+Today these policies are **host-wide, not per-caller**. A per-caller policy is
+being designed separately in ADR 0124.
+
+For a status check, use public `GET /healthz`; no shell command or shell approval
+is needed. Version and uptime fields are the separate #4536 change; this checkout's
+endpoint currently reports readiness, setup, UI tier, and model information.
+
 ## Layer 1 — the native egress allowlist (deny-by-default)
 
 `fetch_url` is the tool where the model picks an arbitrary host — the main

@@ -185,6 +185,79 @@ and a consumer discovers it by reading the part's mimeType. (Earlier revisions o
 this page and ADR 0014 referred to a `hitl-mode-v1` card capability; no such
 extension is declared or implemented.)
 
+#### Approval prompts (shell commands)
+
+`run_command` can also park a task on `input-required` when shell approval is
+required. The status frame's `status.message.parts` includes this DataPart
+(A2A 1.0 wire shape):
+
+```json
+{
+  "data": {
+    "kind": "approval",
+    "title": "Approve shell command?",
+    "detail": "git status\n\nruns via: /bin/sh -c",
+    "project": "workspace"
+  },
+  "metadata": {"mimeType": "application/vnd.protolabs.hitl-v1+json"},
+  "mediaType": "application/json"
+}
+```
+
+`kind` identifies an approval; `title` is the prompt, `detail` contains the
+command and its actual executable chain, and `project` identifies the target
+project. A caller without a console can display or speak the prompt and answer
+in-task: send `message/send` or `message/stream` with the **same `taskId` and
+`contextId`**, as in the continuation example above.
+
+The approval parser accepts these resume values:
+
+- Boolean `true`.
+- Strings `approve`, `approved`, `yes`, `y`, `true`, or `ok`, case-insensitive
+  and with surrounding whitespace stripped (for example, a text part containing
+  `approved`).
+- A data object with a boolean `approved` field: `{"approved": true}` approves,
+  and `{"approved": false}` declines. This boolean takes precedence over other fields.
+- Otherwise, an object whose `decision` field (or, if it is empty/missing, its
+  `answer` field) contains an accepted answer above, such as
+  `{"decision": "approve"}` or `{"answer": "yes"}`.
+
+Anything else is a decline, including `false`, `no`, `deny`, or an empty answer.
+The command is not run; the tool tells the model not to retry and to wait for
+further instructions or ask how to proceed. A reply without the parked task's
+IDs does not answer that approval.
+
+For a fully trusted caller, set **`message.metadata.bypass_permissions: true`**
+on the request to skip `run_command` approval for that turn:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "trusted-delegation-1",
+  "method": "message/send",
+  "params": {
+    "message": {
+      "messageId": "caller-message-1",
+      "role": "user",
+      "parts": [{"text": "Run git status in the workspace project."}],
+      "metadata": {"bypass_permissions": true}
+    }
+  }
+}
+```
+
+This approves **every shell command for that turn**, not just the command named
+in the message. It is honoured only when the host's `filesystem.bypass_allowed`
+is `true` (the default); set it to `false` to prevent caller bypass. Each command
+whose approval is bypassed is logged at WARNING. `delete_file` and onboarding
+approvals **always ask**, regardless of this flag.
+
+Prefer the host's [safe-command allowlist](/guides/sandboxing#run-auto-approve)
+for routine reads. These filesystem approval policies are **host-wide, not
+per-caller**; a per-caller policy is being designed separately in ADR 0124.
+See [Delegated and voice callers](/guides/sandboxing#delegated-and-voice-callers)
+for choosing among the three options.
+
 ### `tasks/cancel`
 
 ```json

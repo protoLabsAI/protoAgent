@@ -1,0 +1,1 @@
+- **A2A shell approval guidance for delegated and voice callers (#4535).** Document in-task approval answers, trusted per-turn bypass, and the host-wide safe-command allowlist so callers without a console can continue paused tasks.
