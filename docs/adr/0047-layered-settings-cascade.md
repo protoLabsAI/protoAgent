@@ -147,6 +147,7 @@ the corresponding items in §7.
    | `prompts.capture`, `prompts.retention_days`, `prompts.max_calls` | prompt-snapshot capture (#2243) is the same machine-wide observability posture as telemetry; both retention caps (#3019) sit with it |
    | `identity.org` | white-label org branding is deployment-wide (`identity.name`/`operator` stay per-agent) |
    | `egress.allowed_hosts` | box-wide outbound network policy (ADR 0008); sits at the Host layer beside the inbound `network.bind` (D8) |
+   | `runtime.stay_awake` | serving sleep inhibition affects the host computer (#4541); opt-in, restart-required, with no env fallback for the setting |
 
    Everything else is `agent`: `identity.name/operator`, `model.temperature/max_tokens/max_iterations`,
    `agent_runtime` (each agent picks **native or `acp:*`** independently), `operator_mcp.tools`,

@@ -1498,6 +1498,19 @@ FIELDS: list[Field] = [
         restart=True,
     ),
     Field(
+        "runtime.stay_awake",
+        "stay_awake",
+        "Stay awake while serving",
+        "bool",
+        "Runtime",
+        "Keep this computer from sleeping while protoAgent runs, so paired phones and "
+        "other devices can always reach it. On a Mac this applies only on AC power "
+        "(on battery the computer sleeps as usual), and a closed laptop lid can still "
+        "sleep it. Off = the computer sleeps normally.",
+        scope="host",
+        restart=True,
+    ),
+    Field(
         "runtime.memory_ceiling_mb",
         "memory_ceiling_mb",
         "Memory ceiling (MB)",

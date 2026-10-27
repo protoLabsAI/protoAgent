@@ -174,6 +174,8 @@ HOST_SCOPED_KEYS = {
     # to an agent leaf — every co-located agent shares the process it would stop.
     "runtime.memory_ceiling_mb",
     "runtime.memory_ceiling_exit",
+    # Serving sleep inhibition affects the host computer (#4541).
+    "runtime.stay_awake",
 }
 
 

@@ -98,6 +98,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "api_base": "http://gateway:4000/v1",
     "audit_middleware": True,
     "autostart_on_boot": False,
+    "stay_awake": False,
     "memory_ceiling_exit": False,
     "memory_ceiling_mb": 0,
     "aux_model": "",
@@ -1254,3 +1255,38 @@ def test_the_shipped_example_sets_none_of_the_retiring_model_keys():
     example = Path(__file__).resolve().parents[1] / "config" / "langgraph-config.example.yaml"
     doc = _yaml.safe_load(example.read_text(encoding="utf-8")) or {}
     assert not {"provider", "api_base", "api_key"} & set(doc.get("model") or {})
+
+
+@pytest.mark.parametrize("value", [None, False, True])
+def test_stay_awake_yaml_roundtrip(tmp_path, monkeypatch, value):
+    # Environment does not select the setting; the keep-awake backend owns its kill switch.
+    monkeypatch.setenv("PROTOAGENT_STAY_AWAKE", "true")
+    monkeypatch.setenv("PROTOAGENT_KEEP_AWAKE", "0")
+    contents = "runtime: {}\n" if value is None else f"runtime:\n  stay_awake: {str(value).lower()}\n"
+    path = _write_yaml(tmp_path, contents)
+    cfg = LangGraphConfig.from_yaml(path)
+    expected = value is True
+    assert cfg.stay_awake is expected
+    data = config_to_dict(cfg)
+    assert data["runtime"]["stay_awake"] is expected
+    doc = load_yaml_doc(path)
+    apply_updates_to_yaml(doc, {"runtime": {"stay_awake": not expected}})
+    save_yaml_doc(doc, path)
+    assert LangGraphConfig.from_yaml(path).stay_awake is not expected
+
+
+def test_stay_awake_settings_schema():
+    field = next(f for f in FIELDS if f.key == "runtime.stay_awake")
+    assert FIELDS[FIELDS.index(field) - 1].key == "runtime.autostart_on_boot"
+    assert field.attr == "stay_awake"
+    assert field.label == "Stay awake while serving"
+    assert field.type == "bool"
+    assert field.section == "Runtime"
+    assert field.scope == "host"
+    assert field.restart is True
+    assert field.description == (
+        "Keep this computer from sleeping while protoAgent runs, so paired phones and "
+        "other devices can always reach it. On a Mac this applies only on AC power "
+        "(on battery the computer sleeps as usual), and a closed laptop lid can still "
+        "sleep it. Off = the computer sleeps normally."
+    )
