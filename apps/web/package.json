@@ -17,9 +17,9 @@
   },
   "dependencies": {
     "@pierre/diffs": "1.5.0",
-    "@protolabsai/design": "^0.13.0",
-    "@protolabsai/ui": "^0.68.3",
-    "@protolabsai/ui-css": "^0.68.3",
+    "@protolabsai/design": "^0.14.0",
+    "@protolabsai/ui": "^0.68.5",
+    "@protolabsai/ui-css": "^0.68.5",
     "@shikijs/themes": "3.23.0",
     "@shikijs/transformers": "3.23.0",
     "@streamdown/code": "^1.1.1",
