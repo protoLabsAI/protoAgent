@@ -731,7 +731,10 @@ async def test_screenshot_passes_the_fenced_path_to_the_cli(monkeypatch):
     written = Path(rec[-1][2])     # the CLI writes a short temp name beside the target…
     assert written.parent == root and written.suffix == ".png" and written.name.startswith(".")
     assert (root / "shot.png").is_file() and not written.exists()   # …swapped into place
-    assert str(root / "shot.png") in out   # the absolute path, for save_file_artifact
+    # browser_screenshot returns a multimodal envelope now; the saved path lives in its text
+    # part. Assert against the decoded text — the raw envelope is JSON, which escapes the
+    # backslashes in a Windows path and would never match a bare `str(path)` substring.
+    assert str(root / "shot.png") in parse_multimodal_result(out)["text"]   # for save_file_artifact
 
 
 async def test_screenshot_attaches_saved_image_and_preserves_artifact_warning(monkeypatch):
