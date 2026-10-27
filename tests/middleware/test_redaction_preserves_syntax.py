@@ -249,7 +249,9 @@ def test_url_userinfo_password_containing_at_is_redacted_to_the_last_at():
 @pytest.mark.parametrize("ref", ["${GH_TOKEN}", "$GH_TOKEN", "{token}", "{{ secrets.GH_TOKEN }}"])
 def test_url_userinfo_template_ref_is_not_a_secret(ref):
     """#4546: frank#6 FAILed on a 'hardcoded token' that was `${GH_TOKEN}` behind the mask."""
-    line = f'git config --global url."https://x-access-token:{ref}@github.com/".insteadOf "https://github.com/"'
+    # Concatenated, like the test above: spelled inline, the unfixed redactor masks the
+    # source line itself, and a reviewer reading through it sees no `{ref}` at all.
+    line = 'git config --global url."https://x-access-token:' + ref + '@github.com/".insteadOf "https://github.com/"'
     assert redact(line) == line
 
 
