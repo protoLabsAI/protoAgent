@@ -210,22 +210,27 @@ project. A caller without a console can display or speak the prompt and answer
 in-task: send `message/send` or `message/stream` with the **same `taskId` and
 `contextId`**, as in the continuation example above.
 
-The approval parser accepts these resume values:
+Over A2A the resume value is always the **text** of the reply message's text
+parts: the handler joins the text parts (`get_user_input()`) and drops everything
+else, and the resume path does not parse JSON. So a caller without a console
+approves by sending a **text part** whose content is one of these accepted
+answers (case-insensitive, surrounding whitespace stripped):
 
-- Boolean `true`.
-- Strings `approve`, `approved`, `yes`, `y`, `true`, or `ok`, case-insensitive
-  and with surrounding whitespace stripped (for example, a text part containing
-  `approved`).
-- A data object with a boolean `approved` field: `{"approved": true}` approves,
-  and `{"approved": false}` declines. This boolean takes precedence over other fields.
-- Otherwise, an object whose `decision` field (or, if it is empty/missing, its
-  `answer` field) contains an accepted answer above, such as
-  `{"decision": "approve"}` or `{"answer": "yes"}`.
+- `approve`, `approved`, `yes`, `y`, `true`, or `ok`.
 
-Anything else is a decline, including `false`, `no`, `deny`, or an empty answer.
-The command is not run; the tool tells the model not to retry and to wait for
-further instructions or ask how to proceed. A reply without the parked task's
-IDs does not answer that approval.
+Any other text declines — `false`, `no`, `deny`, or an empty answer. A declined
+command is not run; the tool tells the model not to retry and to wait for further
+instructions or ask how to proceed. A reply without the parked task's IDs does
+not answer that approval.
+
+The literal text `true` works only because it matches the accepted string above —
+it is not a JSON boolean. The console (a non-A2A client) may resume with typed
+values the same parser also accepts — a boolean `true`, or a data object
+`{"approved": true}` / `{"approved": false}` / `{"decision": "approve"}` /
+`{"answer": "yes"}` — but **those shapes do not work over A2A**: a DataPart is
+dropped before the resume, and a JSON object typed into a text part arrives as
+the literal string (e.g. `{"approved": true}`), which matches no accepted answer
+and therefore declines. Over A2A, approve with one of the answer strings above.
 
 For a fully trusted caller, set **`message.metadata.bypass_permissions: true`**
 on the request to skip `run_command` approval for that turn:

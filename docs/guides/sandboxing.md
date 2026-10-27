@@ -116,9 +116,9 @@ filesystem:
 Today these policies are **host-wide, not per-caller**. A per-caller policy is
 being designed separately in ADR 0124.
 
-For a status check, use public `GET /healthz`; no shell command or shell approval
-is needed. Version and uptime fields are the separate #4536 change; this checkout's
-endpoint currently reports readiness, setup, UI tier, and model information.
+For a status check, use the public `GET /healthz` endpoint — no shell command or
+shell approval is needed. (It reports readiness; version and uptime arrive with
+the separate #4536 change.)
 
 ## Layer 1 — the native egress allowlist (deny-by-default)
 
