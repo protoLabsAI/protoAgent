@@ -250,6 +250,19 @@ def _redact_values(s: str, prefix: re.Pattern, min_run: int = 0) -> str:
     return "".join(out)
 
 
+def _redact_userinfo(m: re.Match) -> str:
+    """The password half of a URL's userinfo — unless it is one template reference (#4546).
+
+    `https://x-access-token:${GH_TOKEN}@github.com/` holds no secret, and masking it told
+    the review panel the script hardcoded a token: frank#6 FAILed on that blocker. Only a
+    password that IS a ref is kept; one that merely contains a ref is still redacted.
+    """
+    password = m.group(0)[len(m.group(1)) :]
+    if _TEMPLATE_REF.fullmatch(password):
+        return m.group(0)
+    return m.group(1) + _PLACEHOLDER
+
+
 def _redact_string_simple(value: str) -> str:
     """Contextual values first (quote-aware), then token shapes, then exact values."""
     value = _redact_values(value, PATTERNS["bearer_token"])
@@ -273,7 +286,7 @@ def _redact_string_simple(value: str) -> str:
         value = PATTERNS[_name].sub(_PLACEHOLDER, value)
 
     # URL userinfo — keep scheme://user:, redact the password, keep the @host.
-    value = PATTERNS["url_userinfo"].sub(r"\1[REDACTED]", value)
+    value = PATTERNS["url_userinfo"].sub(_redact_userinfo, value)
 
     # Manager-sourced values (ADR 0080) — exact-match scrub, shape-agnostic.
     for secret_value in _known_secret_values():
