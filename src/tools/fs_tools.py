@@ -1173,14 +1173,14 @@ def build_fs_tools(config) -> list:
         include_generated: bool = False,
     ) -> str:
         # Context blocks: ``-`` marks context, ``:`` the match; adjacent matches merge, ``--``
-        # separates blocks. Skipped by default: binaries and __pycache__, .pytest_cache,
-        # .mypy_cache, .ruff_cache, .tox, .git, .venv, venv, node_modules, dist, .next, coverage.
+        # separates blocks. The skipped-dir list stays in the docstring on purpose: the model
+        # must be told what it is not being shown (test_fs_tools acceptance criterion).
         """Search text files under a project path; returns grep-style ``file:line`` matches (same addressing as ``read_file`` offsets).
 
         ``query`` is a literal substring unless ``regex=true`` (Python regex; a timed-out pattern
-        errors — simplify and retry). ``context_lines`` works like grep -C. Binary and
-        generated/vendored dirs (.git, node_modules, .venv, dist, caches…) are skipped unless
-        ``include_generated=true``.
+        errors — simplify and retry). ``context_lines`` works like grep -C. Skipped unless
+        ``include_generated=true``: binaries and __pycache__, .pytest_cache, .mypy_cache,
+        .ruff_cache, .tox, .git, .venv, venv, node_modules, dist, .next, coverage.
         """
         registry = registry_ref.get()
         try:
