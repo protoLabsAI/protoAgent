@@ -1210,11 +1210,9 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     # builds plugins, and the commit below publishes unconditionally.
     new_plugin_bundle = None
     if is_setup_complete():
+        prior_workflow = (STATE.workflow_registry, STATE.workflow_run)
         try:
             new_store = _build_knowledge_store(new_config)
-            # The workflows plugin re-sets these in its register() if still enabled;
-            # reset first so disabling it on reload leaves them cleared.
-            STATE.workflow_registry = STATE.workflow_run = None
             # Plugins before MCP — a plugin's managed MCP server (e.g. Google)
             # is injected into the MCP discovery below (matches _main ordering).
             # Prompt-only rebuild (#3365): reuse the live bundle + MCP clients. Only
@@ -1233,6 +1231,11 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
                     STATE.mcp_meta,
                 )
             else:
+                # The workflows plugin re-sets these in its register() if still enabled;
+                # reset first so disabling it on reload leaves them cleared. Full builds
+                # only: a reused bundle never re-runs register(), so clearing there left
+                # every edit_soul without a workflow runner. A failed rebuild restores them.
+                STATE.workflow_registry = STATE.workflow_run = None
                 new_plugins = _build_plugins(
                     new_config,
                     existing_tools=get_all_tools(
@@ -1293,6 +1296,8 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
             # prompt rebuild failed (#3365).
             if new_mcp_clients is not STATE.mcp_clients:
                 _close_mcp_clients(new_mcp_clients)
+            # The prior graph keeps serving, so it keeps the runner it was built with.
+            STATE.workflow_registry, STATE.workflow_run = prior_workflow
             # Scheduler state hasn't been committed yet — caller's
             # running scheduler keeps polling, no orphaned tasks.
             return False, f"graph rebuild failed: {e}"
