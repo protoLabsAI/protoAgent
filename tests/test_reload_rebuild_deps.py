@@ -613,3 +613,110 @@ def test_full_reload_still_rebuilds_plugins_and_mcp(tmp_path, monkeypatch):
     ai._reload_langgraph_agent()
 
     assert calls == ["plugins", "mcp"], f"full reload skipped a builder: {calls}"
+
+
+def test_soul_edit_reload_keeps_the_live_workflow_runner(tmp_path, monkeypatch):
+    """A prompt-only reload must not drop the workflows plugin's runner.
+
+    The reload clears ``STATE.workflow_run``/``workflow_registry`` so a full rebuild with the
+    plugin disabled leaves them unset, and the plugin's ``register()`` sets them again. The
+    reuse path never re-runs ``register()``, so clearing there left the runner ``None`` after
+    every ``edit_soul``: the board's review gate and ``/<recipe>`` commands failed closed
+    until the next full reload. A failed rebuild must leave them alone too."""
+    import server.agent_init as ai
+    from runtime.state import STATE
+
+    runner, registry = object(), object()
+    _stub_soul_reload(tmp_path, monkeypatch, ai, STATE)
+    monkeypatch.setattr(STATE, "workflow_run", runner, raising=False)
+    monkeypatch.setattr(STATE, "workflow_registry", registry, raising=False)
+
+    import graph.agent as ga
+
+    seen: dict = {}
+
+    def _capture(config, **kwargs):
+        seen["run"], seen["registry"] = STATE.workflow_run, STATE.workflow_registry
+        raise RuntimeError("stop before commit")
+
+    monkeypatch.setattr(ga, "create_agent_graph", _capture)
+
+    ok, _ = ai._reload_for_soul_edit()
+
+    assert ok is False
+    assert seen == {"run": runner, "registry": registry}, "the rebuild ran without the live runner"
+    assert STATE.workflow_run is runner and STATE.workflow_registry is registry
+
+
+def test_failed_full_reload_restores_the_workflow_runner(tmp_path, monkeypatch):
+    """A full rebuild that fails commits nothing — the prior graph keeps serving, so the
+    runner it was using must survive too, not stay cleared by the pre-build reset."""
+    import server.agent_init as ai
+    from runtime.state import STATE
+
+    _stub_soul_reload(tmp_path, monkeypatch, ai, STATE)
+    monkeypatch.setattr(ai, "_resolve_plugin_middleware", lambda cfg, mw: [])
+    # The rebuilt bundle comes from a plugin set whose register() didn't set the runner.
+    monkeypatch.setattr(ai, "_build_plugins", lambda *a, **k: _empty_bundle())
+    monkeypatch.setattr(ai, "_build_mcp", lambda *a, **k: ([], [], []))
+    runner, registry = object(), object()
+    monkeypatch.setattr(STATE, "workflow_run", runner, raising=False)
+    monkeypatch.setattr(STATE, "workflow_registry", registry, raising=False)
+
+    import graph.agent as ga
+
+    seen: dict = {}
+
+    def _capture(config, **kwargs):
+        seen["run"] = STATE.workflow_run
+        raise RuntimeError("stop before commit")
+
+    monkeypatch.setattr(ga, "create_agent_graph", _capture)
+
+    ok, _ = ai._reload_langgraph_agent()
+
+    assert ok is False
+    assert seen["run"] is None, "a full rebuild must still clear a runner no plugin re-set"
+    assert STATE.workflow_run is runner and STATE.workflow_registry is registry
+
+
+def _empty_bundle():
+    return SimpleNamespace(
+        mcp_servers=[],
+        tools=[],
+        tool_plugins={},
+        skill_dirs=[],
+        meta=[],
+        surfaces=[],
+        chat_commands={},
+        subagents=[],
+        middleware=[],
+        late_tool_factories=[],
+        routers=[],
+    )
+
+
+def _stub_soul_reload(tmp_path, monkeypatch, ai, STATE):
+    """The reload's collaborators stubbed out, with a live bundle to reuse."""
+    import graph.config_io as cio
+
+    leaf = tmp_path / "langgraph-config.yaml"
+    leaf.write_text("scheduler:\n  enabled: false\n")
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
+    monkeypatch.setattr(cio, "ensure_live_config", lambda: None)
+    monkeypatch.setattr(cio, "is_setup_complete", lambda: True)
+    monkeypatch.setattr(ai, "_build_knowledge_store", lambda cfg: None)
+    monkeypatch.setattr(ai, "_apply_plugin_knowledge_backend", lambda cfg, store, plugins: store)
+    monkeypatch.setattr(ai, "_register_plugin_subagents", lambda subagents: None)
+    monkeypatch.setattr(ai, "_apply_config_subagents", lambda cfg: None)
+    monkeypatch.setattr(ai, "_build_skills_index", lambda cfg, extra_skill_dirs=None: None)
+    monkeypatch.setattr(ai, "_build_inbox_store", lambda cfg: None)
+    monkeypatch.setattr(ai, "_close_mcp_clients", lambda clients: None)
+    monkeypatch.setattr(STATE, "plugin_bundle", _empty_bundle(), raising=False)
+    monkeypatch.setattr(STATE, "mcp_clients", [], raising=False)
+    monkeypatch.setattr(STATE, "mcp_tools", [], raising=False)
+    monkeypatch.setattr(STATE, "mcp_meta", [], raising=False)
+    monkeypatch.setattr(STATE, "checkpointer", object(), raising=False)
+    monkeypatch.setattr(STATE, "tasks_store", object(), raising=False)
+    monkeypatch.setattr(STATE, "background_mgr", object(), raising=False)
+    monkeypatch.setattr(STATE, "scheduler", None, raising=False)
