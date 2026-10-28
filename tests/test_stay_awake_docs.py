@@ -110,23 +110,18 @@ def test_doc_platform_claims_match_keep_awake_module() -> None:
 
 
 def test_changelog_entry_is_present_and_collatable() -> None:
-    """The docs-kind changelog entry survives the release roll: pre-release it lives in the
-    `changelog.d/4541-stay-awake.docs.md` fragment; `scripts/changelog.py collate` then folds
-    it into CHANGELOG.md and DELETES the fragment. So the entry must be present in EITHER
-    source, and this test accepts whichever one carries it (it can't hard-require the fragment,
-    which no longer exists on a release PR or on main after the release).
+    """Require the collatable fragment or its released top-level bullet in CHANGELOG.md.
 
-    Fragment present: keep today's assertions (the load-bearing top-level `- **` bullet —
-    without the leading `- ` the collator silently drops it — plus `(#4541)`). Fragment gone:
-    assert CHANGELOG.md carries the collated lead-in bullet as it appears in the v0.219.0
-    section. Neither source carrying the entry fails with a message naming both locations."""
+    Collation deletes the fragment. While it exists, retain the load-bearing `- **`
+    prefix check: without the leading `- ` the collator silently drops the entry.
+    """
     if FRAGMENT.is_file():
         body = _text(FRAGMENT)
         assert body.lstrip().startswith("- **"), "entry must start with a top-level bullet"
         assert "(#4541)" in body
         return
 
-    collated = _text(CHANGELOG_MD)
+    collated = _text(CHANGELOG_MD) if CHANGELOG_MD.is_file() else ""
     lead = '- **Document "Stay awake while serving" for phone access (#4541).**'
     assert any(line.startswith(lead) for line in collated.splitlines()), (
         "the #4541 docs changelog entry is missing from BOTH "
