@@ -8,6 +8,11 @@ moves and the prose doesn't, the doc lies under a green gate. This is the
 `test_model_concurrency_docs.py` treatment for the keep-awake pages: every claim below is
 re-derived from the shipped source (read as text so the test stays cheap and self-contained,
 no server import), so the test reddens the moment the docs drift from the code.
+
+The changelog check reads from EITHER source — the `changelog.d/4541-stay-awake.docs.md`
+fragment (pre-release) or, once `scripts/changelog.py collate` has folded the fragment into
+CHANGELOG.md and deleted it (on a release PR and on main afterwards), the collated bullet in
+CHANGELOG.md — so it survives the release roll instead of hard-requiring the fragment.
 """
 
 from __future__ import annotations
@@ -17,7 +22,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 GUIDE = REPO / "docs" / "guides" / "phone-access.md"
 CONFIG_REF = REPO / "docs" / "reference" / "configuration.md"
-CHANGELOG = REPO / "changelog.d" / "4541-stay-awake.docs.md"
+FRAGMENT = REPO / "changelog.d" / "4541-stay-awake.docs.md"
+CHANGELOG_MD = REPO / "CHANGELOG.md"
 
 KEEP_AWAKE_SRC = REPO / "src" / "infra" / "keep_awake.py"
 SCHEMA_SRC = REPO / "src" / "graph" / "settings_schema.py"
@@ -104,9 +110,27 @@ def test_doc_platform_claims_match_keep_awake_module() -> None:
 
 
 def test_changelog_entry_is_present_and_collatable() -> None:
-    """The docs-kind changelog entry exists and begins with the load-bearing top-level
-    bullet (without the leading `- ` the collator silently drops it)."""
-    assert CHANGELOG.is_file(), "changelog.d/4541-stay-awake.docs.md must exist"
-    body = _text(CHANGELOG)
-    assert body.lstrip().startswith("- **"), "entry must start with a top-level bullet"
-    assert "(#4541)" in body
+    """The docs-kind changelog entry survives the release roll: pre-release it lives in the
+    `changelog.d/4541-stay-awake.docs.md` fragment; `scripts/changelog.py collate` then folds
+    it into CHANGELOG.md and DELETES the fragment. So the entry must be present in EITHER
+    source, and this test accepts whichever one carries it (it can't hard-require the fragment,
+    which no longer exists on a release PR or on main after the release).
+
+    Fragment present: keep today's assertions (the load-bearing top-level `- **` bullet —
+    without the leading `- ` the collator silently drops it — plus `(#4541)`). Fragment gone:
+    assert CHANGELOG.md carries the collated lead-in bullet as it appears in the v0.219.0
+    section. Neither source carrying the entry fails with a message naming both locations."""
+    if FRAGMENT.is_file():
+        body = _text(FRAGMENT)
+        assert body.lstrip().startswith("- **"), "entry must start with a top-level bullet"
+        assert "(#4541)" in body
+        return
+
+    collated = _text(CHANGELOG_MD)
+    lead = '- **Document "Stay awake while serving" for phone access (#4541).**'
+    assert any(line.startswith(lead) for line in collated.splitlines()), (
+        "the #4541 docs changelog entry is missing from BOTH "
+        f"{FRAGMENT.relative_to(REPO)} (fragment, pre-release) and "
+        f"{CHANGELOG_MD.relative_to(REPO)} (collated, post-release): expected a top-level "
+        f"bullet beginning {lead!r} in CHANGELOG.md once the fragment is collated"
+    )
