@@ -10,9 +10,11 @@ re-derived from the shipped source (read as text so the test stays cheap and sel
 no server import), so the test reddens the moment the docs drift from the code.
 
 The changelog check requires either the `changelog.d/4541-stay-awake.docs.md` fragment
-(pre-release) or its top-level bullet in CHANGELOG.md (post-release). The fragment keeps
-its collatable-prefix and issue-reference checks; after `scripts/changelog.py collate`
-deletes it, the check requires the exact released lead-in in CHANGELOG.md.
+(pre-release) or its top-level bullet in the collated changelog (post-release). The
+fragment keeps its collatable-prefix and issue-reference checks; after
+`scripts/changelog.py collate` deletes it, the check requires the exact released lead-in
+in CHANGELOG.md — or in a `CHANGELOG-YYYY-MM.md` archive, since the first release of a
+month runs `scripts/changelog.py archive` and moves older sections out of CHANGELOG.md.
 """
 
 from __future__ import annotations
@@ -110,10 +112,13 @@ def test_doc_platform_claims_match_keep_awake_module() -> None:
 
 
 def test_changelog_entry_is_present_and_collatable() -> None:
-    """Require the collatable fragment or its released top-level bullet in CHANGELOG.md.
+    """Require the collatable fragment or its released top-level bullet in the changelog.
 
     Collation deletes the fragment. While it exists, retain the load-bearing `- **`
-    prefix check: without the leading `- ` the collator silently drops the entry.
+    prefix check: without the leading `- ` the collator silently drops the entry. Once
+    collated the bullet lives in CHANGELOG.md, but the month's first release runs
+    `scripts/changelog.py archive`, which moves older sections into `CHANGELOG-YYYY-MM.md`
+    archives — so the post-collation search spans CHANGELOG.md and every archive.
     """
     if FRAGMENT.is_file():
         body = _text(FRAGMENT)
@@ -121,11 +126,18 @@ def test_changelog_entry_is_present_and_collatable() -> None:
         assert "(#4541)" in body
         return
 
-    collated = _text(CHANGELOG_MD) if CHANGELOG_MD.is_file() else ""
     lead = '- **Document "Stay awake while serving" for phone access (#4541).**'
-    assert any(line.startswith(lead) for line in collated.splitlines()), (
-        "the #4541 docs changelog entry is missing from BOTH "
-        f"{FRAGMENT.relative_to(REPO)} (fragment, pre-release) and "
-        f"{CHANGELOG_MD.relative_to(REPO)} (collated, post-release): expected a top-level "
-        f"bullet beginning {lead!r} in CHANGELOG.md once the fragment is collated"
+    sources = [CHANGELOG_MD, *sorted(REPO.glob("CHANGELOG-*.md"))]
+    found = any(
+        line.startswith(lead)
+        for p in sources
+        if p.is_file()
+        for line in _text(p).splitlines()
+    )
+    assert found, (
+        "the #4541 docs changelog entry is missing from "
+        f"{FRAGMENT.relative_to(REPO)} (fragment, pre-release), "
+        f"{CHANGELOG_MD.relative_to(REPO)} (collated, post-release), and every "
+        "CHANGELOG-*.md archive (where the month's first release moves older sections): "
+        f"expected a top-level bullet beginning {lead!r} in the collated changelog"
     )
