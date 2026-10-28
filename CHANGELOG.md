@@ -15,6 +15,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.219.0] - 2026-10-28
+
+### Added
+- **Public health version and uptime (#4535).** `/healthz` now includes the package `version` and monotonic process `uptime_s` in both ready and not-ready responses, so callers can read status without a console token or shell probing.
+
+- **Stay awake while serving (#4541).** Add an opt-in Runtime setting that holds a sleep assertion for the server lifetime so paired devices can reach the hub. On Macs it applies only on AC power; closing the lid can still put the computer to sleep.
+
+- **Keep a plugged-in hub awake while serving (#4541).** Added a process-lifetime sleep hold (`start_serving_hold()` / `stop_serving_hold()`) to `src/infra/keep_awake.py` so a Mac hub on AC power stays reachable by paired phones. It is independent of the scheduled-run hold, idempotent, and best-effort: `caffeinate -s -w <pid>` on macOS, `systemd-inhibit` on Linux, and unsupported (logged once) elsewhere. Honours `PROTOAGENT_KEEP_AWAKE=0` but does not require `PROTOAGENT_PARENT_PID`.
+
+### Fixed
+- **Browser screenshots attached for viewing (#4510).** Screenshots now attach the saved image for vision models while preserving the file path and falling back to text if attachment fails.
+
+- **Mobile dropdowns stay open after one tap (#4534).** Adopt the design system's touch and pen trigger fix in `@protolabsai/ui` and `@protolabsai/ui-css` 0.68.5, preserving mouse and keyboard behavior.
+
+- **The secret redactor no longer masks a `${VAR}` reference in a URL's userinfo (#4546).**
+  `https://x-access-token:${GH_TOKEN}@github.com/` came out as `…:[REDACTED]@…`. The review
+  panel read the mask as a hardcoded credential and FAILed protoLabsAI/frank#6 on that
+  false blocker. A password that is a single template reference (`${VAR}`, `$VAR`, `{var}`,
+  `{{ x.y }}`) is now left as written, as the contextual patterns already did. A password
+  that mixes a reference with other text (`hunter2${SUFFIX}`) is still redacted.
+
+### Docs
+- **A2A shell approval guidance for delegated and voice callers (#4535).** Document in-task approval answers, trusted per-turn bypass, and the host-wide safe-command allowlist so callers without a console can continue paused tasks.
+
+- **ADR 0124: per-caller run_command approval policy for A2A callers (#4535).**
+  Design-only record for scoping `run_command` approval per authenticated caller:
+  a server-derived caller identity (never from request/message metadata, with the
+  fleet header-swap resolving to the hub), a `filesystem.caller_policies`
+  list-of-dicts that overrides the host `run_auto_approve` / `bypass_allowed` for a
+  matched caller (reusing the existing matcher), audit markers that name the policy,
+  and a 3-card implementation slice plan. `bypass_allowed` still defaults to true and
+  existing callers see no behaviour change. No runtime code changes.
+
+- **Document "Stay awake while serving" for phone access (#4541).** The phone-access guide now has a *Keep the computer awake* subsection (the agent only answers while the computer is awake; turn on **Settings ▸ Runtime ▸ Stay awake while serving** / `runtime.stay_awake` and restart; AC-power-only and closed-lid limits on a Mac; the macOS no-code alternative; `PROTOAGENT_KEEP_AWAKE=0`; not supported on Windows) plus a Troubleshooting row for a phone that can't reach the agent after the computer has been idle. The configuration reference now documents `runtime.stay_awake` beside `runtime.autostart_on_boot`.
+
 ## [0.218.1] - 2026-10-26
 
 ### Fixed
