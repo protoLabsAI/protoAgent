@@ -1,1 +1,0 @@
-- **Stay awake while serving (#4541).** Add an opt-in Runtime setting that holds a sleep assertion for the server lifetime so paired devices can reach the hub. On Macs it applies only on AC power; closing the lid can still put the computer to sleep.

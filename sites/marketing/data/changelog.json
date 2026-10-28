@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.219.0",
+    "date": "2026-10-28",
+    "changes": [
+      "Public health version and uptime (#4535).",
+      "Stay awake while serving (#4541).",
+      "Keep a plugged-in hub awake while serving (#4541).",
+      "Browser screenshots attached for viewing (#4510).",
+      "Mobile dropdowns stay open after one tap (#4534).",
+      "The secret redactor no longer masks a ${VAR} reference in a URL's userinfo (#4546).",
+      "A2A shell approval guidance for delegated and voice callers (#4535).",
+      "ADR 0124: per-caller run_command approval policy for A2A callers (#4535).",
+      "Document \"Stay awake while serving\" for phone access (#4541)."
+    ]
+  },
+  {
     "version": "v0.218.1",
     "date": "2026-10-26",
     "changes": [
