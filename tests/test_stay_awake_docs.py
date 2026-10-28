@@ -9,10 +9,10 @@ moves and the prose doesn't, the doc lies under a green gate. This is the
 re-derived from the shipped source (read as text so the test stays cheap and self-contained,
 no server import), so the test reddens the moment the docs drift from the code.
 
-The changelog check reads from EITHER source — the `changelog.d/4541-stay-awake.docs.md`
-fragment (pre-release) or, once `scripts/changelog.py collate` has folded the fragment into
-CHANGELOG.md and deleted it (on a release PR and on main afterwards), the collated bullet in
-CHANGELOG.md — so it survives the release roll instead of hard-requiring the fragment.
+The changelog check requires either the `changelog.d/4541-stay-awake.docs.md` fragment
+(pre-release) or its top-level bullet in CHANGELOG.md (post-release). The fragment keeps
+its collatable-prefix and issue-reference checks; after `scripts/changelog.py collate`
+deletes it, the check requires the exact released lead-in in CHANGELOG.md.
 """
 
 from __future__ import annotations
