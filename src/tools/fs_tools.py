@@ -1054,24 +1054,15 @@ def build_fs_tools(config) -> list:
         limit: int | None = None,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
+        # Unset ``limit`` returns offset→EOF whenever it fits the ~50K-char safety cap (a small
+        # file still reads in one call regardless of line count); an explicit ``limit`` pages
+        # exactly that many lines. A single line over ~50K chars is cut either way.
         """Read a text file inside a managed project (relative path).
 
-        `offset`/`limit` are LINE numbers (offset=1 is the first line), the same
-        addressing `search_files` uses — a hit at "file.py:342" reads straight in
-        as `read_file(path="file.py", offset=320, limit=60)` to see it in context,
-        no guessing needed. Returns up to `limit` lines starting at `offset`. A
-        truncated result names the next offset to pass, so a file larger than one
-        chunk is reachable in full across a few calls.
-
-        Leave `limit` unset for the common case: everything from `offset` to EOF
-        comes back in one call whenever it fits the ~50K-char safety cap, matching
-        a small file's old one-call guarantee regardless of line count (a file
-        with 2000 short lines still reads in full if the whole thing is only a
-        few KB). Pass an EXPLICIT `limit` to cap the page to exactly that many
-        lines even when the file would otherwise fit in one call — e.g. paging
-        through a file with many short lines N-at-a-time on purpose. A single
-        line longer than ~50K chars (e.g. a minified bundle) is itself cut short
-        either way — prefer `search_files` over paging through a line like that.
+        ``offset``/``limit`` are 1-based LINE numbers, the same addressing ``search_files`` prints
+        (a hit at ``file.py:342`` → ``offset=320, limit=60``). Leave ``limit`` unset to read to EOF
+        when it fits (~50K chars); a truncated result names the next offset to pass. For huge
+        single lines (minified files) prefer ``search_files``.
         """
         registry = registry_ref.get()
         try:
@@ -1181,25 +1172,15 @@ def build_fs_tools(config) -> list:
         context_lines: int = 0,
         include_generated: bool = False,
     ) -> str:
-        """Search text files under a managed project path; returns file:line matches —
-        grep-style, addressed the same way `read_file`'s offset/limit are, so a hit at
-        "file.py:342" reads straight into `read_file(path="file.py", offset=320,
-        limit=60)`.
+        # Context blocks: ``-`` marks context, ``:`` the match; adjacent matches merge, ``--``
+        # separates blocks. Skipped by default: binaries and __pycache__, .pytest_cache,
+        # .mypy_cache, .ruff_cache, .tox, .git, .venv, venv, node_modules, dist, .next, coverage.
+        """Search text files under a project path; returns grep-style ``file:line`` matches (same addressing as ``read_file`` offsets).
 
-        `query` is a literal substring by default; set regex=true to match it as a
-        Python regex instead (e.g. `def \\w+_handler\\(`) — a pattern that times out
-        (catastrophic backtracking) aborts the search with an error naming it, so
-        simplify it and retry rather than assuming the tool hung. `context_lines`
-        (like grep -C) includes that many lines before/after each match, marked `-`
-        for context vs `:` for the matching line itself, with adjacent/overlapping
-        matches merged into one block and `--` separating non-adjacent ones — so a
-        hit comes with enough of the function around it to be useful without a
-        separate read_file round trip for the common case.
-
-        Binary files and generated/vendored directories are skipped by default —
-        __pycache__, .pytest_cache, .mypy_cache, .ruff_cache, .tox, .git, .venv, venv,
-        node_modules, dist, .next, coverage. Set include_generated=true to search them
-        too (e.g. to grep a vendored dependency).
+        ``query`` is a literal substring unless ``regex=true`` (Python regex; a timed-out pattern
+        errors — simplify and retry). ``context_lines`` works like grep -C. Binary and
+        generated/vendored dirs (.git, node_modules, .venv, dist, caches…) are skipped unless
+        ``include_generated=true``.
         """
         registry = registry_ref.get()
         try:
@@ -1399,12 +1380,11 @@ def build_fs_tools(config) -> list:
 
     @tool
     def delete_file(project: str, path: str) -> str:
-        """Permanently delete a single file inside a managed project (relative path).
+        # The approval is a permanent-delete floor that even bypass-permissions mode can't skip.
+        """Permanently delete ONE file (not a directory) in a managed project (relative path).
 
-        Refused in read-only projects and in ``no_delete`` (read-write-no-delete) projects.
-        Otherwise it ALWAYS pauses for the operator to approve first — a permanent-delete
-        floor that even bypass-permissions mode can't skip, because deletion is irreversible.
-        Removes one file, not a directory (use ``run_command`` for directory trees).
+        Refused in read-only and no-delete projects; otherwise it ALWAYS pauses for operator
+        approval, even in bypass mode. Use ``run_command`` for directory trees.
         """
         registry = registry_ref.get()
         try:
@@ -1450,24 +1430,13 @@ def build_fs_tools(config) -> list:
 
     @tool
     def show_code(project: str, path: str, line: int, end_line: int | None = None, note: str = "") -> str:
-        """Put a specific piece of code in front of the operator, in the console's code pane,
-        WITH a one-sentence `note` on why it matters ("this is where the retry budget is
-        reset", "the bug: the lock is released before the write").
+        """Show a code range to the operator in the console's code pane, with a one-sentence ``note`` (≤280 chars) on why it matters.
 
-        Use it to point at evidence — the function you're about to change, the line that
-        explains a failure, the call site you found — so the operator can follow and check
-        your reasoning. Prefer it over pasting large code blocks into your reply. It does
-        NOT read the file for you (use `read_file` for that), and it can't show secret-like
-        files (.env, keys, credentials) or binary files.
-
-        Get EXACT line numbers first — `search_files` prints `file:line` for every hit, or
-        `read_file` with an `offset` tells you where a chunk starts — never count lines by
-        eye in a plain `read_file` result. The result echoes the first and last line of the
-        range you pointed at; if they aren't the code you meant, call again with the right lines.
-
-        `path` is relative to the project root; `line` is 1-based and `end_line` (inclusive,
-        defaults to `line`) is clamped to the end of the file. `note` is at most 280 chars.
-        Works in read-only projects.
+        Use it to point at evidence instead of pasting large blocks. It doesn't read the file for you
+        (use ``read_file``) and can't show secret-like or binary files. Get EXACT line numbers from
+        ``search_files`` or a ``read_file`` offset — never count by eye. ``line`` is 1-based,
+        ``end_line`` inclusive (default ``line``). The result echoes the range's first/last line —
+        if wrong, call again. Works in read-only projects.
         """
         from graph.components import CODE_REF_NOTE_MAX, encode_component
         from tools.fs_secrets import is_secret_path
@@ -1547,14 +1516,10 @@ def build_fs_tools(config) -> list:
             line: int | None = None,
             state: Annotated[Any, InjectedState] = None,
         ) -> str:
-            """Open a file from a managed project in the operator's code editor on their
-            machine (optionally jumping to `line`), so THEY can look at it.
+            """Open a project file (optionally at ``line``) in the operator's own code editor so THEY can look at it.
 
-            Use it when the operator asks to see/open/show a file ("open the router for
-            me"), or to hand off a specific location worth their attention (the bug you
-            found, the function to review). It does NOT return the file's contents — use
-            `read_file` to read a file yourself. `path` is relative to the project root;
-            works in read-only projects too.
+            Use when they ask to open/see a file or to hand off a location worth their attention. It
+            returns no contents — use ``read_file`` to read. Works in read-only projects.
             """
             registry = registry_ref.get()
             try:
@@ -1574,16 +1539,12 @@ def build_fs_tools(config) -> list:
 
         @tool
         async def run_command(project: str, command: str, timeout: float = 60.0, shell: str = "default") -> str:
-            """Run a shell command inside a managed project's directory (fenced cwd).
+            # Dual-use like execute_code: arbitrary argv with a fenced cwd, not a sandbox.
+            """Run a shell command in a managed project's directory (fenced cwd).
 
-            Powerful + dual-use (like execute_code) — use it for read-only
-            inspection (`git status`, `gh pr list`, `br list`) and only mutate in
-            read-write projects. ``shell`` picks the grammar explicitly:
-            "default" = ``cmd.exe`` on Windows / ``/bin/sh`` elsewhere;
-            "powershell" = Windows PowerShell (``pwsh`` off-Windows), Unicode-safe;
-            "cmd" / "sh" name the platform defaults. PowerShell syntax
-            (``Set-Content``, cmdlets, ``$vars``) REQUIRES shell="powershell" —
-            on Windows the default grammar is cmd.exe and will not run it.
+            Prefer read-only inspection (``git status``, ``gh pr list``); only mutate in read-write
+            projects. ``shell``: ``"default"`` (cmd.exe on Windows, /bin/sh elsewhere), ``"powershell"``
+            (pwsh off-Windows), ``"cmd"`` or ``"sh"``. PowerShell syntax REQUIRES ``shell="powershell"``.
             """
             registry = registry_ref.get()
             try:

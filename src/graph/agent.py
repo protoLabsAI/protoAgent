@@ -1571,19 +1571,15 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
         state: Annotated[Any, InjectedState] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
     ) -> str:
-        """Delegate one focused task to a specialized subagent.
-
-        Use task_batch for independent fan-out.
+        """Delegate one focused task to a specialized subagent; use task_batch for independent fan-out.
 
         Args:
-            description: Short summary of the task.
-            prompt: Self-contained instructions for the subagent.
-            subagent_type: Registered role to use.
-            run_in_background: True for long independent work. With background
-                execution enabled, returns a job id and delivers the result on a
-                later turn. Continue independent work or yield if nothing else can
-                progress; do not poll or spawn a duplicate. False waits for the result
-                in this turn. Without background support, either setting runs foreground.
+            description: short summary.
+            prompt: self-contained instructions.
+            subagent_type: registered role.
+            run_in_background: True for long independent work — returns a job id and the result
+                arrives on a later turn (when background execution is available). Meanwhile keep
+                working or yield; do not poll or spawn a duplicate.
         """
         # Fail fast (#4327): if the prompt tells the subagent to use lead tools it was
         # never bound, refuse BEFORE spawning — the subagent graph is never invoked,
@@ -1743,20 +1739,15 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
         state: Annotated[Any, InjectedState] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
     ) -> str:
-        """Delegate independent tasks concurrently within the configured concurrency cap.
-
-        Use task for one delegation or for steps that depend on preceding results.
+        """Delegate independent tasks concurrently (capped); use task for one delegation or dependent steps.
 
         Args:
-            tasks: Objects with required description and prompt strings, and optional
-                subagent_type (default researcher). Each prompt must stand alone.
-            run_in_background: True returns job ids and delivers results on later turns
-                when background execution is enabled. Continue independent work or yield
-                if nothing else can progress; do not poll or re-spawn. False waits for
-                all results. Without background support, either setting runs foreground.
+            tasks: objects with required ``description`` and ``prompt`` (each standalone) and
+                optional ``subagent_type`` (default researcher).
+            run_in_background: as for ``task`` — job ids now, results on later turns; do not poll
+                or re-spawn.
 
-        Foreground results follow input order with 1-based indices; a failure is
-        reported inline without aborting siblings. Background results arrive as notifications.
+        Foreground results come back in input order (1-based); one failure doesn't abort siblings.
         """
 
         if not tasks:
@@ -1879,9 +1870,7 @@ def _build_task_tools(config: LangGraphConfig, all_tools: list[BaseTool], backgr
 
         @tool
         async def stop_task(job_id: str) -> str:
-            """Stop a running background job (the ``bg-…`` id from
-            ``task(run_in_background=True)``) — cancels its detached turn. Use this to
-            kill a job that's stuck, runaway, or no longer needed."""
+            """Stop a running background job by its ``bg-…`` id (stuck, runaway or no longer needed)."""
             res = await background_mgr.cancel(job_id)
             return res.get("detail", "Done.")
 

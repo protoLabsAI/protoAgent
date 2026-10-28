@@ -569,10 +569,10 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_open(url: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Launch the browser (or navigate the current session). Pass a `url` to go
-        there, or leave blank to open about:blank. Start every browsing task here.
-        The configured runtime options (headed/profile/device/allowed_domains/stealth/…)
-        are applied here, where the session launches."""
+        """Launch the browser (or navigate the current session) to `url`; blank opens
+        about:blank. Start every browsing task here."""
+        # The configured runtime options (headed/profile/device/allowed_domains/stealth/...) are
+        # applied here, where the session launches.
         if (bad := _bad_operand(url=url)):
             return bad
         flags = launch_flags(cfg)
@@ -600,16 +600,15 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_snapshot(*, state: Annotated[Any, InjectedState] = None) -> str:
-        """Get the page's accessibility tree with compact `@eN` element refs. Call
-        this before clicking/filling — the refs (e.g. `@e2`) are what the action
-        tools target. The canonical way to 'see' the page for the agent."""
+        """Get the page's accessibility tree with `@eN` element refs — the way to 'see'
+        the page. Call before acting; the action tools target these refs."""
         return await _ab("snapshot")
 
     @tool
     @_serialized
     async def browser_get_text(selector: str = "body", *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Get the visible text of an element (a `@eN` ref or a CSS selector;
-        defaults to the whole `body`). Use to extract/read page content."""
+        """Get the visible text of an element (`@eN` ref or CSS selector; default the whole
+        `body`)."""
         return _bad_operand(selector=selector) or await _ab("get", "text", selector)
 
     @tool
@@ -623,32 +622,26 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_get_value(selector: str, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Get the current value of a form field by its visible LABEL (re-resolved in the page
-        each call, so it survives re-renders), a `@eN` ref, or a CSS selector. For a whole-form
-        view (every field, committed values included) prefer `browser_form_read`."""
+        """Get a form field's current value. Address it by visible LABEL, `@eN` ref, or CSS
+        selector. For a whole-form view prefer `browser_form_read`."""
+        # A LABEL is re-resolved in the page each call, so it survives re-renders.
         sel, err = await _resolve_field(selector)
         return err or await _ab("get", "value", sel)
 
     @tool
     @_serialized
     async def browser_form_read(scope: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Read every form field on the page in ONE call — the reliable way to see a form
-        before filling it, and to verify it afterwards.
-
-        Returns a JSON array, one object per field in document order, each with `label`,
-        `kind` (text/textarea/email/tel/number/native-select/combobox/checkbox/radio-group/
-        file/other), `name`, `id`, `required`, the current committed `value` (for a
-        react-select-style combobox the RENDERED selection, not any half-typed search text;
-        for a radio group the checked option's label; for a file input the attached
-        filename) and, where they live in the DOM, `options` (native-select / radio-group).
-
-        `scope` optionally restricts the read to one container — a CSS selector
-        (`#application`) or a visible container label (a `<fieldset>` legend / `aria-label`);
-        leave it blank for the whole page.
-
-        The labels this returns are exactly what the other form tools address by, and that
-        addressing is re-resolved in the page on every call, so it survives the re-renders
-        that make a `browser_snapshot` `@eN` ref go stale."""
+        """Read every form field in ONE call (JSON: label, kind, name, id, required, committed
+        value, options) — use before filling a form and to verify it after. The labels it
+        returns are what the other form tools address by. `scope`: optional CSS selector or
+        visible container label (not a `@eN` ref); blank = whole page."""
+        # Field details for maintainers: `kind` is text/textarea/email/tel/number/native-select/
+        # combobox/checkbox/radio-group/file/other; `value` is the COMMITTED value (a react-select
+        # combobox's rendered selection, not half-typed search text; a radio group's checked label; a
+        # file input's attached filename); `options` appear where they live in the DOM (native-select /
+        # radio-group). Label addressing is re-resolved in the page on every call, so it survives the
+        # re-renders that make a `browser_snapshot` `@eN` ref go stale. The web-browse skill carries the
+        # full form-filling workflow.
         # scope is embedded in the eval script (stdin), never an argv element, so it needs no
         # argv-option guard — but a snapshot @ref can't be resolved inside an eval, so say so
         # rather than silently reading the whole page.
@@ -665,22 +658,17 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_click(selector: str, js_fallback: bool = False, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Click a form field by its visible LABEL (re-resolved in the page each call, so it
-        survives re-renders — a checkbox, radio or combobox by label), a `@eN` ref (from
-        `browser_snapshot`), or a CSS selector (e.g. `#submit`). Address buttons and links,
-        which are not form fields, by ref or CSS; `browser_form_read` lists the labels.
-
-        Set `js_fallback=true` when a click reports success but the page visibly does
-        NOTHING (a Greenhouse "Enter manually" button that won't open its textarea, a custom
-        control that ignores a synthetic click): the tool fingerprints the page, does the
-        normal CLI click, re-fingerprints, and ONLY if nothing changed dispatches an in-page
-        click (a bubbling mousedown/mouseup plus `el.click()`) and reports `(JS fallback)`. It
-        never clicks twice when the first click already worked. Because the fallback dispatches
-        the click in the page, address the target by its LABEL or a CSS selector when you set
-        `js_fallback` — a `@eN` ref is resolved by the CLI, not in the page, so it can't drive
-        the fallback and is refused (as `browser_select`/`browser_upload`/`browser_form_read`
-        refuse refs for the same in-page limit). The default (`js_fallback` off) is the plain
-        CLI click, unchanged — a ref still works there."""
+        """Click an element by visible LABEL (form fields), `@eN` ref, or CSS selector (buttons/
+        links: ref or CSS). Set `js_fallback=true` only when a click reports success but the
+        page visibly does nothing: it re-clicks in-page ONLY if the page didn't change (never
+        twice). With `js_fallback`, use a LABEL or CSS selector — a `@eN` ref is refused."""
+        # js_fallback mechanics: fingerprint the page, do the normal CLI click, re-fingerprint, and only
+        # if nothing changed dispatch an in-page click (bubbling mousedown/mouseup + el.click()), reported
+        # as `(JS fallback)`. Motivating case: the Greenhouse "Enter manually" button, custom controls
+        # that ignore a synthetic click. A @ref is CLI-resolved, not in-page, so it can't drive the
+        # fallback (browser_select/browser_upload/browser_form_read refuse refs for the same reason).
+        # The default (js_fallback off) is the plain CLI click; a ref works there. Labels are
+        # re-resolved in the page each call, so they survive re-renders.
         # A @ref drives the JS fallback through an in-page document.querySelector, where "@e5"
         # is invalid CSS and throws: the dispatch would do NOTHING while the CLI's success text
         # stood, so the model would believe a fallback ran that didn't. Refuse a ref up front
@@ -712,10 +700,9 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_fill(selector: str, text: str, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Clear a field and fill it with `text`. Address the field by its visible LABEL
-        (re-resolved in the page each call, so it survives re-renders), a `@eN` ref, or a CSS
-        selector. A label that matches no field, or more than one, is a clear error — call
-        `browser_form_read` to see the fields."""
+        """Clear a field and fill it with `text`. Address it by visible LABEL, `@eN` ref, or CSS
+        selector; a label matching zero or several fields is an error (see `browser_form_read`)."""
+        # A LABEL is re-resolved in the page each call, so it survives re-renders.
         if (bad := _bad_operand(text=text)):
             return bad
         sel, err = await _resolve_field(selector)
@@ -724,9 +711,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_type(selector: str, text: str, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Type `text` into a field without clearing it first. Address the field by its visible
-        LABEL (re-resolved each call, so it survives re-renders), a `@eN` ref, or a CSS
-        selector."""
+        """Type `text` into a field without clearing it. Address it by visible LABEL, `@eN` ref,
+        or CSS selector."""
         if (bad := _bad_operand(text=text)):
             return bad
         sel, err = await _resolve_field(selector)
@@ -735,25 +721,17 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_select(field: str, option_text: str, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Set a CHOICE field to the option whose visible text is `option_text`, then PROVE it
-        by reading the committed value back. Handles a native `<select>`, a react-select-style
-        combobox, and an intl-tel-input country picker — the widgets a plain `browser_fill`
-        cannot drive — and verifies the result so a wrong answer is never submitted silently.
-
-        Address `field` by its visible LABEL (re-resolved in the page each call, so it survives
-        re-renders) or a CSS selector — NOT a `@eN` snapshot ref: this tool sets the widget in
-        the page, where the CLI's ref can't be resolved (`browser_form_read` has the same limit).
-        `browser_form_read` lists the labels. `option_text` is matched case-insensitively and
-        whitespace-collapsed: an exact match wins, and the only non-exact that resolves is a
-        UNIQUE prefix. If no option — or more than one — matches, the tool lists the available
-        options and changes nothing. The combobox is cleared before typing (never appended to)
-        and committed by CLICKING the option, never by pressing Enter. On success you get
-        `Selected "<text>" in <label>`; if the field reads back a different value it is a hard
-        `Error:`, not a success.
-
-        PHONE fields (intl-tel-input): select the COUNTRY with THIS tool BEFORE you
-        `browser_fill` the national number. Changing the country after the number is filled
-        reformats or clears it, so the order matters — country first, then the number."""
+        """Set a choice field (native `<select>`, react-select combobox, intl-tel-input country
+        picker) to the option whose visible text is `option_text`, and verify the committed value
+        — use it for every dropdown instead of `browser_fill`/type+Enter. `field`: visible LABEL
+        or CSS selector, NOT a `@eN` ref. Match is case-insensitive: exact, else a UNIQUE prefix;
+        no/ambiguous match lists the options and changes nothing. A read-back mismatch is an
+        `Error:`. PHONE fields: select the country BEFORE you `browser_fill` the number."""
+        # Matching is whitespace-collapsed. The combobox is cleared before typing (never appended to) and
+        # committed by CLICKING the option, never Enter (Enter commits whatever row is highlighted).
+        # Success reads `Selected "<text>" in <label>`. Changing the phone country after the number is
+        # filled reformats or clears it, hence country first. The ref limit: the widget is set in-page,
+        # where a CLI ref can't be resolved (same as browser_form_read).
         if (bad := _bad_operand(field=field, option_text=option_text)):
             return bad
         # A @ref is resolved by the CLI, not in the page — but browser_select sets the widget
@@ -786,33 +764,22 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_upload(field: str, file_path: str, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Attach a local file to a form's file input and VERIFY it took. Use this for an
-        application form that wants a résumé/CV FILE (Ashby, Greenhouse) — a plain
-        `browser_fill` cannot set a file input.
-
-        `file_path` is FENCED to this plugin's own capture directory: a bare filename or
-        relative path resolves inside it, and an absolute path is accepted only if it already
-        lies inside it. A path that escapes — `..`, a symlink out, `~/.ssh/...`, any absolute
-        path elsewhere — is refused, so a prompt-injected page cannot make the agent upload an
-        arbitrary local file. The way to get a file here is `browser_pdf`, which writes into
-        this same directory and returns the path to pass straight to `browser_upload`; the
-        file must exist and be non-empty.
-
-        Address `field` by its visible LABEL (re-resolved in the page each call, so it survives
-        re-renders), a CSS selector, or `#id` / a bare id of the file input — NOT a `@eN` ref (the
-        input is located and tagged in the page, where a ref can't be resolved; `browser_form_read`
-        has the same limit). A `#id`/bare id of an `input[type=file]` resolves directly, even when
-        it is hidden behind an "Attach" button; otherwise, if the located element isn't the file
-        input itself (Greenhouse/Ashby hide it behind "Attach"), the single file input in its
-        container is used — none, or more than one, is a clear error. When two file fields share a
-        label (two "Attach" buttons), address each by its id.
-
-        On success you get `Uploaded <name> to <label>`, returned only after confirming the attach:
-        by reading the attached filename back from the input (even if the widget re-rendered it and
-        re-found it by id/name), or — when the widget replaced the input and left the filename
-        showing as a chip — via that displayed filename (the line then says so). An attach with no
-        file and no displayed filename is a hard `Error:`, as is a read-back of a different name,
-        and any validation message the field shows is surfaced."""
+        """Attach a local file to a form's file input (e.g. a résumé) and verify the attached
+        filename. `file_path` is FENCED to this plugin's capture directory — anything outside
+        (`..`, symlinks, other absolute paths) is refused; produce the file with `browser_pdf`
+        and pass the path it returns (must exist, non-empty). `field`: visible LABEL, CSS
+        selector, or the input's `#id`/bare id — NOT a `@eN` ref; when two file fields share a
+        label, use the id. Unverified attach or a different read-back name is an `Error:`."""
+        # Why the fence: a prompt-injected page must not make the agent upload an arbitrary local file
+        # (~/.ssh/...). A bare filename or relative path resolves inside the capture dir; an absolute
+        # path is accepted only if already inside it.
+        # Locating: a #id/bare id of an input[type=file] resolves directly even when hidden behind an
+        # "Attach" button (Greenhouse/Ashby); otherwise, if the located element isn't the file input, the
+        # single file input in its container is used (none or several -> clear error). The input is
+        # located and tagged in-page, where a CLI @ref can't be resolved.
+        # Verify: success `Uploaded <name> to <label>` only after reading the filename back from the input
+        # (re-found by id/name after a re-render) or, when the widget replaced the input, from the
+        # displayed filename chip (the line says so). Any field validation message is surfaced.
         if (bad := _bad_operand(field=field)):
             return bad
         # A @ref is resolved by the CLI, not in the page — but the file input is located AND
@@ -874,25 +841,22 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_press(key: str, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Press a key or chord on the focused element (e.g. `Enter`, `Tab`,
-        `Control+a`)."""
+        """Press a key or chord on the focused element (e.g. `Enter`, `Control+a`)."""
         return _bad_operand(key=key) or await _ab("press", key)
 
     @tool
     @_serialized
     async def browser_hover(selector: str, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Hover the pointer over a form field by its visible LABEL (re-resolved each call, so
-        it survives re-renders), a `@eN` ref, or a CSS selector."""
+        """Hover over an element by visible LABEL, `@eN` ref, or CSS selector."""
         sel, err = await _resolve_field(selector)
         return err or await _ab("hover", sel)
 
     @tool
     @_serialized
     async def browser_eval(expression: str, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Evaluate a JavaScript `expression` in the page and return the result.
-        Use sparingly — prefer snapshot + the action tools. An expression that starts with
-        a dash and a letter (`-a`) must be wrapped, `(-a)`, or the CLI reads it as an
-        option; `-1` is fine."""
+        """Evaluate a JavaScript `expression` in the page and return the result. Use sparingly —
+        prefer snapshot + the action tools. Wrap an expression starting with dash+letter, `(-a)`,
+        or the CLI reads it as an option."""
         # The script goes to `agent-browser eval --stdin` on stdin, never into argv: a large
         # script (design-system-plugin's ~32K SITE_PROBE_JS) would otherwise overrun
         # Windows' 32,767-char command-line limit and fail before running (#3689).
@@ -902,38 +866,27 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_screenshot(path: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Save a PNG screenshot of the current page. Returns the absolute file path —
-        hand that to `save_file_artifact` to put the image in the Artifact panel.
-        The image is also attached for vision models.
-
-        `path` is an optional FILENAME or relative path (`shots/home.png`); leave it blank
-        and the file is named for you, which is what you want when you just need the image
-        (two unnamed captures never overwrite each other). Files land in this plugin's own
-        capture directory; an absolute path outside it is refused."""
+        """Save a PNG screenshot of the page and return its absolute path (also attached for
+        vision); pass that to `save_file_artifact` to show it. `path`: optional filename/relative
+        path inside this plugin's capture directory (blank = auto-named); outside it is refused."""
+        # Two unnamed captures never overwrite each other.
         return await _capture("screenshot", path, "page.png", view=True)
 
     @tool
     @_serialized
     async def browser_pdf(path: str = "", *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Print the current page to PDF (Chrome's print-to-PDF) and return the absolute
-        file path. This is the HTML→PDF path: open a page — or an artifact/report you
-        rendered — then `browser_pdf`, then hand the file to `save_file_artifact` so the
-        user can download it.
-
-        `path` is an optional FILENAME or relative path (`out/resume.pdf`); leave it blank
-        and the file is named for you (two unnamed captures never overwrite each other).
-        Files land in this plugin's own capture directory; an absolute path outside it is
-        refused.
-
-        The PDF is always US Letter (8.5 x 11 in). The CLI has no paper-size option and
-        IGNORES a page's CSS `@page size` — an A4 page comes out Letter. Don't promise the
-        user A4: lay the page out for Letter, or say the output is Letter."""
+        """Print the current page to PDF (the HTML→PDF path) and return its absolute path; pass
+        it to `save_file_artifact` so the user can download it. `path`: optional filename/relative
+        path inside this plugin's capture directory (blank = auto-named); outside it is refused.
+        Output is always US Letter (CSS `@page size` is ignored) — never promise A4."""
+        # Chrome's print-to-PDF; the CLI has no paper-size option. Two unnamed captures never overwrite
+        # each other.
         return await _capture("pdf", path, "page.pdf")
 
     @tool
     @_serialized
     async def browser_close(*, state: Annotated[Any, InjectedState] = None) -> str:
-        """Close the browser session. Call when the task is done to free the daemon."""
+        """Close the browser session when the task is done."""
         return await _ab("close")
 
     return [

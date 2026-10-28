@@ -70,48 +70,22 @@ def _build_scheduler_tools(scheduler) -> list:
         max_fires: int | None = None,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
-        """Schedule a future task. The agent receives ``prompt`` as a
-        new turn when the schedule fires.
-
-        Use this for anything the operator wants done later: reminders
-        ("remind me to follow up on the auth migration tomorrow at
-        9am"), recurring sweeps ("every Monday morning, summarize last
-        week's logs"), one-off check-ins ("at 3pm today, ask whether
-        the deploy is healthy").
-
-        Recurring (cron) schedules expire automatically: they get a
-        default TTL of 7 days unless you override it with ``ttl``
-        and/or ``max_fires``, so a forgotten schedule doesn't run
-        indefinitely. Set a longer ``ttl`` for genuinely long-lived
-        recurring work. One-shot ISO schedules are unaffected — they
-        fire once and are removed.
+        # Recurring (cron) schedules get a default 7-day TTL unless ``ttl``/``max_fires`` say
+        # otherwise, so a forgotten schedule doesn't run forever; one-shot ISO schedules fire
+        # once and are removed. Returns "Scheduled job <id> next at <iso>." or an error string.
+        """Schedule a future turn: ``prompt`` arrives as a new turn when it fires (reminders, recurring sweeps, check-ins).
 
         Args:
-            prompt: The text the agent should receive when the schedule
-                fires. Be self-contained — the agent has no memory of
-                this scheduling moment when the task fires.
-            when: Either a 5-field cron expression (``"0 9 * * 1-5"``
-                = every weekday at 9am) or an ISO-8601 datetime
-                (``"2026-05-01T15:00:00"`` = once at 3pm UTC on May 1).
-                Compute exact times using ``current_time`` — the agent
-                cannot infer "now" from training data.
-            job_id: Optional human-readable id for the job. Auto-
-                generated if omitted; you'll need it later to cancel.
-            timezone: Optional IANA timezone (e.g. ``"America/Chicago"``)
-                the cron expression is evaluated in, handling DST — so
-                ``"0 9 * * *"`` means 9am local. Omit for UTC. Ignored
-                for one-shot ISO times (those carry their own offset).
-            ttl: Optional lifetime for a recurring schedule — a human
-                shorthand (``"7d"``, ``"24h"``, ``"2w"``) or an ISO-8601
-                duration (``"P7D"``). The job auto-cancels once this long
-                has passed since it was created. Defaults to ``"7d"`` for
-                cron schedules when omitted.
-            max_fires: Optional cap on firings — the job auto-cancels
-                after this many successful fires.
+            prompt: self-contained instruction — you'll have no memory of scheduling it.
+            when: 5-field cron (``"0 9 * * 1-5"``) or ISO-8601 datetime for a one-shot. Compute
+                times with ``current_time``.
+            job_id: optional id (auto-generated); needed to cancel.
+            timezone: IANA zone the cron is evaluated in (DST-aware); default UTC; ignored for ISO.
+            ttl: recurring lifetime, e.g. ``"7d"``, ``"24h"``, ``"P7D"``. Cron jobs default to 7d —
+                set longer for genuinely long-lived work.
+            max_fires: auto-cancel after this many fires.
 
-        Returns ``"Scheduled job <id> next at <iso>."`` on success,
-        an error string on malformed ``when`` / ``timezone`` / ``ttl`` or
-        backend failure.
+        For "check back in N seconds" use ``wait``.
         """
         # Validate expiry knobs up front — a clean error string beats a
         # backend-specific failure surfacing later.
@@ -180,12 +154,7 @@ def _build_scheduler_tools(scheduler) -> list:
 
     @tool
     async def list_schedules() -> str:
-        """List the current scheduled jobs for this agent.
-
-        Returns one job per line with id, next-fire timestamp, expiry
-        state (ttl / max_fires / fires so far), and a prompt preview.
-        Returns ``"No scheduled jobs."`` when empty.
-        """
+        """List this agent's scheduled jobs (id, next fire, expiry, prompt preview)."""
         jobs = await asyncio.to_thread(scheduler.list_jobs)
         if not jobs:
             return "No scheduled jobs."
@@ -204,14 +173,7 @@ def _build_scheduler_tools(scheduler) -> list:
 
     @tool
     async def cancel_schedule(job_id: str) -> str:
-        """Cancel a scheduled job by id.
-
-        Args:
-            job_id: The id returned by ``schedule_task`` (or shown by
-                ``list_schedules``).
-
-        Returns ``"Canceled <id>."`` or ``"Error: no such job <id>."``.
-        """
+        """Cancel a scheduled job by the id from ``schedule_task`` / ``list_schedules``."""
         if not job_id or not job_id.strip():
             return "Error: job_id is required."
         try:
@@ -222,34 +184,20 @@ def _build_scheduler_tools(scheduler) -> list:
 
     @tool
     async def wait(seconds: int, then: str, state: Annotated[Any, InjectedState] = None) -> str:
-        """Pause and resume LATER instead of polling. Use this whenever you are
-        waiting for something to finish — a ship to arrive, a build/deploy, a
-        cooldown, a countdown a status tool reported ("arriving in 37s"). Do NOT
-        call a status tool over and over to wait it out; that burns the entire
-        turn in one go.
+        # ADR 0053: the wake-up resumes in the SAME conversation with history intact.
+        """Pause and resume LATER instead of polling: ENDS your turn now and re-invokes you in this conversation after ``seconds``.
 
-        Calling ``wait`` ENDS your turn immediately and schedules a one-shot
-        wake-up ``seconds`` from now. When it fires you are re-invoked with
-        ``then`` as your instruction — back in THIS same conversation, with its
-        history intact (ADR 0053) — so you act exactly once, when the thing is
-        actually ready. This is the right way to run long-horizon work without
-        spinning.
+        Use whenever you're waiting on something (a build, deploy, cooldown, an ETA a status tool
+        gave) — never call a status tool repeatedly to wait it out. For an absolute time or a
+        recurring schedule use ``schedule_task``.
 
         Args:
-            seconds: how long to wait, in seconds (e.g. 40). Use the ETA a status
-                tool gave you and round up a little. Minimum 1.
-            then: the self-contained instruction to run on resume — e.g. "Dock
-                NOVAHAUL-5 at X1-UC87-K93, sell the ore, then accept the next
-                contract." This is your only context when you wake, so be
-                specific about what to do and which entities are involved.
+            seconds: ≥1; use the reported ETA, rounded up a little.
+            then: self-contained instruction for when you wake — your only context then, so name
+                the exact entities and steps.
 
-        Returns a short confirmation of the scheduled wait. Do NOT echo this
-        return value verbatim into chat — it's a status line for you, not a reply
-        to the user. If you say anything, paraphrase it conversationally and
-        briefly (e.g. "Okay, I'll check back in about 5 minutes."); never paste
-        the raw string or an ISO timestamp. For an absolute time or a recurring
-        schedule use ``schedule_task`` instead — ``wait`` is for "yield for a
-        bit, then pick this back up".
+        Never paste the returned status line or an ISO timestamp into chat; paraphrase briefly
+        (e.g. "I'll check back in about 5 minutes.").
         """
         if not (then or "").strip():
             return "Error: `then` is required — describe what to do on resume."
@@ -407,36 +355,19 @@ def _build_watch_tools():
         on_change: bool = False,
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
-        """Create a WATCH: poll `condition` on a cadence (ground-truthed by the plugin verifier
-        `check`), and when it's met run `run_prompt` (if given) as a follow-up turn in THIS
-        session. Use watches to supervise many things at once (a deploy, CI, a metric) — each a
-        separate watch, all polled in parallel. Only plugin verifiers are allowed; shell/test/
-        data watches are operator-only. `watch_id` defaults to a slug of the condition (pass one
-        to hold two watches on the same condition).
+        # ADR 0067. Default is a one-shot tripwire. ``repeat`` fires each time the condition
+        # BECOMES true again (not once per check while it stays true). ``on_change`` implies
+        # repeat. ``interval_s`` is a per-watch floor — never faster than the global cadence.
+        # Without interval/expiry/stall knobs a watch polls at the default cadence until cleared.
+        """Create a WATCH: poll ``condition`` via the plugin verifier ``check``; when met, run ``run_prompt`` (if given) as a follow-up turn in THIS session.
 
-        By default this is a TRIPWIRE: it fires once, then it's done. Two flags turn it into a
-        standing monitor instead:
-        - `repeat`: keep watching after it fires. It then fires each time the condition BECOMES
-          true again — not once per check while it stays true — so a condition that latches
-          (`credits >= 1M`) won't spam you.
-        - `on_change`: fire whenever the checked VALUE moves, whatever the condition says. Use
-          this to track something rather than wait for it ("tell me whenever the treasury
-          changes"). Implies `repeat`.
-        A repeating watch runs until its deadline or until you clear it — set `expires_in_s`
-        unless you really mean forever.
-
-        Three optional knobs shape how long it lives and how hard it polls — set them when you
-        know the answer, because a watch with none of them polls at the default cadence until
-        something clears it:
-        - `interval_s`: seconds between checks for THIS watch (a floor — never faster than the
-          global cadence). Raise it for something slow-moving; a nightly build doesn't need a
-          30s poll.
-        - `expires_in_s`: give up after this many seconds FROM NOW; the watch finishes `expired`
-          instead of polling forever. Use it whenever the thing you're watching has a deadline.
-        - `stall_after`: after N consecutive checks with unchanged evidence, fire the stall
-          signal (the watch stays active) — how you notice a deploy that's wedged rather than slow.
-
-        Returns the watch status, or an error.
+        One watch per thing (deploy, CI, metric); all poll in parallel. Only plugin verifiers are
+        allowed — shell/test/data watches are operator-only. ``watch_id`` defaults to a slug of the
+        condition. Fires once by default; ``repeat`` keeps it armed (fires on each re-entry into
+        true); ``on_change`` fires whenever the checked value moves. A repeating watch runs until its
+        deadline or until cleared — set ``expires_in_s`` (seconds from now) unless you mean forever.
+        ``interval_s``: seconds between checks (raise for slow things). ``stall_after``: signal after
+        N checks with unchanged evidence (watch stays active).
         """
         from runtime.state import STATE
 
@@ -504,17 +435,11 @@ def _build_watch_tools():
         repeat: bool | None = None,
         on_change: bool | None = None,
     ) -> str:
-        """Adjust a watch you already set, without losing what it has observed. Pass only
-        what you want to change; everything else stays. Use this instead of clear+create —
-        recreating resets the watch's stall history and starts its evidence over.
+        # Editing keeps stall history and evidence; clear+create resets them.
+        """Adjust an existing watch in place — pass only the fields to change. Prefer this over clear + create (which resets its history).
 
-        Typical: a watch you gave an hour needs three (`expires_in_s=10800`, measured from
-        NOW, not from when it was created); something is moving slower than you thought
-        (`interval_s=1800`); you want the trip to run a different follow-up (`run_prompt`).
-        `clear_deadline=true` removes an expiry entirely so the watch runs until it trips.
-
-        Only watches with a plugin verifier can be edited here, and a finished watch can't be
-        edited at all — set a new one. Returns the updated status, or an error.
+        ``expires_in_s`` is measured from NOW; ``clear_deadline=true`` removes the expiry. Only
+        plugin-verifier watches are editable, and a finished watch can't be — set a new one.
         """
         from runtime.state import STATE
 

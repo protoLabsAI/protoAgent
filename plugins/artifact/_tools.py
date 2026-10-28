@@ -295,49 +295,30 @@ def save_file_artifact(
     link: bool = False,
     state: Annotated[Any, InjectedState] = None,
 ) -> str:
-    """Save a GENERATED FILE (a .docx / .xlsx / .pptx / .pdf / image / text file you already
-    wrote to disk) into the Artifact panel as a VERSIONED download artifact — so the file gets
-    the same edit-history + inspectable panel treatment as a rendered artifact, and the user
-    can download it or diff it across versions.
+    """Save a file you already wrote to disk (.docx/.xlsx/.pptx/.pdf/image/text) into the
+    Artifact panel as a VERSIONED download artifact with a typed preview — use it right after a
+    skill writes a document. To render HTML/SVG/React/Markdown/charts, use ``show_artifact``.
+    Returns the artifact id.
 
-    Use this right AFTER a skill writes a document to disk (e.g. cowork's docx/xlsx/pptx/pdf
-    skills, a generated report or image): pass the file ``path``. The panel stores the bytes,
-    shows a preview typed by content, and offers a Download button:
-    .docx → the real rendered PAGES (Word styles, tables, images, headers/footers);
-    .pdf → the real rendered PAGES; .pptx → the real rendered SLIDES (each keeps its
-    extracted text beneath); .csv/.tsv → a table (delimiter sniffed, numbers right-aligned);
-    .xlsx → one table per sheet; .md → rendered prose; .json → pretty-printed; images → a
-    thumbnail; other text files → plain text.
+    COMPOSE the file completely, then save ONCE — never revision after revision within a turn
+    (each save round-trips the whole file).
 
-    COMPOSE the file completely, then save ONCE — do not save revision after revision while
-    you iterate in a single turn; every save round-trips the full file through the
-    conversation. Batch your edits and save when the content is done.
+    ``path``: relative to a filesystem project (pass ``project`` when several have it) or
+    absolute; an absolute path with ``project`` must lie inside that project, so for a file
+    anywhere else leave ``project`` empty. ``artifact_id`` saves a new revision (v2, v3…) of that
+    artifact instead of a new entry.
 
-    ``title`` is an optional label. To save a NEW revision of a file you saved before (so it
-    becomes v2, v3… of the same artifact rather than a new panel entry), pass that artifact's
-    ``artifact_id`` (see ``list_artifacts``). Returns the artifact id.
-
-    ``path`` takes the same form as the fs tools: a path relative to a filesystem project
-    (pass ``project``, or omit it when only one project has that file — the default
-    ``workspace`` included), or an absolute path. An absolute path together with ``project``
-    must lie inside that project's root; for a file anywhere else, leave ``project`` empty.
-
-    This is for FILES on disk. To render HTML/SVG/React/Markdown/charts, use ``show_artifact``.
-
-    ``link=True`` LINKS the file in place instead of copying its bytes (ADR 0092 D2). Use it for
-    reference material you did NOT produce — a long source PDF, a dataset, a spec — that the user
-    should be able to open from the panel without the agent storing a copy. The file must live
-    inside a registered filesystem project (it's served from there through the live project
-    fence); a path outside every project, or a symlink escaping one, is refused. A linked
-    artifact is READ-ONLY: it keeps no copy and no version history, so it can't be revised —
-    don't pass ``artifact_id`` with ``link=True``, and don't try to revise a linked artifact
-    (save it without ``link`` for an editable, versioned copy). The 25 MB ``max_blob_kb`` cap does
-    not apply; a linked file has its own, larger ``max_linked_kb`` cap (200 MB default).
-    Serving the linked bytes is NOT in this slice: a linked version stores no blob, and the
-    download / media routes answer 404 for one. So a linked artifact is a panel REFERENCE
-    today — use it to point at a document in place, not to hand the bytes to a reader. The
-    fence re-check on serving lands with that follow-up.
+    ``link=True`` links reference material you did NOT produce in place, without copying; it must
+    be inside a registered project. A linked artifact is READ-ONLY with no versions — never pass
+    ``artifact_id`` with it — and is a panel reference only (its bytes aren't served yet).
     """
+    # Maintainer notes (kept out of the model-facing schema; the model-facing manual is the
+    # rendering-artifacts skill): previews by type — .docx/.pdf → rendered pages, .pptx →
+    # rendered slides, .csv/.tsv/.xlsx → tables, .md → prose, .json → pretty, images → thumbnail.
+    # link=True (ADR 0092 D2): served from the live project fence; a symlink escaping a project is
+    # refused. The max_blob_kb cap doesn't apply — a linked file has its own max_linked_kb cap
+    # (200 MB default). Serving linked bytes isn't in this slice: download/media routes 404 for a
+    # linked version; the fence re-check on serving lands with that follow-up.
     if link and artifact_id:
         return (
             "link=True can't be combined with artifact_id: a linked artifact serves a file in "
@@ -821,76 +802,36 @@ def show_artifact(
     placement: str | None = None,
     state: Annotated[Any, InjectedState] = None,
 ) -> str:
-    """CREATE a new generative-UI artifact in the console's Artifact panel.
+    """CREATE a new sandboxed, rendered artifact in the console; returns its id. Prefer it
+    over writing files when the user wants to SEE something. Full manual: the
+    ``rendering-artifacts`` skill.
 
-    ``kind`` is one of: "html" (a full or partial HTML document), "svg" (inline SVG markup),
-    "mermaid" (a Mermaid diagram definition), "markdown" (a Markdown document — rendered with
-    design-system prose styling; ```mermaid fences become live diagrams), "vega-lite" (a CHART: a
-    JSON Vega-Lite spec with its rows inline in ``data.values`` — themed to the console
-    automatically, so leave colours/background out, and omit ``$schema`` (the renderer is always
-    Vega-Lite v6); ``data.url`` is never loaded — EVERY standard
-    bar/line/area/point/arc/heat-map chart is one, even one "added" to an existing tool: show it as
-    its own inline vega-lite artifact beside the tool, never bars/lines hand-built from divs, CSS
-    or SVG), or "react" (a
-    self-contained React component script; name your top-level component ``App`` and it
-    AUTO-MOUNTS into ``#root`` (no manual ``createRoot(...).render`` needed — though an explicit
-    render still works). React, ReactDOM and Babel are provided, and it can ``import`` from a
-    curated offline set — ``three`` (3D: ``import * as THREE from "three"``), ``d3``
-    (``import * as d3 from "d3"``), ``animejs`` (animation: ``import { animate } from "animejs"``,
-    then ``animate(el, { translateX: 100, duration: 400 })``), ``chart.js``, ``lucide``, and
-    ``@pl/ui`` design-system components like ``Button``/``Card``/``Stat``/``Icon``). An ``html``
-    artifact can import ``three`` / ``d3`` / ``animejs`` / ``chart.js`` / ``lucide`` the same way
-    from a ``<script type="module">``; its own import map, if it ships one, is merged with these
-    (its entries win). ``code`` is the source; ``title`` is
-    an optional label. Runs sandboxed — it can't access the console.
+    ``kind``: "html"; "svg"; "mermaid" (a DIAGRAM is ``kind="mermaid"`` — a ```mermaid fence in
+    chat text shows as code, not a drawing); "markdown" (a STANDALONE DOCUMENT the user keeps — a
+    README, spec, report, letter — is ``kind="markdown"``, with only a short summary in chat);
+    "vega-lite" (a CHART: JSON spec with rows inline in ``data.values`` — ``data.url`` is never
+    loaded; omit ``$schema`` and colours, it's themed. EVERY standard bar/line/area/point/arc/
+    heat-map chart is one, even one "added" to an existing tool — never bars/lines hand-built
+    from divs, CSS or SVG); "react" (name the component ``App`` and it auto-mounts; can import
+    ``three``, ``d3``, ``animejs``, ``chart.js``, ``lucide`` and ``@pl/ui`` offline — an html
+    ``<script type="module">`` can too).
 
-    After creating it, CHECK IT RENDERED: this reply carries the render verdict when the panel is
-    open; otherwise — always for an INLINE artifact, whose chat frame mounts only after this reply —
-    call ``check_artifact(<id>)`` before telling the user it works. Fix any reported error.
+    ``html``/``react`` MUST use the injected design system: colours ONLY from theme tokens
+    (``var(--pl-color-fg)`` …; never hex/rgb/``white`` — the theme may be dark) and ``.pl-*``
+    classes.
 
-    A STANDALONE DOCUMENT the user will keep or edit (a README, spec, report, letter) is
-    ``kind="markdown"`` here — it opens in the panel — with a short summary in chat, not the whole
-    document pasted into the reply. Short answers stay text. A DIAGRAM is ``kind="mermaid"``
-    (inline by default): a ```mermaid fence in chat text shows as plain code, not a drawing.
+    ``placement`` defaults to "inline" (html/svg/mermaid/react/vega-lite render in the chat;
+    other kinds fall back to the panel); pass "panel" for a work product iterated over turns.
 
-    To EDIT what you just made, use ``update_artifact`` (a small targeted change) or
-    ``rewrite_artifact`` (a full replacement) — they iterate the SAME artifact as a new
-    version instead of cluttering the panel with near-duplicates.
+    After creating, CHECK IT RENDERED: read the verdict in this reply or — always for inline —
+    call ``check_artifact(<id>)`` before saying it works; fix any error. Edit with
+    ``update_artifact``/``rewrite_artifact``, never by re-creating. Plain structured data (a
+    table, metrics, steps) → prefer ``show_component``.
 
-    Use this for free-form or custom-rendered visuals — a chart, a Mermaid diagram, bespoke
-    HTML/React/SVG (it runs sandboxed, heavier). For plain STRUCTURED DATA — a table, a
-    metrics block, a step/plan list — prefer ``show_component`` instead (it renders inline in
-    the chat, data-only, no sandbox, lighter). Rule of thumb: a generated VISUAL → this tool;
-    a data SHAPE → a component. Prefer either over writing files when the user just wants to
-    SEE something rendered. Returns the artifact id.
-
-    ``placement`` DEFAULTS to ``"inline"``; pass ``"panel"`` to override it. Inline renders the
-    SAME artifact directly in the conversation — the same sandbox, versions and "Open in panel" —
-    for an answer the user interacts with in place (a calculator, an explainer, a chart, a small
-    tool). Inline placement covers html, svg, mermaid, react and vega-lite; any other kind
-    (markdown, decks, PDFs, files) renders in the panel instead — SILENTLY under the default, with
-    a note only when you EXPLICITLY pass ``placement="inline"`` on such a kind. Pass
-    ``placement="panel"`` for a work product you iterate on over many turns (a document, a deck, a
-    large app) — that still opens the panel.
-
-    CODE-LINKED DIAGRAMS (mermaid only): ``links`` maps diagram elements to code, so the
-    operator can click a node or a message and land on that code in the console's code pane.
-    ``{"<key>": {"project", "path", "line", "end_line"?, "note"?}}`` — keys are a flowchart /
-    class / state node id or subgraph id exactly as written (bare — ``participant:`` is for
-    sequence diagrams only), ``participant:<name>`` for a sequence participant, and ``msg:<n>`` for the n-th sequence message (1-based, source
-    order) or ``msg:<exact label>``. Every target must be a REAL location you read — take
-    ``line`` from ``search_files`` (file:line) or a ``read_file`` offset, never a guess — and
-    ALWAYS pass ``anchor``: a short exact snippet of that line copied verbatim from the tool
-    output (``"runTool("``, ``"function textFrom"``, ≤ 120 chars). The server snaps the link to
-    the anchor's nearest occurrence (so a miscounted line still lands) and drops a link whose
-    anchor isn't in the file. The reply echoes each target's first line and every snap. Bad
-    links are dropped with a reason (the diagram still renders). ``note`` is one sentence
-    (≤ 280 chars).
-
-    Style ``html``/``react`` with the injected design system, which is required: colours ONLY from
-    the theme tokens (``var(--pl-color-fg)``, ``var(--pl-color-bg-raised)``, ``var(--pl-color-accent)`` …) (never ``#fff``/``white``/hex/rgb; the operator's theme may be dark
-    or light), and the ``.pl-*`` classes (``pl-card``, ``pl-field`` + ``pl-input``, ``pl-btn
-    pl-btn--primary``, ``pl-stats``, ``pl-table``). See the ``rendering-artifacts`` skill.
+    ``links`` (mermaid only) maps node/subgraph ids, ``participant:<name>`` or ``msg:<n>``/
+    ``msg:<label>`` to ``{"project","path","line","anchor","end_line"?,"note"?}`` — REAL lines you
+    read, never guessed, and ALWAYS an ``anchor`` (that line's text verbatim, ≤ 120 chars). See
+    the ``diagramming-code`` skill.
     """
     checked = _links.check(links)
     ui = _renders_ui(state)
@@ -1064,19 +1005,14 @@ def update_artifact(
     links: dict | str | None = None,
     state: Annotated[Any, InjectedState] = None,
 ) -> str:
-    """Make a TARGETED edit to an existing artifact: replace ``old_string`` with ``new_string``
-    in its current source, creating a new version. ``old_string`` must match the current source
-    EXACTLY ONCE (whitespace included) — add surrounding context to disambiguate if needed.
-    Defaults to the most-recent artifact; pass ``artifact_id`` to target another (see
-    ``list_artifacts``). Prefer this over ``rewrite_artifact`` for small changes — it's the fast
-    path and keeps the version history clean.
+    """TARGETED edit: replace ``old_string`` with ``new_string`` in an artifact's current
+    source, as a new version. ``old_string`` must match EXACTLY ONCE (whitespace included) — add
+    context to disambiguate. Prefer this over ``rewrite_artifact`` for small changes. Defaults to
+    the most-recent artifact; ``artifact_id`` targets another.
 
-    Asked to ADD A CHART to an existing tool? Don't edit bars/lines into it — a standard chart is
-    its own inline ``vega-lite`` artifact (``show_artifact(kind="vega-lite", …)``) beside the tool.
-
-    A mermaid diagram's code ``links`` (see ``show_artifact``) CARRY OVER to the new version
-    unless you pass ``links`` — the full new map, replacing the old one (``{}`` clears them).
-    If your edit renumbers sequence messages (msg:<n>), pass the corrected map.
+    Don't edit a chart into a tool: a standard chart is its own ``vega-lite`` artifact. Mermaid
+    ``links`` carry over unless you pass ``links`` (the full new map; ``{}`` clears) — pass it if
+    the edit renumbers ``msg:<n>``.
     """
     checked = _links.check(links)
     return _then_render(
@@ -1137,15 +1073,11 @@ def rewrite_artifact(
     links: dict | str | None = None,
     state: Annotated[Any, InjectedState] = None,
 ) -> str:
-    """Replace an artifact's ENTIRE source with ``code``, creating a new version (the kind is
-    kept). Use this for a large change where a targeted ``update_artifact`` would be awkward;
-    prefer ``update_artifact`` for small edits — a rewrite round-trips the full body through
-    the conversation every time, so batch your changes into one rewrite rather than iterating
-    rewrite-by-rewrite. Optionally update the ``title``. Defaults to the most-recent artifact;
-    pass ``artifact_id`` to target another.
-
-    A mermaid diagram's code ``links`` (see ``show_artifact``) do NOT carry over a rewrite —
-    the new source is a new diagram, so pass the ``links`` for it (the old version keeps its own).
+    """Replace an artifact's ENTIRE source with ``code`` as a new version (kind kept;
+    optional new ``title``). For large changes — prefer ``update_artifact`` for small ones; each
+    rewrite round-trips the full body, so batch your changes into one rewrite. Defaults to the
+    most-recent artifact; ``artifact_id`` targets another. Mermaid ``links`` do NOT carry over —
+    pass the new diagram's map.
     """
     checked = _links.check(links)
     return _then_render(
@@ -1202,9 +1134,9 @@ def _pin_mark(art: dict) -> str:
 
 @tool
 def list_artifacts() -> str:
-    """List the artifacts in the panel (pinned first, then newest first) with id, kind, title,
-    version count and whether each is pinned, so you can target ``update_artifact`` /
-    ``rewrite_artifact`` / ``pin_artifact`` / ``delete_artifact`` at a specific one. Read-only."""
+    """List artifacts (pinned first, then newest) with id, kind, title, version count and
+    pin state. Read-only.
+    """
     store = _store._read_store()
     if not store["artifacts"]:
         return "No artifacts yet. Create one with show_artifact."
@@ -1230,13 +1162,8 @@ def list_artifacts() -> str:
 
 @tool
 def get_artifact(artifact_id: str = "") -> str:
-    """Return the CURRENT source code of an artifact (with its kind, title and version).
-
-    This is how you TAKE OVER an artifact you didn't create — e.g. one from an earlier
-    session or another agent: read the source here, then iterate it with ``update_artifact``
-    (craft an exact ``old_string`` from what you read) or ``rewrite_artifact``. ``list_artifacts``
-    only shows metadata; this returns the actual code. Defaults to the current artifact; pass
-    ``artifact_id`` (see ``list_artifacts``) to target another. Read-only.
+    """Return an artifact's CURRENT source (with kind, title, version) — how you take over one
+    you didn't create before editing it. Defaults to the current artifact. Read-only.
     """
     store = _store._read_store()
     art = _store._find(store, artifact_id or store["current"])
@@ -1251,21 +1178,12 @@ def get_artifact(artifact_id: str = "") -> str:
 
 @tool
 def check_artifact(artifact_id: str = "", state: Annotated[Any, InjectedState] = None) -> str:
-    """Check whether an artifact's latest version actually RENDERED — the feedback channel for
-    the code→render→fix loop. Rendering happens async in the browser, so a create/edit can
-    return before the result is known; call this (or just iterate) to see how it went.
-
-    Returns the render verdict: rendered cleanly, FAILED with the captured error message, or
-    "no result yet" — for a panel artifact, the panel is closed / not showing this version (open
-    the Artifact panel); for an INLINE artifact, the operator's chat isn't showing it yet, so the
-    render can't be confirmed — don't keep re-checking, and never open the panel for it. On a
-    client that renders text only, there is no viewer and nothing to check.
-    Defaults to the current artifact; pass ``artifact_id`` (see ``list_artifacts``) to target
-    another. Read-only.
-
-    Safe to call right after creating/editing: if a result isn't in yet, it waits briefly for the
-    verdict rather than returning "no result yet" — for an INLINE artifact always (its chat frame
-    mounts after the create reply), for a panel artifact while the panel is live."""
+    """Report whether an artifact's latest version RENDERED: clean, FAILED with the error, or
+    "no result yet". Waits briefly for a pending verdict, so call it right after a create/edit.
+    "No result yet" on an INLINE artifact means the chat isn't showing it — don't keep
+    re-checking, and never open the panel for it; on a panel artifact, the panel isn't showing
+    it. Text-only clients have nothing to check. Defaults to the current artifact. Read-only.
+    """
     store = _store._read_store()
     art = _store._find(store, artifact_id or store["current"])
     if art is None:
@@ -1313,19 +1231,11 @@ def check_artifact(artifact_id: str = "", state: Annotated[Any, InjectedState] =
 @_busy_reply
 @_store.serialized
 def pin_artifact(artifact_id: str, pinned: bool = True) -> str:
-    """PIN an artifact so it is never evicted — for a LONG-LIVED artifact you'll come back to
-    across sessions (a master resume, a reference doc, a running plan), especially one whose
-    id you've recorded somewhere else. Without a pin, artifacts are evicted oldest-first once
-    the panel holds more than its limit (default 20) — counting EVERY artifact on this agent,
-    so a long-lived one silently disappears after enough unrelated renders and a recorded id
-    then points at nothing.
-
-    A pin keeps the artifact and its LATEST versions: edits still trim to the per-artifact
-    version limit (default 50), so old revisions are not kept forever. The number of pins is
-    capped; at the cap this REFUSES and names the pinned artifacts — unpin one first.
-    ``pinned=False`` unpins: the artifact counts toward the limit again, as if just touched.
-    ``list_artifacts`` / ``get_artifact`` show which artifacts are pinned. Pass the
-    ``artifact_id`` (see ``list_artifacts``)."""
+    """PIN a long-lived artifact (a master resume, a reference doc, one whose id you recorded)
+    so it is never evicted; unpinned ones are evicted oldest-first past the panel limit. A pin
+    keeps only the latest versions. Pins are capped — at the cap this refuses; unpin one first.
+    ``pinned=False`` unpins.
+    """
     store = _store._read_store()
     art = _store._find(store, artifact_id)
     if art is None:
@@ -1378,8 +1288,7 @@ def pin_artifact(artifact_id: str, pinned: bool = True) -> str:
 @_busy_reply
 @_store.serialized
 def delete_artifact(artifact_id: str) -> str:
-    """Delete an artifact (all its versions) from the panel — for cleanup. The user can also
-    delete from the panel's trash button. Pass the ``artifact_id`` (see ``list_artifacts``)."""
+    """Delete an artifact and all its versions from the panel."""
     store = _store._read_store()
     if _store._find(store, artifact_id) is None:
         return f"No artifact {artifact_id!r}. Use list_artifacts to see the ids."
