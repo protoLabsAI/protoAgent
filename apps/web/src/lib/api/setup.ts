@@ -78,6 +78,23 @@ export const setupApi = {
     });
   },
 
+  /** Probe this machine for well-known local model servers — Ollama and LM Studio
+   *  (#4572). Each entry reports whether it answered, the models it offers, and any
+   *  error, so the setup wizard can fill in the endpoint + model with no typing. No
+   *  body: the server knows which ports to check. */
+  localModels() {
+    return request<{
+      endpoints: {
+        id: string;
+        label: string;
+        base_url: string;
+        found: boolean;
+        models: string[];
+        error: string;
+      }[];
+    }>("/api/config/local-models", { method: "POST" });
+  },
+
   /** The provider registry (ADR 0106) — every configured CONNECTION, keys redacted.
    *  `in_use_by` names the slots routing through each one, so the delete guard is
    *  legible before the operator tries it. */
