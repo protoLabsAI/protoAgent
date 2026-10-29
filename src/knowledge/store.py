@@ -638,15 +638,14 @@ def migrate_conversation_chunks_to_history(db_path: str | Path | None) -> int:
     db.row_factory = sqlite3.Row
     try:
         db.execute("PRAGMA busy_timeout=5000")
-        # A finished pass is stamped and never re-runs. A DB with no ``_kb_meta`` table
-        # predates the chunks schema entirely, so there is nothing to migrate either.
+        # A DB with no ``_kb_meta`` table predates the chunks schema entirely, so there is
+        # nothing to migrate. The stamp records a finished pass but does NOT skip the
+        # probe: an older core sharing this file (a coder or eval that booted newer code
+        # against a live agent) keeps writing conversation chunks after the stamp, and
+        # those must still move on the next boot.
         try:
-            stamped = db.execute(
-                "SELECT value FROM _kb_meta WHERE key = ?", (_HISTORY_MIGRATION_KEY,)
-            ).fetchone()
+            db.execute("SELECT value FROM _kb_meta WHERE key = ?", (_HISTORY_MIGRATION_KEY,)).fetchone()
         except sqlite3.DatabaseError:
-            return 0
-        if stamped is not None:
             return 0
         # Both tables must exist: the caller runs this only once the HistoryStore has
         # created ``history``; a core file with no ``chunks`` (plugin backend) is empty here.
@@ -658,7 +657,7 @@ def migrate_conversation_chunks_to_history(db_path: str | Path | None) -> int:
             (HISTORY_DOMAIN,),
         ).fetchall()
         if not rows:
-            # Nothing to move, but stamp so a second boot skips even this probe.
+            # Nothing (left) to move: stamp the pass. The probe itself stays cheap.
             with db:
                 db.execute(
                     "INSERT INTO _kb_meta(key, value) VALUES(?, ?) "
@@ -726,7 +725,10 @@ def _backup_pre_0125(db: sqlite3.Connection, path: Path) -> None:
         db.execute("PRAGMA wal_checkpoint(FULL)")
     except sqlite3.DatabaseError:
         pass  # non-WAL / read-only mount: the main file is already current
-    shutil.copy2(path, path.with_name(path.name + _PRE_0125_BACKUP_SUFFIX))
+    backup = path.with_name(path.name + _PRE_0125_BACKUP_SUFFIX)
+    if backup.exists():
+        return  # a later pass (rows an older core wrote after the first) keeps the ORIGINAL backup
+    shutil.copy2(path, backup)
 
 
 def _normalize_expires_at(value: str | datetime | None) -> str | None:
@@ -1956,6 +1958,14 @@ class KnowledgeStore:
                 )
                 hidden += int(cur.rowcount)
             if hwhere and _history_table_present(db):
+                # Already-invalidated history (a migrated soft-deleted archive) is tagged
+                # ``marker|prev:<reason>`` like chunks, so phase 2 deletes it too.
+                db.execute(
+                    "UPDATE history SET invalidation_reason = ? || COALESCE(invalidation_reason, '') "
+                    f"WHERE ({hwhere}) AND invalidated_at IS NOT NULL "
+                    f"AND substr(COALESCE(invalidation_reason, ''), 1, {len(FORGET_PENDING_PREFIX)}) != '{FORGET_PENDING_PREFIX}'",
+                    [marker + FORGET_PREV_SEP, *hparams],
+                )
                 hcur = db.execute(
                     f"UPDATE history SET invalidated_at = ?, invalidation_reason = ? WHERE ({hwhere}) AND invalidated_at IS NULL",
                     [now, marker, *hparams],
@@ -1980,9 +1990,8 @@ class KnowledgeStore:
         half-applied restore would leave a marker that a later forget resumes without
         hiding the rows the first half already un-hid. Raises on a database error.
 
-        ADR 0125: the ``history`` rows ``marker`` hid are un-hidden in the SAME transaction
-        (history carries no supersession, so a plain clear suffices — no ``|prev:`` to
-        restore)."""
+        ADR 0125: the ``history`` rows ``marker`` hid are un-hidden in the SAME transaction,
+        and the already-invalidated ones it tagged get their own reason back."""
         if not marker:
             return 0
         db = self._get_db()
@@ -2006,6 +2015,11 @@ class KnowledgeStore:
                     (marker,),
                 )
                 restored += int(hcur.rowcount)
+                db.execute(
+                    f"UPDATE history SET invalidation_reason = NULLIF(substr(invalidation_reason, {n + 1}), '') "
+                    f"WHERE substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}'",
+                    (marker,),
+                )
             db.commit()
             return restored
         except sqlite3.DatabaseError:

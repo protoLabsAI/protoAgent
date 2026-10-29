@@ -264,3 +264,51 @@ async def test_runtime_sweep_reaches_private_history(tmp_path, monkeypatch, know
     assert hist.get(ids["archive"]) is None
     assert hist.get(ids["report"]) is not None
     assert hist.forget_pending_markers() == {}
+
+
+def _reason(db, row_id):
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("SELECT invalidated_at, invalidation_reason FROM history WHERE id = ?", (row_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def _soft_delete(db, row_id, reason="operator-soft-delete"):
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "UPDATE history SET invalidated_at = '2026-10-01T00:00:00+00:00', invalidation_reason = ? WHERE id = ?",
+            (reason, row_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_forget_deletes_already_invalidated_history_too(tmp_path):
+    """A migrated soft-deleted archive (invalidated before the chat delete) is tagged
+    ``marker|prev:`` in phase 1, so phase 2 removes it with the rest of the chat."""
+    store, hist, db = _stores(tmp_path)
+    ids = _seed_history(hist)
+    _soft_delete(db, ids["archive"])
+
+    marker = begin_forget(store, SESSION, THREADS)
+    assert marker
+    finish_forget(store, marker)
+
+    assert _reason(db, ids["archive"]) is None
+    assert _reason(db, ids["other"]) is not None
+
+
+def test_abort_gives_invalidated_history_its_own_reason_back(tmp_path):
+    store, hist, db = _stores(tmp_path)
+    ids = _seed_history(hist)
+    _soft_delete(db, ids["archive"])
+
+    marker = begin_forget(store, SESSION, THREADS)
+    assert _reason(db, ids["archive"])[1].startswith(marker)
+    abort_forget(store, marker)
+
+    assert _reason(db, ids["archive"]) == ("2026-10-01T00:00:00+00:00", "operator-soft-delete")
+    assert _reason(db, ids["summary"]) == (None, None)
