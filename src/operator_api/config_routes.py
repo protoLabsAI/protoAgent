@@ -296,6 +296,13 @@ def register_config_routes(app) -> None:
         models, error = await asyncio.to_thread(list_gateway_models, base, key)
         return {"models": models, "error": error}
 
+    @app.post("/api/config/local-models")
+    async def _api_local_models():
+        """Discover local model servers without blocking the event loop."""
+        from graph.local_models import detect_local_models
+
+        return {"endpoints": await asyncio.to_thread(detect_local_models)}
+
     @app.get("/api/config/models/available")
     async def _api_available_models():
         """Every model the operator can actually reach, per lane — the gateway plus each
