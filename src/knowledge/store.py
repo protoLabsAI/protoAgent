@@ -359,25 +359,17 @@ def _namespace_clause(namespace: str | list[str] | None, col: str = "namespace")
     return "(" + " OR ".join(arms) + ")", params
 
 
-# The legacy ``chunks.domain`` that held conversation history — compaction archives,
-# retired-thread summaries, background job reports — before ADR 0125 gave history its
-# own table. No writer sets it anymore (H1d); the boot migration
-# (:func:`migrate_conversation_chunks_to_history`) drains the last such rows into
-# ``history``. Kept as the migration's selector; it no longer gates delivery.
+# Legacy conversation history still needs a delivery guard: ADR 0125 migrates only
+# the core agent.db, not commons or plugin stores, and boot migration can fail.
 HISTORY_DOMAIN = "conversation"
 
 
 def _deliverable_clauses(col_prefix: str = "") -> tuple[list[str], list[str]]:
     """The delivery layer's eligibility predicate (ADR 0108 D6 + D7.4): a row an
-    operator REJECTED (``review_state='rejected'``), or one past its ``expires_at``,
+    operator REJECTED (``review_state='rejected'``), conversation history, or one past its ``expires_at``,
     never enters the prompt. NULL review state (= pending) and NULL expiry are
     deliverable. Superseded rows are excluded separately (``invalidated_at``).
     Returns ``(sql_clauses, params)`` — ``col_prefix`` is ``"c."`` on joined SQL.
-
-    Conversation history (``HISTORY_DOMAIN``) used to be excluded here too (#4553),
-    but ADR 0125 moved it out of ``chunks`` into the ``history`` table — the boot
-    migration drains the last ``domain='conversation'`` rows and no writer makes new
-    ones — so that guard now covers an empty set and is retired.
 
     The expiry test is a STRING compare against ``_now_iso()`` — it assumes
     ``expires_at`` is stored in the same ``YYYY-MM-DDTHH:MM:SS.ffffff+00:00``
@@ -389,8 +381,9 @@ def _deliverable_clauses(col_prefix: str = "") -> tuple[list[str], list[str]]:
         [
             f"({p}review_state IS NULL OR {p}review_state != 'rejected')",
             f"({p}expires_at IS NULL OR {p}expires_at > ?)",
+            f"({p}domain IS NULL OR {p}domain != ?)",
         ],
-        [_now_iso()],
+        [_now_iso(), HISTORY_DOMAIN],
     )
 
 

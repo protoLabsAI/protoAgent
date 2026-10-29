@@ -207,3 +207,42 @@ def test_migration_missing_file_is_noop(tmp_path):
 )
 def test_migration_session_id_derivation(namespace, source, expected):
     assert _migration_session_id(namespace, source) == expected
+
+
+def test_core_boot_migration_does_not_make_commons_history_deliverable(tmp_path):
+    from knowledge.layered import LayeredKnowledgeStore
+    from server.agent_init import _migrate_conversation_history
+
+    core = KnowledgeStore(tmp_path / "agent.db")
+    history = HistoryStore(core.path)
+    commons = KnowledgeStore(tmp_path / "commons.db")
+    _seed_conversation_and_fact(core)
+    _seed_conversation_and_fact(commons)
+
+    _migrate_conversation_history(history)
+    assert _history_count(core.path) == 3
+    assert not core.search(_ARCHIVE_TOKEN)
+    assert commons.search(_ARCHIVE_TOKEN)  # deliberately outside the boot migration
+    assert not commons.search(_ARCHIVE_TOKEN, deliverable=True)
+    layered = LayeredKnowledgeStore(core, commons)
+    assert not layered.search(_ARCHIVE_TOKEN, deliverable=True)
+    assert layered.search(_FACT_TOKEN, deliverable=True)
+
+
+def test_failed_boot_migration_keeps_history_out_of_delivery(tmp_path, monkeypatch, caplog):
+    from server.agent_init import _migrate_conversation_history
+
+    store = KnowledgeStore(tmp_path / "agent.db")
+    history = HistoryStore(store.path)
+    _seed_conversation_and_fact(store)
+
+    def fail_migration(path):
+        assert path == history.path
+        raise OSError("backup unavailable")
+
+    monkeypatch.setattr("knowledge.store.migrate_conversation_chunks_to_history", fail_migration)
+    _migrate_conversation_history(history)
+    assert "0125 history migration skipped" in caplog.text
+    assert store.search(_ARCHIVE_TOKEN)  # boot continues with legacy rows present
+    assert not store.search(_ARCHIVE_TOKEN, deliverable=True)
+    assert store.search(_FACT_TOKEN, deliverable=True)
