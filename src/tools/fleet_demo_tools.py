@@ -25,11 +25,9 @@ agent (the PM), so ``created_by`` is stamped with this instance's identity name.
 
 from __future__ import annotations
 
-import logging
+import asyncio
 from typing import Any
 from urllib.parse import quote
-
-log = logging.getLogger("protoagent.tools")
 
 # HTTP timeouts for the loopback hop to this instance's own /agents/<slug>/api/chat proxy. A
 # member turn can run long; the proxy rewrites a plain sync POST into submit-then-poll and holds
@@ -187,7 +185,8 @@ def _build_fleet_demo_tools(config) -> list:
         from graph.fleet.demo import DemoError, create_demo
 
         try:
-            out = create_demo(
+            out = await asyncio.to_thread(
+                create_demo,
                 archetype,
                 model_connection,
                 model,
@@ -223,14 +222,15 @@ def _build_fleet_demo_tools(config) -> list:
             model: New model name within that connection.
             plugin_settings: ``{plugin_id: {key: value}}`` config overlaid per plugin.
 
-        Returns ``{slug, changed, plugins}``, or a refusal string for a non-demo slug.
+        Returns ``{ok, slug, changed, plugins}``, or ``{ok: False, refused: message}``.
         """
-        refusal = _not_demo(slug)
+        refusal = await asyncio.to_thread(_not_demo, slug)
         if refusal is not None:
             return {"ok": False, "refused": refusal}
         from graph.fleet.demo import configure_demo
 
-        out = configure_demo(
+        out = await asyncio.to_thread(
+            configure_demo,
             slug,
             model_connection=model_connection or None,
             model=model or None,
@@ -250,10 +250,17 @@ def _build_fleet_demo_tools(config) -> list:
 
         Returns ``{ok, reply, session_id}`` on success, else a compact error / refusal.
         """
-        refusal = _not_demo(slug)
-        if refusal is not None:
-            return {"ok": False, "refused": refusal}
-        return await _post_chat(slug, message, session_id)
+        from graph.fleet.demo import DemoError, require_demo
+
+        try:
+            record = await asyncio.to_thread(require_demo, slug)
+        except DemoError:
+            return {"ok": False, "refused": _refusal(slug)}
+        # The guard accepts display names; the proxy requires the checked record's ID.
+        member_id = record.get("id")
+        if not isinstance(member_id, str) or not member_id:
+            return {"ok": False, "refused": _refusal(slug)}
+        return await _post_chat(member_id, message, session_id)
 
     @tool
     async def fleet_demo_delete(slug: str) -> dict:
@@ -263,14 +270,14 @@ def _build_fleet_demo_tools(config) -> list:
         Args:
             slug: The demo member's slug.
 
-        Returns ``{ok: True, slug}`` on success, or a refusal string for a non-demo slug.
+        Returns ``{ok: True, slug, deleted: True}``, or ``{ok: False, refused: message}``.
         """
-        refusal = _not_demo(slug)
+        refusal = await asyncio.to_thread(_not_demo, slug)
         if refusal is not None:
             return {"ok": False, "refused": refusal}
         from graph.fleet.demo import delete_demo
 
-        delete_demo(slug)
+        await asyncio.to_thread(delete_demo, slug)
         return {"ok": True, "slug": slug, "deleted": True}
 
     @tool
@@ -280,6 +287,6 @@ def _build_fleet_demo_tools(config) -> list:
         created_by, created_at, ...}`` rows."""
         from graph.fleet.demo import list_demos
 
-        return list_demos()
+        return await asyncio.to_thread(list_demos)
 
     return [fleet_demo_create, fleet_demo_configure, fleet_demo_chat, fleet_demo_delete, fleet_demo_list]

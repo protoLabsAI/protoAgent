@@ -14,9 +14,12 @@ server, fleet, or workspace is touched.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 
 import httpx
+import pytest
 
 from graph.config import LangGraphConfig
 import graph.fleet.demo as demo
@@ -155,7 +158,7 @@ async def test_unknown_slug_fails_closed_to_the_refusal(monkeypatch):
 
 
 async def test_chat_posts_to_member_api_chat_and_returns_reply(monkeypatch):
-    monkeypatch.setattr(demo, "require_demo", lambda slug: {"demo": True})  # it IS a demo
+    monkeypatch.setattr(demo, "require_demo", lambda slug: {"id": slug, "demo": True})  # it IS a demo
     cap: list[httpx.Request] = []
     _install_http(
         monkeypatch,
@@ -179,7 +182,7 @@ async def test_chat_posts_to_member_api_chat_and_returns_reply(monkeypatch):
 
 
 async def test_chat_without_session_id_omits_it_and_mints_server_side(monkeypatch):
-    monkeypatch.setattr(demo, "require_demo", lambda slug: {"demo": True})
+    monkeypatch.setattr(demo, "require_demo", lambda slug: {"id": slug, "demo": True})
     cap: list[httpx.Request] = []
     _install_http(monkeypatch, body={"response": "ok", "session_id": "api-minted"}, capture=cap)
     out = await _tools()["fleet_demo_chat"].ainvoke({"slug": "demo-x", "message": "hi"})
@@ -188,7 +191,7 @@ async def test_chat_without_session_id_omits_it_and_mints_server_side(monkeypatc
 
 
 async def test_chat_maps_a_member_error_status_to_a_compact_failure(monkeypatch):
-    monkeypatch.setattr(demo, "require_demo", lambda slug: {"demo": True})
+    monkeypatch.setattr(demo, "require_demo", lambda slug: {"id": slug, "demo": True})
     _install_http(monkeypatch, status=409, body={"detail": "agent 'demo-x' is not running"})
     out = await _tools()["fleet_demo_chat"].ainvoke({"slug": "demo-x", "message": "hi"})
     assert out["ok"] is False
@@ -267,7 +270,7 @@ async def test_create_passes_an_explicit_name_through(monkeypatch):
 
 
 async def test_configure_a_demo_member_returns_what_changed(monkeypatch):
-    monkeypatch.setattr(demo, "require_demo", lambda slug: {"demo": True})
+    monkeypatch.setattr(demo, "require_demo", lambda slug: {"id": slug, "demo": True})
     seen: dict = {}
 
     def _fake_configure(slug, *, model_connection=None, model=None, plugin_settings=None):
@@ -289,3 +292,68 @@ async def test_list_returns_only_demo_members(monkeypatch):
     monkeypatch.setattr(demo, "list_demos", lambda: rows)
     out = await _tools()["fleet_demo_list"].ainvoke({})
     assert out == rows
+
+
+@pytest.mark.parametrize("alias", ["Demo display name", "remote-member-id"])
+async def test_chat_routes_checked_record_id_not_display_name(monkeypatch, alias):
+    checked = []
+
+    def require_demo(slug):
+        checked.append(slug)
+        return {"id": "demo-canonical", "name": alias, "demo": True}
+
+    monkeypatch.setattr(demo, "require_demo", require_demo)
+    requests = []
+    _install_http(monkeypatch, body={"response": "demo reply"}, capture=requests)
+    out = await _tools()["fleet_demo_chat"].ainvoke({"slug": alias, "message": "hello"})
+    assert checked == [alias]
+    assert out["reply"] == "demo reply"
+    assert requests[0].url.path == "/agents/demo-canonical/api/chat"
+
+
+async def test_chat_refuses_record_without_id(monkeypatch):
+    monkeypatch.setattr(demo, "require_demo", lambda slug: {"demo": True})
+    _forbid_http(monkeypatch)
+    out = await _tools()["fleet_demo_chat"].ainvoke({"slug": "demo-x", "message": "hi"})
+    assert out == {"ok": False, "refused": fdt._refusal("demo-x")}
+
+
+@pytest.mark.parametrize(
+    ("operation", "arguments", "result"),
+    [
+        ("create", {"archetype": "basic", "model_connection": "local", "model": "test"}, {}),
+        ("configure", {"slug": "demo-x"}, {}),
+        ("delete", {"slug": "demo-x"}, None),
+        ("list", {}, []),
+    ],
+)
+async def test_blocking_operations_leave_event_loop_responsive(monkeypatch, operation, arguments, result):
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    started = asyncio.Event()
+    release = threading.Event()
+
+    def require_demo(slug):
+        assert threading.get_ident() != loop_thread
+        return {"id": slug, "demo": True}
+
+    def blocking_op(*args, **kwargs):
+        assert threading.get_ident() != loop_thread
+        loop.call_soon_threadsafe(started.set)
+        assert release.wait(timeout=5), "event loop did not release the blocking operation"
+        return result
+
+    monkeypatch.setattr(demo, "require_demo", require_demo)
+    monkeypatch.setattr(demo, f"{operation}_demo" if operation != "list" else "list_demos", blocking_op)
+    task = asyncio.create_task(_tools()[f"fleet_demo_{operation}"].ainvoke(arguments))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert not task.done()
+        _install_http(monkeypatch, body={"response": "still responsive"})
+        chat = await asyncio.wait_for(
+            _tools()["fleet_demo_chat"].ainvoke({"slug": "demo-x", "message": "hi"}), timeout=2
+        )
+        assert chat["reply"] == "still responsive"
+    finally:
+        release.set()
+        await task
