@@ -315,11 +315,19 @@ def _namespace_clause(namespace: str | list[str] | None, col: str = "namespace")
     return "(" + " OR ".join(arms) + ")", params
 
 
+# Conversation history — compaction archives, retired-thread summaries, background
+# job reports. It is reachable on demand (memory_recall, recall_session) but never
+# enters the prompt unasked: auto-RAG over it re-fed agents their own old turns
+# (99% of a week's injected hits on one member were archives).
+HISTORY_DOMAIN = "conversation"
+
+
 def _deliverable_clauses(col_prefix: str = "") -> tuple[list[str], list[str]]:
     """The delivery layer's eligibility predicate (ADR 0108 D6 + D7.4): a row an
-    operator REJECTED (``review_state='rejected'``) or one past its ``expires_at``
-    never enters the prompt. NULL review state (= pending) and NULL expiry are
-    deliverable. Superseded rows are excluded separately (``invalidated_at``).
+    operator REJECTED (``review_state='rejected'``), one past its ``expires_at``, or
+    conversation history (``HISTORY_DOMAIN``) never enters the prompt. NULL review
+    state (= pending) and NULL expiry are deliverable. Superseded rows are excluded
+    separately (``invalidated_at``).
     Returns ``(sql_clauses, params)`` — ``col_prefix`` is ``"c."`` on joined SQL.
 
     The expiry test is a STRING compare against ``_now_iso()`` — it assumes
@@ -332,8 +340,9 @@ def _deliverable_clauses(col_prefix: str = "") -> tuple[list[str], list[str]]:
         [
             f"({p}review_state IS NULL OR {p}review_state != 'rejected')",
             f"({p}expires_at IS NULL OR {p}expires_at > ?)",
+            f"({p}domain IS NULL OR {p}domain != ?)",
         ],
-        [_now_iso()],
+        [_now_iso(), HISTORY_DOMAIN],
     )
 
 

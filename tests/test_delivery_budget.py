@@ -25,7 +25,7 @@ from graph.projection import (
 )
 from knowledge.hybrid_store import HybridKnowledgeStore
 from knowledge.layered import LayeredKnowledgeStore
-from knowledge.store import KnowledgeStore
+from knowledge.store import HISTORY_DOMAIN, KnowledgeStore
 
 
 # ── fakes ────────────────────────────────────────────────────────────────────
@@ -305,6 +305,9 @@ def test_deliverable_hit():
     assert not deliverable_hit({"review_state": "rejected"})
     assert not deliverable_hit({"expires_at": "2000-01-01T00:00:00+00:00"})
     assert deliverable_hit({"expires_at": "2999-01-01T00:00:00+00:00"})
+    # Conversation history is on-demand only: memory_recall reaches it, auto-RAG never does.
+    assert not deliverable_hit({"domain": HISTORY_DOMAIN})
+    assert deliverable_hit({"domain": "general"})
 
 
 # ── store-level `deliverable` on every backend ───────────────────────────────
@@ -320,6 +323,7 @@ def _seed(store) -> dict[str, int]:
         "rejected": store.add_chunk("alpha rejected row", domain="d", review_state="rejected"),
         "expired": store.add_chunk("alpha expired row", domain="d", expires_at=past),
         "future": store.add_chunk("alpha future row", domain="d", expires_at=future),
+        "history": store.add_chunk("alpha archived turn", domain=HISTORY_DOMAIN),
     }
 
 
