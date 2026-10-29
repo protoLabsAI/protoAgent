@@ -1318,6 +1318,13 @@ export type ChatMessage = {
    *  Posted via `noteToThread(text, { tone })`; system notes never carry the answer
    *  action row (copy/fork/regenerate) — those are answer-only. */
   noteTone?: SystemNoteTone;
+  /** Structured rendering for a LOCAL system note (same component-v1 shape the agent's
+   *  inline `component` parts use): when present and valid, ChatMessageView renders this
+   *  through the ChatComponent registry as a neutral in-thread card INSTEAD of the toned
+   *  `.chat-note` markdown alert. `content` stays the plain-markdown fallback — the text
+   *  export, copy, search, and any surface that doesn't render components still read it —
+   *  so a malformed `component` degrades to today's note rendering. */
+  component?: ComponentSpec;
   /** Display-only overlay that must NOT outlive the page (#2483): the chat store
    *  strips ephemeral messages at persist time, so a "/btw … saved nowhere" aside
    *  can't reappear from localStorage after a reload and make the promise a lie. */
