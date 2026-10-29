@@ -26,36 +26,36 @@
 
 ## Get it running
 
-[Download the desktop app](https://agent.protolabs.studio/download) for macOS,
-Windows, or Linux, then follow the setup wizard.
+**What you need:** a Claude Pro/Max or ChatGPT Plus/Pro plan, an API key
+(OpenAI, OpenRouter, …), or a local model (Ollama / LM Studio).
+Or nothing, to just explore.
 
-With [uv](https://docs.astral.sh/uv/) installed, you can also run the published package:
+**[Download the desktop app](https://agent.protolabs.studio/download)** for macOS,
+Windows, or Linux.
+
+On first run, click **Next** on the welcome screen, connect and test a model (or
+choose **Explore without a model**), choose **Basic** and name your agent, then
+review your choices and click **Finish**.
+The [first-agent tutorial](./docs/tutorials/first-agent.md) covers installation,
+connection testing, and your first chat.
+
+macOS builds are **Apple Silicon only**. Windows and Linux builds are unsigned;
+expect an OS warning on first launch.
+
+<details><summary>Other ways to run it</summary>
+
+### Run the Python package
+
+With [uv](https://docs.astral.sh/uv/) installed, run the published package:
 
 ```bash
 uvx --from protolabs-agent protoagent serve
 ```
 
-Open <http://localhost:7870>. Connect a model endpoint or sign in to a supported
-Claude or ChatGPT subscription, choose **Basic**, name your agent, and finish setup.
-The [first-agent tutorial](./docs/tutorials/first-agent.md) covers installation,
-connection testing, and your first chat.
+Open <http://localhost:7870> and follow the setup wizard. Port 7870 busy? Add
+`--port 7871` and open <http://localhost:7871> instead.
 
-## Watch it
-
-| Your agent drives Claude Code / Codex | An autonomous dev team | A private desktop agent |
-| --- | --- | --- |
-| <a href="docs/public/readme/hero-code-pane.webp"><img src="docs/public/readme/hero-code-pane-poster.png" alt="Claude Code's finished run in a protoAgent chat tab: todo list done, pytest 3 passed, and the Diff pane showing the changes to calc.py and test_calc.py" width="280"></a> | <img src="docs/public/readme/board-builds.webp" alt="Project board: a card marked ready from chat builds while the coder's live drawer streams, moves to In Review with auto-merge pending, then lands in Done with its PR link" width="280"> | <img src="docs/public/readme/install-plugin.webp" alt="Settings, Plugins: the terminal plugin is installed from its git URL, a Terminal icon appears in the rail with no restart, and the shell runs a command" width="280"> |
-| `delegate_to` hands a coding task to a CLI coding agent over ACP, streams its work into your chat, and brings the result back. [Spawn CLI coding agents →](./docs/guides/coding-agents.md) | The **Project Manager** archetype runs the pipeline: brief → board card → disposable worktree → pull request → CI gates → merge. [Build with a coding agent →](./docs/guides/build-with-a-coding-agent.md) | Runs on your machine. Plugins installed from any git URL add tools and console views. [Download →](https://agent.protolabs.studio/download) |
-
-## Repository layout
-
-Runtime Python code lives in `src/`, with unchanged import names such as `graph`
-and `server`. `apps/` contains the web console and desktop shell; `plugins/`
-contains bundled plugins. Tests, development scripts, documentation and deployment
-files live in `tests/`, `scripts/`, `docs/` and `deploy/`. `uv sync` installs the
-application editably, so each checkout's CLI uses its own source and assets.
-
-## From source, step by step
+### From source, step by step
 
 You need Git, uv, Python 3.11+, Node 20, and npm 11+. A source checkout needs a
 console build; published desktop and Python packages include it.
@@ -77,6 +77,59 @@ For frontend development, use `scripts/dev.sh` for the backend on port 7871 and
 `npm run dev --workspace @protoagent/web` for the frontend. See
 [Build and test the console](./docs/guides/build-console.md) and the repository
 instructions in [PROTO.md](./PROTO.md).
+
+### The `protoagent` command
+
+Install the CLI to manage an instance, including a running desktop hub:
+
+```bash
+uv tool install protolabs-agent
+protoagent --help
+protoagent fleet
+```
+
+In a checkout, use `uv run python -m server <subcommand>`. The
+[CLI guide](./docs/guides/cli.md) covers lifecycle, plugins, workspaces, config,
+and the terminal fleet deck.
+
+### One-command install (Docker)
+
+With Docker running:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/protoLabsAI/protoAgent/main/scripts/install.sh | sh
+```
+
+The installer starts the published image, preserves its data volume on updates,
+and offers a setup wizard. See [Deploy with Docker](./docs/guides/deploy-docker.md).
+
+### Run headless
+
+After configuring the model, serve the OpenAI-compatible API and A2A without a console:
+
+```bash
+protoagent serve --ui none
+curl http://localhost:7870/.well-known/agent-card.json
+```
+
+See [Run headless](./docs/guides/headless.md) for setup, API requests, and authentication.
+
+</details>
+
+## Watch it
+
+| Your agent drives Claude Code / Codex | An autonomous dev team | A private desktop agent |
+| --- | --- | --- |
+| <a href="docs/public/readme/hero-code-pane.webp"><img src="docs/public/readme/hero-code-pane-poster.png" alt="Claude Code's finished run in a protoAgent chat tab: todo list done, pytest 3 passed, and the Diff pane showing the changes to calc.py and test_calc.py" width="280"></a> | <img src="docs/public/readme/board-builds.webp" alt="Project board: a card marked ready from chat builds while the coder's live drawer streams, moves to In Review with auto-merge pending, then lands in Done with its PR link" width="280"> | <img src="docs/public/readme/install-plugin.webp" alt="Settings, Plugins: the terminal plugin is installed from its git URL, a Terminal icon appears in the rail with no restart, and the shell runs a command" width="280"> |
+| `delegate_to` hands a coding task to a CLI coding agent over ACP, streams its work into your chat, and brings the result back. [Spawn CLI coding agents →](./docs/guides/coding-agents.md) | The **Project Manager** archetype runs the pipeline: brief → board card → disposable worktree → pull request → CI gates → merge. [Build with a coding agent →](./docs/guides/build-with-a-coding-agent.md) | Runs on your machine. Plugins installed from any git URL add tools and console views. [Download →](https://agent.protolabs.studio/download) |
+
+## Repository layout
+
+Runtime Python code lives in `src/`, with unchanged import names such as `graph`
+and `server`. `apps/` contains the web console and desktop shell; `plugins/`
+contains bundled plugins. Tests, development scripts, documentation and deployment
+files live in `tests/`, `scripts/`, `docs/` and `deploy/`. `uv sync` installs the
+application editably, so each checkout's CLI uses its own source and assets.
 
 ## What you can do
 
@@ -107,42 +160,6 @@ Tracing is optional. See [Network egress](./docs/explanation/network-egress.md).
 To locate the active config and stores, run `protoagent config explain`. A normal
 source or package install uses `~/.protoagent/default/`; desktop and Docker have
 their own roots. See [Configuration](./docs/reference/configuration.md).
-
-## The `protoagent` command
-
-Install the CLI to manage an instance, including a running desktop hub:
-
-```bash
-uv tool install protolabs-agent
-protoagent --help
-protoagent fleet
-```
-
-In a checkout, use `uv run python -m server <subcommand>`. The
-[CLI guide](./docs/guides/cli.md) covers lifecycle, plugins, workspaces, config,
-and the terminal fleet deck.
-
-## One-command install (Docker)
-
-With Docker running:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/protoLabsAI/protoAgent/main/scripts/install.sh | sh
-```
-
-The installer starts the published image, preserves its data volume on updates,
-and offers a setup wizard. See [Deploy with Docker](./docs/guides/deploy-docker.md).
-
-## Run headless
-
-After configuring the model, serve the OpenAI-compatible API and A2A without a console:
-
-```bash
-protoagent serve --ui none
-curl http://localhost:7870/.well-known/agent-card.json
-```
-
-See [Run headless](./docs/guides/headless.md) for setup, API requests, and authentication.
 
 ## Plugins
 
