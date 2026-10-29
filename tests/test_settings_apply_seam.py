@@ -148,8 +148,18 @@ def _wire_finish_setup(monkeypatch, tmp_path, *, probe):
     a test can assert the probe did — or did not — run. ``probe`` is the ``(ok, err)`` the
     stubbed ``validate_model_connection`` returns."""
     import graph.config_io as cio
+    from graph.config import LangGraphConfig
+    from runtime.state import STATE
 
     _isolate_config(monkeypatch, tmp_path)
+    # Explore mode (#4566): the finish's "no model connected yet" note now reflects the
+    # RESULTING config — ``model_is_configured(STATE.graph_config)`` after the reload — not the
+    # submitted payload. The reload is stubbed here, so STATE.graph_config IS that resulting
+    # config: stand up a no-model live config and clear the conftest env key so a no-model
+    # finish reads as genuine explore mode. A test that wants the env-default case re-sets
+    # OPENAI_API_KEY itself (it stays explore for the probe-skip, which is payload-only).
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(), raising=False)
     rec: dict[str, list] = {"probe": [], "marked": [], "reset": []}
 
     def _probe(base, key, model, timeout=20.0, allow_env_key=True):
@@ -178,7 +188,8 @@ def test_finish_setup_without_a_model_skips_the_probe(monkeypatch, tmp_path):
     """Explore mode (#4566): a finish with no connection and a blank model name completes
     ok, marks setup complete, and NEVER probes a model — the model block is present but the
     name is empty, so only the new no-model skip (not the pre-existing isinstance guard)
-    keeps the probe from running."""
+    keeps the probe from running. The "no model connected yet" note is driven by the RESULTING
+    config (no env key here, so model_is_configured is False), not the payload."""
     rec = _wire_finish_setup(monkeypatch, tmp_path, probe=(False, "should never be called"))
 
     ok, msg = settings_apply._build_settings_callbacks()["finish_setup"]({"model": {"name": ""}}, None)
@@ -187,6 +198,26 @@ def test_finish_setup_without_a_model_skips_the_probe(monkeypatch, tmp_path):
     assert rec["probe"] == []  # validate_model_connection untouched
     assert rec["marked"] == [True]  # setup marked complete
     assert "Settings ▸ Model" in msg and "no model" in msg.lower()
+
+
+def test_finish_setup_without_a_model_but_env_key_does_not_claim_no_model(monkeypatch, tmp_path):
+    """#4566 review: the "no model connected yet" note reflects the RESULTING config, not the
+    submitted payload. With OPENAI_API_KEY in the environment the default route resolves it, so
+    ``model_is_configured`` of the reloaded config is True — the reload compiles a graph and the
+    console reports model_configured=true. The finish must NOT then tell the operator "no model
+    connected yet" (the stale, payload-only behaviour). The probe is still skipped: a payload
+    that names nothing has nothing to 1-token-complete against."""
+    rec = _wire_finish_setup(monkeypatch, tmp_path, probe=(False, "should never be called"))
+    # An env default IS a usable model for the resulting config (STATE.graph_config is the
+    # stubbed-reload's resulting config, a default LangGraphConfig that resolves this key).
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-default")
+
+    ok, msg = settings_apply._build_settings_callbacks()["finish_setup"]({"model": {"name": ""}}, None)
+
+    assert ok is True
+    assert rec["probe"] == []  # payload named nothing → still nothing to probe
+    assert rec["marked"] == [True]
+    assert "no model connected yet" not in msg.lower()  # the env default IS a model
 
 
 def test_finish_setup_with_a_named_model_still_probes_and_refuses(monkeypatch, tmp_path):

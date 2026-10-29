@@ -659,11 +659,6 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # 2. Flip the marker — MUST be before reload so the graph builds
         mark_setup_complete()
         messages.append("setup marked complete")
-        if _no_model:
-            # Explore mode: say so plainly so the wizard lands the visitor in the console
-            # with a clear next step rather than a silent "setup done". Appended before the
-            # reload message so the joined status still ends on the reload outcome.
-            messages.append("no model connected yet — connect one in Settings ▸ Model.")
 
         # 3. Autostart sync (shared helper — drawer path runs the same)
         as_msg = _sync_autostart_with_config(config)
@@ -676,6 +671,19 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # them in the chat UI with the "setup required" fallback
         # and no obvious way to retry.
         ok, reload_msg = _agent_init()._reload_langgraph_agent()
+        # Explore mode (#4566): report "no model connected yet" from the RESULTING config, not
+        # the submitted payload. `_no_model` (payload-only) decided whether there was anything
+        # to PROBE; whether the instance actually ends up WITHOUT a usable model is
+        # `model_is_configured` on the reloaded config — the SAME predicate the reload gate and
+        # the runtime `model_configured` status read. Without this, an instance with
+        # OPENAI_API_KEY in the environment (the default route resolves it, so the reload
+        # compiles a graph and model_configured=true) would still be told "no model connected
+        # yet". Appended before the reload message so the joined status still ends on the
+        # reload outcome.
+        from graph.config import model_is_configured
+
+        if ok and not model_is_configured(STATE.graph_config):
+            messages.append("no model connected yet — connect one in Settings ▸ Model.")
         messages.append(reload_msg)
         if not ok:
             reset_setup()

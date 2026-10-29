@@ -1034,11 +1034,29 @@ async def test_goal_verifier_sees_the_answer_after_the_empty_reply_fallback(env,
 async def test_graphless_turn_yields_one_error_frame(env, monkeypatch, auth_err, expected):
     monkeypatch.setattr(env.state, "graph", None, raising=False)
     monkeypatch.setattr(env.state, "graph_auth_error", auth_err, raising=False)
+    # The no-auth-error message is now setup-state-dependent (#4566): setup PENDING → "finish
+    # the wizard"; setup complete with no model (explore mode) → "connect a model" instead.
+    # These cases characterise the setup-pending shape, so pin the marker off deterministically.
+    monkeypatch.setattr("graph.config_io.is_setup_complete", lambda: False, raising=False)
 
     assert await _run() == [("error", expected)]
     # ODDITY: the graphless error returns BEFORE trace_session opens, so no trace is
     # started and nothing is flushed for it (the wrapper still records the output).
     assert env.trace.sessions == [] and env.trace.flushes == 0
+
+
+@pytest.mark.asyncio
+async def test_graphless_turn_in_explore_mode_points_at_settings_model(env, monkeypatch):
+    """#4566: setup complete, no model, no auth error → the A2A stream's graphless frame points
+    the caller at Settings ▸ Model, not at a setup wizard that is already finished."""
+    monkeypatch.setattr(env.state, "graph", None, raising=False)
+    monkeypatch.setattr(env.state, "graph_auth_error", None, raising=False)
+    monkeypatch.setattr("graph.config_io.is_setup_complete", lambda: True, raising=False)
+
+    (frame,) = await _run()
+    kind, msg = frame
+    assert kind == "error"
+    assert "no model connected" in msg.lower() and "Settings ▸ Model" in msg
 
 
 @pytest.mark.asyncio

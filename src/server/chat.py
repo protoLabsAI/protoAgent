@@ -388,10 +388,12 @@ def _setup_required_message() -> list[dict[str, Any]]:
     The console hides the chat pane until setup completes, but the
     HTTP /api/chat, OpenAI-compat, and A2A endpoints don't know the
     UI state — so they emit a plain-text message instead of 500ing on
-    ``STATE.graph is None``. Two graphless states, two messages: the
-    wizard hasn't run, or a native OAuth provider is signed out
-    (#2458) and needs an in-console reconnect — telling that user to
-    "finish setup" points them at a wizard that IS complete.
+    ``STATE.graph is None``. Three graphless states, three messages: the
+    wizard hasn't run; a native OAuth provider is signed out (#2458)
+    and needs an in-console reconnect; or setup finished with no model
+    connected ("Explore without a model", #4566). Telling either of the
+    latter two to "finish setup" points them at a wizard that IS
+    complete — so they get the reconnect / connect-a-model prompt instead.
     """
     auth_err = getattr(STATE, "graph_auth_error", None)
     if auth_err:
@@ -401,6 +403,21 @@ def _setup_required_message() -> list[dict[str, Any]]:
                 "content": (
                     f"**Signed out.** {auth_err.get('message') or 'The model provider is disconnected.'} "
                     "Chat is disabled until the provider is reconnected from the console."
+                ),
+            }
+        ]
+    from graph.config_io import is_setup_complete
+
+    if is_setup_complete():
+        # Explore mode (#4566): setup is done but no model is connected, so the graph is
+        # intentionally uncompiled (and there's no OAuth sign-out). Point the operator at
+        # Settings ▸ Model rather than at a wizard that's already complete.
+        return [
+            {
+                "role": "assistant",
+                "content": (
+                    "**No model connected.** Setup is complete, but no model is configured yet. "
+                    "Connect one in Settings ▸ Model to enable chat."
                 ),
             }
         ]
@@ -1474,7 +1491,14 @@ async def _chat_langgraph_stream_impl(
             # wizard the user already finished.
             yield ("error", auth_err.get("message") or "provider disconnected — reconnect from the console")
         else:
-            yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
+            from graph.config_io import is_setup_complete
+
+            if is_setup_complete():
+                # Explore mode (#4566): setup is done, just no model — point at Settings ▸
+                # Model, not at a wizard the user already finished.
+                yield ("error", "no model connected — connect one in Settings ▸ Model to enable chat")
+            else:
+                yield ("error", "setup required — finish the setup wizard before calling A2A endpoints")
         return
 
     # The turn's EFFECTIVE model pick (#3957): the request's own, else an active goal's —
