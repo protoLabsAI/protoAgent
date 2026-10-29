@@ -154,14 +154,23 @@ def register_eval_case_routes(app) -> None:
         if turn["rating"] == 1 and not summaries:
             from evals.verify import audit_entries_since
 
-            entries = await asyncio.to_thread(audit_entries_since, "")
-            case["expected_tools"] = sorted(
+            entries = await asyncio.to_thread(audit_entries_since, "", include_rotated=True)
+            expected_tools = sorted(
                 {
                     e["tool"]
                     for e in entries
                     if e.get("trace_id") == req.trace_id and e.get("session_id") == req.session_id and e.get("tool")
                 }
             )
+            if expected_tools:
+                case["expected_tools"] = expected_tools
+            else:
+                # Missing history cannot establish the runner's explicit []
+                # assertion that no tools fired. Require operator curation.
+                case["comment"] = (
+                    "No matching tool calls remain in the retained audit log. "
+                    "Add an assertion before saving; missing audit evidence does not prove no tools fired."
+                )
         else:
             case["comment"] = "\n".join([*([turn["note"]] if turn["note"] else []), *summaries])
         return case

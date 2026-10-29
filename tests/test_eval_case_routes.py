@@ -106,6 +106,61 @@ def test_up_draft_is_verbatim_and_writes_nothing(env):
     assert draft(client, trace_id="tr2").json()["prompt"] == "second"
 
 
+@pytest.mark.parametrize("live", ["absent", "unrelated", "split"])
+def test_up_draft_recovers_retained_rotation(env, live):
+    from evals.verify import audit_entries_since
+
+    client, _, root = env
+    path = root / "audit.jsonl"
+    entries = [json.loads(line) for line in path.read_text().splitlines()]
+    path.rename(root / "audit.jsonl.1")
+    if live == "unrelated":
+        path.write_text(json.dumps(entries[-1]) + "\n")
+    elif live == "split":
+        path.write_text(json.dumps(entries[0]) + "\n")
+        (root / "audit.jsonl.1").write_text("\n".join(json.dumps(e) for e in entries[1:]))
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    response = draft(client)
+    assert response.status_code == 200
+    value = response.json()
+    assert value["expected_tools"] == ["read", "search"]
+    assert value["prompt"] == PROMPT
+    assert value["source_trace_id"] == "tr1"
+    assert value["tier"] == "gate"
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+    # The optional historical read must not change live eval verification.
+    assert audit_entries_since("") == ([] if live == "absent" else [entries[-1 if live == "unrelated" else 0]])
+
+
+@pytest.mark.parametrize("history", ["missing", "empty", "unrelated"])
+def test_missing_audit_evidence_does_not_assert_no_tools(env, history):
+    client, _, root = env
+    path = root / "audit.jsonl"
+    path.unlink()
+    if history == "empty":
+        path.write_text("")
+    elif history == "unrelated":
+        entries = [
+            {"ts": "2026-10-01", "session_id": sid, "trace_id": trace, "tool": "other"}
+            for sid, trace in [("s1", "tr2"), ("s2", "tr1")]
+        ]
+        for target in (path, root / "audit.jsonl.1"):
+            target.write_text("\n".join(json.dumps(e) for e in entries))
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    response = draft(client)
+    assert response.status_code == 200
+    value = response.json()
+    assert "expected_tools" not in value
+    assert "missing audit evidence" in value["comment"]
+    assert value["prompt"] == PROMPT
+    assert value["source_trace_id"] == "tr1"
+    assert client.post("/api/evals/cases", json={"case": value}).status_code == 422
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+    value["expected_tools"] = ["search"]
+    assert client.post("/api/evals/cases", json={"case": value}).status_code == 201
+    assert load_instance_cases(root / "instance/config/evals/cases.json")[0]["expected_tools"] == ["search"]
+
+
 @pytest.mark.parametrize("rating,friction", [(0, False), (None, True), (1, True), (0, True)])
 def test_negative_or_friction_has_no_expectations(env, rating, friction):
     client, store, root = env
