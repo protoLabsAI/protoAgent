@@ -592,8 +592,32 @@ def _build_settings_callbacks() -> dict[str, Any]:
         _provider = str((_conn or {}).get("type", "") or "") or (
             str((_model_cfg or {}).get("provider", "") or "") if isinstance(_model_cfg, dict) else ""
         )
+        # "Explore without a model" (#4566): a first run that declares no connection AND
+        # names no model has nothing to probe — there is no endpoint to 1-token-complete
+        # against. Skip the gate, persist whatever was submitted, mark setup complete, and
+        # let the operator connect a model later from Settings ▸ Model. A config that DOES
+        # name a model (or declares a connection) is untouched: it still probes below and
+        # still refuses on failure.
+        _submitted_model_name = (
+            str((_model_cfg or {}).get("name", "") or "").strip() if isinstance(_model_cfg, dict) else ""
+        )
+        _no_model = not _conns and not _submitted_model_name
+        # Explore mode writes the registry as DECLARED-EMPTY. The shipped template
+        # (config/langgraph-config.example.yaml) declares a placeholder `gateway`
+        # openai-compat connection, and apply_updates_to_yaml would otherwise leave it in
+        # place — so `model_is_configured` would read True on that base_url alone (the
+        # loaded config keeps `providers_declared` with a non-empty registry) and the
+        # reload gate would build a graph that can't authenticate. Overwriting `providers`
+        # with `[]` removes the placeholder and makes the loaded config declared-empty
+        # (graph.config from_yaml: an explicit list — `[]` included — sets
+        # providers_declared and the registry floors stay silent), which is exactly what
+        # `model_is_configured` / `split_slot_target` / discovery read as "no model". A
+        # legitimate base_url-only openai-compat connection (a local Ollama / LM Studio)
+        # DECLARES a connection, so `_no_model` is False and this does not touch it.
+        if _no_model and config is not None:
+            config["providers"] = []
         _skip_probe = _runtime.startswith("acp:") or is_native_oauth_provider(_provider)
-        if not _skip_probe and config is not None and isinstance(_model_cfg, dict):
+        if not _skip_probe and not _no_model and config is not None and isinstance(_model_cfg, dict):
             m = _model_cfg
             live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
             if _conn is not None:
@@ -661,6 +685,19 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # them in the chat UI with the "setup required" fallback
         # and no obvious way to retry.
         ok, reload_msg = _agent_init()._reload_langgraph_agent()
+        # Explore mode (#4566): report "no model connected yet" from the RESULTING config, not
+        # the submitted payload. `_no_model` (payload-only) decided whether there was anything
+        # to PROBE; whether the instance actually ends up WITHOUT a usable model is
+        # `model_is_configured` on the reloaded config — the SAME predicate the reload gate and
+        # the runtime `model_configured` status read. Without this, an instance with
+        # OPENAI_API_KEY in the environment (the default route resolves it, so the reload
+        # compiles a graph and model_configured=true) would still be told "no model connected
+        # yet". Appended before the reload message so the joined status still ends on the
+        # reload outcome.
+        from graph.config import model_is_configured
+
+        if ok and not model_is_configured(STATE.graph_config):
+            messages.append("no model connected yet — connect one in Settings ▸ Model.")
         messages.append(reload_msg)
         if not ok:
             reset_setup()

@@ -339,6 +339,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
             return
 
     from graph.agent import create_agent_graph
+    from graph.config import model_is_configured
     from graph.providers.oauth import OAuthCredentialError
     from tools.lg_tools import get_all_tools
 
@@ -445,56 +446,78 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # the `task` tool's run_in_background path can reach it.
     STATE.background_mgr = _build_background_manager(STATE.graph_config)
 
-    try:
-        with _timed_boot_phase("graph_compile", _boot_phases):
-            STATE.graph = create_agent_graph(
-                STATE.graph_config,
-                knowledge_store=STATE.knowledge_store,
-                scheduler=STATE.scheduler,
-                skills_index=STATE.skills_index,
-                extra_tools=STATE.mcp_tools + STATE.plugin_tools,
-                extra_middleware=STATE.plugin_middleware,
-                late_tool_factories=STATE.plugin_late_tool_factories,
-                checkpointer=STATE.checkpointer,
-                inbox_store=STATE.inbox_store,
-                tasks_store=STATE.tasks_store,
-                background_mgr=STATE.background_mgr,
-                # Lets the guarded edit_soul tool (ADR 0079/0081) reload the graph so a
-                # persona self-edit is live on the next turn — injected, so tools/ never
-                # imports server/. The prompt-only variant: a persona edit must not
-                # re-import plugins or respawn MCP servers (#3365).
-                reload_callback=_reload_for_soul_edit,
-            )
-    except OAuthCredentialError as exc:
-        # Signed-out is an intentional state, not a boot failure (#2458): the user
-        # disconnected a native OAuth provider and the marker survived a restart.
-        # Crashing here is a recovery dead end — the reconnect routes live on THIS
-        # server. Boot graphless instead (routes/surfaces above are already wired,
-        # chat degrades on ``STATE.graph is None``) and record why, so status APIs
-        # can offer reconnect instead of a dead port. The graph-independent
-        # machinery below (goal/watch controllers) still builds: the reconnect
-        # reload rebuilds only the graph, so anything skipped here would stay
-        # dead until a full restart.
+    # "Explore without a model" (#4566): setup is complete but no model is connected, so
+    # `create_llm` would raise on the empty key (no endpoint to build a client against).
+    # Boot graphless — the SAME shape as the OAuthCredentialError path below and the reload
+    # gate (`_reload_langgraph_agent`) — so the server stays up and serves the console. The
+    # routes/surfaces/knowledge/plugins above are already wired and chat degrades on
+    # `STATE.graph is None`; saving a model in Settings ▸ Model reloads and compiles with no
+    # restart. This is the SAME predicate the reload gate reads, so boot and reload agree. We
+    # do NOT fake a model to force a build.
+    if not model_is_configured(STATE.graph_config):
+        # Skip the graph build but DON'T return — fall through to the graph-independent
+        # machinery below (goal/watch controllers), exactly as the OAuthCredentialError
+        # path does. A later Settings ▸ Model save reloads only the graph (reconfiguring,
+        # not rebuilding, those controllers), so anything skipped here would stay dead until
+        # a full restart.
         STATE.graph = None
-        STATE.graph_auth_error = {
-            "provider": exc.provider,
-            "message": str(exc),
-            "relogin": exc.relogin,
-        }
+        STATE.graph_auth_error = None
         log.warning(
-            "[oauth] %s — starting without a compiled graph; reconnect %s from the console to restore chat.",
-            exc,
-            exc.provider,
+            "Setup is complete but no model is connected (explore mode, #4566) — graph not "
+            "compiled. Connect a model in Settings ▸ Model to enable chat.",
         )
     else:
-        STATE.graph_auth_error = None
-        # Untooled-action audit (#2276) — now that the persona AND the bound tool set
-        # both exist, warn about commitments no tool backs (the model narrates those
-        # as done).
-        _audit_persona_tools(STATE.graph, trigger="boot")
+        try:
+            with _timed_boot_phase("graph_compile", _boot_phases):
+                STATE.graph = create_agent_graph(
+                    STATE.graph_config,
+                    knowledge_store=STATE.knowledge_store,
+                    scheduler=STATE.scheduler,
+                    skills_index=STATE.skills_index,
+                    extra_tools=STATE.mcp_tools + STATE.plugin_tools,
+                    extra_middleware=STATE.plugin_middleware,
+                    late_tool_factories=STATE.plugin_late_tool_factories,
+                    checkpointer=STATE.checkpointer,
+                    inbox_store=STATE.inbox_store,
+                    tasks_store=STATE.tasks_store,
+                    background_mgr=STATE.background_mgr,
+                    # Lets the guarded edit_soul tool (ADR 0079/0081) reload the graph so a
+                    # persona self-edit is live on the next turn — injected, so tools/ never
+                    # imports server/. The prompt-only variant: a persona edit must not
+                    # re-import plugins or respawn MCP servers (#3365).
+                    reload_callback=_reload_for_soul_edit,
+                )
+        except OAuthCredentialError as exc:
+            # Signed-out is an intentional state, not a boot failure (#2458): the user
+            # disconnected a native OAuth provider and the marker survived a restart.
+            # Crashing here is a recovery dead end — the reconnect routes live on THIS
+            # server. Boot graphless instead (routes/surfaces above are already wired,
+            # chat degrades on ``STATE.graph is None``) and record why, so status APIs
+            # can offer reconnect instead of a dead port. The graph-independent
+            # machinery below (goal/watch controllers) still builds: the reconnect
+            # reload rebuilds only the graph, so anything skipped here would stay
+            # dead until a full restart.
+            STATE.graph = None
+            STATE.graph_auth_error = {
+                "provider": exc.provider,
+                "message": str(exc),
+                "relogin": exc.relogin,
+            }
+            log.warning(
+                "[oauth] %s — starting without a compiled graph; reconnect %s from the console to restore chat.",
+                exc,
+                exc.provider,
+            )
+        else:
+            STATE.graph_auth_error = None
+            # Untooled-action audit (#2276) — now that the persona AND the bound tool set
+            # both exist, warn about commitments no tool backs (the model narrates those
+            # as done).
+            _audit_persona_tools(STATE.graph, trigger="boot")
 
-    # Fires even on a graphless boot (OAuthCredentialError) — the phases that DID
-    # run (checkpointer/knowledge_store/plugins/mcp) are still useful signal.
+    # Fires even on a graphless boot (OAuthCredentialError, or explore mode with no model
+    # connected #4566) — the phases that DID run (checkpointer/knowledge_store/plugins/mcp)
+    # are still useful signal.
     _log_boot_phase_summary(_boot_phases)
 
     # Cache-warming heartbeat — off by default; start() no-ops unless enabled
@@ -1180,7 +1203,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     """
 
     from graph.agent import create_agent_graph
-    from graph.config import LangGraphConfig
+    from graph.config import LangGraphConfig, model_is_configured
     from graph.config_io import config_yaml_path, ensure_live_config, is_setup_complete
     from tools.lg_tools import get_all_tools
 
@@ -1248,6 +1271,19 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     # Pre-seeded for the same reason as its siblings: the setup-pending branch never
     # builds plugins, and the commit below publishes unconditionally.
     new_plugin_bundle = None
+    # "Explore without a model" (#4566): the stores, plugins, MCP clients, skills and inbox
+    # all build WITHOUT a model — only the graph needs one. So the build gate is
+    # `is_setup_complete()` alone (model-independent), mirroring boot's `_init_langgraph_agent`,
+    # which builds all of this BEFORE it ever checks for a model. Only `create_agent_graph` is
+    # gated on `model_is_configured` below: in explore mode it is skipped (its `create_llm`
+    # would raise on the empty key) and `new_graph` stays None, but everything else is built
+    # and committed — so an explore-mode reload KEEPS the live stores/plugins/surfaces it just
+    # rebuilt instead of tearing them down to the pre-seeded empties (which would null out the
+    # knowledge/history/skills/inbox stores, close the live MCP clients and stop every running
+    # surface on the first reload of a booted instance). The moment a model is saved in
+    # Settings, the next reload compiles the graph with no restart. We do NOT fake a model to
+    # force a build. Only the setup-PENDING branch below skips the build entirely — nothing is
+    # built yet while the wizard is up.
     if is_setup_complete():
         prior_workflow = (STATE.workflow_registry, STATE.workflow_run)
         try:
@@ -1303,30 +1339,38 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
             new_late_tool_factories = new_plugins.late_tool_factories  # late-tools seam
             new_skills = _build_skills_index(new_config, extra_skill_dirs=new_plugin_skill_dirs)
             new_inbox_store = _build_inbox_store(new_config)
-            new_graph = create_agent_graph(
-                new_config,
-                knowledge_store=new_store,
-                scheduler=next_scheduler,
-                skills_index=new_skills,
-                extra_tools=new_mcp_tools + new_plugin_tools,
-                extra_middleware=new_middleware,
-                late_tool_factories=new_late_tool_factories,
-                checkpointer=STATE.checkpointer,
-                inbox_store=new_inbox_store,
-                # The tasks store survives reloads like the checkpointer (its path isn't
-                # reloadable config). It was missing here, so ANY settings hot-reload
-                # silently dropped task_create/task_list/task_update/task_close from the
-                # rebuilt graph until the next full restart.
-                tasks_store=STATE.tasks_store,
-                # The background manager (ADR 0050) survives reloads unchanged — its
-                # store path + self-invoke URL/auth don't depend on reloadable config.
-                background_mgr=STATE.background_mgr,
-                # Re-thread the reload hook so the rebuilt graph's edit_soul can reload again
-                # (self-referential: this IS the reload path). Missing it would make the
-                # persona editor a one-shot after the first hot-reload. Threads the
-                # prompt-only variant, so the scope reduction survives a reload too (#3365).
-                reload_callback=_reload_for_soul_edit,
-            )
+            # Compile the graph only when a model is configured. In explore mode (#4566)
+            # `new_graph` stays None — the stores/plugins/MCP/skills/inbox built above are
+            # already committed below, so the server keeps serving the console with everything
+            # but chat; a later model save reloads and compiles with no restart. Same predicate
+            # the runtime `model_configured` status reads, so boot/reload/console never disagree.
+            if model_is_configured(new_config):
+                new_graph = create_agent_graph(
+                    new_config,
+                    knowledge_store=new_store,
+                    scheduler=next_scheduler,
+                    skills_index=new_skills,
+                    extra_tools=new_mcp_tools + new_plugin_tools,
+                    extra_middleware=new_middleware,
+                    late_tool_factories=new_late_tool_factories,
+                    checkpointer=STATE.checkpointer,
+                    inbox_store=new_inbox_store,
+                    # The tasks store survives reloads like the checkpointer (its path isn't
+                    # reloadable config). It was missing here, so ANY settings hot-reload
+                    # silently dropped task_create/task_list/task_update/task_close from the
+                    # rebuilt graph until the next full restart.
+                    tasks_store=STATE.tasks_store,
+                    # The background manager (ADR 0050) survives reloads unchanged — its
+                    # store path + self-invoke URL/auth don't depend on reloadable config.
+                    background_mgr=STATE.background_mgr,
+                    # Re-thread the reload hook so the rebuilt graph's edit_soul can reload again
+                    # (self-referential: this IS the reload path). Missing it would make the
+                    # persona editor a one-shot after the first hot-reload. Threads the
+                    # prompt-only variant, so the scope reduction survives a reload too (#3365).
+                    reload_callback=_reload_for_soul_edit,
+                )
+            else:
+                new_graph = None
         except Exception as e:
             log.exception("[reload] graph rebuild failed")
             # The freshly-built MCP clients were never committed — close them or
@@ -1342,12 +1386,13 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
             # running scheduler keeps polling, no orphaned tasks.
             return False, f"graph rebuild failed: {e}"
     else:
+        # Setup still PENDING — the wizard is up and nothing has been built yet (explore mode,
+        # #4566, now takes the build branch above with only the graph compile skipped). No
+        # graph build means no middleware was resolved: without these the commit below raises
+        # UnboundLocalError and EVERY pre-setup reload 500s (e.g. installing a plugin during
+        # the wizard, whose auto-enable reloads through here).
         new_graph = None
         new_inbox_store = None
-        # Setup pending → no graph build, so no middleware was resolved. Without
-        # this, the commit below raises UnboundLocalError and EVERY pre-setup
-        # reload 500s (e.g. installing a plugin during the wizard, whose
-        # auto-enable reloads through here).
         new_middleware = []
         new_late_tool_factories = []  # late-tools seam
 
@@ -1475,7 +1520,16 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     # Hot-mount routes from newly-enabled plugins (e.g. delegates) — already-mounted
     # routers are skipped, so repeat reloads are no-ops. Keep STATE.plugin_routers
     # current for anything introspecting the live route set.
-    if is_setup_complete():
+    #
+    # Gated on the plugin build having run, NOT on a compiled graph: ``new_plugins`` is bound
+    # exactly when the build branch ran, and ``new_plugin_bundle`` is its non-None result.
+    # That is every setup-complete reload — explore mode included (#4566), where the build
+    # runs but the graph compile is skipped. Boot publishes this SAME plugin wiring in explore
+    # mode (it builds plugins before it checks for a model), so the reload must too, or a
+    # plugin installed/updated in explore mode would have no routes/registries until a model
+    # save or a restart. The setup-PENDING branch leaves ``new_plugin_bundle`` None and
+    # ``new_plugins`` unbound, so this is skipped there (the pre-existing behaviour) — no NameError.
+    if new_plugin_bundle is not None:
         _mount_plugin_routers(new_plugins.routers)
         STATE.plugin_routers = new_plugins.routers
         # Refresh the live plugin verifier/hook registries too (#1752) — same as full init.
@@ -1512,6 +1566,12 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         refresh_served_card()
 
     if new_graph is None:
+        # Two ways to reach an uncompiled graph: the wizard is still up (setup pending), or
+        # setup is complete but no model is connected (explore mode, #4566). Say which, so
+        # the latter doesn't report "setup not complete" right after it was marked complete.
+        if is_setup_complete():
+            log.info("[reload] no model connected — config reloaded, graph not compiled (explore mode)")
+            return True, f"config reloaded • no model connected{fleet_label_note}"
         log.info("[reload] setup not complete — config reloaded, graph not compiled")
         return True, f"config reloaded • setup not complete{fleet_label_note}"
 

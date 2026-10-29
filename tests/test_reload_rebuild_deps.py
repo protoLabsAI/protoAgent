@@ -216,6 +216,135 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
         gv.set_plugin_verifiers({})
 
 
+def test_reload_without_a_model_stays_up_with_graph_uncompiled(tmp_path, monkeypatch):
+    """"Explore without a model" (#4566): setup is complete but no model is connected.
+
+    `create_llm` raises on the empty key, so the reload must NOT attempt the graph build —
+    it leaves the graph uncompiled, commits cleanly and returns ok, so the server stays up
+    and serves the console. Crucially it STILL builds and commits everything that doesn't
+    need a model (knowledge/history/skills/inbox stores, plugins, MCP clients, surfaces),
+    exactly as boot's explore-mode path does: a reload that skipped the build would commit
+    the pre-seeded empties and tear the live stores/clients/surfaces off a booted explore
+    instance on its first reload (this is the teardown this test pins). The commit also runs
+    the plugin wiring (routes/registries/card), which is now keyed on the plugin build having
+    run — not on a compiled graph — so explore mode publishes it the same as boot does."""
+    import graph.agent as ga
+    import graph.config_io as cio
+    import server.agent_init as ai
+    from runtime.state import STATE
+
+    # The default route consults OPENAI_API_KEY — a leaked env key would look configured.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    # A valid live leaf with NO model block (and the scheduler off so none is built).
+    leaf = tmp_path / "langgraph-config.yaml"
+    leaf.write_text("scheduler:\n  enabled: false\n")
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
+    monkeypatch.setattr(cio, "ensure_live_config", lambda: None)
+    monkeypatch.setattr(cio, "is_setup_complete", lambda: True)
+
+    # The graph compile — and ONLY it — is skipped in explore mode; fail loudly if it runs.
+    def _must_not_build(config, **kwargs):
+        raise AssertionError("create_agent_graph must not run in explore mode (no model)")
+
+    monkeypatch.setattr(ga, "create_agent_graph", _must_not_build)
+
+    # The model-independent builders DO run in explore mode — stub them with sentinels so the
+    # test can prove each committed value is the freshly-built one, not a torn-down empty.
+    kstore, hstore, skills, inbox, mcp_client, surface = (object() for _ in range(6))
+    plugin_meta = [{"id": "demo"}]
+    monkeypatch.setattr(ai, "_build_knowledge_store", lambda cfg: kstore)
+    monkeypatch.setattr(ai, "_build_history_store", lambda cfg: hstore)
+    monkeypatch.setattr(ai, "_build_skills_index", lambda cfg, extra_skill_dirs=None: skills)
+    monkeypatch.setattr(ai, "_build_inbox_store", lambda cfg: inbox)
+    monkeypatch.setattr(ai, "_build_mcp", lambda *a, **k: ([mcp_client], [], []))
+    monkeypatch.setattr(ai, "_apply_plugin_knowledge_backend", lambda cfg, store, plugins: store)
+    monkeypatch.setattr(ai, "_register_plugin_subagents", lambda subagents: None)
+    monkeypatch.setattr(ai, "_apply_config_subagents", lambda cfg: None)
+    monkeypatch.setattr(ai, "_resolve_plugin_middleware", lambda cfg, mw: [])
+    monkeypatch.setattr(ai, "_apply_plugin_registries", lambda plugins: None)
+    monkeypatch.setattr(ai, "_mount_plugin_routers", lambda routers: None)
+    monkeypatch.setattr(ai, "_close_mcp_clients", lambda clients: None)
+    monkeypatch.setattr(
+        ai,
+        "_build_plugins",
+        lambda *a, **k: SimpleNamespace(
+            mcp_servers=[],
+            tools=[object()],
+            tool_plugins={},
+            skill_dirs=[],
+            meta=plugin_meta,
+            chat_commands={},
+            subagents=[],
+            middleware=[],
+            late_tool_factories=[],
+            routers=[],
+            public_paths=[],
+            federation_paths=[],
+            goal_verifiers={},
+            goal_hooks=[],
+            watch_hooks=[],
+            lifecycle_hooks=[],
+            surfaces=[surface],
+            thread_id_resolver=None,
+            a2a_skills=[],
+            workflow_dirs=[],
+        ),
+    )
+
+    # Commit-block side effects — no-op so this test can't leak global state into others.
+    monkeypatch.setattr(ai, "_reload_plugin_surfaces", lambda cfg: None)
+    monkeypatch.setattr(ai, "_audit_persona_tools", lambda *a, **k: None)
+    monkeypatch.setattr("server.a2a.refresh_served_card", lambda: None)
+    import security.egress as _egress
+    import security.policy as _policy
+
+    monkeypatch.setattr(_egress, "set_allowed_hosts", lambda *a, **k: None)
+    monkeypatch.setattr(_policy, "set_callback_allowlist", lambda *a, **k: None)
+    try:
+        import a2a_impl.auth as _a2a_auth
+
+        monkeypatch.setattr(_a2a_auth, "set_bearer_token", lambda *a, **k: None)
+        monkeypatch.setattr(_a2a_auth, "set_federation_token", lambda *a, **k: None)
+        monkeypatch.setattr(_a2a_auth, "set_public_prefixes", lambda *a, **k: None)
+        monkeypatch.setattr(_a2a_auth, "set_federation_prefixes", lambda *a, **k: None)
+    except ImportError:
+        pass
+
+    monkeypatch.setattr(STATE, "scheduler", None, raising=False)
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    monkeypatch.setattr(STATE, "workflow_registry", None, raising=False)
+    monkeypatch.setattr(STATE, "workflow_run", None, raising=False)
+    for name in ("checkpointer", "tasks_store", "background_mgr"):
+        monkeypatch.setattr(STATE, name, object(), raising=False)
+    # Simulate a BOOTED explore instance: live stores/clients/surfaces already built, plus a
+    # prior compiled graph. A teardown-on-reload would null/empty every one of these.
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+    monkeypatch.setattr(STATE, "knowledge_store", object(), raising=False)
+    monkeypatch.setattr(STATE, "history_store", object(), raising=False)
+    monkeypatch.setattr(STATE, "skills_index", object(), raising=False)
+    monkeypatch.setattr(STATE, "inbox_store", object(), raising=False)
+    monkeypatch.setattr(STATE, "mcp_clients", [object()], raising=False)
+    monkeypatch.setattr(STATE, "plugin_surfaces", [object()], raising=False)
+    monkeypatch.setattr(STATE, "plugin_bundle", None, raising=False)
+
+    ok, msg = ai._reload_langgraph_agent()
+
+    assert ok is True, msg  # the server stays up
+    assert "no model connected" in msg
+    assert STATE.graph is None  # left uncompiled — not a crash, not a stale graph
+    # THE regression (#4566): the model-independent machinery was REBUILT and committed, not
+    # torn down to the pre-seeded empties an else-branch reload would have published.
+    assert STATE.knowledge_store is kstore
+    assert STATE.history_store is hstore
+    assert STATE.skills_index is skills
+    assert STATE.inbox_store is inbox
+    assert STATE.mcp_clients == [mcp_client]
+    assert STATE.plugin_surfaces == [surface]
+    assert STATE.plugin_meta == plugin_meta  # plugin tools/meta committed, not emptied
+    assert STATE.plugin_bundle is not None  # the reused-bundle anchor for a later soul-edit reload
+
+
 def _stub_reload_for_auth_capture(tmp_path, monkeypatch):
     """Common heavy-builder stubbing so `_reload_langgraph_agent()` reaches its commit
     block, shared by the two auth-token-reload tests below. Writes a minimal live leaf

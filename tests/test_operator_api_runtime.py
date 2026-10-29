@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from graph.config import LangGraphConfig, SubagentDef
+from graph.config import LangGraphConfig, Provider, SubagentDef, model_is_configured
 from operator_api.runtime import build_runtime_status
 from operator_api.subagents import list_subagents
 
@@ -71,6 +71,64 @@ def test_runtime_status_carries_version() -> None:
     assert s["version"] == "0.32.0"
     s2 = build_runtime_status(config=LangGraphConfig(), setup_complete=True, graph_loaded=True, version="0.32.0")
     assert s2["version"] == "0.32.0"
+
+
+def test_model_is_configured_distinguishes_explore_mode(monkeypatch) -> None:
+    # "Explore without a model" (#4566). `resolve_model_route` consults OPENAI_API_KEY, so
+    # clear it — a key leaking in from the shell would read explore mode as configured.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    assert model_is_configured(None) is False
+    # Dataclass defaults only — a gateway base URL and a blank key — are explore mode.
+    assert model_is_configured(LangGraphConfig()) is False
+    # A legacy/default-route key (or the env key) means a usable model.
+    assert model_is_configured(LangGraphConfig(api_key="sk-live")) is True
+    # A DECLARED connection (ADR 0106) with an endpoint, even keyless (a local vLLM).
+    declared = LangGraphConfig(
+        providers=[Provider(id="local", base_url="http://127.0.0.1:8000/v1")],
+        providers_declared=True,
+    )
+    assert model_is_configured(declared) is True
+    # ...but a declared-EMPTY list (the operator removed the last connection) is not.
+    assert model_is_configured(LangGraphConfig(providers=[], providers_declared=True)) is False
+    # A native OAuth subscription authenticates from a credential store, not a key.
+    assert model_is_configured(LangGraphConfig(model_provider="anthropic-oauth")) is True
+    # ...and the setup wizard's ACTUAL subscription shape (the #4566 review blocker): a
+    # DECLARED connection of a native-OAuth TYPE with no base_url/api_key, a qualified
+    # model.name naming it, and model.provider left at its 'openai' default. The
+    # endpoint/key check alone read this as unconfigured even though create_llm builds it
+    # fine through resolve_slot_target -> build_native_oauth_llm.
+    for ptype in ("anthropic-oauth", "openai-codex"):
+        subscription = LangGraphConfig(
+            providers=[Provider(id=ptype, type=ptype)],
+            providers_declared=True,
+            model_name=f"{ptype}:claude-opus-4-6",
+        )
+        assert subscription.model_provider == "openai"  # wizard never sets it
+        assert model_is_configured(subscription) is True
+    # An ACP coding-agent runtime is its own brain — no gateway key needed.
+    assert model_is_configured(LangGraphConfig(agent_runtime="acp:claude")) is True
+
+
+def test_runtime_payload_reports_model_configured() -> None:
+    # Additive field, present in BOTH payload shapes, defaulting False, and carrying the
+    # caller's value verbatim — the console recomputes it each poll, so saving a model
+    # flips it with no restart (#4566).
+    assert build_runtime_status(config=None, setup_complete=True, graph_loaded=False)["model_configured"] is False
+
+    explore = build_runtime_status(
+        config=LangGraphConfig(), setup_complete=True, graph_loaded=False, model_configured=False
+    )
+    assert explore["model_configured"] is False
+
+    configured = build_runtime_status(
+        config=LangGraphConfig(api_key="sk-live"), setup_complete=True, graph_loaded=True, model_configured=True
+    )
+    assert configured["model_configured"] is True
+
+    # Pre-setup shape (config is None) carries the field too.
+    pre_setup = build_runtime_status(config=None, setup_complete=False, graph_loaded=False, model_configured=True)
+    assert pre_setup["model_configured"] is True
 
 
 def test_list_subagents_uses_registry_and_config_override() -> None:
