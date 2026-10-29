@@ -74,9 +74,14 @@ def create_sync(
     secrets: list[dict] | None = None,
     config_inputs: Mapping[str, object] | None = None,
     requires_tools: list[str] | None = None,
+    extra_meta: Mapping[str, object] | None = None,
 ) -> dict:
     """Create a member (blank Basic, or from a bundle archetype) and start it unless told
-    not to. Returns ``{agent, installed, warnings?}`` — the shape ``POST /api/fleet`` answers."""
+    not to. Returns ``{agent, installed, warnings?}`` — the shape ``POST /api/fleet`` answers.
+
+    ``extra_meta`` (#4609) are extra registry keys stamped verbatim into the member's
+    ``workspace.yaml`` — the demo-agent core rides its ``demo``/``created_by``/``created_at``
+    stamp here so the SAME create path the console picker uses also marks a throwaway demo."""
     from graph.fleet import supervisor
     from graph.workspaces import manager
 
@@ -92,6 +97,7 @@ def create_sync(
         secrets=secrets,
         config_inputs=config_inputs,
         requires_tools=requires_tools,
+        extra_meta=extra_meta,
     )
     agent = supervisor.start(name) if start else {"name": name, "id": ws["id"], "port": ws["port"], "running": False}
     out: dict[str, Any] = {"agent": agent, "installed": ws.get("installed", [])}

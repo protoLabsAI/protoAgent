@@ -496,6 +496,7 @@ def create(
     config_inputs: Mapping[str, object] | None = None,
     delegate_source: str | None = None,
     requires_tools: list[str] | None = None,
+    extra_meta: Mapping[str, object] | None = None,
 ) -> dict:
     """Scaffold a workspace: its config dir, ``workspace.yaml``, and (with ``bundle``)
     an installed plugin bundle. Does not start it.
@@ -524,6 +525,13 @@ def create(
     bundle's declared ``config_inputs:`` prompts, written into the workspace config at each
     declared dotted key path. All are seeded AFTER install and only apply on the bundle path;
     operator-supplied only — never auto-copied from the host's environment.
+
+    ``extra_meta`` (``{key: value}``, #4609) are extra registry keys persisted verbatim into
+    ``workspace.yaml`` alongside the core record — e.g. the demo-agent core stamps
+    ``demo: true`` / ``created_by`` / ``created_at`` here so a later op can tell a throwaway
+    demo member apart from a real agent and never touch an unstamped one. The record's own
+    core keys (id/name/label/port/created/bundle) are protected, so a caller can only ADD
+    metadata, never rewrite identity. Absent ⇒ the record is exactly what it was before.
     """
     name = _safe(name)
     if name.lower() in _RESERVED_NAMES:
@@ -615,6 +623,14 @@ def create(
             # the only place both the doctrine and the live tool set are knowable at once.
             if requires_tools:
                 rec["requires_tools"] = [str(t) for t in requires_tools if str(t).strip()]
+            # Extra registry keys the caller wants persisted (#4609) — the demo-agent stamp
+            # (demo/created_by/created_at) rides here. Add-only: the core identity keys are
+            # fenced off so a stamp can never rewrite the id/port/name the fleet routes on.
+            if extra_meta:
+                _CORE_RECORD_KEYS = {"id", "name", "label", "port", "created", "bundle", "bundle_ref"}
+                for k, v in extra_meta.items():
+                    if str(k) not in _CORE_RECORD_KEYS:
+                        rec[str(k)] = v
             # Reserve the port NOW — write workspace.yaml BEFORE the (possibly minutes-long) bundle
             # install, so a concurrent create can't _pick_port the same port (#11). Then clean up the
             # whole dir on any failure, so a retry doesn't 400 with "already exists" on a poisoned
