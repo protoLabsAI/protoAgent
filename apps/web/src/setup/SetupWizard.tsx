@@ -49,12 +49,10 @@ type PostInstallRow = {
   error: string;
 };
 
-// Five steps: intro, then the two-step archetype flow shared with the fleet New-agent
-// panel — "agent" PICKS the archetype (cards only), "setup" names it and answers the
-// bundle's questions (ArchetypeSetupForm) — then "how it thinks" (the model/coding-agent
-// runtime), then a summary. (Progress bar + Back/Next footer are app-local until the DS
-// grows a stepper primitive, protoContent#520.)
-type Step = "welcome" | "agent" | "setup" | "brain" | "finish";
+// Four steps: welcome, a working model, identity + archetype configuration, then
+// a summary. The picker and form are shared with the fleet New-agent panel.
+// Progress bar + Back/Next remain app-local until the DS grows a stepper.
+type Step = "welcome" | "brain" | "agent" | "finish";
 
 // Two former steps were dropped — they're all sensible defaults a new user shouldn't
 // have to reason about; the values flow straight through finishSetup:
@@ -63,7 +61,11 @@ type Step = "welcome" | "agent" | "setup" | "brain" | "finish";
 //     top-K 5, no tasks init (do that from the Tasks view when there's a board).
 //   • Tools (middleware toggles + researcher turns): all middleware on, 40 turns —
 //     tune later in Settings.
-const steps: Step[] = ["welcome", "agent", "setup", "brain", "finish"];
+export const steps: Step[] = ["welcome", "brain", "agent", "finish"];
+
+export function agentStepReady(name: string, missingHard: boolean, peekMissing: boolean): boolean {
+  return Boolean(name.trim()) && !missingHard && !peekMissing;
+}
 
 
 type WizardState = {
@@ -280,7 +282,8 @@ export function SetupWizard({
 }) {
   const [step, setStep] = useState<Step>("welcome");
   const [state, setState] = useState<WizardState>(() => defaultState());
-  // The name the operator typed on the set-up step. Until then the name follows the
+  const [moreArchetypes, setMoreArchetypes] = useState(false);
+  // The name the operator typed on the agent step. Until then the name follows the
   // picked archetype (its suggested name; Basic/Custom keep the configured identity).
   const [agentNameTouched, setAgentNameTouched] = useState(false);
   const hydratedName = useRef("protoagent");
@@ -423,9 +426,9 @@ export function SetupWizard({
         tested,
       });
     }
-    // Set-up step: a blank name has nothing to call the agent. (The required-answer
+    // Agent step: a blank name has nothing to call the agent. (The required-answer
     // gate, #2977, is applied at the Next button — it's derived further down.)
-    if (step === "setup") return Boolean(state.agentName.trim());
+    if (step === "agent") return Boolean(state.agentName.trim());
     return true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.apiBase, state.modelName, state.runtimeKind, state.provider, state.agentName, oauthState?.signed_in, currentTestKey, tested, step]);
@@ -601,14 +604,14 @@ export function SetupWizard({
   });
   const configFields = useMemo(() => archetypeConfigFields(archetypePeek.data), [archetypePeek.data]);
   // Until the peek lands the bundle's questions are unknown (no fields → `missingHard`
-  // false), so Next on the set-up step would skip past required answers and Finish would
+  // false), so Next on the agent step would skip past required answers and Finish would
   // disable later with nothing on screen to explain it. Hold Next until the peek's DATA is
   // here — a failed peek isn't loading either, and holds too (with an inline Retry).
   const bundlePicked = Boolean(pickedArchetype?.bundle);
   const peekLoading = bundlePicked && archetypePeek.isLoading;
   const peekMissing = bundlePicked && !archetypePeek.data;
   // Hard gate (#2977): a required bundle config_inputs answer has no env fallback — the host
-  // install refuses to activate without it, so the set-up step's Next (and Finish) wait for it.
+  // install refuses to activate without it, so the agent step's Next (and Finish) wait for it.
   const missingHard = isMissingRequiredBundleConfig(configFields, configValues);
   const contractNotice = pickedArchetype ? requiresToolsNotice(pickedArchetype.label, pickedArchetype.requires_tools) : null;
 
@@ -870,22 +873,9 @@ export function SetupWizard({
           ) : null}
 
           {step === "agent" ? (
-            <StepBody icon={<Bot size={20} />} title="Agent" kicker="Pick an archetype">
-              <p className="setup-hint">
-                An archetype is a starting persona plus the tools it comes with. You&apos;ll name it and set it up next.
-              </p>
-              <ArchetypePicker
-                archetypes={archetypeList}
-                value={state.archetype}
-                onPick={pickArchetype}
-                notices={[runtimeWarning, contractNotice].filter((n): n is string => Boolean(n))}
-              />
-            </StepBody>
-          ) : null}
-
-          {step === "setup" ? (
             <StepBody icon={<Settings2 size={20} />} title={`Set up ${personaLabel}`} kicker="Name & settings">
               <ArchetypeSetupForm
+                key={state.archetype}
                 nameLabel="Agent name"
                 name={state.agentName}
                 onNameChange={(value) => {
@@ -893,7 +883,20 @@ export function SetupWizard({
                   update({ agentName: value });
                 }}
                 identityExtra={
-                  <Field label="Operator" value={state.operatorName} onValueChange={(value) => update({ operatorName: value })} />
+                  <>
+                    <Field label="Operator" value={state.operatorName} onValueChange={(value) => update({ operatorName: value })} />
+                    <p className="setup-hint">An archetype is a starting persona plus the tools it comes with.</p>
+                    <ArchetypePicker
+                      archetypes={archetypeList}
+                      primaryIds={moreArchetypes ? undefined : ["basic"]}
+                      value={state.archetype}
+                      onPick={pickArchetype}
+                      notices={[runtimeWarning, contractNotice].filter((n): n is string => Boolean(n))}
+                    />
+                    <Button type="button" variant="ghost" aria-expanded={moreArchetypes} onClick={() => setMoreArchetypes((open) => !open)}>
+                      {moreArchetypes ? "Fewer archetypes" : "More archetypes…"}
+                    </Button>
+                  </>
                 }
                 fields={configFields}
                 values={configValues}
@@ -1208,7 +1211,7 @@ export function SetupWizard({
                 </Button>
               )
             ) : (
-              <Button variant="primary" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy || (step === "setup" && (missingHard || peekMissing))}>
+              <Button variant="primary" type="button" onClick={() => setStep(steps[Math.min(steps.length - 1, index + 1)])} disabled={!canGoNext || busy || (step === "agent" && !agentStepReady(state.agentName, missingHard, peekMissing))}>
                 Next
                 <ChevronRight size={15} />
               </Button>

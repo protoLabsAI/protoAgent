@@ -5,11 +5,7 @@ import { HARD_GATE_HINT_WIZARD, SETUP_REQUIRED_HELP } from "../src/lib/pickerCop
 import { ARCHETYPES } from "./fixtures.mjs";
 import { routeSnapshot } from "./routeSnapshot";
 
-// The first-run Setup Wizard (host path, ADR 0100) — the same two-step archetype flow as
-// the fleet New-agent panel (shared ArchetypePicker + ArchetypeSetupForm): the "agent"
-// step picks the archetype (cards only), the "setup" step names it and answers the
-// bundle's config_inputs. A required answer has no env fallback (#2977/#2979/#2984), so
-// the set-up step's Next waits for it, and the answers ride the bundle install on Finish.
+// Model-first setup with identity and bundle questions in one agent step.
 //
 // The mock reports setup_complete:true for every other spec; these flip it per-test so
 // the wizard mounts over the shell. Finishing never flips it back (the override is
@@ -26,26 +22,28 @@ async function openWizard(page) {
   await page.goto("/app/", { waitUntil: "load" });
   const wizard = page.getByRole("dialog", { name: "Setup" });
   await expect(wizard).toBeVisible();
-  // welcome → agent (pick an archetype: cards only, no name yet)
+  // welcome → brain → agent
+  await wizard.getByRole("button", { name: "Next" }).click();
+  await wizard.getByRole("button", { name: "Test connection", exact: true }).click();
+  await expect(wizard.getByRole("button", { name: "Next" })).toBeEnabled();
   await wizard.getByRole("button", { name: "Next" }).click();
   await expect(wizard.locator(".archetype-picker")).toBeVisible();
-  await expect(wizard.getByLabel("Agent name")).toHaveCount(0);
+  await expect(wizard.getByLabel("Agent name")).toHaveValue("mock-agent");
+  await expect(wizard.locator(".setup-progress span")).toHaveCount(4);
+  await expect(wizard.locator(".pl-radiocard", { hasText: "Project Manager" })).toHaveCount(0);
+  await wizard.getByRole("button", { name: "More archetypes…" }).click();
   return wizard;
 }
 
-// Pick the (advanced, collapsed) Project Manager card, then Next → the set-up step.
+// Pick the advanced Project Manager card to reveal its questions.
 async function pickProjectManager(wizard) {
   await wizard.getByRole("button", { name: /^Advanced \(1\)/ }).click();
   await wizard.locator(".pl-radiocard", { hasText: "Project Manager" }).click();
-  await wizard.getByRole("button", { name: "Next" }).click();
   await expect(wizard.getByLabel("Repository path")).toBeVisible();
 }
 
-// setup → brain → finish. The Brain step's Next needs a gateway base + model, which the
-// wizard hydrates with defaults from the mock's /api/config.
+// Agent → finish after answering the required bundle questions.
 async function goToFinish(wizard) {
-  await wizard.getByRole("button", { name: "Next" }).click();
-  await expect(wizard.getByRole("button", { name: "Next" })).toBeEnabled();
   await wizard.getByRole("button", { name: "Next" }).click();
   await expect(wizard.getByRole("button", { name: "Finish" })).toBeVisible();
 }
@@ -55,12 +53,11 @@ const coderTrigger = (wizard) => wizard.locator('[id="config:project_board.coder
 const PM = ARCHETYPES.find((a) => a.id === "project-manager");
 const PM_CONTRACT_NOTICE = requiresToolsNotice(PM.label, PM.requires_tools);
 
-test("the pick step shows the capability contract; the set-up step the name, help lines and required note", async ({ page }) => {
+test("the agent step shows the capability contract, name, help lines and required note", async ({ page }) => {
   const wizard = await openWizard(page);
   await wizard.getByRole("button", { name: /^Advanced \(1\)/ }).click();
   await wizard.locator(".pl-radiocard", { hasText: "Project Manager" }).click();
   await expect(wizard.getByRole("note").filter({ hasText: PM_CONTRACT_NOTICE })).toBeVisible();
-  await wizard.getByRole("button", { name: "Next" }).click();
 
   await expect(wizard.getByRole("heading", { name: "Set up Project Manager" })).toBeVisible();
   await expect(wizard.getByLabel("Agent name")).toHaveValue("project-manager");
@@ -70,21 +67,21 @@ test("the pick step shows the capability contract; the set-up step the name, hel
   await expect(wizard.getByText(HARD_GATE_HINT_WIZARD, { exact: true })).toBeVisible();
 });
 
-test("the set-up step's Next stays disabled while a required bundle answer is blank (#2977)", async ({ page }) => {
+test("the agent step's Next stays disabled while a required bundle answer is blank (#2977)", async ({ page }) => {
   const wizard = await openWizard(page);
   await pickProjectManager(wizard);
   await wizard.getByLabel("Repository path").fill("/Users/me/dev/repo");
   await expect(wizard.getByRole("button", { name: "Next" })).toBeDisabled();
 });
 
-test("Back from set-up returns to the picker with every answer kept", async ({ page }) => {
+test("Back to the model and forward keeps every agent answer", async ({ page }) => {
   const wizard = await openWizard(page);
   await pickProjectManager(wizard);
   await wizard.getByLabel("Agent name").fill("hq");
   await wizard.getByLabel("Repository path").fill("/Users/me/dev/repo");
   await wizard.getByRole("button", { name: "Back" }).click();
-  await expect(wizard.locator(".pl-radiocard--selected", { hasText: "Project Manager" })).toBeVisible();
   await wizard.getByRole("button", { name: "Next" }).click();
+  await expect(wizard.locator(".pl-radiocard--selected", { hasText: "Project Manager" })).toBeVisible();
   await expect(wizard.getByLabel("Agent name")).toHaveValue("hq");
   await expect(wizard.getByLabel("Repository path")).toHaveValue("/Users/me/dev/repo");
 });

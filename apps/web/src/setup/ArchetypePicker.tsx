@@ -8,10 +8,15 @@ import { lucideIcon } from "../lib/lucideIcon";
 import type { Archetype } from "../lib/types";
 import { ArchetypePreviewDialog } from "./ArchetypePreviewDialog";
 
+// Keep the current selection visible when the catalog is collapsed.
+export function primaryArchetypes(archetypes: Archetype[], primaryIds: string[] | undefined, value: string): Archetype[] {
+  return primaryIds ? archetypes.filter((a) => primaryIds.includes(a.id) || a.id === value) : archetypes;
+}
+
 // Step 1 of creating an agent from an archetype — shared by the fleet New-agent panel and
 // the Setup Wizard. Cards ONLY: label, icon, blurb, and a "What's included" link per card.
-// No name and no config here — those are step 2 (ArchetypeSetupForm), so the picker reads
-// as one decision instead of a form that keeps growing below the cards.
+// Name and config live in ArchetypeSetupForm: the fleet uses a second step, while
+// the wizard embeds this picker in the same form.
 //
 // Advanced archetypes (tier: "advanced") collapse behind an "Advanced (N)" toggle — a
 // second RadioCardGroup sharing the same value + onPick, so choosing one is identical to
@@ -33,8 +38,10 @@ export function ArchetypePicker({
   notices = [],
   name = "archetype",
   previewArchetypes,
+  primaryIds,
 }: {
   archetypes: Archetype[];
+  primaryIds?: string[];
   value: string;
   onPick: (a: Archetype) => void;
   // Choose-time notes about the picked card (runtime requirement, capability contract).
@@ -45,7 +52,7 @@ export function ArchetypePicker({
   previewArchetypes?: { on: boolean; onToggle: (on: boolean) => void };
 }) {
   const showHeld = Boolean(previewArchetypes?.on);
-  const visible = archetypes.filter((a) => !a.held || showHeld);
+  const visible = primaryArchetypes(archetypes, primaryIds, value).filter((a) => !a.held || showHeld);
   const [advancedOpen, setAdvancedOpen] = useState(() =>
     visible.some((a) => a.id === value && (a.tier === "advanced" || a.held)),
   );
