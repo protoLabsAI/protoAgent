@@ -962,6 +962,15 @@ class LangGraphConfig:
     # opts in.
     tools_fleet_diagnostics_enabled: bool = False
 
+    # Demo-agent tools (#4609). Gates whether the five fleet_demo_* tools are bound
+    # for the managing agent, plus the two safety limits they pass into the core
+    # (graph/fleet/demo.py): max_live caps how many demo-stamped members run at once,
+    # ttl_hours ages them out via the reap. Default OFF; the tools only ever touch
+    # members they created (stamped `demo: true`), never a real fleet agent.
+    tools_fleet_demo_enabled: bool = False
+    tools_fleet_demo_max_live: int = 3
+    tools_fleet_demo_ttl_hours: int = 24
+
     # Raw model passthrough stays local unless the operator opts in; bearer auth always applies.
     model_passthrough_allow_remote: bool = False
 
@@ -2196,6 +2205,15 @@ class LangGraphConfig:
             tools_fleet_diagnostics_enabled=data.get("tools", {})
             .get("fleet_diagnostics", {})
             .get("enabled", cls.tools_fleet_diagnostics_enabled),
+            tools_fleet_demo_enabled=data.get("tools", {})
+            .get("fleet_demo", {})
+            .get("enabled", cls.tools_fleet_demo_enabled),
+            tools_fleet_demo_max_live=data.get("tools", {})
+            .get("fleet_demo", {})
+            .get("max_live", cls.tools_fleet_demo_max_live),
+            tools_fleet_demo_ttl_hours=data.get("tools", {})
+            .get("fleet_demo", {})
+            .get("ttl_hours", cls.tools_fleet_demo_ttl_hours),
             model_passthrough_allow_remote=data.get("model_passthrough", {}).get(
                 "allow_remote", cls.model_passthrough_allow_remote
             ),

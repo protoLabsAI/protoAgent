@@ -18,9 +18,12 @@ server-side and never rides in a tool's output. HTTP is the sanctioned seam beca
 import-layering contract forbids ``tools`` importing ``operator_api`` (where the proxy route
 lives).
 
-Binding is config-gated (``tools.fleet_demo.enabled``, default off — the setting lands in part
-3; read absent-safe with ``getattr`` until then). The tools are intended for a single managing
-agent (the PM), so ``created_by`` is stamped with this instance's identity name.
+Binding is config-gated (``tools.fleet_demo.enabled``, default off — part 3). Two safety limits
+ride along from the same config: ``tools.fleet_demo.max_live`` (the live-demo cap) and
+``tools.fleet_demo.ttl_hours`` (the age-out TTL), both read absent-safe and passed into
+:func:`graph.fleet.demo.create_demo` (which runs the TTL reap first). The tools are intended for
+a single managing agent (the PM), so ``created_by`` is stamped with this instance's identity
+name.
 """
 
 from __future__ import annotations
@@ -183,10 +186,16 @@ def _build_fleet_demo_tools(config) -> list:
 
     Every tool routes through :func:`graph.fleet.demo.require_demo`, so none can ever act on a
     real fleet member. ``created_by`` on a new demo is stamped with this instance's identity
-    name (the managing agent), read from ``config`` at bind time."""
+    name (the managing agent), read from ``config`` at bind time. The two safety limits
+    (``max_live`` cap and ``ttl_hours`` reap) are read from ``config`` here and passed into
+    :func:`create_demo`, falling back to the core defaults when absent."""
     from langchain_core.tools import tool
 
+    from graph.fleet.demo import DEFAULT_MAX_LIVE, DEFAULT_TTL_HOURS
+
     created_by = str(getattr(config, "identity_name", "") or "agent")
+    max_live = int(getattr(config, "tools_fleet_demo_max_live", DEFAULT_MAX_LIVE))
+    ttl_hours = int(getattr(config, "tools_fleet_demo_ttl_hours", DEFAULT_TTL_HOURS))
 
     @tool
     async def fleet_demo_create(archetype: str, model_connection: str, model: str, name: str = "") -> dict:
@@ -214,6 +223,8 @@ def _build_fleet_demo_tools(config) -> list:
                 model,
                 name=name or None,
                 created_by=created_by,
+                max_live=max_live,
+                ttl_hours=ttl_hours,
             )
         except DemoError as exc:
             return {"ok": False, "error": str(exc)}
