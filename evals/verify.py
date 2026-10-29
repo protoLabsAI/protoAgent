@@ -90,20 +90,30 @@ def audit_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def audit_entries_since(ts_iso: str) -> list[dict]:
-    """Return audit-log entries with ``ts`` strictly greater than ``ts_iso``."""
+def audit_entries_since(ts_iso: str, *, include_rotated: bool = False) -> list[dict]:
+    """Return entries newer than ``ts_iso``, optionally including the retained rotation.
+
+    Historical turn promotion needs the backup too; live eval checks retain
+    their existing live-file-only behavior.
+    """
     p = _audit_path()
-    if not p.is_file():
-        return []
     out: list[dict] = []
-    with p.open() as fh:
-        for line in fh:
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if entry.get("ts", "") > ts_iso:
-                out.append(entry)
+    paths = [p, p.with_suffix(p.suffix + ".1")] if include_rotated else [p]
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            fh = path.open()
+        except FileNotFoundError:
+            continue
+        with fh:
+            for line in fh:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("ts", "") > ts_iso:
+                    out.append(entry)
     return out
 
 
