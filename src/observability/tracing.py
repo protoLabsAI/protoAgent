@@ -1123,6 +1123,33 @@ def score_current_trace(name: str, value: float, comment: str = "") -> None:
         pass
 
 
+def score_trace(trace_id: str, name: str, value: float, comment: str = "") -> None:
+    """Attach a numeric score to a PAST trace, identified by ``trace_id``.
+
+    Unlike :func:`score_current_trace` (which scores the span active in THIS
+    turn), this scores a trace that completed earlier — the row still lives in
+    Langfuse. Planned callers score a trace well after it ran:
+
+        - ``user_feedback`` (the ``/api/feedback`` endpoint): thumbs up/down on
+          a past turn, keyed by that turn's trace_id.
+        - ``friction`` (the friction plugin): a friction signal attributed back
+          to the trace that produced it.
+
+    Goes through the v3 client's ``create_score(trace_id=...)`` and relies on
+    the client's batching — no per-call flush. Same swallow-all contract as
+    ``score_current_trace``: a silent no-op when tracing is disabled, when
+    ``trace_id`` is empty, or on any client error. Never raises into its caller.
+    """
+    if not _enabled or _langfuse is None or not trace_id:
+        return
+    try:
+        _langfuse.create_score(
+            trace_id=trace_id, name=name, value=value, comment=comment
+        )
+    except Exception:
+        pass
+
+
 def flush() -> None:
     """Flush any buffered observations. Call before process exit."""
     if _enabled and _langfuse is not None:

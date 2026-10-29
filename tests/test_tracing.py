@@ -119,6 +119,13 @@ def test_disabled_score_current_trace_is_silent():
     tracing.score_current_trace("verdict", 1.0)  # must not raise
 
 
+def test_disabled_score_trace_is_silent():
+    tracing = _reload_tracing()
+    assert tracing.is_enabled() is False
+    # No client exists; must be a silent no-op (and return None).
+    assert tracing.score_trace("trace-xyz", "user_feedback", 1.0) is None
+
+
 # ── Enabled (fake Langfuse) ───────────────────────────────────────────────────
 
 
@@ -252,6 +259,33 @@ def test_score_current_trace_delegates_to_client():
         value=1.0,
         comment="PASS",
     )
+
+
+def test_score_trace_calls_create_score_with_trace_id():
+    tracing = _reload_tracing()
+    fake, _s, _c = _enable_with_fake_client(tracing)
+    tracing.score_trace("trace-past", "user_feedback", 1.0, comment="👍")
+    fake.create_score.assert_called_once_with(
+        trace_id="trace-past",
+        name="user_feedback",
+        value=1.0,
+        comment="👍",
+    )
+
+
+def test_score_trace_empty_trace_id_skips_client():
+    tracing = _reload_tracing()
+    fake, _s, _c = _enable_with_fake_client(tracing)
+    assert tracing.score_trace("", "friction", 1.0) is None
+    fake.create_score.assert_not_called()
+
+
+def test_score_trace_swallows_client_error():
+    tracing = _reload_tracing()
+    fake, _s, _c = _enable_with_fake_client(tracing)
+    fake.create_score.side_effect = RuntimeError("langfuse down")
+    # Must not raise despite the client blowing up.
+    assert tracing.score_trace("trace-past", "friction", 0.0) is None
 
 
 # ── Fleet tracing: caller trace join (a2a.trace → trace_context) ─────────────
