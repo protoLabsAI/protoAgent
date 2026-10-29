@@ -364,7 +364,7 @@ def _build_watch_tools():
         One watch per thing (deploy, CI, metric); all poll in parallel. Only plugin verifiers are
         allowed — shell/test/data watches are operator-only. ``watch_id`` defaults to a slug of the
         condition. Fires once by default; ``repeat`` keeps it armed (fires on each re-entry into
-        true); ``on_change`` fires whenever the checked value moves. A repeating watch runs until its
+        true); ``on_change`` fires whenever the checked value moves and always repeats. A repeating watch runs until its
         deadline or until cleared — set ``expires_in_s`` (seconds from now) unless you mean forever.
         ``interval_s``: seconds between checks (raise for slow things). ``stall_after``: signal after
         N checks with unchanged evidence (watch stays active).

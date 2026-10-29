@@ -660,8 +660,9 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     async def browser_click(selector: str, js_fallback: bool = False, *, state: Annotated[Any, InjectedState] = None) -> str:
         """Click an element by visible LABEL (form fields), `@eN` ref, or CSS selector (buttons/
         links: ref or CSS). Set `js_fallback=true` only when a click reports success but the
-        page visibly does nothing: it re-clicks in-page ONLY if the page didn't change (never
-        twice). With `js_fallback`, use a LABEL or CSS selector — a `@eN` ref is refused."""
+        page visibly does nothing: it re-clicks in-page only if the page looks unchanged, so an
+        action with no visible effect (e.g. a background request) can run twice. With
+        `js_fallback`, use a LABEL or CSS selector — a `@eN` ref is refused."""
         # js_fallback mechanics: fingerprint the page, do the normal CLI click, re-fingerprint, and only
         # if nothing changed dispatch an in-page click (bubbling mousedown/mouseup + el.click()), reported
         # as `(JS fallback)`. Motivating case: the Greenhouse "Enter manually" button, custom controls
@@ -847,7 +848,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @tool
     @_serialized
     async def browser_hover(selector: str, *, state: Annotated[Any, InjectedState] = None) -> str:
-        """Hover over an element by visible LABEL, `@eN` ref, or CSS selector."""
+        """Hover over a form field by visible LABEL, or any element by `@eN` ref or CSS selector
+        (buttons/links: ref or CSS)."""
         sel, err = await _resolve_field(selector)
         return err or await _ab("hover", sel)
 

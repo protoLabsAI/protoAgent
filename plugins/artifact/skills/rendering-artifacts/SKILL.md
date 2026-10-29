@@ -292,8 +292,8 @@ file in place without storing a copy. The file must live inside a registered fil
 path outside every project, or a symlink escaping one, is refused). A linked artifact is
 **read-only**: no copy, no version history — don't pass `artifact_id` with `link=True`; save without
 `link` for an editable, versioned copy. It has its own, larger size cap (`max_linked_kb`, 200 MB
-default). Its bytes aren't served yet (download answers 404), so it's a panel *reference*, not a
-way to hand the bytes to a reader.
+default). Downloads serve the file in place, re-checked against the project fence on every request:
+403 once it's no longer reachable, 409 if it changed or disappeared since it was linked.
 
 This is for files that already exist on disk. To *render* HTML/React/SVG/Markdown/charts, use
 `show_artifact` (above) — don't write those to a file first.

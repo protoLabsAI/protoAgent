@@ -310,15 +310,15 @@ def save_file_artifact(
 
     ``link=True`` links reference material you did NOT produce in place, without copying; it must
     be inside a registered project. A linked artifact is READ-ONLY with no versions — never pass
-    ``artifact_id`` with it — and is a panel reference only (its bytes aren't served yet).
+    ``artifact_id`` with it — and is served from the file in place (re-checked on every download).
     """
     # Maintainer notes (kept out of the model-facing schema; the model-facing manual is the
     # rendering-artifacts skill): previews by type — .docx/.pdf → rendered pages, .pptx →
     # rendered slides, .csv/.tsv/.xlsx → tables, .md → prose, .json → pretty, images → thumbnail.
     # link=True (ADR 0092 D2): served from the live project fence; a symlink escaping a project is
     # refused. The max_blob_kb cap doesn't apply — a linked file has its own max_linked_kb cap
-    # (200 MB default). Serving linked bytes isn't in this slice: download/media routes 404 for a
-    # linked version; the fence re-check on serving lands with that follow-up.
+    # (200 MB default). The blob route serves a linked version through the live fence on every
+    # request (#4370): 403 once it leaves the fence, 409 when the file changed or is gone.
     if link and artifact_id:
         return (
             "link=True can't be combined with artifact_id: a linked artifact serves a file in "
@@ -628,8 +628,7 @@ def _save_linked(
     return (
         f"Linked file artifact {art_id} → v1: {filename} ({mime}, {kb} KB) from "
         f"{link['project']}/{link['path']} — now in the Artifact panel as a reference "
-        f"(read-only, no copy). The bytes are not served yet: download and preview of a "
-        f"linked artifact land in a follow-up."
+        f"(read-only, no copy). Downloads serve the file in place, re-checked on every request."
     ) + _ref.ref_tail(art)
 
 

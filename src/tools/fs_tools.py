@@ -1059,8 +1059,8 @@ def build_fs_tools(config) -> list:
         # exactly that many lines. A single line over ~50K chars is cut either way.
         """Read a text file inside a managed project (relative path).
 
-        ``offset``/``limit`` are 1-based LINE numbers, the same addressing ``search_files`` prints
-        (a hit at ``file.py:342`` → ``offset=320, limit=60``). Leave ``limit`` unset to read to EOF
+        ``offset`` is a 1-based LINE number (the addressing ``search_files`` prints) and ``limit``
+        a line COUNT (a hit at ``file.py:342`` → ``offset=320, limit=60``). Leave ``limit`` unset to read to EOF
         when it fits (~50K chars); a truncated result names the next offset to pass. For huge
         single lines (minified files) prefer ``search_files``.
         """

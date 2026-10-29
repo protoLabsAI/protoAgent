@@ -125,7 +125,7 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
     ``steps``: list of ``{"schema": <JSON Schema draft-07 object>, "title"?, "description"?}``
     (at least one with fields; several = a wizard). Field shapes: ``string|number|integer|
     boolean`` (``"format": "textarea"`` for multi-line); pick-one cards = ``{"type": "string",
-    "oneOf": [{"const", "title", "description"}, ...]}``; pick-any = ``{"type": "array",
+    "oneOf": [{"const": "a", "title": "A", "description": "…"}, ...]}``; pick-any = ``{"type": "array",
     "items": {"oneOf": [...]}}``. Use ``"required": [...]`` to gate; a ``"default"`` prefills
     and counts as an answer, so use it only for values you want confirmed.
     """
@@ -168,8 +168,8 @@ def show_component(component: str, props: dict, title: str = "") -> str:
         component: ``"table"``, ``"keyvalue"`` or ``"timeline"``.
         props: table ``{"columns": [...], "rows": [[...]], "source"?}`` — pass ``source``
             (≤200 chars, where the rows came from) whenever rows aren't the user's own input;
-            keyvalue ``{"items": [{"label", "value"}]}``; timeline ``{"steps": [{"label",
-            "state": "done|active|todo", "detail"?}]}``.
+            keyvalue ``{"items": [{"label": "…", "value": "…"}]}``; timeline ``{"steps":
+            [{"label": "…", "state": "done|active|todo", "detail"?: "…"}]}``.
         title: optional heading.
     """
     from graph.components import COMPONENT_TYPES, encode_component
