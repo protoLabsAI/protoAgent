@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { finishModelConfig, agentStepReady, steps, brainStepReady, defaultState, hydrateState, pickLocalEndpoint, SetupWizard, testKey, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
+import { apiKeyPlaceholder, finishModelConfig, agentStepReady, steps, brainStepReady, defaultState, hydrateState, pickLocalEndpoint, SetupWizard, testKey, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
 import type { LocalEndpoint } from "./SetupWizard";
 import { primaryArchetypes } from "./ArchetypePicker";
 import { api } from "../lib/api";
@@ -60,6 +60,9 @@ beforeEach(() => {
   });
   vi.spyOn(api, "oauthStatus").mockResolvedValue({} as never);
   vi.spyOn(api, "localModels").mockResolvedValue({ endpoints: [] } as never);
+  // A fresh install has no stored connection → no saved key (the API-key placeholder
+  // must not promise to keep one). Individual tests override this.
+  vi.spyOn(api, "providers").mockResolvedValue({ providers: [] } as never);
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -547,5 +550,42 @@ describe("Explore without a model", () => {
     await click(button(/^Finish$/));
     expect(api.testModel).not.toHaveBeenCalled();
     expect(finish).toHaveBeenCalledWith(expect.objectContaining({ providers: [], model: expect.objectContaining({ name: "" }) }), expect.any(String), []);
+  });
+});
+
+// The API-key placeholder must reflect reality (#4568): a stored connection key lets it
+// promise "blank keeps a saved one"; a fresh install must instead ask the operator to
+// paste one. Pulled out pure so the two branches are unit-testable in isolation.
+describe("apiKeyPlaceholder (#4568)", () => {
+  it("mentions a saved key only when one is saved", () => {
+    const saved = apiKeyPlaceholder(true);
+    expect(saved).toContain("blank keeps a saved one");
+    expect(saved.toLowerCase()).toContain("saved");
+    const fresh = apiKeyPlaceholder(false);
+    expect(fresh).toContain("Paste your API key");
+    expect(fresh.toLowerCase()).not.toContain("saved");
+  });
+});
+
+// End-to-end: the gateway API-key field reads `has_key` off the connection registry
+// (the key itself is redacted out of /api/config), so a stored key shows the keep-it
+// placeholder and a fresh install shows the paste-one placeholder.
+describe("SetupWizard — API key placeholder wiring (#4568)", () => {
+  const apiKeyField = () => container.querySelector<HTMLInputElement>('input[type="password"]');
+
+  it("a stored connection key shows the keep-a-saved-key placeholder", async () => {
+    vi.spyOn(api, "providers").mockResolvedValue({
+      providers: [{ id: "gateway", type: "openai-compat", display: "Gateway", has_key: true, in_use_by: [] }],
+    } as never);
+    await mountToBrain();
+    await tick(() => Boolean(apiKeyField()?.placeholder.toLowerCase().includes("saved")));
+    expect(apiKeyField()?.placeholder).toContain("blank keeps a saved one");
+  });
+
+  it("a fresh install (no stored key) asks the operator to paste one", async () => {
+    await mountToBrain();
+    await tick(() => Boolean(apiKeyField()));
+    expect(apiKeyField()?.placeholder).toContain("Paste your API key");
+    expect(apiKeyField()?.placeholder.toLowerCase()).not.toContain("saved");
   });
 });

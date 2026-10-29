@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { DropdownSelect, Field, FormField, Input, RadioCard, RadioCardGroup, SecretInput } from "@protolabsai/ui/forms";
+import { DropdownSelect, FormField, Input, RadioCard, RadioCardGroup, SecretInput } from "@protolabsai/ui/forms";
 import { Button, Callout } from "@protolabsai/ui/primitives";
 import { Alert, Spinner } from "@protolabsai/ui/data";
 import { useToast } from "@protolabsai/ui/overlays";
@@ -296,7 +296,7 @@ export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promis
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<T>((_resolve, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s — check the API base and key`)),
+      () => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s — check the endpoint URL and key`)),
       ms,
     );
   });
@@ -338,6 +338,17 @@ export function finishModelConfig(state: WizardState, exploreWithoutModel: boole
   };
 }
 
+// The gateway API-key field's placeholder. Only promise "blank keeps a saved one" when a
+// key is actually stored: a fresh install has none, and the key is redacted everywhere
+// (config_to_dict blanks every secret to ""), so the connection registry's `has_key`
+// flag — read in the load effect below — is the only signal there's one to keep. Pulled
+// out pure so the saved/not-saved copy can be unit-tested in isolation (#4568).
+export function apiKeyPlaceholder(hasSavedKey: boolean): string {
+  return hasSavedKey
+    ? "Your endpoint's key (blank keeps a saved one)"
+    : "Paste your API key (leave blank if your endpoint needs none)";
+}
+
 export function SetupWizard({
   open,
   projectPath,
@@ -375,6 +386,10 @@ export function SetupWizard({
   // Flips true once the initial config load finishes. The persona seed waits on it
   // so the async load() (which replaces the whole state) can't clobber the seed.
   const [loaded, setLoaded] = useState(false);
+  // Whether any stored connection already carries a key (ADR 0106 `has_key`). The key is
+  // redacted out of /api/config, so the connection registry is the only signal — it drives
+  // the API-key placeholder so a fresh install isn't told it can "keep a saved one" (#4568).
+  const [savedApiKey, setSavedApiKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -448,7 +463,19 @@ export function SetupWizard({
         if (alive) setBusy(false);
       }
     }
+    // Best-effort: does any stored connection already hold a key (ADR 0106)? The key is
+    // redacted everywhere, so the registry's `has_key` is the only signal. A failure
+    // (absent/legacy endpoint) just leaves the placeholder in its fresh-install form.
+    async function loadSavedKey() {
+      try {
+        const { providers } = await api.providers();
+        if (alive) setSavedApiKey(providers.some((p) => p.has_key));
+      } catch {
+        // ignore — treat as no saved key
+      }
+    }
     void load();
+    void loadSavedKey();
     return () => {
       alive = false;
     };
@@ -543,7 +570,7 @@ export function SetupWizard({
         // openai-codex, and vice-versa). "openai" → gateway path server-side.
         api.models(state.apiBase, state.apiKey, state.provider),
         15000,
-        "Probe",
+        "Load models",
       );
       if (response.error) {
         if (!silent) setError(response.error); // auto-probe stays quiet — the user may still be typing creds
@@ -967,7 +994,9 @@ export function SetupWizard({
                 }}
                 identityExtra={
                   <>
-                    <Field label="Operator" value={state.operatorName} onValueChange={(value) => update({ operatorName: value })} />
+                    <FormField label="Operator" hint="Your name, so the agent knows who it's working for.">
+                      <Input value={state.operatorName} onChange={(event) => update({ operatorName: event.target.value })} />
+                    </FormField>
                     <p className="setup-hint">An archetype is a starting persona plus the tools it comes with.</p>
                     <ArchetypePicker
                       archetypes={archetypeList}
@@ -998,12 +1027,12 @@ export function SetupWizard({
           {step === "brain" ? (
             <StepBody
               icon={<Cpu size={20} />}
-              title="Brain"
+              title="Model"
               kicker={
                 brainKind === "acp"
                   ? "coding agent over ACP (deprecated)"
                   : brainKind === "gateway"
-                    ? "OpenAI-compatible gateway"
+                    ? "Your own API key or endpoint"
                     : brainKind === "local"
                       ? "Ollama or LM Studio on this machine"
                       : `${OAUTH_LABEL[state.provider]} — your own plan`
@@ -1027,7 +1056,7 @@ export function SetupWizard({
                     if (kind === "local") void detectLocalModels();
                   }}
                 >
-                  <RadioCard value="gateway" title="Gateway model" blurb="An OpenAI-compatible gateway with an API key." />
+                  <RadioCard value="gateway" title="API key" blurb="OpenAI, OpenRouter, or any OpenAI-compatible endpoint." />
                   <RadioCard
                     value="claude"
                     title="Claude subscription"
@@ -1227,7 +1256,7 @@ export function SetupWizard({
                     </>
                   ) : null}
                   <div className={brainKind === "local" ? "setup-grid" : "setup-grid two"}>
-                    <FormField label={brainKind === "local" ? "Endpoint" : "API base"}>
+                    <FormField label={brainKind === "local" ? "Endpoint" : "Endpoint URL"}>
                       <Input
                         value={state.apiBase}
                         onChange={(event) => update({ apiBase: event.target.value })}
@@ -1243,7 +1272,7 @@ export function SetupWizard({
                           value={state.apiKey}
                           onChange={(event) => update({ apiKey: event.target.value })}
                           autoComplete="off"
-                          placeholder="Your endpoint's key (blank keeps a saved one)"
+                          placeholder={apiKeyPlaceholder(savedApiKey)}
                         />
                       </FormField>
                     )}
@@ -1254,7 +1283,7 @@ export function SetupWizard({
                         list="model-options"
                         value={state.modelName}
                         onChange={(event) => update({ modelName: event.target.value })}
-                        placeholder="Probe lists your endpoint's models"
+                        placeholder="Load models lists your endpoint's models"
                       />
                       <datalist id="model-options">
                         {models.map((model) => (
@@ -1264,7 +1293,7 @@ export function SetupWizard({
                     </FormField>
                     <Button type="button" onClick={() => void probeModels()} disabled={busy || !state.apiBase.trim()}>
                       {busy ? <Spinner size={15} /> : <Search size={15} />}
-                      Probe
+                      Load models
                     </Button>
                     <TestConnectionButton
                       onClick={() => void testConnection()}
