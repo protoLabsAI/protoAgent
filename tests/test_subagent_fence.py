@@ -69,14 +69,35 @@ async def test_async_path_blocks_too():
     assert ok.content == "ran"
 
 
-def test_manager_resolves_the_registry_allowlist():
-    """_subagent_fence mirrors the in-graph task path's resolution: registry tools
-    (plus any config override — covered by the getattr fallback), [] for unknowns."""
+def test_manager_resolves_the_registry_allowlist(monkeypatch):
+    """Without runtime overrides, use registry tools and [] for unknown types."""
     from background.manager import _subagent_fence
     from graph.subagents.config import SUBAGENT_REGISTRY
+    from runtime.state import STATE
+
+    # Registry defaults apply only without a runtime config override or inherited
+    # lead tools. Do not depend on the state left by another test in this worker.
+    monkeypatch.setattr(STATE, "graph_config", None)
+    monkeypatch.setattr(STATE, "graph", None)
 
     assert _subagent_fence("researcher") == list(SUBAGENT_REGISTRY["researcher"].tools)
     assert _subagent_fence("not-a-registry-type") == []
+
+
+def test_manager_resolves_the_config_allowlist(monkeypatch):
+    from background.manager import _subagent_fence
+    from graph.subagents.config import SUBAGENT_REGISTRY
+    from runtime.state import STATE
+
+    registry_tools = list(SUBAGENT_REGISTRY["researcher"].tools)
+    monkeypatch.setattr(STATE, "graph", None)
+    monkeypatch.setattr(
+        STATE, "graph_config",
+        SimpleNamespace(researcher=SimpleNamespace(tools=["current_time"])),
+    )
+
+    assert _subagent_fence("researcher") == ["current_time"]
+    assert SUBAGENT_REGISTRY["researcher"].tools == registry_tools
 
 
 # ── the model is only SHOWN the fence (schemas trimmed at wrap_model_call) ─────────

@@ -14,6 +14,7 @@ export type RuntimeStatus = {
    *  setup is complete but no connection/key is set, so the graph stays uncompiled yet the
    *  console still opens. Recomputed each poll — saving a model in Settings ▸ Model flips it
    *  to true (and the graph compiles) with no restart. */
+  // Older servers omit this flag and are treated as configured.
   model_configured?: boolean;
   /** App version (pyproject [project].version; the frozen desktop sidecar reports
    *  its bundled version — #894). Surfaced in Settings ▸ Global ▸ Overview. */

@@ -1,4 +1,4 @@
-import { Badge, Button } from "@protolabsai/ui/primitives";
+import { Badge, Button, Callout } from "@protolabsai/ui/primitives";
 import { PromptInput } from "@protolabsai/ui/ai";
 import { EyeOff, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -8,6 +8,8 @@ import { useKbIntents } from "../keybindings/intents";
 import { api } from "../lib/api";
 import { CHAT_ATTACH_ACCEPT } from "../lib/attachTypes";
 import { errMsg } from "../lib/format";
+import { needsModelBanner } from "./modelBanner";
+import { regenerateBlocked } from "./regenerateGuard";
 import { runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
 import { ConfirmDialog } from "@protolabsai/ui/overlays";
@@ -333,6 +335,10 @@ export function ChatSessionSlot({
   // Native vision: when the active model accepts images, attached images go
   // straight to the model as multimodal parts; otherwise they take the pipeline.
   const { data: runtime } = useQuery(runtimeStatusQuery());
+  // No model connected (#4566): the runtime reports model_configured:false after an
+  // "explore without a model" setup, so the agent can't reply yet — the banner below
+  // appears and every send path is blocked until a later poll flips the flag.
+  const noModel = needsModelBanner(runtime);
   // Deliberately signed out of the native OAuth provider (#2513): the send path
   // would only fail locally, so the composer swaps for a reconnect strip instead.
   const signedOut = Boolean(runtime?.graph_auth_error) && !runtime?.graph_loaded;
@@ -677,6 +683,11 @@ export function ChatSessionSlot({
   // which also enables submit when attachments are present (@protolabsai/ui ≥ 0.34).
   const canSend = useMemo(
     () =>
+      // No connected model blocks the send outright (#4566); otherwise the ordinary
+      // draft/attachment gate decides. Kept as a separate guard so `signedOut` stays
+      // literally the OAuth signed-out state and nobody reroutes the no-model gate by
+      // editing canSubmitChatDraft's signed-out logic.
+      !noModel &&
       canSubmitChatDraft({
         draft,
         hasReadyAttachment: attachments.some((a) => a.status === "ready"),
@@ -685,7 +696,7 @@ export function ChatSessionSlot({
         serverTurnLabel,
         serverTurnControl,
       }),
-    [draft, attachments, serverTurnControl, serverTurnLabel, status, signedOut],
+    [draft, attachments, serverTurnControl, serverTurnLabel, status, signedOut, noModel],
   );
 
   // The consumed ↑-recall warning shows only while the marker still applies to this session's
@@ -693,7 +704,7 @@ export function ChatSessionSlot({
   const showDuplicateRisk = isDuplicateRiskActive(duplicateRisk, sessionId, draft);
 
   async function send() {
-    if (!session || signedOut) return;
+    if (!session || signedOut || noModel) return;
     // A HITL form/question/approval is open (#1560): a fresh send would race the
     // pending form — the server holds unmarked messages anyway — so queue it as a
     // steer instead. It folds into the agent's context right AFTER the form
@@ -851,7 +862,11 @@ export function ChatSessionSlot({
   }
 
   async function regenerate(assistantId?: string) {
-    if (!assistantId || !session || status === "streaming") return;
+    // Gate BEFORE any destructive work (the server rewind + local trim below). With no
+    // model connected the re-run can't start, so proceeding would discard the operator's
+    // last user+assistant turn with nothing left to resend it (#4566). `regenerateBlocked`
+    // also drives the button's disabled state, so the guard and the affordance never disagree.
+    if (!assistantId || !session || regenerateBlocked(status, noModel)) return;
     const snap = chatStore.getSnapshot().sessions.find((s) => s.id === session.id);
     if (!snap) return;
     const i = snap.messages.findIndex((m) => m.id === assistantId);
@@ -1004,6 +1019,12 @@ export function ChatSessionSlot({
       formResponse?: ChatMessage["formResponse"];
     } = {},
   ) {
+    // Backstop: no turn starts without a model (#4566). The composer send and the
+    // regenerate action already gate on `noModel` BEFORE doing any work, so this only
+    // catches non-destructive callers (an artifact/component send-to-chat bridge, a goal
+    // kickoff) — keeping them from a raw gateway failure. It must never be the thing that
+    // stops a caller that has ALREADY mutated the thread; those guard up front instead.
+    if (noModel) return;
     if (!session || !content) return;
     // Every visible send — composer, artifact bridge, HITL answer — re-pins the transcript.
     if (!opts.hidden) repinTranscript();
@@ -1728,13 +1749,14 @@ export function ChatSessionSlot({
       onRegenerate: transcriptRegenerate,
       onDismiss: transcriptDismissErroredMessage,
       lastAssistantId,
-      regenDisabled: status === "streaming",
+      regenDisabled: regenerateBlocked(status, noModel),
       incognito: session?.incognito,
       rewindTailId,
     }),
     [
       copiedId,
       lastAssistantId,
+      noModel,
       rewindTailId,
       session?.id,
       session?.incognito,
@@ -1945,6 +1967,14 @@ export function ChatSessionSlot({
           </div>
         ) : null}
         <LocalTurnControls sessionId={sessionId} visible={visible && surfaceActive} />
+        {noModel && (
+          <Callout tone="warning">
+            No model connected. The agent can't reply yet.
+            <Button size="sm" variant="primary" onClick={() => openGlobalSettings("model")}>
+              Connect a model
+            </Button>
+          </Callout>
+        )}
         {signedOut ? (
           /* Deliberate OAuth signed-out state (#2513): the composer is out of
              service — an enabled Send would only fail locally. Reconnect opens
@@ -1960,6 +1990,7 @@ export function ChatSessionSlot({
           </div>
         ) : (
         <PromptInput
+          disabled={noModel}
           value={draft}
           onChange={(v) => {
             setDraft(v);
