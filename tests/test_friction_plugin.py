@@ -1487,3 +1487,208 @@ def test_unknown_id_lists_the_open_items(ledger):
 def test_resolve_requires_summary_or_id(ledger):
     _record("harness", "read_file truncates")
     assert "required" in _resolve()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("traced", [False, True])
+async def test_real_agent_records_turn_identity_and_score(ledger, monkeypatch, traced):
+    """Exercise model → tool runtime injection under the production trace scope."""
+    from unittest.mock import MagicMock
+
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from graph.state import ProtoAgentState
+    from observability import tracing
+
+    class Model(GenericFakeChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    client = MagicMock()
+    client.start_as_current_observation.return_value.__enter__.return_value.trace_id = "turn-trace"
+    monkeypatch.setattr(tracing, "_langfuse", client)
+    monkeypatch.setattr(tracing, "_enabled", traced)
+    score = MagicMock()
+    monkeypatch.setattr(tracing, "score_trace", score)
+    assert "state" not in record_friction.tool_call_schema.model_json_schema()["properties"]
+    model = Model(messages=iter([
+        AIMessage(content="", tool_calls=[{
+            "name": "record_friction", "args": {"kind": "model", "summary": "wrong path"},
+            "id": "record", "type": "tool_call",
+        }]),
+        AIMessage(content="done"),
+    ]))
+    agent = create_agent(model, tools=[record_friction], state_schema=ProtoAgentState)
+    # Deliberately different from injected state: never use the ambient session id.
+    async with tracing.trace_session("ambient-session"):
+        result = await agent.ainvoke({"session_id": "injected-session", "messages": [HumanMessage(content="go")]})
+    assert any(isinstance(m, ToolMessage) and "logged" in m.content for m in result["messages"])
+    rec, = _recs(ledger)
+    assert rec["session_id"] == "injected-session"
+    if traced:
+        assert rec["trace_id"] == "turn-trace"
+        score.assert_called_once_with("turn-trace", "friction", 0, comment="model/minor: wrong path")
+    else:
+        assert "trace_id" not in rec
+        score.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+async def test_real_tool_runtime_auto_capture_ids(ledger, monkeypatch, sync):
+    from unittest.mock import MagicMock
+
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import tool
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.prebuilt import ToolNode
+
+    from graph.state import ProtoAgentState
+    from observability import tracing
+
+    @tool
+    def run_command(command: str) -> str:
+        """A failing shell command."""
+        raise ValueError("broken")
+
+    client = MagicMock()
+    client.start_as_current_observation.return_value.__enter__.return_value.trace_id = "auto-trace"
+    monkeypatch.setattr(tracing, "_langfuse", client)
+    monkeypatch.setattr(tracing, "_enabled", True)
+    score = MagicMock()
+    monkeypatch.setattr(tracing, "score_trace", score)
+    mw = FrictionMiddleware(bound_tools={"read_file"})
+    builder = StateGraph(ProtoAgentState)
+    builder.add_node("tools", ToolNode([run_command], handle_tool_errors=False,
+                                      wrap_tool_call=mw.wrap_tool_call,
+                                      awrap_tool_call=mw.awrap_tool_call))
+    builder.add_edge(START, "tools")
+    builder.add_edge("tools", END)
+    graph = builder.compile()
+    state = {"session_id": "auto-session", "messages": [AIMessage(content="", tool_calls=[{
+        "name": "run_command", "args": {"command": "cat file"}, "id": "shell", "type": "tool_call",
+    }])]}
+    async with tracing.trace_session("ambient"):
+        with pytest.raises(ValueError, match="broken"):
+            if sync:
+                await asyncio.to_thread(graph.invoke, state)
+            else:
+                await graph.ainvoke(state)
+    recs = _recs(ledger)
+    assert len(recs) == 2
+    assert {r["session_id"] for r in recs} == {"auto-session"}
+    assert {r["trace_id"] for r in recs} == {"auto-trace"}
+    assert recs[0]["suggest"] == "read_file"
+    assert "raised ValueError" in recs[1]["summary"]
+    assert score.call_count == 2
+    for call, rec in zip(score.call_args_list, recs):
+        assert call.args == ("auto-trace", "friction", 0)
+        assert call.kwargs == {"comment": f"harness/{rec['severity']}: {rec['summary']}"}
+
+
+def test_service_optional_ids_scoring_failure_and_latest_group(ledger, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from observability import tracing
+    from plugins.friction import record_service, set_resolved
+
+    score = MagicMock(side_effect=RuntimeError("offline"))
+    monkeypatch.setattr(tracing, "score_trace", score)
+    assert record_service("harness", "same")
+    score.assert_not_called()
+    assert "session_id" not in _recs(ledger)[0]
+    assert "trace_id" not in _recs(ledger)[0]
+    assert record_service("harness", "same", severity="major", session_id="s", trace_id="t")
+    score.assert_called_once_with("t", "friction", 0, comment="harness/major: same")
+    row, = grouped_entries()
+    assert (row["session_id"], row["trace_id"], row["count"]) == ("s", "t", 2)
+    # Latest occurrence has no ids: never borrow another occurrence's trace.
+    assert record_service("harness", "same")
+    row, = grouped_entries()
+    assert row["session_id"] == row["trace_id"] == ""
+    assert set_resolved("same") == 3
+    assert grouped_entries() == []
+    assert len(grouped_entries(include_resolved=True)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("template", [None, "https://traces.example/project/p/traces/{trace_id}"])
+async def test_review_links_and_legacy_entries(ledger, monkeypatch, template):
+    from operator_api import telemetry_routes
+    from plugins.friction import record_service
+
+    monkeypatch.setattr(telemetry_routes, "_TRACE_URL_TEMPLATE_CACHE", template)
+    record_service("model", "old entry")
+    record_service("model", "new entry", session_id="session-42", trace_id="trace-42")
+    review = await friction_review.ainvoke({})
+    assert "old entry" in review and "new entry" in review
+    assert "session: session-42" in review
+    if template:
+        assert "[trace](https://traces.example/project/p/traces/trace-42)" in review
+    else:
+        assert "trace: trace-42" in review
+
+
+@pytest.mark.platform_sensitive
+def test_view_renders_trace_links_and_legacy_rows():
+    """Execute the shipped view in a DOM, including its telemetry fetch and fallback."""
+    import shutil
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    if not shutil.which("node") or not (root / "node_modules/jsdom").exists():
+        pytest.skip("view DOM test requires npm ci and Node")
+    script = r'''
+import { JSDOM } from "jsdom";
+import { readFileSync } from "node:fs";
+import assert from "node:assert/strict";
+const html = readFileSync("plugins/friction/view.html", "utf8");
+const dom = new JSDOM(html, {url: "https://agent.example", runScripts: "outside-only"});
+const source = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1]
+  .replace('const kit = await import(window.__base + "/_ds/plugin-kit.js");', 'const kit = window.kit;');
+const calls = [];
+let telemetryFails = false;
+dom.window.setTimeout = () => 0;
+dom.window.setInterval = () => 0;
+dom.window.kit = {
+  initPluginView() {},
+  async apiFetch(url) {
+    calls.push(url);
+    if (url.startsWith("/api/telemetry/recent")) {
+      if (telemetryFails) throw Error("offline");
+      return {ok: true, json: async () => ({langfuse_trace_url_template:
+        "https://trace.example/custom/{trace_id}"})};
+    }
+    return {ok: true, json: async () => ({items: [
+      {kind: "model", summary: "legacy row"},
+      {kind: "model", summary: "new row", session_id: "session<42>", trace_id: "trace/42"},
+    ], counts: {model: 2}})};
+  },
+};
+await dom.window.eval('(async () => {' + source + `
+  await load();
+  window.resetTrace = () => { state.traceTemplate = ""; };
+  window.reloadLedger = load;
+})()`);
+const doc = dom.window.document;
+assert(calls.includes("/api/telemetry/recent?limit=1"));
+assert.equal(doc.querySelectorAll(".entry").length, 2);
+assert(doc.getElementById("list").textContent.includes("legacy row"));
+assert(doc.getElementById("list").textContent.includes("session: session<42>"));
+let trace = [...doc.querySelectorAll("a")].find(a => a.textContent === "Trace");
+assert.equal(trace.href, "https://trace.example/custom/trace%2F42");
+assert.equal(trace.rel, "noopener noreferrer");
+assert.equal(trace.target, "_blank");
+telemetryFails = true;
+dom.window.resetTrace();
+await dom.window.reloadLedger();
+assert.equal(doc.querySelectorAll(".entry").length, 2);
+assert(doc.getElementById("list").textContent.includes("trace: trace/42"));
+assert(![...doc.querySelectorAll("a")].some(a => a.textContent === "Trace"));
+dom.window.close();
+'''
+    result = subprocess.run(["node", "--input-type=module"], input=script, text=True,
+                            capture_output=True, cwd=root, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -232,7 +232,7 @@
   const state = {
     kind: "", severity: "", source: "", sort: "recent", scope: "",
     query: "", showResolved: false,
-    items: [], counts: {}, occurrences: 0, issueRepo: "", members: [], unreachable: [], open: new Set(), busy: new Set(),
+    items: [], counts: {}, occurrences: 0, issueRepo: "", traceTemplate: "", members: [], unreachable: [], open: new Set(), busy: new Set(),
   };
 
   // ── helpers ───────────────────────────────────────────────────────────────
@@ -470,6 +470,20 @@
       (item.severity === "major") ? "error" : null));
     meta.appendChild(badge(item.kind || "harness", item.kind === "model" ? "info" : null));
     meta.appendChild(badge(item.source || "auto"));
+    if (item.session_id) meta.appendChild(el("span", "pl-tag", "session: " + item.session_id));
+    if (item.trace_id) {
+      const url = state.traceTemplate
+        ? state.traceTemplate.replace("{trace_id}", encodeURIComponent(item.trace_id)) : "";
+      if (/^https?:\/\//i.test(url)) {
+        const trace = el("a", "pl-btn pl-btn--sm", "Trace");
+        trace.href = url;
+        trace.target = "_blank";
+        trace.rel = "noopener noreferrer";
+        meta.appendChild(trace);
+      } else {
+        meta.appendChild(el("span", "pl-tag", "trace: " + item.trace_id));
+      }
+    }
     if (item.tool) meta.appendChild(el("span", "pl-tag", item.tool));
     // On a fleet row, WHICH agents hit this is the whole added signal — one agent seeing
     // something 12 times and four agents seeing it three times each are different problems.
@@ -596,6 +610,11 @@
   async function load() {
     if (!state.items.length) renderSkeleton();
     try {
+      // Telemetry owns the Langfuse URL; a lookup failure must not hide the ledger.
+      try {
+        const telemetry = await kit.apiFetch("/api/telemetry/recent?limit=1");
+        if (telemetry.ok) state.traceTemplate = (await telemetry.json()).langfuse_trace_url_template || "";
+      } catch { /* tracing is optional */ }
       if (state.scope === "fleet") {
         const res = await kit.apiFetch("/api/plugins/friction/fleet");
         if (!res.ok) throw new Error(res.status + " " + res.statusText);

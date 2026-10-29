@@ -40,9 +40,14 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Annotated, Any
+from urllib.parse import quote
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
+
+from observability import tracing
 
 log = logging.getLogger(__name__)
 
@@ -362,7 +367,8 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _log(
-    kind: str, summary: str, detail: str, severity: str, source: str, tool_name: str = "", suggest: str = ""
+    kind: str, summary: str, detail: str, severity: str, source: str, tool_name: str = "", suggest: str = "",
+    *, session_id: str = "", trace_id: str = "",
 ) -> None:
     path = _ledger_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -374,6 +380,10 @@ def _log(
         "kind": kind, "summary": _clip(summary, 200), "detail": _clip(detail, 600),
         "severity": severity, "source": source,
     }
+    if session_id:
+        rec["session_id"] = session_id
+    if trace_id:
+        rec["trace_id"] = trace_id
     if tool_name:
         rec["tool"] = tool_name
     if suggest:
@@ -386,6 +396,11 @@ def _log(
         fh.write(json.dumps(rec, default=str) + "\n")
     _trim(path)
     _emit("recorded", dict(rec))
+    if trace_id:
+        try:
+            tracing.score_trace(trace_id, "friction", 0, comment=f"{kind}/{severity}: {summary}")
+        except Exception:  # noqa: BLE001 — scoring must never break recording
+            log.debug("[friction] scoring failed", exc_info=True)
 
 
 def _trim(path: Path) -> None:
@@ -482,6 +497,8 @@ def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict
         g = groups.get(key)
         if g is None:
             groups[key] = {
+                "session_id": rec.get("session_id", ""),
+                "trace_id": rec.get("trace_id", ""),
                 "id": entry_id(*key),
                 "kind": key[0],
                 "summary": key[1],
@@ -507,6 +524,9 @@ def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict
                 "_last_idx": idx,
             }
             continue
+        if ts >= g["last_seen"]:
+            for field in ("session_id", "trace_id"):
+                g[field] = rec.get(field, "")
         g["count"] += 1
         g["last_seen"] = max(g["last_seen"], ts)
         g["_last_idx"] = idx
@@ -526,7 +546,10 @@ def grouped_entries(kind: str = "", include_resolved: bool = False) -> list[dict
 
 
 @tool
-async def record_friction(kind: str, summary: str, detail: str = "", severity: str = "minor") -> str:
+async def record_friction(
+    kind: str, summary: str, detail: str = "", severity: str = "minor",
+    *, state: Annotated[Any, InjectedState] = None,
+) -> str:
     """Record a friction point the moment you hit one — this is how the harness and the
     model get better, so don't skip it.
 
@@ -543,7 +566,10 @@ async def record_friction(kind: str, summary: str, detail: str = "", severity: s
         severity = "minor"
     if not summary.strip():
         return "summary is required (one line: what was the friction?)"
-    _log(kind, summary, detail, severity, source="agent")
+    # trace_session encloses the runtime and propagates its trace into tool tasks;
+    # session identity comes from InjectedState (never current_session_id()).
+    _log(kind, summary, detail, severity, source="agent",
+         session_id=(state or {}).get("session_id", ""), trace_id=tracing.current_trace_id())
     return f"logged {severity} {kind} friction: “{summary}”."
 
 
@@ -551,7 +577,8 @@ async def record_friction(kind: str, summary: str, detail: str = "", severity: s
 _SOURCE_RE = re.compile(r"[^A-Za-z0-9_.:-]+")
 
 
-def record_service(kind: str, summary: str, detail: str = "", severity: str = "minor", *, source: str = "") -> str:
+def record_service(kind: str, summary: str, detail: str = "", severity: str = "minor", *, source: str = "",
+                   session_id: str = "", trace_id: str = "") -> str:
     """The ``friction.record`` service (ADR 0116): record friction from a plugin's own code.
 
     ``record_friction`` is an agent TOOL, so it only ever captured what went wrong inside a
@@ -575,7 +602,8 @@ def record_service(kind: str, summary: str, detail: str = "", severity: str = "m
         if severity not in _SEVERITIES:
             severity = "minor"
         label = _SOURCE_RE.sub("-", str(source or "").strip())[:64].strip("-") or "unknown"
-        _log(kind, summary, str(detail or ""), severity, source=f"plugin:{label}")
+        _log(kind, summary, str(detail or ""), severity, source=f"plugin:{label}",
+             session_id=session_id, trace_id=trace_id)
         return entry_id(kind, _clip(summary, 200))
     except Exception:  # noqa: BLE001 — recording friction must never break its caller
         log.warning("[friction] record_service failed", exc_info=True)
@@ -775,10 +803,19 @@ async def friction_review(kind: str = "", include_resolved: bool = False) -> str
     harness = sum(1 for r in recs if r.get("kind") == "harness")
     model = sum(1 for r in recs if r.get("kind") == "model")
     lines = [f"friction backlog: {len(recs)} total  ·  harness={harness}  model={model}", ""]
+    from operator_api.telemetry_routes import _trace_url_template
+
+    template = await _trace_url_template() if any(r.get("trace_id") for r in recs[-12:]) else None
     for r in recs[-12:]:
         rid = entry_id(str(r.get("kind", "")), str(r.get("summary", "")))
         lines.append(f"  [{rid}] [{r.get('kind', '?'):<7} {r.get('severity', '?'):<5} {r.get('source', '?'):<5}] "
                      f"{r.get('summary', '')}{' [resolved]' if r.get('resolved_at') else ''}")
+        if r.get("session_id"):
+            lines.append(f"    session: {r['session_id']}")
+        if r.get("trace_id"):
+            trace_id = str(r["trace_id"])
+            url = template.replace("{trace_id}", quote(trace_id, safe="")) if template else ""
+            lines.append(f"    [trace]({url})" if url else f"    trace: {trace_id}")
     lines += ["", "resolve one once it is fixed: resolve_friction(id=\"<the [id] above>\", reason=...)"]
     return "\n".join(lines)
 
@@ -884,6 +921,11 @@ class FrictionMiddleware(AgentMiddleware):
         self.observe_tools(getattr(request, "tools", None))
         return await handler(request)
 
+    @staticmethod
+    def _turn_ids(request) -> dict:
+        state = getattr(request, "state", None) or {}
+        return {"session_id": state.get("session_id", ""), "trace_id": tracing.current_trace_id()}
+
     def _note_escape_hatch(self, request) -> None:
         name = request.tool_call.get("name", "?")
         if name not in _ESCAPE_HATCHES:
@@ -910,12 +952,12 @@ class FrictionMiddleware(AgentMiddleware):
             word, suggest = hit
             _log("harness", f"used `{word}` via {name} — {suggest} does this",
                  detail=_clip(args, 300), severity="minor", source="auto",
-                 tool_name=name, suggest=suggest)
+                 tool_name=name, suggest=suggest, **self._turn_ids(request))
             return
         # No command to classify (`python`/`exec`, or a shell hatch with an unknown arg
         # shape): the original, coarser signal.
         _log("harness", f"reached for escape hatch '{name}' — candidate for a first-class tool",
-             detail=_clip(args, 300), severity="minor", source="auto", tool_name=name)
+             detail=_clip(args, 300), severity="minor", source="auto", tool_name=name, **self._turn_ids(request))
 
     def _note_error(self, request, e: Exception) -> None:
         if type(e).__name__ in _CONTROL_FLOW:
@@ -928,7 +970,7 @@ class FrictionMiddleware(AgentMiddleware):
         # count: it argues for a fix nobody can scope.
         _log("harness", f"tool '{request.tool_call.get('name', '?')}' raised {type(e).__name__}",
              detail=f"{type(e).__name__}: {e}", severity="major", source="auto",
-             tool_name=request.tool_call.get("name", ""))
+             tool_name=request.tool_call.get("name", ""), **self._turn_ids(request))
 
     def wrap_tool_call(self, request, handler):
         self._note_escape_hatch(request)
@@ -1266,6 +1308,9 @@ async def fleet_rollup(*, timeout_s: float = 4.0) -> dict:
             if _SEVERITY_RANK.get(str(item.get("severity")), 0) > _SEVERITY_RANK.get(str(row["severity"]), 0):
                 row["severity"] = item.get("severity")
             last, first = str(item.get("last_seen") or ""), str(item.get("first_seen") or "")
+            if last >= row["last_seen"]:
+                for field in ("session_id", "trace_id"):
+                    row[field] = item.get(field, "")
             row["last_seen"] = max(row["last_seen"], last)
             row["first_seen"] = min(row["first_seen"], first) if row["first_seen"] and first else (row["first_seen"] or first)
             if not row["detail"]:
