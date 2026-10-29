@@ -33,7 +33,6 @@ from evals.compare import (  # noqa: E402
     _category_passed,
     _pct,
     _tier_order,
-    _tiers_of,
     is_instance_case,
     resolve_tier,
 )
@@ -47,10 +46,32 @@ def _tier_cell(tiers: dict[str, tuple[int, int]], tier: str) -> str:
     return f"{p}/{t} ({_pct(p, t)})" if t else "—"
 
 
+def _core_tiers(rep: dict) -> dict[str, tuple[int, int]]:
+    """Per-tier ``(passed, total)`` over CORE (non-instance) rows only (ADR 0126 D5).
+
+    The leaderboard, the model ranking and the trend gate/tracked figures stay
+    core-only, so an instance case never moves the core gate headline — instance
+    cases get their own ``## Instance cases`` section instead of being counted twice.
+    Recomputed from rows (not the report's saved all-results ``tiers`` block, which
+    counts instance rows too), with each row's tier resolved via :func:`resolve_tier`;
+    for a legacy report with no instance cases this is identical to that block, so an
+    existing report renders byte-for-byte as before."""
+    agg: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for r in rep.get("results", []):
+        if r.get("skipped") or is_instance_case(r):
+            continue
+        cell = agg[resolve_tier(r)]
+        cell[1] += 1
+        if r.get("passed"):
+            cell[0] += 1
+    return {t: (p, tot) for t, (p, tot) in agg.items()}
+
+
 def _gate_rate(rep: dict) -> float:
     """Gate pass rate (the headline number, ADR 0126 D1); 0.0 when a run has no
-    gate cases so it sorts last rather than crashing."""
-    p, t = _tiers_of(rep).get("gate", (0, 0))
+    gate cases so it sorts last rather than crashing. Core cases only — an instance
+    case must not move a model's rank (ADR 0126 D5)."""
+    p, t = _core_tiers(rep).get("gate", (0, 0))
     return p / t if t else 0.0
 
 
@@ -166,7 +187,7 @@ def build_report(runs: list[dict], only_model: str | None = None) -> str:
         for c in cats:
             pp, tt = cper.get(c, (0, 0))
             cells.append(f"{pp}/{tt}" if tt else "—")
-        tiers = _tiers_of(rep)
+        tiers = _core_tiers(rep)
         gp, gt = tiers.get("gate", (0, 0))
         gate = f"**{gp}/{gt} ({_pct(gp, gt)})**" if gt else "—"
         tracked = _tier_cell(tiers, "tracked")
@@ -189,7 +210,7 @@ def build_report(runs: list[dict], only_model: str | None = None) -> str:
         lines.append("|---|---|---|---|---|")
         prev = None
         for rep in reps:
-            tiers = _tiers_of(rep)
+            tiers = _core_tiers(rep)
             gp, gt = tiers.get("gate", (0, 0))
             arrow = ""
             if prev is not None:

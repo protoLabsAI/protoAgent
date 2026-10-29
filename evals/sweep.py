@@ -191,7 +191,9 @@ def _seed_config_for(policy: str, ts: int, slug: str) -> Path | None:
         return None
 
 
-def _session_seed_steps(category: str | None, tasks: str | None) -> list[dict]:
+def _session_seed_steps(
+    category: str | None, tasks: str | None, instance_path: Path | None = None
+) -> list[dict]:
     """Every ``session_seed`` setup step of the cases this run will execute.
 
     Seeded before the arm boots — see ``_run_one_model``; an arm running with
@@ -202,10 +204,13 @@ def _session_seed_steps(category: str | None, tasks: str | None) -> list[dict]:
     instance's ``<config dir>/evals/cases.json``, ADR 0126 D5) rather than reading
     ``tasks.json`` directly, so the sweep seeds fixtures for exactly the cases the
     runner will run — including instance cases — with no separate loader.
+    ``instance_path`` is the OPERATOR instance's cases file resolved by ``main`` (the
+    same file handed to the runner child via ``--instance-cases``); passing it here
+    keeps the seeded set and the run set reading one authoritative path, never two.
     """
     from evals.runner import load_all_cases, select_by_ids
 
-    cases = load_all_cases()
+    cases = load_all_cases(instance_path=instance_path)
     # AND, exactly like the runner composes them (--tasks X --category Y runs the
     # intersection). Filtering differently here would seed one set and run another.
     if category:
@@ -243,6 +248,43 @@ def _wait_healthy(base_url: str, deadline_s: float = _HEALTH_DEADLINE_S) -> dict
     return None
 
 
+def _runner_cmd(
+    base_url: str,
+    label: str,
+    report_path: Path,
+    *,
+    category: str | None = None,
+    tasks: str | None = None,
+    instance_cases: Path | None = None,
+) -> list[str]:
+    """The ``python -m evals.runner`` command for one arm run.
+
+    ``--instance-cases`` carries the OPERATOR instance's ``evals/cases.json`` into the
+    child (ADR 0126 D5). The child boots on a throwaway instance whose config dir has
+    no ``cases.json``, so without this it would never load the instance cases the
+    sweep seeded fixtures for — and a ``--tasks instance:<id>`` the sweep resolved
+    would be reported unknown by the runner. Added only when the operator file
+    actually exists, so a plain suite's command is byte-for-byte unchanged."""
+    cmd = [
+        sys.executable,
+        "-m",
+        "evals.runner",
+        "--base-url",
+        base_url,
+        "--model-label",
+        label,
+        "--out",
+        str(report_path),
+    ]
+    if category:
+        cmd += ["--category", category]
+    if tasks:
+        cmd += ["--tasks", tasks]
+    if instance_cases and instance_cases.exists():
+        cmd += ["--instance-cases", str(instance_cases)]
+    return cmd
+
+
 def _run_one_model(
     model: str,
     *,
@@ -256,6 +298,7 @@ def _run_one_model(
     label: str | None = None,
     prior_sessions: str | None = None,
     seed_steps: list[dict] | None = None,
+    instance_cases: Path | None = None,
 ) -> list[dict] | None:
     """Boot one agent on ``model`` and run the suite ``repeat`` times against
     it; return the list of report dicts (empty if the agent never came up).
@@ -322,21 +365,14 @@ def _run_one_model(
                 verify.apply_setup(seed_steps, memory_dir=str(_instance_memory_dir(instance)))
             suffix = f"-r{run_i + 1}" if repeat > 1 else ""
             report_path = _RESULTS_DIR / f"run-sweep-{ts}-{_slug(label)}{suffix}.json"
-            cmd = [
-                sys.executable,
-                "-m",
-                "evals.runner",
-                "--base-url",
+            cmd = _runner_cmd(
                 base_url,
-                "--model-label",
                 label,
-                "--out",
-                str(report_path),
-            ]
-            if category:
-                cmd += ["--category", category]
-            if tasks:
-                cmd += ["--tasks", tasks]
+                report_path,
+                category=category,
+                tasks=tasks,
+                instance_cases=instance_cases,
+            )
             if repeat > 1:
                 print(f"  — run {run_i + 1}/{repeat}")
             subprocess.run(cmd, cwd=str(_PROJECT_ROOT), env=env, check=False)
@@ -494,7 +530,14 @@ def main(argv: list[str] | None = None) -> int:
     # One arm per (model, policy). Without a policy axis an arm is just a model,
     # labelled exactly as before so existing reports keep their shape.
     arms = [(m, pol) for m in models for pol in (policies or [None])]
-    seed_steps = _session_seed_steps(args.category, args.tasks)
+    # Resolve the instance cases file ONCE, in this (operator) process — the throwaway
+    # instance the runner child boots has no cases.json, so the child is handed this
+    # path via --instance-cases (ADR 0126 D5). The same path feeds the session-fixture
+    # seeding so the seeded set and the run set never diverge.
+    from evals.runner import instance_cases_path
+
+    instance_cases = instance_cases_path()
+    seed_steps = _session_seed_steps(args.category, args.tasks, instance_cases)
 
     if os.environ.get("PROTOAGENT_HOME", "").strip() and (policies or seed_steps):
         # PROTOAGENT_HOME is terminal: the instance root IS that directory, and
@@ -528,6 +571,7 @@ def main(argv: list[str] | None = None) -> int:
             label=label,
             prior_sessions=policy,
             seed_steps=seed_steps,
+            instance_cases=instance_cases,
         )
         if runs:
             model_runs[label] = runs

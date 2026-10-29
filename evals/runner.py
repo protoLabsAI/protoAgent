@@ -790,9 +790,34 @@ def load_all_cases(tasks_path: Path | None = None, *, instance_path: Path | None
     up instance cases without its own loader.
 
     Instance ids are namespaced, so they can't collide with core ids; an absent
-    instance file leaves the result identical to core cases alone."""
+    instance file leaves the result identical to core cases alone. ``instance_path``
+    pins the instance cases file explicitly (the sweep passes the operator instance's
+    path so its throwaway-instance runner reads the right file); omitted, it resolves
+    ``<config dir>/evals/cases.json`` for this process's instance."""
     tasks_path = tasks_path or (Path(__file__).parent / "tasks.json")
     return load_cases(tasks_path) + load_instance_cases(instance_path)
+
+
+def _load_suite(tasks_file: str | None, instance_cases: str | None) -> tuple[Path, list[dict]]:
+    """The suite ``main`` runs (ADR 0126 D5).
+
+    An explicit ``--tasks-file`` is a self-contained suite (a plugin running its own
+    cases), so it is loaded ALONE — instance cases are never merged into someone
+    else's file. Otherwise it is core ``tasks.json`` PLUS the instance's own cases.
+
+    The instance cases come from ``--instance-cases <path>`` when given, else the
+    resolved ``<config dir>/evals/cases.json`` for this process's instance.
+    ``evals.sweep`` passes the explicit path because the runner subprocess boots on a
+    THROWAWAY instance whose config dir has no ``cases.json`` — resolving it in the
+    child would silently find nothing (and ``--tasks instance:<id>`` would be reported
+    unknown), so the sweep hands the child the operator instance's file it already
+    resolved. An absent/omitted path leaves the result identical to core cases alone."""
+    if tasks_file:
+        tasks_path = Path(tasks_file)
+        return tasks_path, load_cases(tasks_path)
+    tasks_path = Path(__file__).parent / "tasks.json"
+    instance_path = Path(instance_cases) if instance_cases else None
+    return tasks_path, load_all_cases(tasks_path, instance_path=instance_path)
 
 
 def _tier_totals(results: list[CaseResult]) -> dict[str, dict]:
@@ -846,6 +871,14 @@ async def main():
         help="path to a tasks JSON file (default: the built-in evals/tasks.json). "
         "Lets a plugin repo ship its own eval cases and run them with this runner.",
     )
+    p.add_argument(
+        "--instance-cases",
+        default=None,
+        help="path to the target instance's evals/cases.json (ADR 0126 D5). evals.sweep "
+        "passes this so the throwaway-instance runner still loads the OPERATOR instance's "
+        "cases; omitted, the runner resolves <config dir>/evals/cases.json for its own "
+        "instance. Ignored alongside --tasks-file (that suite is self-contained).",
+    )
     p.add_argument("--category", default=None)
     p.add_argument("--out", default=None)
     p.add_argument(
@@ -855,16 +888,10 @@ async def main():
     )
     args = p.parse_args()
 
-    # The default suite is core tasks.json PLUS the instance's own
-    # <config dir>/evals/cases.json when it exists (ADR 0126 D5). An explicit
-    # --tasks-file is a self-contained suite (a plugin running its own cases), so
-    # it is loaded alone — instance cases are not merged into someone else's file.
-    if args.tasks_file:
-        tasks_path = Path(args.tasks_file)
-        cases = load_cases(tasks_path)
-    else:
-        tasks_path = Path(__file__).parent / "tasks.json"
-        cases = load_all_cases(tasks_path)
+    # Core tasks.json PLUS the instance's own <config dir>/evals/cases.json (ADR
+    # 0126 D5), unless --tasks-file pins a self-contained suite. --instance-cases
+    # pins the instance file explicitly (see _load_suite / evals.sweep).
+    tasks_path, cases = _load_suite(args.tasks_file, args.instance_cases)
 
     if args.tasks:
         cases, unknown = select_by_ids(cases, args.tasks)

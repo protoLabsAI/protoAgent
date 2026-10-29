@@ -23,6 +23,7 @@ import pytest
 from evals import runner
 from evals.compare import INSTANCE_ID_PREFIX, is_instance_case
 from evals.report import build_report
+from evals.sweep import _runner_cmd
 
 
 def _write(path, cases):
@@ -235,3 +236,81 @@ def test_report_has_no_instance_heading_without_instance_cases():
     rows = [_row("core_a", True), _row("core_b", False)]
     md = build_report([_report("2026-10-29T00:00:00+00:00", "model/a", rows)])
     assert "## Instance cases" not in md
+
+
+def test_core_gate_headline_excludes_instance_cases():
+    """The leaderboard/trend gate figure (and the model ranking) stays core-only;
+    instance cases live only in their own section (ADR 0126 D5). A passing instance
+    case must not inflate the core gate headline."""
+    rows = [
+        _row("core_a", False, tier="gate"),  # core gate: 0/1
+        _row("instance:g1", True, tier="gate", instance=True),  # instance gate: 1/1
+    ]
+    md = build_report([_report("2026-10-29T00:00:00+00:00", "model/a", rows)])
+    core_part = md[: md.index("## Instance cases")]
+    assert "**0/1" in core_part  # core gate, bolded in the leaderboard, core-only
+    assert "**1/2" not in core_part  # NOT inflated by the instance pass
+    inst_part = md[md.index("## Instance cases") :]
+    assert "1/1" in inst_part  # the instance pass shows only in its own section
+
+
+# ── main's suite loader: --instance-cases merges; --tasks-file is self-contained ──
+
+
+def test_load_suite_merges_instance_cases_from_an_explicit_path(tmp_path):
+    """No --tasks-file: core ``tasks.json`` + the explicit ``--instance-cases`` file,
+    instance ids namespaced. This is the path the sweep child takes (it is handed the
+    operator instance's file because its own throwaway config dir has none)."""
+    inst = _write(
+        tmp_path / "config" / "evals" / "cases.json",
+        [{"id": "my_case", "kind": "ask", "prompt": "hi"}],
+    )
+    tasks_path, cases = runner._load_suite(None, str(inst))
+    ids = [c["id"] for c in cases]
+    assert "instance:my_case" in ids
+    assert any(not is_instance_case(c) for c in cases)  # core tasks.json still loaded
+    assert tasks_path.name == "tasks.json"
+
+
+def test_load_suite_tasks_file_is_self_contained(tmp_path):
+    """An explicit --tasks-file loads ALONE — instance cases are not merged into
+    someone else's suite, even when an instance-cases path is given."""
+    self_contained = _write(tmp_path / "plugin_tasks.json", [{"id": "only", "kind": "ask", "prompt": "hi"}])
+    inst = _write(tmp_path / "config" / "evals" / "cases.json", [{"id": "ignored", "kind": "ask", "prompt": "hi"}])
+    tasks_path, cases = runner._load_suite(str(self_contained), str(inst))
+    assert [c["id"] for c in cases] == ["only"]
+    assert tasks_path == self_contained
+
+
+# ── sweep → runner child: the operator cases file rides --instance-cases ──────────
+
+
+def test_sweep_passes_the_operator_instance_cases_to_the_runner_child(tmp_path):
+    """The sweep's runner subprocess boots on a THROWAWAY instance with no cases.json,
+    so the operator instance's file must ride into the child on --instance-cases — or
+    the child silently runs core only and reports a resolved ``instance:<id>`` unknown
+    (ADR 0126 E4a blocking finding)."""
+    inst = _write(
+        tmp_path / "config" / "evals" / "cases.json",
+        [{"id": "my_case", "kind": "ask", "prompt": "hi"}],
+    )
+    cmd = _runner_cmd(
+        "http://127.0.0.1:7990",
+        "vendor/m",
+        tmp_path / "out.json",
+        tasks="instance:my_case",
+        instance_cases=inst,
+    )
+    assert "--instance-cases" in cmd
+    # The flag's value is the operator instance's file, verbatim.
+    assert cmd[cmd.index("--instance-cases") + 1] == str(inst)
+    # And the --tasks selection the sweep resolved rides along, so the child runs it.
+    assert cmd[cmd.index("--tasks") + 1] == "instance:my_case"
+
+
+def test_sweep_omits_instance_cases_flag_when_the_file_is_absent(tmp_path):
+    """No operator cases.json → the runner command is unchanged (a plain suite), so an
+    instance with no cases behaves exactly as today."""
+    missing = tmp_path / "config" / "evals" / "cases.json"
+    cmd = _runner_cmd("http://127.0.0.1:7990", "vendor/m", tmp_path / "out.json", instance_cases=missing)
+    assert "--instance-cases" not in cmd
