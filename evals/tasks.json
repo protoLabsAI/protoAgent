@@ -71,7 +71,7 @@
     "category": "tool",
     "kind": "ask",
     "name": "Asks for arithmetic → calculator",
-    "prompt": "Use the calculator tool to compute 17 times 23, plus 1.",
+    "prompt": "What is 17 times 23, plus 1?",
     "expected_tools": ["calculator"],
     "expected_patterns": ["392"]
   },
@@ -99,7 +99,7 @@
     "category": "tool",
     "kind": "ask",
     "name": "Stores a stable preference → memory_ingest writes a chunk",
-    "prompt": "Use memory_ingest to store this exact text without rephrasing: I prefer protoLabs Studio standups at 9am Eastern.",
+    "prompt": "Remember that I prefer protoLabs Studio standups at 9am Eastern.",
     "expected_tools": ["memory_ingest"],
     "expected_patterns": [],
     "verify_kb": {
@@ -114,7 +114,7 @@
     "category": "tool",
     "kind": "ask",
     "name": "Asks to log an event → memory_ingest writes the chunk",
-    "prompt": "Use memory_ingest to store this note: my standup just ended, team is unblocked on the auth migration.",
+    "prompt": "Make a note: my standup just ended, team is unblocked on the auth migration.",
     "expected_tools": ["memory_ingest"],
     "expected_patterns": [],
     "verify_kb": {
@@ -136,7 +136,7 @@
         "heading": "lab"
       }}
     ],
-    "prompt": "Use memory_recall to look up my primary lab. Where is it and what is it called?",
+    "prompt": "What is my primary lab called, and where is it located?",
     "expected_tools": ["memory_recall"],
     "expected_patterns": ["snickerdoodle", "spokane"],
     "teardown": [
@@ -152,7 +152,7 @@
       {"kb_ingest": {"content": "called the dentist", "domain": "daily-log", "heading": "today"}},
       {"kb_ingest": {"content": "merged the auth PR", "domain": "daily-log", "heading": "today"}}
     ],
-    "prompt": "Use memory_list to list the daily-log memory domain and summarize what I did today.",
+    "prompt": "What have I logged today? Give me a rundown of my entries.",
     "expected_tools": ["memory_list"],
     "expected_patterns": ["dentist"],
     "teardown": [
