@@ -59,7 +59,13 @@ describe("bootGatePhase — focused-agent recovery precedence (ADR 0042 §I)", (
 });
 
 describe("bootGateReady — when the shell shows instead of the gate", () => {
-  const DOWN = { bootOverride: false, setupPending: false, engineReady: false, signedOut: false };
+  const DOWN = {
+    bootOverride: false,
+    setupPending: false,
+    engineReady: false,
+    signedOut: false,
+    exploreMode: false,
+  };
 
   it("nothing resolved → gate stays up (cold start)", () => {
     expect(bootGateReady(DOWN)).toBe(false);
@@ -76,5 +82,12 @@ describe("bootGateReady — when the shell shows instead of the gate", () => {
     // condition, so the operator waited out the 45s "stuck" gate and read an
     // intentional disconnect as a broken startup.
     expect(bootGateReady({ ...DOWN, signedOut: true })).toBe(true);
+  });
+
+  it("explore-without-a-model is READY, not a hung boot (#4566)", () => {
+    // setup_complete with model_configured=false leaves graph_loaded=false and no
+    // graph_auth_error, so it fell through every other ready condition and stranded the
+    // visitor on the full-screen loader. It's an intentional state: open the console.
+    expect(bootGateReady({ ...DOWN, exploreMode: true })).toBe(true);
   });
 });

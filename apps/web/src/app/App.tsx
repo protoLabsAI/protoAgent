@@ -199,7 +199,12 @@ export function App() {
   const setupPending = Boolean(runtime) && runtime?.setup_complete === false;
   const engineReady = Boolean(runtime?.graph_loaded);
   const signedOut = Boolean(runtime?.graph_auth_error) && !runtime?.graph_loaded;
-  const bootReady = bootGateReady({ bootOverride, setupPending, engineReady, signedOut });
+  // "Explore without a model" (#4566): setup finished with no model, so the graph stays
+  // uncompiled (graph_loaded false, no auth error) by design — open the console anyway
+  // rather than wait out the boot loader. Flips off the moment a model is saved and the
+  // next poll reports model_configured true (the graph then compiles → engineReady).
+  const exploreMode = Boolean(runtime?.setup_complete) && runtime?.model_configured === false;
+  const bootReady = bootGateReady({ bootOverride, setupPending, engineReady, signedOut, exploreMode });
   // "failed" is time-based, like "stuck": a query error alone isn't enough — the BOOT_FAILED_MS
   // elapsed-time timer must also have fired. Before 120s an errored probe stays on loading/stuck
   // while refetchInterval keeps polling, so a slow-to-bind sidecar never flashes "isn't responding".

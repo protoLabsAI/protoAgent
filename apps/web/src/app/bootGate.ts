@@ -22,17 +22,21 @@ export type BootGatePhase =
 
 /** Whether the app shows at all (the gate hides). Ready when the engine is up, the
  *  setup wizard is due (no graph expected pre-setup), the operator escaped via
- *  "Continue anyway" — or the instance is deliberately SIGNED OUT of its native
+ *  "Continue anyway", the instance is deliberately SIGNED OUT of its native
  *  OAuth provider (#2513): `graph_auth_error` under `setup_complete` means the
  *  graph can't build until reconnect, which is a first-class state the shell
- *  banners, not a startup failure to wait out. */
+ *  banners, not a startup failure to wait out — or the operator finished setup in
+ *  "Explore without a model" (#4566): `setup_complete` with `model_configured === false`
+ *  means the graph is intentionally uncompiled, so the console must open (chat degrades
+ *  to a connect-a-model prompt) rather than hang on the full-screen loader. */
 export function bootGateReady(s: {
   bootOverride: boolean;
   setupPending: boolean;
   engineReady: boolean;
   signedOut: boolean;
+  exploreMode: boolean;
 }): boolean {
-  return s.bootOverride || s.setupPending || s.engineReady || s.signedOut;
+  return s.bootOverride || s.setupPending || s.engineReady || s.signedOut || s.exploreMode;
 }
 
 export function bootGatePhase(s: {

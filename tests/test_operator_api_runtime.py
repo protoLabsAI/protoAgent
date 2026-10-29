@@ -93,6 +93,19 @@ def test_model_is_configured_distinguishes_explore_mode(monkeypatch) -> None:
     assert model_is_configured(LangGraphConfig(providers=[], providers_declared=True)) is False
     # A native OAuth subscription authenticates from a credential store, not a key.
     assert model_is_configured(LangGraphConfig(model_provider="anthropic-oauth")) is True
+    # ...and the setup wizard's ACTUAL subscription shape (the #4566 review blocker): a
+    # DECLARED connection of a native-OAuth TYPE with no base_url/api_key, a qualified
+    # model.name naming it, and model.provider left at its 'openai' default. The
+    # endpoint/key check alone read this as unconfigured even though create_llm builds it
+    # fine through resolve_slot_target -> build_native_oauth_llm.
+    for ptype in ("anthropic-oauth", "openai-codex"):
+        subscription = LangGraphConfig(
+            providers=[Provider(id=ptype, type=ptype)],
+            providers_declared=True,
+            model_name=f"{ptype}:claude-opus-4-6",
+        )
+        assert subscription.model_provider == "openai"  # wizard never sets it
+        assert model_is_configured(subscription) is True
     # An ACP coding-agent runtime is its own brain — no gateway key needed.
     assert model_is_configured(LangGraphConfig(agent_runtime="acp:claude")) is True
 

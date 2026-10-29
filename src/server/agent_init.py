@@ -339,6 +339,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
             return
 
     from graph.agent import create_agent_graph
+    from graph.config import model_is_configured
     from graph.providers.oauth import OAuthCredentialError
     from tools.lg_tools import get_all_tools
 
@@ -441,53 +442,74 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # the `task` tool's run_in_background path can reach it.
     STATE.background_mgr = _build_background_manager(STATE.graph_config)
 
-    try:
-        with _timed_boot_phase("graph_compile", _boot_phases):
-            STATE.graph = create_agent_graph(
-                STATE.graph_config,
-                knowledge_store=STATE.knowledge_store,
-                scheduler=STATE.scheduler,
-                skills_index=STATE.skills_index,
-                extra_tools=STATE.mcp_tools + STATE.plugin_tools,
-                extra_middleware=STATE.plugin_middleware,
-                late_tool_factories=STATE.plugin_late_tool_factories,
-                checkpointer=STATE.checkpointer,
-                inbox_store=STATE.inbox_store,
-                tasks_store=STATE.tasks_store,
-                background_mgr=STATE.background_mgr,
-                # Lets the guarded edit_soul tool (ADR 0079/0081) reload the graph so a
-                # persona self-edit is live on the next turn — injected, so tools/ never
-                # imports server/. The prompt-only variant: a persona edit must not
-                # re-import plugins or respawn MCP servers (#3365).
-                reload_callback=_reload_for_soul_edit,
-            )
-    except OAuthCredentialError as exc:
-        # Signed-out is an intentional state, not a boot failure (#2458): the user
-        # disconnected a native OAuth provider and the marker survived a restart.
-        # Crashing here is a recovery dead end — the reconnect routes live on THIS
-        # server. Boot graphless instead (routes/surfaces above are already wired,
-        # chat degrades on ``STATE.graph is None``) and record why, so status APIs
-        # can offer reconnect instead of a dead port. The graph-independent
-        # machinery below (goal/watch controllers) still builds: the reconnect
-        # reload rebuilds only the graph, so anything skipped here would stay
-        # dead until a full restart.
+    # "Explore without a model" (#4566): setup is complete but no model is connected, so
+    # `create_llm` would raise on the empty key (no endpoint to build a client against).
+    # Boot graphless — the SAME shape as the OAuthCredentialError path below and the reload
+    # gate (`_reload_langgraph_agent`) — so the server stays up and serves the console. The
+    # routes/surfaces/knowledge/plugins above are already wired and chat degrades on
+    # `STATE.graph is None`; saving a model in Settings ▸ Model reloads and compiles with no
+    # restart. This is the SAME predicate the reload gate reads, so boot and reload agree. We
+    # do NOT fake a model to force a build.
+    if not model_is_configured(STATE.graph_config):
+        # Skip the graph build but DON'T return — fall through to the graph-independent
+        # machinery below (goal/watch controllers), exactly as the OAuthCredentialError
+        # path does. A later Settings ▸ Model save reloads only the graph (reconfiguring,
+        # not rebuilding, those controllers), so anything skipped here would stay dead until
+        # a full restart.
         STATE.graph = None
-        STATE.graph_auth_error = {
-            "provider": exc.provider,
-            "message": str(exc),
-            "relogin": exc.relogin,
-        }
+        STATE.graph_auth_error = None
         log.warning(
-            "[oauth] %s — starting without a compiled graph; reconnect %s from the console to restore chat.",
-            exc,
-            exc.provider,
+            "Setup is complete but no model is connected (explore mode, #4566) — graph not "
+            "compiled. Connect a model in Settings ▸ Model to enable chat.",
         )
     else:
-        STATE.graph_auth_error = None
-        # Untooled-action audit (#2276) — now that the persona AND the bound tool set
-        # both exist, warn about commitments no tool backs (the model narrates those
-        # as done).
-        _audit_persona_tools(STATE.graph, trigger="boot")
+        try:
+            with _timed_boot_phase("graph_compile", _boot_phases):
+                STATE.graph = create_agent_graph(
+                    STATE.graph_config,
+                    knowledge_store=STATE.knowledge_store,
+                    scheduler=STATE.scheduler,
+                    skills_index=STATE.skills_index,
+                    extra_tools=STATE.mcp_tools + STATE.plugin_tools,
+                    extra_middleware=STATE.plugin_middleware,
+                    late_tool_factories=STATE.plugin_late_tool_factories,
+                    checkpointer=STATE.checkpointer,
+                    inbox_store=STATE.inbox_store,
+                    tasks_store=STATE.tasks_store,
+                    background_mgr=STATE.background_mgr,
+                    # Lets the guarded edit_soul tool (ADR 0079/0081) reload the graph so a
+                    # persona self-edit is live on the next turn — injected, so tools/ never
+                    # imports server/. The prompt-only variant: a persona edit must not
+                    # re-import plugins or respawn MCP servers (#3365).
+                    reload_callback=_reload_for_soul_edit,
+                )
+        except OAuthCredentialError as exc:
+            # Signed-out is an intentional state, not a boot failure (#2458): the user
+            # disconnected a native OAuth provider and the marker survived a restart.
+            # Crashing here is a recovery dead end — the reconnect routes live on THIS
+            # server. Boot graphless instead (routes/surfaces above are already wired,
+            # chat degrades on ``STATE.graph is None``) and record why, so status APIs
+            # can offer reconnect instead of a dead port. The graph-independent
+            # machinery below (goal/watch controllers) still builds: the reconnect
+            # reload rebuilds only the graph, so anything skipped here would stay
+            # dead until a full restart.
+            STATE.graph = None
+            STATE.graph_auth_error = {
+                "provider": exc.provider,
+                "message": str(exc),
+                "relogin": exc.relogin,
+            }
+            log.warning(
+                "[oauth] %s — starting without a compiled graph; reconnect %s from the console to restore chat.",
+                exc,
+                exc.provider,
+            )
+        else:
+            STATE.graph_auth_error = None
+            # Untooled-action audit (#2276) — now that the persona AND the bound tool set
+            # both exist, warn about commitments no tool backs (the model narrates those
+            # as done).
+            _audit_persona_tools(STATE.graph, trigger="boot")
 
     # Fires even on a graphless boot (OAuthCredentialError) — the phases that DID
     # run (checkpointer/knowledge_store/plugins/mcp) are still useful signal.

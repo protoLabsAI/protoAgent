@@ -354,13 +354,23 @@ def model_is_configured(config) -> bool:
 
     * the runtime is an ACP coding agent (``agent_runtime: acp:<agent>``) — the coding
       agent is the brain and needs no gateway key (ADR 0033);
-    * an explicitly DECLARED provider connection (ADR 0106) has an endpoint or a key.
-      ``providers`` alone is NOT the signal: a pre-0106 load migrates a ``gateway`` entry
-      in from the DEFAULT ``api_base``, so the registry is rarely empty — the
-      ``providers_declared`` flag is what says the operator actually declared one;
-    * ``model.provider`` is a native OAuth subscription (it authenticates from a
-      credential store, not a gateway key, ADR 0097);
+    * an explicitly DECLARED provider connection (ADR 0106) is one ``create_llm`` can
+      build: a native OAuth subscription connection (``type: anthropic-oauth`` /
+      ``openai-codex``) authenticates from a credential store and so needs NO base_url or
+      api_key of its own (ADR 0097), while any other connection (openai-compat) needs an
+      endpoint or a key. ``providers`` alone is NOT the signal: a pre-0106 load migrates a
+      ``gateway`` entry in from the DEFAULT ``api_base``, so the registry is rarely empty —
+      the ``providers_declared`` flag is what says the operator actually declared one;
+    * ``model.provider`` is a native OAuth subscription (an unqualified lead that routes
+      there, same credential-store auth);
     * the default route resolves a non-empty key (``model.api_key`` or ``OPENAI_API_KEY``).
+
+    The DECLARED-connection branch is why the setup wizard's "Explore without a model" is
+    distinguishable from its subscription path: a Claude/Codex subscription writes a
+    connection of a native-OAuth type and a qualified ``model.name`` but leaves
+    ``model.provider`` at its ``openai`` default (SetupWizard.tsx), so the endpoint/key
+    check alone would wrongly read it as unconfigured even though ``create_llm`` builds it
+    fine through ``resolve_slot_target`` → ``build_native_oauth_llm``.
 
     Both the reload gate (skip the graph build rather than let ``create_llm`` raise on an
     empty key) and the console's runtime status (``model_configured``) read this, so the
@@ -371,15 +381,21 @@ def model_is_configured(config) -> bool:
         return False
     if str(getattr(config, "agent_runtime", "") or "").startswith("acp:"):
         return True
+    from graph.providers import is_native_oauth_provider  # lazy — avoid an import cycle
+
     if getattr(config, "providers_declared", False):
         for p in getattr(config, "providers", None) or []:
-            # Resolve each connection through the same route resolver as everything else
-            # (its own endpoint/key, already stripped) rather than reading the fields raw.
+            # A native OAuth subscription connection carries no endpoint or key of its own —
+            # it authenticates from a credential store (ADR 0097) — so the route check below
+            # would miss it. This is the subscription setup-wizard shape.
+            if is_native_oauth_provider(str(getattr(p, "type", "") or "")):
+                return True
+            # Otherwise resolve each connection through the same route resolver as
+            # everything else (its own endpoint/key, already stripped) rather than reading
+            # the fields raw.
             route = resolve_model_route(config, p)
             if route.base_url or route.api_key:
                 return True
-    from graph.providers import is_native_oauth_provider  # lazy — avoid an import cycle
-
     if is_native_oauth_provider(str(getattr(config, "model_provider", "") or "")):
         return True
     return bool(str(resolve_model_route(config).api_key or "").strip())
