@@ -521,6 +521,27 @@ def test_vendor_asset_routes_are_declared_public():
     assert not offenders, "vendor assets gated behind auth — will 401 on a sister agent: " + "; ".join(offenders)
 
 
+def test_career_coach_archetype_is_listed_with_a_generic_preset() -> None:
+    catalog = json.loads((CONFIG / "archetype-catalog.json").read_text())
+    (row,) = (a for a in catalog["archetypes"] if a["id"] == "career-coach")
+    assert catalog["archetypes"][-1]["id"] == "custom"
+    assert not any(a["id"] == "career-coach" for a in catalog.get("held", []))
+    assert row["label"] == "Career Coach"
+    assert row["icon"] == "Compass"
+    assert row["bundle"] == "https://github.com/protoLabsAI/careercoach-archetype"
+    assert row["soul_preset"] == "career-coach"
+    assert row["requires_tools"] == ["careercoach_find_roles", "careercoach_save_apply_kit"]
+    assert "Never applies on its own." in row["blurb"]
+
+    soul = (CONFIG / "soul-presets" / "career-coach.md").read_text().lower()
+    for rule in ("coach first", "single source of truth", "paste their resume",
+                 "never invent experience", "never\nauto-submit", "even when asked",
+                 "careercoach_find_roles", "careercoach_save_apply_kit"):
+        assert rule in soul, f"career-coach persona lost a hard rule: {rule!r}"
+    for personal_detail in ("jobcoach", "@", "/users/", "c:\\users\\"):
+        assert personal_detail not in soul
+
+
 def test_cowork_archetype_requires_python_runtime() -> None:
     """The Cowork archetype's document skills route through execute_code, which on the
     desktop app needs the managed Python runtime (ADR 0094) — the catalog row declares

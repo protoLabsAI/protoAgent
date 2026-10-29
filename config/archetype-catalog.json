@@ -67,6 +67,18 @@
       "soul_preset": "technical-writer"
     },
     {
+      "id": "career-coach",
+      "label": "Career Coach",
+      "icon": "Compass",
+      "bundle": "https://github.com/protoLabsAI/careercoach-archetype",
+      "blurb": "A job-hunt copilot — paste your resume, get a profile and fresh roles in minutes; triage an inbox, track a pipeline, and get an apply kit (tailored resume, cover letter, every answer) you fill in yourself. Never applies on its own.",
+      "soul_preset": "career-coach",
+      "requires_tools": [
+        "careercoach_find_roles",
+        "careercoach_save_apply_kit"
+      ]
+    },
+    {
       "id": "custom",
       "label": "Custom",
       "icon": "PenLine",

@@ -446,6 +446,10 @@ plugins:
 # `archetype:` names the shipped catalog row the repo backs (null = published but
 # not in the starter catalog). Not derived into any app/site catalog today.
 archetype_repos:
+  - id: careercoach-archetype
+    repo: protoLabsAI/careercoach-archetype
+    archetype: career-coach
+    tagline: "Career Coach — resume-grounded coaching, role discovery, inbox triage, pipeline tracking, and apply kits the operator submits."
   - id: cowork-archetype
     repo: protoLabsAI/cowork-archetype
     archetype: cowork
