@@ -24,6 +24,7 @@ def build_runtime_status(
     instance_uid: str = "",
     version: str = "",
     graph_auth_error: dict[str, Any] | None = None,
+    model_configured: bool = False,
 ) -> dict[str, Any]:
     """Return UI-safe runtime status.
 
@@ -45,6 +46,13 @@ def build_runtime_status(
     ``setup_complete: true``: a native OAuth provider is signed out
     (``{"provider", "message", "relogin"}``) and the console should offer
     reconnect instead of reading the agent as broken.
+
+    ``model_configured`` (#4566) is True when a usable model/connection is configured and
+    False in "explore without a model" mode — a visitor can finish setup with no plan, key
+    or local model, and the console reads this (not ``model.name``, which keeps its
+    dataclass default) to offer "connect a model" instead of a broken chat. The caller
+    recomputes it from the live config each poll, so saving a model flips it with no
+    restart.
     """
     warnings_block = [w for w in (warnings or []) if w]
     project = {"path": project_path, "allowed_dirs": list(allowed_dirs or [])}
@@ -62,6 +70,7 @@ def build_runtime_status(
     if config is None:
         return {
             "setup_complete": bool(setup_complete),
+            "model_configured": bool(model_configured),
             "graph_loaded": False,
             "graph_auth_error": graph_auth_error,
             "project": project,
@@ -91,6 +100,7 @@ def build_runtime_status(
 
     return {
         "setup_complete": bool(setup_complete),
+        "model_configured": bool(model_configured),
         "graph_loaded": bool(graph_loaded),
         "graph_auth_error": graph_auth_error,
         "project": project,

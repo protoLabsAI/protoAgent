@@ -216,6 +216,64 @@ def test_reload_refreshes_plugin_verifier_registry(tmp_path, monkeypatch):
         gv.set_plugin_verifiers({})
 
 
+def test_reload_without_a_model_stays_up_with_graph_uncompiled(tmp_path, monkeypatch):
+    """"Explore without a model" (#4566): setup is complete but no model is connected.
+
+    `create_llm` raises on the empty key, so the reload must NOT attempt the graph build —
+    it leaves the graph uncompiled, commits cleanly and returns ok, so the server stays up
+    and serves the console. Also guards the `new_plugins`-unbound NameError the explore
+    branch would otherwise hit in the commit block (plugin wiring is keyed on the compiled
+    graph, not the setup marker)."""
+    import graph.agent as ga
+    import graph.config_io as cio
+    import server.agent_init as ai
+    from runtime.state import STATE
+
+    # The default route consults OPENAI_API_KEY — a leaked env key would look configured.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    # A valid live leaf with NO model block (and the scheduler off so none is built).
+    leaf = tmp_path / "langgraph-config.yaml"
+    leaf.write_text("scheduler:\n  enabled: false\n")
+    monkeypatch.setattr(cio, "config_yaml_path", lambda: leaf)
+    monkeypatch.setattr(cio, "ensure_live_config", lambda: None)
+    monkeypatch.setattr(cio, "is_setup_complete", lambda: True)
+
+    # If the build branch were wrongly taken it fails loudly instead of 401ing at chat time.
+    def _must_not_build(config, **kwargs):
+        raise AssertionError("create_agent_graph must not run in explore mode (no model)")
+
+    monkeypatch.setattr(ga, "create_agent_graph", _must_not_build)
+
+    # Commit-block side effects — no-op so this test can't leak global state into others.
+    monkeypatch.setattr(ai, "_reload_plugin_surfaces", lambda cfg: None)
+    monkeypatch.setattr(ai, "_audit_persona_tools", lambda *a, **k: None)
+    import security.egress as _egress
+    import security.policy as _policy
+
+    monkeypatch.setattr(_egress, "set_allowed_hosts", lambda *a, **k: None)
+    monkeypatch.setattr(_policy, "set_callback_allowlist", lambda *a, **k: None)
+    try:
+        import a2a_impl.auth as _a2a_auth
+
+        monkeypatch.setattr(_a2a_auth, "set_bearer_token", lambda *a, **k: None)
+        monkeypatch.setattr(_a2a_auth, "set_federation_token", lambda *a, **k: None)
+    except ImportError:
+        pass
+
+    monkeypatch.setattr(STATE, "mcp_clients", [], raising=False)
+    monkeypatch.setattr(STATE, "scheduler", None, raising=False)
+    monkeypatch.setattr(STATE, "goal_controller", None, raising=False)
+    # A prior compiled graph that the explore-mode reload must clear back to None.
+    monkeypatch.setattr(STATE, "graph", object(), raising=False)
+
+    ok, msg = ai._reload_langgraph_agent()
+
+    assert ok is True, msg  # the server stays up
+    assert "no model connected" in msg
+    assert STATE.graph is None  # left uncompiled — not a crash, not a stale graph
+
+
 def _stub_reload_for_auth_capture(tmp_path, monkeypatch):
     """Common heavy-builder stubbing so `_reload_langgraph_agent()` reaches its commit
     block, shared by the two auth-token-reload tests below. Writes a minimal live leaf

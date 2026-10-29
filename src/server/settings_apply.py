@@ -592,8 +592,18 @@ def _build_settings_callbacks() -> dict[str, Any]:
         _provider = str((_conn or {}).get("type", "") or "") or (
             str((_model_cfg or {}).get("provider", "") or "") if isinstance(_model_cfg, dict) else ""
         )
+        # "Explore without a model" (#4566): a first run that declares no connection AND
+        # names no model has nothing to probe — there is no endpoint to 1-token-complete
+        # against. Skip the gate, persist whatever was submitted, mark setup complete, and
+        # let the operator connect a model later from Settings ▸ Model. A config that DOES
+        # name a model (or declares a connection) is untouched: it still probes below and
+        # still refuses on failure.
+        _submitted_model_name = (
+            str((_model_cfg or {}).get("name", "") or "").strip() if isinstance(_model_cfg, dict) else ""
+        )
+        _no_model = not _conns and not _submitted_model_name
         _skip_probe = _runtime.startswith("acp:") or is_native_oauth_provider(_provider)
-        if not _skip_probe and config is not None and isinstance(_model_cfg, dict):
+        if not _skip_probe and not _no_model and config is not None and isinstance(_model_cfg, dict):
             m = _model_cfg
             live = resolve_model_route(STATE.graph_config) if STATE.graph_config else None
             if _conn is not None:
@@ -649,6 +659,11 @@ def _build_settings_callbacks() -> dict[str, Any]:
         # 2. Flip the marker — MUST be before reload so the graph builds
         mark_setup_complete()
         messages.append("setup marked complete")
+        if _no_model:
+            # Explore mode: say so plainly so the wizard lands the visitor in the console
+            # with a clear next step rather than a silent "setup done". Appended before the
+            # reload message so the joined status still ends on the reload outcome.
+            messages.append("no model connected yet — connect one in Settings ▸ Model.")
 
         # 3. Autostart sync (shared helper — drawer path runs the same)
         as_msg = _sync_autostart_with_config(config)

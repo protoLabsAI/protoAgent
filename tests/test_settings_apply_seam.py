@@ -141,6 +141,68 @@ def test_callers_resolve_apply_through_agent_init():
     assert not reads, f"server/__init__ calls its re-exported copy (a patch on agent_init misses it): {reads}"
 
 
+def _wire_finish_setup(monkeypatch, tmp_path, *, probe):
+    """Shared wiring for the finish_setup seam tests (#4566): isolate config I/O and stub
+    the persist / autostart / reload collaborators the terminal action calls through the
+    config_io module (and settings_apply / agent_init), recording every model-probe call so
+    a test can assert the probe did — or did not — run. ``probe`` is the ``(ok, err)`` the
+    stubbed ``validate_model_connection`` returns."""
+    import graph.config_io as cio
+
+    _isolate_config(monkeypatch, tmp_path)
+    rec: dict[str, list] = {"probe": [], "marked": [], "reset": []}
+
+    def _probe(base, key, model, timeout=20.0, allow_env_key=True):
+        rec["probe"].append((base, key, model))
+        return probe
+
+    monkeypatch.setattr(cio, "validate_model_connection", _probe)
+    monkeypatch.setattr(cio, "mark_setup_complete", lambda: rec["marked"].append(True))
+    monkeypatch.setattr(cio, "reset_setup", lambda: rec["reset"].append(True))
+    # Persist helpers — a seam test writes no real YAML / secrets.
+    monkeypatch.setattr(cio, "validate_config_dict", lambda c: (True, ""))
+    monkeypatch.setattr(cio, "split_secret_updates", lambda c: (c, {}))
+    monkeypatch.setattr(cio, "save_secrets", lambda s: None)
+    monkeypatch.setattr(cio, "load_yaml_doc", lambda: {})
+    monkeypatch.setattr(cio, "apply_updates_to_yaml", lambda doc, main: None)
+    monkeypatch.setattr(cio, "strip_secrets_from_doc", lambda doc: None)
+    monkeypatch.setattr(cio, "save_yaml_doc", lambda doc: None)
+    monkeypatch.setattr(cio, "write_soul", lambda s: ["/tmp/SOUL.md"])
+    # Autostart + reload are reached by bare name through settings_apply / agent_init.
+    monkeypatch.setattr(settings_apply, "_sync_autostart_with_config", lambda config: "")
+    monkeypatch.setattr(agent_init, "_reload_langgraph_agent", lambda: (True, "reloaded"))
+    return rec
+
+
+def test_finish_setup_without_a_model_skips_the_probe(monkeypatch, tmp_path):
+    """Explore mode (#4566): a finish with no connection and a blank model name completes
+    ok, marks setup complete, and NEVER probes a model — the model block is present but the
+    name is empty, so only the new no-model skip (not the pre-existing isinstance guard)
+    keeps the probe from running."""
+    rec = _wire_finish_setup(monkeypatch, tmp_path, probe=(False, "should never be called"))
+
+    ok, msg = settings_apply._build_settings_callbacks()["finish_setup"]({"model": {"name": ""}}, None)
+
+    assert ok is True
+    assert rec["probe"] == []  # validate_model_connection untouched
+    assert rec["marked"] == [True]  # setup marked complete
+    assert "Settings ▸ Model" in msg and "no model" in msg.lower()
+
+
+def test_finish_setup_with_a_named_model_still_probes_and_refuses(monkeypatch, tmp_path):
+    """A config that NAMES a model is unchanged: it still probes, and a probe failure
+    refuses the finish without marking setup complete (#4566 leaves this path intact)."""
+    rec = _wire_finish_setup(monkeypatch, tmp_path, probe=(False, "401 bad key"))
+    config = {"model": {"name": "gpt-x", "api_base": "http://g/v1", "api_key": "sk-bad"}}
+
+    ok, msg = settings_apply._build_settings_callbacks()["finish_setup"](config, None)
+
+    assert ok is False
+    assert len(rec["probe"]) == 1  # the probe ran
+    assert rec["marked"] == []  # setup NOT marked complete
+    assert "model connection failed" in msg
+
+
 def test_agent_init_patch_reaches_the_config_routes(monkeypatch):
     """Behavioral proof (#3856): a patch on ``agent_init._apply_settings_changes`` is what
     ``POST /api/config`` and the SOUL-history restore run."""

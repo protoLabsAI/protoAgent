@@ -346,6 +346,45 @@ def resolve_model_route(config, connection: Provider | None = None) -> ModelRout
     )
 
 
+def model_is_configured(config) -> bool:
+    """True when ``config`` names a model ``create_llm`` can actually build — the setup
+    wizard's "Explore without a model" path (#4566) leaves this False.
+
+    A model is usable when ANY of these holds:
+
+    * the runtime is an ACP coding agent (``agent_runtime: acp:<agent>``) — the coding
+      agent is the brain and needs no gateway key (ADR 0033);
+    * an explicitly DECLARED provider connection (ADR 0106) has an endpoint or a key.
+      ``providers`` alone is NOT the signal: a pre-0106 load migrates a ``gateway`` entry
+      in from the DEFAULT ``api_base``, so the registry is rarely empty — the
+      ``providers_declared`` flag is what says the operator actually declared one;
+    * ``model.provider`` is a native OAuth subscription (it authenticates from a
+      credential store, not a gateway key, ADR 0097);
+    * the default route resolves a non-empty key (``model.api_key`` or ``OPENAI_API_KEY``).
+
+    Both the reload gate (skip the graph build rather than let ``create_llm`` raise on an
+    empty key) and the console's runtime status (``model_configured``) read this, so the
+    two never disagree. The dataclass defaults — a gateway base URL and a blank key — are
+    exactly "explore mode" and read as NOT configured.
+    """
+    if config is None:
+        return False
+    if str(getattr(config, "agent_runtime", "") or "").startswith("acp:"):
+        return True
+    if getattr(config, "providers_declared", False):
+        for p in getattr(config, "providers", None) or []:
+            # Resolve each connection through the same route resolver as everything else
+            # (its own endpoint/key, already stripped) rather than reading the fields raw.
+            route = resolve_model_route(config, p)
+            if route.base_url or route.api_key:
+                return True
+    from graph.providers import is_native_oauth_provider  # lazy — avoid an import cycle
+
+    if is_native_oauth_provider(str(getattr(config, "model_provider", "") or "")):
+        return True
+    return bool(str(resolve_model_route(config).api_key or "").strip())
+
+
 def _migrated_providers(config) -> list[Provider]:
     """The registry a pre-ADR-0106 config implies.
 

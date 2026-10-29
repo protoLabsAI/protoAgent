@@ -21,6 +21,7 @@ import logging
 import os
 
 from events import ACTIVITY_CONTEXT
+from graph.config import model_is_configured as _operator_model_is_configured
 from graph.config_io import is_setup_complete as _operator_setup_complete
 from graph.output_format import extract_output
 from operator_api.runtime import build_runtime_status as _build_operator_status
@@ -180,6 +181,9 @@ async def _operator_runtime_status():
     status = _build_operator_status(
         config=STATE.graph_config,
         setup_complete=_operator_setup_complete(),
+        # Explore mode (#4566): read live from the loaded config each poll, so saving a
+        # model in Settings flips this to true on the next poll without a restart.
+        model_configured=_operator_model_is_configured(STATE.graph_config),
         graph_loaded=STATE.graph is not None,
         project_path=_resolve_operator_project_root(),
         allowed_dirs=_operator_allowed_dirs(),

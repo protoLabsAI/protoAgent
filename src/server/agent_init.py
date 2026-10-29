@@ -1157,7 +1157,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     """
 
     from graph.agent import create_agent_graph
-    from graph.config import LangGraphConfig
+    from graph.config import LangGraphConfig, model_is_configured
     from graph.config_io import config_yaml_path, ensure_live_config, is_setup_complete
     from tools.lg_tools import get_all_tools
 
@@ -1225,7 +1225,13 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     # Pre-seeded for the same reason as its siblings: the setup-pending branch never
     # builds plugins, and the commit below publishes unconditionally.
     new_plugin_bundle = None
-    if is_setup_complete():
+    # "Explore without a model" (#4566): with setup complete but no model connected,
+    # `create_agent_graph` -> `create_llm` raises on the empty key (there is no endpoint
+    # to build a client against). Leave the graph uncompiled — the same shape as the
+    # setup-pending branch below — so the server stays up and serves the console in
+    # explore mode. The moment a model is saved in Settings, the next reload takes the
+    # build branch and compiles, no restart. We do NOT fake a model to force a build.
+    if is_setup_complete() and model_is_configured(new_config):
         prior_workflow = (STATE.workflow_registry, STATE.workflow_run)
         try:
             new_store = _build_knowledge_store(new_config)
@@ -1321,10 +1327,10 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     else:
         new_graph = None
         new_inbox_store = None
-        # Setup pending → no graph build, so no middleware was resolved. Without
-        # this, the commit below raises UnboundLocalError and EVERY pre-setup
-        # reload 500s (e.g. installing a plugin during the wizard, whose
-        # auto-enable reloads through here).
+        # Setup pending (or explore mode: complete but no model, #4566) → no graph build,
+        # so no middleware was resolved. Without this, the commit below raises
+        # UnboundLocalError and EVERY such reload 500s (e.g. installing a plugin during the
+        # wizard, whose auto-enable reloads through here).
         new_middleware = []
         new_late_tool_factories = []  # late-tools seam
 
@@ -1452,7 +1458,14 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     # Hot-mount routes from newly-enabled plugins (e.g. delegates) — already-mounted
     # routers are skipped, so repeat reloads are no-ops. Keep STATE.plugin_routers
     # current for anything introspecting the live route set.
-    if is_setup_complete():
+    #
+    # Gated on a compiled graph, NOT ``is_setup_complete()``: ``new_plugins`` is bound only
+    # in the build branch, which is exactly when ``new_graph`` ends up non-None. These were
+    # equivalent until "Explore without a model" (#4566) added a third state — setup
+    # complete but no model, which skips the build — so the marker is True here while
+    # ``new_plugins`` is unbound. Keying on the graph keeps the pre-existing behaviour and
+    # avoids a NameError in explore mode.
+    if new_graph is not None:
         _mount_plugin_routers(new_plugins.routers)
         STATE.plugin_routers = new_plugins.routers
         # Refresh the live plugin verifier/hook registries too (#1752) — same as full init.
@@ -1489,6 +1502,12 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         refresh_served_card()
 
     if new_graph is None:
+        # Two ways to reach an uncompiled graph: the wizard is still up (setup pending), or
+        # setup is complete but no model is connected (explore mode, #4566). Say which, so
+        # the latter doesn't report "setup not complete" right after it was marked complete.
+        if is_setup_complete():
+            log.info("[reload] no model connected — config reloaded, graph not compiled (explore mode)")
+            return True, f"config reloaded • no model connected{fleet_label_note}"
         log.info("[reload] setup not complete — config reloaded, graph not compiled")
         return True, f"config reloaded • setup not complete{fleet_label_note}"
 
