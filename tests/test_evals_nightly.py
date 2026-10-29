@@ -396,3 +396,43 @@ def test_main_exits_one_when_sweep_produced_no_report(tmp_path, monkeypatch):
     monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
     monkeypatch.setattr(nightly, "run_sweep", lambda *a, **k: None)
     assert nightly.main(["--model", "vendor/m"]) == 1
+
+
+# ── where regression friction lands (--friction-log) ──────────────────────────
+
+
+def test_sweep_env_never_carries_friction_log(monkeypatch):
+    monkeypatch.setenv("FRICTION_LOG", "/somewhere/friction.jsonl")
+    env = nightly.sweep_env()
+    assert "FRICTION_LOG" not in env
+    assert env.get("PATH") == __import__("os").environ.get("PATH")
+
+
+def test_friction_log_routes_regressions_and_never_reaches_the_sweep(tmp_path, monkeypatch):
+    """The nightly's regression lands in the named ledger (e.g. a desktop member's), and
+    the throwaway sweep agent never sees FRICTION_LOG, so its own friction can't."""
+    import os
+
+    monkeypatch.delenv("FRICTION_LOG", raising=False)
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    (tmp_path / "run-nightly-100.json").write_text(
+        json.dumps(_report([_row("calc", True)], nightly_ts=100)), encoding="utf-8"
+    )
+    seen_at_sweep: list[str | None] = []
+
+    def fake_sweep(model, *, port_base, results_dir):
+        seen_at_sweep.append(os.environ.get("FRICTION_LOG"))
+        out = results_dir / "run-sweep-200-vendor-m.json"
+        out.write_text(json.dumps(_report([_row("calc", False)])), encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(nightly, "run_sweep", fake_sweep)
+    ledger = tmp_path / "member" / "friction" / "friction.jsonl"
+
+    rc = nightly.main(["--model", "vendor/m", "--friction-log", str(ledger)])
+
+    assert rc == 1  # the gate regressed
+    assert seen_at_sweep == [None]
+    entries = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+    assert [e["summary"] for e in entries] == ["nightly gate regression: calc"]
+    assert entries[0]["kind"] == "harness"

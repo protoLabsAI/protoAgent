@@ -173,6 +173,19 @@ host/default instance in production, or the dev sandbox under
 `PROTOAGENT_INSTANCE=dev`. It is deliberately **not** the throwaway sweep instance,
 which is deleted when the sweep ends.
 
+On the desktop the agents people actually watch are fleet members, and the host's default
+instance (`~/.protoagent/default`) is not one of them. Use `--friction-log` to put
+regressions in a member's ledger instead, e.g. the project manager that triages protoAgent:
+
+```bash
+python scripts/evals_nightly.py \
+  --friction-log "$HOME/Library/Application Support/studio.protolabs.protoagent/workspaces/<member>/friction/friction.jsonl"
+```
+
+It sets `FRICTION_LOG` (the friction plugin's ledger override) for the nightly process only,
+after the sweep finishes. The sweep subprocess never inherits `FRICTION_LOG`, even one set in
+your shell, so the throwaway agent's own friction can't land in that ledger.
+
 ### Scheduling it on the host
 
 Run it from the **host scheduler — a launchd plist on macOS, cron on Linux** — not

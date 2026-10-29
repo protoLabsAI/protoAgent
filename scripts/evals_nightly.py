@@ -42,6 +42,7 @@ Usage::
     PROTOAGENT_INSTANCE=dev python scripts/evals_nightly.py   # the :7871 sandbox ledger
     python scripts/evals_nightly.py --model vendor/some-model
     python scripts/evals_nightly.py --dry-run       # analyse the last two nightlies, record nothing
+    python scripts/evals_nightly.py --friction-log "<desktop box>/workspaces/<member>/friction/friction.jsonl"
 
 Installing the schedule (a launchd plist on macOS, or cron on Linux) is an
 operator step on the host — see ``docs/guides/evals.md``. This script installs
@@ -52,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -318,6 +320,18 @@ def default_model() -> str:
         return LangGraphConfig.app_defaults().model_name
 
 
+def sweep_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """The sweep subprocess's environment: this one, minus ``FRICTION_LOG``.
+
+    ``FRICTION_LOG`` names the ledger the friction plugin writes (it overrides the
+    instance's own). The throwaway sweep agent runs the friction plugin too, so an
+    inherited ``FRICTION_LOG`` would pour its own tool errors into the operator's
+    ledger. The nightly's ``--friction-log`` is applied only after the sweep ends."""
+    env = dict(os.environ if base is None else base)
+    env.pop("FRICTION_LOG", None)
+    return env
+
+
 def run_sweep(model: str, *, port_base: int, results_dir: Path) -> Path | None:
     """Run ``python -m evals.sweep --models <model>`` (one throwaway instance) and
     return the per-model report it wrote, or ``None`` if the sweep produced none.
@@ -340,7 +354,7 @@ def run_sweep(model: str, *, port_base: int, results_dir: Path) -> Path | None:
         str(port_base),
     ]
     print(f"$ {' '.join(cmd)}")
-    subprocess.run(cmd, cwd=str(_PROJECT_ROOT), check=False)
+    subprocess.run(cmd, cwd=str(_PROJECT_ROOT), env=sweep_env(), check=False)
     new = sorted(set(results_dir.glob("run-sweep-*.json")) - before, key=lambda p: p.stat().st_mtime)
     return new[-1] if new else None
 
@@ -349,6 +363,15 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", default=None, help="model to sweep (default: the default config's model.name)")
     p.add_argument("--port-base", type=int, default=7990, help="port for the throwaway sweep agent")
+    p.add_argument(
+        "--friction-log",
+        default=None,
+        help=(
+            "ledger file for gate-regression friction (sets FRICTION_LOG for this process only, "
+            "after the sweep): e.g. a desktop member's <workspace>/friction/friction.jsonl. "
+            "Default: this instance's own ledger"
+        ),
+    )
     p.add_argument(
         "--dry-run",
         action="store_true",
@@ -379,12 +402,18 @@ def main(argv: list[str] | None = None) -> int:
 
     model = args.model or default_model()
     ts = int(time.time())
-    print(f"nightly eval sweep — model={model} (throwaway instance; friction → this instance's ledger)")
+    destination = args.friction_log or os.environ.get("FRICTION_LOG") or "this instance's ledger"
+    print(f"nightly eval sweep — model={model} (throwaway instance; friction → {destination})")
 
     sweep_report = run_sweep(model, port_base=args.port_base, results_dir=results_dir)
     if sweep_report is None:
         print("sweep produced no report (agent never became healthy?) — nothing to gate", file=sys.stderr)
         return 1
+
+    if args.friction_log:
+        # Only now: the sweep (and its throwaway agent) has finished, so nothing but this
+        # process's regression write can reach the named ledger.
+        os.environ["FRICTION_LOG"] = str(Path(args.friction_log).expanduser())
 
     report_path = mark_nightly(sweep_report, ts, results_dir)
     print(f"nightly report: {report_path}")
