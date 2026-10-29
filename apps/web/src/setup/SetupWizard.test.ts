@@ -1,8 +1,4 @@
-// The Setup Wizard's half of the shared two-step archetype flow: the "agent" step is the
-// shared ArchetypePicker (cards only), the "setup" step is the shared ArchetypeSetupForm
-// (the same component NewAgentPanel shows in its dialog) — name first, the bundle's
-// config_inputs as real fields, Advanced collapsed. Back keeps every choice.
-//
+// Model-first wizard with identity, archetype, and bundle configuration in one step.
 // jsdom + react-dom/client, React.createElement (no @testing-library), like the
 // NewAgentPanel tests.
 import { act, createElement as h } from "react";
@@ -11,7 +7,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { brainStepReady, defaultState, hydrateState, SetupWizard, testKey, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
+import { agentStepReady, steps, brainStepReady, defaultState, hydrateState, SetupWizard, testKey, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
+import { primaryArchetypes } from "./ArchetypePicker";
 import { api } from "../lib/api";
 import type { Archetype, ArchetypePreview, ConfigPayload } from "../lib/types";
 
@@ -51,6 +48,8 @@ let container: HTMLElement;
 let root: Root;
 
 beforeEach(() => {
+  vi.spyOn(api, "models").mockResolvedValue({ models: ["m"] } as never);
+  vi.spyOn(api, "testModel").mockResolvedValue({ ok: true } as never);
   vi.spyOn(api, "config").mockResolvedValue(CONFIG as never);
   vi.spyOn(api, "archetypes").mockResolvedValue({ archetypes: ARCHETYPES });
   vi.spyOn(api, "archetypePreview").mockImplementation(async (id: string) => (id === "engineer" ? PREVIEW : { id, bundle: null }));
@@ -95,7 +94,7 @@ async function typeInto(input: HTMLInputElement | null, value: string) {
   });
 }
 
-async function mountToPicker() {
+async function mountToBrain() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => {
     root.render(
@@ -103,23 +102,37 @@ async function mountToPicker() {
     );
   });
   await tick(() => Boolean(button(/^Next/)) && !button(/^Next/)!.disabled);
-  await click(button(/^Next/)); // welcome → agent (pick)
-  await tick(() => Boolean(radioFor("engineer")));
+  await click(button(/^Next/)); // welcome → brain
+  await tick(() => Boolean(radioFor("gateway")));
 }
 
-describe("SetupWizard — the shared two-step archetype flow", () => {
-  it("the pick step is the shared picker: cards only, no name field", async () => {
-    await mountToPicker();
-    expect(container.querySelector(".archetype-picker")).not.toBeNull();
-    expect(radioFor("basic")).toBeTruthy();
-    expect(nameInput()).toBeNull();
-    expect(container.querySelector(".archetype-setup")).toBeNull();
+async function mountToPicker(expand = true) {
+  await mountToBrain();
+  await click(button(/^Test connection/));
+  await tick(() => !button(/^Next/)?.disabled);
+  await click(button(/^Next/)); // brain → agent
+  await tick(() => Boolean(radioFor("basic")));
+  if (expand) await click(button(/^More archetypes/));
+}
+
+describe("SetupWizard — the combined agent step", () => {
+  it("defaults to Basic and an editable name, with four progress markers", async () => {
+    await mountToPicker(false);
+    expect(container.querySelectorAll(".setup-progress span")).toHaveLength(4);
+    expect(radioFor("basic")?.checked).toBe(true);
+    expect(radioFor("engineer")).toBeUndefined();
+    expect(nameInput()?.value).toBe("protoagent");
+    await typeInto(nameInput(), "  ");
+    expect(button(/^Next/)?.disabled).toBe(true);
+    await typeInto(nameInput(), "my-agent");
+    await click(button(/^More archetypes/));
+    await click(radioFor("engineer"));
+    expect(nameInput()?.value).toBe("my-agent");
   });
 
   it("the set-up step is the shared form: suggested name first, help lines, folder picker, gated Next", async () => {
     await mountToPicker();
     await click(radioFor("engineer"));
-    await click(button(/^Next/));
     await tick(() => Boolean(container.textContent?.includes("Start in a local repo")));
 
     expect(container.querySelector(".archetype-setup")).not.toBeNull();
@@ -140,7 +153,6 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
     );
     await mountToPicker();
     await click(radioFor("engineer"));
-    await click(button(/^Next/));
     expect(nameInput()?.value).toBe("engineer");
     // Name is set, nothing is known to be missing yet — but the questions haven't landed.
     expect(button(/^Next/)?.disabled).toBe(true);
@@ -159,7 +171,6 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
       });
     await mountToPicker();
     await click(radioFor("engineer"));
-    await click(button(/^Next/));
     // The wizard's query retries once (~1s) before it settles into the error state.
     for (let i = 0; i < 40 && !container.querySelector('[role="alert"]'); i++) {
       await act(async () => {
@@ -180,17 +191,17 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
     expect(button(/^Next/)?.disabled).toBe(false);
   }, 10_000);
 
-  it("Back from set-up returns to the picker keeping the pick, the typed name and the answers", async () => {
+  it("Back from agent returns to the model keeping the pick, the typed name and the answers", async () => {
     await mountToPicker();
     await click(radioFor("engineer"));
-    await click(button(/^Next/));
     await tick(() => Boolean(container.querySelector('input[aria-label="Branch"]')));
     await typeInto(nameInput(), "forge");
     await typeInto(container.querySelector<HTMLInputElement>('input[aria-label="Branch"]'), "main");
 
     await click(button(/^Back/));
-    expect(radioFor("engineer")?.checked).toBe(true);
+    expect(radioFor("gateway")?.checked).toBe(true);
     await click(button(/^Next/));
+    expect(radioFor("engineer")?.checked).toBe(true);
     expect(nameInput()?.value).toBe("forge");
     expect(container.querySelector<HTMLInputElement>('input[aria-label="Branch"]')?.value).toBe("main");
   });
@@ -201,7 +212,6 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
     });
     await mountToPicker();
     await click(radioFor("custom"));
-    await click(button(/^Next/));
     expect(container.querySelector<HTMLTextAreaElement>(".archetype-setup-soul")?.value).toBe("# Mine");
   });
 
@@ -209,7 +219,6 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
     await mountToPicker();
     await click(radioFor("engineer"));
     await click(radioFor("basic"));
-    await click(button(/^Next/));
     expect(nameInput()?.value).toBe("protoagent");
   });
 });
@@ -220,14 +229,6 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
 // key" — new users were reading the old "uses your Claude Code / Codex CLI login" copy as
 // "install the CLI first", when sign-in actually happens in the browser from this callout.
 describe("SetupWizard — subscription copy (#4565)", () => {
-  async function mountToBrain() {
-    await mountToPicker();
-    await click(radioFor("basic")); // no bundle → Next gated only on the pre-filled name
-    await click(button(/^Next/)); // agent → setup
-    await tick(() => Boolean(nameInput()?.value));
-    await click(button(/^Next/)); // setup → brain
-    await tick(() => (container.textContent ?? "").includes("How this agent thinks"));
-  }
 
   it("both subscription cards say sign-in-with-your-plan and no API key — never 'CLI login'", async () => {
     await mountToBrain();
@@ -379,5 +380,37 @@ describe("withTimeout", () => {
     await vi.advanceTimersByTimeAsync(5000);
     await assertion;
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("wizard navigation", () => {
+  it("connects a model before configuring the agent", () => {
+    expect(steps).toEqual(["welcome", "brain", "agent", "finish"]);
+  });
+
+  it("requires a name, required bundle answers, and a completed peek", () => {
+    expect(agentStepReady("protoagent", false, false)).toBe(true);
+    expect(agentStepReady("  ", false, false)).toBe(false);
+    expect(agentStepReady("engineer", true, false)).toBe(false);
+    expect(agentStepReady("engineer", false, true)).toBe(false);
+  });
+
+  it("filters the initial catalog but keeps the current choice visible", () => {
+    expect(primaryArchetypes(ARCHETYPES, ["basic"], "basic").map((a) => a.id)).toEqual(["basic"]);
+    expect(primaryArchetypes(ARCHETYPES, undefined, "basic")).toEqual(ARCHETYPES);
+    expect(primaryArchetypes(ARCHETYPES, ["basic"], "engineer")).toEqual(ARCHETYPES);
+  });
+
+  it("refreshes OAuth and auto-probes on entering the model step", async () => {
+    await mountToBrain();
+    expect(api.oauthStatus).toHaveBeenCalled();
+    expect(api.models).toHaveBeenCalledWith("https://gw/v1", "", "openai");
+    expect(button(/^Next/)?.disabled).toBe(true);
+    await click(button(/^Test connection/));
+    expect(button(/^Next/)?.disabled).toBe(false);
+    const calls = vi.mocked(api.oauthStatus).mock.calls.length;
+    await click(button(/^Next/));
+    await click(button(/^Back/));
+    expect(vi.mocked(api.oauthStatus).mock.calls.length).toBeGreaterThan(calls);
   });
 });

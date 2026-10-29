@@ -51,17 +51,26 @@ test("mobile: New agent → pick → set-up dialog fits the phone and creates", 
   await expect(page).toHaveURL(/\/app\/agent\/phonebot-ab12\//);
 });
 
-test("mobile: Setup Wizard — pick step, then the set-up step with the folder picker", async ({ page }) => {
+test("mobile: Setup Wizard — model first, then agent configuration with the folder picker", async ({ page }) => {
   await routeSnapshot(page, "/api/runtime/status", (json) => {
     json.setup_complete = false;
   });
   await page.goto("/app/", { waitUntil: "load" });
   const wizard = page.getByRole("dialog", { name: "Setup" });
   await wizard.getByRole("button", { name: "Next" }).tap();
+  await wizard.getByRole("button", { name: "Test connection", exact: true }).tap();
+  await expect(wizard.getByRole("button", { name: "Next" })).toBeEnabled();
+  await wizard.getByRole("button", { name: "Next" }).tap();
+  await expect(wizard.locator(".setup-progress span")).toHaveCount(4);
+  await expect(wizard.getByLabel("Agent name")).toHaveValue("mock-agent");
+  await expect(wizard.locator(".pl-radiocard--selected", { hasText: "Basic" })).toBeVisible();
+  await expect(wizard.locator(".pl-radiocard", { hasText: "Project Manager" })).toHaveCount(0);
+  await wizard.getByRole("button", { name: "More archetypes…" }).tap();
   await wizard.getByRole("button", { name: /^Advanced \(1\)/ }).tap();
   await wizard.locator(".pl-radiocard", { hasText: "Project Manager" }).tap();
-  await wizard.getByRole("button", { name: "Next" }).tap();
   await expect(wizard.getByLabel("Agent name")).toHaveValue("project-manager");
+  await expect(wizard.getByLabel("Repository path")).toBeVisible();
+  await expect(wizard.getByRole("button", { name: "Next" })).toBeDisabled();
   await expect(wizard.getByRole("button", { name: /Browse/ })).toBeVisible();
   await noSidewaysScroll(page);
 });
