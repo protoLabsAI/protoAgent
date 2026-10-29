@@ -491,3 +491,10 @@ def register_provider_routes(app) -> None:
 
         models, error = await asyncio.to_thread(list_provider_models, entry.type, cfg)
         return {"models": models, "error": error}
+
+    # Raw model passthrough (#4608) — POST /api/models/{connection}/v1/chat/completions. A sibling
+    # of the registry surface: it is keyed by the SAME connection ids this module owns, so it
+    # registers here rather than from the server bootstrap (which other cards own).
+    from operator_api.model_passthrough_routes import register_model_passthrough_routes
+
+    register_model_passthrough_routes(app)
