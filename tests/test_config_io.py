@@ -1039,7 +1039,7 @@ def test_list_gateway_models_http_error(monkeypatch):
 
     models, err = config_io.list_gateway_models("http://8.8.8.8/v1")
     assert models == []
-    assert "connection failed" in err
+    assert "Nothing is answering at http://8.8.8.8/v1/models" in err
 
 
 def test_list_gateway_models_bad_status(monkeypatch):
@@ -1357,3 +1357,70 @@ def test_the_failure_message_names_the_consequence_not_a_set_diff():
 
     body = pathlib.Path(__file__).read_text(encoding="utf-8")
     assert "render NOWHERE in" in body and "Add a Field per knob" in body
+
+
+@pytest.mark.parametrize("probe", ["list_gateway_models", "validate_model_connection"])
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (httpx.ConnectError("[Errno 61] Connection refused"), "Nothing is answering at {url}. Is the server running, and is the port right? (connection refused)"),
+        (httpx.ConnectTimeout("secret detail"), "The endpoint didn't answer in time. (timeout)"),
+        (httpx.ReadTimeout("secret detail"), "The endpoint didn't answer in time. (timeout)"),
+        (httpx.RemoteProtocolError("disconnected"), "connection failed: disconnected"),
+    ],
+)
+def test_model_probe_transport_hints(monkeypatch, probe, error, expected):
+    from graph import config_io
+
+    fake_client = MagicMock()
+    fake_client.__enter__ = lambda self: fake_client
+    fake_client.__exit__ = lambda *args: None
+    fake_client.get.side_effect = error
+    fake_client.post.side_effect = error
+    monkeypatch.setattr("httpx.Client", lambda **kw: fake_client)
+
+    base = "http://127.0.0.1:11434/v1"
+    if probe == "list_gateway_models":
+        result, err = config_io.list_gateway_models(base)
+        assert result == []
+        url = base + "/models"
+    else:
+        result, err = config_io.validate_model_connection(base, model="llama3")
+        assert result is False
+        url = base + "/chat/completions"
+    assert err == expected.format(url=url)
+
+
+@pytest.mark.parametrize("probe", ["list_gateway_models", "validate_model_connection"])
+@pytest.mark.parametrize("status", [401, 403, 404, 500])
+def test_model_probe_status_hints_never_echo_body(monkeypatch, probe, status):
+    from graph import config_io
+
+    fake_response = MagicMock()
+    fake_response.status_code = status
+    fake_response.text = "upstream-secret"
+    fake_response.json.return_value = {"error": {"message": "upstream-secret"}}
+    fake_client = MagicMock()
+    fake_client.__enter__ = lambda self: fake_client
+    fake_client.__exit__ = lambda *args: None
+    fake_client.get.return_value = fake_response
+    fake_client.post.return_value = fake_response
+    monkeypatch.setattr("httpx.Client", lambda **kw: fake_client)
+
+    base = "http://127.0.0.1:11434/v1"
+    if probe == "list_gateway_models":
+        result, err = config_io.list_gateway_models(base)
+        assert result == []
+        fallback = "HTTP 500 from the gateway's /models"
+    else:
+        result, err = config_io.validate_model_connection(base, model="llama3")
+        assert result is False
+        fallback = "HTTP 500"
+    if status in (401, 403):
+        assert err == f"The endpoint rejected the key. Check the API key. (HTTP {status})"
+    elif status == 404:
+        assert err == "No such endpoint or model. Check the URL (it usually ends in /v1) and the model name. (HTTP 404)"
+    else:
+        assert err == fallback
+    assert "upstream-secret" not in err
+    fake_response.json.assert_not_called()
