@@ -147,6 +147,13 @@ export const queryKeys = {
     return ns("memory", "injections");
   },
   memoryInjectionDetail: (id: number) => ns("memory", "injections", "detail", id),
+  // History view (ADR 0125 D6) — the conversation `history` table, its own tab.
+  get memoryHistory() {
+    return ns("memory", "history");
+  },
+  get memoryStats() {
+    return ns("memory", "stats");
+  },
 };
 
 // The fleet of workspace agents (ADR 0042). `running` is a live-pid probe, so poll

@@ -362,3 +362,85 @@ test("a hot delete against a store that went off errors instead of claiming succ
   ).toBeVisible();
   await expect(page.locator(".pl-toast", { hasText: "Hot-memory entry deleted." })).toHaveCount(0);
 });
+
+// ── History tab (ADR 0125 D6) ─────────────────────────────────────────────────
+// The conversation `history` table — archives, retired-thread summaries and
+// background-job reports — surfaced ONLY here (the Knowledge browser lists chunks
+// only). A per-session rollup, a search that opens an entry in full, the memory/
+// history size split, and deletes that reuse the chat-delete forget semantics (#3957).
+
+async function openHistory(page: import("@playwright/test").Page) {
+  const surface = page.getByTestId("memory-surface");
+  await surface.getByRole("tab", { name: "History" }).click();
+  return surface;
+}
+
+test("History tab lists sessions with surface, kind counts, and the memory/history split", async ({ page }) => {
+  const surface = await openHistory(page);
+
+  await expect(surface.getByText("chat-1750000000000-abc123")).toBeVisible();
+  await expect(surface.getByText("1 archive · 1 summary · 0 report")).toBeVisible();
+  await expect(surface.getByText("sched-hourly-report")).toBeVisible();
+  await expect(surface.getByText("0 archive · 0 summary · 1 report")).toBeVisible();
+
+  // The split: history counts AND the chunk-store size, side by side (#4557).
+  const stats = surface.getByTestId("history-stats");
+  await expect(stats).toContainText("3 entries across 2 sessions");
+  await expect(stats).toContainText("1 archives · 1 summaries · 1 reports");
+  await expect(stats).toContainText("memory store: 12 chunks");
+});
+
+test("History search opens the matched entry in full", async ({ page }) => {
+  const surface = await openHistory(page);
+  // Same query the agent's recall uses (server-side session_search normalization).
+  await surface.getByLabel("search history").fill("hardening rollout");
+  const hit = surface.getByText("Conversation summary (memory hardening rollout)");
+  await expect(hit).toBeVisible();
+
+  await hit.click();
+  const pre = page.locator(".memory-session-pre");
+  await expect(pre).toBeVisible();
+  await expect(pre).toContainText("split memory, knowledge and history into separate stores");
+});
+
+test("deleting a whole session keeps reports, toasts, and drops the row", async ({ page }) => {
+  const surface = await openHistory(page);
+
+  await surface.getByLabel("delete history session chat-1750000000000-abc123").click();
+  const dialog = page.getByRole("dialog", { name: "Delete this session's history?" });
+  await expect(dialog).toBeVisible();
+  // The copy names the forget semantics it reuses: reports survive.
+  await expect(dialog).toContainText("background-job reports are kept");
+  await dialog.getByRole("button", { name: "Delete history" }).click();
+
+  await expect(page.locator(".pl-toast", { hasText: "background reports kept" })).toBeVisible();
+  await expect(surface.getByText("chat-1750000000000-abc123")).toHaveCount(0);
+  // The background-report session is untouched.
+  await expect(surface.getByText("sched-hourly-report")).toBeVisible();
+});
+
+test("deleting one history entry from search confirms, toasts, and drops the hit", async ({ page }) => {
+  const surface = await openHistory(page);
+  await surface.getByLabel("search history").fill("hardening rollout");
+  await expect(surface.getByText("Conversation summary (memory hardening rollout)")).toBeVisible();
+
+  await surface.getByLabel("delete history entry 101").click();
+  const dialog = page.getByRole("dialog", { name: "Delete this history entry?" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Delete entry" }).click();
+
+  await expect(page.locator(".pl-toast", { hasText: "History entry deleted." })).toBeVisible();
+  await expect(surface.getByText("Conversation summary (memory hardening rollout)")).toHaveCount(0);
+});
+
+test("History tab degrades: a 500 shows the error alert, store-off shows the notice", async ({ page }) => {
+  await page.request.post("/api/__test__/memory/mode", { data: { fail: "history" } });
+  await openMemory(page);
+  let surface = await openHistory(page);
+  await expect(surface.getByText(/Couldn't read history/)).toBeVisible();
+
+  await page.request.post("/api/__test__/memory/mode", { data: { fail: "", enabled: false } });
+  await openMemory(page);
+  surface = await openHistory(page);
+  await expect(surface.getByText(/History is off/)).toBeVisible();
+});

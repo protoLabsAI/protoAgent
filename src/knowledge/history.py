@@ -148,6 +148,88 @@ class HistoryStore:
                 "ORDER BY history_fts.rank, h.id LIMIT ?", (query, limit)
             )]
 
+    # ── console History view (ADR 0125 D6) ───────────────────────────────────────
+    # The operator-facing rollup/stats/delete surface for the Memory inspector's
+    # History tab. History is visible only here — never in the Knowledge browser,
+    # which lists chunks only.
+
+    def sessions(self) -> list[dict]:
+        """Per-session rollup of VISIBLE history, newest activity first: one row per
+        ``session_id`` with its surface, date span (``span_*`` plus the ``created_at``
+        range) and per-kind counts. Rows hidden by an in-flight forget
+        (``invalidated_at`` set) are excluded, like every other read here."""
+        with closing(self._connect()) as db:
+            rows = db.execute(
+                "SELECT session_id, COUNT(*) AS total, "
+                "SUM(kind = 'archive') AS archives, "
+                "SUM(kind = 'summary') AS summaries, "
+                "SUM(kind = 'report') AS reports, "
+                "MAX(surface) AS surface, "  # a non-null surface if any row carries one
+                "MIN(span_start) AS span_start, MAX(span_end) AS span_end, "
+                "MIN(created_at) AS first_at, MAX(created_at) AS last_at "
+                "FROM history WHERE invalidated_at IS NULL "
+                "GROUP BY session_id ORDER BY last_at DESC, session_id"
+            ).fetchall()
+        return [
+            {
+                "session_id": r["session_id"],
+                "surface": r["surface"],
+                "span_start": r["span_start"],
+                "span_end": r["span_end"],
+                "first_at": r["first_at"],
+                "last_at": r["last_at"],
+                "total": int(r["total"]),
+                "kinds": {
+                    "archive": int(r["archives"] or 0),
+                    "summary": int(r["summaries"] or 0),
+                    "report": int(r["reports"] or 0),
+                },
+            }
+            for r in rows
+        ]
+
+    def stats(self) -> dict[str, int]:
+        """VISIBLE per-kind entry counts plus ``total`` and distinct ``sessions`` — the
+        history half of the console's memory/history size split (ADR 0125), so the
+        operator sees history's real size apart from the chunk store."""
+        with closing(self._connect()) as db:
+            by_kind = {
+                r["kind"]: int(r["n"])
+                for r in db.execute(
+                    "SELECT kind, COUNT(*) AS n FROM history WHERE invalidated_at IS NULL GROUP BY kind"
+                )
+            }
+            sessions = db.execute(
+                "SELECT COUNT(DISTINCT session_id) FROM history WHERE invalidated_at IS NULL"
+            ).fetchone()[0]
+        out = {"archive": 0, "summary": 0, "report": 0, **by_kind}
+        out["total"] = sum(by_kind.values())
+        out["sessions"] = int(sessions)
+        return out
+
+    def delete_entry(self, id: int) -> bool:
+        """Hard-delete one VISIBLE entry by id — the History tab's single-entry delete. An
+        explicit operator act removes the row outright (ADR 0069 D9), any kind; it never
+        reaches a row another forget has hidden (``invalidated_at IS NULL``). Returns
+        whether a row was removed."""
+        with closing(self._connect()) as db, db:
+            return db.execute(
+                "DELETE FROM history WHERE id = ? AND invalidated_at IS NULL", (id,)
+            ).rowcount > 0
+
+    def delete_session(self, session_id: str, thread_ids: Sequence[str] = ()) -> int:
+        """Hard-delete a whole session's history — the History tab's session delete, with
+        the SAME semantics as the chat-delete forget (#3957): exactly the rows
+        :func:`_history_forget_where` selects for ``session_id`` / ``thread_ids``, so
+        background-job reports (``kind='report'``) are kept — the mirror of
+        :meth:`KnowledgeStore.delete_history_for_session`. Returns the count removed; 0
+        when nothing is selected (an empty selection never widens into every row)."""
+        where, params = _history_forget_where(session_id, thread_ids)
+        if not where:
+            return 0
+        with closing(self._connect()) as db, db:
+            return int(db.execute(f"DELETE FROM history WHERE ({where})", params).rowcount)
+
     def mark_forget_pending(self, marker: str, *, session_id="", thread_ids=(), **kwargs) -> int:
         """Hide this session's archives and summaries before retirement."""
         where, params = _history_forget_where(session_id, thread_ids)
