@@ -108,12 +108,31 @@ def _stub_docker(tmp_path: Path) -> Path:
     return bindir
 
 
-def _env(tmp_path: Path, token: str | None, **extra: str) -> dict[str, str]:
+def _env(
+    tmp_path: Path, token: str | None, *, platform: str | None = "linux/amd64", **extra: str
+) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PROTOAGENT_", "A2A_"))}
-    env.update(NO_COLOR="1", TMPDIR=str(tmp_path), PROTOAGENT_PLATFORM="linux/amd64", **extra)
+    env.update(NO_COLOR="1", TMPDIR=str(tmp_path), **extra)
+    # Pin PLATFORM by default so the stub docker's argv is deterministic; pass
+    # platform=None to instead exercise the script's `uname -m` auto-detection.
+    if platform is not None:
+        env["PROTOAGENT_PLATFORM"] = platform
     if token is not None:
         env["A2A_AUTH_TOKEN"] = token
     return env
+
+
+def _stub_uname(bindir: Path, machine: str) -> None:
+    """A `uname` that reports a chosen `-m`; any other flag defers to the real one."""
+    real = shutil.which("uname") or "/usr/bin/uname"
+    uname = bindir / "uname"
+    uname.write_text(
+        "#!/bin/sh\n"
+        f'[ "$1" = -m ] && {{ printf "%s\\n" "{machine}"; exit 0; }}\n'
+        f'exec "{real}" "$@"\n',
+        encoding="utf-8",
+    )
+    uname.chmod(0o755)
 
 
 def _run_docker_path(tmp_path: Path, instance: _Instance, token: str | None) -> subprocess.CompletedProcess:
@@ -147,6 +166,45 @@ def test_open_loopback_install_needs_no_token(tmp_path):
     assert res.returncode == 0, res.stdout + res.stderr
     assert "Server is up." in res.stdout
     assert inst.requests and all(r["auth"] is None for r in inst.requests)
+
+
+@pytest.mark.parametrize(
+    ("machine", "forces_amd64"),
+    [
+        ("x86_64", False),   # native amd64
+        ("aarch64", False),  # native arm64 — the multi-arch image resolves it
+        ("arm64", False),    # Apple Silicon reports arm64; also native now
+        ("armv7l", True),    # no native variant → amd64 under emulation
+    ],
+)
+def test_arch_detection_pulls_native_on_amd64_and_arm64(tmp_path, machine, forces_amd64):
+    """After multi-arch publishing, arm64 hosts must pull the native image (no
+    `--platform`), not amd64 under emulation (the #4571 installer regression)."""
+    bindir = _stub_docker(tmp_path)
+    _stub_uname(bindir, machine)
+    with _Instance(None) as inst:
+        env = _env(
+            tmp_path,
+            None,
+            platform=None,  # exercise the script's own `uname -m` detection
+            PROTOAGENT_PORT=str(inst.port),
+            PROTOAGENT_INSTALL_NONINTERACTIVE="1",
+        )
+        env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
+        res = subprocess.run(
+            [SH, str(SCRIPT)],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+            stdin=subprocess.DEVNULL,
+        )
+    assert res.returncode == 0, res.stdout + res.stderr
+    args = (tmp_path / "docker-args").read_text()
+    if forces_amd64:
+        assert "--platform linux/amd64" in args
+    else:
+        assert "--platform" not in args
 
 
 def test_missing_token_is_an_auth_failure_not_a_startup_timeout(tmp_path):

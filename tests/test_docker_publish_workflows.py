@@ -35,3 +35,16 @@ def test_docker_publish_platforms_and_emulation(filename, job):
         "linux/amd64", "linux/arm64",
     ]
     assert steps[build]["with"]["push"] is True
+
+
+def test_docker_publish_verify_exercises_both_architectures():
+    """The post-push verify must run the arm64 variant too, not only amd64 —
+    otherwise a dependency that fails to import on arm64 still ships as :latest."""
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "docker-publish.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["build-and-push"]["steps"]
+    verify = next(s for s in steps if s.get("name", "").startswith("Verify"))
+    run = verify["run"]
+    assert "--platform linux/amd64" in run
+    assert "--platform linux/arm64" in run

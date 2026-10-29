@@ -83,15 +83,29 @@ jobs:
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
 
-      - name: Verify — pytest collection in runtime image
+      - name: Verify — runtime image (amd64 collection + arm64 import smoke)
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          docker run --rm \
+          IMG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHORT_SHA}"
+          # amd64 is the runner's native arch — do the full pytest collection there.
+          echo "::group::verify linux/amd64 (native)"
+          docker run --rm --platform linux/amd64 \
             -v "${{ github.workspace }}:/repo" \
             -w /repo \
             --entrypoint sh \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${SHORT_SHA}" \
+            "$IMG" \
             -c 'pip install -q pytest pytest-asyncio && python -m pytest tests/ --collect-only -q'
+          echo "::endgroup::"
+          # Exercise the NATIVE arm64 variant too (QEMU, set up above), so a dependency
+          # that installs but fails to import on arm64 is caught before :latest ships.
+          # A full emulated collection would be slow, so this leg is a bounded import
+          # smoke over the compiled-extension deps most likely to break per-arch.
+          echo "::group::verify linux/arm64 (emulated)"
+          docker run --rm --platform linux/arm64 \
+            --entrypoint sh \
+            "$IMG" \
+            -c 'uname -m && python -c "import pydantic_core, yaml, fastapi, uvicorn, langgraph, langchain; print(\"arm64 core imports OK\")"'
+          echo "::endgroup::"
 
       # Tell the fleet member repos that build `FROM ...protoagent:latest` that a new
       # base just landed, so they rebuild instead of drifting until their own next
