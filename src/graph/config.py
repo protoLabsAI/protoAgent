@@ -962,6 +962,9 @@ class LangGraphConfig:
     # opts in.
     tools_fleet_diagnostics_enabled: bool = False
 
+    # Raw model passthrough stays local unless the operator opts in; bearer auth always applies.
+    model_passthrough_allow_remote: bool = False
+
     # Tool denylist — drop named core tools from the agent without editing
     # ``tools/lg_tools.py::get_all_tools``. A fork keeps what it wants by listing
     # the rest here (config ``tools.disabled``); plugins still ADD tools. So
@@ -2193,6 +2196,9 @@ class LangGraphConfig:
             tools_fleet_diagnostics_enabled=data.get("tools", {})
             .get("fleet_diagnostics", {})
             .get("enabled", cls.tools_fleet_diagnostics_enabled),
+            model_passthrough_allow_remote=data.get("model_passthrough", {}).get(
+                "allow_remote", cls.model_passthrough_allow_remote
+            ),
             tools_disabled=list(data.get("tools", {}).get("disabled", []) or []),
             tools_self_config_enabled=bool(data.get("tools", {}).get("self_config_enabled", False)),
             tools_hidden=list(data.get("tools", {}).get("hidden", []) or []),

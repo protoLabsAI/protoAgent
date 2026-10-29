@@ -1222,6 +1222,14 @@ FIELDS: list[Field] = [
         "When on, the future fleet-diagnostics tool may be exposed to the model. Off by default; "
         "this slice only lands the config gate and binds no tool.",
     ),
+    Field(
+        "model_passthrough.allow_remote",
+        "model_passthrough_allow_remote",
+        "Allow remote callers",
+        "bool",
+        "Model passthrough",
+        "Let callers off this machine use the raw model passthrough. Bearer auth still applies.",
+    ),
     # ── Middleware toggles ───────────────────────────────────────────────────
     Field("middleware.knowledge", "knowledge_middleware", "Knowledge middleware", "bool", "Middleware"),
     Field("middleware.memory", "memory_middleware", "Memory middleware", "bool", "Middleware"),
@@ -2219,6 +2227,7 @@ _SECTION_CATEGORY = {
     # connection, sampling, and cache. The runtime lives here, not in Behavior, because it
     # decides whether the model config is even required (create_llm's ACP-only fallback).
     "Model & runtime": "Model",
+    "Model passthrough": "Model",
     "Favorite models": "Model",  # /model quick-switch pins (#1957)
     "Routing": "Model",
     "Caching": "Model",

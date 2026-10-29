@@ -334,6 +334,7 @@ FROM_YAML_EXAMPLE_FIELDS = {
     "tools_deferred_enabled": False,
     "tools_deferred_keep": [],
     "tools_fleet_diagnostics_enabled": False,
+    "model_passthrough_allow_remote": False,
     "tools_memoize_reads_enabled": False,
     "tools_disabled": [],
     "tools_self_config_enabled": False,
