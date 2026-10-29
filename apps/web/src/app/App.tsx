@@ -1254,10 +1254,14 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                     marketplace, which otherwise hides behind the unlabelled Settings icon →
                     Plugins → Discover. A labelled pill (text, not an icon-only square) so a
                     first-time visitor can read it; onClick runs the atomic store opener so the
-                    dialog lands on Plugins ▸ Discover rather than the default Installed tab. */}
+                    dialog lands on Plugins ▸ Discover rather than the default Installed tab.
+                    size="sm" (not xs) so it is a `.pl-btn--sm:not(.pl-btn--icon)` text button and
+                    rides the existing tablet touch-floor overlay (tablet.css) — an xs text button
+                    matches neither that rule nor the DS icon-button layer, so it rendered under
+                    the 44px touch minimum and tripped the tablet E2E (tablet.spec.ts). */}
                 <Tooltip label="Discover plugins">
                   <Button
-                    size="xs"
+                    size="sm"
                     variant="ghost"
                     type="button"
                     aria-label="Discover plugins"

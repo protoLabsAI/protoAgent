@@ -43,7 +43,7 @@ afterEach(() => {
 function Pill() {
   return (
     <Button
-      size="xs"
+      size="sm"
       variant="ghost"
       type="button"
       aria-label="Discover plugins"
