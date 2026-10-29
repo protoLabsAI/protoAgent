@@ -11,10 +11,14 @@ Usage:
     python -m evals.runner                                # all cases
     python -m evals.runner --category tool                # one category
     python -m evals.runner --tasks current_time_intent,memory_ingest_intent
+    python -m evals.runner --tasks instance:my_case       # a per-instance case
     python -m evals.runner --tasks-file plugins/cowork/evals/tasks.json
     python -m evals.runner --base-url http://host:7870
 
-Cases are described in ``tasks.json``. Each case picks one of three
+Cases are described in core ``tasks.json`` plus, when it exists, the target
+instance's ``<config dir>/evals/cases.json`` (ADR 0126 D5) — instance case ids
+are namespaced ``instance:<id>`` so they can't collide with core ids. Each case
+picks one of three
 ``kind`` runners:
 
 - ``agent_card`` — fetch ``/.well-known/agent-card.json`` and assert
@@ -50,7 +54,7 @@ sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
 from evals.client import AgentClient, TaskResult
 from evals import verify
-from evals.compare import _pct, resolve_tier
+from evals.compare import INSTANCE_ID_PREFIX, _pct, is_instance_case, resolve_tier
 
 
 @dataclass
@@ -69,6 +73,10 @@ class CaseResult:
     # nightly run) or ``tracked`` (LLM-judge, trend only). Stamped in
     # ``run_one`` so every report row carries it.
     tier: str = "gate"
+    # True when the case came from the instance's ``<config dir>/evals/cases.json``
+    # rather than core ``tasks.json`` (ADR 0126 D5). Stamped in ``run_one`` so the
+    # report can mark the row and split instance cases under their own heading.
+    instance: bool = False
 
 
 def _requirements_unmet(case: dict) -> str | None:
@@ -657,6 +665,8 @@ async def run_one(client: AgentClient, case: dict) -> CaseResult:
     # Stamp the resolved tier on the row so the report can split gate/tracked
     # (ADR 0126 D1). Done here, the single choke point every kind flows through.
     result.tier = resolve_tier(case)
+    # Mark instance cases (ADR 0126 D5) so the report can show them apart.
+    result.instance = is_instance_case(case)
     if turn and not result.trace_id:
         try:
             result.trace_id = await client.trace_for_context(
@@ -728,6 +738,88 @@ def load_cases(path: Path) -> list[dict]:
     return cases
 
 
+def instance_cases_path() -> Path:
+    """The per-instance eval cases file — ``<instance config dir>/evals/cases.json``
+    (ADR 0126 D5).
+
+    The config dir is resolved the same way the server resolves it for the target
+    instance (``infra.paths.instance_paths().config_dir`` — the parent of
+    ``langgraph-config.yaml``/``SOUL.md``), so the runner reads the cases that live
+    with whatever instance it is pointed at: the default/prod instance, the dev
+    sandbox, or a throwaway sweep instance."""
+    from infra.paths import instance_paths
+
+    return instance_paths().config_dir / "evals" / "cases.json"
+
+
+def load_instance_cases(path: Path | None = None) -> list[dict]:
+    """Per-instance eval cases, ids namespaced so they can't collide with core ids.
+
+    Returns ``[]`` when the file is absent — behaviour is then identical to loading
+    core ``tasks.json`` alone (ADR 0126 D5). A present-but-malformed file is a clear
+    error NAMING the file, never a silent skip: a domain operator's suite vanishing
+    must be loud, not quietly dropped.
+
+    Every id is rewritten to ``instance:<id>`` (:data:`INSTANCE_ID_PREFIX`) and the
+    case is flagged ``instance: True``; the format is otherwise the core case
+    format, tier included — ``tier`` defaults exactly as it does for core cases
+    (:func:`evals.compare.resolve_tier`, E1b), and an unknown tier is the same
+    load-time error naming the case."""
+    path = path or instance_cases_path()
+    if not path.exists():
+        return []
+    try:
+        cases = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        raise ValueError(f"malformed instance eval cases file {path}: {e}") from e
+    if not isinstance(cases, list):
+        raise ValueError(f"malformed instance eval cases file {path}: expected a JSON list of cases")
+    for case in cases:
+        if not isinstance(case, dict) or "id" not in case:
+            raise ValueError(f"malformed instance eval cases file {path}: every case needs an 'id'")
+        case["id"] = f"{INSTANCE_ID_PREFIX}{case['id']}"
+        case["instance"] = True
+        resolve_tier(case)  # same up-front tier validation as core cases, naming the case
+    return cases
+
+
+def load_all_cases(tasks_path: Path | None = None, *, instance_path: Path | None = None) -> list[dict]:
+    """Core ``tasks.json`` cases plus per-instance ``<config dir>/evals/cases.json``
+    cases (ADR 0126 D5) — the single place both are loaded, so every caller (the
+    runner, ``evals.sweep``, ``scripts/evals_nightly.py`` through the runner) picks
+    up instance cases without its own loader.
+
+    Instance ids are namespaced, so they can't collide with core ids; an absent
+    instance file leaves the result identical to core cases alone. ``instance_path``
+    pins the instance cases file explicitly (the sweep passes the operator instance's
+    path so its throwaway-instance runner reads the right file); omitted, it resolves
+    ``<config dir>/evals/cases.json`` for this process's instance."""
+    tasks_path = tasks_path or (Path(__file__).parent / "tasks.json")
+    return load_cases(tasks_path) + load_instance_cases(instance_path)
+
+
+def _load_suite(tasks_file: str | None, instance_cases: str | None) -> tuple[Path, list[dict]]:
+    """The suite ``main`` runs (ADR 0126 D5).
+
+    An explicit ``--tasks-file`` is a self-contained suite (a plugin running its own
+    cases), so it is loaded ALONE — instance cases are never merged into someone
+    else's file. Otherwise it is core ``tasks.json`` PLUS the instance's own cases.
+
+    The instance cases come from ``--instance-cases <path>`` when given, else the
+    resolved ``<config dir>/evals/cases.json`` for this process's instance.
+    ``evals.sweep`` passes the explicit path because the runner subprocess boots on a
+    THROWAWAY instance whose config dir has no ``cases.json`` — resolving it in the
+    child would silently find nothing (and ``--tasks instance:<id>`` would be reported
+    unknown), so the sweep hands the child the operator instance's file it already
+    resolved. An absent/omitted path leaves the result identical to core cases alone."""
+    if tasks_file:
+        tasks_path = Path(tasks_file)
+        return tasks_path, load_cases(tasks_path)
+    tasks_path = Path(__file__).parent / "tasks.json"
+    instance_path = Path(instance_cases) if instance_cases else None
+    return tasks_path, load_all_cases(tasks_path, instance_path=instance_path)
+
+
 def _tier_totals(results: list[CaseResult]) -> dict[str, dict]:
     """Per-tier ``{passed, total, pass_rate}`` over the non-skipped results.
 
@@ -768,12 +860,24 @@ def select_by_ids(cases: list[dict], tasks_arg: str) -> tuple[list[dict], list[s
 async def main():
     p = argparse.ArgumentParser()
     p.add_argument("--base-url", default=None)
-    p.add_argument("--tasks", default=None, help="comma-separated case IDs")
+    p.add_argument(
+        "--tasks",
+        default=None,
+        help="comma-separated case IDs (a per-instance case is its namespaced id, e.g. instance:my_case)",
+    )
     p.add_argument(
         "--tasks-file",
         default=None,
         help="path to a tasks JSON file (default: the built-in evals/tasks.json). "
         "Lets a plugin repo ship its own eval cases and run them with this runner.",
+    )
+    p.add_argument(
+        "--instance-cases",
+        default=None,
+        help="path to the target instance's evals/cases.json (ADR 0126 D5). evals.sweep "
+        "passes this so the throwaway-instance runner still loads the OPERATOR instance's "
+        "cases; omitted, the runner resolves <config dir>/evals/cases.json for its own "
+        "instance. Ignored alongside --tasks-file (that suite is self-contained).",
     )
     p.add_argument("--category", default=None)
     p.add_argument("--out", default=None)
@@ -784,8 +888,10 @@ async def main():
     )
     args = p.parse_args()
 
-    tasks_path = Path(args.tasks_file) if args.tasks_file else Path(__file__).parent / "tasks.json"
-    cases = load_cases(tasks_path)
+    # Core tasks.json PLUS the instance's own <config dir>/evals/cases.json (ADR
+    # 0126 D5), unless --tasks-file pins a self-contained suite. --instance-cases
+    # pins the instance file explicitly (see _load_suite / evals.sweep).
+    tasks_path, cases = _load_suite(args.tasks_file, args.instance_cases)
 
     if args.tasks:
         cases, unknown = select_by_ids(cases, args.tasks)
@@ -830,6 +936,7 @@ async def main():
                 detail=f"skipped: {skip}",
                 skipped=True,
                 tier=resolve_tier(case),
+                instance=is_instance_case(case),
             )
         else:
             result = await run_one(client, case)
