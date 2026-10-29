@@ -7,6 +7,7 @@ import re
 
 from langchain_core.messages import AIMessage, HumanMessage
 
+from graph.message_blocks import text_of
 from graph.output_format import extract_output
 from knowledge.store import FORGET_PENDING_PREFIX  # the store owns the marker format
 
@@ -33,7 +34,8 @@ def render_transcript(messages: list, *, max_chars: int | None = _MAX_TRANSCRIPT
     """Render a User/Assistant transcript from checkpoint messages.
 
     Assistant turns are run through ``extract_output`` (drop scratch_pad/think);
-    tool and system messages are skipped. Truncated to the most-recent
+    multipart content retains text and non-text attachment markers; tool and
+    system messages are skipped. Truncated to the most-recent
     ``max_chars`` when long; pass ``max_chars=None`` for the full transcript (the
     compaction path archives the *whole* conversation losslessly before it
     rewrites the live context — a capped render would silently drop the head).
@@ -48,8 +50,8 @@ def render_transcript(messages: list, *, max_chars: int | None = _MAX_TRANSCRIPT
 def _line(m, day: str = "") -> str | None:
     """One transcript line (``User: …`` / ``Assistant: …``), or None for a message the
     transcript skips. ``day`` stamps the line with when the message was sent."""
-    content = getattr(m, "content", "")
-    if not isinstance(content, str) or not content.strip():
+    content = text_of(m)
+    if not content.strip():
         return None
     tag = f" [{day}]" if day else ""
     if isinstance(m, HumanMessage):

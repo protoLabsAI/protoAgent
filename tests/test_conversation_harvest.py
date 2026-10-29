@@ -37,6 +37,28 @@ def test_render_transcript_cleans_and_skips_noise():
     assert "scratch_pad" not in t
 
 
+@pytest.mark.parametrize("message_type,role", [(HumanMessage, "User"), (AIMessage, "Assistant")])
+def test_render_transcript_preserves_multipart_content(message_type, role):
+    message = message_type(content=[
+        {"type": "text", "text": "Caption"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,private"}},
+        "More text",
+        {"type": "text", "text": "<scratch_pad>hidden</scratch_pad>Answer"},
+    ])
+    transcript = render_transcript([message])
+    assert transcript.startswith(f"{role}: Caption\n\n_[image_url]_\n\nMore text")
+    assert "Answer" in transcript
+    assert "base64" not in transcript
+    if message_type is AIMessage:
+        assert "hidden" not in transcript
+
+
+def test_render_transcript_preserves_attachment_only_message():
+    assert render_transcript([HumanMessage(content=[
+        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+    ])]) == "User: _[image_url]_"
+
+
 class _FakeKnowledge:
     def __init__(self):
         self.chunks = []

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from graph.compaction_op import compact_thread
 from graph.conversation_harvest import harvest_thread
@@ -25,7 +25,8 @@ def stores(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("automatic", [False, True])
 @pytest.mark.parametrize("knowledge_available", [False, True])
-async def test_archive_metadata_and_no_chunks(stores, monkeypatch, automatic, knowledge_available):
+@pytest.mark.parametrize("multipart", [False, True])
+async def test_archive_metadata_and_no_chunks(stores, monkeypatch, automatic, knowledge_available, multipart):
     knowledge, history = stores
     writer_knowledge = knowledge if knowledge_available else None
     monkeypatch.setattr(STATE, "knowledge_store", writer_knowledge)
@@ -33,9 +34,15 @@ async def test_archive_metadata_and_no_chunks(stores, monkeypatch, automatic, kn
         "graph.conversation_harvest.message_dates",
         lambda *args, **kwargs: {"h1": "2026-08-01", "h2": "2026-08-02"},
     )
+    def content(text):
+        return [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+        ] if multipart else text
+
     state = {
         "session_id": "session",
-        "messages": [HumanMessage("first", id="h1"), HumanMessage("last", id="h2")],
+        "messages": [HumanMessage(content("first"), id="h1"), AIMessage(content("last"), id="h2")],
     }
     if automatic:
         mw = CountingSummarizationMiddleware.__new__(CountingSummarizationMiddleware)
@@ -53,6 +60,10 @@ async def test_archive_metadata_and_no_chunks(stores, monkeypatch, automatic, kn
     assert (entry.kind, entry.thread_id, entry.namespace) == ("archive", "thread", "chat-archive:session")
     assert (entry.span_start, entry.span_end) == ("2026-08-01", "2026-08-02")
     assert "first" in entry.content and "last" in entry.content
+    assert "User [2026-08-01]: first" in entry.content
+    assert "Assistant [2026-08-02]: last" in entry.content
+    if multipart:
+        assert entry.content.count("_[image_url]_") == 2
     assert knowledge.list_chunks() == []
 
 
@@ -87,21 +98,25 @@ async def test_manual_archive_failure_preserves_checkpoint_unless_forced(stores,
     assert knowledge.list_chunks() == []
 
 
-async def test_summary_uses_checkpoint_session_and_keeps_facts_in_chunks(stores):
+@pytest.mark.parametrize("multipart", [False, True])
+async def test_summary_uses_checkpoint_session_and_keeps_facts_in_chunks(stores, multipart):
     knowledge, history = stores
+    content = [{"type": "text", "text": "I prefer teal"}] if multipart else "I prefer teal"
     checkpoint = SimpleNamespace(checkpoint={
         "ts": "2026-08-02T12:00:00Z",
-        "channel_values": {"session_id": "session", "messages": [HumanMessage("I prefer teal")]},
+        "channel_values": {"session_id": "session", "messages": [HumanMessage(content)]},
     })
+    summarizer = AsyncMock(return_value="Teal preference.")
     entry_id = await harvest_thread(
         "custom:thread:goal-iter-2",
         checkpointer=SimpleNamespace(aget_tuple=AsyncMock(return_value=checkpoint)),
         knowledge_store=knowledge, config=SimpleNamespace(knowledge_facts=True),
-        summarizer=AsyncMock(return_value="Teal preference."),
+        summarizer=summarizer,
         fact_extractor=AsyncMock(return_value=["The user prefers teal."]),
         namespace="project",
     )
     entry = history.get(entry_id)
+    assert "User: I prefer teal" in summarizer.call_args.args[0]
     assert (entry.session_id, entry.thread_id, entry.kind) == ("session", "custom:thread:goal-iter-2", "summary")
     assert entry.namespace == "project"
     chunks = knowledge.list_chunks()
