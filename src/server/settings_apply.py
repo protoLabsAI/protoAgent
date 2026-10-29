@@ -602,6 +602,20 @@ def _build_settings_callbacks() -> dict[str, Any]:
             str((_model_cfg or {}).get("name", "") or "").strip() if isinstance(_model_cfg, dict) else ""
         )
         _no_model = not _conns and not _submitted_model_name
+        # Explore mode writes the registry as DECLARED-EMPTY. The shipped template
+        # (config/langgraph-config.example.yaml) declares a placeholder `gateway`
+        # openai-compat connection, and apply_updates_to_yaml would otherwise leave it in
+        # place — so `model_is_configured` would read True on that base_url alone (the
+        # loaded config keeps `providers_declared` with a non-empty registry) and the
+        # reload gate would build a graph that can't authenticate. Overwriting `providers`
+        # with `[]` removes the placeholder and makes the loaded config declared-empty
+        # (graph.config from_yaml: an explicit list — `[]` included — sets
+        # providers_declared and the registry floors stay silent), which is exactly what
+        # `model_is_configured` / `split_slot_target` / discovery read as "no model". A
+        # legitimate base_url-only openai-compat connection (a local Ollama / LM Studio)
+        # DECLARES a connection, so `_no_model` is False and this does not touch it.
+        if _no_model and config is not None:
+            config["providers"] = []
         _skip_probe = _runtime.startswith("acp:") or is_native_oauth_provider(_provider)
         if not _skip_probe and not _no_model and config is not None and isinstance(_model_cfg, dict):
             m = _model_cfg

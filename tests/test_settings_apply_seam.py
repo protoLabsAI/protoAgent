@@ -234,6 +234,88 @@ def test_finish_setup_with_a_named_model_still_probes_and_refuses(monkeypatch, t
     assert "model connection failed" in msg
 
 
+def test_finish_setup_explore_from_the_shipped_template_lands_declared_empty(monkeypatch, tmp_path):
+    """#4566 review: an explore finish started from the SHIPPED template must land a
+    DECLARED-EMPTY registry, not keep the template's placeholder ``gateway`` connection.
+
+    ``config/langgraph-config.example.yaml`` declares a ``gateway`` openai-compat connection
+    with only a ``base_url`` (and no key). A plain merge would leave it in place, so the
+    reloaded config would read ``model_is_configured == True`` on that base_url alone — the
+    reload gate would then build a graph that can't authenticate, defeating explore mode. The
+    finish must overwrite ``providers`` with ``[]`` so the loaded config is declared-empty.
+
+    This drives the finish through the REAL config round-trip (no stubbed YAML I/O): copy the
+    shipped template to a tmp leaf, run the explore finish, then load the persisted leaf back
+    and assert the placeholder is gone, the config reads unconfigured, the runtime status
+    reports ``model_configured == false``, and the reload gate builds no graph. A declared
+    base_url-only connection and a subscription still read configured — those are pinned in
+    tests/test_operator_api_runtime.py and ``model_is_configured`` is unchanged here."""
+    import shutil
+
+    import graph.config_io as cio
+    from graph.config import LangGraphConfig, model_is_configured
+    from operator_api.runtime import build_runtime_status
+    from runtime.state import STATE
+
+    _isolate_config(monkeypatch, tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    example = Path(__file__).resolve().parent.parent / "config" / "langgraph-config.example.yaml"
+    leaf = tmp_path / "langgraph-config.yaml"
+    shutil.copyfile(example, leaf)
+
+    # Sanity: the shipped template genuinely declares the placeholder gateway and so reads as
+    # CONFIGURED on its base_url alone — exactly the shape the finish must neutralise. Without
+    # this the rest of the test could pass against a template that never had the bug.
+    seed = LangGraphConfig.from_yaml(leaf)
+    assert seed.providers_declared is True and [p.id for p in seed.providers] == ["gateway"]
+    assert model_is_configured(seed) is True
+
+    # Real persist I/O: only neutralise the no-arg load's one-shot HOME-touching seed/migration
+    # (the leaf already exists, so the seed is a no-op) and the non-I/O collaborators. The
+    # load/apply/save round-trip itself runs for real against the tmp leaf.
+    monkeypatch.setattr(cio, "ensure_live_config", lambda: False)
+    monkeypatch.setattr(cio, "validate_config_dict", lambda c: (True, ""))
+    monkeypatch.setattr(cio, "save_secrets", lambda s, path=None: None)
+    monkeypatch.setattr(cio, "mark_setup_complete", lambda: None)
+    monkeypatch.setattr(cio, "reset_setup", lambda: None)
+    monkeypatch.setattr(cio, "validate_model_connection", lambda *a, **k: (False, "should never be called"))
+    monkeypatch.setattr(settings_apply, "_sync_autostart_with_config", lambda config: "")
+
+    # A faithful stand-in for the reload: load the just-written leaf into STATE.graph_config and
+    # build a graph ONLY when a model is configured — the SAME gate agent_init uses (#4566), so
+    # "graph built" == "model_is_configured" here too.
+    graph_sentinel = object()
+    monkeypatch.setattr(STATE, "graph", graph_sentinel, raising=False)
+
+    def _reload():
+        STATE.graph_config = LangGraphConfig.from_yaml(cio.config_yaml_path())
+        STATE.graph = graph_sentinel if model_is_configured(STATE.graph_config) else None
+        return True, "config reloaded"
+
+    monkeypatch.setattr(agent_init, "_reload_langgraph_agent", _reload)
+
+    ok, msg = settings_apply._build_settings_callbacks()["finish_setup"]({"model": {"name": ""}}, None)
+
+    assert ok is True
+    # The persisted leaf no longer carries the template's placeholder gateway — it is a
+    # DECLARED-EMPTY registry, which is what reads as "no model".
+    reloaded = LangGraphConfig.from_yaml(leaf)
+    assert reloaded.providers == [] and reloaded.providers_declared is True
+    assert model_is_configured(reloaded) is False
+    # No graph built in explore mode (the reload gate skipped the compile).
+    assert STATE.graph is None
+    # The runtime status the console polls reports it as unconfigured.
+    status = build_runtime_status(
+        config=reloaded,
+        setup_complete=True,
+        graph_loaded=STATE.graph is not None,
+        model_configured=model_is_configured(reloaded),
+    )
+    assert status["model_configured"] is False
+    assert "no model connected yet" in msg.lower()
+
+
 def test_agent_init_patch_reaches_the_config_routes(monkeypatch):
     """Behavioral proof (#3856): a patch on ``agent_init._apply_settings_changes`` is what
     ``POST /api/config`` and the SOUL-history restore run."""
