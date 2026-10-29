@@ -53,6 +53,27 @@ def _refusal(slug: str) -> str:
     return f"{slug} is not a demo member — demo tools never touch real agents"
 
 
+def _operation_failure(exc: Exception, slug: str = "") -> dict:
+    """Return operational failures without leaking credentials from exception text."""
+    from graph.fleet.demo import NotDemoMember
+    from graph.workspaces.manager import WorkspaceBusy
+
+    if isinstance(exc, NotDemoMember):
+        return {"ok": False, "refused": _refusal(slug)}
+    if isinstance(exc, WorkspaceBusy):
+        return {
+            "ok": False,
+            "error": "workspace_busy",
+            "retryable": True,
+            "detail": "Removal is incomplete; the workspace is busy. Retry deletion.",
+        }
+    return {
+        "ok": False,
+        "error": "operation_failed",
+        "detail": f"Demo operation could not complete ({type(exc).__name__}); check fleet state before retrying.",
+    }
+
+
 def _not_demo(slug: str) -> str | None:
     """``None`` when ``slug`` is a live demo member (safe to act on), else the refusal string.
 
@@ -181,6 +202,7 @@ def _build_fleet_demo_tools(config) -> list:
         Returns ``{slug, port, archetype_ref, plugin_versions, created_at}`` — the member's
         scoped token is kept server-side (used by fleet_demo_chat), never returned here. Refuses
         with a message when the archetype is unknown or the live-demo cap is reached.
+        Other operational failures return ``{ok: False, error, detail}``.
         """
         from graph.fleet.demo import DemoError, create_demo
 
@@ -195,6 +217,8 @@ def _build_fleet_demo_tools(config) -> list:
             )
         except DemoError as exc:
             return {"ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001 — model-facing operation boundary
+            return _operation_failure(exc)
         # Strip the scoped bearer: it must not cross into the model's context (fleet_demo_chat
         # re-resolves it server-side). Keep provenance the PM needs to use the demo.
         return {
@@ -223,20 +247,24 @@ def _build_fleet_demo_tools(config) -> list:
             plugin_settings: ``{plugin_id: {key: value}}`` config overlaid per plugin.
 
         Returns ``{ok, slug, changed, plugins}``, or ``{ok: False, refused: message}``.
+        Operational failures return ``{ok: False, error, detail}``.
         """
-        refusal = await asyncio.to_thread(_not_demo, slug)
-        if refusal is not None:
-            return {"ok": False, "refused": refusal}
-        from graph.fleet.demo import configure_demo
+        try:
+            refusal = await asyncio.to_thread(_not_demo, slug)
+            if refusal is not None:
+                return {"ok": False, "refused": refusal}
+            from graph.fleet.demo import configure_demo
 
-        out = await asyncio.to_thread(
-            configure_demo,
-            slug,
-            model_connection=model_connection or None,
-            model=model or None,
-            plugin_settings=plugin_settings,
-        )
-        return {"ok": True, **out}
+            out = await asyncio.to_thread(
+                configure_demo,
+                slug,
+                model_connection=model_connection or None,
+                model=model or None,
+                plugin_settings=plugin_settings,
+            )
+            return {"ok": True, **out}
+        except Exception as exc:  # noqa: BLE001 — includes failures after the stamp check
+            return _operation_failure(exc, slug)
 
     @tool
     async def fleet_demo_chat(slug: str, message: str, session_id: str = "") -> dict:
@@ -271,14 +299,18 @@ def _build_fleet_demo_tools(config) -> list:
             slug: The demo member's slug.
 
         Returns ``{ok: True, slug, deleted: True}``, or ``{ok: False, refused: message}``.
+        Operational failures return ``{ok: False, error, detail}``; busy removal is retryable.
         """
-        refusal = await asyncio.to_thread(_not_demo, slug)
-        if refusal is not None:
-            return {"ok": False, "refused": refusal}
-        from graph.fleet.demo import delete_demo
+        try:
+            refusal = await asyncio.to_thread(_not_demo, slug)
+            if refusal is not None:
+                return {"ok": False, "refused": refusal}
+            from graph.fleet.demo import delete_demo
 
-        await asyncio.to_thread(delete_demo, slug)
-        return {"ok": True, "slug": slug, "deleted": True}
+            await asyncio.to_thread(delete_demo, slug)
+            return {"ok": True, "slug": slug, "deleted": True}
+        except Exception as exc:  # noqa: BLE001 — includes failures after the stamp check
+            return _operation_failure(exc, slug)
 
     @tool
     async def fleet_demo_list() -> list:

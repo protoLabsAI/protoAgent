@@ -357,3 +357,75 @@ async def test_blocking_operations_leave_event_loop_responsive(monkeypatch, oper
     finally:
         release.set()
         await task
+
+
+@pytest.mark.parametrize("operation", ["create", "configure", "delete"])
+@pytest.mark.parametrize("failure", ["workspace", "supervisor", "io", "unexpected"])
+async def test_operation_failures_are_structured_and_do_not_leak(monkeypatch, operation, failure):
+    from graph.fleet.supervisor import FleetError
+    from graph.workspaces.manager import WorkspaceError
+
+    errors = {"workspace": WorkspaceError, "supervisor": FleetError, "io": OSError, "unexpected": RuntimeError}
+    calls = []
+    monkeypatch.setattr(demo, "require_demo", lambda slug: {"id": slug, "demo": True})
+
+    def fail(*args, **kwargs):
+        calls.append(operation)
+        raise errors[failure]("SECRET-SCOPED-BEARER")
+
+    monkeypatch.setattr(demo, f"{operation}_demo", fail)
+    arguments = {"archetype": "basic", "model_connection": "local", "model": "test"} if operation == "create" else {"slug": "demo-x"}
+    out = await _tools()[f"fleet_demo_{operation}"].ainvoke(arguments)
+    assert out["ok"] is False
+    assert out["error"] == "operation_failed"
+    assert errors[failure].__name__ in out["detail"]
+    assert "SECRET-SCOPED-BEARER" not in json.dumps(out)
+    assert calls == [operation]  # No automatic retry of potentially partial mutations.
+
+
+@pytest.mark.parametrize("operation", ["configure", "delete"])
+async def test_member_reaped_after_initial_guard_returns_refusal(monkeypatch, operation):
+    checks = []
+
+    def require_demo(slug):
+        checks.append(slug)
+        if len(checks) > 1:
+            raise demo.NotDemoMember("member was reaped")
+        return {"id": slug, "demo": True}
+
+    monkeypatch.setattr(demo, "require_demo", require_demo)
+    # Use the real core operation: its second stamp check must refuse before mutation.
+    out = await _tools()[f"fleet_demo_{operation}"].ainvoke({"slug": "demo-x"})
+    assert checks == ["demo-x", "demo-x"]
+    assert out == {"ok": False, "refused": fdt._refusal("demo-x")}
+
+
+async def test_delete_busy_workspace_reports_retryable_partial_outcome(monkeypatch):
+    from graph.workspaces.manager import WorkspaceBusy
+    from ops import fleet
+
+    monkeypatch.setattr(demo, "require_demo", lambda slug: {"id": slug, "demo": True})
+
+    def remove_sync(slug, *, purge):
+        assert slug == "demo-x" and purge is True
+        raise WorkspaceBusy("locked workspace")
+
+    monkeypatch.setattr(fleet, "remove_sync", remove_sync)
+    out = await _tools()["fleet_demo_delete"].ainvoke({"slug": "demo-x"})
+    assert out["ok"] is False
+    assert out["error"] == "workspace_busy"
+    assert out["retryable"] is True
+    assert "incomplete" in out["detail"]
+    assert "deleted" not in out
+
+
+@pytest.mark.parametrize("operation", ["configure", "delete"])
+async def test_guard_io_failure_returns_error_without_mutation(monkeypatch, operation):
+    def fail(slug):
+        raise OSError("registry unreadable")
+
+    monkeypatch.setattr(demo, "require_demo", fail)
+    monkeypatch.setattr(demo, f"{operation}_demo", _boom_op(operation))
+    out = await _tools()[f"fleet_demo_{operation}"].ainvoke({"slug": "demo-x"})
+    assert out["ok"] is False
+    assert out["error"] == "operation_failed"
