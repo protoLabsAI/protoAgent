@@ -330,3 +330,68 @@ async def test_real_driver_releases_thread_lock_and_flushes_trace_by_return(env,
     # No gc.collect(), no polling: both happened inside execute().
     assert env.trace.flushes == 1
     assert not turn_control._thread_lock("a2a:s-3876").locked()
+
+
+# ── the turn's trace id survives the stall guard (ADR 0126) ────────────────────
+
+
+class _TracedTurn:
+    """Shaped like the chat driver under ``trace_session``: the trace id is set in a
+    context variable inside the stream, before its first frame, and reset in its
+    ``finally``."""
+
+    def __init__(self, frames, trace_id: str):
+        self.frames = frames
+        self.trace_id = trace_id
+        self.seen_at_each_frame: list[str] = []
+
+    async def __call__(self, text, context_id, **kwargs):
+        from observability import tracing
+
+        token = tracing._trace_id_ctx.set(self.trace_id)
+        try:
+            for frame in self.frames:
+                self.seen_at_each_frame.append(tracing.current_trace_id())
+                yield frame
+        finally:
+            try:
+                tracing._trace_id_ctx.reset(token)
+            except ValueError:
+                pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stall", [0.0, 30.0], ids=["guard-off", "guard-on"])
+async def test_the_turn_outcome_carries_the_streams_trace_id(stall, _outcomes):
+    """Every A2A turn's telemetry row is keyed to its trace by `TurnOutcome.trace_id`.
+    Under the stall guard (the default) it was always "": each step ran in a fresh
+    context copy, so the id the stream set never reached the executor."""
+    turn = _TracedTurn([("text", "a"), ("text", "b"), ("done", "ab")], "trace-abc123")
+
+    await ProtoAgentExecutor(turn, stall_timeout_provider=lambda: stall).execute(_request_context(), EventQueue())
+
+    assert [o.trace_id for o in _outcomes] == ["trace-abc123"]
+    # The stream itself keeps seeing its own trace id at every step, as with no guard.
+    assert turn.seen_at_each_frame == ["trace-abc123"] * 3
+
+
+@pytest.mark.asyncio
+async def test_stall_guard_keeps_a_context_variable_the_stream_set_across_steps():
+    import contextvars
+
+    var: contextvars.ContextVar[str] = contextvars.ContextVar("probe", default="")
+    seen: list[str] = []
+
+    async def inner():
+        var.set("set-in-step-1")
+        yield 1
+        seen.append(var.get())
+        yield 2
+
+    holder: list = []
+    got = [item async for item in _stall_guarded(inner(), 30.0, ["starting up"], holder)]
+
+    assert got == [1, 2]
+    assert seen == ["set-in-step-1"]
+    assert holder and holder[0].run(var.get) == "set-in-step-1"
+    assert var.get() == ""  # the caller's own context is untouched
