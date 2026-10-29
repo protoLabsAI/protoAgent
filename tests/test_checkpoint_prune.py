@@ -543,3 +543,104 @@ def test_age_ttl_scan_and_delete_are_one_write_transaction(tmp_path, monkeypatch
     finally:
         conn.close()
     assert outcome == ["held off"] or survived == 1, (outcome, survived)
+
+
+def _incremental_db_with_free_pages(tmp_path, *, rows=400, keep=5) -> str:
+    db = str(tmp_path / "c.db")
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, data BLOB)")
+    conn.executemany("INSERT INTO t (data) VALUES (?)", [(b"z" * 4096,) for _ in range(rows)])
+    conn.commit()
+    conn.execute("DELETE FROM t WHERE id > ?", (keep,))
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_freelist_worth_reclaiming_on_a_mostly_free_incremental_db(tmp_path):
+    from graph.checkpoint_prune import freelist_worth_reclaiming
+
+    db = _incremental_db_with_free_pages(tmp_path)
+    assert freelist_worth_reclaiming(db) is True
+    reclaim(db)
+    # Drained: nothing left worth another pass.
+    assert freelist_worth_reclaiming(db) is False
+
+
+def test_freelist_not_worth_reclaiming_when_small_legacy_or_missing(tmp_path, monkeypatch):
+    import graph.checkpoint_prune as cp
+
+    # A small freelist under both thresholds.
+    db = _incremental_db_with_free_pages(tmp_path, rows=40, keep=35)
+    assert cp.freelist_worth_reclaiming(db) is False
+    # A legacy (auto_vacuum=NONE) DB: reclaim can't shrink it live, so never "worth it".
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    legacy = _legacy_db_with_free_pages(legacy_dir)
+    assert cp.freelist_worth_reclaiming(legacy) is False
+    assert cp.freelist_worth_reclaiming("/nonexistent_dir_xyz_12345/test.db") is False
+
+
+def test_sweep_reclaims_a_bloated_db_even_when_it_deleted_nothing(tmp_path, monkeypatch):
+    """The write path (ADR 0120) prunes rows, so the sweep finds nothing to delete. It
+    must still hand a large freelist back to the OS (designSystem: 2 GB file, 28 MB live)."""
+    from types import SimpleNamespace
+
+    import server.maintenance_loops as ml
+    from runtime.state import STATE
+
+    db = _incremental_db_with_free_pages(tmp_path)
+    pages_before = sqlite3.connect(db).execute("PRAGMA page_count").fetchone()[0]
+
+    cfg = SimpleNamespace(
+        checkpoint_prune_interval_hours=6,
+        checkpoint_max_age_days=0,
+        checkpoint_harvest_enabled=False,
+        checkpoint_keep_per_thread=2,
+        checkpoint_background_keep=1,
+        checkpoint_vacuum=True,
+    )
+    for name, value in {
+        "graph_config": cfg,
+        "checkpoint_path": db,
+        "checkpointer": None,
+        "knowledge_store": None,
+        "telemetry_store": None,
+        "inbox_store": None,
+        "activity_log": None,
+        "a2a_task_engine": None,
+    }.items():
+        monkeypatch.setattr(STATE, name, value, raising=False)
+
+    async def _noop():
+        return None
+
+    monkeypatch.setattr(ml, "_sweep_orphaned_forgets", _noop)
+    monkeypatch.setattr(ml, "_maybe_run_soul_drift_pass", lambda cfg: None)
+    # The table isn't a checkpoint table: the prune itself deletes nothing.
+    monkeypatch.setattr(
+        "graph.checkpoint_prune.prune_checkpoints",
+        lambda *a, **k: {"threads_deleted": 0, "checkpoints_deleted": 0},
+    )
+    monkeypatch.setattr("graph.checkpoint_prune.gc_media", lambda *a, **k: 0)
+
+    class _Stop(Exception):
+        pass
+
+    calls = []
+
+    async def _sleep(seconds):
+        calls.append(seconds)
+        if len(calls) > 1:  # the boot-settle sleep passes; the end-of-pass tick stops the loop
+            raise _Stop
+
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+    try:
+        asyncio.run(ml._checkpoint_prune_loop())
+    except _Stop:
+        pass
+
+    pages_after = sqlite3.connect(db).execute("PRAGMA page_count").fetchone()[0]
+    assert pages_after < pages_before / 2

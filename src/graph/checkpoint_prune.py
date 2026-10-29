@@ -441,6 +441,39 @@ def reclaim(db_path: str, *, full_vacuum: bool = False) -> dict[str, int]:
     return result
 
 
+#: The periodic sweep reclaims even when it deleted nothing itself once the freelist holds
+#: this much... Since the write path prunes (ADR 0120) the sweep rarely deletes anything,
+#: so gating reclaim on its own deletes left INCREMENTAL DBs at 97-99% freelist
+#: (designSystem: 2 GB file, 28 MB live).
+RECLAIM_MIN_FREE_BYTES = 64 * 1024 * 1024
+#: ...or this fraction of the file's pages.
+RECLAIM_MIN_FREE_FRACTION = 0.25
+
+
+def freelist_worth_reclaiming(db_path: str) -> bool:
+    """True when an INCREMENTAL DB's freelist is big enough for :func:`reclaim` to matter.
+
+    A legacy (auto_vacuum=NONE) DB returns False: ``reclaim`` can't shrink it live, and
+    asking every sweep would only repeat the migrate hint. Never raises."""
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+    except Exception:
+        return False
+    try:
+        if conn.execute("PRAGMA auto_vacuum").fetchone()[0] != 2:
+            return False
+        page_size = conn.execute("PRAGMA page_size").fetchone()[0]
+        page_count = conn.execute("PRAGMA page_count").fetchone()[0]
+        freelist = conn.execute("PRAGMA freelist_count").fetchone()[0]
+    except Exception:
+        return False
+    finally:
+        conn.close()
+    if not freelist:
+        return False
+    return freelist * page_size >= RECLAIM_MIN_FREE_BYTES or freelist >= page_count * RECLAIM_MIN_FREE_FRACTION
+
+
 def plan_compaction(db_path: str, *, keep_per_thread: int = 2, background_keep: int = 1, top: int = 10) -> dict:
     """What :func:`compact` would remove — READ-ONLY (SELECTs only; safe on a live DB).
 
