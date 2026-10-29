@@ -529,6 +529,7 @@ def configure(
     allowed_origins_raw: str,
     federation_token: str | None = None,
     fleet_token: str | None = None,
+    bind_host: str | None = None,
 ) -> None:
     """Seed the guard at route-registration time.
 
@@ -542,12 +543,24 @@ def configure(
         api_key: the ``<AGENT>_API_KEY`` value; "" disables the X-API-Key check.
         allowed_origins_raw: ``A2A_ALLOWED_ORIGINS`` value ("" = disabled,
             "*" = disabled, else comma-separated allowlist).
+        bind_host: the resolved interface the server binds (``127.0.0.1``,
+            ``0.0.0.0``, a hostname…). Only decides the *log level* of the two
+            "open mode" notices below: on a loopback-only bind (the uvx/desktop
+            default) an open endpoint and a missing origin allowlist are the
+            expected posture, not a misconfiguration, so they drop to INFO; any
+            reachable bind keeps them at WARNING (#4569). ``None`` = unspecified
+            → treated as the loopback default. The *security* refusal for an open
+            non-loopback bind is enforced independently by ``evaluate_open_bind``.
     """
+    loopback_only = _is_loopback_bind(bind_host)
+    # INFO on a loopback-only bind, WARNING on anything reachable (#4569).
+    open_notice = logger.info if loopback_only else logger.warning
+
     raw_bearer = bearer_token if bearer_token is not None else os.environ.get("A2A_AUTH_TOKEN", "")
     seed = (raw_bearer or "").strip()
     _BEARER[0] = seed or None
     if _BEARER[0] is None:
-        logger.warning("[a2a] A2A auth token not configured — endpoint is open")
+        open_notice("[a2a] A2A auth token not configured — endpoint is open")
 
     # Federation token (ADR 0066) — same authoritative-vs-env-fallback rule as the bearer.
     raw_fed = federation_token if federation_token is not None else os.environ.get("A2A_FEDERATION_TOKEN", "")
@@ -581,7 +594,7 @@ def configure(
 
     raw = (allowed_origins_raw or "").strip()
     if not raw:
-        logger.warning("[a2a] A2A_ALLOWED_ORIGINS not set — origin verification disabled")
+        open_notice("[a2a] A2A_ALLOWED_ORIGINS not set — origin verification disabled")
         _ALLOWED_ORIGINS[0] = None
     elif raw == "*":
         _ALLOWED_ORIGINS[0] = None
@@ -1102,6 +1115,7 @@ def install(
     allowed_origins_raw: str,
     federation_token: str | None = None,
     fleet_token: str | None = None,
+    bind_host: str | None = None,
 ) -> None:
     """Configure the guard and add the middleware to ``app``.
 
@@ -1123,6 +1137,7 @@ def install(
         allowed_origins_raw=allowed_origins_raw,
         federation_token=federation_token,
         fleet_token=fleet_token,
+        bind_host=bind_host,
     )
     app.add_middleware(A2AAuthMiddleware)
     app.add_middleware(DeviceSocketGuard)
@@ -1131,6 +1146,22 @@ def install(
 
 
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _is_loopback_bind(host: str | None) -> bool:
+    """True when the server binds loopback only — ``127.0.0.1``, ``::1``, ``localhost``,
+    or an unspecified host (``None``/empty, which resolves to the loopback default).
+
+    ``0.0.0.0`` / ``::`` (every interface) and any other address or hostname bind a
+    reachable interface and are NOT loopback. Used only to pick the log level of
+    ``configure()``'s open-mode notices (#4569); the security refusal for an open
+    non-loopback bind lives in ``evaluate_open_bind``."""
+    if host is None:
+        return True
+    h = host.strip().lower()
+    if not h:
+        return True
+    return h in _LOOPBACK_HOSTS
 
 
 def evaluate_open_bind(host: str, *, bearer_configured: bool, allow_open: bool) -> tuple[bool, str | None]:

@@ -1327,6 +1327,14 @@ def _main():
     except Exception:  # noqa: BLE001 — a fleet-token hiccup must not take down boot
         log.exception("[a2a] could not resolve fleet service token — intra-fleet auth degraded")
         fleet_token = None
+    # Resolve the bind interface now so configure() can pick the log level for its open-mode
+    # notices (#4569): a loopback-only bind — the uvx/desktop default — logs "token not
+    # configured" / "origins not set" at INFO, anything reachable keeps them at WARNING. This
+    # mirrors the authoritative resolution + args.host mutation below (--host flag > cascade),
+    # which runs later; reuse this value there so the two never drift.
+    resolved_bind_host = args.host or (
+        STATE.graph_config.bind_host if STATE.graph_config else os.environ.get("PROTOAGENT_HOST", "127.0.0.1")
+    ) or "127.0.0.1"
     auth.install(
         fastapi_app,
         bearer_token=(STATE.graph_config.auth_token if STATE.graph_config else None),
@@ -1334,6 +1342,7 @@ def _main():
         allowed_origins_raw=os.environ.get("A2A_ALLOWED_ORIGINS", ""),
         federation_token=(STATE.graph_config.federation_token if STATE.graph_config else None),
         fleet_token=fleet_token,
+        bind_host=resolved_bind_host,
     )
 
     # Member-public deferral for the fleet proxy (#1890): a member's plugin view
@@ -1584,9 +1593,10 @@ def _main():
     # the env read is a defensive fallback for the degenerate no-config path.
     host_from_flag = bool(args.host)
     if not args.host:
-        args.host = (
-            STATE.graph_config.bind_host if STATE.graph_config else os.environ.get("PROTOAGENT_HOST", "127.0.0.1")
-        ) or "127.0.0.1"
+        # Same cascade computed above as resolved_bind_host (leaf > host-config.yaml >
+        # env > 127.0.0.1); reuse it so the bind we announce and the loopback-ness
+        # configure() logged against stay in lockstep.
+        args.host = resolved_bind_host
 
     log.info("Starting %s (ui=%s) on http://%s:%d", agent_name(), ui, args.host, args.port)
 
