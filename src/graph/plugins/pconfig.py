@@ -260,11 +260,13 @@ def installed_plugin_config_schemas(*, strict: bool = False) -> list[PluginConfi
     try:
         from infra.paths import instance_paths
 
-        from graph.config_io import load_yaml_doc
+        from graph.plugins.installer import configured_plugins_dir
         from graph.plugins.loader import discover_plugins
 
-        data = load_yaml_doc() or {}
-        roots = plugin_roots_from(instance_paths().plugins_dir, str((data.get("plugins") or {}).get("dir") or ""))
+        # The content-cached, validated read of `plugins.dir`, not `load_yaml_doc`: that
+        # parses the whole config as an editable ruamel document, which (on the event
+        # loop, via GET /api/config) cost more than the rest of this call.
+        roots = plugin_roots_from(instance_paths().plugins_dir, configured_plugins_dir())
         all_ids = {m.id for m in discover_plugins(roots)}
         return discover_plugin_config(roots, all_ids, set(), strict=strict)  # every installed plugin, on or off
     except Exception:  # noqa: BLE001
