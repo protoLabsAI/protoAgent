@@ -1,6 +1,6 @@
 # ADR 0125 — Separate memory, knowledge and history
 
-- Status: Proposed
+- Status: Accepted (2026-10-28; Josh: hard rename, optional shared profile, phase order as written)
 - Date: 2026-10-28
 - Deciders: Josh Mabry; protoAgent maintainers
 - Implementation: Phase 0 in #4553; Phases 1–3 not started.
@@ -116,8 +116,9 @@ current single table.
 
 `memory_save` replaces `memory_ingest`. "Ingest" means fetching a document, which is
 what `knowledge_ingest` does. `memory_recall` becomes `memory_search` and covers memory
-only. The old names are removed in the same release; bundled skills and SOULs that name
-them are updated in that PR. This follows the no-legacy rule for fleet floors.
+only. This is a hard rename with no aliases: the old names are removed in the same
+release, and bundled skills and SOULs that name them are updated in that PR. This follows
+the no-legacy rule for fleet floors.
 
 ### D4 — Saving a memory checks for the same subject
 
@@ -157,9 +158,38 @@ The pre-migration database is kept as `agent.db.pre-0125` until the next release
 console's Memory inspector reads `memories`, its Knowledge browser reads `chunks`, and a
 History tab reads `history`.
 
-### D7 — Out of scope
+### D7 — An optional shared operator profile
 
-- Shared memory across agents: memory stays per agent; knowledge has the commons tier.
+Memory is per agent, but who the operator is (name, timezone, how they like to work,
+standing preferences) is the same for every agent on the box. Re-teaching each agent is
+how the fleet drifts apart.
+
+- **Store.** `<commons.path>/profile.db` uses the `memories` schema, next to the
+  knowledge commons (ADR 0041). It holds `kind=profile` and `kind=standing` rows about
+  the operator only, never project facts.
+- **Opt-in per agent.** It is off by default: `memory.shared_profile: true` in the
+  agent's config (Settings → Memory). A sandboxed or client-facing agent never sees
+  the operator's profile unless it is switched on.
+- **Delivery.** For an opted-in agent, confirmed shared rows join always-on memory (or
+  retrieved memory, by their `delivery`) under their own label, "Operator profile
+  (shared)". If an agent's private row has the same `subject` and `kind`, the private
+  row wins for that agent. That lets one agent keep a deliberate local exception.
+- **Writes.**
+  - The operator edits the shared profile directly in the console, and those rows start
+    `confirmed`.
+  - An agent proposes with `memory_save(..., shared=True)`. The row lands in the shared
+    store as `review_state=pending` and reaches no agent until the operator confirms it.
+    This is the same promotion rule as the knowledge commons: curated, never automatic.
+  - D4 supersession applies within the shared store, so a confirmed replacement retires
+    the older shared row for every agent at once.
+- **Migration.** Nothing moves automatically. After Phase 2, the review pass (Phase 3)
+  offers each agent's `kind=profile` rows as shared-profile candidates, de-duplicated by
+  `subject`, for the operator to confirm.
+
+### D8 — Out of scope
+
+- Sharing anything beyond the operator profile: project memory stays per agent;
+  knowledge already has the commons tier.
 - Memory evals (LongMemEval subset): wanted, but tracked separately.
 
 ## Phases
@@ -169,10 +199,11 @@ History tab reads `history`.
    at it, migrate `domain=conversation` rows, and move `session_search` and
    `recall_session` onto it.
 2. **Memory/knowledge split**: add the `memories` table, migrate, split retrieval and
-   budgets (D2), rename the tools (D3), and split the console inspector.
+   budgets (D2), rename the tools (D3), split the console inspector, and add the
+   optional shared profile store (D7).
 3. **Better memory use**: subject supersession (D4), status-line guidance (D5), the
    extractor through the memory funnel, and a review pass over each agent's migrated
-   memories with the operator.
+   memories with the operator, including shared-profile candidates (D7).
 
 ## Consequences
 
