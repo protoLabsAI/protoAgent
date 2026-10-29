@@ -1,0 +1,1 @@
+- **Promote turns to instance eval cases (#4603).** Operators can draft a case from a rated or friction-carrying turn with its stored prompt, then explicitly save validated assertions to the instance suite. Incognito turns and duplicate ids are refused.
