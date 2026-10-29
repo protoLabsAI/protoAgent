@@ -1,6 +1,6 @@
 # ADR 0126 — Close the eval loop: nightly gate, feedback scores, traces become cases
 
-- Status: Proposed
+- Status: Accepted (2026-10-29; Josh)
 - Date: 2026-10-29
 - Deciders: Josh Mabry; protoAgent maintainers
 - Implementation: epic #4599 (E1 #4600, E2 #4601, E3 #4602, E4 #4603); not started.
