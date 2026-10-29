@@ -236,6 +236,8 @@ def test_allow_private_permits_lan_but_blocks_metadata():
         "http://10.0.0.5:7870/",
         "http://192.168.1.20/",
         "http://127.0.0.1:7871/",
+        "http://[::1]:4000/v1",  # IPv6 loopback is also is_reserved — must still pass
+        "http://localhost:4000/v1",  # resolves to ::1 first on most hosts
         "http://100.119.239.8/",
     ):  # tailnet
         assert egress.check_url(ok, allow_private=True) is None, ok
@@ -249,7 +251,7 @@ def test_allow_private_permits_lan_but_blocks_metadata():
 
 def test_default_mode_still_blocks_all_private():
     # The model-probe path keeps the strict default — private + loopback blocked too.
-    for bad in ("http://10.0.0.5/", "http://127.0.0.1/", "http://169.254.169.254/"):
+    for bad in ("http://10.0.0.5/", "http://127.0.0.1/", "http://[::1]/", "http://169.254.169.254/"):
         assert egress.check_url(bad) is not None, bad
 
 
