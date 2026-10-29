@@ -3,6 +3,7 @@
 - Status: Proposed
 - Date: 2026-10-29
 - Deciders: Josh Mabry; protoAgent maintainers
+- Implementation: epic #4599 (E1 #4600, E2 #4601, E3 #4602, E4 #4603); not started.
 - Builds on: [ADR 0006](./0006-observability-and-the-self-improving-flywheel.md) (measure → surface → advise),
   [ADR 0012](./0012-eval-strategy-and-model-comparison.md) (side-effect-verified harness, sweeps, judge),
   [ADR 0107](./0107-unified-self-improvement-policy.md) (self-improvement policy).
@@ -121,13 +122,13 @@ traces, which is the raw material for both new cases (D5) and any later training
 
 ## Phases
 
-All in epic E (filed with this ADR):
+All in epic #4599:
 
-1. **E1** — Revive the suite and run it nightly: fix cases that rotted since 2026-08-19, add
+1. **E1 (#4600)** — Revive the suite and run it nightly: fix cases that rotted since 2026-08-19, add
    `tier`, the host schedule, the gate-regression friction entry, and `trace_id` in report rows (D1, D2).
-2. **E2** — Feedback: console thumbs, `/api/feedback`, `tracing.score_trace` (D3).
-3. **E3** — Friction joins its turn: `session_id`/`trace_id` on entries, the `friction` score (D4).
-4. **E4** — Per-instance cases and promote-to-case from a turn or friction entry (D5). Needs E2
+2. **E2 (#4601)** — Feedback: console thumbs, `/api/feedback`, `tracing.score_trace` (D3).
+3. **E3 (#4602)** — Friction joins its turn: `session_id`/`trace_id` on entries, the `friction` score (D4).
+4. **E4 (#4603)** — Per-instance cases and promote-to-case from a turn or friction entry (D5). Needs E2
    for the rated-turn path and E3 for the friction path.
 
 ## Consequences
