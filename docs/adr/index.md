@@ -136,3 +136,4 @@ retired behavior; follow linked guides and references for current procedures.
 | [0122](./0122-subscription-usage-model-and-routing.md) | Subscription usage model and routing: two sources into one cache, normalized windows, and unknown routes as today | Accepted (2026-10-21) |
 | [0123](./0123-forward-delegate-approvals-up-the-chain.md) | Forward delegate approvals up the delegation chain | Accepted (2026-10-25) |
 | [0124](./0124-per-caller-run-command-approval-policy.md) | Per-caller run_command approval policy for A2A callers | Proposed |
+| [0125](./0125-memory-knowledge-history-separation.md) | Separate memory, knowledge and history: three stores, per-layer tools, history never auto-injects | Proposed |
