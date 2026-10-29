@@ -22,9 +22,9 @@ translated to Anthropic's native form for ``anthropic-oauth`` (``ChatAnthropic``
 defaults instead of 502-ing — see :data:`_PARAM_DROPS` and :func:`convert_tool_choice`.
 
 Gating: it lives under ``/api``, so the operator bearer (``a2a_impl.auth``, default-deny) already
-guards it like every other operator route — no new trust surface. It is ADDITIONALLY loopback-only
-(403 off 127.0.0.1/::1): a passthrough that spends subscription tokens on an arbitrary prompt is a
-local developer tool, not something a remote console should reach.
+guards it like every other operator route. It is additionally loopback-only by default
+(403 off 127.0.0.1/::1). Operators can enable ``model_passthrough.allow_remote`` to accept
+remote callers; bearer auth still applies. The setting is read live on every request.
 
 Usage: the call is billed through the same telemetry row the non-streaming chat turn writes — the
 token counts come off a ``UsageMetadataCallbackHandler`` (the collector
@@ -388,12 +388,14 @@ def register_model_passthrough_routes(app) -> None:
         ``create_llm(<connection>:<model>).bind_tools(...).ainvoke(...)``, converted in and out
         of the OpenAI wire shape, so an eval can point at a subscription model (ADR 0097) the
         way it would point at OpenAI."""
-        if not _is_loopback(request.client.host if request.client else None):
+        cfg = STATE.graph_config
+        if not getattr(cfg, "model_passthrough_allow_remote", False) and not _is_loopback(
+            request.client.host if request.client else None
+        ):
             raise HTTPException(status_code=403, detail="model passthrough is loopback-only")
         if body.stream:
             raise HTTPException(status_code=400, detail="streaming is not supported; set stream:false")
 
-        cfg = STATE.graph_config
         if cfg is None:
             raise HTTPException(status_code=503, detail="config not loaded")
         conn = (connection or "").strip().lower()
