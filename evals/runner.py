@@ -50,6 +50,7 @@ sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
 from evals.client import AgentClient, TaskResult
 from evals import verify
+from evals.compare import _pct, resolve_tier
 
 
 @dataclass
@@ -64,6 +65,10 @@ class CaseResult:
     raw: dict = field(default_factory=dict)
     skipped: bool = False
     trace_id: str = ""
+    # Resolved eval tier (ADR 0126 D1): ``gate`` (deterministic, gates the
+    # nightly run) or ``tracked`` (LLM-judge, trend only). Stamped in
+    # ``run_one`` so every report row carries it.
+    tier: str = "gate"
 
 
 def _requirements_unmet(case: dict) -> str | None:
@@ -649,6 +654,9 @@ async def run_one(client: AgentClient, case: dict) -> CaseResult:
             False,
             f"exception: {e!r}",
         )
+    # Stamp the resolved tier on the row so the report can split gate/tracked
+    # (ADR 0126 D1). Done here, the single choke point every kind flows through.
+    result.tier = resolve_tier(case)
     if turn and not result.trace_id:
         try:
             result.trace_id = await client.trace_for_context(
@@ -681,6 +689,12 @@ def _print_board(results: list[CaseResult]) -> None:
     ran = len(results) - skip_count
     print(f"\n{pass_count}/{ran} passed" + (f" ({skip_count} skipped)" if skip_count else ""))
 
+    # Per-tier split, gate first — the gate pass rate is the headline (ADR 0126 D1).
+    tiers = _tier_totals(results)
+    for tier in sorted(tiers, key=lambda t: (0 if t == "gate" else 1, t)):
+        t = tiers[tier]
+        print(f"  {tier}: {t['passed']}/{t['total']} ({_pct(t['passed'], t['total'])})")
+
 
 def _save_report(results: list[CaseResult], path: Path, *, model: str = "", base_url: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -694,10 +708,44 @@ def _save_report(results: list[CaseResult], path: Path, *, model: str = "", base
         "total": len(results),
         "passed": sum(1 for r in results if r.passed and not r.skipped),
         "skipped": sum(1 for r in results if r.skipped),
+        # Per-tier passed/total/pass-rate (ADR 0126 D1). The gate figure is the
+        # headline; evals.report / evals.compare split the trend on this.
+        "tiers": _tier_totals(results),
         "results": [asdict(r) for r in results],
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"\nReport: {path}")
+
+
+def load_cases(path: Path) -> list[dict]:
+    """Read a tasks JSON file and validate every case's tier up front.
+
+    An unknown ``tier`` is a load-time error (naming the case) rather than a
+    silent miscount at report time — see :func:`evals.compare.resolve_tier`."""
+    cases = json.loads(Path(path).read_text(encoding="utf-8"))
+    for case in cases:
+        resolve_tier(case)  # raises ValueError naming the case on an unknown tier
+    return cases
+
+
+def _tier_totals(results: list[CaseResult]) -> dict[str, dict]:
+    """Per-tier ``{passed, total, pass_rate}`` over the non-skipped results.
+
+    Skipped cases (an unmet ``requires_env``) carry no pass/fail signal, so they
+    are excluded from both the numerator and the denominator — the gate pass
+    rate is the headline (ADR 0126 D1) and a skipped case should not move it."""
+    agg: dict[str, list[int]] = {}
+    for r in results:
+        if r.skipped:
+            continue
+        cell = agg.setdefault(r.tier or "gate", [0, 0])
+        cell[1] += 1
+        if r.passed:
+            cell[0] += 1
+    return {
+        tier: {"passed": p, "total": t, "pass_rate": round(p / t, 4) if t else 0.0}
+        for tier, (p, t) in agg.items()
+    }
 
 
 def select_by_ids(cases: list[dict], tasks_arg: str) -> tuple[list[dict], list[str]]:
@@ -737,7 +785,7 @@ async def main():
     args = p.parse_args()
 
     tasks_path = Path(args.tasks_file) if args.tasks_file else Path(__file__).parent / "tasks.json"
-    cases = json.loads(tasks_path.read_text())
+    cases = load_cases(tasks_path)
 
     if args.tasks:
         cases, unknown = select_by_ids(cases, args.tasks)
@@ -781,6 +829,7 @@ async def main():
                 passed=True,
                 detail=f"skipped: {skip}",
                 skipped=True,
+                tier=resolve_tier(case),
             )
         else:
             result = await run_one(client, case)

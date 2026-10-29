@@ -29,9 +29,22 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
-from evals.compare import _category_passed, _pct  # noqa: E402
+from evals.compare import _category_passed, _pct, _tiers_of  # noqa: E402
 
 _RESULTS_DIR = Path(__file__).parent / "results"
+
+
+def _tier_cell(tiers: dict[str, tuple[int, int]], tier: str) -> str:
+    """``p/t (pct)`` for a tier, or ``—`` when the run had no cases in it."""
+    p, t = tiers.get(tier, (0, 0))
+    return f"{p}/{t} ({_pct(p, t)})" if t else "—"
+
+
+def _gate_rate(rep: dict) -> float:
+    """Gate pass rate (the headline number, ADR 0126 D1); 0.0 when a run has no
+    gate cases so it sorts last rather than crashing."""
+    p, t = _tiers_of(rep).get("gate", (0, 0))
+    return p / t if t else 0.0
 
 
 def _load_runs(results_dir: Path) -> list[dict]:
@@ -76,52 +89,61 @@ def build_report(runs: list[dict], only_model: str | None = None) -> str:
 
     lines: list[str] = ["# Eval trend report", ""]
 
-    # Leaderboard: latest run per model, best overall first.
+    # Leaderboard: latest run per model, best GATE pass rate first — the gate is
+    # the headline number (ADR 0126 D1), so the board ranks and bolds it. Gate
+    # and tracked are shown apart; overall is kept alongside for continuity.
     latest = {m: reps[-1] for m, reps in by_model.items()}
     cats = sorted({c for rep in latest.values() for c in _category_passed(rep)})
     lines.append("## Leaderboard (latest run per model)")
     lines.append("")
-    lines.append("| Model | " + " | ".join(cats) + " | **Overall** | Latency | Tokens | Runs |")
-    lines.append("|" + "---|" * (len(cats) + 4))
-    ordered = sorted(
-        latest.items(),
-        key=lambda kv: (kv[1].get("passed", 0) / kv[1].get("total", 1)) if kv[1].get("total") else 0,
-        reverse=True,
+    lines.append(
+        "| Model | " + " | ".join(cats) + " | **Gate** | Tracked | Overall | Latency | Tokens | Runs |"
     )
+    # Columns: Model + categories + Gate + Tracked + Overall + Latency + Tokens + Runs.
+    lines.append("|" + "---|" * (len(cats) + 7))
+    ordered = sorted(latest.items(), key=lambda kv: _gate_rate(kv[1]), reverse=True)
     for model, rep in ordered:
         cper = _category_passed(rep)
         cells = []
         for c in cats:
             pp, tt = cper.get(c, (0, 0))
             cells.append(f"{pp}/{tt}" if tt else "—")
-        overall = (
-            f"**{rep.get('passed', 0)}/{rep.get('total', 0)} ({_pct(rep.get('passed', 0), rep.get('total', 0))})**"
-        )
+        tiers = _tiers_of(rep)
+        gp, gt = tiers.get("gate", (0, 0))
+        gate = f"**{gp}/{gt} ({_pct(gp, gt)})**" if gt else "—"
+        tracked = _tier_cell(tiers, "tracked")
+        overall = f"{rep.get('passed', 0)}/{rep.get('total', 0)} ({_pct(rep.get('passed', 0), rep.get('total', 0))})"
         lines.append(
             f"| `{model}` | "
             + " | ".join(cells)
-            + f" | {overall} | {_avg_latency(rep)}ms | {_avg_tokens(rep) or '—'} | {len(by_model[model])} |"
+            + f" | {gate} | {tracked} | {overall} | {_avg_latency(rep)}ms | {_avg_tokens(rep) or '—'} | {len(by_model[model])} |"
         )
     lines.append("")
 
-    # Per-model trend over time.
+    # Per-model trend over time — gate and tracked tracked apart, gate first and
+    # carrying the delta arrow since it is the number that gates the run.
     lines.append("## Trend (pass rate by run)")
     for model, reps in sorted(by_model.items()):
         lines.append("")
         lines.append(f"### `{model}`")
         lines.append("")
-        lines.append("| When | Pass | Rate | Report |")
-        lines.append("|---|---|---|---|")
+        lines.append("| When | Gate | Tracked | Overall | Report |")
+        lines.append("|---|---|---|---|---|")
         prev = None
         for rep in reps:
-            p, t = rep.get("passed", 0), rep.get("total", 0)
+            tiers = _tiers_of(rep)
+            gp, gt = tiers.get("gate", (0, 0))
             arrow = ""
             if prev is not None:
-                d = p - prev
+                d = gp - prev
                 arrow = " ▲" if d > 0 else (" ▼" if d < 0 else " ■")
-            prev = p
+            prev = gp
+            gate = f"{gp}/{gt} ({_pct(gp, gt)}){arrow}" if gt else f"—{arrow}"
+            tracked = _tier_cell(tiers, "tracked")
+            p, t = rep.get("passed", 0), rep.get("total", 0)
+            overall = f"{p}/{t} ({_pct(p, t)})"
             when = (rep.get("ts") or "")[:19].replace("T", " ")
-            lines.append(f"| {when} | {p}/{t}{arrow} | {_pct(p, t)} | `{rep.get('_file', '?')}` |")
+            lines.append(f"| {when} | {gate} | {tracked} | {overall} | `{rep.get('_file', '?')}` |")
     return "\n".join(lines)
 
 
