@@ -933,7 +933,14 @@ def get_all_tools(
 
         tools.extend(build_onboard_tools(graph_config))
     if knowledge_store is not None:
-        tools.extend(_build_memory_tools(knowledge_store, graph_config, background_mgr))
+        from runtime.state import STATE
+
+        # Reload publishes the new store after constructing the graph. Resolve it
+        # at invocation so tools cannot retain the previous instance's history.
+        tools.extend(_build_memory_tools(
+            knowledge_store, graph_config, background_mgr,
+            history_store_getter=lambda: STATE.history_store,
+        ))
     if scheduler is not None:
         tools.extend(_build_scheduler_tools(scheduler))
     if inbox_store is not None:

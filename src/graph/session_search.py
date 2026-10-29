@@ -296,3 +296,54 @@ def search_session_summaries(
         raise SessionSearchUnavailable(f"session search failed: {exc}") from exc
     finally:
         conn.close()
+
+
+def search_sessions(
+    query: str,
+    *,
+    history_store=None,
+    memory_dir: str | None = None,
+    limit: int = 5,
+    surface: str | None = None,
+    exclude_session_id: str = "",
+) -> list[dict]:
+    """Interleave independently ranked summary and history hits under one limit.
+
+    FTS scores from separate corpora aren't comparable. Preserve each source's
+    relevance order and alternate sources so both can be discovered.
+    """
+    kwargs = dict(memory_dir=memory_dir, limit=limit, surface=surface,
+                  exclude_session_id=exclude_session_id)
+    if history_store is None:
+        return search_session_summaries(query, **kwargs)
+    selected_surface = (surface or "").strip().lower()
+    if selected_surface and selected_surface not in SESSION_SEARCH_SURFACES:
+        raise ValueError(f"unknown surface {surface!r}; use one of: {', '.join(sorted(SESSION_SEARCH_SURFACES))}")
+    match = _match_query(query)
+    cap = max(1, min(int(limit), 20))
+    summaries = [dict(row, kind="session summary")
+                 for row in search_session_summaries(query, **kwargs)]
+    # The store accepts FTS syntax, not natural text. Filter before limiting:
+    # current-session hits must not crowd other sessions out of the result.
+    fetch_limit = cap
+    try:
+        while True:
+            entries = history_store.search(match, limit=fetch_limit)
+            eligible = [entry for entry in entries
+                        if entry.session_id != exclude_session_id
+                        and (not selected_surface or entry.surface == selected_surface)]
+            if len(eligible) >= cap or len(entries) < fetch_limit:
+                break
+            fetch_limit *= 2
+    except sqlite3.Error as exc:
+        raise SessionSearchUnavailable(f"history search failed: {exc}") from exc
+    history = [dict(session_id=entry.session_id, timestamp=entry.created_at,
+                    surface=entry.surface or "unknown", kind=entry.kind, entry_id=entry.id,
+                    excerpt=str(redact(strip_reasoning(entry.content)))[:500])
+               for entry in eligible[:cap]]
+    merged = []
+    for index in range(max(len(summaries), len(history))):
+        for rows in (summaries, history):
+            if index < len(rows):
+                merged.append(rows[index])
+    return merged[:cap]
