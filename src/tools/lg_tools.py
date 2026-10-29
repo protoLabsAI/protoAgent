@@ -169,7 +169,7 @@ def show_component(component: str, props: dict, title: str = "") -> str:
         props: table ``{"columns": [...], "rows": [[...]], "source"?}`` — pass ``source``
             (≤200 chars, where the rows came from) whenever rows aren't the user's own input;
             keyvalue ``{"items": [{"label": "…", "value": "…"}]}``; timeline ``{"steps":
-            [{"label": "…", "state": "done|active|todo", "detail"?: "…"}]}``.
+            [{"label": "…", "state": "done|active|todo", "detail": "…"}]}`` (``detail`` optional).
         title: optional heading.
     """
     from graph.components import COMPONENT_TYPES, encode_component

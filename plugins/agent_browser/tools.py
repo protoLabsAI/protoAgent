@@ -662,7 +662,8 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
         links: ref or CSS). Set `js_fallback=true` only when a click reports success but the
         page visibly does nothing: it re-clicks in-page only if the page looks unchanged, so an
         action with no visible effect (e.g. a background request) can run twice. With
-        `js_fallback`, use a LABEL or CSS selector — a `@eN` ref is refused."""
+        `js_fallback`, use a LABEL (form fields) or CSS selector (buttons/links) — a `@eN` ref is
+        refused."""
         # js_fallback mechanics: fingerprint the page, do the normal CLI click, re-fingerprint, and only
         # if nothing changed dispatch an in-page click (bubbling mousedown/mouseup + el.click()), reported
         # as `(JS fallback)`. Motivating case: the Greenhouse "Enter manually" button, custom controls
