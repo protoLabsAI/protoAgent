@@ -37,6 +37,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -62,6 +63,7 @@ class CaseResult:
     tokens: int = 0
     raw: dict = field(default_factory=dict)
     skipped: bool = False
+    trace_id: str = ""
 
 
 def _requirements_unmet(case: dict) -> str | None:
@@ -231,11 +233,8 @@ async def _run_prompt_case(
 
         since = verify.audit_now()
 
-        # An explicit ``context_id`` pins the A2A contextId (= the agent's
-        # session_id) for prompt cases too, not just goal cases — a suite that
-        # joins its cases against per-turn telemetry (evals.ptc_bench) needs a
-        # deterministic session key per case. Absent → the client's default
-        # per-call behavior, exactly as before.
+        # run_one supplies a fresh context unless the suite pins its own
+        # (e.g. evals.ptc_bench). A2A contextId is the telemetry session_id.
         ctx = case.get("context_id")
         if streaming:
             events, result = await client.stream(
@@ -263,6 +262,7 @@ async def _run_prompt_case(
                 f"task state={state}; error={error}",
                 duration_ms=duration,
                 raw={"text": text_preview},
+                trace_id=result.trace_id if result else "",
             )
 
         problems: list[str] = []
@@ -354,6 +354,7 @@ async def _run_prompt_case(
             duration_ms=result.duration_ms,
             tokens=result.usage.get("total_tokens", 0) or 0,
             raw={"reply": result.text[:300]},
+            trace_id=result.trace_id,
         )
     finally:
         # Teardown unconditionally — even when the task crashed or
@@ -368,6 +369,8 @@ async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
     then assert on the resulting goal state and the reply footer.
 
     Case schema (in addition to id/category/name):
+      - ``goal_setup: "operator"`` uses authenticated POST /api/goals (kick=false)
+        for privileged verifiers; the default keeps the /goal A2A command path.
       - ``set_goal``: the goal spec dict sent as ``/goal {json}`` (condition +
         verifier + optional max_iterations). Use deterministic ``command``
         verifiers (``"true"``/``"false"``) so the outcome is independent of
@@ -389,17 +392,26 @@ async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
         spec = case.get("set_goal")
         if not isinstance(spec, dict):
             return CaseResult(cid, cat, name, False, "case missing 'set_goal' spec")
-        set_reply = await client.ask("/goal " + json.dumps(spec), timeout_s=30, context_id=ctx)
-        if set_reply.state != "completed" or "goal set" not in set_reply.text.lower():
-            return CaseResult(
-                cid, cat, name, False, f"goal not set (state={set_reply.state}): {set_reply.text[:120]!r}"
-            )
+        if case.get("goal_setup") == "operator":
+            setup = await client.set_goal(ctx, spec)
+            if not setup.get("ok"):
+                return CaseResult(cid, cat, name, False, f"goal not set: {setup}")
+        else:
+            set_reply = await client.ask("/goal " + json.dumps(spec), timeout_s=30, context_id=ctx)
+            if set_reply.state != "completed" or "goal set" not in set_reply.text.lower():
+                return CaseResult(
+                    cid, cat, name, False, f"goal not set (state={set_reply.state}): {set_reply.text[:120]!r}",
+                    trace_id=set_reply.trace_id,
+                )
 
+        # The goal-setting command is a separate turn; only attribute the trigger.
+        case["_trace_since"] = datetime.now(UTC).isoformat()
         result = await client.ask(case["prompt"], timeout_s=case.get("timeout_s", 120), context_id=ctx)
         if result is None or result.state != "completed":
             state = result.state if result else "no-final-event"
             return CaseResult(
-                cid, cat, name, False, f"trigger state={state}; error={(result.error if result else None) or '(none)'}"
+                cid, cat, name, False, f"trigger state={state}; error={(result.error if result else None) or '(none)'}",
+                trace_id=result.trace_id if result else "",
             )
 
         problems: list[str] = []
@@ -436,6 +448,7 @@ async def _run_goal_case(client: AgentClient, case: dict) -> CaseResult:
             duration_ms=result.duration_ms,
             tokens=result.usage.get("total_tokens", 0) or 0,
             raw={"reply": result.text[:300]},
+            trace_id=result.trace_id,
         )
     finally:
         try:
@@ -621,16 +634,29 @@ async def run_one(client: AgentClient, case: dict) -> CaseResult:
             False,
             f"unknown kind: {case.get('kind')}",
         )
+    case = dict(case)
+    turn = case.get("kind", "ask") in {"ask", "stream", "goal"}
+    if turn:
+        case["context_id"] = case.get("context_id") or f"eval-{uuid.uuid4()}"
+    since = datetime.now(UTC).isoformat()
     try:
-        return await runner(client, case)
+        result = await runner(client, case)
     except Exception as e:
-        return CaseResult(
+        result = CaseResult(
             case["id"],
             case.get("category", "?"),
             case.get("name", "?"),
             False,
             f"exception: {e!r}",
         )
+    if turn and not result.trace_id:
+        try:
+            result.trace_id = await client.trace_for_context(
+                case["context_id"], since=case.get("_trace_since", since)
+            )
+        except Exception:
+            pass
+    return result
 
 
 # ── main ────────────────────────────────────────────────────────────────────

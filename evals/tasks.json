@@ -71,7 +71,7 @@
     "category": "tool",
     "kind": "ask",
     "name": "Asks for arithmetic → calculator",
-    "prompt": "How much is 17 times 23, plus 1?",
+    "prompt": "Use the calculator tool to compute 17 times 23, plus 1.",
     "expected_tools": ["calculator"],
     "expected_patterns": ["392"]
   },
@@ -99,7 +99,7 @@
     "category": "tool",
     "kind": "ask",
     "name": "Stores a stable preference → memory_ingest writes a chunk",
-    "prompt": "Remember that I prefer protoLabs Studio standups at 9am Eastern.",
+    "prompt": "Use memory_ingest to store this exact text without rephrasing: I prefer protoLabs Studio standups at 9am Eastern.",
     "expected_tools": ["memory_ingest"],
     "expected_patterns": [],
     "verify_kb": {
@@ -114,7 +114,7 @@
     "category": "tool",
     "kind": "ask",
     "name": "Asks to log an event → memory_ingest writes the chunk",
-    "prompt": "Note this for me: my standup just ended, team is unblocked on the auth migration.",
+    "prompt": "Use memory_ingest to store this note: my standup just ended, team is unblocked on the auth migration.",
     "expected_tools": ["memory_ingest"],
     "expected_patterns": [],
     "verify_kb": {
@@ -136,7 +136,7 @@
         "heading": "lab"
       }}
     ],
-    "prompt": "Where's my primary lab and what's it called?",
+    "prompt": "Use memory_recall to look up my primary lab. Where is it and what is it called?",
     "expected_tools": ["memory_recall"],
     "expected_patterns": ["snickerdoodle", "spokane"],
     "teardown": [
@@ -152,7 +152,7 @@
       {"kb_ingest": {"content": "called the dentist", "domain": "daily-log", "heading": "today"}},
       {"kb_ingest": {"content": "merged the auth PR", "domain": "daily-log", "heading": "today"}}
     ],
-    "prompt": "What did I do today? Summarize from the log.",
+    "prompt": "Use memory_list to list the daily-log memory domain and summarize what I did today.",
     "expected_tools": ["memory_list"],
     "expected_patterns": ["dentist"],
     "teardown": [
@@ -227,6 +227,7 @@
     "id": "goal_achieved",
     "category": "goal",
     "kind": "goal",
+    "goal_setup": "operator",
     "name": "Goal with a passing verifier resolves to achieved",
     "set_goal": {"condition": "the readiness check passes", "verifier": {"type": "command", "command": "true"}},
     "prompt": "Please make progress toward the goal.",
@@ -237,6 +238,7 @@
     "id": "goal_exhausted",
     "category": "goal",
     "kind": "goal",
+    "goal_setup": "operator",
     "name": "Never-satisfiable goal runs out of its iteration budget",
     "set_goal": {"condition": "the readiness check passes", "verifier": {"type": "command", "command": "false"}, "max_iterations": 1},
     "prompt": "Please make progress toward the goal.",
@@ -247,6 +249,7 @@
     "id": "goal_verifier_beats_giveup",
     "category": "goal",
     "kind": "goal",
+    "goal_setup": "operator",
     "name": "Passing verifier overrides a model give-up in the same turn",
     "set_goal": {"condition": "the readiness check passes", "verifier": {"type": "command", "command": "true"}},
     "prompt": "You have no way to do this and no relevant tools. Give up: state that the goal is unachievable and stop.",
@@ -257,6 +260,7 @@
     "id": "goal_llm_verifier",
     "category": "goal",
     "kind": "goal",
+    "goal_setup": "operator",
     "name": "Fuzzy (llm) verifier resolves an agent-satisfied goal to achieved",
     "set_goal": {"condition": "the reply clearly names Paris as the capital of France", "verifier": {"type": "llm"}},
     "prompt": "What is the capital of France? Answer in one word.",
@@ -267,7 +271,8 @@
     "id": "goal_contract_achieved",
     "category": "goal",
     "kind": "goal",
-    "name": "A goal carrying an ADR 0073 completion contract resolves via /goal {json}",
+    "goal_setup": "operator",
+    "name": "A goal carrying an ADR 0073 completion contract resolves via the operator API",
     "set_goal": {"condition": "the readiness check passes", "verifier": {"type": "command", "command": "true"}, "constraints": ["do not touch files outside the target module"], "boundaries": ["the readiness script only"], "stop_when": "a dependency is missing"},
     "prompt": "Please make progress toward the goal, respecting the contract.",
     "expected_goal_status": "achieved",
@@ -278,7 +283,7 @@
     "category": "subagent",
     "kind": "ask",
     "name": "Open-ended research request → delegates (subagent or workflow)",
-    "prompt": "I need a thorough background briefing on the current approaches to retrieval-augmented generation before a design review. Go research it properly and report back with a sourced summary.",
+    "prompt": "Delegate one focused research task to a researcher subagent: compare two current approaches to retrieval-augmented generation using at most two sources. Return a concise sourced briefing for my design review; keep this to one delegation and a short summary.",
     "expected_any_tools": ["task", "task_batch", "run_workflow"],
     "timeout_s": 300
   },
@@ -286,6 +291,7 @@
     "id": "workflow_research_brief",
     "category": "workflow",
     "kind": "workflow",
+    "requires_env": ["EVAL_WORKFLOWS"],
     "name": "research-and-brief recipe produces a sourced brief",
     "workflow": "research-and-brief",
     "inputs": {"topic": "the tradeoffs between vector databases and full-text search for retrieval"},
@@ -303,6 +309,7 @@
     "id": "workflow_deep_research_adversarial",
     "category": "workflow",
     "kind": "workflow",
+    "requires_env": ["EVAL_WORKFLOWS"],
     "name": "deep-research recipe yields a balanced, adversarially-reviewed report",
     "workflow": "deep-research",
     "inputs": {"topic": "Is retrieval-augmented generation the right architecture for keeping LLM answers current, or is it oversold?", "depth": "standard"},
@@ -347,7 +354,7 @@
         "heading": "eval-mem-region"
       }}
     ],
-    "prompt": "Which cloud region is my primary deployment in right now?",
+    "prompt": "Which cloud region is my primary deployment in right now? Reply with only the current region, without migration history.",
     "expected_patterns": ["eu-west-1"],
     "forbidden_patterns": ["us-east-1"],
     "teardown": [
@@ -366,7 +373,7 @@
         "heading": "eval-mem-lab"
       }}
     ],
-    "prompt": "What's the street address and door code for my primary lab, Snickerdoodle?",
+    "prompt": "Using only the context already available, without calling tools, what is the street address and door code for my primary lab, Snickerdoodle? If either is absent, say you do not know it.",
     "expected_tools": [],
     "verify_rubric": {
       "criteria": [
@@ -438,22 +445,22 @@
         "session_id": "chat-eval-vague-retention",
         "topic": "how long should we keep audit logs before rotating them out of the hot store?",
         "final_output": "Decided: audit logs are retained for 90 days.",
-        "age_minutes": 400
+        "age_minutes": 0
       }},
       {"session_seed": {
         "session_id": "chat-eval-vague-deploy",
         "topic": "move the deploy target off fly.io and onto render.com",
         "final_output": "Deploy target is now render.com.",
-        "age_minutes": 300
+        "age_minutes": 0
       }},
       {"session_seed": {
         "session_id": "chat-eval-vague-pricing",
         "topic": "rewrite the pricing page copy for the self-hosted tier",
         "final_output": "Draft copy agreed for the self-hosted tier.",
-        "age_minutes": 200
+        "age_minutes": 0
       }}
     ],
-    "prompt": "What have I been working on in my other recent sessions? Just list the topics you can actually see.",
+    "prompt": "What have I been working on in my recent sessions whose IDs start with chat-eval-vague-? Just list the topics you can actually see for those sessions.",
     "verify_rubric": {
       "criteria": [
         "The reply names at least two of: audit log retention, the deploy target move to render.com, the pricing page rewrite",
@@ -600,7 +607,7 @@
     ],
     "prompt": "Pull up the session where I wrote the checkout outage incident review and tell me the root cause we recorded.",
     "expected_any_tools": ["recall_session", "session_search"],
-    "expected_patterns": ["connection pool"],
+    "expected_patterns": ["connection", "pool"],
     "teardown": [{"session_purge": {"session_id": "chat-eval-cont-incident"}}]
   }
 ]

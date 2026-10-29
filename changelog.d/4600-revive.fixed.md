@@ -1,0 +1,1 @@
+- **Eval cases run against current dev instances and report turn traces (#4600).** Repair goal setup on the authenticated operator API, clarify tool probes, tolerate hyphenated replies, and extract structured rubric text. Reports prefer A2A trace IDs with a bounded telemetry fallback; unavailable tracing never changes a verdict.
