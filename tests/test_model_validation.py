@@ -36,14 +36,14 @@ def test_auth_error_strips_token_hash_and_key(monkeypatch):
 
     ok, err = config_io.validate_model_connection("https://8.8.8.8/v1", "sk-bogus", "m")
     assert ok is False
-    # The actionable cause survives…
-    assert "Authentication Error" in err
+    # The actionable hint replaces upstream detail…
+    assert "The endpoint rejected the key. Check the API key." in err
     # …but nothing secret/internal leaks.
     for leak in ("Key Hash", "sk-...-xxx", "LiteLLM_VerificationTokenTable", "Unable to find token"):
         assert leak not in err, f"leaked {leak!r} in {err!r}"
 
 
-def test_clean_gateway_message_passes_through(monkeypatch):
+def test_gateway_message_is_not_echoed(monkeypatch):
     import httpx
 
     monkeypatch.setattr(
@@ -53,7 +53,7 @@ def test_clean_gateway_message_passes_through(monkeypatch):
     )
     ok, err = config_io.validate_model_connection("https://8.8.8.8/v1", "bad", "m")
     assert ok is False
-    assert "expected to start with 'sk-'" in err
+    assert err == "HTTP 400"
 
 
 def _client_returning(resp: _FakeResp):
