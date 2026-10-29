@@ -2,8 +2,9 @@
 
 Stores a thumbs rating in the telemetry store's ``feedback`` table and mirrors it into
 Langfuse via the bd-1cky.1 ``tracing.score_trace`` helper (faked here). Covers store +
-score, replace, un-rate, incognito refusal, the no-trace_id (stored, not scored) path, and
-the GET join that hands the console a session's per-turn trace_ids + current ratings.
+score, replace (one upserted score, not two), un-rate (local row AND Langfuse score
+removed), incognito refusal, the no-trace_id (stored, not scored) path, and the GET join
+that hands the console a session's per-turn trace_ids + current ratings.
 """
 
 from __future__ import annotations
@@ -13,24 +14,31 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from observability.telemetry_store import TelemetryStore
-from operator_api.feedback_routes import register_feedback_routes
+from operator_api.feedback_routes import _score_id, register_feedback_routes
 
 
-def _client(monkeypatch, store, scores, *, tracing_enabled=True):
+def _client(monkeypatch, store, scores, deletes=None, *, tracing_enabled=True):
     import runtime.state as rs
     from observability import tracing
 
+    deletes = [] if deletes is None else deletes
     monkeypatch.setattr(rs.STATE, "telemetry_store", store, raising=False)
     # Pin tracing so the GET's `tracing_enabled` is deterministic regardless of what a
     # sibling test or the ambient Langfuse env left on the module.
     monkeypatch.setattr(tracing, "is_enabled", lambda: tracing_enabled)
 
-    def _fake_score(trace_id, name, value, comment=""):
-        scores.append((trace_id, name, value, comment))
+    def _fake_score(trace_id, name, value, comment="", *, score_id=""):
+        # score_id is the turn's STABLE Langfuse score identity — recorded so a replace
+        # test can prove the second rating upserts the SAME score rather than stacking.
+        scores.append((trace_id, name, value, comment, score_id))
 
-    # The route does `from observability import tracing; tracing.score_trace(...)`, so
-    # patching the module attribute swaps in the fake for the in-function import too.
+    def _fake_delete(score_id):
+        deletes.append(score_id)
+
+    # The route does `from observability import tracing; tracing.<fn>(...)`, so patching
+    # the module attribute swaps in the fakes for the in-function imports too.
     monkeypatch.setattr(tracing, "score_trace", _fake_score)
+    monkeypatch.setattr(tracing, "delete_score", _fake_delete)
 
     app = FastAPI()
     register_feedback_routes(app)
@@ -76,8 +84,9 @@ def test_post_stores_row_and_scores_the_trace(monkeypatch, store):
     assert body["scored"] is True
     # Stored locally…
     assert _rating_for(store, "tr1") == 1
-    # …and mirrored to Langfuse as a user_feedback score on the past trace.
-    assert scores == [("tr1", "user_feedback", 1.0, "great answer")]
+    # …and mirrored to Langfuse as a user_feedback score on the past trace, pinned to the
+    # turn's deterministic score id (so a re-rating later upserts THIS score).
+    assert scores == [("tr1", "user_feedback", 1.0, "great answer", _score_id("tr1"))]
 
 
 def test_a_second_rating_replaces_the_first(monkeypatch, store):
@@ -92,14 +101,18 @@ def test_a_second_rating_replaces_the_first(monkeypatch, store):
     rows = [t for t in store.session_feedback("s1") if t["trace_id"] == "tr1"]
     assert len(rows) == 1
     assert rows[0]["rating"] == 0
-    # Each rating was scored; the second value reached Langfuse.
+    # Both ratings were written under the SAME Langfuse score id (down then up value), so
+    # Langfuse upserts the one user_feedback score — the second REPLACES the first there
+    # too, rather than leaving the trace with two contradictory ratings.
     assert [s[2] for s in scores] == [1.0, 0.0]
+    assert {s[4] for s in scores} == {_score_id("tr1")}
 
 
 def test_null_value_un_rates_and_deletes_the_row(monkeypatch, store):
     scores: list = []
+    deletes: list = []
     _seed_turn(store, task_id="t1", trace_id="tr1")
-    c = _client(monkeypatch, store, scores)
+    c = _client(monkeypatch, store, scores, deletes)
 
     c.post("/api/feedback", json={"session_id": "s1", "trace_id": "tr1", "value": 1})
     assert _rating_for(store, "tr1") == 1
@@ -108,8 +121,29 @@ def test_null_value_un_rates_and_deletes_the_row(monkeypatch, store):
     assert r.status_code == 200
     assert r.json()["rating"] is None
     assert r.json()["removed"] is True
+    assert r.json()["unscored"] is True
     # The row is gone — the turn reads as unrated again.
     assert _rating_for(store, "tr1") is None
+    # …and the mirrored Langfuse score was removed too (same id it was written under),
+    # so the trace no longer carries a stale user_feedback rating.
+    assert deletes == [_score_id("tr1")]
+
+
+def test_un_rating_an_untraced_turn_deletes_only_the_row(monkeypatch, store):
+    scores: list = []
+    deletes: list = []
+    # Tracing off and no trace_id — there is no Langfuse score to delete.
+    _seed_turn(store, task_id="t1", trace_id="")
+    c = _client(monkeypatch, store, scores, deletes, tracing_enabled=False)
+
+    c.post("/api/feedback", json={"session_id": "s1", "trace_id": "", "value": 0})
+    r = c.post("/api/feedback", json={"session_id": "s1", "trace_id": "", "value": None})
+    assert r.status_code == 200
+    assert r.json()["unscored"] is False
+    assert _rating_for(store, "") is None
+    # No trace to score and nothing to delete in Langfuse.
+    assert scores == []
+    assert deletes == []
 
 
 def test_incognito_session_is_refused_and_nothing_is_stored_or_scored(monkeypatch, store):
@@ -136,6 +170,20 @@ def test_missing_trace_id_is_stored_but_not_scored(monkeypatch, store):
     # Stored locally against the session's empty-trace key…
     assert _rating_for(store, "") == 0
     # …but score_trace was never called (no trace to score).
+    assert scores == []
+
+
+def test_rating_with_tracing_off_is_stored_but_not_scored(monkeypatch, store):
+    scores: list = []
+    # The turn HAS a trace_id, but tracing is currently off — the rating still stores,
+    # yet `scored` must not claim it reached Langfuse (score_trace would be a no-op).
+    _seed_turn(store, task_id="t1", trace_id="tr1")
+    c = _client(monkeypatch, store, scores, tracing_enabled=False)
+
+    r = c.post("/api/feedback", json={"session_id": "s1", "trace_id": "tr1", "value": 1})
+    assert r.status_code == 200
+    assert r.json()["scored"] is False
+    assert _rating_for(store, "tr1") == 1
     assert scores == []
 
 

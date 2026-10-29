@@ -1123,7 +1123,9 @@ def score_current_trace(name: str, value: float, comment: str = "") -> None:
         pass
 
 
-def score_trace(trace_id: str, name: str, value: float, comment: str = "") -> None:
+def score_trace(
+    trace_id: str, name: str, value: float, comment: str = "", *, score_id: str = ""
+) -> None:
     """Attach a numeric score to a PAST trace, identified by ``trace_id``.
 
     Unlike :func:`score_current_trace` (which scores the span active in THIS
@@ -1135,6 +1137,14 @@ def score_trace(trace_id: str, name: str, value: float, comment: str = "") -> No
         - ``friction`` (the friction plugin): a friction signal attributed back
           to the trace that produced it.
 
+    ``score_id`` pins the score's Langfuse identity. Langfuse upserts a score by
+    its id, so passing a STABLE id (e.g. derived from ``trace_id`` + ``name``)
+    makes a re-submission REPLACE the earlier score in place instead of stacking a
+    second one — and lets :func:`delete_score` later remove exactly that score.
+    Left empty (the default) the client auto-generates a fresh id per call, which
+    is the right behavior for scores that accumulate (one ``friction`` signal per
+    occurrence) rather than being overwritten.
+
     Goes through the v3 client's ``create_score(trace_id=...)`` and relies on
     the client's batching — no per-call flush. Same swallow-all contract as
     ``score_current_trace``: a silent no-op when tracing is disabled, when
@@ -1143,9 +1153,34 @@ def score_trace(trace_id: str, name: str, value: float, comment: str = "") -> No
     if not _enabled or _langfuse is None or not trace_id:
         return
     try:
-        _langfuse.create_score(
-            trace_id=trace_id, name=name, value=value, comment=comment
-        )
+        kwargs: dict[str, Any] = {
+            "trace_id": trace_id,
+            "name": name,
+            "value": value,
+            "comment": comment,
+        }
+        # Only forward score_id when the caller pinned one — an empty default must
+        # leave the call shape (and the auto-id behavior) exactly as it was.
+        if score_id:
+            kwargs["score_id"] = score_id
+        _langfuse.create_score(**kwargs)
+    except Exception:
+        pass
+
+
+def delete_score(score_id: str) -> None:
+    """Delete a score by its id — the inverse of a :func:`score_trace` call that pinned
+    that id. For un-rating: the ``/api/feedback`` endpoint drops a turn's thumbs score so
+    the trace stops carrying a stale ``user_feedback`` rating, not just the local row.
+
+    Goes through the client's score-delete endpoint directly (not the batched ingestion
+    queue). Same swallow-all contract as :func:`score_trace`: a silent no-op when tracing
+    is disabled, when ``score_id`` is empty, or on any client error. Never raises.
+    """
+    if not _enabled or _langfuse is None or not score_id:
+        return
+    try:
+        _langfuse.api.legacy.score_v1.delete(score_id)
     except Exception:
         pass
 

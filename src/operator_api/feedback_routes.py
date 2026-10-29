@@ -24,6 +24,7 @@ thumbs for it rather than guessing.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import timezone, datetime
 
 from fastapi import HTTPException
@@ -35,11 +36,23 @@ from runtime.state import STATE
 #: length so a pasted paragraph can't bloat the row (or the Langfuse score comment).
 _NOTE_MAX = 500
 
+#: The Langfuse score name this endpoint owns, one per rated turn (ADR 0126 D3).
+_SCORE_NAME = "user_feedback"
+
 
 def _clean_note(note: str | None) -> str:
     """One line, length-capped. ``split()``/join collapses every whitespace run (newlines
     included) to single spaces and strips the ends."""
     return " ".join((note or "").split())[:_NOTE_MAX]
+
+
+def _score_id(trace_id: str) -> str:
+    """The STABLE Langfuse score id for one turn's ``user_feedback`` rating, derived from
+    its ``trace_id``. A turn carries exactly one user_feedback score, so pinning the id to
+    the (trace_id, score-name) pair makes a re-rating UPSERT that single score in place —
+    the second rating replaces the first in Langfuse rather than stacking beside it — and
+    lets un-rating delete exactly it. SHA-1 hex: deterministic, ASCII, a valid score id."""
+    return hashlib.sha1(f"{trace_id}:{_SCORE_NAME}".encode()).hexdigest()
 
 
 class FeedbackRequest(BaseModel):
@@ -83,20 +96,34 @@ def register_feedback_routes(app) -> None:
         trace_id = (req.trace_id or "").strip()
         note = _clean_note(req.note)
         store = STATE.telemetry_store
+        # Resolved once per request against the live package attribute so the test's
+        # monkeypatch of tracing.{is_enabled,score_trace,delete_score} is seen, and so a
+        # sibling test that reloads the tracing module can't leave us on a stale object
+        # (protoAgent#176 — why every operator_api route imports observability inline).
+        from observability import tracing
 
-        # Un-rate: delete the local row (if the store is on). Nothing to score.
+        # Un-rate: delete the local row (if the store is on) AND drop the mirrored
+        # Langfuse score, so the trace stops carrying a stale user_feedback rating —
+        # clearing both halves, not just the local one. The Langfuse delete is keyed by
+        # the SAME deterministic score id the rating was written under, is a no-op when
+        # the turn was never traced (no trace_id) or tracing is off, and never raises.
         if req.value is None:
             removed = 0
             if store is not None:
                 removed = await asyncio.to_thread(
                     store.delete_feedback, session_id=session_id, trace_id=trace_id
                 )
+            unscored = False
+            if trace_id and tracing.is_enabled():
+                await asyncio.to_thread(tracing.delete_score, _score_id(trace_id))
+                unscored = True
             return {
                 "ok": True,
                 "session_id": session_id,
                 "trace_id": trace_id or None,
                 "rating": None,
                 "removed": bool(removed),
+                "unscored": unscored,
             }
 
         # Store/replace the local row (best-effort — the store can be off on an instance
@@ -113,15 +140,21 @@ def register_feedback_routes(app) -> None:
             )
 
         # Mirror into Langfuse as a user_feedback score on the turn's PAST trace — the
-        # bd-1cky.1 helper, reused. Only when a trace_id is present: a turn with no trace
-        # (tracing off) has no row to score. The helper is itself a no-op when tracing is
-        # disabled, so the guard here is what makes "no trace_id → not scored" exact.
+        # bd-1cky.1 helper, reused (no second scoring helper), PINNED to a deterministic
+        # score id so re-rating the same turn REPLACES the one score in place instead of
+        # adding a second, contradictory one. Only when a trace_id is present AND tracing
+        # is live: a turn with no trace (tracing off) has nothing to score, and reporting
+        # `scored` true when score_trace is a no-op would wrongly claim the rating reached
+        # Langfuse.
         scored = False
-        if trace_id:
-            from observability import tracing
-
+        if trace_id and tracing.is_enabled():
             await asyncio.to_thread(
-                tracing.score_trace, trace_id, "user_feedback", float(req.value), note
+                tracing.score_trace,
+                trace_id,
+                _SCORE_NAME,
+                float(req.value),
+                note,
+                score_id=_score_id(trace_id),
             )
             scored = True
 
