@@ -122,6 +122,37 @@ def test_summary_is_stable_across_nights_for_the_same_case():
     assert s1 == s2 == ["calc"]
 
 
+def test_record_returns_empty_when_recorder_unavailable(monkeypatch):
+    # Friction plugin not importable → record nothing, but this must NOT be read as
+    # "no regressions" by the caller (main() gates on the regressions found, not this).
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: None)
+    prev = _report([_row("calc", True)])
+    curr = _report([_row("calc", False)])
+    assert nightly.record_regressions(nightly.gate_regressions(prev, curr), "r") == []
+
+
+def test_record_skips_cases_the_recorder_rejects():
+    # record_service returns "" when the write is rejected/fails; that case is attempted
+    # but not counted as recorded, so the caller can't claim a write that never landed.
+    prev = _report([_row("calc", True), _row("search", True)])
+    curr = _report([_row("calc", False), _row("search", False)])
+
+    class _RejectingRecorder:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, *a, **k):
+            self.calls += 1
+            return "" if self.calls == 1 else "harness:row"  # first write rejected
+
+    rec = _RejectingRecorder()
+    written = nightly.record_regressions(
+        nightly.gate_regressions(prev, curr), "r", recorder=rec, trace_link=_fake_link
+    )
+    assert rec.calls == 2  # both regressions attempted
+    assert written == ["search"]  # only the one the ledger took counts (calc rejected)
+
+
 def test_pass_to_pass_records_nothing():
     prev = _report([_row("calc", True)])
     curr = _report([_row("calc", True)])
@@ -275,3 +306,93 @@ def test_load_nightly_reports_sorted_oldest_first(tmp_path):
         )
     loaded = nightly.load_nightly_reports(tmp_path)
     assert [r["nightly_ts"] for r in loaded] == [100, 200, 300]
+
+
+# ── main() gating (offline: the sweep and the friction recorder are faked) ───────
+
+
+def _seed_nightly(dirp: Path, rows: list[dict], *, nightly_ts: int) -> None:
+    (dirp / f"run-nightly-{nightly_ts}.json").write_text(
+        json.dumps(_report(rows, nightly_ts=nightly_ts)), encoding="utf-8"
+    )
+
+
+def _fake_sweep(dirp: Path, rows: list[dict]):
+    """A run_sweep stand-in: writes one run-sweep-*.json (as evals.sweep would, into the
+    same results dir) and returns its path — no agent boot, no subprocess, no network."""
+
+    def run_sweep(model, *, port_base, results_dir):
+        p = results_dir / "run-sweep-999-vendor-m.json"
+        p.write_text(json.dumps(_report(rows)), encoding="utf-8")
+        return p
+
+    return run_sweep
+
+
+def test_main_exits_one_on_regression_even_when_friction_unavailable(tmp_path, monkeypatch, capsys):
+    # The gate verdict must be the regressions FOUND, not the ids recorded: a real gate
+    # regression with the friction plugin unreachable still fails the night (exit 1) and
+    # must never print "no gate regressions".
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly, "_default_trace_link", _fake_link)
+    _seed_nightly(tmp_path, [_row("calc", True)], nightly_ts=1)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("calc", False, trace_id="tr")]))
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: None)  # plugin not importable
+
+    rc = nightly.main(["--model", "vendor/m"])
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "no gate regressions" not in out
+    assert "REGRESSED calc" in out
+
+
+def test_main_records_one_friction_and_exits_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly, "_default_trace_link", _fake_link)
+    _seed_nightly(tmp_path, [_row("calc", True), _row("search", True)], nightly_ts=1)
+    monkeypatch.setattr(
+        nightly, "run_sweep", _fake_sweep(tmp_path, [_row("calc", False, trace_id="tr-calc"), _row("search", True)])
+    )
+    rec = _FakeRecorder()
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: rec)
+
+    rc = nightly.main(["--model", "vendor/m"])
+
+    assert rc == 1
+    assert len(rec.calls) == 1
+    assert rec.calls[0]["summary"] == "nightly gate regression: calc"
+    assert rec.calls[0]["source"] == "evals-nightly"
+    assert "https://lf.example/project/p/traces/tr-calc" in rec.calls[0]["detail"]
+
+
+def test_main_exits_zero_and_records_nothing_when_gate_holds(tmp_path, monkeypatch):
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    _seed_nightly(tmp_path, [_row("calc", True)], nightly_ts=1)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("calc", True)]))
+    rec = _FakeRecorder()
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: rec)
+
+    rc = nightly.main(["--model", "vendor/m"])
+
+    assert rc == 0
+    assert rec.calls == []
+
+
+def test_main_first_run_records_a_baseline_and_exits_zero(tmp_path, monkeypatch):
+    # No previous nightly to compare → baseline only, nothing gated or recorded.
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("calc", False, trace_id="t")]))
+    rec = _FakeRecorder()
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: rec)
+
+    rc = nightly.main(["--model", "vendor/m"])
+
+    assert rc == 0
+    assert rec.calls == []
+
+
+def test_main_exits_one_when_sweep_produced_no_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly, "run_sweep", lambda *a, **k: None)
+    assert nightly.main(["--model", "vendor/m"]) == 1

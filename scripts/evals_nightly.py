@@ -220,7 +220,7 @@ def record_regressions(
         detail = f"report: {report_path}"
         if link:
             detail += f"\ntrace: {link}"
-        recorder(
+        row_id = recorder(
             FRICTION_KIND,
             f"nightly gate regression: {cid}",
             detail,
@@ -228,7 +228,14 @@ def record_regressions(
             source=FRICTION_SOURCE,
             trace_id=trace_id,
         )
-        written.append(cid)
+        # record_service returns "" when it rejects the input or the write fails; only
+        # count a case as recorded when the ledger actually took it, so the caller's
+        # "recorded as friction" line can't claim a write that never landed. The gate
+        # verdict does NOT depend on this — main() gates on the regressions found.
+        if row_id:
+            written.append(cid)
+        else:
+            print(f"  ! friction write did not persist for {cid}", file=sys.stderr)
     return written
 
 
@@ -316,7 +323,12 @@ def run_sweep(model: str, *, port_base: int, results_dir: Path) -> Path | None:
     return the per-model report it wrote, or ``None`` if the sweep produced none.
 
     The new ``run-sweep-*.json`` is found by diffing the results dir around the
-    run, so the sweep's self-chosen timestamp doesn't have to be guessed."""
+    run, so the sweep's self-chosen timestamp doesn't have to be guessed.
+    ``results_dir`` must be the directory ``evals.sweep`` actually writes into —
+    ``evals/results`` (== :data:`_RESULTS_DIR`). ``evals.sweep`` takes no output-dir
+    flag; it hardcodes that location, so the nightly does not offer a ``--results-dir``
+    override that the sweep would silently ignore (which would make the before/after
+    glob miss every report and mis-report 'no report' without ever gating)."""
     before = set(results_dir.glob("run-sweep-*.json"))
     cmd = [
         sys.executable,
@@ -337,7 +349,6 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", default=None, help="model to sweep (default: the default config's model.name)")
     p.add_argument("--port-base", type=int, default=7990, help="port for the throwaway sweep agent")
-    p.add_argument("--results-dir", default=str(_RESULTS_DIR), help="where reports live")
     p.add_argument(
         "--dry-run",
         action="store_true",
@@ -345,7 +356,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = p.parse_args(argv)
 
-    results_dir = Path(args.results_dir)
+    # Fixed to where evals.sweep writes its run-sweep-*.json — evals/results. The nightly
+    # globs the sweep output, marks it, and loads the comparison window all from this one
+    # directory; there is no override, because evals.sweep ignores one (see run_sweep).
+    results_dir = _RESULTS_DIR
     results_dir.mkdir(parents=True, exist_ok=True)
 
     if args.dry_run:
@@ -381,16 +395,26 @@ def main(argv: list[str] | None = None) -> int:
     # nightly is the one before it (if any).
     prev = nightlies[-2] if len(nightlies) >= 2 else None
 
-    recorded: list[str] = []
+    regressions: list[dict] = []
     if prev is None:
         print("no previous nightly — recording a baseline, gating nothing this run")
     else:
+        # The gate verdict is the set of regressions FOUND, not the set recorded: if the
+        # friction plugin can't be reached the night still failed and must read as failed,
+        # so recording is a (reported) side effect that never flips the headline or exit code.
         regressions = gate_regressions(prev, curr)
-        recorded = record_regressions(regressions, report_path)
-        if recorded:
-            print(f"gate regressions vs {prev['_file']}: {len(recorded)} recorded as friction ({FRICTION_SOURCE}):")
-            for cid in recorded:
-                print(f"  REGRESSED {cid} → friction 'nightly gate regression: {cid}'")
+        if regressions:
+            recorded = record_regressions(regressions, report_path)
+            reg_ids = [str(r.get("id")) for r in regressions]
+            print(f"gate regressions vs {prev['_file']}: {len(regressions)} ({', '.join(reg_ids)})")
+            for cid in reg_ids:
+                if cid in recorded:
+                    print(f"  REGRESSED {cid} → friction 'nightly gate regression: {cid}' ({FRICTION_SOURCE})")
+                else:
+                    print(f"  REGRESSED {cid} — NOT recorded as friction (plugin unavailable or write failed)")
+            missed = len(regressions) - len(recorded)
+            if missed:
+                print(f"  ! {missed} regression(s) could not be recorded as friction — gate still fails", file=sys.stderr)
         else:
             print(f"no gate regressions vs {prev['_file']}")
 
@@ -399,8 +423,10 @@ def main(argv: list[str] | None = None) -> int:
         print(format_flakes(flakes))
 
     print("\nsee the gate/tracked split with:  python -m evals.report")
-    # Exit non-zero when the gate regressed, so a host scheduler can surface a failed run.
-    return 1 if recorded else 0
+    # Exit non-zero whenever the gate regressed — independent of whether the friction write
+    # landed — so a host scheduler surfaces the failed night even if the friction plugin or
+    # its ledger was unavailable.
+    return 1 if regressions else 0
 
 
 if __name__ == "__main__":
