@@ -18,6 +18,9 @@ redaction is scoped to media paths on purpose.
 Core server startup installs it (``server/__init__.py``) before uvicorn serves, so it runs
 regardless of which plugins are enabled; the artifact plugin keeps a thin shim that delegates
 here so there is a single implementation.
+
+The same installer quiets successful console polling reads with a second filter,
+after redaction; errors and state-changing requests retain their access-log level.
 """
 
 from __future__ import annotations
@@ -33,6 +36,24 @@ _REDACT_PARAMS = re.compile(r"([?&](?:sig|t|ticket|token)=)[^&#\s\"]*")
 # Only touch paths that name a media route. ``/media/`` is a substring of all three link shapes
 # (``/media/``, ``/agents/<slug>/media/``, ``/plugins/artifact/media/``), so one marker covers them.
 _MEDIA_MARK = "/media/"
+
+# Console polling reads (apps/web/src/lib/queries.ts and lib/api/).
+_POLL_PATH_PREFIXES = (
+    "/healthz",
+    "/api/runtime/status",
+    "/api/runtime/node",
+    "/api/runtime/python",
+    "/api/background",
+    "/api/activity",
+    "/api/inbox",
+    "/api/config/setup-status",
+    "/api/fleet",
+    "/api/secrets/status",
+    "/api/plugins/workflows/runs",
+    "/api/plugins/installed",
+    "/api/scheduler/jobs",
+    "/api/usage",
+)
 
 
 def redact(text: str) -> str:
@@ -56,12 +77,36 @@ class MediaRedactFilter(logging.Filter):
         return True
 
 
+class PollingAccessFilter(logging.Filter):
+    """Quiet successful console polls, while preserving mutations and failures."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not isinstance(record.args, tuple) or len(record.args) != 5:
+            return True
+        _, method, full_path, _, status = record.args
+        if method not in ("GET", "HEAD") or not isinstance(full_path, str):
+            return True
+        if not isinstance(status, int) or status >= 400:
+            return True
+        path = full_path.partition("?")[0]
+        if not any(path == prefix or path.startswith(prefix + "/") for prefix in _POLL_PATH_PREFIXES):
+            return True
+        record.levelno = logging.DEBUG
+        record.levelname = "DEBUG"
+        # Logger levels are checked BEFORE filters; enforce the new level ourselves.
+        return logging.getLogger(record.name).getEffectiveLevel() <= logging.DEBUG
+
+
 def install(logger_name: str = "uvicorn.access", *, filter_cls: type[logging.Filter] = MediaRedactFilter) -> None:
-    """Attach ``filter_cls`` to ``logger_name`` once (idempotent — never a second copy).
+    """Attach redaction and polling filters to ``logger_name`` once each.
 
     Idempotency keys on the filter class NAME, so re-running install (or an artifact-plugin
     router rebuild that installs its back-compat subclass) never stacks duplicates."""
     lg = logging.getLogger(logger_name)
     name = filter_cls.__name__
     if not any(type(f).__name__ == name for f in lg.filters):
-        lg.addFilter(filter_cls())
+        # Redact before a polling filter can discard the record, including when a
+        # compatibility subclass is installed after the core filters.
+        lg.filters.insert(0, filter_cls())
+    if not any(type(f).__name__ == PollingAccessFilter.__name__ for f in lg.filters):
+        lg.addFilter(PollingAccessFilter())

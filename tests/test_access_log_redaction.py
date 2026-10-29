@@ -14,11 +14,78 @@ from __future__ import annotations
 import logging
 
 import httpx
+import pytest
 
 from graph.fleet import proxy
 from infra import access_log_redact
 
 _UVICORN_FMT = '%s - "%s %s HTTP/%s" %d'  # uvicorn's AccessFormatter record shape
+
+
+@pytest.fixture
+def polling_logger(monkeypatch):
+    lg = logging.getLogger("test.access_log_redaction.polling")
+    monkeypatch.setattr(lg, "filters", [])
+    monkeypatch.setattr(lg, "level", logging.INFO)
+    access_log_redact.install(lg.name)
+    access_log_redact.install(lg.name)
+    assert len(lg.filters) == 2
+    return lg
+
+
+@pytest.mark.parametrize("path", access_log_redact._POLL_PATH_PREFIXES)
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize("level", [logging.INFO, logging.DEBUG])
+def test_successful_polls_are_debug(polling_logger, monkeypatch, path, method, level):
+    monkeypatch.setattr(polling_logger, "level", level)
+    rec = logging.LogRecord(
+        polling_logger.name, logging.INFO, __file__, 1, _UVICORN_FMT,
+        ("127.0.0.1:5", method, path + "?limit=10", "1.1", 200), None,
+    )
+    assert bool(polling_logger.filter(rec)) is (level == logging.DEBUG)
+    assert (rec.levelno, rec.levelname) == (logging.DEBUG, "DEBUG")
+
+
+@pytest.mark.parametrize("method,path,status", [
+    ("GET", "/api/runtime/status", 500),
+    ("HEAD", "/healthz", 400),
+    ("POST", "/api/runtime/status", 200),
+    ("DELETE", "/api/background/job-1", 200),
+    ("GET", "/api/chat", 200),
+    ("GET", "/api/runtime/status-other", 200),
+    ("GET", "/api/chat?next=/api/runtime/status", 200),
+])
+def test_other_access_records_stay_info(polling_logger, method, path, status):
+    rec = logging.LogRecord(
+        polling_logger.name, logging.INFO, __file__, 1, _UVICORN_FMT,
+        ("127.0.0.1:5", method, path, "1.1", status), None,
+    )
+    assert polling_logger.filter(rec)
+    assert (rec.levelno, rec.levelname) == (logging.INFO, "INFO")
+
+
+@pytest.mark.parametrize("level", [logging.INFO, logging.DEBUG])
+@pytest.mark.parametrize("path", ["/media/file", "/api/background/job/media/file"])
+def test_installed_filters_redact_even_dropped_polls(polling_logger, monkeypatch, level, path):
+    monkeypatch.setattr(polling_logger, "level", level)
+    rec = logging.LogRecord(
+        polling_logger.name, logging.INFO, __file__, 1, _UVICORN_FMT,
+        ("127.0.0.1:5", "GET", path + "?sig=secret", "1.1", 200), None,
+    )
+    kept = polling_logger.filter(rec)
+    assert bool(kept) is (path.startswith("/media/") or level == logging.DEBUG)
+    assert "secret" not in rec.getMessage()
+    assert "sig=…" in rec.getMessage()
+
+
+def test_poll_filter_preserves_preformatted_records(polling_logger):
+    rec = logging.LogRecord(
+        polling_logger.name, logging.INFO, __file__, 1,
+        "GET /media/file?sig=secret 200", (), None,
+    )
+    assert polling_logger.filter(rec)
+    assert rec.levelno == logging.INFO
+    assert "secret" not in rec.getMessage()
 
 
 def _format_access(path: str, status: int = 200) -> str:
