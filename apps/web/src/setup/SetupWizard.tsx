@@ -186,6 +186,44 @@ function isOAuthProvider(provider: string): boolean {
   return (OAUTH_PROVIDERS as readonly string[]).includes(provider);
 }
 
+// A connection test is bound to the exact inputs it ran against. The key folds the
+// provider/runtime axes and the three credential fields (trimmed) into one string: a
+// stored `tested` result whose key no longer matches the live inputs counts as "not
+// tested", so editing the endpoint/key/model/provider silently invalidates an earlier
+// pass or failure instead of letting a stale verdict unlock Next.
+export function testKey(
+  s: Pick<WizardState, "provider" | "runtimeKind" | "apiBase" | "apiKey" | "modelName">,
+): string {
+  return JSON.stringify([s.provider, s.runtimeKind, s.apiBase.trim(), s.apiKey.trim(), s.modelName.trim()]);
+}
+
+// Whether the brain step may advance (the Next gate), pulled out pure so it can be
+// unit-tested in isolation (#4562):
+//   • ACP (legacy) — the coding agent IS the brain; there's nothing here to gate.
+//   • gateway — needs an api_base + a model AND a passing test for the current inputs.
+//   • OAuth subscription — needs a model, a signed-in account, AND a passing test.
+// `tested` is the last probe result; it only counts when its key matches the live inputs,
+// so a verdict left over from earlier edits never unlocks Next.
+export function brainStepReady(args: {
+  runtimeKind: WizardState["runtimeKind"];
+  provider: string;
+  apiBase: string;
+  modelName: string;
+  signedIn: boolean;
+  currentKey: string;
+  tested: { ok: boolean; key: string } | null;
+}): boolean {
+  if (args.runtimeKind === "acp") return true;
+  const oauth = isOAuthProvider(args.provider);
+  const fieldsFilled = oauth
+    ? Boolean(args.modelName.trim())
+    : Boolean(args.apiBase.trim() && args.modelName.trim());
+  if (!fieldsFilled) return false;
+  // A subscription brain also needs the account signed in (ADR 0097).
+  if (oauth && !args.signedIn) return false;
+  return Boolean(args.tested && args.tested.ok && args.tested.key === args.currentKey);
+}
+
 // The brain step presents ONE choice with four cards; each maps to a (runtimeKind,
 // provider) pair. Keeping the two config axes separate underneath (ADR 0033/0047) while
 // the UI is a single "what's your brain?" pick.
@@ -261,9 +299,19 @@ export function SetupWizard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  // Result of the last "Test connection" probe (a real completion). null = not
-  // yet tested; invalidated whenever the key/base/model changes.
-  const [tested, setTested] = useState<null | { ok: boolean; error: string }>(null);
+  // Result of the last "Test connection" probe (a real completion). null = not yet
+  // tested. The `key` binds the verdict to the inputs it ran against (see testKey): a
+  // result whose key doesn't match the live inputs is treated as "not tested", so Next
+  // never unlocks on a stale pass.
+  const [tested, setTested] = useState<null | { ok: boolean; error: string; key: string }>(null);
+  // True while a connection test (manual or auto) is in flight — drives the "Testing
+  // connection…" indicator and the Test button spinner, kept separate from `busy` so an
+  // auto-test triggered by typing doesn't lock the whole step (Back/Probe).
+  const [testing, setTesting] = useState(false);
+  // The key of the most recently LAUNCHED test. A result is only applied / clears the
+  // spinner when it's still the active one, so a slow in-flight probe for older inputs
+  // can never overwrite the verdict for the newer inputs the user has moved on to.
+  const activeTestKey = useRef("");
   // Native OAuth lifecycle (ADR 0097 / #2460) — the SHARED hook Settings ▸ Model
   // also consumes, so wizard and Settings behavior can never drift. Wizard-specific
   // side effects (clear the stale model list so the new account's models fetch
@@ -327,10 +375,10 @@ export function SetupWizard({
     };
   }, [open]);
 
-  // A changed key/base/model/provider invalidates a prior connection test.
-  useEffect(() => {
-    setTested(null);
-  }, [state.apiBase, state.apiKey, state.modelName, state.provider]);
+  // A changed key/base/model/provider invalidates a prior connection test — handled by
+  // keying the `tested` verdict (testKey) rather than nulling it: a verdict whose key
+  // no longer matches the live inputs reads as "not tested" (see shownTest / canGoNext),
+  // which also lets an identical re-entry of the same inputs reuse a prior pass.
 
   // Switching the brain (provider or native↔acp) clears the stale model list + probe
   // marker so the new provider's models are fetched fresh.
@@ -348,19 +396,54 @@ export function SetupWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
+  // Brain step derived view (ADR 0097): the selected card + whether it's an OAuth
+  // provider + that provider's sign-in status. Derived up here (not just before render)
+  // because the Next gate below reads the sign-in state.
+  const brainKind = brainKindOf(state);
+  const oauthProvider = isOAuthProvider(state.provider) ? state.provider : "";
+  const oauthState = oauthProvider ? oauthStatus[oauthProvider] : undefined;
+
+  // The key the live inputs would test under, and the last verdict as it applies to
+  // THOSE inputs (null if the stored verdict was for different inputs).
+  const currentTestKey = testKey(state);
+  const shownTest = tested && tested.key === currentTestKey ? tested : null;
+
   const canGoNext = useMemo(() => {
-    // Brain step: ACP needs neither gateway nor model (the coding agent is the brain);
-    // an OAuth provider needs a model but no gateway/key; a gateway needs base + model.
+    // Brain step: a passing connection test now gates Next (#4562) — a gateway needs
+    // base + model + pass; an OAuth subscription needs model + signed-in + pass; ACP
+    // (legacy) advances freely. The rule lives in the pure brainStepReady.
     if (step === "brain") {
-      if (state.runtimeKind === "acp") return true;
-      if (isOAuthProvider(state.provider)) return Boolean(state.modelName.trim());
-      return Boolean(state.apiBase.trim() && state.modelName.trim());
+      return brainStepReady({
+        runtimeKind: state.runtimeKind,
+        provider: state.provider,
+        apiBase: state.apiBase,
+        modelName: state.modelName,
+        signedIn: Boolean(oauthState?.signed_in),
+        currentKey: currentTestKey,
+        tested,
+      });
     }
     // Set-up step: a blank name has nothing to call the agent. (The required-answer
     // gate, #2977, is applied at the Next button — it's derived further down.)
     if (step === "setup") return Boolean(state.agentName.trim());
     return true;
-  }, [state.apiBase, state.modelName, state.runtimeKind, state.provider, state.agentName, step]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.apiBase, state.modelName, state.runtimeKind, state.provider, state.agentName, oauthState?.signed_in, currentTestKey, tested, step]);
+
+  // A short reason shown under a disabled Next on the brain step (#4562) so the gate
+  // never looks broken — why can't I continue? ACP never blocks here.
+  const brainNextHint = ((): string => {
+    if (step !== "brain" || state.runtimeKind === "acp" || canGoNext) return "";
+    const oauth = isOAuthProvider(state.provider);
+    if (oauth && !oauthState?.signed_in) return "Sign in to continue.";
+    const fieldsFilled = oauth
+      ? Boolean(state.modelName.trim())
+      : Boolean(state.apiBase.trim() && state.modelName.trim());
+    if (!fieldsFilled) return oauth ? "Enter a model to continue." : "Enter an endpoint and model to continue.";
+    if (testing) return "Testing the connection…";
+    if (shownTest && !shownTest.ok) return "Connection failed — fix it to continue.";
+    return "Test the connection to continue.";
+  })();
 
   function update(patch: Partial<WizardState>) {
     setState((current) => ({ ...current, ...patch }));
@@ -420,10 +503,14 @@ export function SetupWizard({
 
   // The real auth check: a 1-token completion down the same path as chat, so a
   // bad key / wrong model is caught here in the UI rather than as a failed turn.
+  // Runs on the manual "Test connection" button AND the auto-test debounce below.
   async function testConnection() {
-    setBusy(true);
+    const key = testKey(state);
+    // Mark this the active test. A newer launch moves the marker, so a slow in-flight
+    // probe for older inputs is discarded instead of overwriting the newer verdict.
+    activeTestKey.current = key;
+    setTesting(true);
     setError("");
-    setTested(null);
     try {
       const r = await withTimeout(
         api.testModel(
@@ -437,13 +524,34 @@ export function SetupWizard({
         25000,
         "Test connection",
       );
-      setTested({ ok: r.ok, error: r.error || "" });
+      if (activeTestKey.current !== key) return; // superseded — don't apply a stale result
+      setTested({ ok: r.ok, error: r.error || "", key });
     } catch (exc) {
-      setTested({ ok: false, error: errMsg(exc) });
+      if (activeTestKey.current !== key) return;
+      setTested({ ok: false, error: errMsg(exc), key });
     } finally {
-      setBusy(false);
+      // Only the test that's still active owns the spinner — a superseded one leaves it
+      // to the newer launch so "Testing…" stays up across back-to-back edits.
+      if (activeTestKey.current === key) setTesting(false);
     }
   }
+
+  // Auto-test (#4562): once the required fields for a native brain are present, verify
+  // the connection automatically after an ~800ms debounce so Next unlocks without the
+  // user hunting for the Test button — and re-runs whenever those inputs change. A
+  // verdict already exists for the current inputs (pass OR fail) → skip, so a failing
+  // test isn't retried in a loop; the user changes something (new key) to re-probe.
+  useEffect(() => {
+    if (step !== "brain" || state.runtimeKind !== "native") return;
+    const oauth = isOAuthProvider(state.provider);
+    const ready = oauth
+      ? Boolean(state.modelName.trim() && oauthState?.signed_in)
+      : Boolean(state.apiBase.trim() && state.modelName.trim());
+    if (!ready || tested?.key === currentTestKey) return;
+    const timer = setTimeout(() => void testConnection(), 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, currentTestKey, oauthState?.signed_in, tested]);
 
   // Picking an archetype card seeds the editor with that archetype's base SOUL
   // — the same archetypes the fleet new-agent picker offers. The textarea stays
@@ -516,10 +624,6 @@ export function SetupWizard({
       : null;
   const personaLabel = pickedArchetype?.label ?? state.archetype;
   const pickedBundle = pickedArchetype?.bundle ?? null;
-  // Brain step derived view (ADR 0097): the selected card + whether it's an OAuth provider.
-  const brainKind = brainKindOf(state);
-  const oauthProvider = isOAuthProvider(state.provider) ? state.provider : "";
-  const oauthState = oauthProvider ? oauthStatus[oauthProvider] : undefined;
 
   async function finishSetup() {
     setBusy(true);
@@ -940,15 +1044,19 @@ export function SetupWizard({
                     </Button>
                     <TestConnectionButton
                       onClick={() => void testConnection()}
-                      pending={busy}
-                      disabled={!state.modelName.trim()}
+                      pending={testing}
+                      disabled={!state.modelName.trim() || testing}
                     />
                   </div>
-                  {tested ? (
-                    <Alert status={tested.ok ? "success" : "error"}>
-                      {tested.ok
+                  {testing ? (
+                    <Alert status="info">
+                      <Spinner size={15} /> Testing connection…
+                    </Alert>
+                  ) : shownTest ? (
+                    <Alert status={shownTest.ok ? "success" : "error"}>
+                      {shownTest.ok
                         ? "Connection OK — the model responded on your subscription."
-                        : `Connection failed — ${tested.error || "the model did not respond."}`}
+                        : `Connection failed — ${shownTest.error || "the model did not respond."}`}
                     </Alert>
                   ) : null}
                 </>
@@ -996,15 +1104,19 @@ export function SetupWizard({
                     </Button>
                     <TestConnectionButton
                       onClick={() => void testConnection()}
-                      pending={busy}
-                      disabled={!state.apiBase.trim() || !state.modelName.trim()}
+                      pending={testing}
+                      disabled={!state.apiBase.trim() || !state.modelName.trim() || testing}
                     />
                   </div>
-                  {tested ? (
-                    <Alert status={tested.ok ? "success" : "error"}>
-                      {tested.ok
+                  {testing ? (
+                    <Alert status="info">
+                      <Spinner size={15} /> Testing connection…
+                    </Alert>
+                  ) : shownTest ? (
+                    <Alert status={shownTest.ok ? "success" : "error"}>
+                      {shownTest.ok
                         ? "Connection OK — the model responded."
-                        : `Connection failed — ${tested.error || "the model did not respond."}`}
+                        : `Connection failed — ${shownTest.error || "the model did not respond."}`}
                     </Alert>
                   ) : null}
                 </>
@@ -1099,6 +1211,7 @@ export function SetupWizard({
               </Button>
             )}
           </div>
+          {brainNextHint ? <p className="setup-hint setup-next-hint">{brainNextHint}</p> : null}
         </section>
       </div>
     </div>

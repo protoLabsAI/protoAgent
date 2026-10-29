@@ -1219,6 +1219,14 @@ textarea {
   border-top: 1px solid var(--pl-color-border);
 }
 
+/* The "why is Next disabled" reason on the brain step (#4562): sits just under the
+   actions bar, aligned with the Next button on the right. */
+.setup-next-hint {
+  margin: 0;
+  padding: 0 18px var(--pl-space-4);
+  text-align: right;
+}
+
 /* The app `.spin` keyframe is retired — busy spinners now come from the DS
    (`<Button loading>` and `<Spinner>`, @protolabsai/ui ≥ 0.50). */
 
