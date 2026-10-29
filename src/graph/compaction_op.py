@@ -9,27 +9,27 @@ compaction would do nothing — this runs SERVER-SIDE against the checkpointer.
 The pass, for one thread:
 
 1. ``aget_state`` the current messages off the checkpoint.
-2. Render the **full** transcript and archive it into the searchable knowledge
-   store (``domain="conversation"``, ``namespace="chat-archive:<session_id>"``)
-   so nothing is lost — the raw history stays recallable via ``memory_recall``.
+2. Render the **full** transcript and archive it into the searchable history
+   store (``kind="archive"``, ``namespace="chat-archive:<session_id>"``)
+   so nothing is lost — the raw history stays recallable via ``recall_session``.
 3. Summarize the conversation with the cheap aux model.
 4. Rewrite the checkpoint to ``[RemoveMessage(REMOVE_ALL_MESSAGES), summary,
    *recent_tail]`` via ``aupdate_state`` — so the next turn carries the whole
    thread's context at a fraction of the token cost.
 
 **Never-lossy (hard invariant).** Compaction must never drop history it could
-not archive. If there is no knowledge store, or the archive write yields no
-chunks, or the summarizer produces nothing, we DO NOT touch the checkpoint and
+not archive. If there is no history store, or the archive write yields no
+entry, or the summarizer produces nothing, we DO NOT touch the checkpoint and
 return ``refused=True`` — the operator keeps their full, intact context.
 
 **Incognito (ADR 0069 D3b).** An incognito thread is never archived: the archive
-would put its transcript in the knowledge store, where RAG re-injects it. With
+would put its transcript in persistent history. With
 nothing archived, the never-lossy rule refuses the manual ``/compact``
 (``reason="incognito"``); the overflow safety valve still shrinks the thread,
 without an archive. "Incognito" is the checkpoint's channel, so a thread is as
 incognito as its latest turn — the same rule the retire harvest applies.
 
-The archive row carries ``source=<thread_id>`` and its messages' dates (#3493,
+The archive row carries ``thread_id=<thread_id>`` and its messages' dates (#3493,
 ``conversation_harvest.archive_payload``).
 
 **Message-boundary integrity (hard invariant).** The recent tail must never
@@ -40,7 +40,7 @@ safe-cut the auto-summarizer uses: if the naive cutoff lands on a
 kept together), summarizing slightly more rather than splitting a pair.
 
 Host-free and unit-testable: it takes the graph, checkpointer, knowledge store,
-and config as arguments (no ``STATE`` import), mirroring
+and config as arguments, with lazy runtime history resolution, mirroring
 ``conversation_harvest.harvest_thread``.
 """
 
@@ -50,7 +50,13 @@ import logging
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from graph.conversation_harvest import _default_summarizer, archive_payload, render_transcript
+from graph.conversation_harvest import (
+    _DEFAULT_HISTORY_STORE,
+    _default_summarizer,
+    archive_payload,
+    render_transcript,
+    resolve_history_store,
+)
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +130,7 @@ async def compact_thread(
     summarizer=_default_summarizer,
     keep_recent: int | None = None,
     force: bool = False,
+    history_store=_DEFAULT_HISTORY_STORE,
 ) -> dict:
     """Compact ``thread_id``'s live context: archive the raw transcript, summarize,
     then rewrite the checkpoint to ``[summary, *recent_tail]``.
@@ -163,12 +170,11 @@ async def compact_thread(
     # Never-lossy: no archive target ⇒ never touch the checkpoint. In force
     # mode the rewrite proceeds unarchived — loudly: the thread is unusable
     # until it shrinks, and that outranks purity on the safety-valve path.
-    if knowledge_store is None and not force:
+    history_store = resolve_history_store(history_store)
+    if history_store is None and not force:
         return _refused("no_store", kept=len(messages))
 
     import asyncio
-
-    from knowledge import add_document
 
     # Archive the FULL transcript (uncapped) so the raw history is recallable —
     # a capped render would silently drop the head we're about to remove. Dated from
@@ -193,12 +199,13 @@ async def compact_thread(
             # rather than drop un-archived history.
             return _refused("empty", kept=len(messages))
 
-    # add_document does blocking gateway work per chunk (embed + optional
-    # enrichment) — keep it off the event loop (mirrors conversation_harvest).
-    chunk_ids: list = []
-    if knowledge_store is not None and content.strip():
+    # Keep the SQLite archive write off the event loop.
+    # Keep the public archived_chunks count compatible: history writes one entry.
+    entry_ids: list = []
+    if history_store is not None and content.strip():
         try:
-            chunk_ids = await asyncio.to_thread(add_document, knowledge_store, content, **archive_kw)
+            entry_id = await asyncio.to_thread(history_store.add, content, **archive_kw)
+            entry_ids = [entry_id] if entry_id else []
         except Exception:
             if not force:
                 log.exception("[compact] archive failed for thread %s — refusing to rewrite", thread_id)
@@ -208,10 +215,10 @@ async def compact_thread(
                 "safety valve, ADR 0101 D5): the summarized-away history is NOT archived",
                 thread_id,
             )
-            chunk_ids = []
-    if not chunk_ids and not force:
+            entry_ids = []
+    if not entry_ids and not force:
         return _refused("empty_archive", kept=len(messages))
-    if not chunk_ids and force and not incognito:
+    if not entry_ids and force and not incognito:
         log.warning(
             "[compact] FORCE: proceeding without an archive for thread %s — the history "
             "removed by this rewrite is unrecoverable (overflow safety valve)",
@@ -228,20 +235,20 @@ async def compact_thread(
             # the checkpoint half-rewritten. Refuse (never-lossy) — the raw history stands
             # as a searchable archive and the live context is untouched.
             log.exception("[compact] summarize failed for thread %s — refusing to rewrite", thread_id)
-            return _refused("summary_error", kept=len(messages), archived=True, archived_chunks=len(chunk_ids))
+            return _refused("summary_error", kept=len(messages), archived=True, archived_chunks=len(entry_ids))
         log.exception("[compact] FORCE: summarize failed for thread %s — using a stub summary", thread_id)
         summary = ""
     if not summary:
         if not force:
             # We DID archive, but with no summary a rewrite would strip the context
             # thread — keep the full live context (archive stands as a searchable bonus).
-            return _refused("no_summary", kept=len(messages), archived=True, archived_chunks=len(chunk_ids))
+            return _refused("no_summary", kept=len(messages), archived=True, archived_chunks=len(entry_ids))
         # Safety valve: the thread MUST shrink. Say honestly that the summary is
         # missing rather than fake one.
         summary = (
             "(No summary is available — the earlier conversation was force-compacted after "
             "a context-window overflow."
-            + (" The full transcript is archived and searchable via memory recall.)" if chunk_ids else ")")
+            + (" The full transcript is archived and searchable via recall_session.)" if entry_ids else ")")
         )
 
     cut = _safe_cut_index(messages, keep)
@@ -255,8 +262,8 @@ async def compact_thread(
     from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
     archived_note = (
-        "the full transcript is archived and searchable via memory recall"
-        if chunk_ids
+        "the full transcript is archived and searchable via recall_session"
+        if entry_ids
         else "the removed history was NOT archived"  # force-mode honesty — never claim an archive that didn't happen
     )
     summary_msg = HumanMessage(
@@ -280,20 +287,20 @@ async def compact_thread(
     except Exception:  # noqa: BLE001 — trajectory is best-effort
         pass
     log.info(
-        "[compact] thread %s: archived %d chunk(s), removed %d msg(s), kept %d",
+        "[compact] thread %s: archived %d history entry(s), removed %d msg(s), kept %d",
         thread_id,
-        len(chunk_ids),
+        len(entry_ids),
         cut,
         len(recent_tail),
     )
     return {
         "summary": summary,
-        "archived_chunks": len(chunk_ids),
+        "archived_chunks": len(entry_ids),
         "kept": len(recent_tail),
         "removed": cut,
         # Honest under force mode: a rewrite CAN proceed unarchived there, and
         # the result must never claim an archive that didn't happen.
-        "archived": bool(chunk_ids),
+        "archived": bool(entry_ids),
         "refused": False,
         "reason": "",
     }

@@ -1,14 +1,4 @@
-"""Harvest a retired conversation into the searchable knowledge base.
-
-When a chat thread is retired — aged out by the checkpoint pruner, or explicitly
-deleted — we don't just drop it: we summarize it and ingest the summary into the
-``KnowledgeStore`` (FTS5 + embeddings), so the substance becomes searchable via
-``memory_recall`` while the bulky raw checkpoints are reclaimed. Save space,
-keep the signal.
-
-The summary is produced by the cheap aux model (``routing.aux_model``) — it's
-classification-grade work, not the main reasoning task.
-"""
+"""Archive conversations and retirement summaries in history; extract facts into memory."""
 
 from __future__ import annotations
 
@@ -21,6 +11,19 @@ from graph.output_format import extract_output
 from knowledge.store import FORGET_PENDING_PREFIX  # the store owns the marker format
 
 log = logging.getLogger(__name__)
+
+# Distinguish an omitted dependency from an explicitly unavailable store in tests.
+_DEFAULT_HISTORY_STORE = object()
+
+
+def resolve_history_store(store=_DEFAULT_HISTORY_STORE):
+    """Resolve at use time so initialization and reloads need no caller wiring."""
+    if store is _DEFAULT_HISTORY_STORE:
+        from runtime.state import STATE
+
+        return STATE.history_store
+    return store
+
 
 # Cap the transcript fed to the summarizer (keep the most recent tail).
 _MAX_TRANSCRIPT_CHARS = 16000
@@ -102,15 +105,12 @@ def archive_payload(
     cause: str = "",
     trailing_date: str | None = None,
 ) -> tuple[str, dict]:
-    """The compaction archive write: ``(content, add_document kwargs)``, shared by
+    """The compaction archive write: ``(content, HistoryStore.add kwargs)``, shared by
     auto-compaction and ``/compact``. ``content`` is ``""`` when nothing renders.
 
-    Provenance and dates (#3493). An archive used to carry only the compaction day
-    (``created_at``) and no ``source``, so a transcript from weeks earlier was recalled
-    as current. Now the row's ``source`` is the thread it came from, the heading names
-    the span of the messages' dates, and the content opens with that span. Each line also
-    carries its own day, so every chunk the store splits the transcript into still says
-    when it was written: recall shows a chunk's text and stored date, never its heading.
+    Provenance and dates (#3493): the row identifies its session and thread,
+    and records the known message date span. Each transcript line also carries
+    its own day; undated messages remain explicitly undated.
 
     ``trailing_date`` defaults to today (see :func:`message_dates`)."""
     today = _today()
@@ -143,12 +143,12 @@ def archive_payload(
     lead += f"; archived {today}]"
     prefix = f"{cause}, " if cause else ""
     return f"{lead}\n{transcript}", {
-        "domain": "conversation",
+        "kind": "archive",
+        "session_id": session_id,
+        "thread_id": thread_id or None,
+        "span_start": min(days) if days else None,
+        "span_end": max(days) if days else None,
         "heading": f"Conversation archive ({prefix}{session_id}, {label})",
-        # source=<thread> is the provenance link the harvest already writes (ADR 0069 D5).
-        "source": thread_id or None,
-        # Agent-derived trust tier (ADR 0069 D8): the operator's own conversation.
-        "source_type": "conversation",
         "namespace": f"chat-archive:{session_id}",
     }
 
@@ -419,21 +419,23 @@ async def harvest_thread(
     namespace: str | None = None,
     fact_extractor=None,
     raise_on_error: bool = False,
-) -> str | None:
-    """Retire ``thread_id``'s conversation into the knowledge base (ADR 0021).
+    history_store=_DEFAULT_HISTORY_STORE,
+) -> int | None:
+    """Retire ``thread_id``'s conversation into history (ADR 0021).
 
     The single session-end pass: store an **episodic** summary
-    (``domain="conversation"``) and, when ``config.knowledge_facts``, also
+    (``kind="summary"``) and, when ``config.knowledge_facts``, also
     extract **semantic** facts (``finding_type="fact"``) and consolidate them.
     Both carry ``namespace`` for later per-project scoping.
 
-    Returns the summary chunk id, or None when there's nothing to harvest (no
+    Returns the history entry id, or None when there's nothing to harvest (no
     store, no checkpoint, incognito thread — ADR 0069 D3b, empty transcript,
     or a summarizer failure). Best-effort by default (a failure logs and returns
     None); ``raise_on_error=True`` re-raises instead, so a caller that must tell
     FAILURE from legitimately-nothing (#2946: the retire path) can.
     """
-    if knowledge_store is None:
+    history_store = resolve_history_store(history_store)
+    if history_store is None:
         return None
     # Background worker thread (ADR 0070 D3): its transcript is disposable — the
     # report was already delivered to (and indexed under) the ORIGIN session at
@@ -450,8 +452,7 @@ async def harvest_thread(
         channel_values = (tup.checkpoint or {}).get("channel_values", {})
         # Incognito thread (ADR 0069 D3b): "no memory trail" must hold at
         # retirement too — without this gate the retire sweep (harvest_enabled
-        # defaults ON) would summarize the transcript into the knowledge store,
-        # where RAG re-injects it into later prompts. Same per-message
+        # defaults ON) would leave a persistent transcript summary. Same per-message
         # semantics as _persist_session: the channel holds the last stamped
         # value, so a thread is as incognito as its latest turn.
         if channel_values.get("incognito"):
@@ -471,38 +472,22 @@ async def harvest_thread(
         as_of = _as_of(tup)
         if as_of:
             summary = f"[as of {as_of}] {summary}"
-        # A summary is document-sized — chunk it so each passage gets its own
-        # embedding instead of one diluted whole-summary vector (ADR 0021).
-        # Offloaded: add_document does blocking gateway work per chunk (embed +
-        # optional contextual enrichment) — keep it off the maintenance loop.
         import asyncio
 
-        from knowledge import add_document
-
-        # source=<thread_id> is the machine-readable provenance link (ADR 0069
-        # D5) — the heading carries it for humans, but recall/audit key on the
-        # row's source column. source_type="harvest" ranks the rows in the
-        # agent-derived trust tier (ADR 0069 D8).
-        chunk_ids = await asyncio.to_thread(
-            add_document,
-            knowledge_store,
+        entry_id = await asyncio.to_thread(
+            history_store.add,
             summary,
-            domain="conversation",
+            kind="summary",
+            session_id=str(channel_values.get("session_id") or thread_id),
+            thread_id=thread_id,
             heading=f"Conversation summary ({thread_id}" + (f", last active {as_of})" if as_of else ")"),
-            source=thread_id,
-            source_type="harvest",
+            span_end=as_of or None,
             namespace=namespace,
         )
-        chunk_id = chunk_ids[0] if chunk_ids else None
-        log.info(
-            "[harvest] summarized thread %s into knowledge (%d chunk(s), first %s)",
-            thread_id,
-            len(chunk_ids),
-            chunk_id,
-        )
+        log.info("[harvest] summarized thread %s into history (entry %s)", thread_id, entry_id)
 
         # Semantic facts — the second half of the session-end pass (ADR 0021).
-        if getattr(config, "knowledge_facts", False):
+        if knowledge_store is not None and getattr(config, "knowledge_facts", False):
             from graph.memory_facts import extract_and_store_facts
 
             kwargs = {
@@ -516,7 +501,7 @@ async def harvest_thread(
                 kwargs["extractor"] = fact_extractor
             await extract_and_store_facts(transcript, **kwargs)
 
-        return chunk_id
+        return entry_id
     except Exception:
         log.exception("[harvest] failed for thread %s", thread_id)
         # `None` also means "legitimately nothing to harvest" (no store, incognito,

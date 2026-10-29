@@ -117,7 +117,7 @@ def hook_env(monkeypatch):
     from runtime.state import STATE
 
     monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(), raising=False)
-    monkeypatch.setattr(STATE, "knowledge_store", None, raising=False)
+    monkeypatch.setattr(STATE, "history_store", None, raising=False)
     monkeypatch.delenv("BACKGROUND_WAKE", raising=False)
     published: list = []
     monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
@@ -559,13 +559,13 @@ class TestServerTurnControlPlane:
 # ── D2: report indexing ──────────────────────────────────────────────────────
 
 
-class _FakeKnowledgeStore:
+class _FakeHistoryStore:
     def __init__(self):
         self.calls: list[tuple[str, dict]] = []
 
-    def add_document(self, content, **kwargs):
+    def add(self, content, **kwargs):
         self.calls.append((content, kwargs))
-        return [1, 2]
+        return 1
 
 
 class TestReportIndexing:
@@ -587,8 +587,8 @@ class TestReportIndexing:
         # pull-only so the resume path stays out of these assertions
         monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(background_auto_resume=False), raising=False)
         monkeypatch.setattr(a2a, "_spawn_background_wake", lambda job: None)
-        fake = _FakeKnowledgeStore()
-        monkeypatch.setattr(STATE, "knowledge_store", fake, raising=False)
+        fake = _FakeHistoryStore()
+        monkeypatch.setattr(STATE, "history_store", fake, raising=False)
         return a2a, jid, fake
 
     async def test_substantial_result_indexed_with_provenance(self, tmp_path, monkeypatch, hook_env):
@@ -599,8 +599,8 @@ class TestReportIndexing:
         assert len(fake.calls) == 1
         content, kwargs = fake.calls[0]
         assert content == report.strip() or content == report  # full report, not the preview
-        assert kwargs["source"] == "chat-42"  # keyed to the ORIGIN session
-        assert kwargs["source_type"] == "background_report"
+        assert kwargs["session_id"] == "chat-42"  # keyed to the ORIGIN session
+        assert kwargs["kind"] == "report"
         assert kwargs["heading"] == f"Background report: dig ({jid})"
 
     async def test_small_result_not_indexed(self, tmp_path, monkeypatch, hook_env):

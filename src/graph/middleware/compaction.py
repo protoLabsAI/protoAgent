@@ -9,7 +9,7 @@ two additions:
    the rewrite landed in the checkpoint, ``checkpoint_keep_per_thread`` pruning
    destroyed the pre-compaction rows, and the summarized-away history was simply
    gone — while the never-lossy manual ``/compact`` archived first. Now, when the
-   parent decides to compact, the full transcript is archived to the knowledge
+   parent decides to compact, the full transcript is archived to the history
    store (``chat-archive:<session_id>``, the same namespace ``/compact`` uses)
    BEFORE the update is returned — i.e. before anything is committed. Failure
    mode, operator-decided: attempt the archive; on failure, compact ANYWAY with
@@ -17,7 +17,7 @@ two additions:
    between the model and an overflow error, and purity loses to availability
    here. The manual path keeps its strict refusal.
 
-   The archive row carries ``source=<thread>`` and the dates of the messages it
+   The archive row carries ``thread_id=<thread>`` and the dates of the messages it
    holds (#3493, see ``conversation_harvest.archive_payload``). An **incognito**
    turn is never archived (ADR 0069 D3b, the rule the retire harvest applies):
    it still compacts, because this is the overflow safety valve, and the
@@ -64,6 +64,8 @@ import contextvars
 import logging
 
 from langchain.agents.middleware import SummarizationMiddleware
+
+from graph.conversation_harvest import _DEFAULT_HISTORY_STORE, resolve_history_store
 
 log = logging.getLogger(__name__)
 
@@ -235,13 +237,14 @@ _TURN_WINDOW: contextvars.ContextVar[int | None] = contextvars.ContextVar("compa
 class CountingSummarizationMiddleware(SummarizationMiddleware):
     """``SummarizationMiddleware`` + archive-first (#2784) + a compaction counter."""
 
-    def __init__(self, *args, knowledge_store=None, window_resolver=None, default_window: int | None = None, **kwargs):
+    def __init__(self, *args, knowledge_store=None, history_store=_DEFAULT_HISTORY_STORE, window_resolver=None, default_window: int | None = None, **kwargs):
         # Set BEFORE the parent's __init__: it validates a ``fraction`` trigger by asking
         # ``_get_profile_limits``, which reads these.
         self._window_resolver = window_resolver
         self._default_window = default_window if isinstance(default_window, int) and default_window > 0 else None
         super().__init__(*args, **kwargs)
         self._knowledge_store = knowledge_store
+        self._history_store = history_store
         # Replace the parent's retry-everything ``with_retry()`` wrapper.
         self._summary_model = _TransientRetry(self.model)
         self._backoff: dict[str, dict] = {}
@@ -380,7 +383,7 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
         """Archive the full pre-compaction transcript. Best-effort with the D5
         failure mode: any failure logs LOUDLY and compaction proceeds — never
         raises, never blocks the rewrite."""
-        store = getattr(self, "_knowledge_store", None)
+        store = resolve_history_store(getattr(self, "_history_store", _DEFAULT_HISTORY_STORE))
         session_id = str((state or {}).get("session_id") or "unknown")
         if (state or {}).get("incognito"):
             log.info("[compaction] session %s is incognito — compacting WITHOUT an archive (ADR 0069 D3b)", session_id)
@@ -388,13 +391,12 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
         try:
             if store is None:
                 log.warning(
-                    "[compaction] no knowledge store — auto-compacting session %s WITHOUT an "
+                    "[compaction] no history store — auto-compacting session %s WITHOUT an "
                     "archive; the summarized-away history is unrecoverable (ADR 0101 D5)",
                     session_id,
                 )
                 return
             from graph.conversation_harvest import archive_payload
-            from knowledge import add_document
 
             content, kwargs = archive_payload(
                 list((state or {}).get("messages") or []),
@@ -404,16 +406,16 @@ class CountingSummarizationMiddleware(SummarizationMiddleware):
             )
             if not content:
                 return  # nothing renderable — nothing to lose
-            chunk_ids = add_document(store, content, **kwargs)
-            if chunk_ids:
+            entry_id = store.add(content, **kwargs)
+            if entry_id:
                 log.info(
-                    "[compaction] archived %d chunk(s) for session %s before compacting",
-                    len(chunk_ids),
+                    "[compaction] archived history entry %s for session %s before compacting",
+                    entry_id,
                     session_id,
                 )
             else:
                 log.warning(
-                    "[compaction] archive wrote no chunks for session %s — compacting ANYWAY "
+                    "[compaction] archive wrote no entry for session %s — compacting ANYWAY "
                     "(ADR 0101 D5): the summarized-away history is unrecoverable",
                     session_id,
                 )

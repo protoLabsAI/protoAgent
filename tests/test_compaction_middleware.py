@@ -15,7 +15,9 @@ from graph.middleware.compaction import CountingSummarizationMiddleware
 
 def _instance():
     # Skip the heavy __init__ (needs a model); we only exercise the override.
-    return object.__new__(CountingSummarizationMiddleware)
+    mw = object.__new__(CountingSummarizationMiddleware)
+    mw._history_store = None
+    return mw
 
 
 def test_counts_when_parent_compacts(monkeypatch):
@@ -56,11 +58,13 @@ def test_record_compaction_noop_when_disabled():
 # ── archive-first (#2784, ADR 0101 D5) ────────────────────────────────────────
 
 
-def _kb():
-    class _Store:
-        pass
+class _History:
+    def add(self, content, **kwargs):
+        return 1
 
-    return _Store()
+
+def _kb():
+    return _History()
 
 
 def test_archives_before_a_real_compaction(monkeypatch):
@@ -71,17 +75,17 @@ def test_archives_before_a_real_compaction(monkeypatch):
     docs = []
     monkeypatch.setattr(SummarizationMiddleware, "before_model", lambda self, s, r: {"messages": []})
     monkeypatch.setattr(
-        "knowledge.add_document",
-        lambda store, text, **kw: docs.append({"text": text, **kw}) or [1],
+        _History, "add",
+        lambda store, text, **kw: docs.append({"text": text, **kw}) or 1,
     )
     mw = _instance()
-    mw._knowledge_store = _kb()
+    mw._history_store = _kb()
     state = {"messages": [HumanMessage(content="the sky is teal")], "session_id": "sessX"}
     assert mw.before_model(state, None) == {"messages": []}
     assert len(docs) == 1
     assert "teal" in docs[0]["text"]
     assert docs[0]["namespace"] == "chat-archive:sessX"
-    assert docs[0]["domain"] == "conversation"
+    assert docs[0]["kind"] == "archive"
 
 
 def test_archive_failure_never_blocks_the_compaction(monkeypatch, caplog):
@@ -95,9 +99,9 @@ def test_archive_failure_never_blocks_the_compaction(monkeypatch, caplog):
     def _boom(*a, **k):
         raise RuntimeError("store on fire")
 
-    monkeypatch.setattr("knowledge.add_document", _boom)
+    monkeypatch.setattr(_History, "add", _boom)
     mw = _instance()
-    mw._knowledge_store = _kb()
+    mw._history_store = _kb()
     with caplog.at_level("ERROR"):
         out = mw.before_model({"messages": [HumanMessage(content="m")], "session_id": "s"}, None)
     assert out == {"messages": []}  # the compaction still happened
@@ -108,7 +112,7 @@ def test_no_store_compacts_with_a_loud_warning(monkeypatch, caplog):
     from langchain_core.messages import HumanMessage
 
     monkeypatch.setattr(SummarizationMiddleware, "before_model", lambda self, s, r: {"messages": []})
-    mw = _instance()  # no _knowledge_store attribute at all (getattr default)
+    mw = _instance()  # explicitly unavailable history store
     with caplog.at_level("WARNING"):
         out = mw.before_model({"messages": [HumanMessage(content="m")], "session_id": "s"}, None)
     assert out == {"messages": []}
@@ -118,9 +122,9 @@ def test_no_store_compacts_with_a_loud_warning(monkeypatch, caplog):
 def test_no_archive_when_parent_does_not_compact(monkeypatch):
     docs = []
     monkeypatch.setattr(SummarizationMiddleware, "before_model", lambda self, s, r: None)
-    monkeypatch.setattr("knowledge.add_document", lambda *a, **k: docs.append(1) or [1])
+    monkeypatch.setattr(_History, "add", lambda *a, **k: docs.append(1) or 1)
     mw = _instance()
-    mw._knowledge_store = _kb()
+    mw._history_store = _kb()
     assert mw.before_model({"messages": []}, None) is None
     assert docs == []
 
@@ -137,9 +141,9 @@ def test_incognito_turn_is_never_archived_but_still_compacts(monkeypatch):
 
     docs = []
     monkeypatch.setattr(SummarizationMiddleware, "before_model", lambda self, s, r: {"messages": []})
-    monkeypatch.setattr("knowledge.add_document", lambda store, text, **kw: docs.append(kw) or [1])
+    monkeypatch.setattr(_History, "add", lambda store, text, **kw: docs.append(kw) or 1)
     mw = _instance()
-    mw._knowledge_store = _kb()
+    mw._history_store = _kb()
     state = {"messages": [HumanMessage(content="my secret is teal")], "session_id": "s", "incognito": True}
     assert mw.before_model(state, None) == {"messages": []}  # still compacted
     assert docs == []  # nothing archived
@@ -155,9 +159,9 @@ async def test_async_incognito_turn_is_never_archived(monkeypatch):
         return {"messages": []}
 
     monkeypatch.setattr(SummarizationMiddleware, "abefore_model", _fake)
-    monkeypatch.setattr("knowledge.add_document", lambda store, text, **kw: docs.append(kw) or [1])
+    monkeypatch.setattr(_History, "add", lambda store, text, **kw: docs.append(kw) or 1)
     mw = _instance()
-    mw._knowledge_store = _kb()
+    mw._history_store = _kb()
     state = {"messages": [HumanMessage(content="my secret is teal")], "session_id": "s", "incognito": True}
     assert await mw.abefore_model(state, None) == {"messages": []}
     assert docs == []
@@ -201,9 +205,9 @@ def test_archive_row_carries_thread_source_and_message_dates(monkeypatch, tmp_pa
     monkeypatch.setattr(langgraph.config, "get_config", lambda: {"configurable": {"thread_id": "a2a:sessX"}})
     docs = []
     monkeypatch.setattr(SummarizationMiddleware, "before_model", lambda self, s, r: {"messages": []})
-    monkeypatch.setattr("knowledge.add_document", lambda store, text, **kw: docs.append({"text": text, **kw}) or [1])
+    monkeypatch.setattr(_History, "add", lambda store, text, **kw: docs.append({"text": text, **kw}) or 1)
     mw = _instance()
-    mw._knowledge_store = _kb()
+    mw._history_store = _kb()
     state = {
         "session_id": "sessX",
         "messages": [
@@ -215,7 +219,7 @@ def test_archive_row_carries_thread_source_and_message_dates(monkeypatch, tmp_pa
     }
     mw.before_model(state, None)
     (doc,) = docs
-    assert doc["source"] == "a2a:sessX"
+    assert doc["thread_id"] == "a2a:sessX"
     assert doc["namespace"] == "chat-archive:sessX"
     assert doc["heading"] == f"Conversation archive (auto-compaction, sessX, messages 2026-08-31 to {today})"
     lines = doc["text"].splitlines()
@@ -239,11 +243,11 @@ def test_archive_without_a_trajectory_is_marked_undated_not_new(monkeypatch, tmp
     _trajectory(monkeypatch, tmp_path, "sessY", [])
     docs = []
     monkeypatch.setattr(SummarizationMiddleware, "before_model", lambda self, s, r: {"messages": []})
-    monkeypatch.setattr("knowledge.add_document", lambda store, text, **kw: docs.append({"text": text, **kw}) or [1])
+    monkeypatch.setattr(_History, "add", lambda store, text, **kw: docs.append({"text": text, **kw}) or 1)
     mw = _instance()
-    mw._knowledge_store = _kb()
+    mw._history_store = _kb()
     mw.before_model({"session_id": "sessY", "messages": [HumanMessage(id="h1", content="old news")]}, None)
     (doc,) = docs
     assert doc["text"].splitlines() == [f"[Conversation archive: message dates unknown; archived {today}]", "User: old news"]
     assert doc["heading"] == f"Conversation archive (auto-compaction, sessY, archived {today})"
-    assert doc["source"] is None  # no graph run → no thread to name
+    assert doc["thread_id"] is None  # no graph run → no thread to name
