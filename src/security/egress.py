@@ -100,6 +100,13 @@ def _blocked_ip(host: str, *, allow_private: bool = False) -> str | None:
             ip = ipaddress.ip_address(addr)
         except ValueError:
             return addr
+        # Loopback is decided first: ``::1`` also reports ``is_reserved`` (it sits in
+        # ``::/8``), and ``localhost`` usually resolves to ``::1`` first, so the reserved
+        # check below would block a local gateway even with ``allow_private``.
+        if ip.is_loopback:
+            if not allow_private:
+                return addr
+            continue
         # link-local covers the cloud-metadata IP — always blocked.
         if ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
             return addr
