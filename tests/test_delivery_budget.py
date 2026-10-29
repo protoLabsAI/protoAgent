@@ -280,7 +280,8 @@ def test_injection_record_names_what_was_delivered(quiet):
 def test_search_passes_deliverable_and_post_filters(quiet):
     past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
-    rows = _hits(4)
+    rows = _hits(5)
+    rows[4]["domain"] = HISTORY_DOMAIN
     rows[1]["review_state"] = "rejected"
     rows[2]["expires_at"] = past
     rows[3]["expires_at"] = future
@@ -291,7 +292,8 @@ def test_search_passes_deliverable_and_post_filters(quiet):
 
 
 def test_old_backend_without_the_kwarg_still_gets_the_rule(quiet):
-    rows = _hits(2)
+    rows = _hits(3)
+    rows[2]["domain"] = HISTORY_DOMAIN
     rows[0]["review_state"] = "rejected"
     store = _Store(results=rows, reject_deliverable_kwarg=True)
     p = _compose(store, None, budget=None, digest=False)
@@ -305,7 +307,6 @@ def test_deliverable_hit():
     assert not deliverable_hit({"review_state": "rejected"})
     assert not deliverable_hit({"expires_at": "2000-01-01T00:00:00+00:00"})
     assert deliverable_hit({"expires_at": "2999-01-01T00:00:00+00:00"})
-    # Conversation history is on-demand only: memory_recall reaches it, auto-RAG never does.
     assert not deliverable_hit({"domain": HISTORY_DOMAIN})
     assert deliverable_hit({"domain": "general"})
 
@@ -323,6 +324,7 @@ def _seed(store) -> dict[str, int]:
         "rejected": store.add_chunk("alpha rejected row", domain="d", review_state="rejected"),
         "expired": store.add_chunk("alpha expired row", domain="d", expires_at=past),
         "future": store.add_chunk("alpha future row", domain="d", expires_at=future),
+        # Legacy history may remain in an unmigrated store.
         "history": store.add_chunk("alpha archived turn", domain=HISTORY_DOMAIN),
     }
 
@@ -361,9 +363,11 @@ def test_deliverable_on_the_layered_store_filters_both_tiers(tmp_path):
     private.add_chunk("alpha private rejected", domain="d", review_state="rejected")
     commons.add_chunk("alpha commons ok", domain="d")
     commons.add_chunk("alpha commons rejected", domain="d", review_state="rejected")
+    private.add_chunk("alpha private archive", domain=HISTORY_DOMAIN)
+    commons.add_chunk("alpha commons archive", domain=HISTORY_DOMAIN)
     hits = layered.search("alpha", k=10, deliverable=True)
     assert {r["content"] for r in hits} == {"alpha private ok", "alpha commons ok"}
-    assert len(layered.search("alpha", k=10)) == 4
+    assert len(layered.search("alpha", k=10)) == 6
 
 
 # ── always-on is a policy, not a domain ──────────────────────────────────────
@@ -377,6 +381,7 @@ def test_always_on_selects_by_delivery_policy(tmp_path):
     store.add_chunk("a retrieved fact", domain="preferences")
     store.add_chunk("a rejected pin", domain="preferences", delivery_policy="always", review_state="rejected")
     store.add_chunk("an expired pin", domain="preferences", delivery_policy="always", expires_at=past)
+    store.add_chunk("an archived pin", domain=HISTORY_DOMAIN, delivery_policy="always")
     assert {cid for cid, _ in store.get_hot_memory_entries()} == {hot, pinned}
     assert "metric units" in store.get_hot_memory() and "a retrieved fact" not in store.get_hot_memory()
 

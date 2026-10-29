@@ -927,9 +927,12 @@ def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[
 
 def deliverable_hit(r: dict) -> bool:
     """Whether a retrieved row may enter the prompt (ADR 0108 D6 + D7.4): not
-    operator-rejected, not past its ``expires_at`` and not conversation history
-    (``knowledge.store.HISTORY_DOMAIN``). Mirrors the store-level
+    operator-rejected, not conversation history and not past its ``expires_at``. Mirrors the store-level
     ``deliverable=True`` predicate for backends that don't implement it.
+
+    The history guard remains necessary for unmigrated commons/plugin stores and
+    rows left behind by a failed core boot migration.
+
     ``expires_at`` is parsed as ISO-8601 (``Z`` and naive timestamps read as
     UTC); an unparseable value falls back to the string compare the SQL
     predicate makes."""

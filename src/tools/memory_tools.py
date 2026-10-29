@@ -382,6 +382,10 @@ def _build_memory_tools(
         # date, namespace). include_superseded is ADR 0108 D7.3 audit history.
         """Search long-term memory for chunks relevant to ``query``; use when stored context beats your training data.
 
+        Returns memory only (preferences, decisions, facts). For what HAPPENED in a prior
+        conversation — a compaction archive, retired-thread summary or background report —
+        use ``session_search`` instead; that history no longer lives here (ADR 0125).
+
         Args:
             domain: search ONE domain — e.g. separate your own record from inherited reference
                 such as ``claude-import`` (another agent's history, not your own actions).
