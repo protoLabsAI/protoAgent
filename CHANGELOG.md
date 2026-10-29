@@ -15,6 +15,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.221.0] - 2026-10-29
+
+### Added
+- **Career Coach in the new-agent picker (#44).** Adds the Career Coach bundle and a generic, resume-first persona for grounded coaching and apply kits that the operator reviews and submits.
+
+- **Memory inspector gains a History tab (#4557).** The console's Memory inspector now has a fourth tab for the conversation `history` store (ADR 0125 D6) — compaction archives, retired-thread summaries and background-job reports — with a per-session rollup (surface, date span, kind counts), a search that runs the same query the agent's recall uses, an open-an-entry reader, and deletes that reuse the chat-delete "forget" semantics (a single entry is removed outright; a whole session keeps background-job reports). History is visible only here — the Knowledge browser lists chunks only — and the memory/history size split is reported separately so the operator sees the real size of each.
+
+- **Explore without a model (#4566).** A visitor with no plan, key or local model can now finish setup and look around: `finish_setup` skips the model probe when no connection is declared and the model name is blank, writes the config (clearing the shipped template's placeholder gateway connection to a declared-empty `providers: []`) and SOUL, and marks setup complete. Both the reload after finishing AND the next server boot leave the graph uncompiled in this state (rather than crash building a client with no key), so the server stays up. The runtime status the console polls gains an additive `model_configured` boolean — false in explore mode — and the console's boot gate now reads it, opening the console (chat degrades to a connect-a-model prompt) instead of hanging on the full-screen loader. Saving a model in Settings ▸ Model flips `model_configured` true and compiles the graph on the next poll, no restart.
+
+- **Discover plugins from the console (#4570).** Add a labelled "Discover plugins" pill to the utility bar, next to Settings, that opens Settings directly on Plugins ▸ Discover in one click — so the plugin marketplace is reachable without first hunting through the unlabelled Settings icon.
+
+- **Multi-architecture Docker images (#4571).** Rolling and release images now publish for linux/amd64 and linux/arm64, enabling native Docker installs on Apple Silicon and other ARM64 hosts.
+
+- **Local model discovery (#4572).** Add a config API endpoint that probes local Ollama and LM Studio servers and reports available models for the setup wizard.
+
+- **Eval tiers: gate vs tracked (#4600).** `evals/tasks.json` cases take an optional `tier` (`gate` | `tracked`), defaulting to `tracked` when a case has a `verify_rubric` and `gate` otherwise; an unknown tier fails loading with the case id. The runner stamps the resolved tier on every report row and writes per-tier passed/total/pass-rate into the report JSON, and its board prints gate and tracked separately (gate first). `python -m evals.report` and `evals.compare` split the trend and the regression diff by tier with the gate pass rate as the headline, and still render older reports that predate the tier field (ADR 0126 D1).
+
+- **Per-turn feedback API (#4601).** `POST /api/feedback` stores a thumbs up/down on one assistant turn and writes a `user_feedback` score onto that turn's Langfuse trace (ADR 0126 E2/D3). The score is pinned to a deterministic id, so a second rating on the same turn **replaces** the first in Langfuse as well as locally, and `value: null` un-rates — deleting both the local row and the mirrored Langfuse score. Incognito sessions are refused; a turn with no trace (tracing off) is stored but not scored. `GET /api/feedback?session_id=` returns the session's per-turn trace_ids and current ratings so the console can map a rendered message back to its trace. Backend only — the thumbs buttons land in a follow-up.
+
+- **Score a past trace by id (#4601).** Add `tracing.score_trace(trace_id, name, value, comment="")`, which attaches a numeric score to an already-completed Langfuse trace via the v3 client's create-score API — the ADR 0126 foundation shared by `user_feedback` (`/api/feedback`) and the friction plugin. Same swallow-all contract as `score_current_trace`: a silent no-op when tracing is disabled, the trace id is empty, or the client raises, and no per-call flush.
+
+- **Rate assistant replies (#4601).** Console messages now offer thumbs up/down with an optional down-rating note, restore saved feedback on reload, and roll back failed saves with a visible error. Incognito and unresolved turns cannot be rated.
+
+- **Friction joins its turn (#4602).** Friction records carry session and trace identities when available, score their trace, and expose trace links in the review and Friction view.
+
+- **Remote model passthrough opt-in (#4608).** Add `model_passthrough.allow_remote`, off by default, to allow remote callers to use raw model passthrough while retaining required bearer authentication.
+
+- **Raw model passthrough endpoint (#4608).** `POST /api/models/{connection}/v1/chat/completions` makes a plain OpenAI-shaped chat call (messages, `tools`, `tool_calls`, `tool_choice`, `temperature`, `max_tokens`) against any registered model connection (ADR 0106) — including native subscription connections (`anthropic-oauth`, `openai-codex`) that have no `/chat/completions` of their own — so evals can point at a Claude-plan model the way they point at OpenAI. It is a *raw model* passthrough, not the agent's `/v1` surface: no graph, no tool execution, no SOUL, no memory. Built with the same `create_llm` builder, loopback-only on top of the operator bearer, non-streaming, and billed through the same usage path so subscription spend shows in `/api/usage`.
+
+- **Demo-agent core (#4609).** New `graph.fleet.demo` creates throwaway demo members through the same path the console new-agent picker uses, stamping `demo: true` / `created_by` / `created_at` into each member's `workspace.yaml`. Every demo op refuses any member that isn't stamped — there is no override, so a demo tool can never touch a real agent — and creation caps live demos (default 3) and reaps stamped members past a TTL (default 24h). `manager.create` / `ops.fleet.create_sync` gain an optional `extra_meta` passthrough that persists these keys (no behaviour change when absent).
+
+### Changed
+- **Chat-delete forget now covers conversation history in the same transaction as extracted facts (#4556).** The two-phase forget (and its one-step fallback) hides, restores and hard-deletes the matching rows in the ADR 0125 `history` table — archives and summaries keyed to the chat's session, threads and `:goal-iter-N` sub-threads — under the same `forget_pending:<session>` marker and on the same `agent.db` connection as the `chunks` facts, so a chat delete can never leave history behind and a mid-forget failure rolls both tables back together. Background-job reports stay out of reach, and the orphan sweep settles history-only markers.
+
+- **Session history readers (#4556).** Session search merges summary files with labelled history hits; session recall lists history entry ids and reads individual entries with bounded output.
+
+- **Conversation writers use HistoryStore (#4556).** Compaction archives, retirement summaries, and background reports now persist in history without embeddings; extracted facts remain in memory and manual compaction retains its never-lossy refusal. Chat deletion also forgets private history with shared or plugin knowledge backends, and report notifications identify the session to recall.
+
+- **Conversation history moved out of the knowledge store into its own `history` table (#4556).** A one-shot, idempotent boot migration (ADR 0125) drains legacy `domain='conversation'` chunks — compaction archives, retirement summaries and background reports — into the per-agent `history` table in the same `agent.db`, taking an `agent.db.pre-0125` backup first and deleting the moved rows, their FTS entries and their vectors in one transaction. `memory_recall` now returns memory only and points to `session_search` for "what happened"; auto-retrieved context no longer carries history. Delivery guards remain in place for legacy conversation rows in commons/plugin stores and after a failed migration.
+
+- **Actionable model connection errors (#4564).** Model discovery and connection tests now explain connection failures, rejected API keys, missing endpoints or models, and timeouts in plain language without exposing upstream response bodies.
+
+- **Setup wizard: subscription cards say "sign in with your plan", not "uses your CLI login" (#4565).** The Claude and ChatGPT/Codex subscription cards on the brain step now read "Sign in with your Claude Pro/Max account. No API key needed." and "Sign in with your ChatGPT Plus/Pro account. No API key needed." The Not-signed-in callout now spells out that sign-in happens in the browser and no command-line tool is needed, and the Disconnect tooltip no longer implies a CLI login. Copy-only; no behaviour change.
+
+- **Explore without a model in the console (#4566).** Setup can finish without a model connection. Chat shows a persistent link to model settings and disables sending until a runtime poll confirms a model is configured.
+
+- **`protoagent serve --help` is written for users, and boot prints the console URL (#4567).** The `serve` help drops maintainer-only wording (removed-flag notes, ADR numbers, the legacy launch form) and documents `--port`/`--host`/`--ui`/`--setup`; `--config` and `--headless` are hidden but behave exactly as before. Once the server is actually listening it prints a single `Console ready → http://127.0.0.1:<port>/app` line (or `API ready → …` for `--ui none`).
+
+- **Plainer setup wizard model step (#4568).** The model step is now titled "Model" (was "Brain"), the gateway card reads "API key — OpenAI, OpenRouter, or any OpenAI-compatible endpoint" (was "Gateway model"), the endpoint field is labelled "Endpoint URL" (was "API base"), and the model-list button reads "Load models" (was "Probe"). The Operator field gains help text ("Your name, so the agent knows who it's working for."), and the API-key placeholder only offers to keep a saved key when one is actually stored.
+
+- **Quieter console polling access logs (#4569).** Successful GET/HEAD polling requests now log at DEBUG; errors, state-changing requests, and other paths remain at INFO. Signed media links remain redacted.
+
+- **Chat starter prompts (#4570).** Empty chats offer four editable starter prompts for a tool tour, web summary, memory, and a coding hand-off labelled as needing Claude Code installed. Selecting a prompt fills the composer without sending it.
+
+- **Setup wizard: a "Local model" card that detects Ollama / LM Studio (#4572).** The brain step now offers a fourth card, "Local model", for Ollama or LM Studio running on this machine — no account or API key. Picking it (and a Re-check button) probes both servers, lists what it found, and auto-fills the endpoint and first model from the first reachable server that has models pulled; the connection test and Next gate then pass with no typing. If nothing is running, it shows a short hint for starting a server and never hangs (the probe is timeout-bounded). The endpoint and model stay editable.
+
+- **Model-first setup wizard (#4573).** Connect a model before configuring the agent in one editable name, operator, and archetype step. Basic is selected by default; More archetypes reveals the catalog while preserving bundle configuration requirements.
+
+- **Local system notes can render a structured component card (#4591).** A role-"system" chat message carrying a `component` (the same component-v1 shape the agent's inline cards use) now renders through the chat component registry as a neutral in-thread card instead of the toned `.chat-note` markdown alert — so slash-command output can sit in the thread like the cards an agent turn emits. The message's `content` stays the plain-markdown fallback for export, copy and search, and a malformed `component` degrades to today's note rendering.
+
+- **Subscription usage cards (#4591).** /usage now saves a card with usage meters, the local check time, cached-data age, and refresh status, while retaining a timestamped text fallback for copy and export.
+
+### Fixed
+- **The ADR 0125 history migration re-checks on every boot, and deleting a chat removes its already-hidden history (#4556).** A history row written to `chunks` after the migration's stamp, for example by an older core sharing the same `agent.db`, now moves on the next boot instead of staying stranded, and a later pass never overwrites the original `agent.db.pre-0125` backup. Deleting a chat now also removes history rows that were already invalidated before the delete (such as a migrated soft-deleted archive), and a failed delete gives those rows their own reason back.
+
+- **A local model at `http://localhost:…` now connects (#4559).** The setup wizard and model probe rejected `localhost` endpoints (Ollama, LM Studio, LiteLLM) with "api_base host is blocked by the egress guard", because `localhost` resolves to `::1` first and Python reports `::1` as a reserved address. Loopback is now checked before the reserved-range block, so `localhost` and `[::1]` work wherever loopback is allowed; link-local, cloud-metadata, multicast and unspecified addresses stay blocked.
+
+- **Setup wizard gates Next on a passing connection test (#4562).** On the model step, the first-run wizard now auto-runs the connection test (debounced) whenever the provider, endpoint, key or model changes, and holds Next until a test passes for exactly those inputs — so a "Connection failed" can no longer slip through to Finish and surface a raw `Connection refused`. Claude/ChatGPT subscriptions additionally require being signed in. A "Testing connection…" state and a short reason hint explain why Next is disabled.
+
+- **A loopback-only boot no longer opens with "A2A auth token not configured" / "A2A_ALLOWED_ORIGINS not set" warnings (#4569).** On a loopback-only bind (the `uvx`/desktop default — `127.0.0.1`, `::1`, `localhost`, or an unspecified host), an open endpoint and an absent origin allowlist are the expected posture, not a misconfiguration, so those two notices now log at INFO. Any reachable bind (`0.0.0.0`, `::`, a LAN address or hostname) keeps them at WARNING, and the boot gate still refuses an open non-loopback bind. The federation-token and X-API-Key deprecation warnings are unchanged — they always flag a real misconfiguration.
+
+- **Eval cases run against current dev instances and report turn traces (#4600).** Goal cases set their goal through the authenticated operator API, the rubric judge reads structured model text, and the two workflow cases need `EVAL_WORKFLOWS`. Each case's report row records the trace of the turn it drove, from A2A metadata or a bounded telemetry lookup; missing tracing never changes a verdict.
+
+- **Checkpoint DBs shrink again after write-path pruning (#4626).** The periodic sweep now reclaims a large freelist (64 MB or a quarter of the file) even when it deleted nothing itself. Since pruning moved to the write path the sweep rarely deletes anything, so freed pages had stopped returning to the OS: one agent's 2 GB checkpoint DB held 28 MB of live data.
+
+- **`GET /api/config` no longer stalls the server (#4627).** Plugin manifests are parsed once per file version (libyaml when available) instead of twice per request, and `plugins.dir` is read without a comment-preserving parse of the whole config. On a live agent the request held every other request for about 200 ms; it now takes about 3 ms.
+
+### Docs
+- **Simplify first-agent setup documentation (#4563).** Make Download the primary README route, put model prerequisites up front, and collapse alternative launch methods while preserving their commands and links. Document platform warnings, the alternate-port option, and the shipped model-before-agent wizard flow, including local models and exploration without a model.
+
+- **ADR 0126: close the eval loop (#4598).** Accepted design: three eval tiers, a nightly
+  gate on the host, console feedback and friction written as scores on the turn's trace,
+  and turns promoted to per-instance eval cases. Design only.
+
 ## [0.220.0] - 2026-10-29
 
 ### Added
