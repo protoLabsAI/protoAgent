@@ -164,17 +164,22 @@ async def _checkpoint_prune_loop() -> None:
                 media_gone = await asyncio.to_thread(gc_media, path)
                 if media_gone:
                     log.info("[checkpoint-prune] removed %d unreferenced media payload(s)", media_gone)
-                if res["threads_deleted"] or res["checkpoints_deleted"] or media_gone:
+                deleted = bool(res["threads_deleted"] or res["checkpoints_deleted"] or media_gone)
+                if deleted:
                     log.info(
                         "[checkpoint-prune] removed %d idle thread(s), %d old checkpoint(s)",
                         res["threads_deleted"],
                         res["checkpoints_deleted"],
                     )
-                    # Reclaim freed space back to the OS (compact WAL + pages).
-                    if getattr(cfg, "checkpoint_vacuum", True):
-                        try:
-                            from graph.checkpoint_prune import reclaim as _reclaim
+                # Reclaim freed space back to the OS (compact WAL + pages). Not only after
+                # this sweep's own deletes: the write path (ADR 0120) frees most rows, so
+                # the sweep usually deletes nothing and the freelist would never shrink.
+                if getattr(cfg, "checkpoint_vacuum", True):
+                    try:
+                        from graph.checkpoint_prune import freelist_worth_reclaiming
+                        from graph.checkpoint_prune import reclaim as _reclaim
 
+                        if deleted or await asyncio.to_thread(freelist_worth_reclaiming, path):
                             vac = await asyncio.to_thread(_reclaim, path)
                             if vac["wal_truncated"] or vac["pages_reclaimed"]:
                                 log.info(
@@ -182,8 +187,8 @@ async def _checkpoint_prune_loop() -> None:
                                     vac["wal_truncated"],
                                     vac["pages_reclaimed"],
                                 )
-                        except Exception:
-                            log.exception("[checkpoint-prune] reclaim failed")
+                    except Exception:
+                        log.exception("[checkpoint-prune] reclaim failed")
             except Exception:
                 log.exception("[checkpoint-prune] sweep failed")
         # Telemetry retention guardrail (ADR 0006) — drop turns older than the
