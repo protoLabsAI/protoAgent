@@ -21,7 +21,7 @@ import {
   usageTipNote,
 } from "./costLabel";
 import { useUI } from "../state/uiStore";
-import type { ChatMessage, ChatPart, ContextWindow, FormResponseDisplay, TurnUsage } from "../lib/types";
+import type { ChatMessage, ChatPart, ComponentSpec, ContextWindow, FormResponseDisplay, TurnUsage } from "../lib/types";
 import { ChatComponent } from "./ChatComponent";
 import { DelegateProgressView } from "./DelegateProgressView";
 import { hideDanglingMarker } from "./danglingMarker";
@@ -167,6 +167,14 @@ export function ChatMessageView({
   // message with at least one labelled field — a legacy message without the map, or an empty /
   // malformed one, falls through to the normal text path below (we never sniff arbitrary JSON).
   const formResponseDisplay = renderableFormResponse(message);
+  // A LOCAL system note can carry a structured `component` (same component-v1 shape the
+  // agent's inline parts use) to render as a neutral in-thread card instead of the toned
+  // `.chat-note` markdown alert — so slash-command output like /usage sits in the thread
+  // like the component cards agent turns emit. Only a role-"system" message with a
+  // well-formed spec qualifies; a malformed one (e.g. `{}`) falls through to today's note
+  // rendering, with `content` still the plain-markdown fallback for export/copy/search.
+  const systemNoteComponent =
+    message.role === "system" && isRenderableComponent(message.component) ? message.component : null;
   return (
     <Message
       role={message.role}
@@ -190,15 +198,20 @@ export function ChatMessageView({
           : undefined
       }
       className={
-        // Any system message here is a local note → compact .chat-note card; the tone
-        // modifier is appended only when set, so neutral notes still get the styling.
-        // (Report messages returned above.)
-        message.role === "system"
-          ? `chat-note${message.noteTone ? ` chat-note--${message.noteTone}` : ""}`
-          : // An issued slash command → distinct .chat-slash-msg user bubble (#1529).
-            userSlashCmd
-            ? "chat-slash-msg"
-            : undefined
+        // A system note rendering a structured component → neutral .chat-note-card (NO
+        // tone accent), so it sits in the thread like an agent's component card rather than
+        // the toned .chat-note alert.
+        systemNoteComponent
+          ? "chat-note-card"
+          : // Any other system message here is a local note → compact .chat-note card; the
+            // tone modifier is appended only when set, so neutral notes still get the
+            // styling. (Report messages returned above.)
+            message.role === "system"
+            ? `chat-note${message.noteTone ? ` chat-note--${message.noteTone}` : ""}`
+            : // An issued slash command → distinct .chat-slash-msg user bubble (#1529).
+              userSlashCmd
+              ? "chat-slash-msg"
+              : undefined
       }
     >
       {/* An `@<name>`-addressed answer (#3042) is this participant's own words, not the
@@ -215,7 +228,11 @@ export function ChatMessageView({
         // reasoning card. Live turns render reasoning inline via parts.
         <ReasoningCard text={message.reasoning} streaming={streaming && !message.content} />
       ) : null}
-      {formResponseDisplay ? (
+      {systemNoteComponent ? (
+        // The structured card stands in for the markdown body; `content` remains the
+        // plain-markdown fallback the message still carries for export/copy/search.
+        <ChatComponent spec={systemNoteComponent} />
+      ) : formResponseDisplay ? (
         <FormResponseCard display={formResponseDisplay} />
       ) : message.parts && message.parts.length ? (
         (() => {
@@ -436,6 +453,17 @@ export function ChatMessageView({
         </MessageActions>
       ) : null}
     </Message>
+  );
+}
+
+/** Whether a message's `component` is well-formed enough to render as a system-note card:
+ *  an object whose `component` kind is a non-empty string. A malformed spec (e.g. `{}`, or
+ *  a non-object) returns false so the message falls back to its markdown note. The kind
+ *  itself needn't be a KNOWN renderer — ChatComponent degrades an unknown/failed kind to a
+ *  labelled note on its own; this only gates "card vs. plain .chat-note alert". Pure. */
+function isRenderableComponent(spec: ComponentSpec | undefined): spec is ComponentSpec {
+  return (
+    !!spec && typeof spec === "object" && typeof spec.component === "string" && spec.component.length > 0
   );
 }
 

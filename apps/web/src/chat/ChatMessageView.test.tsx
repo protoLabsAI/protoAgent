@@ -9,7 +9,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { registerChatComponent } from "../ext/componentRegistry";
-import type { ChatMessage, ChatPart, ToolCall } from "../lib/types";
+import type { ChatMessage, ChatPart, ComponentSpec, ToolCall } from "../lib/types";
 import { ChatMessageView } from "./ChatMessageView";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -310,5 +310,64 @@ describe("ChatMessageView — a send-to-chat user turn shows a 'from ‹title›
     expect(origin).not.toBeNull();
     expect(origin!.closest(".pl-message__content")).toBeNull();
     expect(container.querySelector(".pl-message__content")?.textContent).not.toContain("Bill Splitter");
+  });
+});
+
+describe("ChatMessageView — a local system note renders a structured component card", () => {
+  const sysRoot = () => container.querySelector(".pl-message--system")!;
+
+  it("renders the component (dt/dd) instead of the markdown body, with a neutral class", () => {
+    render({
+      id: "s1",
+      role: "system",
+      content: "fallback text",
+      status: "done",
+      component: { component: "keyvalue", props: { items: [{ label: "a", value: "b" }] } },
+    });
+    // The keyvalue card is rendered…
+    const dts = [...container.querySelectorAll("dt")].map((el) => el.textContent);
+    const dds = [...container.querySelectorAll("dd")].map((el) => el.textContent);
+    expect(dts).toContain("a");
+    expect(dds).toContain("b");
+    // …the plain-markdown fallback is NOT shown anywhere…
+    expect(container.textContent).not.toContain("fallback text");
+    // …and the card sits on a neutral root — no toned `.chat-note` alert styling.
+    const root = sysRoot();
+    expect(root.classList.contains("chat-note-card")).toBe(true);
+    expect(root.classList.contains("chat-note")).toBe(false);
+    expect(root.classList.contains("chat-note--info")).toBe(false);
+  });
+
+  it("falls back to the markdown note when `component` is malformed", () => {
+    render({
+      id: "s2",
+      role: "system",
+      content: "fallback text",
+      status: "done",
+      noteTone: "info",
+      // An object missing the `component` kind is not renderable → today's note rendering.
+      component: {} as unknown as ComponentSpec,
+    });
+    const root = sysRoot();
+    expect(root.classList.contains("chat-note")).toBe(true);
+    expect(root.classList.contains("chat-note--info")).toBe(true);
+    expect(root.classList.contains("chat-note-card")).toBe(false);
+    expect(container.textContent).toContain("fallback text");
+    expect(container.querySelector("dt")).toBeNull();
+  });
+
+  it("a system note WITHOUT a component renders unchanged as a toned note", () => {
+    render({
+      id: "s3",
+      role: "system",
+      content: "ingested 3 files",
+      status: "done",
+      noteTone: "success",
+    });
+    const root = sysRoot();
+    expect(root.classList.contains("chat-note")).toBe(true);
+    expect(root.classList.contains("chat-note--success")).toBe(true);
+    expect(root.classList.contains("chat-note-card")).toBe(false);
+    expect(container.textContent).toContain("ingested 3 files");
   });
 });

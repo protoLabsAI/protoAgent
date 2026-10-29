@@ -91,7 +91,10 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     // Then two more when the delete/clear dialog's harvest/forget switches became one memory
     // RadioGroup (#4053/#3493): the `.chat-memory-label` caption (sm) and the per-option
     // `.chat-memory-choice-hint` explanation (sm) → 37.
-    expect(tokenCount(chatCss)).toBe(37);
+    // Then one more for the `.chat-note-card` system-note card body (base): a slash-command
+    // note rendering a structured component neutralizes the DS system pill's font back to
+    // base, mirroring the report chip → 38.
+    expect(tokenCount(chatCss)).toBe(38);
     expect(tokenCount(promptviewerCss)).toBe(12);
     expect(tokenCount(chatComponentCss)).toBe(11);
     expect(tokenCount(hitlCss)).toBe(7);

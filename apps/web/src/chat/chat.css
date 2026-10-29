@@ -631,6 +631,28 @@
 .chat-session-slot .pl-message--system.chat-note--warning .pl-message__content { border-left-color: var(--pl-color-status-warning); }
 .chat-session-slot .pl-message--system.chat-note--danger .pl-message__content { border-left-color: var(--pl-color-status-error); }
 
+/* A local system note rendering a structured `component` (a /usage-style card). Like the
+   report chip above, NEUTRALIZE the de-emphasized DS system pill (centered bg-inset fill)
+   so the ChatComponent card sits full-width in the thread exactly like the component cards
+   an agent turn emits — no tone accent, no note-alert box, just left-aligned block flow.
+   Same stacked specificity (.pl-message--system.chat-note-card …, 0-4-0 / bare 0-2-0) the
+   .chat-note / .chat-report rules use, so load order can't let the DS default win. Spacing
+   only — the component owns its own visual design. */
+.chat-note-card.pl-message--system {
+  justify-content: stretch;
+}
+.chat-session-slot .pl-message--system.chat-note-card .pl-message__content,
+.pl-message--system.chat-note-card .pl-message__content {
+  display: block;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  text-align: left;
+  font-size: var(--pl-font-size-base);
+  color: var(--pl-color-fg);
+}
+
 /* No "loading side-bar" on streaming answer text. The DS pulses a 2px accent left-border +
    10px inset on a streaming message body (ai.css) — but the streaming text itself is the cue,
    and it should read FULL WIDTH, not inset behind an animated rail. Drop it (higher specificity
