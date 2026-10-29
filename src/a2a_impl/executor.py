@@ -192,7 +192,7 @@ async def _frame_within(step: asyncio.Task, seconds: float) -> bool:
     return bool(finished)
 
 
-async def _stall_guarded(stream, seconds: float, last_activity: list[str]):
+async def _stall_guarded(stream, seconds: float, last_activity: list[str], step_context: list | None = None):
     """Yield from ``stream``, raising :class:`TurnStalled` if no event arrives
     for ``seconds``.
 
@@ -211,6 +211,13 @@ async def _stall_guarded(stream, seconds: float, last_activity: list[str]):
     ``wait_for`` cancel propagates into the tool call itself.
 
     ``seconds <= 0`` disables the guard and passes the stream straight through.
+
+    Every step runs in ONE context, copied once: whatever the stream sets in a context
+    variable (``trace_session``'s trace id, above all) is still set at its next step,
+    exactly as with no guard. A fresh copy per step dropped it after the first frame, so
+    the executor's trace capture always read "" and every A2A turn's telemetry row
+    carried no trace id. ``step_context`` (a one-slot list) receives that context so the
+    caller can read what the stream set, between steps.
 
     Closing THIS generator closes ``stream`` too (#3876): a bare ``async for`` does not
     close the generator it iterates when the iterating generator is itself closed, so the
@@ -231,11 +238,13 @@ async def _stall_guarded(stream, seconds: float, last_activity: list[str]):
         # than as an operator's cancel. Set BEFORE the cancel below, which is why this is
         # an explicit wait + cancel rather than `asyncio.wait_for` (that cancels first).
         stop = TurnStop()
+        # Each step runs as its own task (so a stall can cancel it), all in this one copy of
+        # the caller's context plus the shared `stop` — see the docstring.
+        step_ctx = contextvars.copy_context()
+        bind_turn_stop(step_ctx, stop)
+        if step_context is not None:
+            step_context[:] = [step_ctx]
         while True:
-            # Each step runs as its own task in a fresh copy of this context, exactly as
-            # `wait_for` ran it, plus the shared `stop`.
-            step_ctx = contextvars.copy_context()
-            bind_turn_stop(step_ctx, stop)
             step = asyncio.get_running_loop().create_task(iterator.__anext__(), context=step_ctx)
             try:
                 finished = await _frame_within(step, seconds)
@@ -1072,6 +1081,9 @@ class ProtoAgentExecutor(AgentExecutor):
         # ``_outcome`` calls, reliably yields "". A one-slot list so the closure in
         # ``_outcome`` sees the captured value without a ``nonlocal``.
         trace_id: list[str] = [""]
+        # The stall guard runs the stream's steps in its own context; the trace id lives
+        # there, not in ours. Empty when the guard is off (the stream runs in ours).
+        stream_ctx: list[contextvars.Context] = []
 
         def _capture_trace_id() -> None:
             if trace_id[0]:
@@ -1079,7 +1091,8 @@ class ProtoAgentExecutor(AgentExecutor):
             try:
                 from observability import tracing
 
-                trace_id[0] = tracing.current_trace_id() or ""
+                read = tracing.current_trace_id
+                trace_id[0] = (stream_ctx[0].run(read) if stream_ctx else read()) or ""
             except Exception:  # noqa: BLE001 — telemetry must never break a turn
                 pass
 
@@ -1135,6 +1148,7 @@ class ProtoAgentExecutor(AgentExecutor):
                 ),
                 self._stall_timeout_seconds(),
                 last_activity,
+                stream_ctx,
             )
             async for event_type, payload in guarded:
                 _capture_trace_id()
