@@ -46,6 +46,19 @@ def test_successful_polls_are_debug(polling_logger, monkeypatch, path, method, l
     assert (rec.levelno, rec.levelname) == (logging.DEBUG, "DEBUG")
 
 
+@pytest.mark.parametrize("path", [
+    "/api/chat/sessions/chat-1793128619708-j3cseg/local-turns",
+    "/api/plugins/project_board/features/bd-1cky.9/progress",
+])
+def test_id_carrying_polls_are_debug(polling_logger, path):
+    rec = logging.LogRecord(
+        polling_logger.name, logging.INFO, __file__, 1, _UVICORN_FMT,
+        ("127.0.0.1:5", "GET", path + "?since=3", "1.1", 200), None,
+    )
+    assert not polling_logger.filter(rec)
+    assert rec.levelno == logging.DEBUG
+
+
 @pytest.mark.parametrize("method,path,status", [
     ("GET", "/api/runtime/status", 500),
     ("HEAD", "/healthz", 400),
@@ -54,6 +67,11 @@ def test_successful_polls_are_debug(polling_logger, monkeypatch, path, method, l
     ("GET", "/api/chat", 200),
     ("GET", "/api/runtime/status-other", 200),
     ("GET", "/api/chat?next=/api/runtime/status", 200),
+    ("GET", "/api/chat/sessions/s-1", 200),
+    ("GET", "/api/chat/sessions/s-1/local-turns/t-1", 200),
+    ("POST", "/api/chat/sessions/s-1/local-turns", 200),
+    ("GET", "/api/plugins/project_board/features/bd-1", 200),
+    ("GET", "/api/chat/sessions/s-1/local-turns", 500),
 ])
 def test_other_access_records_stay_info(polling_logger, method, path, status):
     rec = logging.LogRecord(

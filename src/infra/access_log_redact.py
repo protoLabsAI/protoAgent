@@ -53,6 +53,20 @@ _POLL_PATH_PREFIXES = (
     "/api/plugins/installed",
     "/api/scheduler/jobs",
     "/api/usage",
+    # The hub re-reads each member's public paths and agent card (graph/fleet/member_public.py).
+    "/.well-known/protoagent/public-paths",
+    "/.well-known/agent-card.json",
+    # Plugin views that poll (ledger, project board, org chart).
+    "/api/ledger/live",
+    "/api/plugins/project_board/rev",
+    "/api/plugins/orgchart/live",
+    "/api/plugins/orgchart/topology",
+)
+# Polls whose path carries an id. On a live project manager these and the prefixes above
+# were ~85% of agent.log (local-turns alone: 74k lines in 3.7 days, #4624).
+_POLL_PATH_PATTERNS = (
+    re.compile(r"/api/chat/sessions/[^/]+/local-turns"),
+    re.compile(r"/api/plugins/project_board/features/[^/]+/progress"),
 )
 
 
@@ -89,7 +103,9 @@ class PollingAccessFilter(logging.Filter):
         if not isinstance(status, int) or status >= 400:
             return True
         path = full_path.partition("?")[0]
-        if not any(path == prefix or path.startswith(prefix + "/") for prefix in _POLL_PATH_PREFIXES):
+        if not any(path == prefix or path.startswith(prefix + "/") for prefix in _POLL_PATH_PREFIXES) and not any(
+            pattern.fullmatch(path) for pattern in _POLL_PATH_PATTERNS
+        ):
             return True
         record.levelno = logging.DEBUG
         record.levelname = "DEBUG"
