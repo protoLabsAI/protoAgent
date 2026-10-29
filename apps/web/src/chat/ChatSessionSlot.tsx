@@ -1818,6 +1818,7 @@ export function ChatSessionSlot({
               onCancelDelegation={transcriptCancelDelegation}
               onDismissToolCall={transcriptDismissToolCall}
               onCancelSteer={transcriptCancelSteer}
+              onStarterPrompt={setDraft}
               followSignal={followSignal}
             />
           </ComponentFrameRegistryContext.Provider>
