@@ -246,3 +246,28 @@ def test_failed_boot_migration_keeps_history_out_of_delivery(tmp_path, monkeypat
     assert store.search(_ARCHIVE_TOKEN)  # boot continues with legacy rows present
     assert not store.search(_ARCHIVE_TOKEN, deliverable=True)
     assert store.search(_FACT_TOKEN, deliverable=True)
+
+
+def test_migration_reruns_for_rows_written_after_the_stamp(tmp_path):
+    """An older core sharing the file (a coder or eval booted newer code against a live
+    agent) keeps writing conversation chunks after the stamp; the next boot moves them,
+    and the ORIGINAL pre-0125 backup is kept, not overwritten."""
+    path = tmp_path / "agent.db"
+    store = KnowledgeStore(path)
+    HistoryStore(path)
+    _seed_conversation_and_fact(store)
+    assert migrate_conversation_chunks_to_history(path) == 3
+    backup = path.with_name("agent.db.pre-0125")
+    original = backup.read_bytes()
+
+    store.add_chunk(
+        "Conversation archive written by the old core after the stamp.",
+        domain=HISTORY_DOMAIN,
+        source="thread-9",
+        source_type="conversation",
+        namespace="chat-archive:sess-9",
+    )
+    assert migrate_conversation_chunks_to_history(path) == 1
+    assert _history_count(path) == 4
+    assert backup.read_bytes() == original
+    assert migrate_conversation_chunks_to_history(path) == 0
