@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { defaultState, hydrateState, SetupWizard, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
+import { brainStepReady, defaultState, hydrateState, SetupWizard, testKey, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
 import { api } from "../lib/api";
 import type { Archetype, ArchetypePreview, ConfigPayload } from "../lib/types";
 
@@ -254,6 +254,76 @@ describe("hydrateState", () => {
     const s = hydrateState(partial({ model: { api_base: "https://api.openai.com/v1", name: "gpt-x" } }));
     expect(s.apiBase).toBe("https://api.openai.com/v1");
     expect(s.modelName).toBe("gpt-x");
+  });
+});
+
+// The brain-step Next gate (#4562): a passing connection test — bound to the exact
+// inputs via testKey — now gates Next, plus signed-in for subscriptions.
+describe("brainStepReady", () => {
+  const GW = {
+    runtimeKind: "native" as const,
+    provider: "openai",
+    apiBase: "https://gw/v1",
+    apiKey: "sk-1",
+    modelName: "m",
+  };
+  const gwKey = testKey(GW);
+  const gwArgs = { runtimeKind: GW.runtimeKind, provider: GW.provider, apiBase: GW.apiBase, modelName: GW.modelName, signedIn: false };
+
+  it("gateway: blocked with no test, blocked on a failed test, unlocked on a pass for the current key", () => {
+    expect(brainStepReady({ ...gwArgs, currentKey: gwKey, tested: null })).toBe(false);
+    expect(brainStepReady({ ...gwArgs, currentKey: gwKey, tested: { ok: false, key: gwKey } })).toBe(false);
+    expect(brainStepReady({ ...gwArgs, currentKey: gwKey, tested: { ok: true, key: gwKey } })).toBe(true);
+  });
+
+  it("gateway: a passing test for OTHER inputs (stale key) does not unlock Next", () => {
+    const staleKey = testKey({ ...GW, modelName: "old-model" });
+    expect(brainStepReady({ ...gwArgs, currentKey: gwKey, tested: { ok: true, key: staleKey } })).toBe(false);
+  });
+
+  it("gateway: a missing endpoint or model blocks even with a passing test", () => {
+    expect(brainStepReady({ ...gwArgs, apiBase: "", currentKey: gwKey, tested: { ok: true, key: gwKey } })).toBe(false);
+    expect(brainStepReady({ ...gwArgs, modelName: "", currentKey: gwKey, tested: { ok: true, key: gwKey } })).toBe(false);
+  });
+
+  it("OAuth: stays blocked while signed out, even with a model and a passing test", () => {
+    const key = testKey({ runtimeKind: "native", provider: "anthropic-oauth", apiBase: "", apiKey: "", modelName: "claude" });
+    expect(
+      brainStepReady({ runtimeKind: "native", provider: "anthropic-oauth", apiBase: "", modelName: "claude", signedIn: false, currentKey: key, tested: { ok: true, key } }),
+    ).toBe(false);
+  });
+
+  it("OAuth: signed in + model + passing test unlocks (no gateway base needed); not-yet-tested still blocks", () => {
+    const key = testKey({ runtimeKind: "native", provider: "openai-codex", apiBase: "", apiKey: "", modelName: "gpt" });
+    expect(
+      brainStepReady({ runtimeKind: "native", provider: "openai-codex", apiBase: "", modelName: "gpt", signedIn: true, currentKey: key, tested: { ok: true, key } }),
+    ).toBe(true);
+    expect(
+      brainStepReady({ runtimeKind: "native", provider: "openai-codex", apiBase: "", modelName: "gpt", signedIn: true, currentKey: key, tested: null }),
+    ).toBe(false);
+  });
+
+  it("ACP (legacy) always advances — the coding agent is the brain, no test required", () => {
+    expect(
+      brainStepReady({ runtimeKind: "acp", provider: "openai", apiBase: "", modelName: "", signedIn: false, currentKey: "anything", tested: null }),
+    ).toBe(true);
+  });
+});
+
+describe("testKey", () => {
+  const base = { provider: "openai", runtimeKind: "native" as const, apiBase: " https://gw/v1 ", apiKey: " sk-1 ", modelName: " m " };
+
+  it("is stable for identical inputs and trims surrounding whitespace", () => {
+    expect(testKey(base)).toBe(testKey({ ...base }));
+    expect(testKey(base)).toBe(testKey({ ...base, apiBase: "https://gw/v1", apiKey: "sk-1", modelName: "m" }));
+  });
+
+  it("changes when any of provider / runtime / base / key / model changes", () => {
+    expect(testKey(base)).not.toBe(testKey({ ...base, provider: "anthropic-oauth" }));
+    expect(testKey(base)).not.toBe(testKey({ ...base, runtimeKind: "acp" }));
+    expect(testKey(base)).not.toBe(testKey({ ...base, apiBase: "https://other/v1" }));
+    expect(testKey(base)).not.toBe(testKey({ ...base, apiKey: "sk-2" }));
+    expect(testKey(base)).not.toBe(testKey({ ...base, modelName: "m2" }));
   });
 });
 
