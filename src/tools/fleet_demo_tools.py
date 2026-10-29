@@ -282,13 +282,15 @@ def _build_fleet_demo_tools(config) -> list:
 
         try:
             record = await asyncio.to_thread(require_demo, slug)
+            # The guard accepts display names; the proxy requires the checked record's ID.
+            member_id = record.get("id")
+            if not isinstance(member_id, str) or not member_id:
+                return {"ok": False, "refused": _refusal(slug)}
+            return await _post_chat(member_id, message, session_id)
         except DemoError:
             return {"ok": False, "refused": _refusal(slug)}
-        # The guard accepts display names; the proxy requires the checked record's ID.
-        member_id = record.get("id")
-        if not isinstance(member_id, str) or not member_id:
-            return {"ok": False, "refused": _refusal(slug)}
-        return await _post_chat(member_id, message, session_id)
+        except Exception as exc:  # noqa: BLE001 — model-facing operation boundary
+            return _operation_failure(exc, slug)
 
     @tool
     async def fleet_demo_delete(slug: str) -> dict:
@@ -313,12 +315,15 @@ def _build_fleet_demo_tools(config) -> list:
             return _operation_failure(exc, slug)
 
     @tool
-    async def fleet_demo_list() -> list:
+    async def fleet_demo_list() -> list | dict:
         """List the live DEMO members (stamped ``demo: true``) this instance is running. Real
         fleet members are excluded by construction. Returns a list of ``{id, name, port,
-        created_by, created_at, ...}`` rows."""
+        created_by, created_at, ...}`` rows, or ``{ok: False, error, detail}`` on failure."""
         from graph.fleet.demo import list_demos
 
-        return await asyncio.to_thread(list_demos)
+        try:
+            return await asyncio.to_thread(list_demos)
+        except Exception as exc:  # noqa: BLE001 — model-facing operation boundary
+            return _operation_failure(exc)
 
     return [fleet_demo_create, fleet_demo_configure, fleet_demo_chat, fleet_demo_delete, fleet_demo_list]

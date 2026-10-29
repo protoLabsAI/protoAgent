@@ -419,13 +419,51 @@ async def test_delete_busy_workspace_reports_retryable_partial_outcome(monkeypat
     assert "deleted" not in out
 
 
-@pytest.mark.parametrize("operation", ["configure", "delete"])
+@pytest.mark.parametrize("operation", ["configure", "chat", "delete"])
 async def test_guard_io_failure_returns_error_without_mutation(monkeypatch, operation):
+    from unittest.mock import AsyncMock
+
     def fail(slug):
-        raise OSError("registry unreadable")
+        raise OSError("registry unreadable SECRET-SCOPED-BEARER")
 
     monkeypatch.setattr(demo, "require_demo", fail)
-    monkeypatch.setattr(demo, f"{operation}_demo", _boom_op(operation))
-    out = await _tools()[f"fleet_demo_{operation}"].ainvoke({"slug": "demo-x"})
+    post_chat = AsyncMock()
+    monkeypatch.setattr(fdt, "_post_chat", post_chat)
+    arguments = {"slug": "demo-x"}
+    if operation == "chat":
+        arguments["message"] = "hi"
+    else:
+        monkeypatch.setattr(demo, f"{operation}_demo", _boom_op(operation))
+    out = await _tools()[f"fleet_demo_{operation}"].ainvoke(arguments)
     assert out["ok"] is False
     assert out["error"] == "operation_failed"
+    assert "OSError" in out["detail"]
+    assert "SECRET-SCOPED-BEARER" not in json.dumps(out)
+    post_chat.assert_not_called()
+
+
+@pytest.mark.parametrize("error", [OSError, RuntimeError])
+async def test_list_failure_returns_structured_error_without_leaking(monkeypatch, error):
+    def fail():
+        raise error("registry unreadable SECRET-SCOPED-BEARER")
+
+    monkeypatch.setattr(demo, "list_demos", fail)
+    out = await _tools()["fleet_demo_list"].ainvoke({})
+    assert out["ok"] is False
+    assert out["error"] == "operation_failed"
+    assert error.__name__ in out["detail"]
+    assert "SECRET-SCOPED-BEARER" not in json.dumps(out)
+
+
+async def test_chat_setup_failure_returns_structured_error_without_leaking(monkeypatch):
+    monkeypatch.setattr(demo, "require_demo", lambda slug: {"id": slug, "demo": True})
+    _install_http(monkeypatch)
+
+    def fail():
+        raise OSError("SECRET-SCOPED-BEARER")
+
+    monkeypatch.setattr(fdt, "_make_client", fail)
+    out = await _tools()["fleet_demo_chat"].ainvoke({"slug": "demo-x", "message": "hi"})
+    assert out["ok"] is False
+    assert out["error"] == "operation_failed"
+    assert "SECRET-SCOPED-BEARER" not in json.dumps(out)
