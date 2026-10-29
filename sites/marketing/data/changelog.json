@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.220.0",
+    "date": "2026-10-29",
+    "changes": [
+      "Core conversation history store (#4556).",
+      "Tool schemas sent on every model call are ~45% smaller (#4551).",
+      "A persona edit no longer switches off the agent's workflow runner (#4552).",
+      "Agents no longer get their own old conversations back as \"relevant memory\" (#4553).",
+      "ADR 0125: separate memory, knowledge and history (#4554)."
+    ]
+  },
+  {
     "version": "v0.219.0",
     "date": "2026-10-28",
     "changes": [

@@ -15,6 +15,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.220.0] - 2026-10-29
+
+### Added
+- **Core conversation history store (#4556).** Add unchunked, FTS5-searchable history in the private agent database and initialize it on boot and reload independently of plugin knowledge backends.
+
+### Changed
+- **Tool schemas sent on every model call are ~45% smaller (#4551).** The core tools (memory, scheduler, HITL, skills, filesystem, delegation) and the bundled `artifact` and `agent_browser` plugins now describe what each tool does, when to use it, and its hard constraints — nothing more. Combined schema text drops from ~67.5k to ~37.4k chars per call. Maintainer rationale moved to code comments; the `save_file_artifact(link=True)` guide moved into the `rendering-artifacts` skill. No tool, parameter, type or default changed.
+
+### Fixed
+- **A persona edit no longer switches off the agent's workflow runner (#4552).** The
+  prompt-only reload after `edit_soul` cleared `STATE.workflow_run` but reused the live
+  plugin bundle, so the workflows plugin never set it again: the board's review gate and
+  `/<recipe>` chat commands failed closed until the next full reload. A failed rebuild
+  also left the runner cleared while the old graph kept serving. Both now keep it.
+
+- **Agents no longer get their own old conversations back as "relevant memory" (#4553).**
+  Per-turn retrieval searched the whole knowledge store, including compaction archives,
+  retired-thread summaries and background job reports (`domain=conversation`); on one
+  member 99% of a week's injected hits were its own archived turns. History rows are now
+  on-demand only: `memory_recall` and `recall_session` still reach them.
+
+### Docs
+- **ADR 0125: separate memory, knowledge and history (#4554).** Proposed design: three
+  stores instead of one table, per-layer tools, and conversation history that never
+  auto-injects into the prompt. Design only.
+
 ## [0.219.0] - 2026-10-28
 
 ### Added
