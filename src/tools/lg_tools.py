@@ -50,6 +50,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from langchain_core.tools import tool
 
 from tools.fallbacks import with_fallback
+from tools.fleet_demo_tools import _build_fleet_demo_tools
 from tools.goal_tools import (  # re-exported: tests / plugins / forks import them from here
     _build_abandon_goal_tool,
     _build_goal_plan_tool,
@@ -975,6 +976,11 @@ def get_all_tools(
         # read-only member logs and exact task-by-id inspection through the existing
         # authenticated fleet proxy; no operator/runtime mutation path is bound here.
         tools.extend(_build_fleet_diagnostics_tool())
+    if getattr(graph_config, "tools_fleet_demo_enabled", False):
+        # Demo-agent tools (#4609), default off (the setting lands in part 3 — read absent-safe).
+        # create / configure / chat / delete / list, every op routed through the demo-stamp guard
+        # (graph.fleet.demo.require_demo) so none can ever touch a real fleet member.
+        tools.extend(_build_fleet_demo_tools(graph_config))
     if soul_edit_enabled:
         # ADR 0079/0081 — guarded self-authored persona (config soul.self_edit_enabled,
         # default off). Lead-agent only: no subagent build passes soul_edit_enabled, so
