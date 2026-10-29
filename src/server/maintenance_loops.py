@@ -62,10 +62,11 @@ async def _sweep_orphaned_forgets() -> None:
     """Settle chat-delete forgets a crash or an unretried failure left half-done (#3957)."""
     import asyncio
 
-    store = STATE.knowledge_store
+    from graph.conversation_harvest import conversation_forget_store, sweep_orphaned_forgets
+
+    store = conversation_forget_store(STATE.knowledge_store, STATE.history_store)
     if store is None:
         return
-    from graph.conversation_harvest import sweep_orphaned_forgets
 
     res = await asyncio.to_thread(
         sweep_orphaned_forgets, store, retirement_incomplete=_forget_retirement_incomplete

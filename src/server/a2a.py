@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from events import ACTIVITY_CONTEXT
+from graph.conversation_harvest import _DEFAULT_HISTORY_STORE, resolve_history_store
 from graph.output_format import extract_output
 from runtime.state import STATE
 from server import _event_bus, agent_name
@@ -33,7 +34,7 @@ log = logging.getLogger("protoagent.server")
 _BG_WAKE_TASKS: set = set()
 
 # ADR 0070 D2 — results at or under this size just drain inline; anything bigger is
-# also indexed into the knowledge store so the full report stays searchable after
+# also indexed into the history store so the full report stays searchable after
 # the drain notification truncates it.
 _BG_INDEX_MIN_CHARS = 800
 
@@ -296,9 +297,9 @@ def _spawn_background_resume(mgr, job) -> None:
     t.add_done_callback(_BG_WAKE_TASKS.discard)
 
 
-def _should_index_report(job) -> bool:
+def _should_index_report(job, *, history_store=_DEFAULT_HISTORY_STORE) -> bool:
     """The ADR 0070 D2 guards: index a *completed* job's report when it is substantial
-    (> ``_BG_INDEX_MIN_CHARS`` — smaller results just drain inline), the knowledge
+    (> ``_BG_INDEX_MIN_CHARS`` — smaller results just drain inline), the history
     store is up, and the spawning thread wasn't incognito (no memory trail)."""
     if job is None or job.status != "completed":
         return False
@@ -314,17 +315,14 @@ def _should_index_report(job) -> bool:
         return False
     if len(job.result or "") <= _BG_INDEX_MIN_CHARS:
         return False
-    return STATE.knowledge_store is not None
+    return resolve_history_store(history_store) is not None
 
 
-def _spawn_report_index(job) -> None:
-    """Index a finished job's FULL report into the knowledge store (ADR 0070 D2),
-    fire-and-forget. Keyed to the ORIGIN session (``source=origin_session``) with
-    ``source_type="background_report"`` (trust tier 2 — agent-derived, ADR 0069 D8),
-    so ``memory_recall`` surfaces it with provenance + trust citations after the
-    drain notification truncates the in-context copy. ``add_document`` chunks
-    document-sized reports with the shared ingestion chunker (knowledge/chunking.py).
-    Best-effort; never raises into the terminal hook. No-op off-loop."""
+def _spawn_report_index(job, *, history_store=_DEFAULT_HISTORY_STORE) -> None:
+    """Save a full report in history under its origin session (ADR 0070 D2).
+
+    Best-effort; never raises into the terminal hook. No-op off-loop.
+    """
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -332,20 +330,15 @@ def _spawn_report_index(job) -> None:
 
     async def _go() -> None:
         try:
-            from knowledge import add_document
-
-            # add_document does blocking gateway work per chunk (embed + optional
-            # contextual enrichment) — keep it off the event loop.
-            chunk_ids = await asyncio.to_thread(
-                add_document,
-                STATE.knowledge_store,
+            entry_id = await asyncio.to_thread(
+                resolve_history_store(history_store).add,
                 job.result,
-                domain="conversation",
+                kind="report",
+                session_id=job.origin_session or f"background:{job.id}",
+                surface="background",
                 heading=f"Background report: {job.description} ({job.id})",
-                source=job.origin_session or f"background:{job.id}",
-                source_type="background_report",
             )
-            log.info("[background] indexed report for %s → %d chunk(s)", job.id, len(chunk_ids or []))
+            log.info("[background] indexed report for %s → history entry %s", job.id, entry_id)
         except Exception:  # noqa: BLE001 — indexing is best-effort; jobs.db stays the record
             log.exception("[background] report indexing failed for %s", getattr(job, "id", "?"))
 
@@ -1154,9 +1147,9 @@ def _handle_background_terminal(outcome) -> None:
             "error": error if status != "completed" else "",
         },
     )
-    # Index the full report into the knowledge store (ADR 0070 D2) BEFORE any resume
-    # turn runs, so the drained notification's "searchable via memory_recall" pointer
-    # is already true when the agent reads it.
+    # Index the full report into the history store (ADR 0070 D2) BEFORE any resume
+    # turn runs. The drained notification points to recall_session with the origin
+    # session ID; indexing is best-effort and the jobs DB remains the record.
     if _should_index_report(job):
         _spawn_report_index(job)
     # Delivery (ADR 0070 D1): push-resume the ORIGIN session — the nudge turn's drain

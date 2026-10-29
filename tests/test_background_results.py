@@ -117,7 +117,7 @@ def hook_env(monkeypatch):
     from runtime.state import STATE
 
     monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(), raising=False)
-    monkeypatch.setattr(STATE, "knowledge_store", None, raising=False)
+    monkeypatch.setattr(STATE, "history_store", None, raising=False)
     monkeypatch.delenv("BACKGROUND_WAKE", raising=False)
     published: list = []
     monkeypatch.setattr(a2a._event_bus, "publish", lambda t, d=None: published.append((t, d)))
@@ -559,13 +559,13 @@ class TestServerTurnControlPlane:
 # ── D2: report indexing ──────────────────────────────────────────────────────
 
 
-class _FakeKnowledgeStore:
+class _FakeHistoryStore:
     def __init__(self):
         self.calls: list[tuple[str, dict]] = []
 
-    def add_document(self, content, **kwargs):
+    def add(self, content, **kwargs):
         self.calls.append((content, kwargs))
-        return [1, 2]
+        return 1
 
 
 class TestReportIndexing:
@@ -587,8 +587,8 @@ class TestReportIndexing:
         # pull-only so the resume path stays out of these assertions
         monkeypatch.setattr(STATE, "graph_config", LangGraphConfig(background_auto_resume=False), raising=False)
         monkeypatch.setattr(a2a, "_spawn_background_wake", lambda job: None)
-        fake = _FakeKnowledgeStore()
-        monkeypatch.setattr(STATE, "knowledge_store", fake, raising=False)
+        fake = _FakeHistoryStore()
+        monkeypatch.setattr(STATE, "history_store", fake, raising=False)
         return a2a, jid, fake
 
     async def test_substantial_result_indexed_with_provenance(self, tmp_path, monkeypatch, hook_env):
@@ -599,8 +599,8 @@ class TestReportIndexing:
         assert len(fake.calls) == 1
         content, kwargs = fake.calls[0]
         assert content == report.strip() or content == report  # full report, not the preview
-        assert kwargs["source"] == "chat-42"  # keyed to the ORIGIN session
-        assert kwargs["source_type"] == "background_report"
+        assert kwargs["session_id"] == "chat-42"  # keyed to the ORIGIN session
+        assert kwargs["kind"] == "report"
         assert kwargs["heading"] == f"Background report: dig ({jid})"
 
     async def test_small_result_not_indexed(self, tmp_path, monkeypatch, hook_env):
@@ -774,27 +774,27 @@ class TestDrainPointer:
         assert len(msgs) == 1
         return msgs[0].content
 
-    def test_truncated_notification_points_at_memory_recall(self, tmp_path, monkeypatch):
+    def test_truncated_notification_points_at_recall_session(self, tmp_path, monkeypatch):
         from server.chat import _BG_RESULT_CAP
 
         assert _BG_RESULT_CAP == 3000  # ADR 0070 D2 shrank the inline cap
         body = self._drained_body(tmp_path, monkeypatch, result="x" * (_BG_RESULT_CAP + 500))
-        assert "memory_recall" in body
+        assert "recall_session(session_id='sess-P')" in body
         assert "report card" in body
         assert "job id bg-" in body
 
     def test_small_result_carries_no_pointer(self, tmp_path, monkeypatch):
         body = self._drained_body(tmp_path, monkeypatch, result="tiny result")
-        assert "memory_recall" not in body
+        assert "recall_session" not in body
         assert "tiny result" in body
 
     def test_incognito_truncation_does_not_claim_searchability(self, tmp_path, monkeypatch):
         """An incognito job's report is NOT indexed — the notification must not
-        point the model at a memory_recall hit that doesn't exist."""
+        point the model at a recall_session hit that doesn't exist."""
         from server.chat import _BG_RESULT_CAP
 
         body = self._drained_body(tmp_path, monkeypatch, result="x" * (_BG_RESULT_CAP + 500), incognito=True)
-        assert "memory_recall" not in body
+        assert "recall_session" not in body
         assert "report card" in body  # jobs.db still has the full text
 
     def test_chained_job_truncation_does_not_claim_searchability(self, tmp_path, monkeypatch):
@@ -805,7 +805,7 @@ class TestDrainPointer:
         body = self._drained_body(
             tmp_path, monkeypatch, result="x" * (_BG_RESULT_CAP + 500), origin="background:bg-parentparent"
         )
-        assert "memory_recall" not in body
+        assert "recall_session" not in body
         assert "report card" in body
 
 
@@ -843,7 +843,7 @@ class TestDeterministicDeliverables:
         body = await self._drain_work_result(tmp_path, monkeypatch, result=reply)
         assert "TAIL-SENTINEL" in body, "the delegate's reply was truncated before the orchestrator saw it"
         assert "truncated to" not in body
-        assert "memory_recall" not in body
+        assert "recall_session" not in body
 
     async def test_spawn_work_row_is_marked_deterministic(self, tmp_path, monkeypatch):
         """The flag is a FACT about the job recorded at creation — the drain reads it,

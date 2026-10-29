@@ -184,3 +184,83 @@ def test_one_step_forget_also_deletes_history(tmp_path):
     assert removed == 3  # three history rows (no chunks seeded)
     assert _row_count(db) == 2
     assert hist.get(ids["report"]) is not None and hist.get(ids["other"]) is not None
+
+
+def test_separate_databases_retry_preserves_new_harvest(tmp_path, monkeypatch):
+    from graph.conversation_harvest import conversation_forget_store
+
+    store = KnowledgeStore(tmp_path / "commons.db")
+    hist = HistoryStore(tmp_path / "private.db")
+    ids = _seed_history(hist)
+    store.add_chunk("old fact", source="a2a:s1", source_type="harvest")
+    combined = conversation_forget_store(store, hist)
+    marker = begin_forget(combined, SESSION, THREADS)
+    new = hist.add("fresh summary", session_id=SESSION, kind="summary")
+    store.add_chunk("fresh fact", source="a2a:s1", source_type="harvest")
+    original = hist.delete_forget_pending
+
+    def fail(marker):
+        raise RuntimeError("history unavailable")
+
+    monkeypatch.setattr(hist, "delete_forget_pending", fail)
+    with pytest.raises(RuntimeError, match="history unavailable"):
+        finish_forget(combined, marker)
+    # Knowledge deletion succeeded; the history marker still protects BOTH new writes.
+    assert store.count_forget_pending(marker) == 0
+    assert begin_forget(combined, SESSION, THREADS) == marker
+    monkeypatch.setattr(hist, "delete_forget_pending", original)
+    finish_forget(combined, marker)
+    assert hist.get(new) is not None
+    assert hist.get(ids["archive"]) is None
+    assert [row.content for row in store.list_chunks()] == ["fresh fact"]
+
+
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_separate_databases_orphan_sweep(tmp_path, incomplete):
+    from graph.conversation_harvest import conversation_forget_store
+
+    store = KnowledgeStore(tmp_path / "commons.db")
+    hist = HistoryStore(tmp_path / "private.db")
+    ids = _seed_history(hist)
+    combined = conversation_forget_store(store, hist)
+    begin_forget(combined, SESSION, THREADS)
+    result = sweep_orphaned_forgets(combined, retirement_incomplete=lambda sid, at: incomplete)
+    assert result == {"finished": int(not incomplete), "restored": int(incomplete)}
+    assert (hist.get(ids["archive"]) is not None) == incomplete
+    assert hist.get(ids["report"]) is not None
+
+
+def test_separate_databases_hide_failure_restores_knowledge(tmp_path, monkeypatch):
+    from graph.conversation_harvest import conversation_forget_store
+
+    store = KnowledgeStore(tmp_path / "commons.db")
+    hist = HistoryStore(tmp_path / "private.db")
+    store.add_chunk("old fact", source="a2a:s1", source_type="harvest")
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("history unavailable")
+
+    monkeypatch.setattr(hist, "mark_forget_pending", fail)
+    with pytest.raises(RuntimeError, match="history unavailable"):
+        begin_forget(conversation_forget_store(store, hist), SESSION, THREADS)
+    assert [row.content for row in store.list_chunks()] == ["old fact"]
+    assert store.forget_pending_markers() == {}
+
+
+@pytest.mark.parametrize("knowledge_available", [False, True])
+async def test_runtime_sweep_reaches_private_history(tmp_path, monkeypatch, knowledge_available):
+    from graph.conversation_harvest import conversation_forget_store
+    from runtime.state import STATE
+    from server import maintenance_loops
+
+    store = KnowledgeStore(tmp_path / "commons.db") if knowledge_available else None
+    hist = HistoryStore(tmp_path / "private.db")
+    ids = _seed_history(hist)
+    begin_forget(conversation_forget_store(store, hist), SESSION, THREADS)
+    monkeypatch.setattr(STATE, "knowledge_store", store)
+    monkeypatch.setattr(STATE, "history_store", hist)
+    monkeypatch.setattr(maintenance_loops, "_forget_retirement_incomplete", lambda sid, at: False)
+    await maintenance_loops._sweep_orphaned_forgets()
+    assert hist.get(ids["archive"]) is None
+    assert hist.get(ids["report"]) is not None
+    assert hist.forget_pending_markers() == {}

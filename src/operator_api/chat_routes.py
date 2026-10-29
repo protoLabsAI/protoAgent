@@ -861,7 +861,8 @@ def register_chat_routes(app, ui: str) -> None:
         from graph import conversation_harvest as _harvest
 
         store = STATE.knowledge_store
-        forget = forget and store is not None
+        forget_store = _harvest.conversation_forget_store(store, STATE.history_store)
+        forget = forget and forget_store is not None
         # Resolved only when forgetting: a resolver replay without request metadata is a
         # best-effort call this route otherwise makes exactly where it always did.
         forget_tids = (
@@ -871,7 +872,7 @@ def register_chat_routes(app, ui: str) -> None:
             else []
         )
         # Not best-effort: if this raises, the delete fails before anything is retired.
-        marker = await asyncio.to_thread(_harvest.begin_forget, store, session_id, forget_tids) if forget else None
+        marker = await asyncio.to_thread(_harvest.begin_forget, forget_store, session_id, forget_tids) if forget else None
         try:
             chunk_id = await _retire_thread(f"a2a:{session_id}", harvest=harvest, cascade=True)
             await _retire_thread(f"chat:{session_id}", harvest=False, cascade=True)  # only harvest once
@@ -883,7 +884,7 @@ def register_chat_routes(app, ui: str) -> None:
                 # then would let the NEXT attempt hide and delete that attempt's harvest.
                 await asyncio.to_thread(
                     _harvest.settle_failed_retirement,
-                    store,
+                    forget_store,
                     marker,
                     thread_ids=forget_tids,
                     checkpoint_path=STATE.checkpoint_path,
@@ -971,8 +972,12 @@ def register_chat_routes(app, ui: str) -> None:
         # Phase 2 of the forget, last: nothing after it can fail and strand a retry that
         # would then hide (and delete) what this attempt's harvest just wrote.
         forgotten = 0
+        if marker and store is not None and not callable(getattr(store, "mark_forget_pending", None)):
+            forgotten += await asyncio.to_thread(
+                _harvest.forget_conversation_memory, store, session_id, forget_tids
+            )
         if marker:
-            forgotten = await asyncio.to_thread(_harvest.finish_forget, store, marker)
+            forgotten += await asyncio.to_thread(_harvest.finish_forget, forget_store, marker)
         elif forget:
             # A store that can't hide rows (a plugin backend): the one-step delete, after
             # retirement so a failed retirement still forgets nothing.

@@ -28,16 +28,14 @@ class _FakeGraph:
         self.updates.append((config, update))
 
 
-class _FakeKnowledge:
+class _FakeHistory:
     def __init__(self, *, yields=True):
         self.docs: list = []
         self._yields = yields
 
-    def add_document(self, content, *, domain=None, heading=None, namespace=None, **kw):
-        self.docs.append(
-            {"content": content, "domain": domain, "heading": heading, "namespace": namespace, "source": kw.get("source")}
-        )
-        return [1, 2] if self._yields else []
+    def add(self, content, **kwargs):
+        self.docs.append({"content": content, **kwargs})
+        return 1 if self._yields else None
 
 
 async def _summ(transcript, config):
@@ -64,17 +62,17 @@ def test_compact_archives_and_rewrites_checkpoint():
         AIMessage(content="teal", id="a2"),
     ]
     g = _FakeGraph(msgs)
-    kb = _FakeKnowledge()
-    res = asyncio.run(compact_thread(g, object(), kb, _cfg(2), "a2a:s1", "s1", summarizer=_summ))
+    kb = _FakeHistory()
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=kb, summarizer=_summ))
 
-    # Raw transcript archived into the conversation domain, session-scoped namespace.
-    assert kb.docs[0]["domain"] == "conversation"
+    # Raw transcript archived into the history store, session-scoped namespace.
+    assert kb.docs[0]["kind"] == "archive"
     assert kb.docs[0]["namespace"] == "chat-archive:s1"
     assert "teal" in kb.docs[0]["content"] and "favorite color" in kb.docs[0]["content"]
 
     assert res["summary"] == "SUMMARY: user likes teal"
     assert res["archived"] is True and res["refused"] is False
-    assert res["removed"] == 2 and res["kept"] == 2 and res["archived_chunks"] == 2
+    assert res["removed"] == 2 and res["kept"] == 2 and res["archived_chunks"] == 1
 
     # Checkpoint rewritten to [REMOVE_ALL, summary, *keep_recent].
     assert len(g.updates) == 1
@@ -82,6 +80,7 @@ def test_compact_archives_and_rewrites_checkpoint():
     out = update["messages"]
     assert isinstance(out[0], RemoveMessage) and out[0].id == REMOVE_ALL_MESSAGES
     assert isinstance(out[1], HumanMessage) and "SUMMARY: user likes teal" in out[1].content
+    assert "recall_session(session_id='s1')" in out[1].content
     assert out[1].additional_kwargs.get("lc_source") == "compaction"
     assert [m.id for m in out[2:]] == ["h2", "a2"]  # the recent tail, untouched
 
@@ -100,7 +99,7 @@ def test_compact_preserves_tool_call_pairing():
         AIMessage(content="answer2", id="a4"),
     ]
     g = _FakeGraph(msgs)
-    res = asyncio.run(compact_thread(g, object(), _FakeKnowledge(), _cfg(2), "a2a:s1", "s1", summarizer=_summ))
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=_FakeHistory(), summarizer=_summ))
 
     _config, update = g.updates[0]
     tail = update["messages"][2:]
@@ -115,7 +114,7 @@ def test_compact_refuses_without_store():
     # Never-lossy: no archive target ⇒ the checkpoint is left untouched.
     msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
     g = _FakeGraph(msgs)
-    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", summarizer=_boom))
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=None, summarizer=_boom))
     assert res["refused"] is True and res["archived"] is False and res["reason"] == "no_store"
     assert g.updates == []  # NO rewrite
 
@@ -124,8 +123,8 @@ def test_compact_refuses_when_archive_yields_nothing():
     # Never-lossy: archive wrote no chunks ⇒ don't rewrite (and don't even summarize).
     msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
     g = _FakeGraph(msgs)
-    kb = _FakeKnowledge(yields=False)
-    res = asyncio.run(compact_thread(g, object(), kb, _cfg(2), "a2a:s1", "s1", summarizer=_boom))
+    kb = _FakeHistory(yields=False)
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=kb, summarizer=_boom))
     assert res["refused"] is True and res["archived"] is False and res["reason"] == "empty_archive"
     assert g.updates == []
 
@@ -135,24 +134,24 @@ def test_compact_refuses_when_summarizer_raises():
     # 500 or half-rewrite the checkpoint — refuse and leave the live context intact.
     msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
     g = _FakeGraph(msgs)
-    kb = _FakeKnowledge()
-    res = asyncio.run(compact_thread(g, object(), kb, _cfg(2), "a2a:s1", "s1", summarizer=_raise_summ))
+    kb = _FakeHistory()
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=kb, summarizer=_raise_summ))
     assert res["refused"] is True and res["reason"] == "summary_error"
-    assert res["archived"] is True and res["archived_chunks"] == 2  # the archive stands
+    assert res["archived"] is True and res["archived_chunks"] == 1  # the archive stands
     assert g.updates == []  # NO checkpoint rewrite
 
 
 def test_compact_noop_when_already_short():
     msgs = [HumanMessage(content="hi", id="h1"), AIMessage(content="yo", id="a1")]
     g = _FakeGraph(msgs)
-    kb = _FakeKnowledge()
-    res = asyncio.run(compact_thread(g, object(), kb, _cfg(20), "a2a:s1", "s1", summarizer=_boom))
+    kb = _FakeHistory()
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(20), "a2a:s1", "s1", history_store=kb, summarizer=_boom))
     assert res["refused"] is False and res["reason"] == "too_short" and res["removed"] == 0
     assert g.updates == [] and kb.docs == []  # nothing archived, nothing rewritten
 
 
 def test_compact_refuses_without_checkpointer():
-    res = asyncio.run(compact_thread(_FakeGraph([]), None, _FakeKnowledge(), _cfg(2), "a2a:s1", "s1", summarizer=_boom))
+    res = asyncio.run(compact_thread(_FakeGraph([]), None, None, _cfg(2), "a2a:s1", "s1", history_store=_FakeHistory(), summarizer=_boom))
     assert res["refused"] is True and res["reason"] == "no_checkpointer"
 
 
@@ -176,11 +175,11 @@ def test_compact_rewrites_real_sqlite_checkpoint(tmp_path):
         HumanMessage(content="q2"),
         AIMessage(content="answer2"),
     ]
-    kb = _FakeKnowledge()
+    kb = _FakeHistory()
 
     async def run():
         await app.ainvoke({"messages": seed}, cfg)
-        res = await compact_thread(app, saver, kb, _cfg(2), "a2a:s1", "s1", summarizer=_summ)
+        res = await compact_thread(app, saver, None, _cfg(2), "a2a:s1", "s1", history_store=kb, summarizer=_summ)
         snap = await app.aget_state(cfg)
         return res, snap.values["messages"]
 
@@ -195,9 +194,9 @@ def test_compact_rewrites_real_sqlite_checkpoint(tmp_path):
 def test_compact_archive_is_searchable_in_a_real_store(tmp_path):
     """End-to-end 'searchable full-text save': the FULL raw transcript — including
     the head that compaction REMOVES from live context — is archived into a REAL
-    KnowledgeStore (FTS5, no gateway) and retrievable by search. Only the
+    HistoryStore (FTS5, no gateway) and retrievable by search. Only the
     summarizer is stubbed; the checkpoint rewrite + archive are real."""
-    from knowledge.store import KnowledgeStore
+    from knowledge.history import HistoryStore
 
     g = StateGraph(MessagesState)
     g.add_node("n", lambda s: {"messages": []})
@@ -214,11 +213,11 @@ def test_compact_archive_is_searchable_in_a_real_store(tmp_path):
         HumanMessage(content="what is the capital of France"),
         AIMessage(content="Paris"),
     ]
-    store = KnowledgeStore(db_path=str(tmp_path / "kb.db"))
+    store = HistoryStore(db_path=str(tmp_path / "kb.db"))
 
     async def run():
         await app.ainvoke({"messages": seed}, cfg)
-        res = await compact_thread(app, saver, store, _cfg(2), "a2a:s1", "s1", summarizer=_summ)
+        res = await compact_thread(app, saver, None, _cfg(2), "a2a:s1", "s1", history_store=store, summarizer=_summ)
         snap = await app.aget_state(cfg)
         return res, snap.values["messages"]
 
@@ -234,9 +233,9 @@ def test_compact_archive_is_searchable_in_a_real_store(tmp_path):
     assert all("pumpernickel" not in (m.content or "") for m in final)
 
     # (3) …but the removed head is preserved AND SEARCHABLE in the real store.
-    hits = store.search("pumpernickel", domain="conversation")
+    hits = store.search("pumpernickel")
     assert hits, "archived transcript is NOT searchable"
-    blob = " ".join(str(h.get("content") or h.get("preview") or "") for h in hits)
+    blob = " ".join(h.content for h in hits)
     assert "pumpernickel" in blob
 
 
@@ -249,7 +248,7 @@ def test_force_compacts_without_a_store():
     history was not archived (never claim an archive that didn't happen)."""
     msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
     g = _FakeGraph(msgs)
-    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", summarizer=_summ, force=True))
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=None, summarizer=_summ, force=True))
     assert res["refused"] is False
     assert res["archived"] is False
     assert g.updates, "force mode must rewrite"
@@ -261,8 +260,8 @@ def test_force_compacts_when_summarizer_raises():
     """Safety valve: a summarizer failure degrades to an honest stub, never a refusal."""
     msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
     g = _FakeGraph(msgs)
-    kb = _FakeKnowledge(yields=True)
-    res = asyncio.run(compact_thread(g, object(), kb, _cfg(2), "a2a:s1", "s1", summarizer=_raise_summ, force=True))
+    kb = _FakeHistory(yields=True)
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=kb, summarizer=_raise_summ, force=True))
     assert res["refused"] is False
     assert g.updates
     summary_msg = g.updates[0][1]["messages"][1]
@@ -275,7 +274,7 @@ def test_force_still_noops_on_an_already_short_thread():
     overflow has another cause and a retry would hit the same wall."""
     msgs = [HumanMessage(content="m", id="m0")]
     g = _FakeGraph(msgs)
-    res = asyncio.run(compact_thread(g, object(), None, _cfg(5), "a2a:s1", "s1", summarizer=_summ, force=True))
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(5), "a2a:s1", "s1", history_store=None, summarizer=_summ, force=True))
     # A benign no-op, not a refusal — but nothing shrank, which is what the
     # overflow caller keys on (it requires removed > 0 before retrying).
     assert res["reason"] == "too_short" and res["removed"] == 0
@@ -286,7 +285,7 @@ def test_default_mode_unchanged_by_the_force_flag():
     """The manual /compact path (force absent) keeps its strict refusals."""
     msgs = [HumanMessage(content=f"m{i}", id=f"m{i}") for i in range(6)]
     g = _FakeGraph(msgs)
-    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", summarizer=_summ))
+    res = asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=None, summarizer=_summ))
     assert res["refused"] is True and res["reason"] == "no_store"
     assert g.updates == []
 
@@ -321,8 +320,8 @@ def test_compact_never_archives_an_incognito_thread(tmp_path):
     the knowledge store (where RAG re-injects it), and the never-lossy invariant forbids
     rewriting history it hasn't archived — so it refuses and changes nothing."""
     app = _seed_real_thread(str(tmp_path / "c.db"), "a2a:incog", incognito=True)
-    kb = _FakeKnowledge()
-    res = asyncio.run(compact_thread(app, object(), kb, _cfg(2), "a2a:incog", "incog", summarizer=_boom))
+    kb = _FakeHistory()
+    res = asyncio.run(compact_thread(app, object(), None, _cfg(2), "a2a:incog", "incog", history_store=kb, summarizer=_boom))
     assert kb.docs == []
     assert res["refused"] is True and res["reason"] == "incognito"
     assert res["removed"] == 0
@@ -332,8 +331,8 @@ def test_force_compact_of_an_incognito_thread_shrinks_without_archiving(tmp_path
     """The overflow safety valve must still shrink an incognito thread — without
     writing its transcript into memory."""
     app = _seed_real_thread(str(tmp_path / "c.db"), "a2a:incog", incognito=True)
-    kb = _FakeKnowledge()
-    res = asyncio.run(compact_thread(app, object(), kb, _cfg(2), "a2a:incog", "incog", summarizer=_summ, force=True))
+    kb = _FakeHistory()
+    res = asyncio.run(compact_thread(app, object(), None, _cfg(2), "a2a:incog", "incog", history_store=kb, summarizer=_summ, force=True))
     assert kb.docs == []
     assert res["refused"] is False and res["removed"] > 0 and res["archived"] is False
 
@@ -341,8 +340,8 @@ def test_force_compact_of_an_incognito_thread_shrinks_without_archiving(tmp_path
 def test_compact_archives_a_non_incognito_real_thread(tmp_path):
     """Control for the two tests above: the same real thread, not incognito, IS archived."""
     app = _seed_real_thread(str(tmp_path / "c.db"), "a2a:open", incognito=False)
-    kb = _FakeKnowledge()
-    res = asyncio.run(compact_thread(app, object(), kb, _cfg(2), "a2a:open", "open", summarizer=_summ))
+    kb = _FakeHistory()
+    res = asyncio.run(compact_thread(app, object(), None, _cfg(2), "a2a:open", "open", history_store=kb, summarizer=_summ))
     assert len(kb.docs) == 1 and "teal" in kb.docs[0]["content"]
     assert res["archived"] is True
 
@@ -371,10 +370,10 @@ def test_compact_archive_row_carries_thread_source_and_dates(monkeypatch, tmp_pa
         AIMessage(content="teal", id="a2"),
     ]
     g = _FakeGraph(msgs, created_at="2026-09-09T18:00:00+00:00")
-    kb = _FakeKnowledge()
-    asyncio.run(compact_thread(g, object(), kb, _cfg(2), "a2a:s1", "s1", summarizer=_summ))
+    kb = _FakeHistory()
+    asyncio.run(compact_thread(g, object(), None, _cfg(2), "a2a:s1", "s1", history_store=kb, summarizer=_summ))
     (doc,) = kb.docs
-    assert doc["source"] == "a2a:s1"
+    assert doc["thread_id"] == "a2a:s1"
     assert doc["namespace"] == "chat-archive:s1"
     assert doc["heading"] == "Conversation archive (s1, messages 2026-08-31 to 2026-09-09)"
     assert doc["content"].splitlines()[1:] == [
@@ -391,3 +390,12 @@ def test_safe_cut_skips_orphan_tool_block_without_parent():
     msgs = [HumanMessage(content="q"), ToolMessage(content="orphan", tool_call_id="missing"),
             ToolMessage(content="also orphan", tool_call_id="missing2"), AIMessage(content="answer")]
     assert _safe_cut_index(msgs, keep_last=3) == 3
+
+
+def test_compaction_status_names_history_and_recall_tool():
+    from server.chat_session_ops import _compaction_message
+
+    refused = _compaction_message({"reason": "no_store"})
+    assert "history store" in refused and "knowledge store" not in refused
+    compacted = _compaction_message({"removed": 4, "kept": 2})
+    assert "recall_session" in compacted and "memory recall" not in compacted

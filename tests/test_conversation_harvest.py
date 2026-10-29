@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+from knowledge.history import HistoryStore
+from runtime.state import STATE
+
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, MessagesState, StateGraph
 
 from graph.checkpoint_prune import delete_thread, find_aged_threads
 from graph.checkpointer import build_sqlite_checkpointer
 from graph.conversation_harvest import harvest_thread, render_transcript
+
+
+
+@pytest.fixture(autouse=True)
+def history_store(tmp_path, monkeypatch):
+    store = HistoryStore(tmp_path / "kb.db")
+    monkeypatch.setattr(STATE, "history_store", store)
+    return store
 
 
 def test_render_transcript_cleans_and_skips_noise():
@@ -22,6 +35,28 @@ def test_render_transcript_cleans_and_skips_noise():
     assert "User: what is 2+2?" in t
     assert "Assistant: It's 4." in t  # leaked scratch_pad dropped, native answer kept
     assert "scratch_pad" not in t
+
+
+@pytest.mark.parametrize("message_type,role", [(HumanMessage, "User"), (AIMessage, "Assistant")])
+def test_render_transcript_preserves_multipart_content(message_type, role):
+    message = message_type(content=[
+        {"type": "text", "text": "Caption"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,private"}},
+        "More text",
+        {"type": "text", "text": "<scratch_pad>hidden</scratch_pad>Answer"},
+    ])
+    transcript = render_transcript([message])
+    assert transcript.startswith(f"{role}: Caption\n\n_[image_url]_\n\nMore text")
+    assert "Answer" in transcript
+    assert "base64" not in transcript
+    if message_type is AIMessage:
+        assert "hidden" not in transcript
+
+
+def test_render_transcript_preserves_attachment_only_message():
+    assert render_transcript([HumanMessage(content=[
+        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+    ])]) == "User: _[image_url]_"
 
 
 class _FakeKnowledge:
@@ -57,7 +92,7 @@ def _seed(db, thread="a2a:chat-1"):
     asyncio.run(main())
 
 
-def test_harvest_thread_summarizes_into_knowledge(tmp_path):
+def test_harvest_thread_summarizes_into_history(tmp_path, history_store):
     db = str(tmp_path / "c.db")
     _seed(db)
     saver = build_sqlite_checkpointer(db)
@@ -76,16 +111,14 @@ def test_harvest_thread_summarizes_into_knowledge(tmp_path):
             summarizer=fake_summarizer,
         )
     )
-    assert cid == "chunk-1"
-    assert kb.chunks[0]["domain"] == "conversation"
-    assert "teal" in kb.chunks[0]["content"]
-    # Provenance (ADR 0069 D5): the row links back to the retired thread.
-    assert kb.chunks[0]["source"] == "a2a:chat-1"
-    # Trust tier (ADR 0069 D8): harvest rows rank agent-derived.
-    assert kb.chunks[0]["source_type"] == "harvest"
+    row = history_store.get(cid)
+    assert row.kind == "summary"
+    assert "teal" in row.content
+    assert row.thread_id == "a2a:chat-1"
+    assert kb.chunks == []
 
 
-def test_harvest_extracts_facts_when_enabled(tmp_path):
+def test_harvest_extracts_facts_when_enabled(tmp_path, history_store):
     """ADR 0021: the session-end pass also distils facts (gated on
     knowledge_facts), stamped with the namespace, into a real store."""
     from types import SimpleNamespace
@@ -117,12 +150,14 @@ def test_harvest_extracts_facts_when_enabled(tmp_path):
     )
     assert cid is not None
     # Episodic summary (conversation) + semantic fact (fact), both namespaced.
-    summaries = store.list_chunks(domain="conversation", namespace="proj-x")
+    summaries = history_store.list_for_session("a2a:chat-1")
+    assert store.list_chunks(domain="conversation") == []
+    assert summaries[0].namespace == "proj-x"
     assert len(summaries) == 1
     facts = store.list_chunks(domain="fact", namespace="proj-x")
     assert len(facts) == 1 and "teal" in facts[0].content
     # Provenance (ADR 0069 D5): both rows carry the originating thread id.
-    assert summaries[0].source == "a2a:chat-1"
+    assert summaries[0].thread_id == "a2a:chat-1"
     assert facts[0].source == "a2a:chat-1"
 
 
@@ -155,11 +190,11 @@ def test_harvest_skips_facts_when_disabled(tmp_path):
     assert store.list_chunks(domain="fact") == []
 
 
-def test_harvest_noop_without_knowledge_store(tmp_path):
+def test_harvest_noop_without_history_store(tmp_path):
     db = str(tmp_path / "c.db")
     _seed(db)
     saver = build_sqlite_checkpointer(db)
-    assert asyncio.run(harvest_thread("a2a:chat-1", checkpointer=saver, knowledge_store=None, config=object())) is None
+    assert asyncio.run(harvest_thread("a2a:chat-1", checkpointer=saver, knowledge_store=None, history_store=None, config=object())) is None
 
 
 def test_harvest_noop_on_unknown_thread(tmp_path):
@@ -339,7 +374,7 @@ async def test_harvest_thread_raise_on_error_reraises(tmp_path):
         await harvest_thread("t-e", raise_on_error=True, **kwargs)
 
 
-def test_harvest_dates_summary_and_facts_to_the_conversation(tmp_path):
+def test_harvest_dates_summary_and_facts_to_the_conversation(tmp_path, history_store):
     # Regression (2026-09-10): the TTL sweep retired August threads and stored their facts
     # undated, so "the user runs model X" was recalled weeks later as the current setup.
     from datetime import UTC, datetime
@@ -366,8 +401,8 @@ def test_harvest_dates_summary_and_facts_to_the_conversation(tmp_path):
         )
     )
     day = datetime.now(UTC).date().isoformat()  # the seeded thread's last checkpoint
-    summary = kb.chunks[0]
-    assert summary["content"].startswith(f"[as of {day}] ")
-    assert summary["heading"].endswith(f", last active {day})")
+    summary = history_store.list_for_session("a2a:chat-1")[0]
+    assert summary.content.startswith(f"[as of {day}] ")
+    assert summary.heading.endswith(f", last active {day})")
     facts = [c for c in kb.chunks if c["domain"] == "fact"]
     assert facts and facts[0]["content"] == f"[as of {day}] The user prefers teal."
