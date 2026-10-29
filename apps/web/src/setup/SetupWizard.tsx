@@ -305,6 +305,39 @@ export function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promis
   return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
+export function finishModelConfig(state: WizardState, exploreWithoutModel: boolean) {
+  // ACP runs on whatever provider is configured elsewhere; a native brain carries
+  // its provider (gateway "openai", or a native OAuth provider — ADR 0097).
+  const provider = state.runtimeKind === "acp" ? state.provider || "openai" : state.provider;
+  const oauth = isOAuthProvider(provider);
+  // Setup writes ONE CONNECTION (ADR 0106), not the provider/base/key triple. The id
+  // is the lane name the qualified grammar already used — `gateway` for an
+  // OpenAI-compatible endpoint, the provider's own name for a subscription — so a
+  // config written here is indistinguishable from a migrated one, and first run never
+  // has to ask someone to invent an identifier.
+  const connectionId = oauth ? provider : "gateway";
+  const connection: NonNullable<AgentConfig["providers"]>[number] = {
+    id: connectionId,
+    type: oauth ? provider : "openai-compat",
+  };
+  // A subscription authenticates from a credential store, so it carries no endpoint.
+  if (!oauth) connection.base_url = state.apiBase.trim();
+  if (!oauth && state.apiKey.trim()) connection.api_key = state.apiKey.trim();
+  const model: AgentConfig["model"] = {
+    // Qualified from the start: the primary model names its connection like every
+    // other slot, so there is no lead provider to fall out of step with.
+    name: exploreWithoutModel ? "" : `${connectionId}:${state.modelName.trim()}`,
+    temperature: Number(state.temperature),
+    max_tokens: Number(state.maxTokens),
+    max_iterations: Number(state.maxIterations),
+  };
+  return {
+    agent_runtime: exploreWithoutModel ? "native" : state.runtimeKind === "acp" ? `acp:${state.acpAgent}` : "native",
+    providers: exploreWithoutModel ? [] : [connection],
+    model,
+  };
+}
+
 export function SetupWizard({
   open,
   projectPath,
@@ -316,6 +349,7 @@ export function SetupWizard({
   onProjectPathChange: (value: string) => void;
   onFinished: () => void;
 }) {
+  const [exploreWithoutModel, setExploreWithoutModel] = useState(false);
   const [step, setStep] = useState<Step>("welcome");
   const [state, setState] = useState<WizardState>(() => defaultState());
   const [moreArchetypes, setMoreArchetypes] = useState(false);
@@ -437,7 +471,10 @@ export function SetupWizard({
   // Refresh OAuth sign-in status when the brain step is entered (the user may have
   // signed into Claude Code / Codex out-of-band since the wizard opened).
   useEffect(() => {
-    if (step === "brain") void refreshOauthStatus();
+    if (step === "brain") {
+      setExploreWithoutModel(false);
+      void refreshOauthStatus();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
@@ -706,31 +743,6 @@ export function SetupWizard({
     setError("");
     setMessage("");
     try {
-      // ACP runs on whatever provider is configured elsewhere; a native brain carries
-      // its provider (gateway "openai", or a native OAuth provider — ADR 0097).
-      const provider = state.runtimeKind === "acp" ? state.provider || "openai" : state.provider;
-      const oauth = isOAuthProvider(provider);
-      // Setup writes ONE CONNECTION (ADR 0106), not the provider/base/key triple. The id
-      // is the lane name the qualified grammar already used — `gateway` for an
-      // OpenAI-compatible endpoint, the provider's own name for a subscription — so a
-      // config written here is indistinguishable from a migrated one, and first run never
-      // has to ask someone to invent an identifier.
-      const connectionId = oauth ? provider : "gateway";
-      const connection: NonNullable<AgentConfig["providers"]>[number] = {
-        id: connectionId,
-        type: oauth ? provider : "openai-compat",
-      };
-      // A subscription authenticates from a credential store, so it carries no endpoint.
-      if (!oauth) connection.base_url = state.apiBase.trim();
-      if (!oauth && state.apiKey.trim()) connection.api_key = state.apiKey.trim();
-      const model: AgentConfig["model"] = {
-        // Qualified from the start: the primary model names its connection like every
-        // other slot, so there is no lead provider to fall out of step with.
-        name: `${connectionId}:${state.modelName.trim()}`,
-        temperature: Number(state.temperature),
-        max_tokens: Number(state.maxTokens),
-        max_iterations: Number(state.maxIterations),
-      };
       // The project you're setting up should be operable, so fold its path
       // into the allowlist automatically — otherwise picking a project path
       // outside the (empty) allowlist silently makes tasks/notes unusable
@@ -745,9 +757,7 @@ export function SetupWizard({
       );
       const response = await api.finishSetup(
         {
-          agent_runtime: state.runtimeKind === "acp" ? `acp:${state.acpAgent}` : "native",
-          providers: [connection],
-          model,
+          ...finishModelConfig(state, exploreWithoutModel),
           identity: {
             name: state.agentName.trim() || "protoagent",
             operator: state.operatorName.trim(),
@@ -1039,6 +1049,19 @@ export function SetupWizard({
                       (the wizard writes agent_runtime explicitly, so the old value is
                       overwritten, not merged around). */}
                 </RadioCardGroup>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  style={{ textDecoration: "underline" }}
+                  disabled={busy}
+                  onClick={() => {
+                    setExploreWithoutModel(true);
+                    setError("");
+                    setStep("agent");
+                  }}
+                >
+                  Explore without a model
+                </Button>
               </div>
               {oauthProvider ? (
                 <>
@@ -1270,7 +1293,9 @@ export function SetupWizard({
             <StepBody icon={<Check size={20} />} title="You're all set" kicker="Review & finish">
               <div className="finish-list">
                 <StatusLine icon={<Bot size={15} />} label={`Agent · ${state.agentName || "protoagent"}`} />
-                {brainKind === "acp" ? (
+                {exploreWithoutModel ? (
+                  <StatusLine icon={<KeyRound size={15} />} label="No model connected — you can add one any time in Settings ▸ Model." />
+                ) : brainKind === "acp" ? (
                   <StatusLine icon={<KeyRound size={15} />} label={`Runtime · acp:${state.acpAgent} (deprecated)`} />
                 ) : oauthProvider ? (
                   <StatusLine

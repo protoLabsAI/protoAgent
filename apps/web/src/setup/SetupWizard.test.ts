@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { agentStepReady, steps, brainStepReady, defaultState, hydrateState, pickLocalEndpoint, SetupWizard, testKey, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
+import { finishModelConfig, agentStepReady, steps, brainStepReady, defaultState, hydrateState, pickLocalEndpoint, SetupWizard, testKey, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
 import type { LocalEndpoint } from "./SetupWizard";
 import { primaryArchetypes } from "./ArchetypePicker";
 import { api } from "../lib/api";
@@ -517,5 +517,35 @@ describe("wizard navigation", () => {
     await click(button(/^Next/));
     await click(button(/^Back/));
     expect(vi.mocked(api.oauthStatus).mock.calls.length).toBeGreaterThan(calls);
+  });
+});
+
+
+describe("Explore without a model", () => {
+  it("discards model credentials and legacy ACP runtime in the finish payload", () => {
+    const state = { ...defaultState(), runtimeKind: "acp" as const, apiBase: "https://gw/v1", apiKey: "secret", modelName: "m" };
+    const config = finishModelConfig(state, true);
+    expect(config.providers).toEqual([]);
+    expect(config.model.name).toBe("");
+    expect(config.agent_runtime).toBe("native");
+    expect(JSON.stringify(config)).not.toContain("secret");
+  });
+
+  it("preserves the configured model path", () => {
+    const config = finishModelConfig({ ...defaultState(), apiBase: "https://gw/v1", modelName: "m" }, false);
+    expect(config.providers).toEqual([{ id: "gateway", type: "openai-compat", base_url: "https://gw/v1" }]);
+    expect(config.model.name).toBe("gateway:m");
+  });
+
+  it("skips the test gate and finishes with no connection", async () => {
+    const finish = vi.spyOn(api, "finishSetup").mockResolvedValue({ ok: true } as never);
+    await mountToBrain();
+    expect(button(/^Next/)?.disabled).toBe(true);
+    await click(button(/^Explore without a model$/));
+    await click(button(/^Next/));
+    expect(container.textContent).toContain("No model connected — you can add one any time in Settings ▸ Model.");
+    await click(button(/^Finish$/));
+    expect(api.testModel).not.toHaveBeenCalled();
+    expect(finish).toHaveBeenCalledWith(expect.objectContaining({ providers: [], model: expect.objectContaining({ name: "" }) }), expect.any(String), []);
   });
 });
