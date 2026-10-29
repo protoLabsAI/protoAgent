@@ -41,8 +41,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
-from knowledge.store import HISTORY_DOMAIN
-
 log = logging.getLogger(__name__)
 
 # <working_state> caps (ADR 0079) — the agent's own live commitments injected every turn so
@@ -927,13 +925,17 @@ def search_scoped(knowledge_store, query: str, opts: ProjectionOptions) -> list[
 
 def deliverable_hit(r: dict) -> bool:
     """Whether a retrieved row may enter the prompt (ADR 0108 D6 + D7.4): not
-    operator-rejected, not past its ``expires_at`` and not conversation history
-    (``knowledge.store.HISTORY_DOMAIN``). Mirrors the store-level
+    operator-rejected and not past its ``expires_at``. Mirrors the store-level
     ``deliverable=True`` predicate for backends that don't implement it.
+
+    Conversation history used to be excluded here too (#4553), but ADR 0125 moved
+    it into its own ``history`` table — no retrieved ``chunks`` row carries it
+    anymore — so that guard is retired alongside the store-level one.
+
     ``expires_at`` is parsed as ISO-8601 (``Z`` and naive timestamps read as
     UTC); an unparseable value falls back to the string compare the SQL
     predicate makes."""
-    if r.get("review_state") == "rejected" or r.get("domain") == HISTORY_DOMAIN:
+    if r.get("review_state") == "rejected":
         return False
     expires = r.get("expires_at")
     if not expires:

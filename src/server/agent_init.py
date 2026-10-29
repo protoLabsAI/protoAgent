@@ -350,6 +350,10 @@ def _init_langgraph_agent(headless_setup: bool = False):
     with _timed_boot_phase("knowledge_store", _boot_phases):
         STATE.knowledge_store = _build_knowledge_store(STATE.graph_config)
         STATE.history_store = _build_history_store(STATE.graph_config)
+        # ADR 0125 D6: one-shot, idempotent boot migration draining legacy
+        # domain='conversation' chunks into the history table (same agent.db).
+        # Runs now that both stores exist and have created their schemas.
+        _migrate_conversation_history(STATE.history_store)
 
     # Scheduler — the bundled local sqlite backend (or None when disabled).
     # Agent-tool surface: schedule_task / list_schedules / cancel_schedule.
@@ -525,6 +529,25 @@ def _init_langgraph_agent(headless_setup: bool = False):
         getattr(STATE.knowledge_store, "path", "(disabled)"),
         getattr(STATE.scheduler, "name", "disabled"),
     )
+
+
+def _migrate_conversation_history(history_store) -> None:
+    """ADR 0125 D6: move legacy ``domain='conversation'`` chunks into the ``history``
+    table in the same core agent.db. Idempotent (``_kb_meta`` marker); a plugin
+    KnowledgeBackend's own store is never touched — history is always core SQLite, so
+    ``history_store.path`` IS the core agent.db to migrate. Best-effort: a failure
+    logs and leaves the chunks in place (still reachable) rather than blocking boot."""
+    if history_store is None:
+        return
+    path = getattr(history_store, "path", None)
+    if path is None:
+        return
+    try:
+        from knowledge.store import migrate_conversation_chunks_to_history
+
+        migrate_conversation_chunks_to_history(path)
+    except Exception:  # noqa: BLE001 — a migration hiccup must never fail boot
+        log.exception("[server] 0125 history migration skipped")
 
 
 def _build_history_store(config):

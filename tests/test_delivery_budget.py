@@ -305,8 +305,9 @@ def test_deliverable_hit():
     assert not deliverable_hit({"review_state": "rejected"})
     assert not deliverable_hit({"expires_at": "2000-01-01T00:00:00+00:00"})
     assert deliverable_hit({"expires_at": "2999-01-01T00:00:00+00:00"})
-    # Conversation history is on-demand only: memory_recall reaches it, auto-RAG never does.
-    assert not deliverable_hit({"domain": HISTORY_DOMAIN})
+    # ADR 0125 retired the #4553 domain guard: history lives in its own table now, so
+    # `domain` no longer gates delivery — a leftover conversation-domain row is eligible.
+    assert deliverable_hit({"domain": HISTORY_DOMAIN})
     assert deliverable_hit({"domain": "general"})
 
 
@@ -323,6 +324,8 @@ def _seed(store) -> dict[str, int]:
         "rejected": store.add_chunk("alpha rejected row", domain="d", review_state="rejected"),
         "expired": store.add_chunk("alpha expired row", domain="d", expires_at=past),
         "future": store.add_chunk("alpha future row", domain="d", expires_at=future),
+        # ADR 0125: a leftover conversation-domain row is now deliverable like any other
+        # (the #4553 domain guard was retired once history moved to its own table).
         "history": store.add_chunk("alpha archived turn", domain=HISTORY_DOMAIN),
     }
 
@@ -330,7 +333,7 @@ def _seed(store) -> dict[str, int]:
 def test_deliverable_on_the_plain_store(tmp_path):
     store = KnowledgeStore(tmp_path / "kb.db")
     ids = _seed(store)
-    eligible = {ids["plain"], ids["pending"], ids["confirmed"], ids["future"]}
+    eligible = {ids["plain"], ids["pending"], ids["confirmed"], ids["future"], ids["history"]}
     assert {c.id for c in store.list_chunks(deliverable=True)} == eligible
     assert {c.id for c in store.list_chunks()} == set(ids.values())  # memory_list sees everything
     assert {r["id"] for r in store.search("alpha", k=10, deliverable=True)} == eligible
@@ -346,7 +349,7 @@ def _const_embed(text: str) -> list[float]:
 def test_deliverable_on_the_hybrid_store_filters_both_rankings(tmp_path):
     store = HybridKnowledgeStore(tmp_path / "kb.db", embed_fn=_const_embed)
     ids = _seed(store)
-    eligible = {ids["plain"], ids["pending"], ids["confirmed"], ids["future"]}
+    eligible = {ids["plain"], ids["pending"], ids["confirmed"], ids["future"], ids["history"]}
     assert {r["id"] for r in store.search("alpha", k=10, deliverable=True)} == eligible
     # Vector-only path (no shared tokens): the rejected/expired rows can't surface there either.
     assert {r["id"] for r in store.search("zzzzz", k=10, deliverable=True)} == eligible

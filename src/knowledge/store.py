@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, fields
@@ -358,20 +359,25 @@ def _namespace_clause(namespace: str | list[str] | None, col: str = "namespace")
     return "(" + " OR ".join(arms) + ")", params
 
 
-# Conversation history — compaction archives, retired-thread summaries, background
-# job reports. It is reachable on demand (memory_recall, recall_session) but never
-# enters the prompt unasked: auto-RAG over it re-fed agents their own old turns
-# (99% of a week's injected hits on one member were archives).
+# The legacy ``chunks.domain`` that held conversation history — compaction archives,
+# retired-thread summaries, background job reports — before ADR 0125 gave history its
+# own table. No writer sets it anymore (H1d); the boot migration
+# (:func:`migrate_conversation_chunks_to_history`) drains the last such rows into
+# ``history``. Kept as the migration's selector; it no longer gates delivery.
 HISTORY_DOMAIN = "conversation"
 
 
 def _deliverable_clauses(col_prefix: str = "") -> tuple[list[str], list[str]]:
     """The delivery layer's eligibility predicate (ADR 0108 D6 + D7.4): a row an
-    operator REJECTED (``review_state='rejected'``), one past its ``expires_at``, or
-    conversation history (``HISTORY_DOMAIN``) never enters the prompt. NULL review
-    state (= pending) and NULL expiry are deliverable. Superseded rows are excluded
-    separately (``invalidated_at``).
+    operator REJECTED (``review_state='rejected'``), or one past its ``expires_at``,
+    never enters the prompt. NULL review state (= pending) and NULL expiry are
+    deliverable. Superseded rows are excluded separately (``invalidated_at``).
     Returns ``(sql_clauses, params)`` — ``col_prefix`` is ``"c."`` on joined SQL.
+
+    Conversation history (``HISTORY_DOMAIN``) used to be excluded here too (#4553),
+    but ADR 0125 moved it out of ``chunks`` into the ``history`` table — the boot
+    migration drains the last ``domain='conversation'`` rows and no writer makes new
+    ones — so that guard now covers an empty set and is retired.
 
     The expiry test is a STRING compare against ``_now_iso()`` — it assumes
     ``expires_at`` is stored in the same ``YYYY-MM-DDTHH:MM:SS.ffffff+00:00``
@@ -383,9 +389,8 @@ def _deliverable_clauses(col_prefix: str = "") -> tuple[list[str], list[str]]:
         [
             f"({p}review_state IS NULL OR {p}review_state != 'rejected')",
             f"({p}expires_at IS NULL OR {p}expires_at > ?)",
-            f"({p}domain IS NULL OR {p}domain != ?)",
         ],
-        [_now_iso(), HISTORY_DOMAIN],
+        [_now_iso()],
     )
 
 
@@ -560,6 +565,175 @@ def _backfill_review_state(db: sqlite3.Connection) -> int:
     if updates:
         db.executemany("UPDATE chunks SET review_state = ? WHERE id = ? AND review_state IS NULL", updates)
     return len(updates)
+
+
+# ── ADR 0125 D6: one-shot history migration ──────────────────────────────────
+# Legacy conversation history lived in ``chunks`` as ``domain='conversation'``
+# rows (compaction archives, retirement summaries, background reports). H1a–H1d
+# added the ``history`` table and moved every writer onto it, so no new such rows
+# are created. This boot migration drains the ones already on live agents into
+# ``history`` (same agent.db), then deletes them. It's stamped in ``_kb_meta`` so a
+# finished pass never re-runs, and a ``agent.db.pre-0125`` backup is taken first.
+_HISTORY_MIGRATION_KEY = "history_migration_0125"
+_PRE_0125_BACKUP_SUFFIX = ".pre-0125"
+_CHAT_ARCHIVE_PREFIX = "chat-archive:"
+
+# Legacy ``chunks.source_type`` (on a ``domain='conversation'`` row) → ``history.kind``
+# (ADR 0125 migration table). An unmapped source_type is treated as an ``archive`` —
+# the generic "what happened" kind — so nothing is dropped by the CHECK constraint.
+_HISTORY_SOURCE_TYPE_TO_KIND = {
+    "conversation": "archive",
+    "harvest": "summary",
+    "background_report": "report",
+}
+
+
+def _table_present(db: sqlite3.Connection, name: str) -> bool:
+    """Whether ``name`` is a table in this DB (used to guard the migration against a
+    core agent.db that holds only ``history`` — a plugin KnowledgeBackend's file —
+    or that predates the ``chunk_vectors`` side table)."""
+    try:
+        return (
+            db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+            ).fetchone()
+            is not None
+        )
+    except sqlite3.DatabaseError:
+        return False
+
+
+def _migration_session_id(namespace: str | None, source: str | None) -> str:
+    """The ``history.session_id`` for a migrated row: the ``chat-archive:<sid>``
+    namespace suffix (compaction archives), else the row's ``source`` (harvest
+    summaries key ``source=thread``; background reports key ``source=origin session``).
+    Never NULL — the history schema requires it — so a row with neither falls back to
+    the empty string."""
+    ns = namespace or ""
+    if ns.startswith(_CHAT_ARCHIVE_PREFIX):
+        sid = ns[len(_CHAT_ARCHIVE_PREFIX) :]
+        if sid:
+            return sid
+    return source or ""
+
+
+def migrate_conversation_chunks_to_history(db_path: str | Path | None) -> int:
+    """Move legacy ``domain='conversation'`` chunks in the core agent.db into the
+    ``history`` table in the same file (ADR 0125 D6). Returns the number of rows moved.
+
+    Idempotent: a ``_kb_meta`` marker means a second boot copies and moves nothing.
+    Before anything moves, the database file is copied to ``agent.db.pre-0125``. The
+    insert into ``history`` (which populates ``history_fts`` via its trigger) and the
+    delete of the moved chunks, their FTS entries (via the ``chunks`` delete trigger)
+    and their ``chunk_vectors`` rows run in ONE transaction. Fast at ~3k rows: the
+    deletes are a single predicate each, not a per-id sweep.
+
+    Core agent.db only (``STATE.history_store.path``): when a plugin KnowledgeBackend
+    (ADR 0031) serves ``chunks`` elsewhere, that store is never touched; a core file
+    with no ``chunks`` table is a no-op.
+    """
+    if db_path is None:
+        return 0
+    path = Path(db_path)
+    if not path.exists():
+        return 0
+    try:
+        db = sqlite3.connect(str(path))
+    except sqlite3.DatabaseError:
+        log.exception("[knowledge] 0125 history migration: cannot open %s", path)
+        return 0
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute("PRAGMA busy_timeout=5000")
+        # A finished pass is stamped and never re-runs. A DB with no ``_kb_meta`` table
+        # predates the chunks schema entirely, so there is nothing to migrate either.
+        try:
+            stamped = db.execute(
+                "SELECT value FROM _kb_meta WHERE key = ?", (_HISTORY_MIGRATION_KEY,)
+            ).fetchone()
+        except sqlite3.DatabaseError:
+            return 0
+        if stamped is not None:
+            return 0
+        # Both tables must exist: the caller runs this only once the HistoryStore has
+        # created ``history``; a core file with no ``chunks`` (plugin backend) is empty here.
+        if not _history_table_present(db) or not _table_present(db, "chunks"):
+            return 0
+        rows = db.execute(
+            "SELECT content, heading, source, source_type, namespace, created_at, "
+            "invalidated_at, invalidation_reason FROM chunks WHERE domain = ?",
+            (HISTORY_DOMAIN,),
+        ).fetchall()
+        if not rows:
+            # Nothing to move, but stamp so a second boot skips even this probe.
+            with db:
+                db.execute(
+                    "INSERT INTO _kb_meta(key, value) VALUES(?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (_HISTORY_MIGRATION_KEY, _now_iso()),
+                )
+            return 0
+        # File-level backup BEFORE any move (kept until the next release). Checkpoint
+        # WAL first so the copied main file is current.
+        _backup_pre_0125(db, path)
+        has_vectors = _table_present(db, "chunk_vectors")
+        with db:  # one transaction: insert history (+fts), delete chunks (+fts) + vectors
+            for r in rows:
+                db.execute(
+                    "INSERT INTO history (session_id, thread_id, surface, kind, heading, content, "
+                    "span_start, span_end, created_at, namespace, invalidated_at, invalidation_reason) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        _migration_session_id(r["namespace"], r["source"]),
+                        r["source"],  # thread link preserved (harvest/report key source=thread)
+                        None,  # surface: the chunks table never had one
+                        _HISTORY_SOURCE_TYPE_TO_KIND.get(r["source_type"], "archive"),
+                        r["heading"],
+                        r["content"],
+                        None,  # span_start: chunks carried the span only inside the heading text
+                        None,  # span_end
+                        r["created_at"] or _now_iso(),
+                        r["namespace"],
+                        r["invalidated_at"],  # keep a soft-deleted / forget-pending row hidden
+                        r["invalidation_reason"],
+                    ),
+                )
+            # Delete by predicate, not a 3k-long IN list (the host-parameter cap). No new
+            # ``domain='conversation'`` chunk is written anymore (writers moved in H1d) and
+            # boot has no live traffic, so this set equals the rows just inserted.
+            if has_vectors:
+                db.execute(
+                    "DELETE FROM chunk_vectors WHERE chunk_id IN "
+                    "(SELECT id FROM chunks WHERE domain = ?)",
+                    (HISTORY_DOMAIN,),
+                )
+            db.execute("DELETE FROM chunks WHERE domain = ?", (HISTORY_DOMAIN,))
+            db.execute(
+                "INSERT INTO _kb_meta(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (_HISTORY_MIGRATION_KEY, _now_iso()),
+            )
+        log.info(
+            "[knowledge] 0125 history migration: moved %d conversation chunk(s) into history (backup: %s)",
+            len(rows),
+            path.name + _PRE_0125_BACKUP_SUFFIX,
+        )
+        return len(rows)
+    except sqlite3.DatabaseError:
+        log.exception("[knowledge] 0125 history migration failed at %s", path)
+        return 0
+    finally:
+        db.close()
+
+
+def _backup_pre_0125(db: sqlite3.Connection, path: Path) -> None:
+    """Copy the agent.db to ``agent.db.pre-0125`` before the migration moves anything.
+    Checkpoint WAL first so the copied main file reflects all committed writes."""
+    try:
+        db.execute("PRAGMA wal_checkpoint(FULL)")
+    except sqlite3.DatabaseError:
+        pass  # non-WAL / read-only mount: the main file is already current
+    shutil.copy2(path, path.with_name(path.name + _PRE_0125_BACKUP_SUFFIX))
 
 
 def _normalize_expires_at(value: str | datetime | None) -> str | None:
