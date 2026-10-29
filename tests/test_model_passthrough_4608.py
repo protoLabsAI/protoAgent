@@ -27,6 +27,7 @@ from graph.config import LangGraphConfig
 from operator_api.model_passthrough_routes import (
     aimessage_to_openai_message,
     build_chat_completion,
+    convert_tool_choice,
     openai_messages_to_langchain,
     register_model_passthrough_routes,
 )
@@ -39,6 +40,7 @@ DOC = {
         {"id": "prod-gateway", "type": "openai-compat", "base_url": "https://prod/v1"},
         {"id": "local-vllm", "type": "openai-compat", "base_url": "http://localhost:8000/v1"},
         {"id": "claude-sub", "type": "anthropic-oauth"},
+        {"id": "codex-sub", "type": "openai-codex"},
     ],
     "model": {"name": "prod-gateway:protolabs/reasoning"},
 }
@@ -178,6 +180,40 @@ def test_build_chat_completion_finish_reason():
     assert plain["choices"][0]["message"]["content"] == "hello"
 
 
+# ── tool_choice adaptation per connection type (r1/r2) ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize("ptype", ["openai-compat", "openai-codex"])
+@pytest.mark.parametrize(
+    "value",
+    ["auto", "required", "none", {"type": "function", "function": {"name": "f"}}],
+)
+def test_tool_choice_passes_through_for_openai_shaped_clients(ptype, value):
+    # ChatOpenAI (gateway, local, Codex Responses) takes the OpenAI shape as-is.
+    assert convert_tool_choice(value, ptype) == value
+
+
+def test_tool_choice_none_value_stays_none():
+    assert convert_tool_choice(None, "anthropic-oauth") is None
+    assert convert_tool_choice(None, "openai-compat") is None
+
+
+def test_tool_choice_converted_to_anthropic_native():
+    # "required" must NOT reach ChatAnthropic as the string "required" (it would force a
+    # tool literally named "required"); it means "call some tool" → Anthropic "any".
+    assert convert_tool_choice("required", "anthropic-oauth") == {"type": "any"}
+    assert convert_tool_choice("auto", "anthropic-oauth") == {"type": "auto"}
+    assert convert_tool_choice("none", "anthropic-oauth") == {"type": "none"}
+    # OpenAI's forced-function dict → Anthropic's forced-tool dict.
+    assert convert_tool_choice(
+        {"type": "function", "function": {"name": "get_weather"}}, "anthropic-oauth"
+    ) == {"type": "tool", "name": "get_weather"}
+    # A dict already in Anthropic shape is left alone.
+    assert convert_tool_choice({"type": "any"}, "anthropic-oauth") == {"type": "any"}
+    # A bare tool name keeps ChatAnthropic's own string→tool meaning, made explicit.
+    assert convert_tool_choice("get_weather", "anthropic-oauth") == {"type": "tool", "name": "get_weather"}
+
+
 # ── the three connection types, each via create_llm's qualified-slot path (r1) ─────────────────
 
 
@@ -240,6 +276,81 @@ def test_plain_reply_has_content_and_usage(harness):
     assert body["usage"] == {"prompt_tokens": 20, "completion_tokens": 4, "total_tokens": 24}
 
 
+# ── per-connection-type param adaptation (the two review blockers) ───────────────────────────────
+
+
+def test_temperature_forwarded_to_openai_compat(harness):
+    r = _post(
+        harness,
+        "prod-gateway",
+        {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}], "temperature": 0, "max_tokens": 64},
+    )
+    assert r.status_code == 200, r.text
+    kw = harness.state["llm"].captured["kwargs"]
+    # openai-compat takes both knobs as-is
+    assert kw.get("temperature") == 0
+    assert kw.get("max_tokens") == 64
+
+
+def test_temperature_dropped_for_anthropic_oauth(harness):
+    # The whole point of the endpoint: an eval setting temperature=0 against a Claude
+    # subscription must NOT 502 — Claude rejects temperature, so we omit it.
+    r = _post(
+        harness,
+        "claude-sub",
+        {"model": "claude-sonnet-4-6", "messages": [{"role": "user", "content": "hi"}], "temperature": 0, "max_tokens": 64},
+    )
+    assert r.status_code == 200, r.text
+    kw = harness.state["llm"].captured["kwargs"]
+    assert "temperature" not in kw  # dropped for anthropic-oauth
+    assert kw.get("max_tokens") == 64  # but Anthropic takes max_tokens
+
+
+def test_temperature_and_max_tokens_dropped_for_openai_codex(harness):
+    # The Codex Responses backend rejects both max_output_tokens and non-default
+    # temperature on its reasoning models, so neither is forwarded.
+    r = _post(
+        harness,
+        "codex-sub",
+        {"model": "gpt-5-codex", "messages": [{"role": "user", "content": "hi"}], "temperature": 0.2, "max_tokens": 64},
+    )
+    assert r.status_code == 200, r.text
+    assert harness.state["calls"] == [("native", "openai-codex", "gpt-5-codex")]
+    kw = harness.state["llm"].captured["kwargs"]
+    assert "temperature" not in kw and "max_tokens" not in kw
+
+
+def test_tool_choice_converted_for_anthropic_oauth_at_bind(harness):
+    harness.state["response"] = _reply(
+        "", tool_calls=[{"name": "get_weather", "args": {"city": "SF"}, "id": "c1", "type": "tool_call"}]
+    )
+    body = {
+        "model": "claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "weather?"}],
+        "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+        "tool_choice": "required",
+    }
+    r = _post(harness, "claude-sub", body)
+    assert r.status_code == 200, r.text
+    # "required" was translated to Anthropic's {"type":"any"} before bind_tools, not passed
+    # through as the string "required" (which ChatAnthropic would read as a tool name).
+    assert harness.state["llm"].captured["tool_choice"] == {"type": "any"}
+    assert harness.state["llm"].captured["tools"] == body["tools"]
+
+
+def test_tool_choice_passed_through_for_gateway_at_bind(harness):
+    body = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}],
+        "tool_choice": "required",
+    }
+    r = _post(harness, "prod-gateway", body)
+    assert r.status_code == 200, r.text
+    # openai-compat clients speak OpenAI tool_choice natively — no translation
+    assert harness.state["llm"].captured["tool_choice"] == "required"
+
+
 # ── refusals (r3) ──────────────────────────────────────────────────────────────────────────────
 
 
@@ -255,6 +366,14 @@ def test_stream_true_is_400(harness):
     assert r.status_code == 400
     # nothing was built for a rejected stream request
     assert harness.state["calls"] == []
+
+
+def test_missing_model_is_400(harness):
+    # Without a model the qualified slot would be "prod-gateway:" and the gateway builder
+    # would fall back to the main agent's model name — a clear 400 instead.
+    r = _post(harness, "prod-gateway", {"messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 400
+    assert harness.state["calls"] == []  # refused before any model build
 
 
 def test_non_loopback_client_is_403(harness, monkeypatch):
@@ -284,9 +403,11 @@ def test_no_bearer_refused_by_api_auth():
         body = {"model": "x", "messages": [{"role": "user", "content": "hi"}]}
         # no Authorization header → refused before the handler ever runs
         assert c.post(PATH.format(conn="prod-gateway"), json=body).status_code == 401
-        # with the bearer, auth lets it through to the handler (which 404s the unknown model)
-        ok = c.post(PATH.format(conn="prod-gateway"), json=body, headers={"Authorization": "Bearer sekret"})
-        assert ok.status_code != 401
+        # With the bearer, auth lets it through to the handler. Target an UNKNOWN connection
+        # so the handler 404s at the registry check — proving auth passed WITHOUT building a
+        # real model client or making any outbound network call.
+        ok = c.post(PATH.format(conn="no-such-connection"), json=body, headers={"Authorization": "Bearer sekret"})
+        assert ok.status_code == 404
     finally:
         auth._BEARER[0] = prev_bearer
         STATE.graph_config = prev_cfg

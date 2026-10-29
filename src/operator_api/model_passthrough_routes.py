@@ -13,6 +13,14 @@ could eval a Claude-plan model. This route gives every registered connection —
 openai-compat, or native subscription — one uniform OpenAI endpoint, so an eval can point at a
 subscription model exactly as it would at OpenAI.
 
+The OpenAI wire shape and each client's accepted shape are NOT identical, so the route adapts
+the request to the connection's registered TYPE (ADR 0106) — the one authoritative signal for
+"what can this client take" — rather than forwarding every knob verbatim: ``tool_choice`` is
+translated to Anthropic's native form for ``anthropic-oauth`` (``ChatAnthropic`` reads a bare
+``"required"`` as a tool *name*), and a per-call knob a subscription backend rejects
+(``temperature`` on Claude; ``temperature``/``max_tokens`` on Codex) is dropped so the model
+defaults instead of 502-ing — see :data:`_PARAM_DROPS` and :func:`convert_tool_choice`.
+
 Gating: it lives under ``/api``, so the operator bearer (``a2a_impl.auth``, default-deny) already
 guards it like every other operator route — no new trust surface. It is ADDITIONALLY loopback-only
 (403 off 127.0.0.1/::1): a passthrough that spends subscription tokens on an arbitrary prompt is a
@@ -48,6 +56,23 @@ log = logging.getLogger("protoagent.operator_api.model_passthrough")
 # The row key prefix for a passthrough turn — the same convention
 # ``server/turn_telemetry.local_task_id`` uses, so "which surface spent this" stays answerable.
 _ORIGIN = "model_passthrough"
+
+# Per-call OpenAI knobs each connection TYPE can actually accept. The OpenAI wire body
+# carries ``temperature``/``max_tokens`` for everyone, but a native subscription client
+# (ADR 0097) deliberately omits some because its backend rejects them — so forwarding the
+# OpenAI value unchanged turns a plain eval into a 502 on exactly the connections this
+# endpoint exists to serve. We MIRROR the builders rather than fight them:
+#   * ``anthropic-oauth`` — ``build_anthropic_oauth_llm`` never sends ``temperature``; the
+#     current Claude models (the 5 family and newer) reject it.
+#   * ``openai-codex`` — the Codex Responses backend rejects ``max_output_tokens`` (what
+#     langchain derives from ``max_tokens``) and non-default ``temperature`` on its
+#     reasoning models; ``build_codex_llm`` sets neither.
+# Omitted knobs fall back to the model's own default, which is the only value these
+# subscription models will honour anyway.
+_PARAM_DROPS: dict[str, frozenset[str]] = {
+    "anthropic-oauth": frozenset({"temperature"}),
+    "openai-codex": frozenset({"temperature", "max_tokens"}),
+}
 
 
 class ChatCompletionRequest(BaseModel):
@@ -95,6 +120,44 @@ def _to_lc_tool_calls(raw: list[dict] | None) -> list[dict]:
             }
         )
     return out
+
+
+def convert_tool_choice(tool_choice: Any, provider_type: str) -> Any:
+    """Adapt an OpenAI ``tool_choice`` to what ``provider_type``'s client understands.
+
+    OpenAI-compatible clients (gateway, local openai-compat, and the Codex Responses API,
+    all built on ``ChatOpenAI``) take the OpenAI shape as-is, so it passes through.
+
+    ``ChatAnthropic`` does NOT: its ``bind_tools`` treats any string other than
+    ``"auto"``/``"any"`` as a *tool name* (so OpenAI's ``"required"`` would force a tool
+    literally named ``required``), and it copies an OpenAI ``{"type":"function",…}`` dict
+    through unchanged — both of which Anthropic rejects. For an ``anthropic-oauth``
+    connection we translate to the Anthropic-native form:
+
+    - ``"auto"`` → ``{"type":"auto"}``
+    - ``"required"`` → ``{"type":"any"}`` (Anthropic's "must call some tool")
+    - ``"none"`` → ``{"type":"none"}``
+    - ``{"type":"function","function":{"name":"f"}}`` → ``{"type":"tool","name":"f"}``
+    - a dict already in Anthropic shape, or a bare tool name, is passed through.
+    """
+    if tool_choice is None:
+        return None
+    if provider_type != "anthropic-oauth":
+        return tool_choice
+    if isinstance(tool_choice, str):
+        low = tool_choice.strip().lower()
+        if low in ("auto", "any", "none"):
+            return {"type": low}
+        if low == "required":
+            return {"type": "any"}
+        # A bare tool name — mirror ChatAnthropic's own string→tool mapping, explicitly.
+        return {"type": "tool", "name": tool_choice}
+    if isinstance(tool_choice, dict):
+        if tool_choice.get("type") == "function":
+            name = (tool_choice.get("function") or {}).get("name")
+            return {"type": "tool", "name": str(name)} if name else None
+        return tool_choice  # already Anthropic-native (auto/any/tool/none dict)
+    return tool_choice
 
 
 def openai_messages_to_langchain(messages: list[dict] | None) -> list[BaseMessage]:
@@ -334,9 +397,23 @@ def register_model_passthrough_routes(app) -> None:
         if cfg is None:
             raise HTTPException(status_code=503, detail="config not loaded")
         conn = (connection or "").strip().lower()
-        if cfg.provider_by_id(conn) is None:
+        entry = cfg.provider_by_id(conn)
+        if entry is None:
             known = ", ".join(cfg.provider_ids()) or "(none registered)"
             raise HTTPException(status_code=404, detail=f"no model connection named {connection!r}; registered: {known}")
+        # The connection's registered TYPE (ADR 0106) drives how the OpenAI-shaped per-call
+        # params are adapted below — it is the one authoritative signal for "what can this
+        # client actually take", resolved once so tool_choice and temperature/max_tokens stay
+        # consistent instead of being patched knob by knob.
+        ptype = (entry.type or "").strip().lower()
+        if not (body.model or "").strip():
+            # Without a model the qualified slot is just "<conn>:", and the gateway builder
+            # falls back to the main agent's model name — sending one connection's model id to
+            # another connection's endpoint. Name the model instead of guessing.
+            raise HTTPException(
+                status_code=400,
+                detail="'model' is required: name the connection's model, e.g. {\"model\": \"claude-sonnet-4-6\", …}",
+            )
 
         # The qualified-slot form IS how ADR 0106 names a connection's model — the same string a
         # model slot stores — so create_llm's registry dispatch builds the right client.
@@ -349,14 +426,25 @@ def register_model_passthrough_routes(app) -> None:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if body.tools:
-            tool_kw = {"tool_choice": body.tool_choice} if body.tool_choice is not None else {}
+            # OpenAI tool_choice must be translated for ChatAnthropic (it treats "required"
+            # as a tool NAME and passes OpenAI's function dict through unchanged); the
+            # openai-compat/Codex clients take it as-is. See convert_tool_choice.
+            tool_choice = convert_tool_choice(body.tool_choice, ptype)
+            tool_kw = {"tool_choice": tool_choice} if tool_choice is not None else {}
             llm = llm.bind_tools(body.tools, **tool_kw)
 
+        # Forward only the per-call knobs this connection type can take (see _PARAM_DROPS):
+        # a native subscription client rejects some, and this endpoint's main use case is
+        # evals that set temperature against such a connection.
+        drops = _PARAM_DROPS.get(ptype, frozenset())
         overrides: dict[str, Any] = {}
-        if body.temperature is not None:
+        if body.temperature is not None and "temperature" not in drops:
             overrides["temperature"] = body.temperature
-        if body.max_tokens is not None:
+        if body.max_tokens is not None and "max_tokens" not in drops:
             overrides["max_tokens"] = body.max_tokens
+        dropped = [k for k in ("temperature", "max_tokens") if k in drops and getattr(body, k) is not None]
+        if dropped:
+            log.debug("[model-passthrough] %s does not accept %s; using the model default", ptype, ", ".join(dropped))
 
         lc_messages = openai_messages_to_langchain(body.messages)
         usage_cb = _make_usage_callback()
