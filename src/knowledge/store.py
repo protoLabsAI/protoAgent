@@ -291,6 +291,49 @@ def _forget_selection(namespace: str, sources, source_types) -> tuple[str, list]
     return " OR ".join(clauses), params
 
 
+# The one row ``kind`` the chat-delete forget never touches: a background-job report is
+# "out of reach, by design" (``forget_conversation_memory``) — in ``chunks`` it rides the
+# ``source_type='background_report'`` filter; in ``history`` it is ``kind='report'``.
+_FORGET_SKIP_HISTORY_KIND = "report"
+
+
+def _history_forget_where(session_id: str, thread_ids) -> tuple[str, list]:
+    """SQL predicate + params selecting the ``history`` rows (ADR 0125) a chat wrote:
+    rows whose ``session_id`` is ``session_id``, or whose ``thread_id`` is one of
+    ``thread_ids`` (exact) or one of their ``:goal-iter-N`` sub-threads (prefix — the TTL
+    sweep can harvest those on their own). Background-job reports (``kind='report'``) are
+    never selected, mirroring the ``chunks`` forget. ``("", [])`` when nothing is selected
+    — an empty selection never widens into "every row"."""
+    arms: list[str] = []
+    params: list = []
+    sid = str(session_id or "").strip()
+    if sid:
+        arms.append("session_id = ?")
+        params.append(sid)
+    for tid in dict.fromkeys(str(t) for t in (thread_ids or ()) if t):
+        arms.append("thread_id = ?")
+        params.append(tid)
+        arms.append(f"thread_id LIKE ? ESCAPE '{_LIKE_ESCAPE}'")
+        params.append(_escape_like(f"{tid}:goal-iter-") + "%")
+    if not arms:
+        return "", []
+    return f"kind != '{_FORGET_SKIP_HISTORY_KIND}' AND ({' OR '.join(arms)})", params
+
+
+def _history_table_present(db: sqlite3.Connection) -> bool:
+    """Does the shared ``agent.db`` already hold the ADR 0125 ``history`` table? A
+    ``KnowledgeStore`` opened on a database created before the history store existed
+    (pre-0125 DBs, a test that builds only a KnowledgeStore) has no such table, so the
+    forget primitives must skip it rather than raise ``no such table`` and abort a forget
+    that must still cover ``chunks``."""
+    try:
+        return (
+            db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history'").fetchone() is not None
+        )
+    except sqlite3.DatabaseError:
+        return False
+
+
 def _namespace_clause(namespace: str | list[str] | None, col: str = "namespace") -> tuple[str, list[str]]:
     """SQL predicate + params for a namespace filter (ADR 0069 D3a).
 
@@ -1672,6 +1715,32 @@ class KnowledgeStore:
         finally:
             db.close()
 
+    def delete_history_for_session(self, session_id: str, thread_ids) -> int:
+        """HARD-delete the conversation ``history`` rows (ADR 0125) a chat wrote — archives
+        and summaries keyed to ``session_id`` or one of ``thread_ids`` (and their
+        ``:goal-iter-N`` sub-threads). Background-job reports (``kind='report'``) are kept,
+        mirroring :meth:`delete_by_source`. The one-step counterpart to the two-phase
+        forget, for :func:`graph.conversation_harvest.forget_conversation_memory`; it lives
+        on the store so history rides the same ``agent.db`` connection as the chunk delete.
+        Returns the count removed — 0 when the DB has no ``history`` table yet (pre-0125)."""
+        where, params = _history_forget_where(session_id, thread_ids)
+        if not where:
+            return 0
+        db = self._get_db()
+        if db is None:
+            return 0
+        try:
+            if not _history_table_present(db):
+                return 0
+            cur = db.execute(f"DELETE FROM history WHERE ({where})", params)
+            db.commit()
+            return int(cur.rowcount)
+        except sqlite3.DatabaseError as exc:
+            log.warning("[knowledge] delete_history_for_session failed: %s", exc)
+            return 0
+        finally:
+            db.close()
+
     # ── forget-on-delete, in two phases (#3957) ──────────────────────────────────
     # The chat delete's "forget what this chat saved" must neither lose memory when the
     # chat's retirement fails nor delete what a harvest ticked alongside it produces. So
@@ -1680,35 +1749,53 @@ class KnowledgeStore:
     # store that no longer holds them), the chat is retired, and only then are exactly the
     # hidden rows hard-deleted. A failed retirement restores them.
 
-    def mark_forget_pending(self, marker: str, *, namespace: str = "", sources=(), source_types=None) -> int:
+    def mark_forget_pending(
+        self, marker: str, *, namespace: str = "", sources=(), source_types=None, session_id: str = "", thread_ids=()
+    ) -> int:
         """Phase 1: hide every VALID chunk in ``namespace`` or matching one of
         ``sources`` (``(source, prefix)`` pairs, narrowed to ``source_types``) by stamping
         ``invalidated_at`` + ``invalidation_reason = marker``. Rows in that selection that
         are already invalidated (supersession history, a pending bulk delete) keep their
         ``invalidated_at`` and get ``marker|prev:<their reason>``: nothing is deleted here,
         so a restore puts every row back exactly as it was (review #3957 B2). Returns the
-        count hidden. An empty marker or selection does nothing."""
+        count hidden. An empty marker or selection does nothing.
+
+        ADR 0125: the same ``agent.db`` also holds the conversation ``history`` table, and a
+        chat delete must never leave history behind — so the matching ``history`` rows
+        (``session_id`` / ``thread_ids``, via :func:`_history_forget_where`) are hidden in
+        THIS SAME transaction. One connection spans both tables: a failure rolls BOTH back,
+        so a mid-forget error leaves ``chunks`` and ``history`` untouched together."""
         where, params = _forget_selection(namespace, sources, source_types)
-        if not marker or not where:
+        hwhere, hparams = _history_forget_where(session_id, thread_ids)
+        if not marker or (not where and not hwhere):
             return 0
         db = self._get_db()
         if db is None:
             return 0
         try:
             now = _now_iso()
-            db.execute(
-                "UPDATE chunks SET invalidation_reason = ? || COALESCE(invalidation_reason, ''), updated_at = ? "
-                f"WHERE ({where}) AND invalidated_at IS NOT NULL "
-                f"AND substr(COALESCE(invalidation_reason, ''), 1, {len(FORGET_PENDING_PREFIX)}) != '{FORGET_PENDING_PREFIX}'",
-                [marker + FORGET_PREV_SEP, now, *params],
-            )
-            cur = db.execute(
-                "UPDATE chunks SET invalidated_at = ?, invalidation_reason = ?, updated_at = ? "
-                f"WHERE ({where}) AND invalidated_at IS NULL",
-                [now, marker, now, *params],
-            )
+            hidden = 0
+            if where:
+                db.execute(
+                    "UPDATE chunks SET invalidation_reason = ? || COALESCE(invalidation_reason, ''), updated_at = ? "
+                    f"WHERE ({where}) AND invalidated_at IS NOT NULL "
+                    f"AND substr(COALESCE(invalidation_reason, ''), 1, {len(FORGET_PENDING_PREFIX)}) != '{FORGET_PENDING_PREFIX}'",
+                    [marker + FORGET_PREV_SEP, now, *params],
+                )
+                cur = db.execute(
+                    "UPDATE chunks SET invalidated_at = ?, invalidation_reason = ?, updated_at = ? "
+                    f"WHERE ({where}) AND invalidated_at IS NULL",
+                    [now, marker, now, *params],
+                )
+                hidden += int(cur.rowcount)
+            if hwhere and _history_table_present(db):
+                hcur = db.execute(
+                    f"UPDATE history SET invalidated_at = ?, invalidation_reason = ? WHERE ({hwhere}) AND invalidated_at IS NULL",
+                    [now, marker, *hparams],
+                )
+                hidden += int(hcur.rowcount)
             db.commit()
-            return int(cur.rowcount)
+            return hidden
         except sqlite3.DatabaseError:
             db.rollback()
             raise
@@ -1716,14 +1803,19 @@ class KnowledgeStore:
             db.close()
 
     def count_forget_pending(self, marker: str) -> int:
-        """How many chunks are still held under ``marker`` (a previous attempt's)."""
-        return self._forget_pending_exec("SELECT COUNT(*) FROM chunks WHERE {held}", marker, count=True)
+        """How many rows are still held under ``marker`` (a previous attempt's) — across
+        ``chunks`` AND ``history``, so a retry resumes a history-only forget too."""
+        return self._forget_pending_exec("SELECT COUNT(*) FROM {table} WHERE {held}", marker, count=True)
 
     def restore_forget_pending(self, marker: str) -> int:
         """Undo phase 1 — the retirement failed: un-hide every chunk ``marker`` hid, and
         give the already-invalidated ones their own reason back. ONE transaction: a
         half-applied restore would leave a marker that a later forget resumes without
-        hiding the rows the first half already un-hid. Raises on a database error."""
+        hiding the rows the first half already un-hid. Raises on a database error.
+
+        ADR 0125: the ``history`` rows ``marker`` hid are un-hidden in the SAME transaction
+        (history carries no supersession, so a plain clear suffices — no ``|prev:`` to
+        restore)."""
         if not marker:
             return 0
         db = self._get_db()
@@ -1741,6 +1833,12 @@ class KnowledgeStore:
                 f"WHERE substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}'",
                 (marker,),
             )
+            if _history_table_present(db):
+                hcur = db.execute(
+                    "UPDATE history SET invalidated_at = NULL, invalidation_reason = NULL WHERE invalidation_reason = ?",
+                    (marker,),
+                )
+                restored += int(hcur.rowcount)
             db.commit()
             return restored
         except sqlite3.DatabaseError:
@@ -1750,13 +1848,16 @@ class KnowledgeStore:
             db.close()
 
     def delete_forget_pending(self, marker: str) -> int:
-        """Phase 2 — the chat is retired: HARD-delete exactly the chunks ``marker`` holds
-        (the hidden ones and the already-invalidated ones it tagged)."""
-        return self._forget_pending_exec("DELETE FROM chunks WHERE {held}", marker)
+        """Phase 2 — the chat is retired: HARD-delete exactly the rows ``marker`` holds
+        (the hidden ones and the already-invalidated ones it tagged), in ``chunks`` AND the
+        ADR 0125 ``history`` table, in one transaction."""
+        return self._forget_pending_exec("DELETE FROM {table} WHERE {held}", marker)
 
     def forget_pending_markers(self) -> dict[str, str]:
-        """Every marker still holding rows → when it was stamped (the earliest
-        ``updated_at`` among them, UTC ISO). Feeds the orphan sweep."""
+        """Every marker still holding rows → when it was stamped (the earliest stamp among
+        them, UTC ISO). Feeds the orphan sweep. ADR 0125: ``history``-only markers (a chat
+        that wrote history but no ``chunks``) are found too — their stamp is the earliest
+        ``invalidated_at`` the forget set."""
         db = self._get_db()
         if db is None:
             return {}
@@ -1766,6 +1867,12 @@ class KnowledgeStore:
                 f"WHERE substr(invalidation_reason, 1, {len(FORGET_PENDING_PREFIX)}) = '{FORGET_PENDING_PREFIX}' "
                 "GROUP BY invalidation_reason"
             ).fetchall()
+            if _history_table_present(db):
+                rows += db.execute(
+                    "SELECT invalidation_reason, MIN(invalidated_at) FROM history "
+                    f"WHERE substr(invalidation_reason, 1, {len(FORGET_PENDING_PREFIX)}) = '{FORGET_PENDING_PREFIX}' "
+                    "GROUP BY invalidation_reason"
+                ).fetchall()
         finally:
             db.close()
         out: dict[str, str] = {}
@@ -1776,10 +1883,12 @@ class KnowledgeStore:
         return out
 
     def _forget_pending_exec(self, sql: str, marker: str, *, count: bool = False) -> int:
-        """Run one marker-scoped statement. ``{held}`` in ``sql`` expands to "held by
-        ``marker``": exactly it, or ``marker|prev:…``. Raises on a database error: these
-        back an explicit delete that must fail loudly rather than report memory gone (or
-        kept) when it isn't."""
+        """Run one marker-scoped statement against ``chunks`` AND, when present, the ADR
+        0125 ``history`` table, in ONE transaction. ``{table}`` picks the table and
+        ``{held}`` expands to "held by ``marker``": exactly it, or ``marker|prev:…``. The
+        two tables' counts/rowcounts are summed. Raises on a database error: these back an
+        explicit delete that must fail loudly rather than report memory gone (or kept)
+        when it isn't."""
         if not marker:
             return 0
         db = self._get_db()
@@ -1788,11 +1897,14 @@ class KnowledgeStore:
         try:
             n = len(marker + FORGET_PREV_SEP)
             held = f"(invalidation_reason = ? OR substr(invalidation_reason, 1, {n}) = ? || '{FORGET_PREV_SEP}')"
-            cur = db.execute(sql.format(held=held), (marker, marker))
-            if count:
-                return int(cur.fetchone()[0])
-            db.commit()
-            return int(cur.rowcount)
+            cur = db.execute(sql.format(table="chunks", held=held), (marker, marker))
+            total = int(cur.fetchone()[0]) if count else int(cur.rowcount)
+            if _history_table_present(db):
+                hcur = db.execute(sql.format(table="history", held=held), (marker, marker))
+                total += int(hcur.fetchone()[0]) if count else int(hcur.rowcount)
+            if not count:
+                db.commit()
+            return total
         finally:
             db.close()
 
