@@ -84,14 +84,34 @@ it("shows read failures without preventing the answer from rendering", async () 
   expect(el.querySelector('[role="alert"]')?.textContent).toContain("Could not load");
   expect(el.textContent).toContain("Answer 1");
 });
-it("uses ordered rows only for a complete alignment and rejects ambiguous task matches", async () => {
+it("uses ordered rows only for a complete alignment", async () => {
   await mount(false, messages.map(({ taskId: _taskId, ...message }) => message));
   await click("Thumbs up");
   expect(feedbackApi.set).toHaveBeenLastCalledWith(expect.objectContaining({ trace_id: "trace1" }));
+  // Fewer rows than rendered answers: turn order can no longer be trusted, so none get thumbs.
   await act(async () => root.render(null));
-  vi.mocked(feedbackApi.get).mockResolvedValue({ enabled: true, tracing_enabled: true, turns: [turns[0], { ...turns[1], task_id: "t1" }] });
-  await mount();
+  vi.mocked(feedbackApi.get).mockResolvedValue({ enabled: true, tracing_enabled: true, turns: [turns[0]] });
+  await mount(false, messages.map(({ taskId: _taskId, ...message }) => message));
   expect(button("Thumbs up")).toBeNull();
+});
+// A HITL park/resume records TWO telemetry legs under one task_id (telemetry_store: "one row
+// per turn LEG"); the final leg carries the completed turn, so it — not the parked leg — is the
+// rateable one. The earlier "ambiguous, so unrateable" behavior was the blocking defect.
+const hitlLegs: FeedbackTurn[] = [
+  { task_id: "t1", trace_id: "trace-parked", created_at: "", rating: null, note: null },
+  { task_id: "t1", trace_id: "trace-resumed", created_at: "", rating: null, note: null },
+];
+it("rates a HITL turn's final leg when both legs share a task", async () => {
+  vi.mocked(feedbackApi.get).mockResolvedValue({ enabled: true, tracing_enabled: true, turns: hitlLegs });
+  await mount(false, [messages[0]]);
+  await click("Thumbs up");
+  expect(feedbackApi.set).toHaveBeenLastCalledWith(expect.objectContaining({ trace_id: "trace-resumed", value: 1 }));
+});
+it("aligns ordered rows after collapsing a HITL turn's extra leg", async () => {
+  vi.mocked(feedbackApi.get).mockResolvedValue({ enabled: true, tracing_enabled: true, turns: hitlLegs });
+  await mount(false, [{ ...messages[0], taskId: undefined }]);
+  await click("Thumbs up");
+  expect(feedbackApi.set).toHaveBeenLastCalledWith(expect.objectContaining({ trace_id: "trace-resumed", value: 1 }));
 });
 it("keeps tracing-off rows synchronized with the backend's shared local key", async () => {
   vi.mocked(feedbackApi.get).mockResolvedValue({ enabled: true, tracing_enabled: false, turns: turns.map((turn) => ({ ...turn, trace_id: null })) });

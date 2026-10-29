@@ -1,11 +1,8 @@
-import { Input } from "@protolabsai/ui/forms";
-import type { SessionFeedbackActions } from "./useSessionFeedback";
-import type { FeedbackTurn } from "../lib/api/feedback";
-
 import { Button, Card } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
+import { Input } from "@protolabsai/ui/forms";
 import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, CircleSlash, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, ThumbsUp, ThumbsDown, X } from "lucide-react";
 import { useState } from "react";
 
@@ -15,6 +12,7 @@ import { StreamingPreview } from "../artifacts/StreamingPreview";
 import { openDocument } from "../docviewer";
 import { slashCommandName } from "../ext/slashRegistry";
 import { loadBackgroundReport } from "../lib/api";
+import type { FeedbackTurn } from "../lib/api/feedback";
 import { runtimeStatusQuery } from "../lib/queries";
 import {
   costAriaLabel,
@@ -39,6 +37,7 @@ import { foldPlan, toolsForGroup } from "./parts";
 import { rendersAsResultCard, serverResultLabel, serverResultPreview } from "./server-turn-store";
 import { useBackgroundJob } from "./backgroundJobStore";
 import { STATE_LABEL, briefSummary, delegationState } from "./delegation";
+import type { SessionFeedbackActions } from "./useSessionFeedback";
 import { readKey, writeKey } from "../lib/storage";
 
 // Optional per-message action row (copy / fork / regenerate). Omit it (e.g. the palette
@@ -167,6 +166,11 @@ export function ChatMessageView({
   // A turn the operator STOPPED (#4076) says so on replay too — a quiet marker in the same
   // footer row, so a transcript that ends mid-thought reads as stopped, not as finished.
   const stoppedMark = !revealStreaming && message.role === "assistant" && message.stopped === true;
+  // Resolved ONCE: this message's turn row (rating/note), or undefined when it isn't rateable
+  // (incognito, or a turn with no recorded telemetry). Drives both the pinned state and the
+  // thumbs controls below — the hook join runs a single time per render.
+  const feedback = actions?.feedback;
+  const feedbackTurn = feedback?.resolve(message);
   // A submitted HITL form answer (#4259): the user message carries a presentation-only label
   // map, so render a compact key/value card instead of its raw resume JSON. Guarded to a user
   // message with at least one labelled field — a legacy message without the map, or an empty /
@@ -423,9 +427,9 @@ export function ChatMessageView({
         </div>
       ) : null}
       {actions && message.role === "assistant" && !revealStreaming && message.content ? (
-        <MessageActions pinned={actions.feedback?.resolve(message)?.rating != null}>
-          {!actions.incognito && actions.feedback?.resolve(message) ? (
-            <FeedbackControls key={`${actions.sessionId}-${message.id}`} turn={actions.feedback.resolve(message)!} feedback={actions.feedback} />
+        <MessageActions pinned={feedbackTurn?.rating != null}>
+          {!actions.incognito && feedback && feedbackTurn ? (
+            <FeedbackControls key={`${actions.sessionId}-${message.id}`} turn={feedbackTurn} feedback={feedback} />
           ) : null}
           {actions.onCopy ? (
             <MessageAction
