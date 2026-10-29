@@ -26,6 +26,35 @@ artifacts, not source). The CLI prints a pass/fail board; the JSON report
 carries reply previews, timing, and the **model under test** (auto-detected from
 `/healthz`, overridable with `--model-label`) so runs stay comparable.
 
+## Eval tiers — gate vs tracked
+
+Every case resolves to one of two tiers ([ADR 0126](/adr/0126-eval-flywheel-traces-feedback-cases) D1):
+
+- **`gate`** — deterministic conformity: "this still works". Audit-log tool
+  firing, reply/forbidden patterns, KB side effects, HTTP status — channels with
+  a yes/no answer that doesn't depend on model mood. The **gate pass rate is the
+  headline number**, and a gate case that was passing and now fails is a
+  regression that should block.
+- **`tracked`** — LLM-judge frequency: "how well, how often". A `verify_rubric`
+  score is non-deterministic and costs tokens, so it only ever moves a *trend* —
+  never a hard pass/fail. A tracked wobble must never read as a gate break.
+
+How a case's tier is resolved (`evals.compare.resolve_tier`):
+
+1. An explicit `"tier": "gate"` / `"tier": "tracked"` on the case wins. An unknown
+   value is a **load-time error** naming the case, so a typo can't silently drop a
+   case out of the gate.
+2. Otherwise a case carrying a `verify_rubric` defaults to `tracked`; everything
+   else defaults to `gate`.
+
+The runner stamps the resolved tier on every report row and writes a per-tier
+`passed/total` block; `evals.report` and `evals.compare` split the leaderboard and
+trend on it, gate first. See the split for any report with:
+
+```bash
+python -m evals.report        # Gate and Tracked columns, per model, best gate first
+```
+
 ## Compare models, track over time
 
 Improving an agent means measuring it the same way every time and being able to
@@ -95,6 +124,88 @@ For a single before/after of one change, `evals/compare.py` diffs two reports
 ```bash
 python -m evals.compare evals/results/run-OLD.json evals/results/run-NEW.json
 ```
+
+## Nightly gate — `scripts/evals_nightly.py`
+
+`scripts/evals_nightly.py` is the unattended version of all of the above: once a
+night, sweep the **default config's model**, compare the **gate tier** to the
+previous nightly, and turn each regression into a tracked improvement lead.
+
+```bash
+python scripts/evals_nightly.py                 # default model, this instance's ledger
+PROTOAGENT_INSTANCE=dev python scripts/evals_nightly.py   # record into the :7871 sandbox ledger
+python scripts/evals_nightly.py --model vendor/some-model
+python scripts/evals_nightly.py --dry-run       # compare the last two nightlies, record nothing
+```
+
+What it does:
+
+1. **Sweeps on a throwaway instance.** It runs `evals.sweep` for one model, which
+   boots a UI-less agent on its own `PROTOAGENT_INSTANCE` (`eval-sweep-<ts>-0`) and
+   its own port, runs the suite, and tears the instance down. A live agent's
+   chat/tasks/knowledge are never touched ([ADR 0004](/adr/0004-multi-instance-data-scoping)) —
+   the throwaway name is passed only into the sweep subprocess's environment.
+2. **Writes a marked nightly report** to `evals/results/run-nightly-<ts>.json`
+   carrying `"nightly": true`. It matches `run-*.json`, so `python -m evals.report`
+   trends it like any run, but the previous-nightly comparison reads only
+   `run-nightly-*.json` — an ad-hoc `evals.sweep`/`evals.runner` run is never
+   mistaken for last night.
+3. **Gates gate-tier regressions → friction.** A gate case that **passed in the
+   previous nightly and fails now** records one `harness` friction entry (source
+   `evals-nightly`) through the friction plugin's `record_service`. The summary is
+   stable — `nightly gate regression: <case id>`, no dates or counts — so the
+   ledger (which groups by kind + summary) holds **one row per case**, not one per
+   night; the detail carries the report path and the trace link (from the row's
+   `trace_id`). Tracked-tier changes record nothing.
+4. **Flags flaky gate cases.** A gate case that flips pass/fail twice within the
+   last 7 nightlies is printed as flaky with "demote to tracked or fix". Nothing is
+   auto-demoted — demoting a case is an operator judgement.
+
+### Which ledger does it write to?
+
+The nightly runs **outside any agent turn**, so it reaches friction by importing
+the plugin's `record_service` directly (the `graph.sdk.record_friction` seam
+no-ops in a bare script — it resolves a *registered* plugin service, and nothing is
+registered in a plain process). That service resolves the ledger at
+`instance_paths().store("friction")` under **this process's** instance — so a
+regression is recorded against whatever instance you run the nightly under: the
+host/default instance in production, or the dev sandbox under
+`PROTOAGENT_INSTANCE=dev`. It is deliberately **not** the throwaway sweep instance,
+which is deleted when the sweep ends.
+
+### Scheduling it on the host
+
+Run it from the **host scheduler — a launchd plist on macOS, cron on Linux** — not
+the protoAgent scheduler. The protoAgent scheduler fires *prompts as agent turns
+inside a running instance*; the nightly is a host process that boots its own
+throwaway instance and writes to the host's friction ledger, so it has no turn to
+run in and nothing for the agent scheduler to carry. A launchd `StartCalendarInterval`
+job is the right shape:
+
+```xml
+<!-- ~/Library/LaunchAgents/ai.protolabs.protoagent.evals-nightly.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>ai.protolabs.protoagent.evals-nightly</string>
+  <key>WorkingDirectory</key><string>/path/to/protoAgent</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PROTOAGENT_INSTANCE</key><string>default</string></dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/protoAgent/.venv/bin/python</string>
+    <string>scripts/evals_nightly.py</string>
+  </array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardOutPath</key><string>/tmp/protoagent-evals-nightly.log</string>
+  <key>StandardErrorPath</key><string>/tmp/protoagent-evals-nightly.log</string>
+</dict></plist>
+```
+
+**Installing the schedule is an operator step on the host** (`launchctl load …`, or
+the cron equivalent) — it needs the host's model gateway credentials and decides
+which instance's ledger the run writes to. The script installs nothing; a merge of
+this change does not touch launchd or any scheduler.
 
 ## The three assertion channels
 
@@ -379,6 +490,23 @@ side — which is the shape the #3186 default decision is meant to rest on.
 plausibly typed by a real user. "Use `memory_ingest` to record..." tests
 instruction-following, not tool selection. If the agent needs to
 infer the tool from intent, that *is* the test.
+
+## Editing a case — the guardrail
+
+Operator rule, non-negotiable, when a case fails on the current model:
+
+> **Never reword a case's prompt to name the expected tool; never tell the agent
+> to delegate, or not to use tools; never loosen an assertion** (expected/forbidden
+> tools, patterns, rubric criteria) **just to get a pass.**
+
+A case that fails on the current model is a real finding — a regression or a
+genuine capability gap. **Report it, don't edit it.** Loosening the assertion or
+leaking the tool name into the prompt makes the board green while the behaviour it
+was guarding silently ships broken; it converts a failing test into a test of
+nothing. (The nightly gate exists precisely to catch these regressions — editing
+the case to pass defeats it.) If a case is genuinely wrong — it asserts behaviour
+the agent was never meant to have — that is a change to the case's *intent*, made
+deliberately and reviewed as such, not a quiet tweak to clear a red run.
 
 ## Setup and teardown — start clean every time
 

@@ -51,6 +51,34 @@ python -m evals.report
 python -m evals.compare results/run-OLD.json results/run-NEW.json
 ```
 
+## Eval tiers (gate vs tracked)
+
+Every case resolves to a tier (ADR 0126 D1): **`gate`** — deterministic "this
+still works", the headline pass rate, a regression here should block — or
+**`tracked`** — an LLM-judge (`verify_rubric`) frequency signal that only moves a
+trend. A case with a `verify_rubric` defaults to `tracked`, everything else to
+`gate`; an explicit `"tier"` overrides (an unknown value is a load-time error).
+The runner stamps the resolved tier on every report row, and `evals.report` /
+`evals.compare` split on it.
+
+## Nightly gate (`scripts/evals_nightly.py`)
+
+The unattended version: sweep the **default config's model** on a throwaway
+instance, compare the **gate tier** to the previous nightly, and record one
+`harness` friction entry (source `evals-nightly`) per gate regression — a stable
+summary `nightly gate regression: <case id>`, so the ledger holds one row per case.
+A gate case that flips twice within the last 7 nightlies is printed as flaky
+("demote to tracked or fix"); nothing auto-demotes. Friction is written to the
+ledger of **the instance the script runs under** (not the throwaway sweep
+instance). Installing the host schedule (launchd/cron) is an operator step — see
+[docs/guides/evals.md](../docs/guides/evals.md).
+
+```bash
+python scripts/evals_nightly.py                          # default model, this instance's ledger
+PROTOAGENT_INSTANCE=dev python scripts/evals_nightly.py  # the :7871 sandbox ledger
+python scripts/evals_nightly.py --dry-run                # compare the last two nightlies, record nothing
+```
+
 ## Compare digest policies (the #3186 A/B)
 
 `--prior-sessions` turns `context.prior_sessions` into a sweep axis: one arm per
