@@ -244,6 +244,61 @@ def _forget_selection_kwargs(session_id: str, thread_ids) -> dict:
     }
 
 
+class _ForgetStores:
+    """Coordinate private history with a separate knowledge database.
+
+    Any pending row resumes the whole operation, including when one database's
+    final delete succeeded before the other failed. Same-database stores retain
+    the existing single transaction. Across databases, a failed hide restores
+    completed hides before retirement is allowed to start.
+    """
+
+    def __init__(self, stores):
+        self.stores = stores
+
+    def count_forget_pending(self, marker):
+        return sum(store.count_forget_pending(marker) for store in self.stores)
+
+    def mark_forget_pending(self, marker, **selection):
+        hidden = 0
+        try:
+            for store in self.stores:
+                hidden += store.mark_forget_pending(marker, **selection)
+        except BaseException:
+            for store in self.stores:
+                abort_forget(store, marker)
+            raise
+        return hidden
+
+    def restore_forget_pending(self, marker):
+        return sum(store.restore_forget_pending(marker) for store in self.stores)
+
+    def delete_forget_pending(self, marker):
+        return sum(store.delete_forget_pending(marker) for store in self.stores)
+
+    def forget_pending_markers(self):
+        pending = {}
+        for store in self.stores:
+            for marker, stamp in store.forget_pending_markers().items():
+                pending[marker] = min(pending.get(marker, stamp), stamp)
+        return pending
+
+
+def conversation_forget_store(knowledge_store, history_store):
+    """Resolve the databases that own conversation rows, independent of knowledge scope.
+
+    Plugin knowledge backends without two-phase primitives keep their existing
+    post-retirement fallback; private history always participates in two phases.
+    """
+    if history_store is None:
+        return knowledge_store
+    capable = callable(getattr(knowledge_store, "mark_forget_pending", None))
+    if capable and getattr(knowledge_store, "path", None) == history_store.path:
+        return knowledge_store
+    stores = [knowledge_store, history_store] if capable else [history_store]
+    return _ForgetStores(stores)
+
+
 def begin_forget(knowledge_store, session_id: str, thread_ids) -> str | None:
     """Phase 1 — before the chat is retired: hide exactly the rows
     :func:`forget_conversation_memory` would delete. Returns the marker to finish or

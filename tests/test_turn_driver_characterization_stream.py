@@ -495,7 +495,7 @@ async def test_background_drain_replies_lead_and_messages_prepend(env, monkeypat
     msgs = g.stream_calls[0][0]["messages"]
     assert [type(m) for m in msgs] == [HumanMessage, HumanMessage, HumanMessage]
     assert msgs[0].additional_kwargs == {"lc_source": "room", "room": {"from": "proto"}}
-    assert "<job-id>j2</job-id>" in msgs[1].content and "indexed and searchable via memory_recall" in msgs[1].content
+    assert "<job-id>j2</job-id>" in msgs[1].content and "recall_session(session_id='s1')" in msgs[1].content
     assert msgs[2].content == "hello"
 
 

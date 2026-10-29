@@ -58,28 +58,28 @@ def _compaction_message(result: dict) -> str:
         return f"Nothing to compact — this conversation is already short ({result.get('kept', 0)} messages)."
     if reason == "no_store":
         return (
-            "Compaction skipped — no searchable knowledge store is configured, so the raw history "
+            "Compaction skipped — no searchable history store is configured, so the raw history "
             "couldn't be archived. Nothing was changed (your full context is intact)."
         )
     if reason == "incognito":
         return (
-            "Compaction skipped — this chat is incognito, so its history is never archived to memory, "
+            "Compaction skipped — this chat is incognito, so its conversation is never archived, "
             "and /compact doesn't remove history it hasn't archived. Nothing was changed."
         )
     if reason in ("empty", "empty_archive", "archive_error"):
         return "Compaction skipped — the conversation couldn't be archived, so nothing was changed."
     if reason in ("no_summary", "summary_error"):
         return (
-            f"Archived {result.get('archived_chunks', 0)} chunk(s) to searchable memory, but the summary "
+            f"Archived {result.get('archived_chunks', 0)} entry/entries to searchable history, but the summary "
             "couldn't be generated — kept your full context rather than compacting it."
         )
     if reason == "no_checkpointer":
         return "Compaction unavailable — no conversation checkpoint to compact."
     removed, kept = result.get("removed", 0), result.get("kept", 0)
     return (
-        f"Compacted this conversation — archived {removed} older message(s) to searchable memory and kept the "
+        f"Compacted this conversation — archived {removed} older message(s) to searchable history and kept the "
         f"last {kept}. The agent now carries a summary of the earlier messages plus the recent ones, at a "
-        f"fraction of the token cost; the full raw history stays searchable via memory recall."
+        f"fraction of the token cost; the full raw history stays retrievable via recall_session."
     )
 
 

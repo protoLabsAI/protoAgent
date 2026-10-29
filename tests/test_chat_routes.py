@@ -1904,3 +1904,44 @@ def test_delete_session_cascade_removes_aside_threads_with_writes_and_media(monk
     for tid in kept:
         assert _n("checkpoints", tid) > 0 and _n("writes", tid) > 0, tid
     assert _media() == 2 * len(kept)  # the deleted chat's images went with it, nobody else's
+
+
+@pytest.mark.parametrize("backend", ["shared", "plugin", "none"])
+@pytest.mark.parametrize("fails", [False, True])
+def test_forget_private_history_independent_of_knowledge(monkeypatch, tmp_path, backend, fails):
+    """Forget owns private history even when knowledge lives elsewhere or is absent."""
+    from runtime.state import STATE
+    from knowledge.history import HistoryStore
+
+    async def retire(thread_id, **kwargs):
+        if fails:
+            raise RuntimeError("retirement failed")
+        if thread_id == "a2a:s1":
+            history.add("fresh summary", session_id="s1", thread_id=thread_id, kind="summary")
+        return "summary"
+
+    c, store, _ = _forget_fixture(monkeypatch, tmp_path, retire=retire)
+    history = HistoryStore(tmp_path / "private.db")
+    monkeypatch.setattr(STATE, "history_store", history)
+    if backend != "shared":
+        monkeypatch.setattr(STATE, "knowledge_store", object() if backend == "plugin" else None)
+    old = history.add("old archive", session_id="s1", thread_id="a2a:s1", kind="archive")
+    goal = history.add("old goal", session_id="other", thread_id="a2a:s1:goal-iter-1", kind="summary")
+    report = history.add("report", session_id="s1", kind="report")
+    other = history.add("other chat", session_id="s2", kind="archive")
+    if fails:
+        with pytest.raises(RuntimeError, match="retirement failed"):
+            c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+        assert history.get(old) and history.get(goal)
+        if backend == "shared":
+            assert "old summary" in _contents(store)
+    else:
+        response = c.delete("/api/chat/sessions/s1?forget=true&harvest=true")
+        assert response.status_code == 200
+        assert response.json()["forgotten"] >= 2
+        assert history.get(old) is None and history.get(goal) is None
+        assert "fresh summary" in [row.content for row in history.list_for_session("s1")]
+        if backend == "shared":
+            assert "old summary" not in _contents(store)
+    assert history.get(report) and history.get(other)
+    assert history.forget_pending_markers() == {}

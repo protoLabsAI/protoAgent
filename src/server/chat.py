@@ -246,14 +246,14 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
     Two delivery shapes, keyed on what the result IS (#2363):
 
     * a ``spawn`` job's result is a **report** an autonomous subagent wrote — excerpt it at
-      ``_BG_RESULT_CAP`` and point at the knowledge-store copy (ADR 0070 D2);
+      ``_BG_RESULT_CAP`` and point at the history-store copy (ADR 0070 D2);
     * a ``spawn_work`` job's result (``deterministic``) is the **deliverable** the caller
       dispatched — deliver it whole.
     * a background delegate with ``result_author`` is that participant's own reply —
       persist a ``<room-message>`` and emit its matching live authorship frame (#3051).
 
-    The excerpt path's ``memory_recall`` pointer is only ever emitted for jobs that were
-    actually indexed: ``_spawn_report_index`` runs from the A2A terminal hook, i.e. for
+    The excerpt path's ``recall_session`` pointer names the origin session for jobs
+    eligible for indexing: ``_spawn_report_index`` runs from the A2A terminal hook, i.e. for
     ``spawn`` jobs, which are exactly the ones that reach the truncation branch. Keep those
     two in step — a pointer at an index that never ran sends the model to an empty search
     (#2362), which is worse than the truncation it is trying to soften.
@@ -307,11 +307,11 @@ def _drain_background(session_id: str) -> tuple[list, list[dict]]:
             continue
         # A deterministic work job's result is the deliverable — deliver it whole (#2363).
         if not getattr(j, "deterministic", False) and len(result) > _BG_RESULT_CAP:
-            # Completed, non-incognito reports this size were indexed at completion
+            # Completed, non-incognito reports this size are eligible for indexing at completion
             # (ADR 0070 D2) — say so; incognito/failed/chained (background-origin)
             # ones only live in the jobs DB.
             searchable = (
-                " — the full report is indexed and searchable via memory_recall"
+                f" — look for the full report with recall_session(session_id={j.origin_session!r})"
                 if (
                     j.status == "completed"
                     and not getattr(j, "origin_incognito", False)

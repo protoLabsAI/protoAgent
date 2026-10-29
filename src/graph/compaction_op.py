@@ -248,7 +248,7 @@ async def compact_thread(
         summary = (
             "(No summary is available — the earlier conversation was force-compacted after "
             "a context-window overflow."
-            + (" The full transcript is archived and searchable via recall_session.)" if entry_ids else ")")
+            + (f" The full transcript is archived; use recall_session(session_id={session_id!r}).)" if entry_ids else ")")
         )
 
     cut = _safe_cut_index(messages, keep)
@@ -262,7 +262,7 @@ async def compact_thread(
     from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
     archived_note = (
-        "the full transcript is archived and searchable via recall_session"
+        f"the full transcript is archived; use recall_session(session_id={session_id!r})"
         if entry_ids
         else "the removed history was NOT archived"  # force-mode honesty — never claim an archive that didn't happen
     )

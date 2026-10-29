@@ -1148,8 +1148,8 @@ def _handle_background_terminal(outcome) -> None:
         },
     )
     # Index the full report into the history store (ADR 0070 D2) BEFORE any resume
-    # turn runs, so the drained notification's "searchable via memory_recall" pointer
-    # is already true when the agent reads it.
+    # turn runs. The drained notification points to recall_session with the origin
+    # session ID; indexing is best-effort and the jobs DB remains the record.
     if _should_index_report(job):
         _spawn_report_index(job)
     # Delivery (ADR 0070 D1): push-resume the ORIGIN session — the nudge turn's drain

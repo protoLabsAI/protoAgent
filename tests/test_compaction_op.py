@@ -80,6 +80,7 @@ def test_compact_archives_and_rewrites_checkpoint():
     out = update["messages"]
     assert isinstance(out[0], RemoveMessage) and out[0].id == REMOVE_ALL_MESSAGES
     assert isinstance(out[1], HumanMessage) and "SUMMARY: user likes teal" in out[1].content
+    assert "recall_session(session_id='s1')" in out[1].content
     assert out[1].additional_kwargs.get("lc_source") == "compaction"
     assert [m.id for m in out[2:]] == ["h2", "a2"]  # the recent tail, untouched
 
@@ -389,3 +390,12 @@ def test_safe_cut_skips_orphan_tool_block_without_parent():
     msgs = [HumanMessage(content="q"), ToolMessage(content="orphan", tool_call_id="missing"),
             ToolMessage(content="also orphan", tool_call_id="missing2"), AIMessage(content="answer")]
     assert _safe_cut_index(msgs, keep_last=3) == 3
+
+
+def test_compaction_status_names_history_and_recall_tool():
+    from server.chat_session_ops import _compaction_message
+
+    refused = _compaction_message({"reason": "no_store"})
+    assert "history store" in refused and "knowledge store" not in refused
+    compacted = _compaction_message({"removed": 4, "kept": 2})
+    assert "recall_session" in compacted and "memory recall" not in compacted

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from knowledge.store import _now_iso, _resolve_path
+from knowledge.store import FORGET_PENDING_PREFIX, _history_forget_where, _now_iso, _resolve_path
 
 HistoryKind = Literal["archive", "summary", "report"]
 
@@ -147,3 +147,42 @@ class HistoryStore:
                 "WHERE history_fts MATCH ? AND h.invalidated_at IS NULL "
                 "ORDER BY history_fts.rank, h.id LIMIT ?", (query, limit)
             )]
+
+    def mark_forget_pending(self, marker: str, *, session_id="", thread_ids=(), **kwargs) -> int:
+        """Hide this session's archives and summaries before retirement."""
+        where, params = _history_forget_where(session_id, thread_ids)
+        if not marker or not where:
+            return 0
+        with closing(self._connect()) as db, db:
+            return db.execute(
+                f"UPDATE history SET invalidated_at = ?, invalidation_reason = ? "
+                f"WHERE ({where}) AND invalidated_at IS NULL",
+                [_now_iso(), marker, *params],
+            ).rowcount
+
+    def count_forget_pending(self, marker: str) -> int:
+        """Count rows held by a previous attempt, so retries hide nothing new."""
+        with closing(self._connect()) as db:
+            return db.execute("SELECT COUNT(*) FROM history WHERE invalidation_reason = ?", (marker,)).fetchone()[0]
+
+    def restore_forget_pending(self, marker: str) -> int:
+        """Restore rows after a failed retirement."""
+        with closing(self._connect()) as db, db:
+            return db.execute(
+                "UPDATE history SET invalidated_at = NULL, invalidation_reason = NULL WHERE invalidation_reason = ?",
+                (marker,),
+            ).rowcount
+
+    def delete_forget_pending(self, marker: str) -> int:
+        """Delete only the rows hidden before retirement, preserving its new harvest."""
+        with closing(self._connect()) as db, db:
+            return db.execute("DELETE FROM history WHERE invalidation_reason = ?", (marker,)).rowcount
+
+    def forget_pending_markers(self) -> dict[str, str]:
+        """Find interrupted history forgets for the orphan sweep."""
+        with closing(self._connect()) as db:
+            return dict(db.execute(
+                "SELECT invalidation_reason, MIN(invalidated_at) FROM history "
+                "WHERE substr(invalidation_reason, 1, ?) = ? GROUP BY invalidation_reason",
+                (len(FORGET_PENDING_PREFIX), FORGET_PENDING_PREFIX),
+            ).fetchall())
