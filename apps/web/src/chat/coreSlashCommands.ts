@@ -22,8 +22,8 @@ import { openPromptViewer } from "./PromptViewer";
 import { historyLine, promptNoteMarkdown, retentionLine } from "./promptView";
 import { perfNoteMarkdown } from "./perfView";
 import { request } from "../lib/api/http";
-import type { UsageSnapshot } from "../lib/queries";
-import { usageNoteMarkdown } from "./usageView";
+import "./UsageCard";
+import { usageNoteMarkdown, type UsageSnapshot } from "./usageView";
 import { trajectoryNoteMarkdown } from "./trajectoryView";
 
 // Local id for the system notes /compact posts (the command manages messages
@@ -267,10 +267,19 @@ registerSlashCommand({
   usage: "/usage",
   run: (ctx) => {
     if (!ctx.sessionId) return false; // no session → fall through
+    const sessionId = ctx.sessionId;
     // Instance-wide, like /perf: the same `GET /api/usage` the Settings ▸ Providers meters
     // read, so the server's 60 s poll floor applies here too.
     void request<UsageSnapshot>("/api/usage")
-      .then((snapshot) => ctx.noteToThread(usageNoteMarkdown(snapshot), { tone: "info" }))
+      .then((snapshot) => {
+        const now = Date.now();
+        const messages = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId)?.messages ?? [];
+        chatStore.updateMessages(sessionId, [...messages, {
+          id: noteId(), role: "system", content: usageNoteMarkdown(snapshot, now),
+          component: { component: "subscription-usage", props: { snapshot, checked_at: now } },
+          createdAt: now, status: "done",
+        }]);
+      })
       .catch((e) => ctx.noteToThread(`Usage check failed — ${errMsg(e)}`, { tone: "danger" }));
     ctx.focusComposer();
     return true;
