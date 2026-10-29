@@ -611,7 +611,7 @@
       "placements": [
         {
           "page": "tutorials/first-agent.md",
-          "heading": "## 3. Connect a model"
+          "heading": "## 2. Connect a model"
         }
       ],
       "watch": [

@@ -48,7 +48,7 @@ Recognize a successful model test before finishing setup.
 
 **Capture / drawing brief:** Capture the Brain step with a named demo connection, selected model, and successful Test connection result. Crop to the wizard; use dummy credentials. Do not imply Probe is a completion test.
 
-**Placement:** [tutorials/first-agent.md](../tutorials/first-agent.md) → 3. Connect a model
+**Placement:** [tutorials/first-agent.md](../tutorials/first-agent.md) → 2. Connect a model
 
 **Caption:** Run Test connection before continuing. This example uses a Claude subscription; gateway setup uses the same test step.
 
