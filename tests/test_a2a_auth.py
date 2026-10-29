@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import logging
 import time
 from types import SimpleNamespace
 
@@ -1424,3 +1425,72 @@ def test_a_signed_media_link_does_not_cover_a_control_char_variant(monkeypatch):
     c = _differential_client()
     assert c.get("/media/a.png?sig=x").status_code == 200
     assert c.get("/media/a.p%09ng?sig=x").status_code == 401
+
+
+# ── Loopback bind quiets the two open-mode notices (#4569) ───────────────────
+#
+# A fresh loopback-only ``uvx`` boot is open-by-design, not misconfigured, so the
+# "token not configured" / "origins not set" notices log at INFO there; a reachable
+# bind keeps them at WARNING. The federation-token and X-API-Key warnings always stay
+# WARNING — they flag a real misconfiguration regardless of the bind.
+
+_OPEN_TOKEN_MSG = "A2A auth token not configured"
+_OPEN_ORIGINS_MSG = "A2A_ALLOWED_ORIGINS not set"
+
+
+def _auth_records(caplog, needle):
+    return [r for r in caplog.records if r.name == "a2a_impl.auth" and needle in r.getMessage()]
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost", None])
+def test_loopback_bind_logs_open_notices_at_info(monkeypatch, caplog, host):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    with caplog.at_level(logging.INFO, logger="a2a_impl.auth"):
+        auth.configure(bearer_token="", api_key="", allowed_origins_raw="", bind_host=host)
+    token_recs = _auth_records(caplog, _OPEN_TOKEN_MSG)
+    origin_recs = _auth_records(caplog, _OPEN_ORIGINS_MSG)
+    assert token_recs and all(r.levelno == logging.INFO for r in token_recs)
+    assert origin_recs and all(r.levelno == logging.INFO for r in origin_recs)
+    # Quiet boot: nothing from this logger reaches WARNING on a loopback bind.
+    assert not [r for r in caplog.records if r.name == "a2a_impl.auth" and r.levelno >= logging.WARNING]
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "10.0.0.5", "agent.example.com"])
+def test_non_loopback_bind_keeps_open_notices_at_warning(monkeypatch, caplog, host):
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    with caplog.at_level(logging.INFO, logger="a2a_impl.auth"):
+        auth.configure(bearer_token="", api_key="", allowed_origins_raw="", bind_host=host)
+    token_recs = _auth_records(caplog, _OPEN_TOKEN_MSG)
+    origin_recs = _auth_records(caplog, _OPEN_ORIGINS_MSG)
+    assert token_recs and all(r.levelno == logging.WARNING for r in token_recs)
+    assert origin_recs and all(r.levelno == logging.WARNING for r in origin_recs)
+
+
+def test_federation_and_apikey_warnings_stay_warning_on_loopback(monkeypatch, caplog):
+    # Even on a loopback bind the federation-inert and X-API-Key-deprecation notices are
+    # WARNING: they signal a real misconfiguration, not the benign open-by-default posture.
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("A2A_FEDERATION_TOKEN", raising=False)
+    auth._API_KEY_DEPRECATION_LOGGED[0] = False
+    with caplog.at_level(logging.INFO, logger="a2a_impl.auth"):
+        auth.configure(
+            bearer_token="",  # open mode → federation tier is inert (warns)
+            api_key="legacy-key",  # X-API-Key deprecation (warns, once per process)
+            allowed_origins_raw="https://app.example",
+            federation_token="fed-secret",
+            bind_host="127.0.0.1",  # loopback — these two must STILL warn
+        )
+    fed_recs = _auth_records(caplog, "federation tier is inert")
+    apikey_recs = _auth_records(caplog, "is DEPRECATED")
+    assert fed_recs and all(r.levelno == logging.WARNING for r in fed_recs)
+    assert apikey_recs and all(r.levelno == logging.WARNING for r in apikey_recs)
+
+
+def test_configure_defaults_to_loopback_when_bind_host_unspecified(monkeypatch, caplog):
+    # The kwarg is optional; omitting it (the pre-existing call shape) is treated as the
+    # loopback default, so legacy callers don't suddenly warn on a benign boot.
+    monkeypatch.delenv("A2A_AUTH_TOKEN", raising=False)
+    with caplog.at_level(logging.INFO, logger="a2a_impl.auth"):
+        auth.configure(bearer_token="", api_key="", allowed_origins_raw="")
+    assert _auth_records(caplog, _OPEN_TOKEN_MSG)
+    assert not [r for r in caplog.records if r.name == "a2a_impl.auth" and r.levelno >= logging.WARNING]
