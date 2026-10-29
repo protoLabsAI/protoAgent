@@ -1,1 +1,0 @@
-- **Remote model passthrough opt-in (#4608).** Add `model_passthrough.allow_remote`, off by default, to allow remote callers to use raw model passthrough while retaining required bearer authentication.

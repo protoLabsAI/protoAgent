@@ -1,1 +1,0 @@
-- **Subscription usage cards (#4591).** /usage now saves a card with usage meters, the local check time, cached-data age, and refresh status, while retaining a timestamped text fallback for copy and export.
