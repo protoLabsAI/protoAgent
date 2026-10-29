@@ -2,6 +2,7 @@ import { devices, expect, test, type Page } from "@playwright/test";
 
 import { withArtifactPanel } from "./artifactPanel";
 import { withCodePane } from "./codePane";
+import { STARTER_PROMPTS } from "../src/chat/starterPrompts";
 
 // Tablet band of the desktop shell (#4336 S5). Runs under the `tablet` Playwright project
 // (playwright.config.ts) with real device profiles — isMobile + hasTouch + DPR, so
@@ -95,6 +96,21 @@ for (const p of PROFILES) {
       expect(zoomers).toEqual([]);
 
       expect(await undersizedTargets(page)).toEqual([]);
+    });
+
+    test("starter chips have touch-sized boxes and fill the composer without sending", async ({ page }) => {
+      await page.goto("/app/", { waitUntil: "load" });
+      const composer = page.getByPlaceholder(/Message protoAgent/i);
+      for (const { label, prompt, note } of STARTER_PROMPTS) {
+        const chip = page.getByRole("button", { name: note ? `${label} ${note}` : label, exact: true });
+        await expect(chip).toBeVisible();
+        const box = (await chip.boundingBox())!;
+        expect(box.width).toBeGreaterThanOrEqual(44);
+        expect(box.height).toBeGreaterThanOrEqual(44);
+        await chip.tap();
+        await expect(composer).toHaveValue(prompt);
+        await expect(page.locator(".pl-message--user")).toHaveCount(0);
+      }
     });
 
     if (p.portrait) {

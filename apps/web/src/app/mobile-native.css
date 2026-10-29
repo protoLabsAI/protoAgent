@@ -21,6 +21,13 @@
    always should have had. */
 
 @media (hover: none) {
+  /* Starter chips need a full touch target on phones and tablets. Grow the box
+     so adjacent prompts keep their spacing without overlapping hit areas. */
+  .chat-starter-prompts .pl-chip {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
   /* iOS Safari zooms the viewport on focus of any control under 16px. The DS covers
      its own `.pl-*` classes; these bare selectors catch everything else — theme-base.css
      sets the body font-size to the base step, 14px, and the `button,input,textarea,select

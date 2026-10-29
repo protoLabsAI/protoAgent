@@ -111,7 +111,7 @@ export const ChatTranscript = memo(function ChatTranscript({
     <Conversation id={rootId} autoScroll={false}>
       {messages.length === 0 ? (
         <Empty icon={<TerminalSquare />} title="Try one of these">
-          <div style={{ display: "grid", gap: 8, maxWidth: "100%", textAlign: "left" }}>
+          <div className="chat-starter-prompts" style={{ display: "grid", gap: 8, maxWidth: "100%", textAlign: "left" }}>
             {STARTER_PROMPTS.map(({ label, prompt, note }) =>
               onStarterPrompt ? (
                 <Chip key={label} block label={label} note={note} onClick={() => onStarterPrompt(prompt)} />
