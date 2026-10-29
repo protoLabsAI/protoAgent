@@ -241,15 +241,20 @@ afterward catches it.
 
 ## The shape of a case
 
+A tool-selection case asks for work the tool is actually needed for. A model answers
+"17 × 23 + 1" in its head (correctly), so that case measured nothing; and a fact the
+runtime already injects into the prompt (ADR 0069) needs no `memory_recall` call, so
+such a case asserts the answer, not the path.
+
 ```json
 {
   "id": "unique-id",
   "category": "tool",
   "kind": "ask",
-  "name": "Asks for arithmetic → calculator",
-  "prompt": "How much is 17 times 23, plus 1?",
+  "name": "Arithmetic too heavy to do in-head → calculator",
+  "prompt": "What is 1.07 raised to the 37th power, to four decimal places?",
   "expected_tools": ["calculator"],
-  "expected_patterns": ["392"],
+  "expected_patterns": ["12.223"],
   "verify_kb": {
     "find_chunk_containing": "EVAL-MARK-XYZ",
     "domain": "context"

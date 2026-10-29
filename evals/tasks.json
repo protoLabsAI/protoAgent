@@ -70,10 +70,10 @@
     "id": "calculator_intent",
     "category": "tool",
     "kind": "ask",
-    "name": "Asks for arithmetic → calculator",
-    "prompt": "How much is 17 times 23, plus 1?",
+    "name": "Arithmetic too heavy to do in-head → calculator",
+    "prompt": "What is 1.07 raised to the 37th power, to four decimal places?",
     "expected_tools": ["calculator"],
-    "expected_patterns": ["392"]
+    "expected_patterns": ["12.223"]
   },
   {
     "id": "web_search_intent",
@@ -128,7 +128,7 @@
     "id": "memory_recall_intent",
     "category": "tool",
     "kind": "ask",
-    "name": "Asks about a stored fact → recall surfaces it",
+    "name": "Asks about a stored fact → answered from memory (injected or recalled)",
     "setup": [
       {"kb_ingest": {
         "content": "Operator's primary lab is Snickerdoodle, located in Spokane.",
@@ -137,7 +137,6 @@
       }}
     ],
     "prompt": "Where's my primary lab and what's it called?",
-    "expected_tools": ["memory_recall"],
     "expected_patterns": ["snickerdoodle", "spokane"],
     "teardown": [
       {"kb_delete_by_heading": {"domain": "context", "heading": "lab"}}
