@@ -247,6 +247,26 @@ def live_plugin_config_schemas() -> list[PluginConfigSchema]:
         return []
 
 
+def _configured_plugins_dir() -> str:
+    """The live config's ``plugins.dir``, read-only.
+
+    A plain C-loader parse, not ``load_yaml_doc``: that returns a comment-preserving
+    ruamel document for editing, and parsing the whole config that way was most of the
+    cost of every ``GET /api/config`` once manifests were cached (it runs on the event loop)."""
+    import yaml
+
+    from graph.config_io import config_yaml_path, ensure_live_config
+    from infra.paths import read_text_utf8
+
+    ensure_live_config()
+    path = config_yaml_path()
+    if not path.exists():
+        return ""
+    data = yaml.load(read_text_utf8(path), Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader)) or {}
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    return str((plugins or {}).get("dir") or "") if isinstance(plugins, dict) else ""
+
+
 def installed_plugin_config_schemas(*, strict: bool = False) -> list[PluginConfigSchema]:
     """Like ``live_plugin_config_schemas`` but for EVERY installed plugin — enabled or
     not. The SECRET-ROUTING + config-redaction paths use this so a secret saved for a
@@ -260,11 +280,9 @@ def installed_plugin_config_schemas(*, strict: bool = False) -> list[PluginConfi
     try:
         from infra.paths import instance_paths
 
-        from graph.config_io import load_yaml_doc
         from graph.plugins.loader import discover_plugins
 
-        data = load_yaml_doc() or {}
-        roots = plugin_roots_from(instance_paths().plugins_dir, str((data.get("plugins") or {}).get("dir") or ""))
+        roots = plugin_roots_from(instance_paths().plugins_dir, _configured_plugins_dir())
         all_ids = {m.id for m in discover_plugins(roots)}
         return discover_plugin_config(roots, all_ids, set(), strict=strict)  # every installed plugin, on or off
     except Exception:  # noqa: BLE001

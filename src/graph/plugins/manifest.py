@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import posixpath
 import re
@@ -1439,6 +1440,31 @@ def _pip_pkg_name(spec: str) -> str:
     return re.split(r"[<>=!~\[; ]", str(spec).strip(), maxsplit=1)[0].strip()
 
 
+#: libyaml's loader when the C extension is present (it ships in the PyYAML wheels), else the
+#: pure-Python one. Same safe tag set; roughly 10x faster on a manifest.
+_SafeLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+#: Parsed manifest YAML keyed by path → ((mtime_ns, size), data). Discovery runs on request
+#: paths (GET /api/config walks it twice through installed_plugin_config_schemas), and
+#: re-parsing every manifest each time held the event loop for 100-200 ms on a live agent.
+#: An edited or replaced manifest changes its mtime/size and is parsed again.
+_PARSED: dict[str, tuple[tuple[int, int], dict]] = {}
+
+
+def _read_manifest_yaml(manifest_path: Path) -> object:
+    """The manifest's YAML, parsed once per file version. Returns a private copy."""
+    st = manifest_path.stat()
+    key = str(manifest_path)
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _PARSED.get(key)
+    if hit is not None and hit[0] == stamp:
+        return copy.deepcopy(hit[1])
+    data = yaml.load(manifest_path.read_text(encoding="utf-8"), Loader=_SafeLoader) or {}
+    if isinstance(data, dict):
+        _PARSED[key] = (stamp, copy.deepcopy(data))
+    return data
+
+
 def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     """Parse ``<plugin_dir>/protoagent.plugin.yaml`` → ``PluginManifest``.
 
@@ -1450,7 +1476,7 @@ def load_manifest(plugin_dir: Path) -> PluginManifest | None:
     if not manifest_path.exists():
         return None
     try:
-        data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+        data = _read_manifest_yaml(manifest_path)
     except (OSError, yaml.YAMLError) as exc:
         log.warning("[plugins] %s: unreadable manifest: %s", plugin_dir.name, exc)
         return None
