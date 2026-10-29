@@ -939,12 +939,12 @@ export function SetupWizard({
                   <RadioCard
                     value="claude"
                     title="Claude subscription"
-                    blurb="Run Claude on your Pro/Max plan — no API key, uses your Claude Code login."
+                    blurb="Sign in with your Claude Pro/Max account. No API key needed."
                   />
                   <RadioCard
                     value="codex"
                     title="ChatGPT / Codex subscription"
-                    blurb="Run ChatGPT/Codex on your plan — no API key, uses your Codex CLI login."
+                    blurb="Sign in with your ChatGPT Plus/Pro account. No API key needed."
                   />
                   {/* The ACP brain card is deliberately GONE (deprecated 2026-08-11):
                       ACP survives for delegates only. A legacy acp:* config parses,
@@ -968,7 +968,7 @@ export function SetupWizard({
                         type="button"
                         onClick={() => void disconnectProvider(state.provider)}
                         disabled={loginBusy}
-                        title="Revoke and remove protoAgent's stored credential (your CLI login is untouched)"
+                        title="Remove protoAgent's stored sign-in for this provider"
                       >
                         {loginBusy ? <Spinner size={15} /> : null} Disconnect
                       </Button>
@@ -1025,6 +1025,9 @@ export function SetupWizard({
                         {oauthStatusBusy ? <Spinner size={15} /> : null}
                         {oauthStatusBusy ? "Checking…" : "Re-check"}
                       </Button>
+                      <div className="setup-hint">
+                        Sign-in happens right here in the browser — no command-line tool and no separate login needed.
+                      </div>
                     </Callout>
                   )}
                   {oauthStatusError ? <Alert status="error">{oauthStatusError}</Alert> : null}

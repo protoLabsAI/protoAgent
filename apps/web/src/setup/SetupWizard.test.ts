@@ -216,6 +216,38 @@ describe("SetupWizard — the shared two-step archetype flow", () => {
 
 // Partial /api/config payloads (a proxied fleet member on an older core) must not crash
 // the first-run render — every missing section falls back to defaultState().
+// #4565: the brain-step subscription cards must read as "sign in with your plan, no API
+// key" — new users were reading the old "uses your Claude Code / Codex CLI login" copy as
+// "install the CLI first", when sign-in actually happens in the browser from this callout.
+describe("SetupWizard — subscription copy (#4565)", () => {
+  async function mountToBrain() {
+    await mountToPicker();
+    await click(radioFor("basic")); // no bundle → Next gated only on the pre-filled name
+    await click(button(/^Next/)); // agent → setup
+    await tick(() => Boolean(nameInput()?.value));
+    await click(button(/^Next/)); // setup → brain
+    await tick(() => (container.textContent ?? "").includes("How this agent thinks"));
+  }
+
+  it("both subscription cards say sign-in-with-your-plan and no API key — never 'CLI login'", async () => {
+    await mountToBrain();
+    const text = container.textContent ?? "";
+    expect(text).toContain("Sign in with your Claude Pro/Max account. No API key needed.");
+    expect(text).toContain("Sign in with your ChatGPT Plus/Pro account. No API key needed.");
+    expect(text).not.toContain("Claude Code login");
+    expect(text).not.toContain("Codex CLI login");
+  });
+
+  it("the Not-signed-in callout says sign-in happens here in the browser with no CLI", async () => {
+    await mountToBrain();
+    await click(radioFor("claude")); // switch to the Claude subscription (OAuth) brain
+    await tick(() => (container.textContent ?? "").includes("Not signed in"));
+    const text = container.textContent ?? "";
+    expect(text).toContain("Not signed in");
+    expect(text).toContain("no command-line tool and no separate login needed");
+  });
+});
+
 describe("hydrateState", () => {
   const partial = (config: Record<string, unknown>) => ({ config, soul: "" }) as unknown as ConfigPayload;
 
