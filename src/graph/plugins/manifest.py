@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 import posixpath
 import re
@@ -1444,22 +1445,23 @@ def _pip_pkg_name(spec: str) -> str:
 #: pure-Python one. Same safe tag set; roughly 10x faster on a manifest.
 _SafeLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
-#: Parsed manifest YAML keyed by path → ((mtime_ns, size), data). Discovery runs on request
+#: Parsed manifest YAML keyed by path → ((size, digest), data). Discovery runs on request
 #: paths (GET /api/config walks it twice through installed_plugin_config_schemas), and
 #: re-parsing every manifest each time held the event loop for 100-200 ms on a live agent.
-#: An edited or replaced manifest changes its mtime/size and is parsed again.
-_PARSED: dict[str, tuple[tuple[int, int], dict]] = {}
+#: Keyed on the file's CONTENT like ``installer._content_stamp``: a stat key misses a
+#: same-size rewrite inside one mtime tick, and on Windows every in-place rewrite.
+_PARSED: dict[str, tuple[tuple[int, bytes], dict]] = {}
 
 
 def _read_manifest_yaml(manifest_path: Path) -> object:
-    """The manifest's YAML, parsed once per file version. Returns a private copy."""
-    st = manifest_path.stat()
+    """The manifest's YAML, parsed once per distinct content. Returns a private copy."""
+    raw = manifest_path.read_bytes()
     key = str(manifest_path)
-    stamp = (st.st_mtime_ns, st.st_size)
+    stamp = (len(raw), hashlib.blake2b(raw, digest_size=16).digest())
     hit = _PARSED.get(key)
     if hit is not None and hit[0] == stamp:
         return copy.deepcopy(hit[1])
-    data = yaml.load(manifest_path.read_text(encoding="utf-8"), Loader=_SafeLoader) or {}
+    data = yaml.load(raw.decode("utf-8"), Loader=_SafeLoader) or {}
     if isinstance(data, dict):
         _PARSED[key] = (stamp, copy.deepcopy(data))
     return data

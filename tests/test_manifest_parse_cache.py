@@ -62,15 +62,33 @@ def test_callers_get_a_private_copy_of_the_cached_yaml(tmp_path, monkeypatch):
     assert manifest_mod._read_manifest_yaml(path)["name"] == "First"
 
 
-def test_installed_schemas_still_read_the_configured_plugins_dir(tmp_path, monkeypatch):
-    import graph.config_io as config_io
-    from graph.plugins import pconfig
+def test_a_rewrite_that_leaves_every_stat_field_unchanged_is_seen(tmp_path, monkeypatch):
+    """Windows: an in-place same-size save keeps mtime, size, ctime and file index. The
+    cache is keyed on content, so it must still serve the new manifest."""
+    import os
 
-    cfg = tmp_path / "langgraph-config.yaml"
-    cfg.write_text("# a comment\nplugins:\n  dir: /opt/extra-plugins\n", encoding="utf-8")
-    monkeypatch.setattr(config_io, "config_yaml_path", lambda: cfg)
-    monkeypatch.setattr(config_io, "ensure_live_config", lambda: False)
-    assert pconfig._configured_plugins_dir() == "/opt/extra-plugins"
+    _count_parses(monkeypatch)
+    _write(tmp_path / "p", "Alpha")
+    path = tmp_path / "p" / MANIFEST_FILENAME
+    assert load_manifest(tmp_path / "p").name == "Alpha"
 
-    cfg.write_text("model:\n  name: x\n", encoding="utf-8")
-    assert pconfig._configured_plugins_dir() == ""
+    frozen = os.stat(path)
+    real_stat = os.stat
+    monkeypatch.setattr(
+        os, "stat", lambda t, *a, **k: frozen if os.fspath(t) == str(path) else real_stat(t, *a, **k)
+    )
+    _write(tmp_path / "p", "Omega")  # same length as "Alpha"
+    assert os.stat(path) == frozen
+
+    assert load_manifest(tmp_path / "p").name == "Omega"
+
+
+def test_installed_schemas_resolve_roots_from_the_configured_plugins_dir(monkeypatch):
+    from graph.plugins import installer, pconfig
+
+    seen = {}
+    monkeypatch.setattr(installer, "configured_plugins_dir", lambda: "/opt/extra-plugins")
+    monkeypatch.setattr(pconfig, "plugin_roots_from", lambda live, override: seen.setdefault("o", override) and [])
+    monkeypatch.setattr(pconfig, "discover_plugin_config", lambda *a, **k: [])
+    pconfig.installed_plugin_config_schemas()
+    assert seen["o"] == "/opt/extra-plugins"
