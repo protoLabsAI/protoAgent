@@ -1783,6 +1783,38 @@ textarea {
   font-size: var(--pl-font-size-xs);
 }
 
+/* Setup wizard — Local model discovery (#4572): the detected Ollama / LM Studio rows. */
+.setup-local {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-2);
+}
+.setup-local-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pl-space-3);
+  border: 1px solid var(--pl-color-border);
+  border-radius: var(--pl-radius);
+  padding: var(--pl-space-2_5) var(--pl-space-3);
+}
+.setup-local-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-0_5);
+}
+.setup-local-info > span {
+  color: var(--pl-color-fg-subtle);
+  font-size: var(--pl-font-size-xs);
+  font-family: var(--pl-font-mono);
+}
+.setup-local-ok {
+  color: var(--pl-color-status-success);
+}
+.setup-local-miss {
+  color: var(--pl-color-fg-subtle);
+}
+
 /* Category filter overflow (#2319) — same DS segmented-Tabs gap as the plugin Discover
    row: no max-width, no scroll, and the `responsive` collapse keys on container width
    rather than on whether the pills fit. In this dialog the spill lands squarely on the

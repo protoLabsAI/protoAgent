@@ -78,6 +78,11 @@ type WizardState = {
   // gateway (api_base + key); "anthropic-oauth" / "openai-codex" = a Claude / ChatGPT
   // subscription (no gateway key — the model list + test route through the OAuth path).
   provider: string;
+  // Which brain CARD the operator picked (#4572). Only distinguishes "local" from
+  // "gateway" — both are the openai provider underneath, so without this a local pick
+  // would read back as a plain gateway. All other kinds are recoverable from
+  // provider/runtimeKind; this is UI state only (never persisted).
+  brainChoice: BrainKind;
   acpAgent: string;
   apiBase: string;
   apiKey: string;
@@ -107,6 +112,7 @@ export function defaultState(): WizardState {
     operatorName: "",
     runtimeKind: "native",
     provider: "openai",
+    brainChoice: "gateway",
     acpAgent: "proto",
     // Blank, not a protoLabs-internal default (#B8): a stranger's first screen must not
     // show a URL they can't reach. The fields carry example placeholders instead.
@@ -154,6 +160,9 @@ export function hydrateState(payload: ConfigPayload): WizardState {
     operatorName: identity.operator || d.operatorName,
     runtimeKind: rt.startsWith("acp:") ? "acp" : "native",
     provider: String(model.provider || d.provider),
+    // A saved config can't record "local" (it's an openai gateway on disk), so a hydrated
+    // state always starts on the gateway card — the operator re-picks Local to re-detect.
+    brainChoice: d.brainChoice,
     acpAgent: rt.startsWith("acp:") ? rt.slice(4) || d.acpAgent : d.acpAgent,
     apiBase: model.api_base || d.apiBase,
     apiKey: "",
@@ -228,25 +237,52 @@ export function brainStepReady(args: {
 
 // The brain step presents ONE choice with four cards; each maps to a (runtimeKind,
 // provider) pair. Keeping the two config axes separate underneath (ADR 0033/0047) while
-// the UI is a single "what's your brain?" pick.
-type BrainKind = "gateway" | "claude" | "codex" | "acp";
-function brainKindOf(s: Pick<WizardState, "runtimeKind" | "provider">): BrainKind {
+// the UI is a single "what's your brain?" pick. "local" is the gateway provider pointed
+// at a local Ollama / LM Studio server (#4572) — identical config underneath, so it can't
+// be told apart from "gateway" by provider/base alone; the live pick is tracked in
+// `brainChoice` so brainKindOf can distinguish the two cards.
+type BrainKind = "gateway" | "local" | "claude" | "codex" | "acp";
+function brainKindOf(s: Pick<WizardState, "runtimeKind" | "provider" | "brainChoice">): BrainKind {
   if (s.runtimeKind === "acp") return "acp";
   if (s.provider === "anthropic-oauth") return "claude";
   if (s.provider === "openai-codex") return "codex";
-  return "gateway";
+  // Both local and gateway are the openai-compatible provider — only the in-session
+  // pick separates them (a saved config always reads back as the plain gateway).
+  return s.brainChoice === "local" ? "local" : "gateway";
 }
 function brainKindPatch(kind: BrainKind): Partial<WizardState> {
   switch (kind) {
     case "acp":
-      return { runtimeKind: "acp" };
+      return { runtimeKind: "acp", brainChoice: kind };
     case "claude":
-      return { runtimeKind: "native", provider: "anthropic-oauth" };
+      return { runtimeKind: "native", provider: "anthropic-oauth", brainChoice: kind };
     case "codex":
-      return { runtimeKind: "native", provider: "openai-codex" };
+      return { runtimeKind: "native", provider: "openai-codex", brainChoice: kind };
+    case "local":
+      return { runtimeKind: "native", provider: "openai", brainChoice: kind };
     default:
-      return { runtimeKind: "native", provider: "openai" };
+      return { runtimeKind: "native", provider: "openai", brainChoice: "gateway" };
   }
+}
+
+// One probed local model server (#4572) — the row shape POST /api/config/local-models
+// returns per endpoint. `found` is reachability; `error` carries the reason when it's
+// unreachable OR the "running, but no models pulled" note when it answered empty.
+export type LocalEndpoint = {
+  id: string;
+  label: string;
+  base_url: string;
+  found: boolean;
+  models: string[];
+  error: string;
+};
+
+// The endpoint the wizard auto-selects: the first that's reachable AND actually offers
+// models, so a running Ollama/LM Studio fills in the base URL + model with no typing.
+// A server that's up but has nothing pulled (found, empty list) is deliberately skipped
+// — there's nothing to run yet. Null when nothing is usable (→ the "start a server" hint).
+export function pickLocalEndpoint(endpoints: LocalEndpoint[]): LocalEndpoint | null {
+  return endpoints.find((e) => e.found && e.models.length > 0) ?? null;
 }
 const OAUTH_LABEL: Record<string, string> = {
   "anthropic-oauth": "Claude subscription",
@@ -296,6 +332,12 @@ export function SetupWizard({
   // fall back to this host's environment / the declared defaults.
   const [configValues, setConfigValues] = useState<Record<string, string>>({});
   const [models, setModels] = useState<string[]>([]);
+  // Local model discovery (#4572): the probed endpoints (null = not probed yet, so no
+  // list and no "nothing found" hint until the first detection), plus a dedicated busy
+  // flag so re-checking spins only the Re-check button — not the whole step like `busy`.
+  const [localEndpoints, setLocalEndpoints] = useState<LocalEndpoint[] | null>(null);
+  const [localBusy, setLocalBusy] = useState(false);
+  const [localError, setLocalError] = useState("");
   // Flips true once the initial config load finishes. The persona seed waits on it
   // so the async load() (which replaces the whole state) can't clobber the seed.
   const [loaded, setLoaded] = useState(false);
@@ -482,6 +524,37 @@ export function SetupWizard({
       if (!silent) setError(errMsg(exc));
     } finally {
       if (!silent) setBusy(false);
+    }
+  }
+
+  // Fill the endpoint + model fields from a detected local server (#4572). Local servers
+  // need no key, so it's blanked; the picked endpoint's own model list drives the datalist
+  // and seeds the model (blank when the server is up but has nothing pulled yet). The
+  // auto-test (#4562) then fires off the filled inputs and unlocks Next with no typing.
+  function selectLocalEndpoint(endpoint: LocalEndpoint) {
+    setModels(endpoint.models);
+    update({ apiBase: endpoint.base_url, apiKey: "", modelName: endpoint.models[0] ?? "" });
+  }
+
+  // Probe for local model servers — on picking the Local card and from Re-check. Bounded
+  // by withTimeout so a wedged probe can never hang the step (the server already caps each
+  // endpoint, but the thread/transport is still network I/O). Auto-selects the first usable
+  // endpoint; a timeout/error surfaces inline and leaves an empty list so the "start a
+  // server" hint shows.
+  async function detectLocalModels() {
+    setLocalBusy(true);
+    setLocalError("");
+    try {
+      const r = await withTimeout(api.localModels(), 8000, "Local model detection");
+      const endpoints = r.endpoints ?? [];
+      setLocalEndpoints(endpoints);
+      const pick = pickLocalEndpoint(endpoints);
+      if (pick) selectLocalEndpoint(pick);
+    } catch (exc) {
+      setLocalError(errMsg(exc));
+      setLocalEndpoints([]);
+    } finally {
+      setLocalBusy(false);
     }
   }
 
@@ -921,7 +994,9 @@ export function SetupWizard({
                   ? "coding agent over ACP (deprecated)"
                   : brainKind === "gateway"
                     ? "OpenAI-compatible gateway"
-                    : `${OAUTH_LABEL[state.provider]} — your own plan`
+                    : brainKind === "local"
+                      ? "Ollama or LM Studio on this machine"
+                      : `${OAUTH_LABEL[state.provider]} — your own plan`
               }
             >
               {/* One choice, four brains: a gateway (api key), your own Claude / ChatGPT
@@ -932,11 +1007,15 @@ export function SetupWizard({
                 <RadioCardGroup
                   name="brain"
                   value={brainKind}
-                  onValueChange={(kind) =>
+                  onValueChange={(value) => {
+                    const kind = value as BrainKind;
                     // Clear the model on a brain switch so a provider's model id never
                     // carries into another provider (the auto-probe picks a valid one).
-                    update({ ...brainKindPatch(kind as BrainKind), modelName: "" })
-                  }
+                    update({ ...brainKindPatch(kind), modelName: "" });
+                    // Picking Local kicks off detection immediately so the endpoint +
+                    // model fill in without a click (#4572); Re-check re-runs it.
+                    if (kind === "local") void detectLocalModels();
+                  }}
                 >
                   <RadioCard value="gateway" title="Gateway model" blurb="An OpenAI-compatible gateway with an API key." />
                   <RadioCard
@@ -948,6 +1027,11 @@ export function SetupWizard({
                     value="codex"
                     title="ChatGPT / Codex subscription"
                     blurb="Sign in with your ChatGPT Plus/Pro account. No API key needed."
+                  />
+                  <RadioCard
+                    value="local"
+                    title="Local model"
+                    blurb="Use Ollama or LM Studio running on this machine. No account needed."
                   />
                   {/* The ACP brain card is deliberately GONE (deprecated 2026-08-11):
                       ACP survives for delegates only. A legacy acp:* config parses,
@@ -1068,27 +1152,78 @@ export function SetupWizard({
                 </>
               ) : (
                 <>
-                  {/* Gateway config — only when the brain is the gateway model.
+                  {/* Gateway / Local config — both are the openai-compatible provider, so
+                      they share the base + model + test row below; Local just adds the
+                      detection panel and drops the API key (local servers need none).
                       Temperature / max-tokens / max-turns are sensible defaults a new user
                       shouldn't have to tune — they flow through finishSetup; tweak later in
                       Settings. */}
-                  <div className="setup-grid two">
-                    <FormField label="API base">
+                  {brainKind === "local" ? (
+                    <>
+                      <div className="pl-field setup-local">
+                        <span className="pl-field__label">Detected on this machine</span>
+                        {localBusy && !localEndpoints ? (
+                          <Alert status="info">
+                            <Spinner size={15} /> Looking for local model servers…
+                          </Alert>
+                        ) : null}
+                        {(localEndpoints ?? []).map((ep) => {
+                          const usable = ep.found && ep.models.length > 0;
+                          const selected = state.apiBase.trim() === ep.base_url;
+                          return (
+                            <div key={ep.id} className="setup-local-row">
+                              <div className="setup-local-info">
+                                <strong>{ep.label}</strong>
+                                <span>{ep.base_url}</span>
+                                <span className={usable ? "setup-local-ok" : "setup-local-miss"}>
+                                  {usable
+                                    ? `${ep.models.length} model${ep.models.length === 1 ? "" : "s"} available`
+                                    : ep.found
+                                      ? ep.error || "running — no models pulled yet"
+                                      : ep.error || "not reachable"}
+                                </span>
+                              </div>
+                              <Button type="button" onClick={() => selectLocalEndpoint(ep)} disabled={localBusy}>
+                                {selected ? "Selected ✓" : "Use"}
+                              </Button>
+                            </div>
+                          );
+                        })}
+                        <Button type="button" onClick={() => void detectLocalModels()} disabled={localBusy}>
+                          {localBusy ? <Spinner size={15} /> : <Search size={15} />}
+                          Re-check
+                        </Button>
+                      </div>
+                      {localError ? <Alert status="error">{localError}</Alert> : null}
+                      {localEndpoints && !pickLocalEndpoint(localEndpoints) ? (
+                        <Callout tone="warning">
+                          No local model server found. Start Ollama (<code>ollama serve</code>, then{" "}
+                          <code>ollama pull llama3.2</code>) or LM Studio&apos;s local server, then Re-check.
+                        </Callout>
+                      ) : null}
+                    </>
+                  ) : null}
+                  <div className={brainKind === "local" ? "setup-grid" : "setup-grid two"}>
+                    <FormField label={brainKind === "local" ? "Endpoint" : "API base"}>
                       <Input
                         value={state.apiBase}
                         onChange={(event) => update({ apiBase: event.target.value })}
-                        placeholder="e.g. https://api.openai.com/v1"
+                        placeholder={
+                          brainKind === "local" ? "e.g. http://127.0.0.1:11434/v1" : "e.g. https://api.openai.com/v1"
+                        }
                         autoComplete="off"
                       />
                     </FormField>
-                    <FormField label="API key">
-                      <SecretInput
-                        value={state.apiKey}
-                        onChange={(event) => update({ apiKey: event.target.value })}
-                        autoComplete="off"
-                        placeholder="Your endpoint's key (blank keeps a saved one)"
-                      />
-                    </FormField>
+                    {brainKind === "local" ? null : (
+                      <FormField label="API key">
+                        <SecretInput
+                          value={state.apiKey}
+                          onChange={(event) => update({ apiKey: event.target.value })}
+                          autoComplete="off"
+                          placeholder="Your endpoint's key (blank keeps a saved one)"
+                        />
+                      </FormField>
+                    )}
                   </div>
                   <div className="setup-grid model-row">
                     <FormField label="Model">
@@ -1142,6 +1277,8 @@ export function SetupWizard({
                     icon={<ShieldCheck size={15} />}
                     label={`${OAUTH_LABEL[state.provider]} · ${state.modelName || "—"}`}
                   />
+                ) : brainKind === "local" ? (
+                  <StatusLine icon={<HardDrive size={15} />} label={`Local model · ${state.modelName || "—"}`} />
                 ) : (
                   <StatusLine icon={<KeyRound size={15} />} label={`Model · ${state.modelName || "—"}`} />
                 )}

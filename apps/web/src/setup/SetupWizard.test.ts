@@ -7,7 +7,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ToastProvider } from "@protolabsai/ui/overlays";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { agentStepReady, steps, brainStepReady, defaultState, hydrateState, SetupWizard, testKey, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
+import { agentStepReady, steps, brainStepReady, defaultState, hydrateState, pickLocalEndpoint, SetupWizard, testKey, UNCONFIGURED_API_BASE, withTimeout } from "./SetupWizard";
+import type { LocalEndpoint } from "./SetupWizard";
 import { primaryArchetypes } from "./ArchetypePicker";
 import { api } from "../lib/api";
 import type { Archetype, ArchetypePreview, ConfigPayload } from "../lib/types";
@@ -58,6 +59,7 @@ beforeEach(() => {
     install: { state: "idle", pct: 0, message: "", error: null },
   });
   vi.spyOn(api, "oauthStatus").mockResolvedValue({} as never);
+  vi.spyOn(api, "localModels").mockResolvedValue({ endpoints: [] } as never);
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -340,6 +342,109 @@ describe("brainStepReady", () => {
     expect(
       brainStepReady({ runtimeKind: "acp", provider: "openai", apiBase: "", modelName: "", signedIn: false, currentKey: "anything", tested: null }),
     ).toBe(true);
+  });
+});
+
+// Local model auto-pick (#4572): the wizard selects the first endpoint that's reachable
+// AND actually has models — a server that's up but empty is skipped, and nothing usable
+// returns null (→ the "start a server" hint).
+describe("pickLocalEndpoint", () => {
+  const ep = (over: Partial<LocalEndpoint>): LocalEndpoint => ({
+    id: "x",
+    label: "X",
+    base_url: "http://127.0.0.1:11434/v1",
+    found: false,
+    models: [],
+    error: "",
+    ...over,
+  });
+
+  it("picks the first found endpoint that has models, skipping an earlier empty one", () => {
+    const empty = ep({ id: "lmstudio", label: "LM Studio", base_url: "http://127.0.0.1:1234/v1", found: true, error: "running, but no models pulled" });
+    const ready = ep({ id: "ollama", label: "Ollama", found: true, models: ["llama3.2", "qwen"] });
+    expect(pickLocalEndpoint([empty, ready])).toBe(ready);
+  });
+
+  it("does not pick a server that is up but has no models pulled", () => {
+    const empty = ep({ found: true, models: [], error: "running, but no models pulled" });
+    expect(pickLocalEndpoint([empty])).toBeNull();
+  });
+
+  it("returns null when nothing is reachable", () => {
+    const refused = ep({ id: "ollama", found: false, error: "connection refused" });
+    const timedOut = ep({ id: "lmstudio", base_url: "http://127.0.0.1:1234/v1", found: false, error: "connection timed out" });
+    expect(pickLocalEndpoint([refused, timedOut])).toBeNull();
+    expect(pickLocalEndpoint([])).toBeNull();
+  });
+});
+
+// The Local model card end-to-end (#4572): picking it detects servers, auto-fills the
+// endpoint + model, and the connection test unlocks Next; with nothing running it shows a
+// hint and a Re-check button and never hangs (the detection is timeout-bounded).
+describe("SetupWizard — the Local model card (#4572)", () => {
+  const endpointInput = () =>
+    [...container.querySelectorAll<HTMLLabelElement>("label.pl-field")]
+      .find((l) => l.querySelector(".pl-field__label")?.textContent === "Endpoint")
+      ?.querySelector("input") ?? null;
+  const modelInput = () => container.querySelector<HTMLInputElement>('input[list="model-options"]');
+
+  it("offers a Local model card with the no-account blurb", async () => {
+    await mountToBrain();
+    expect(radioFor("local")).toBeDefined();
+    expect(container.textContent).toContain("Use Ollama or LM Studio running on this machine. No account needed.");
+  });
+
+  it("picking it fills the endpoint + model from the detected server, and the test unlocks Next", async () => {
+    vi.spyOn(api, "localModels").mockResolvedValue({
+      endpoints: [
+        { id: "ollama", label: "Ollama", base_url: "http://127.0.0.1:11434/v1", found: true, models: ["llama3.2", "qwen"], error: "" },
+        { id: "lmstudio", label: "LM Studio", base_url: "http://127.0.0.1:1234/v1", found: false, models: [], error: "connection refused" },
+      ],
+    } as never);
+    await mountToBrain();
+    await click(radioFor("local"));
+    await tick(() => modelInput()?.value === "llama3.2");
+    expect(api.localModels).toHaveBeenCalled();
+    expect(endpointInput()?.value).toBe("http://127.0.0.1:11434/v1");
+    expect(modelInput()?.value).toBe("llama3.2");
+    // The reachable server with models reads as available; the unreachable one as its error.
+    expect(container.textContent).toContain("2 models available");
+    expect(container.textContent).toContain("connection refused");
+    // bd-jq56.1's auto-test / Next gate applies unchanged — a passing test unlocks Next.
+    await click(button(/^Test connection/));
+    await tick(() => !button(/^Next/)?.disabled);
+    expect(button(/^Next/)?.disabled).toBe(false);
+    expect(api.testModel).toHaveBeenCalledWith("http://127.0.0.1:11434/v1", "", "llama3.2", "openai");
+  });
+
+  it("with nothing running, shows the start-a-server hint and a Re-check, and holds Next", async () => {
+    vi.spyOn(api, "localModels").mockResolvedValue({
+      endpoints: [
+        { id: "ollama", label: "Ollama", base_url: "http://127.0.0.1:11434/v1", found: false, models: [], error: "connection refused" },
+        { id: "lmstudio", label: "LM Studio", base_url: "http://127.0.0.1:1234/v1", found: false, models: [], error: "connection refused" },
+      ],
+    } as never);
+    await mountToBrain();
+    await click(radioFor("local"));
+    await tick(() => Boolean(container.textContent?.includes("No local model server found")));
+    expect(container.textContent).toContain("No local model server found");
+    expect(button(/Re-check/)).toBeDefined();
+    // No model was auto-picked, so the gate still blocks (nothing to run).
+    expect(modelInput()?.value).toBe("");
+    expect(button(/^Next/)?.disabled).toBe(true);
+  });
+
+  it("the endpoint and model stay editable after a pick", async () => {
+    vi.spyOn(api, "localModels").mockResolvedValue({
+      endpoints: [{ id: "ollama", label: "Ollama", base_url: "http://127.0.0.1:11434/v1", found: true, models: ["llama3.2"], error: "" }],
+    } as never);
+    await mountToBrain();
+    await click(radioFor("local"));
+    await tick(() => modelInput()?.value === "llama3.2");
+    await typeInto(endpointInput(), "http://127.0.0.1:1234/v1");
+    await typeInto(modelInput(), "custom-model");
+    expect(endpointInput()?.value).toBe("http://127.0.0.1:1234/v1");
+    expect(modelInput()?.value).toBe("custom-model");
   });
 });
 
