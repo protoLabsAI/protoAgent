@@ -20,6 +20,14 @@ a crafted id can't path-traverse out of the memory dir. The review verdict
 (ADR 0108 D7.2 — confirm / reject / re-open an agent-derived or ingested row)
 is an operator act, so it lives here and nowhere on the agent's tool surface.
 
+The History view (ADR 0125 D6) is the fourth surface: the conversation ``history``
+table (compaction archives, retired-thread summaries, background-job reports) behind
+``STATE.history_store``. It is visible only here — the Knowledge browser lists chunks
+only — with a per-session rollup, search (the same query ``session_search`` runs), an
+open-an-entry read, and deletes that reuse the chat-delete forget semantics (#3957)
+rather than a new delete path. The counts/stats route splits the chunk store from
+history so the operator sees the real size of each.
+
 Auth: gated by the server-level ``/api/*`` bearer middleware
 (``a2a_impl.auth``) like every other operator route — nothing here is public.
 """
@@ -174,6 +182,86 @@ def _hot_chunks(store) -> list[dict]:
         for c in (c if isinstance(c, dict) else c.as_dict() for c in rows)
         if c.get("tier") != "commons"
     ]
+
+
+# ── History (ADR 0125 D6) ─────────────────────────────────────────────────────
+# The conversation ``history`` table — its own HistoryStore, surfaced ONLY in the
+# Memory inspector's History tab (never the Knowledge browser, which lists chunks
+# only). ``search`` runs the same query normalization ``session_search`` uses.
+
+# Mirror session_search's history cap: it clamps `limit` to 20; the console list is
+# wider so the operator can scan a session's whole history, not just a turn's top-k.
+_HISTORY_SEARCH_LIMIT = 50
+
+
+def _history_search(store, q: str, limit: int) -> list[dict]:
+    """History hits for *q*, normalized through the SAME path ``session_search`` runs
+    (``graph.session_search._match_query`` → ``HistoryStore.search``): natural text
+    becomes a literal AND query, never raw FTS5 syntax. A termless query returns
+    nothing. Each hit carries a redacted, reasoning-stripped excerpt — the model-visible
+    read surface session_search already redacts before returning."""
+    from graph.session_search import _match_query
+
+    text = (q or "").strip()
+    if not text:
+        return []
+    try:
+        match = _match_query(text)
+    except ValueError:
+        return []  # no searchable terms — an empty result, not a 400
+    capped = max(1, min(int(limit or _HISTORY_SEARCH_LIMIT), _HISTORY_SEARCH_LIMIT))
+    return [_history_hit(e) for e in store.search(match, limit=capped)]
+
+
+def _history_hit(entry) -> dict:
+    """One search hit in the console's shape: id/session/kind/surface/span + a bounded,
+    redacted excerpt (the session_search history-row shape)."""
+    from graph.middleware.redaction import redact
+    from graph.output_format import strip_reasoning
+
+    return {
+        "id": entry.id,
+        "session_id": entry.session_id,
+        "thread_id": entry.thread_id,
+        "surface": entry.surface or "unknown",
+        "kind": entry.kind,
+        "heading": entry.heading,
+        "span_start": entry.span_start,
+        "span_end": entry.span_end,
+        "created_at": entry.created_at,
+        "excerpt": str(redact(strip_reasoning(entry.content or "")))[:500],
+    }
+
+
+def _history_entry_full(entry) -> dict:
+    """One history entry in full (the open-an-entry read) — the flat ``HistoryEntry``
+    dataclass as a dict; ``get`` only returns VISIBLE rows, so the invalidation fields
+    are always null here."""
+    from dataclasses import asdict
+
+    return asdict(entry)
+
+
+def _memory_stats() -> dict:
+    """The memory/history size split (ADR 0125): the chunk store's own stats (memory +
+    knowledge; ``domain='conversation'`` history was migrated OUT at boot — H1/#4556)
+    alongside the history store's per-kind counts, so the operator sees the real size of
+    each. A store that is off (or whose stats raise) is an empty block, never a 500."""
+    memory: dict = {}
+    store = STATE.knowledge_store
+    if store is not None:
+        try:
+            memory = dict(store.stats())
+        except Exception:  # noqa: BLE001 — never 500 the console
+            log.exception("[memory] knowledge stats failed")
+    history: dict = {}
+    hstore = STATE.history_store
+    if hstore is not None:
+        try:
+            history = dict(hstore.stats())
+        except Exception:  # noqa: BLE001 — never 500 the console
+            log.exception("[memory] history stats failed")
+    return {"memory": memory, "history": history}
 
 
 def register_memory_routes(app) -> None:
@@ -372,3 +460,79 @@ def register_memory_routes(app) -> None:
         if not updated:
             return JSONResponse({"detail": "no chunk with that id"}, status_code=404)
         return {"enabled": True, "id": chunk_id, "review_state": state}
+
+    # --- History (ADR 0125 D6) -----------------------------------------------
+    # The conversation ``history`` table behind ``STATE.history_store`` — archives,
+    # retired-thread summaries and background-job reports. Visible only here; the
+    # Knowledge browser lists chunks only. Degrades to ``enabled: false`` when history
+    # is off (``middleware.knowledge`` disabled), never 500s the console.
+
+    @app.get("/api/memory/history/sessions")
+    async def _api_memory_history_sessions():
+        store = STATE.history_store
+        if store is None:
+            return {"enabled": False, "sessions": []}
+        try:
+            sessions = await asyncio.to_thread(store.sessions)
+        except Exception:  # noqa: BLE001 — never 500 the console
+            log.exception("[memory] history session list failed")
+            return {"enabled": True, "sessions": []}
+        return {"enabled": True, "sessions": sessions}
+
+    @app.get("/api/memory/history/search")
+    async def _api_memory_history_search(q: str = "", limit: int = _HISTORY_SEARCH_LIMIT):
+        store = STATE.history_store
+        if store is None:
+            return {"enabled": False, "query": q, "results": []}
+        try:
+            results = await asyncio.to_thread(_history_search, store, q, limit)
+        except Exception:  # noqa: BLE001 — a bad index must not 500 the console
+            log.exception("[memory] history search failed")
+            results = []
+        return {"enabled": True, "query": q, "results": results}
+
+    @app.get("/api/memory/history/entries/{entry_id}")
+    async def _api_memory_history_entry(entry_id: int):
+        store = STATE.history_store
+        if store is None:
+            return {"enabled": False, "entry": None}
+        entry = await asyncio.to_thread(store.get, entry_id)
+        if entry is None:
+            return JSONResponse({"detail": "no history entry with that id"}, status_code=404)
+        return {"enabled": True, "entry": _history_entry_full(entry)}
+
+    @app.delete("/api/memory/history/entries/{entry_id}")
+    async def _api_memory_history_entry_delete(entry_id: int):
+        # A single-entry delete is an explicit operator act — a HARD delete of exactly
+        # that row (any kind), the forget's phase-2 semantics scoped to one id (ADR 0069
+        # D9). It never reaches a row another forget has hidden (the store filters on
+        # ``invalidated_at IS NULL``).
+        store = STATE.history_store
+        if store is None:
+            return {"enabled": False, "deleted": False}
+        deleted = await asyncio.to_thread(store.delete_entry, entry_id)
+        if not deleted:
+            return JSONResponse({"detail": "no history entry with that id"}, status_code=404)
+        return {"enabled": True, "deleted": True}
+
+    @app.delete("/api/memory/history/sessions/{session_id}")
+    async def _api_memory_history_session_delete(session_id: str):
+        # A whole-session delete follows the chat-delete forget semantics (#3957): the
+        # rows ``_history_forget_where`` selects for this session, so background-job
+        # reports (kind='report') are kept — the mirror of the chat delete's
+        # ``delete_history_for_session``. Reuses that path rather than a new delete.
+        store = STATE.history_store
+        if store is None:
+            return {"enabled": False, "deleted": 0}
+        try:
+            removed = await asyncio.to_thread(store.delete_session, session_id)
+        except Exception:  # noqa: BLE001 — never 500 the console
+            log.exception("[memory] history session delete failed")
+            return JSONResponse({"detail": "history delete failed"}, status_code=500)
+        return {"enabled": True, "session_id": session_id, "deleted": int(removed)}
+
+    @app.get("/api/memory/stats")
+    async def _api_memory_stats():
+        # Counts/stats split: the chunk store (memory + knowledge) vs history, each its
+        # own block, so the operator sees the real size of each (ADR 0125).
+        return await asyncio.to_thread(_memory_stats)

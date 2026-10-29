@@ -14,11 +14,12 @@ import pytest
 pytestmark = pytest.mark.platform_sensitive
 
 
-def _client(monkeypatch, tmp_path, *, knowledge=None):
+def _client(monkeypatch, tmp_path, *, knowledge=None, history=None):
     import runtime.state as rs
 
     monkeypatch.setenv("MEMORY_PATH", str(tmp_path))  # memory_path() resolves per call
     monkeypatch.setattr(rs.STATE, "knowledge_store", knowledge, raising=False)
+    monkeypatch.setattr(rs.STATE, "history_store", history, raising=False)
     app = FastAPI()
     register_memory_routes(app)
     return TestClient(app)
@@ -633,3 +634,167 @@ def test_sessions_list_honors_the_configured_digest_size(tmp_path, monkeypatch):
     c = _client(monkeypatch, tmp_path)
     flags = {r["session_id"]: r["in_digest"] for r in c.get("/api/memory/sessions").json()["sessions"]}
     assert flags == {"s-3": True, "s-2": True, "s-1": False, "s-0": False}
+
+
+# ── History view (ADR 0125 D6) ────────────────────────────────────────────────
+# The conversation `history` table (archives / summaries / background reports), its
+# own HistoryStore. Visible ONLY in the Memory inspector's History tab — never the
+# Knowledge browser, which lists chunks only — with deletes that reuse the chat-delete
+# forget semantics (#3957).
+
+
+def _history(tmp_path, name="agent.db"):
+    from knowledge.history import HistoryStore
+
+    return HistoryStore(db_path=str(tmp_path / name))
+
+
+def test_knowledge_browser_returns_no_history_rows(tmp_path, monkeypatch):
+    # r1: after the H1 migration, history lives in its own table and the Knowledge
+    # browser's list AND search routes read `chunks` only, so no history row can leak in.
+    import runtime.state as rs
+    from knowledge.history import HistoryStore
+    from knowledge.store import KnowledgeStore
+    from operator_api.knowledge_routes import register_knowledge_routes
+
+    db = str(tmp_path / "agent.db")
+    ks = KnowledgeStore(db)
+    hs = HistoryStore(db_path=db)  # SAME agent.db → both tables coexist, like production
+    ks.add_chunk("the launch checklist lives in the runbook", domain="general", source="console")
+    hs.add(
+        "conversation archive: we discussed the launch checklist at length",
+        kind="archive", session_id="chat-1", thread_id="a2a:chat-1", heading="archive",
+    )
+    monkeypatch.setattr(rs.STATE, "knowledge_store", ks, raising=False)
+    app = FastAPI()
+    register_knowledge_routes(app)
+    c = TestClient(app)
+
+    listing = c.get("/api/knowledge/search").json()["results"]  # empty q → list_chunks
+    found = c.get("/api/knowledge/search", params={"q": "launch checklist"}).json()["results"]
+    for rows in (listing, found):
+        blob = " ".join((r.get("content") or "") for r in rows)
+        assert "runbook" in blob  # the real chunk is listed/searched
+        assert "conversation archive" not in blob  # the history row is NOT
+    # Store stats describe chunks only — no history/conversation bucket.
+    stats = c.get("/api/knowledge/search").json()["stats"]
+    assert "conversation" not in stats and stats.get("total") == 1
+
+
+def test_history_sessions_list_rollup(tmp_path, monkeypatch):
+    # r2: a per-session rollup — surface, date span and per-kind counts.
+    hs = _history(tmp_path)
+    hs.add("archived transcript about the launch", kind="archive", session_id="chat-1",
+           thread_id="a2a:chat-1", span_start="2026-06-01", span_end="2026-06-02", heading="archive one")
+    hs.add("summary of the launch planning", kind="summary", session_id="chat-1",
+           thread_id="a2a:chat-1", span_end="2026-06-03", heading="summary one")
+    hs.add("background job report", kind="report", session_id="sched-1",
+           surface="background", heading="report one")
+    c = _client(monkeypatch, tmp_path, history=hs)
+    body = c.get("/api/memory/history/sessions").json()
+    assert body["enabled"] is True
+    rows = {r["session_id"]: r for r in body["sessions"]}
+    chat = rows["chat-1"]
+    assert chat["total"] == 2
+    assert chat["kinds"] == {"archive": 1, "summary": 1, "report": 0}
+    assert chat["span_start"] == "2026-06-01" and chat["span_end"] == "2026-06-03"
+    sched = rows["sched-1"]
+    assert sched["surface"] == "background"
+    assert sched["kinds"] == {"archive": 0, "summary": 0, "report": 1}
+
+
+def test_history_sessions_disabled_without_store(tmp_path, monkeypatch):
+    c = _client(monkeypatch, tmp_path)  # history_store is None
+    assert c.get("/api/memory/history/sessions").json() == {"enabled": False, "sessions": []}
+    assert c.get("/api/memory/history/search", params={"q": "x"}).json() == {
+        "enabled": False, "query": "x", "results": [],
+    }
+    assert c.get("/api/memory/history/entries/1").json() == {"enabled": False, "entry": None}
+    assert c.delete("/api/memory/history/entries/1").json() == {"enabled": False, "deleted": False}
+    assert c.delete("/api/memory/history/sessions/chat-1").json() == {"enabled": False, "deleted": 0}
+
+
+def test_history_search_uses_the_session_search_query(tmp_path, monkeypatch):
+    # r2: the SAME normalization session_search runs — natural text, not raw FTS5.
+    hs = _history(tmp_path)
+    eid = hs.add("we finalized the launch checklist and rollout plan", kind="summary",
+                 session_id="chat-1", thread_id="a2a:chat-1", heading="launch summary")
+    hs.add("unrelated chatter about lunch", kind="summary", session_id="chat-2")
+    c = _client(monkeypatch, tmp_path, history=hs)
+    hits = c.get("/api/memory/history/search", params={"q": "launch checklist"}).json()["results"]
+    assert [h["id"] for h in hits] == [eid]  # "lunch" is not "launch" (no stemming)
+    hit = hits[0]
+    assert (hit["kind"], hit["session_id"]) == ("summary", "chat-1")
+    assert "launch checklist" in hit["excerpt"]
+    # A termless query is an empty result, never a 400.
+    assert c.get("/api/memory/history/search", params={"q": "   "}).json()["results"] == []
+
+
+def test_history_open_entry_in_full(tmp_path, monkeypatch):
+    # r2: opening an entry returns its whole content, not an excerpt.
+    hs = _history(tmp_path)
+    eid = hs.add("the whole archived transcript, verbatim", kind="archive",
+                 session_id="chat-1", heading="archive one", span_start="2026-06-01")
+    c = _client(monkeypatch, tmp_path, history=hs)
+    entry = c.get(f"/api/memory/history/entries/{eid}").json()["entry"]
+    assert entry["id"] == eid
+    assert entry["content"] == "the whole archived transcript, verbatim"
+    assert (entry["kind"], entry["heading"]) == ("archive", "archive one")
+    assert c.get("/api/memory/history/entries/999999").status_code == 404
+
+
+def test_history_delete_one_entry_hard_deletes_that_row(tmp_path, monkeypatch):
+    # r3: a single-entry delete is explicit curation — a hard delete of exactly that
+    # row, any kind (a report too), 404 once it is gone.
+    hs = _history(tmp_path)
+    arch = hs.add("archive body", kind="archive", session_id="chat-1")
+    rep = hs.add("report body", kind="report", session_id="chat-1", surface="background")
+    c = _client(monkeypatch, tmp_path, history=hs)
+    assert c.delete(f"/api/memory/history/entries/{arch}").json() == {"enabled": True, "deleted": True}
+    assert hs.get(arch) is None
+    assert c.delete(f"/api/memory/history/entries/{rep}").json()["deleted"] is True
+    assert hs.get(rep) is None
+    assert c.delete(f"/api/memory/history/entries/{arch}").status_code == 404
+
+
+def test_history_delete_session_keeps_reports_like_the_chat_forget(tmp_path, monkeypatch):
+    # r3: a whole-session delete follows the chat-delete forget semantics (#3957) —
+    # archives and summaries go, background-job reports stay, other sessions untouched.
+    hs = _history(tmp_path)
+    arch = hs.add("archive body", kind="archive", session_id="chat-1", thread_id="a2a:chat-1")
+    summ = hs.add("summary body", kind="summary", session_id="chat-1", thread_id="a2a:chat-1")
+    rep = hs.add("report body", kind="report", session_id="chat-1", surface="background")
+    other = hs.add("other session archive", kind="archive", session_id="chat-2")
+    c = _client(monkeypatch, tmp_path, history=hs)
+    body = c.delete("/api/memory/history/sessions/chat-1").json()
+    assert body["enabled"] is True and body["session_id"] == "chat-1"
+    assert body["deleted"] == 2  # archive + summary; the report is kept
+    assert hs.get(arch) is None and hs.get(summ) is None
+    assert hs.get(rep) is not None  # the background report survives the forget
+    assert hs.get(other) is not None  # another session untouched
+
+
+def test_memory_stats_split_memory_from_history(tmp_path, monkeypatch):
+    # r4: counts/stats report the chunk store (memory + knowledge) and history SEPARATELY.
+    from knowledge.store import KnowledgeStore
+
+    db = str(tmp_path / "agent.db")
+    ks = KnowledgeStore(db)
+    hs = _history(tmp_path)
+    ks.add_chunk("a memory fact", domain="hot")
+    ks.add_chunk("a knowledge chunk", domain="general")
+    hs.add("archive one", kind="archive", session_id="chat-1")
+    hs.add("summary one", kind="summary", session_id="chat-1")
+    hs.add("report one", kind="report", session_id="sched-1", surface="background")
+    c = _client(monkeypatch, tmp_path, knowledge=ks, history=hs)
+    body = c.get("/api/memory/stats").json()
+    assert body["memory"]["total"] == 2  # the chunk store
+    assert "conversation" not in body["memory"]  # history migrated OUT of chunks (H1)
+    assert body["history"]["total"] == 3
+    assert body["history"]["sessions"] == 2
+    assert (body["history"]["archive"], body["history"]["summary"], body["history"]["report"]) == (1, 1, 1)
+
+
+def test_memory_stats_each_store_off_is_an_empty_block(tmp_path, monkeypatch):
+    c = _client(monkeypatch, tmp_path)  # both stores None
+    assert c.get("/api/memory/stats").json() == {"memory": {}, "history": {}}

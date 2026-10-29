@@ -8,12 +8,16 @@
  * (cross-domain orchestration stays in `lib/api.ts`, where it goes through `api.`).
  */
 import type {
+  HistoryEntry,
+  HistorySearchHit,
+  HistorySessionRow,
   KnowledgeChunk,
   MemoryDigestPolicy,
   MemoryHotChunk,
   MemoryInjectionDetail,
   MemoryInjectionRow,
   MemorySessionDigest,
+  MemoryStats,
   PromptBreakdown,
   PromptCall,
   PromptRetention,
@@ -208,6 +212,49 @@ export const knowledgeApi = {
   // back marked `unavailable`.
   memoryInjectionDetail(id: number) {
     return request<MemoryInjectionDetail>(`/api/memory/injections/${id}`);
+  },
+
+  // History (ADR 0125 D6): the conversation `history` table (archives, retired-thread
+  // summaries, background-job reports) behind the HistoryStore — the Memory inspector's
+  // History tab. Never the Knowledge browser, which lists chunks only. `enabled:false`
+  // = history is off (middleware.knowledge disabled).
+  memoryHistorySessions() {
+    return request<{ enabled: boolean; sessions: HistorySessionRow[] }>(
+      "/api/memory/history/sessions",
+    );
+  },
+  // Search runs the SAME query normalization `session_search` uses (natural text →
+  // literal AND terms), so the tab finds what the agent's recall would.
+  memoryHistorySearch(q: string, limit = 50) {
+    const params = new URLSearchParams({ q, limit: String(limit) });
+    return request<{ enabled: boolean; query: string; results: HistorySearchHit[] }>(
+      `/api/memory/history/search?${params.toString()}`,
+    );
+  },
+  memoryHistoryEntry(id: number) {
+    return request<{ enabled: boolean; entry: HistoryEntry | null }>(
+      `/api/memory/history/entries/${id}`,
+    );
+  },
+  // Deletes reuse the chat-delete forget semantics (#3957): a single entry is a hard
+  // delete of exactly that row (any kind); a whole session keeps background-job reports,
+  // like the chat delete's forget. `deleted` is a boolean (entry) / a count (session).
+  deleteMemoryHistoryEntry(id: number) {
+    return request<{ enabled: boolean; deleted: boolean }>(
+      `/api/memory/history/entries/${id}`,
+      { method: "DELETE" },
+    );
+  },
+  deleteMemoryHistorySession(sessionId: string) {
+    return request<{ enabled: boolean; session_id: string; deleted: number }>(
+      `/api/memory/history/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+    );
+  },
+  // The memory/history size split (#4557): the chunk store (memory + knowledge) and
+  // history, each its own per-bucket count map.
+  memoryStats() {
+    return request<MemoryStats>("/api/memory/stats");
   },
 
   // Prompt snapshots (#2243): every captured model call of one turn, in call

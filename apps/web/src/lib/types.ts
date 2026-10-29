@@ -1853,6 +1853,63 @@ export type MemoryInjectionDetail = {
   approx_tokens: number;
 };
 
+// History view (ADR 0125 D6) — the conversation `history` table (compaction
+// archives, retired-thread summaries, background-job reports), its own
+// HistoryStore. Surfaced ONLY in the Memory inspector's History tab; the
+// Knowledge browser lists chunks only.
+export type HistoryKind = "archive" | "summary" | "report";
+
+// One per-session rollup row (GET /api/memory/history/sessions): the session's
+// surface, date span (span_* plus the created_at range) and per-kind counts.
+export type HistorySessionRow = {
+  session_id: string;
+  surface: string | null;
+  span_start: string | null;
+  span_end: string | null;
+  first_at: string | null;
+  last_at: string | null;
+  total: number;
+  kinds: { archive: number; summary: number; report: number };
+};
+
+// One search hit (GET /api/memory/history/search) — a bounded, redacted excerpt,
+// kind-labelled. The query runs the same normalization `session_search` uses.
+export type HistorySearchHit = {
+  id: number;
+  session_id: string;
+  thread_id: string | null;
+  surface: string;
+  kind: HistoryKind;
+  heading: string | null;
+  span_start: string | null;
+  span_end: string | null;
+  created_at: string;
+  excerpt: string;
+};
+
+// One full entry (GET /api/memory/history/entries/{id}) — the open-an-entry read.
+export type HistoryEntry = {
+  id: number;
+  session_id: string;
+  thread_id: string | null;
+  surface: string | null;
+  kind: HistoryKind;
+  heading: string | null;
+  content: string;
+  span_start: string | null;
+  span_end: string | null;
+  created_at: string;
+  namespace: string | null;
+};
+
+// The memory/history size split (GET /api/memory/stats): the chunk store (memory +
+// knowledge) and history, each its own per-bucket count map, so the operator sees
+// the real size of each.
+export type MemoryStats = {
+  memory: Record<string, number>;
+  history: Record<string, number>;
+};
+
 // One captured model call (GET /api/prompts/*, #2243): the EXACT system prompt
 // the call received — `system.stable` (the turn-stable prefix) + `system.context`
 // (the volatile per-call tail); their concatenation is byte-for-byte what the

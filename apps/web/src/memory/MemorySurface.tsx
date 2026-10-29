@@ -5,7 +5,7 @@ import { Input, Textarea } from "@protolabsai/ui/forms";
 import { PanelHeader, Tabs } from "@protolabsai/ui/navigation";
 import { ConfirmDialog, Dialog, Tooltip, useToast } from "@protolabsai/ui/overlays";
 import { Badge, Button, Empty } from "@protolabsai/ui/primitives";
-import { Flame, History, Pencil, Syringe, Trash2 } from "lucide-react";
+import { Archive, Flame, History, Pencil, Syringe, Trash2 } from "lucide-react";
 
 import { RefreshButton } from "../app/ui-kit";
 import { openDocument } from "../docviewer";
@@ -23,6 +23,7 @@ import { useChatState } from "../chat/chat-store";
 
 import { ReviewActions, ReviewChip } from "../knowledge/ReviewVerdict";
 import { DIGEST_POLICY_HINT, sessionBadge } from "./digestPolicy";
+import { HistoryPanel } from "./HistoryPanel";
 import { injectionSummary } from "./injectionSummary";
 import "./memory.css";
 
@@ -34,12 +35,16 @@ import "./memory.css";
 // polish. Distinct from Knowledge → Store (the whole KB): this is only what
 // auto-injects.
 
-type MemoryTab = "sessions" | "hot" | "injections";
+type MemoryTab = "sessions" | "hot" | "injections" | "history";
 
 const TABS: { id: MemoryTab; label: string; icon: React.ReactNode }[] = [
   { id: "sessions", label: "Sessions", icon: <History size={15} /> },
   { id: "hot", label: "Hot memory", icon: <Flame size={15} /> },
   { id: "injections", label: "Injections", icon: <Syringe size={15} /> },
+  // History (ADR 0125 D6): the conversation `history` table — archives, retired-thread
+  // summaries and background-job reports. Visible only here; the Knowledge browser lists
+  // chunks only.
+  { id: "history", label: "History", icon: <Archive size={15} /> },
 ];
 
 export function MemorySurface() {
@@ -71,8 +76,10 @@ export function MemorySurface() {
           />
         ) : tab === "hot" ? (
           <HotMemoryPanel />
-        ) : (
+        ) : tab === "injections" ? (
           <InjectionsPanel filter={injectionFilter} setFilter={setInjectionFilter} />
+        ) : (
+          <HistoryPanel />
         )}
       </div>
     </section>

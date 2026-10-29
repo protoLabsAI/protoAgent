@@ -46,6 +46,10 @@ import {
   MEMORY_INJECTION_DETAILS,
   MEMORY_SESSIONS,
   MEMORY_SESSION_RENDERED,
+  MEMORY_STATS,
+  HISTORY_SESSIONS,
+  HISTORY_ENTRIES,
+  HISTORY_SEARCH,
   PROMPT_CALL,
   SECRETS_STATUS,
   SUBAGENTS,
@@ -344,15 +348,20 @@ const secretsStatusNow = () =>
 const cloneMemory = () => ({
   sessions: JSON.parse(JSON.stringify(MEMORY_SESSIONS)),
   hot: JSON.parse(JSON.stringify(MEMORY_HOT)),
+  // History view (ADR 0125 D6): the per-session rollup + full entries the History
+  // tab reads; deletes mutate these working copies.
+  history: JSON.parse(JSON.stringify(HISTORY_SESSIONS)),
+  historyEntries: JSON.parse(JSON.stringify(HISTORY_ENTRIES)),
+  stats: JSON.parse(JSON.stringify(MEMORY_STATS)),
 });
 let memory = cloneMemory();
 
 // Degradation switches the memory spec flips via POST /api/__test__/memory/mode
 // (merged; /api/__test__/memory/reset restores the defaults):
-//   fail: "sessions"|"hot"|"injections" → that GET answers 500
-//   enabled: false                      → the hot routes report the store off
+//   fail: "sessions"|"hot"|"injections"|"history" → that GET answers 500
+//   enabled: false                      → the hot + history routes report the store off
 //                                         (GET list; PUT/DELETE drop the write)
-//   empty: true                         → all three lists serve zero rows
+//   empty: true                         → all four lists serve zero rows
 //   replaced: false                     → the hot PUT reports the old revision survived
 //   legacy: true                        → rows are served WITHOUT the delivery-truth
 //                                         fields (in_digest/injecting/size_bytes), like
@@ -1654,6 +1663,40 @@ const server = createServer(async (req, res) => {
           return sendJson(res, detail);
         }
       }
+      // History view (ADR 0125 D6): the memory/history size split + the History tab's
+      // per-session rollup, search, and full-entry reads.
+      if (pathname === "/api/memory/stats") {
+        return sendJson(res, memory.stats);
+      }
+      if (pathname === "/api/memory/history/sessions") {
+        if (memoryMode.fail === "history") return sendJson(res, { detail: "kaboom (mock)" }, 500);
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, sessions: [] });
+        return sendJson(res, { enabled: true, sessions: memoryMode.empty ? [] : memory.history });
+      }
+      if (pathname === "/api/memory/history/search") {
+        if (memoryMode.fail === "history") return sendJson(res, { detail: "kaboom (mock)" }, 500);
+        if (!memoryMode.enabled) return sendJson(res, { enabled: false, query: "", results: [] });
+        const raw = url.searchParams.get("q") || "";
+        const q = raw.trim().toLowerCase();
+        // Case-insensitive substring over heading+excerpt (FTS stand-in); a deleted
+        // entry drops from search too.
+        const results = q
+          ? HISTORY_SEARCH.filter(
+              (h) =>
+                `${h.heading || ""} ${h.excerpt || ""}`.toLowerCase().includes(q) &&
+                memory.historyEntries[h.id],
+            )
+          : [];
+        return sendJson(res, { enabled: true, query: raw, results });
+      }
+      {
+        const m = pathname.match(/^\/api\/memory\/history\/entries\/(\d+)$/);
+        if (m) {
+          const entry = memory.historyEntries[m[1]];
+          if (!entry) return sendJson(res, { detail: "no history entry with that id" }, 404);
+          return sendJson(res, { enabled: true, entry });
+        }
+      }
       {
         // One goal's detail (status dict + `.plan.md` artifact) for the goal detail drawer.
         const m = pathname.match(/^\/api\/goals\/([^/]+)$/);
@@ -2126,6 +2169,33 @@ const server = createServer(async (req, res) => {
         // replaced:false = the re-add landed but the old revision couldn't be
         // deleted (both rows linger) — the console warns via toast.
         return sendJson(res, { enabled: true, id: id + 100, replaced: memoryMode.replaced });
+      }
+    }
+    // History deletes (ADR 0125 D6) — chat-delete forget semantics (#3957): a single
+    // entry is removed outright; a whole session keeps background-job reports.
+    {
+      const e = pathname.match(/^\/api\/memory\/history\/entries\/(\d+)$/);
+      if (e && req.method === "DELETE") {
+        const id = e[1];
+        if (!memory.historyEntries[id]) {
+          return sendJson(res, { detail: "no history entry with that id" }, 404);
+        }
+        delete memory.historyEntries[id];
+        return sendJson(res, { enabled: true, deleted: true });
+      }
+      const h = pathname.match(/^\/api\/memory\/history\/sessions\/([^/]+)$/);
+      if (h && req.method === "DELETE") {
+        const sid = decodeURIComponent(h[1]);
+        const i = memory.history.findIndex((x) => x.session_id === sid);
+        if (i < 0) return sendJson(res, { enabled: true, session_id: sid, deleted: 0 });
+        const row = memory.history[i];
+        // Reports are kept, like the chat delete's forget — only archives + summaries go.
+        const deleted = row.kinds.archive + row.kinds.summary;
+        memory.history.splice(i, 1);
+        for (const [eid, entry] of Object.entries(memory.historyEntries)) {
+          if (entry.session_id === sid && entry.kind !== "report") delete memory.historyEntries[eid];
+        }
+        return sendJson(res, { enabled: true, session_id: sid, deleted });
       }
     }
     if (req.method === "POST" && /^\/api\/knowledge\/\d+\/promote$/.test(pathname)) {

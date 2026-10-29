@@ -2084,6 +2084,89 @@ export const MEMORY_INJECTION_DETAILS = {
   },
 };
 
+// History view (ADR 0125 D6) — the conversation `history` table surfaced in the
+// Memory inspector's History tab: a per-session rollup (surface / span / kind counts),
+// search hits, the full entries, and the memory/history size split. Mutated by the
+// delete specs, so reset via POST /api/__test__/memory/reset.
+export const HISTORY_SESSIONS = [
+  {
+    session_id: "chat-1750000000000-abc123",
+    surface: "chat",
+    span_start: "2026-06-28",
+    span_end: "2026-06-30",
+    first_at: "2026-06-28T09:00:00+00:00",
+    last_at: "2026-06-30T18:00:00+00:00",
+    total: 2,
+    kinds: { archive: 1, summary: 1, report: 0 },
+  },
+  {
+    session_id: "sched-hourly-report",
+    surface: "background",
+    span_start: null,
+    span_end: null,
+    first_at: "2026-06-30T17:00:00+00:00",
+    last_at: "2026-06-30T17:00:00+00:00",
+    total: 1,
+    kinds: { archive: 0, summary: 0, report: 1 },
+  },
+];
+
+// Full entries keyed by id (GET /api/memory/history/entries/{id}) — the open-an-entry
+// reader shows `content` verbatim.
+export const HISTORY_ENTRIES = {
+  101: {
+    id: 101,
+    session_id: "chat-1750000000000-abc123",
+    thread_id: "a2a:chat-1750000000000-abc123",
+    surface: "chat",
+    kind: "summary",
+    heading: "Conversation summary (memory hardening rollout)",
+    content:
+      "The operator planned the memory hardening rollout: split memory, knowledge and history into separate stores, and audit each in the console.",
+    span_start: null,
+    span_end: "2026-06-30",
+    created_at: "2026-06-30T18:00:00+00:00",
+    namespace: null,
+  },
+  102: {
+    id: 102,
+    session_id: "chat-1750000000000-abc123",
+    thread_id: "a2a:chat-1750000000000-abc123",
+    surface: "chat",
+    kind: "archive",
+    heading: "Conversation archive (chat-1750000000000-abc123, messages 2026-06-28 to 2026-06-30)",
+    content: "[Conversation archive]\nUser: plan the memory hardening rollout\nAssistant: here is the phased plan…",
+    span_start: "2026-06-28",
+    span_end: "2026-06-30",
+    created_at: "2026-06-28T09:00:00+00:00",
+    namespace: "chat-archive:chat-1750000000000-abc123",
+  },
+};
+
+// Search hits (GET /api/memory/history/search) — keyed on a matched term; the mock
+// matches a case-insensitive substring of the heading/excerpt, like FTS would.
+export const HISTORY_SEARCH = [
+  {
+    id: 101,
+    session_id: "chat-1750000000000-abc123",
+    thread_id: "a2a:chat-1750000000000-abc123",
+    surface: "chat",
+    kind: "summary",
+    heading: "Conversation summary (memory hardening rollout)",
+    span_start: null,
+    span_end: "2026-06-30",
+    created_at: "2026-06-30T18:00:00+00:00",
+    excerpt:
+      "The operator planned the memory hardening rollout: split memory, knowledge and history into separate stores.",
+  },
+];
+
+// Memory vs history size split (GET /api/memory/stats).
+export const MEMORY_STATS = {
+  memory: { hot: 3, general: 9, total: 12 },
+  history: { archive: 1, summary: 1, report: 1, total: 3, sessions: 2 },
+};
+
 // Delegate registry (ADR 0025) — types schema + a sample roster for the panel. Every
 // type carries the shared `env` (envmap) editor field (#2114) — the per-delegate env
 // map + env_remove list + per-row secret toggle.
