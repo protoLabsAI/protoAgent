@@ -59,6 +59,10 @@
               "title": "Connect and change models"
             },
             {
+              "path": "guides/model-passthrough.md",
+              "title": "Call a model directly"
+            },
+            {
               "path": "guides/command-palette.md",
               "title": "Command palette (⌘⇧K)"
             }

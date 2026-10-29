@@ -34,6 +34,7 @@
           "pages": [
             "guides/react-tauri-ui.md",
             "guides/model-connections.md",
+            "guides/model-passthrough.md",
             "guides/command-palette.md"
           ]
         },
@@ -304,6 +305,10 @@
     },
     "guides/model-connections.md": {
       "title": "Connect and change models",
+      "status": "current"
+    },
+    "guides/model-passthrough.md": {
+      "title": "Call a model directly",
       "status": "current"
     },
     "guides/command-palette.md": {

@@ -23,6 +23,7 @@ Choose a task area below. For a shorter starting point, use [the task navigation
 
 - [Use the app](/guides/react-tauri-ui)
 - [Connect and change models](/guides/model-connections)
+- [Call a model directly](/guides/model-passthrough)
 - [Command palette (⌘⇧K)](/guides/command-palette)
 - [Work with files and documents](/guides/documents-and-files)
 - [Enable document creation (desktop)](/guides/python-runtime)
