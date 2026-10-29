@@ -32,6 +32,11 @@
       "decision": "media",
       "reason": "A concrete state, spatial relationship, or multi-step interaction benefits from a visual; see its production brief."
     },
+    "guides/model-passthrough.md": {
+      "journey": "use",
+      "decision": "text",
+      "reason": "A raw-API/eval reference: the value is the URL shape, request/response bodies, and the loopback/allow_remote rule, all of which are executable text; the one Settings toggle it names is already covered by the model-connections and exposing-protoagent media."
+    },
     "guides/command-palette.md": {
       "journey": "use",
       "decision": "reuse",
