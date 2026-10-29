@@ -295,28 +295,57 @@ def _public_console_gate(graph_config: Any) -> None:
         )
 
 
-def build_uvicorn_server(config: "uvicorn.Config") -> "uvicorn.Server":
-    """The ``uvicorn.Server`` this process runs, with one change: an exit signal
-    starts tearing down the process trees this process owns (#3428) BEFORE the
-    graceful drain, instead of leaving them to the lifespan teardown.
+def _ready_line(host: str | None, port: int, ui: str) -> str:
+    """The one prominent stdout line printed once the server is listening (#4567):
+    the URL a new user should open. ``0.0.0.0``/``::`` (and an unset host) are
+    bind-only wildcards nothing can browse to — show loopback instead. The console
+    tier adds the ``/app`` console path; ``--ui none`` has no web console, so point
+    at the API root."""
+    display = host or ""
+    if display in ("0.0.0.0", "::", ""):
+        display = "127.0.0.1"
+    base = f"http://{display}:{port}"
+    if ui == "none":
+        return f"API ready → {base}"
+    return f"Console ready → {base}/app"
 
-    That ordering is the fix. The hub SIGKILLs a member 3s after SIGTERM, and the
-    drain alone can take ``timeout_graceful_shutdown`` (5s), so the member's
-    lifespan teardown — the only thing that closed its shell/ACP/execute_code
-    trees — was pre-empted, and those trees survived at ppid=1. Tearing down at
-    receipt makes them independent of the drain: SIGTERM now, SIGKILL after
-    ``infra.proc.TEARDOWN_GRACE`` (inside the hub's 3s), whatever the drain does.
+
+def build_uvicorn_server(config: "uvicorn.Config", ready_line: str | None = None) -> "uvicorn.Server":
+    """The ``uvicorn.Server`` this process runs, with two changes: an exit signal
+    starts tearing down the process trees this process owns (#3428) BEFORE the
+    graceful drain, instead of leaving them to the lifespan teardown; and once
+    startup completes (the server is actually listening) it prints ``ready_line``
+    once per boot (#4567) so a new user sees which URL to open.
+
+    The teardown ordering is the #3428 fix. The hub SIGKILLs a member 3s after
+    SIGTERM, and the drain alone can take ``timeout_graceful_shutdown`` (5s), so
+    the member's lifespan teardown — the only thing that closed its
+    shell/ACP/execute_code trees — was pre-empted, and those trees survived at
+    ppid=1. Tearing down at receipt makes them independent of the drain: SIGTERM
+    now, SIGKILL after ``infra.proc.TEARDOWN_GRACE`` (inside the hub's 3s),
+    whatever the drain does.
     """
     import uvicorn
 
     from infra.proc import begin_tree_teardown
 
     class _TreeReapingServer(uvicorn.Server):
+        _printed_ready = False
+
         def handle_exit(self, sig: int, frame: Any) -> None:
             # Before super(): the state change it makes is what starts the drain.
             # begin_tree_teardown never raises and never blocks.
             begin_tree_teardown()
             super().handle_exit(sig, frame)
+
+        async def startup(self, sockets: Any = None) -> None:
+            await super().startup(sockets=sockets)
+            # `started` is only set once uvicorn has the socket(s); a bind failure
+            # returns here without it. Guard `_printed_ready` so a re-entrant
+            # startup (not config reload — that never re-runs this) prints once.
+            if ready_line and self.started and not self._printed_ready:
+                self._printed_ready = True
+                print(ready_line, flush=True)
 
     return _TreeReapingServer(config)
 
@@ -468,6 +497,73 @@ def _a2a_executor(**providers):
 # ---------------------------------------------------------------------------
 
 
+def build_serve_parser() -> argparse.ArgumentParser:
+    """The ``protoagent serve`` argument parser (also used by the bare server
+    boot). Help is written for someone running protoAgent for the first time, not
+    for maintainers — no issue numbers, ADR references, or the legacy launch form.
+
+    ``--config`` and ``--headless`` are hidden (``SUPPRESS``) but kept with their
+    exact behaviour and error messages: ``--config`` still fails loudly (it never
+    loaded the given file) and ``--headless``/``--ui full`` still resolve to the
+    console tier downstream."""
+    parser = argparse.ArgumentParser(
+        prog="protoagent serve",
+        description="Run protoAgent in the foreground and serve the console.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=7870,
+        help="Port to listen on (default 7870). Pick another if 7870 is already in "
+        "use, e.g. by another protoAgent.",
+    )
+    # Bind host. Defaults to loopback so a local/desktop run is NOT exposed on
+    # all interfaces (prod-readiness: the console + operator API are otherwise
+    # reachable by anything that can reach the port). Containers set
+    # PROTOAGENT_HOST=0.0.0.0 (entrypoint / deploy manifests) because their
+    # boundary is the network policy + published port, not the in-container bind.
+    # Default None ⇒ resolve from the Host-layer cascade after config load (ADR 0047
+    # D8 network.bind, which folds in the PROTOAGENT_HOST env fallback); an explicit
+    # --host always wins.
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=None,
+        help="Address to bind (default: this machine only).",
+    )
+    # Hidden: --config never actually loaded the given file (it silently used the
+    # default instance's config), so it stays only to fail loudly below instead of
+    # argparse's generic "unrecognized arguments". Use PROTOAGENT_HOME / an isolated
+    # instance for a real alternate config.
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--ui",
+        choices=["console", "none", "full"],
+        default=os.environ.get("PROTOAGENT_UI", "").lower() or None,
+        help="console (default) or none (API only, no web console).",
+    )
+    # Hidden: deprecated alias for --ui console (NOT --ui none, despite the name —
+    # it predates the tiers and meant "no Gradio, keep the React console"). Kept as
+    # a back-compatible alias; it resolves to the console tier downstream.
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        default=os.environ.get("PROTOAGENT_HEADLESS", "").lower() in ("1", "true", "yes"),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Validate the saved config and mark setup complete, then exit.",
+    )
+    return parser
+
+
 def _main():
     # Frozen sidecar TLS: point native clients (primp → ddgs → web_search) at the
     # bundled certifi CA bundle before any outbound request, else DuckDuckGo search
@@ -505,55 +601,7 @@ def _main():
         run_plugin_mcp_main(plugin_id)
         return
 
-    parser = argparse.ArgumentParser(
-        prog="python -m server",
-        description=f"{AGENT_NAME_ENV} — protoAgent server",
-    )
-    parser.add_argument("--port", type=int, default=7870)
-    # Bind host. Defaults to loopback so a local/desktop run is NOT exposed on
-    # all interfaces (prod-readiness: the console + operator API are otherwise
-    # reachable by anything that can reach the port). Containers set
-    # PROTOAGENT_HOST=0.0.0.0 (entrypoint / deploy manifests) because their
-    # boundary is the network policy + published port, not the in-container bind.
-    # Default None ⇒ resolve from the Host-layer cascade after config load (ADR 0047
-    # D8 network.bind, which folds in the PROTOAGENT_HOST env fallback); an explicit
-    # --host always wins.
-    parser.add_argument("--host", type=str, default=None)
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=None,
-        help="REMOVED (#2647) — this flag was declared but never consumed by any "
-        "startup path, so passing it silently booted the DEFAULT instance's config "
-        "and credentials instead of the file given. Kept here only so a caller "
-        "gets a clear, actionable error instead of argparse's generic "
-        "'unrecognized arguments'. Use PROTOAGENT_HOME=<dir> (or "
-        "PROTOAGENT_INSTANCE=<id> under a shared PROTOAGENT_BOX_ROOT) to run "
-        "against a genuinely isolated instance instead — see ADR 0065.",
-    )
-    parser.add_argument(
-        "--ui",
-        choices=["console", "none", "full"],
-        default=os.environ.get("PROTOAGENT_UI", "").lower() or None,
-        help="UI deployment tier (ADR 0010): 'console' (default) = React console at "
-        "/app + API/A2A; 'none' = API + A2A + /metrics only (headless servers / "
-        "the lean stack). 'full' is a DEPRECATED alias for 'console' — the Gradio "
-        "tier was removed. Env: PROTOAGENT_UI.",
-    )
-    parser.add_argument(
-        "--headless",
-        action="store_true",
-        default=os.environ.get("PROTOAGENT_HEADLESS", "").lower() in ("1", "true", "yes"),
-        help="DEPRECATED alias for --ui console (NOT --ui none, despite the name — it "
-        "predates the tiers and meant 'no Gradio, keep the React console'; ADR 0010 "
-        "§2.1). For no UI at all use --ui none. Env: PROTOAGENT_HEADLESS.",
-    )
-    parser.add_argument(
-        "--setup",
-        action="store_true",
-        help="Headless setup (ADR 0010): validate the live config + mark setup "
-        "complete, then exit. No wizard/UI needed.",
-    )
+    parser = build_serve_parser()
     args = parser.parse_args()
     if args.config is not None:
         # #2647: fail loudly instead of silently ignoring it — see the --config
@@ -1637,7 +1685,9 @@ def _main():
         proxy_headers=True,
         forwarded_allow_ips=trusted_proxies,
     )
-    uvicorn_server = build_uvicorn_server(uvicorn_config)
+    # The one line a new user needs: which URL to open, printed once the server is
+    # actually listening (not now — the bind can still fail). #4567.
+    uvicorn_server = build_uvicorn_server(uvicorn_config, ready_line=_ready_line(args.host, args.port, ui))
     STATE.uvicorn_server = uvicorn_server
     try:
         # Our own sockets when bind.py opened them (picked IP + loopback); else uvicorn binds.

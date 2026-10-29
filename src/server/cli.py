@@ -89,7 +89,7 @@ _LIFECYCLE_HELP = {
     "up": "Start THIS instance's server in the background (detached)",
     "down": "Stop the background server started by `protoagent up`",
     "status": "Show whether this instance's server is running (port, pid, version)",
-    "serve": "Run the server in the FOREGROUND (= `python -m server`)",
+    "serve": "Run the server in the foreground and print the console URL",
     "setup": "Complete headless setup for the live config (ADR 0010)",
 }
 
