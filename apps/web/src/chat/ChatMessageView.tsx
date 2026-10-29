@@ -2,7 +2,8 @@ import { Button, Card } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, CircleSlash, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, X } from "lucide-react";
+import { Input } from "@protolabsai/ui/forms";
+import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, CircleSlash, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, ThumbsUp, ThumbsDown, X } from "lucide-react";
 import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
@@ -11,6 +12,7 @@ import { StreamingPreview } from "../artifacts/StreamingPreview";
 import { openDocument } from "../docviewer";
 import { slashCommandName } from "../ext/slashRegistry";
 import { loadBackgroundReport } from "../lib/api";
+import type { FeedbackTurn } from "../lib/api/feedback";
 import { runtimeStatusQuery } from "../lib/queries";
 import {
   costAriaLabel,
@@ -35,11 +37,13 @@ import { foldPlan, toolsForGroup } from "./parts";
 import { rendersAsResultCard, serverResultLabel, serverResultPreview } from "./server-turn-store";
 import { useBackgroundJob } from "./backgroundJobStore";
 import { STATE_LABEL, briefSummary, delegationState } from "./delegation";
+import type { SessionFeedbackActions } from "./useSessionFeedback";
 import { readKey, writeKey } from "../lib/storage";
 
 // Optional per-message action row (copy / fork / regenerate). Omit it (e.g. the palette
 // chat) and no actions render. Each callback is independently optional.
 export type ChatMessageActions = {
+  feedback?: SessionFeedbackActions;
   copiedId?: string | null;
   // Session the message belongs to — lets View prompt (#2843) fetch the history
   // breakdown alongside the captured prompt.
@@ -162,6 +166,11 @@ export function ChatMessageView({
   // A turn the operator STOPPED (#4076) says so on replay too — a quiet marker in the same
   // footer row, so a transcript that ends mid-thought reads as stopped, not as finished.
   const stoppedMark = !revealStreaming && message.role === "assistant" && message.stopped === true;
+  // Resolved ONCE: this message's turn row (rating/note), or undefined when it isn't rateable
+  // (incognito, or a turn with no recorded telemetry). Drives both the pinned state and the
+  // thumbs controls below — the hook join runs a single time per render.
+  const feedback = actions?.feedback;
+  const feedbackTurn = feedback?.resolve(message);
   // A submitted HITL form answer (#4259): the user message carries a presentation-only label
   // map, so render a compact key/value card instead of its raw resume JSON. Guarded to a user
   // message with at least one labelled field — a legacy message without the map, or an empty /
@@ -418,7 +427,10 @@ export function ChatMessageView({
         </div>
       ) : null}
       {actions && message.role === "assistant" && !revealStreaming && message.content ? (
-        <MessageActions>
+        <MessageActions pinned={feedbackTurn?.rating != null}>
+          {!actions.incognito && feedback && feedbackTurn ? (
+            <FeedbackControls key={`${actions.sessionId}-${message.id}`} turn={feedbackTurn} feedback={feedback} />
+          ) : null}
           {actions.onCopy ? (
             <MessageAction
               label={actions.copiedId === message.id ? "Copied" : "Copy"}
@@ -454,6 +466,30 @@ export function ChatMessageView({
       ) : null}
     </Message>
   );
+}
+
+function FeedbackControls({ turn, feedback }: { turn: FeedbackTurn; feedback: SessionFeedbackActions }) {
+  const [editing, setEditing] = useState(false);
+  const [note, setNote] = useState("");
+  return <>
+    <MessageAction label="Thumbs up" icon={<ThumbsUp size={14} />} active={turn.rating === 1}
+      disabled={feedback.pending} onClick={() => { setEditing(false); void feedback.save(turn, turn.rating === 1 ? null : 1); }} />
+    <MessageAction label="Thumbs down" icon={<ThumbsDown size={14} />} active={turn.rating === 0}
+      disabled={feedback.pending} onClick={() => {
+        if (turn.rating === 0) { setEditing(false); void feedback.save(turn, null); }
+        else { setNote(""); setEditing(true); void feedback.save(turn, 0); }
+      }} />
+    {editing ? <form onSubmit={(event) => {
+      event.preventDefault();
+      if (feedback.pending) return;
+      void feedback.save(turn, 0, note);
+      setEditing(false);
+    }}>
+      <Input aria-label="Feedback note (optional)" placeholder="What could be better? (optional)" maxLength={500}
+        value={note} onChange={(event) => setNote(event.target.value)} />
+      <Button type="submit" size="xs" disabled={feedback.pending}>Save note</Button>
+    </form> : turn.rating === 0 && turn.note ? <span>{turn.note}</span> : null}
+  </>;
 }
 
 /** Whether a message's `component` is well-formed enough to render as a system-note card:

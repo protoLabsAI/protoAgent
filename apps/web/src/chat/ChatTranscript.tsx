@@ -10,6 +10,7 @@ import type { SessionStatus } from "./chat-store";
 import { ChatMessageView, type ChatMessageActions } from "./ChatMessageView";
 import { hideDismissedToolCalls } from "./dismissedToolCalls";
 import { useStreamFollow } from "./streamFollow";
+import { useSessionFeedback } from "./useSessionFeedback";
 import { STARTER_PROMPTS } from "./starterPrompts";
 
 type ChatTranscriptProps = {
@@ -90,6 +91,8 @@ export const ChatTranscript = memo(function ChatTranscript({
   onStarterPrompt,
   followSignal = 0,
 }: ChatTranscriptProps) {
+  const feedback = useSessionFeedback(sessionId, messages, actions.incognito);
+  const feedbackActions = useMemo(() => feedback.available ? { ...actions, feedback } : actions, [actions, feedback]);
   const rootId = `pl-conv-${sessionId}`;
   const follow = useStreamFollow(rootId, followSignal);
   // The transcript is the one record of "settled": once a queued message's id is in it (the
@@ -109,6 +112,7 @@ export const ChatTranscript = memo(function ChatTranscript({
     // autoScroll off: the DS follower unpinned itself when a card grew right after its own
     // follow scroll (B6) — `useStreamFollow` owns following and the jump button instead.
     <Conversation id={rootId} autoScroll={false}>
+      {feedback.error ? <p role="alert">{feedback.error}</p> : null}
       {messages.length === 0 ? (
         <Empty icon={<TerminalSquare />} title="Try one of these">
           <div className="chat-starter-prompts" style={{ display: "grid", gap: 8, maxWidth: "100%", textAlign: "left" }}>
@@ -131,7 +135,7 @@ export const ChatTranscript = memo(function ChatTranscript({
             dismissedToolCalls={dismissedToolCalls}
             onCancelDelegation={onCancelDelegation}
             onDismissToolCall={onDismissToolCall}
-            actions={actions}
+            actions={feedbackActions}
             activityLabel={liveId && message.id === liveId ? serverTurnLabel : null}
           />
         ))
