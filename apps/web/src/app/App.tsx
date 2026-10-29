@@ -5,6 +5,7 @@ import {
   PanelLeft,
   PanelRight,
   Plus,
+  Puzzle,
   Save,
   Settings2,
   Undo2,
@@ -384,6 +385,7 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
   const globalSettingsOpen = useUI((s) => s.globalSettingsOpen);
   const globalSettingsSection = useUI((s) => s.globalSettingsSection);
   const openGlobalSettings = useUI((s) => s.openGlobalSettings);
+  const openPluginsDiscover = useUI((s) => s.openPluginsDiscover);
   const closeGlobalSettings = useUI((s) => s.closeGlobalSettings);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sessionSheetOpen, setSessionSheetOpen] = useState(false);
@@ -1246,6 +1248,27 @@ function WorkspaceApp({ runtime }: { runtime: RuntimeStatus | null }) {
                     onClick={() => openGlobalSettings()}
                   >
                     <Settings2 size={14} />
+                  </Button>
+                </Tooltip>
+                {/* Discover plugins (#4570) — the first visible, LABELLED way into the plugin
+                    marketplace, which otherwise hides behind the unlabelled Settings icon →
+                    Plugins → Discover. A labelled pill (text, not an icon-only square) so a
+                    first-time visitor can read it; onClick runs the atomic store opener so the
+                    dialog lands on Plugins ▸ Discover rather than the default Installed tab.
+                    size="sm" (not xs) so it is a `.pl-btn--sm:not(.pl-btn--icon)` text button and
+                    rides the existing tablet touch-floor overlay (tablet.css) — an xs text button
+                    matches neither that rule nor the DS icon-button layer, so it rendered under
+                    the 44px touch minimum and tripped the tablet E2E (tablet.spec.ts). */}
+                <Tooltip label="Discover plugins">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    type="button"
+                    aria-label="Discover plugins"
+                    data-testid="discover-plugins"
+                    onClick={() => openPluginsDiscover()}
+                  >
+                    <Puzzle size={14} /> Discover plugins
                   </Button>
                 </Tooltip>
                 {/* The palette's only visible way in (ADR 0057) — an icon pill, AFTER Settings:
