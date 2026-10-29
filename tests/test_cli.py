@@ -210,3 +210,64 @@ def test_operator_mcp_verb_is_routed():
     # must stay routable and documented.
     assert cli._FORWARD["operator-mcp"] == ("server.operator_mcp", "main")
     assert "operator-mcp" in cli._FORWARD_HELP
+
+
+def test_serve_lifecycle_help_is_user_facing():
+    # The one-liner in `protoagent --help` must not leak the legacy launch form.
+    assert "python -m server" not in cli._LIFECYCLE_HELP["serve"]
+
+
+# ── #4567: `protoagent serve --help` is written for users, boot prints the URL ─
+
+
+def test_serve_help_has_no_maintainer_references():
+    import server
+
+    help_text = server.build_serve_parser().format_help()
+    # Nothing maintainer-only: no issue numbers, ADR refs, or the legacy launch form.
+    assert "#2647" not in help_text
+    assert "ADR" not in help_text
+    assert "python -m server" not in help_text
+    # The user-facing flags stay documented...
+    for flag in ("--port", "--host", "--ui", "--setup"):
+        assert flag in help_text
+    # ...and the one-line description is present.
+    assert "Run protoAgent in the foreground and serve the console." in help_text
+
+
+def test_serve_help_hides_config_and_headless_but_keeps_behaviour():
+    import server
+
+    parser = server.build_serve_parser()
+    help_text = parser.format_help()
+    # Hidden from help...
+    assert "--config" not in help_text
+    assert "--headless" not in help_text
+    # ...but still parsed (behaviour preserved): --headless resolves, --config is
+    # accepted by argparse (and fails loudly later in _main, not here).
+    args = parser.parse_args(["--headless", "--config", "/tmp/x.yaml"])
+    assert args.headless is True
+    assert args.config == "/tmp/x.yaml"
+
+
+def test_serve_help_does_not_crash_the_server_import():
+    # format_help must not require any server boot state.
+    import server
+
+    assert server.build_serve_parser().prog == "protoagent serve"
+
+
+def test_ready_line_formats_the_url_a_user_opens():
+    import server
+
+    # Loopback console: the /app console path.
+    assert server._ready_line("127.0.0.1", 7870, "console") == "Console ready → http://127.0.0.1:7870/app"
+    # A wildcard bind is unbrowsable — show loopback instead of 0.0.0.0 / :: / unset.
+    assert server._ready_line("0.0.0.0", 7871, "console") == "Console ready → http://127.0.0.1:7871/app"
+    assert server._ready_line("::", 7870, "console") == "Console ready → http://127.0.0.1:7870/app"
+    assert server._ready_line(None, 7870, "console") == "Console ready → http://127.0.0.1:7870/app"
+    # --ui none has no web console — point at the API root, no /app.
+    assert server._ready_line("127.0.0.1", 7870, "none") == "API ready → http://127.0.0.1:7870"
+    assert server._ready_line("0.0.0.0", 7870, "none") == "API ready → http://127.0.0.1:7870"
+    # A concrete non-loopback host is shown verbatim.
+    assert server._ready_line("192.168.1.5", 7870, "console") == "Console ready → http://192.168.1.5:7870/app"
