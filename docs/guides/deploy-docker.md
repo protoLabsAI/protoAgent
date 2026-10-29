@@ -60,10 +60,11 @@ Fix the token value instead.
 | `PROTOAGENT_INSTALL_NONINTERACTIVE` | — | `1` = start only, never prompt |
 | `A2A_AUTH_TOKEN` | — | Operator token: required to widen the bind past loopback; sent as the bearer on setup requests |
 
-> **Architecture note.** The published image is currently **linux/amd64**. On
-> Apple Silicon / arm64 the installer targets amd64 explicitly so Docker Desktop
-> runs it under emulation (a slower first boot); native-ARM performance needs a
-> multi-arch image or a local build. On amd64 hosts it runs natively.
+> **Architecture note.** The published image is **multi-arch**
+> (`linux/amd64` + `linux/arm64`), so the installer pulls the native variant on
+> both Intel/AMD and ARM64 hosts (Apple Silicon, arm64 servers) — no emulation.
+> On any other host arch (which has no native variant) it targets amd64 so Docker
+> runs it under emulation. Set `PROTOAGENT_PLATFORM` to override.
 
 For a **pre-configured, config-as-code** deploy (bake settings into your own
 image, no wizard) use the seed pattern below instead.

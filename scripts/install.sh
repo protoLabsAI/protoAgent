@@ -49,15 +49,18 @@ HOST=$BIND
 [ "$BIND" = "0.0.0.0" ] && HOST=127.0.0.1
 BASE_URL="http://${HOST}:${PORT}"
 
-# The published image is currently linux/amd64. On a non-amd64 host (Apple
-# Silicon, arm64 servers) a bare `docker pull` errors on the missing native
-# manifest, so target amd64 explicitly — Docker Desktop then runs it under
-# emulation. Override with PROTOAGENT_PLATFORM (e.g. once a native image exists).
+# The published image is multi-arch (linux/amd64 + linux/arm64), so on both
+# Intel/AMD and ARM64 hosts (Apple Silicon, arm64 servers) a bare `docker pull`
+# resolves the native variant — no `--platform` needed, no emulation. Any other
+# host arch has no native variant, so target amd64 explicitly there — a bare
+# pull would error on the missing manifest, and Docker then runs amd64 under
+# emulation. Override with PROTOAGENT_PLATFORM (e.g. to force emulation).
 PLATFORM=${PROTOAGENT_PLATFORM:-}
 if [ -z "$PLATFORM" ]; then
   case "$(uname -m)" in
-    x86_64|amd64) PLATFORM='' ;;
-    *)            PLATFORM='linux/amd64' ;;
+    x86_64|amd64)  PLATFORM='' ;;
+    aarch64|arm64) PLATFORM='' ;;
+    *)             PLATFORM='linux/amd64' ;;
   esac
 fi
 

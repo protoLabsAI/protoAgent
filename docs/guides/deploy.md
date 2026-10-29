@@ -4,7 +4,8 @@
 
 Publish your fork's container image, then deploy it using the
 [Docker guide](/guides/deploy-docker). You need GitHub Actions enabled on the fork
-and permission to publish its GHCR package. The published image targets `linux/amd64`.
+and permission to publish its GHCR package. The published image is multi-arch
+(`linux/amd64` + `linux/arm64`).
 
 ## Wire it up (once)
 
