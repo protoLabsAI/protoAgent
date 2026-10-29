@@ -29,7 +29,14 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
-from evals.compare import _category_passed, _pct, _tiers_of  # noqa: E402
+from evals.compare import (  # noqa: E402
+    _category_passed,
+    _pct,
+    _tier_order,
+    _tiers_of,
+    is_instance_case,
+    resolve_tier,
+)
 
 _RESULTS_DIR = Path(__file__).parent / "results"
 
@@ -74,6 +81,57 @@ def _avg_latency(rep: dict) -> int:
 def _avg_tokens(rep: dict) -> int:
     toks = [r for r in rep.get("results", []) if r.get("tokens")]
     return round(sum(r["tokens"] for r in toks) / len(toks)) if toks else 0
+
+
+def _instance_tiers(rep: dict) -> dict[str, tuple[int, int]]:
+    """Per-tier ``(passed, total)`` over this run's INSTANCE cases only (ADR 0126
+    D5). Skipped rows carry no pass/fail signal and are excluded, same as the core
+    tier split; each row's tier is resolved with :func:`resolve_tier` so a legacy
+    instance row with no stamped tier still lands in gate."""
+    agg: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for r in rep.get("results", []):
+        if r.get("skipped") or not is_instance_case(r):
+            continue
+        cell = agg[resolve_tier(r)]
+        cell[1] += 1
+        if r.get("passed"):
+            cell[0] += 1
+    return {t: (p, tot) for t, (p, tot) in agg.items()}
+
+
+def _instance_section(latest: dict[str, dict]) -> list[str]:
+    """The ``## Instance cases`` block (ADR 0126 D5): the latest run per model that
+    actually ran instance cases, their pass rate split by tier and kept apart from
+    the core suite. Empty list when no run has any instance case, so a plain suite's
+    report is unchanged."""
+    with_instance = {m: _instance_tiers(rep) for m, rep in latest.items()}
+    with_instance = {m: t for m, t in with_instance.items() if t}
+    if not with_instance:
+        return []
+    tiers = sorted({t for cells in with_instance.values() for t in cells}, key=_tier_order)
+    lines = [
+        "",
+        "## Instance cases",
+        "",
+        "Cases loaded from `<config dir>/evals/cases.json` (namespaced `instance:*`, "
+        "ADR 0126 D5) — latest run per model, split by tier.",
+        "",
+        "| Model | " + " | ".join(t.capitalize() for t in tiers) + " | Overall |",
+        "|" + "---|" * (len(tiers) + 2),
+    ]
+    for model in sorted(with_instance):
+        cells_by_tier = with_instance[model]
+        cells = []
+        tot_p = tot_t = 0
+        for tier in tiers:
+            p, t = cells_by_tier.get(tier, (0, 0))
+            tot_p += p
+            tot_t += t
+            cells.append(f"{p}/{t} ({_pct(p, t)})" if t else "—")
+        overall = f"{tot_p}/{tot_t} ({_pct(tot_p, tot_t)})"
+        lines.append(f"| `{model}` | " + " | ".join(cells) + f" | {overall} |")
+    lines.append("")
+    return lines
 
 
 def build_report(runs: list[dict], only_model: str | None = None) -> str:
@@ -144,6 +202,12 @@ def build_report(runs: list[dict], only_model: str | None = None) -> str:
             overall = f"{p}/{t} ({_pct(p, t)})"
             when = (rep.get("ts") or "")[:19].replace("T", " ")
             lines.append(f"| {when} | {gate} | {tracked} | {overall} | `{rep.get('_file', '?')}` |")
+
+    # Per-instance cases under their own heading, still split by tier (ADR 0126 D5)
+    # — a domain suite's pass rate kept distinct from the core suite's. Appended
+    # only when some run actually carried instance cases, so a plain report is
+    # byte-for-byte unchanged.
+    lines += _instance_section(latest)
     return "\n".join(lines)
 
 

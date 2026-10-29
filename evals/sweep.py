@@ -197,10 +197,15 @@ def _session_seed_steps(category: str | None, tasks: str | None) -> list[dict]:
     Seeded before the arm boots — see ``_run_one_model``; an arm running with
     ``prior_sessions: off`` needs the same summaries on disk either way, since
     that is the whole comparison.
-    """
-    from evals.runner import select_by_ids
 
-    cases = json.loads((Path(__file__).parent / "tasks.json").read_text())
+    Cases come through the runner's own loader (core ``tasks.json`` + the
+    instance's ``<config dir>/evals/cases.json``, ADR 0126 D5) rather than reading
+    ``tasks.json`` directly, so the sweep seeds fixtures for exactly the cases the
+    runner will run — including instance cases — with no separate loader.
+    """
+    from evals.runner import load_all_cases, select_by_ids
+
+    cases = load_all_cases()
     # AND, exactly like the runner composes them (--tasks X --category Y runs the
     # intersection). Filtering differently here would seed one set and run another.
     if category:

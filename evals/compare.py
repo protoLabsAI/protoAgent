@@ -24,6 +24,24 @@ from pathlib import Path
 _VALID_TIERS = ("gate", "tracked")
 _TIER_ORDER = {t: i for i, t in enumerate(_VALID_TIERS)}
 
+# ADR 0126 D5 — per-instance eval cases. A case loaded from the instance's
+# ``<config dir>/evals/cases.json`` has its id namespaced with this prefix so it
+# can never collide with a core ``tasks.json`` id, and so a saved report row (or a
+# loaded case) is recognisable as an instance case by its id alone.
+INSTANCE_ID_PREFIX = "instance:"
+
+
+def is_instance_case(item: dict) -> bool:
+    """True for a per-instance case or report row (ADR 0126 D5).
+
+    Detected by the namespaced ``instance:`` id so it works on a saved report row
+    exactly as on a freshly loaded case; the explicit ``instance`` flag the runner
+    stamps is a secondary signal (a legacy row predating that flag still resolves
+    via its id)."""
+    if item.get("instance"):
+        return True
+    return str(item.get("id", "")).startswith(INSTANCE_ID_PREFIX)
+
 
 def resolve_tier(item: dict) -> str:
     """Resolve the eval tier of a case or a report row (ADR 0126 D1).
