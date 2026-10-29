@@ -439,7 +439,7 @@ async def harvest_thread(
         return None
     # Background worker thread (ADR 0070 D3): its transcript is disposable — the
     # report was already delivered to (and indexed under) the ORIGIN session at
-    # completion, so harvesting the worker would duplicate the report into the KB
+    # completion, so harvesting the worker would duplicate the report into history
     # under the worker's identity. Mirrors the incognito skip below; string-matched
     # so legacy retired threads are covered too.
     if thread_id.startswith("background:") or ":background:" in thread_id:

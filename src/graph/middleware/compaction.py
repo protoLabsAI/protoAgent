@@ -113,7 +113,7 @@ def _strip_retained_thinking(result):
 
 
 def _thread_id() -> str | None:
-    """The checkpoint thread this turn runs on, for the archive's ``source``. The
+    """The checkpoint thread this turn runs on, for the archive's ``thread_id``. The
     hooks run inside a graph node, so the run's config carries it; None outside a run."""
     try:
         from langgraph.config import get_config

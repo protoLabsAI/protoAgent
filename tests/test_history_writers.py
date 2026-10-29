@@ -24,8 +24,11 @@ def stores(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("automatic", [False, True])
-async def test_archive_metadata_and_no_chunks(stores, monkeypatch, automatic):
+@pytest.mark.parametrize("knowledge_available", [False, True])
+async def test_archive_metadata_and_no_chunks(stores, monkeypatch, automatic, knowledge_available):
     knowledge, history = stores
+    writer_knowledge = knowledge if knowledge_available else None
+    monkeypatch.setattr(STATE, "knowledge_store", writer_knowledge)
     monkeypatch.setattr(
         "graph.conversation_harvest.message_dates",
         lambda *args, **kwargs: {"h1": "2026-08-01", "h2": "2026-08-02"},
@@ -41,7 +44,7 @@ async def test_archive_metadata_and_no_chunks(stores, monkeypatch, automatic):
         graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(values=state)),
                                 aupdate_state=AsyncMock())
         result = await compact_thread(
-            graph, object(), knowledge, object(), "thread", "session",
+            graph, object(), writer_knowledge, object(), "thread", "session",
             keep_recent=0, summarizer=AsyncMock(return_value="summary"),
         )
         assert result["archived_chunks"] == 1
@@ -103,6 +106,27 @@ async def test_summary_uses_checkpoint_session_and_keeps_facts_in_chunks(stores)
     assert entry.namespace == "project"
     chunks = knowledge.list_chunks()
     assert len(chunks) == 1 and chunks[0].domain == "fact"
+
+
+async def test_summary_does_not_require_a_knowledge_store(stores, monkeypatch):
+    knowledge, history = stores
+    monkeypatch.setattr(STATE, "knowledge_store", None)
+    checkpoint = SimpleNamespace(checkpoint={
+        "channel_values": {"session_id": "session", "messages": [HumanMessage("conversation")]},
+    })
+    extractor = AsyncMock()
+    entry_id = await harvest_thread(
+        "thread",
+        checkpointer=SimpleNamespace(aget_tuple=AsyncMock(return_value=checkpoint)),
+        knowledge_store=None, config=SimpleNamespace(knowledge_facts=True),
+        summarizer=AsyncMock(return_value="Retirement summary."),
+        fact_extractor=extractor,
+    )
+    entry = history.get(entry_id)
+    assert (entry.session_id, entry.thread_id, entry.kind) == ("session", "thread", "summary")
+    assert entry.content == "Retirement summary."
+    extractor.assert_not_awaited()
+    assert knowledge.list_chunks() == []
 
 
 async def test_report_is_full_history_under_origin(stores):
