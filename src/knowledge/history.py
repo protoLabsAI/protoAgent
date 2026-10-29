@@ -9,7 +9,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from knowledge.store import FORGET_PENDING_PREFIX, _history_forget_where, _now_iso, _resolve_path
+from knowledge.store import FORGET_PENDING_PREFIX, FORGET_PREV_SEP, _history_forget_where, _now_iso, _resolve_path
+
+
+# "Held by marker": exactly it, or ``marker|prev:<reason>`` (an already-invalidated row).
+_HELD = "(invalidation_reason = ? OR substr(invalidation_reason, 1, ?) = ?)"
+
+
+def _held(marker: str) -> tuple:
+    return (marker, len(marker + FORGET_PREV_SEP), marker + FORGET_PREV_SEP)
+
 
 HistoryKind = Literal["archive", "summary", "report"]
 
@@ -231,11 +240,18 @@ class HistoryStore:
             return int(db.execute(f"DELETE FROM history WHERE ({where})", params).rowcount)
 
     def mark_forget_pending(self, marker: str, *, session_id="", thread_ids=(), **kwargs) -> int:
-        """Hide this session's archives and summaries before retirement."""
+        """Hide this session's archives and summaries before retirement. Rows already
+        invalidated are tagged ``marker|prev:<reason>`` so phase 2 deletes them too."""
         where, params = _history_forget_where(session_id, thread_ids)
         if not marker or not where:
             return 0
         with closing(self._connect()) as db, db:
+            db.execute(
+                "UPDATE history SET invalidation_reason = ? || COALESCE(invalidation_reason, '') "
+                f"WHERE ({where}) AND invalidated_at IS NOT NULL "
+                f"AND substr(COALESCE(invalidation_reason, ''), 1, {len(FORGET_PENDING_PREFIX)}) != '{FORGET_PENDING_PREFIX}'",
+                [marker + FORGET_PREV_SEP, *params],
+            )
             return db.execute(
                 f"UPDATE history SET invalidated_at = ?, invalidation_reason = ? "
                 f"WHERE ({where}) AND invalidated_at IS NULL",
@@ -245,26 +261,39 @@ class HistoryStore:
     def count_forget_pending(self, marker: str) -> int:
         """Count rows held by a previous attempt, so retries hide nothing new."""
         with closing(self._connect()) as db:
-            return db.execute("SELECT COUNT(*) FROM history WHERE invalidation_reason = ?", (marker,)).fetchone()[0]
+            return db.execute(f"SELECT COUNT(*) FROM history WHERE {_HELD}", _held(marker)).fetchone()[0]
 
     def restore_forget_pending(self, marker: str) -> int:
-        """Restore rows after a failed retirement."""
+        """Restore rows after a failed retirement; tagged rows get their own reason back."""
+        n = len(marker + FORGET_PREV_SEP)
         with closing(self._connect()) as db, db:
-            return db.execute(
+            restored = db.execute(
                 "UPDATE history SET invalidated_at = NULL, invalidation_reason = NULL WHERE invalidation_reason = ?",
                 (marker,),
             ).rowcount
+            db.execute(
+                f"UPDATE history SET invalidation_reason = NULLIF(substr(invalidation_reason, {n + 1}), '') "
+                "WHERE substr(invalidation_reason, 1, ?) = ?",
+                (n, marker + FORGET_PREV_SEP),
+            )
+            return restored
 
     def delete_forget_pending(self, marker: str) -> int:
         """Delete only the rows hidden before retirement, preserving its new harvest."""
         with closing(self._connect()) as db, db:
-            return db.execute("DELETE FROM history WHERE invalidation_reason = ?", (marker,)).rowcount
+            return db.execute(f"DELETE FROM history WHERE {_HELD}", _held(marker)).rowcount
 
     def forget_pending_markers(self) -> dict[str, str]:
         """Find interrupted history forgets for the orphan sweep."""
         with closing(self._connect()) as db:
-            return dict(db.execute(
+            rows = db.execute(
                 "SELECT invalidation_reason, MIN(invalidated_at) FROM history "
                 "WHERE substr(invalidation_reason, 1, ?) = ? GROUP BY invalidation_reason",
                 (len(FORGET_PENDING_PREFIX), FORGET_PENDING_PREFIX),
-            ).fetchall())
+            ).fetchall()
+        out: dict[str, str] = {}
+        for reason, at in rows:
+            marker = str(reason).split(FORGET_PREV_SEP, 1)[0]
+            if marker not in out or (at and str(at) < out[marker]):
+                out[marker] = str(at or "")
+        return out

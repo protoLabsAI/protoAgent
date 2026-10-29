@@ -312,3 +312,28 @@ def test_abort_gives_invalidated_history_its_own_reason_back(tmp_path):
 
     assert _reason(db, ids["archive"]) == ("2026-10-01T00:00:00+00:00", "operator-soft-delete")
     assert _reason(db, ids["summary"]) == (None, None)
+
+
+@pytest.mark.parametrize("abort", [False, True])
+def test_separate_databases_cover_already_invalidated_history(tmp_path, abort):
+    """The HistoryStore's own forget (plugin/commons knowledge in another file) tags
+    already-invalidated history like the shared-file path: finish deletes it, abort gives
+    it its own reason back."""
+    from graph.conversation_harvest import conversation_forget_store
+
+    store = KnowledgeStore(tmp_path / "commons.db")
+    private = tmp_path / "private.db"
+    hist = HistoryStore(private)
+    ids = _seed_history(hist)
+    _soft_delete(private, ids["archive"])
+    combined = conversation_forget_store(store, hist)
+
+    marker = begin_forget(combined, SESSION, THREADS)
+    assert marker and hist.count_forget_pending(marker) == 3
+    if abort:
+        abort_forget(combined, marker)
+        assert _reason(private, ids["archive"]) == ("2026-10-01T00:00:00+00:00", "operator-soft-delete")
+    else:
+        finish_forget(combined, marker)
+        assert _reason(private, ids["archive"]) is None
+    assert hist.forget_pending_markers() == {}
