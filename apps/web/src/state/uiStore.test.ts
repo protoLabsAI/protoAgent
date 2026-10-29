@@ -471,6 +471,33 @@ describe("openPluginConfig", () => {
   });
 });
 
+// openPluginsDiscover (#4570): the atomic "land Settings on Plugins ▸ Discover" opener behind
+// the "Discover plugins" command-palette entry (and Settings ▸ Plugins). The utility-bar pill
+// that used to call it was removed (#4643) for breaking the bar's layout, but the action — the
+// real contract the entry points share — stays. From a clean slate (Settings closed, default
+// section, Installed tab) one call must flip ALL of: open, the Plugins section (both the overlay
+// seed and the landing site), and the market (Discover) tab in the SAME set so Installed never
+// flashes first. (Previously pinned by DiscoverPluginsPill.test.tsx, deleted with the pill.)
+describe("openPluginsDiscover", () => {
+  beforeEach(() => {
+    useUI.setState({
+      globalSettingsOpen: false,
+      globalSettingsSection: undefined,
+      settingsSection: "identity",
+      pluginsTab: "local",
+    });
+  });
+
+  it("opens Settings on Plugins ▸ Discover (market) in one atomic set", () => {
+    useUI.getState().openPluginsDiscover();
+    const s = useUI.getState();
+    expect(s.globalSettingsOpen).toBe(true);
+    expect(s.globalSettingsSection).toBe("plugins"); // the overlay seed
+    expect(s.settingsSection).toBe("plugins"); // the authoritative landing section
+    expect(s.pluginsTab).toBe("market"); // Discover, not the default Installed
+  });
+});
+
 // showChatUsage (#2931): the per-turn token/cost footer under chat answers is OFF for fresh
 // installs. The initializer only applies when there is no persisted state — zustand/persist
 // hydrates existing installs from localStorage, so flipping the default never touches them
