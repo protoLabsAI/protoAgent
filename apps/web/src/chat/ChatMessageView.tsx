@@ -1,8 +1,12 @@
+import { Input } from "@protolabsai/ui/forms";
+import type { SessionFeedbackActions } from "./useSessionFeedback";
+import type { FeedbackTurn } from "../lib/api/feedback";
+
 import { Button, Card } from "@protolabsai/ui/primitives";
 import { Message, MessageAction, MessageActions } from "@protolabsai/ui/ai";
 import { Tooltip } from "@protolabsai/ui/overlays";
 import { Spinner } from "@protolabsai/ui/data";
-import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, CircleSlash, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, X } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Bot, CalendarClock, Check, ChevronDown, CircleSlash, Clock, Coins, Copy, FileText, GitBranch, Gauge, History, PauseCircle, RotateCcw, Sparkles, Timer, ThumbsUp, ThumbsDown, X } from "lucide-react";
 import { useState } from "react";
 
 import { useQuery } from "@tanstack/react-query";
@@ -40,6 +44,7 @@ import { readKey, writeKey } from "../lib/storage";
 // Optional per-message action row (copy / fork / regenerate). Omit it (e.g. the palette
 // chat) and no actions render. Each callback is independently optional.
 export type ChatMessageActions = {
+  feedback?: SessionFeedbackActions;
   copiedId?: string | null;
   // Session the message belongs to — lets View prompt (#2843) fetch the history
   // breakdown alongside the captured prompt.
@@ -418,7 +423,10 @@ export function ChatMessageView({
         </div>
       ) : null}
       {actions && message.role === "assistant" && !revealStreaming && message.content ? (
-        <MessageActions>
+        <MessageActions pinned={actions.feedback?.resolve(message)?.rating != null}>
+          {!actions.incognito && actions.feedback?.resolve(message) ? (
+            <FeedbackControls key={`${actions.sessionId}-${message.id}`} turn={actions.feedback.resolve(message)!} feedback={actions.feedback} />
+          ) : null}
           {actions.onCopy ? (
             <MessageAction
               label={actions.copiedId === message.id ? "Copied" : "Copy"}
@@ -454,6 +462,30 @@ export function ChatMessageView({
       ) : null}
     </Message>
   );
+}
+
+function FeedbackControls({ turn, feedback }: { turn: FeedbackTurn; feedback: SessionFeedbackActions }) {
+  const [editing, setEditing] = useState(false);
+  const [note, setNote] = useState("");
+  return <>
+    <MessageAction label="Thumbs up" icon={<ThumbsUp size={14} />} active={turn.rating === 1}
+      disabled={feedback.pending} onClick={() => { setEditing(false); void feedback.save(turn, turn.rating === 1 ? null : 1); }} />
+    <MessageAction label="Thumbs down" icon={<ThumbsDown size={14} />} active={turn.rating === 0}
+      disabled={feedback.pending} onClick={() => {
+        if (turn.rating === 0) { setEditing(false); void feedback.save(turn, null); }
+        else { setNote(""); setEditing(true); void feedback.save(turn, 0); }
+      }} />
+    {editing ? <form onSubmit={(event) => {
+      event.preventDefault();
+      if (feedback.pending) return;
+      void feedback.save(turn, 0, note);
+      setEditing(false);
+    }}>
+      <Input aria-label="Feedback note (optional)" placeholder="What could be better? (optional)" maxLength={500}
+        value={note} onChange={(event) => setNote(event.target.value)} />
+      <Button type="submit" size="xs" disabled={feedback.pending}>Save note</Button>
+    </form> : turn.rating === 0 && turn.note ? <span>{turn.note}</span> : null}
+  </>;
 }
 
 /** Whether a message's `component` is well-formed enough to render as a system-note card:
