@@ -63,16 +63,12 @@ def _build_list_verifiers_tool():
 
     @tool
     async def list_verifiers() -> str:
-        """List all verifier types and plugin checks registered on this instance.
+        # Core verifier types (command, test, ci, data, llm, plugin) are listed for awareness;
+        # only plugin checks are valid for the agent's own set_goal / create_watch.
+        """List verifier types and plugin checks registered on this instance.
 
-        Returns core verifier types (command, test, ci, data, llm, plugin) for your
-        AWARENESS — they exist and an operator can use any of them — then any
-        plugin-contributed checks with their <plugin-id>:<name> identifier and
-        description. Only the plugin-contributed checks are valid for YOUR set_goal
-        or create_watch calls; both tools accept a plugin verifier name only, never
-        a core type directly. If no plugin verifiers are registered, set_goal and
-        create_watch have nothing they can use yet — say so rather than trying one
-        of the core types, which will fail with "unknown plugin verifier".
+        Only the ``<plugin-id>:<name>`` plugin checks are valid for set_goal / create_watch — never a
+        core type. If none are registered, say so rather than trying a core type.
         """
         from graph.goals.verifiers import verifier_catalog
 

@@ -43,15 +43,9 @@ def _build_curation_tools(*, provenance_required: bool = False):
 
     @tool
     def recent_activity(limit: int = 30, window_hours: int = 168) -> str:
-        """Read-only digest of what the agent has recently DONE — for spotting
-        repeated workflows or durable facts worth consolidating.
-
-        Combines the Activity feed (recent assistant turns: time · origin ·
-        trigger · text) with a telemetry rollup (turn/tool/cost volume, per
-        model) over the last ``window_hours`` (default 7 days). Use this as the
-        primary evidence source for `/dream` and `/distill`. Purely read-only —
-        it never modifies anything.
-        """
+        # Combines the Activity feed (time · origin · trigger · text) with a telemetry rollup
+        # (turn/tool/cost volume per model) over ``window_hours``.
+        """Read-only digest of what the agent recently DID (activity + telemetry) — the primary evidence for `/dream` and `/distill`."""
         from datetime import datetime, timedelta, timezone
 
         from runtime.state import STATE
@@ -100,10 +94,7 @@ def _build_curation_tools(*, provenance_required: bool = False):
 
     @tool
     def list_skills() -> str:
-        """List every skill already in the index (name · source · confidence ·
-        description) so a distill/dream pass reuses or extends instead of
-        duplicating. Read-only.
-        """
+        """Read-only list of indexed skills (name · source · confidence · description) — check it so a distill/dream pass reuses rather than duplicates."""
         from runtime.state import STATE
 
         idx = STATE.skills_index
@@ -133,16 +124,12 @@ def _build_curation_tools(*, provenance_required: bool = False):
         source_session_id: str = "",
         state: Annotated[Any, InjectedState] = None,
     ) -> str:
-        """Create a NEW reusable skill (a procedure/playbook the agent will be
-        offered for matching tasks). ADDITIVE-ONLY — refuses if a skill with that
-        name already exists (it never overwrites; to revise an existing skill,
-        propose it for review instead). Use this only for high-confidence,
-        clearly-missing workflows during a `/distill` pass.
+        # Saved curator-managed: confidence decays if unused, so a mistaken capture self-cleans.
+        """Create a NEW skill during a `/distill` pass, only for a high-confidence, clearly missing workflow.
 
-        `name` is a short label, `description` a focused one-liner (what it does /
-        when to use it), `body` the procedure prompt, `tools` the tool names it
-        relies on. Saved as a curator-managed skill (confidence decays if it goes
-        unused), so a mistaken capture self-cleans rather than accumulating.
+        ADDITIVE-ONLY: refuses if the name exists (never overwrites — propose a revision for review
+        instead). ``description`` is a focused one-liner (what / when), ``body`` the procedure,
+        ``tools`` the tool names it relies on.
         """
         from runtime.state import STATE
 

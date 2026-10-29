@@ -89,20 +89,16 @@ log = logging.getLogger("protoagent.tools")
 
 @tool
 def ask_human(question: str) -> str:
-    """Pause and ask the human operator a question, then continue with their answer.
+    # Model-facing text is kept terse (it is sent on every model call). Maintainer notes:
+    # the turn pauses as A2A ``input-required`` until the operator answers. On autonomous
+    # turns (scheduled / inbox / background) the runtime auto-answers so the turn can't
+    # deadlock — the docstring still steers the model away from asking there.
+    """Pause and ask the human operator a free-text question; returns their answer.
 
-    Use this only when you genuinely need a human decision or a fact you cannot
-    determine yourself — an approval ("merge this PR?"), a missing input, or a
-    choice between options. The task pauses (surfaced to A2A callers as the
-    ``input-required`` state) until the operator answers; their reply is returned
-    from this call so you can continue. Do NOT use it for narration or status —
-    only for an answer you must wait on. Phrase ``question`` as a clear,
-    self-contained ask.
-
-    Autonomous turns (scheduled / inbox / background) have no operator watching the
-    chat, so don't block on a human here — prefer proceeding with your best judgment
-    and stating the assumption. (If you do ask on such a turn, the runtime
-    auto-answers it so the turn can't deadlock.)
+    Use only for an answer you must wait on (an approval, a missing input, a choice) —
+    never for narration or status. Make ``question`` self-contained. On autonomous turns
+    (scheduled / inbox / background) nobody is watching: proceed on your best judgment and
+    state the assumption instead. For structured fields use ``request_user_input``.
     """
     # LangGraph HITL: interrupt() checkpoints the graph at this exact point. On
     # resume (Command(resume=answer)) it returns the operator's reply. Requires a
@@ -115,41 +111,23 @@ def ask_human(question: str) -> str:
 
 @tool
 def request_user_input(title: str, steps: list[dict], description: str = "") -> str:
-    """Ask the operator for **structured** input via a form dialog, then continue
-    with their response. Use when you need specific values, choices, credentials,
-    or config — anything better captured as form fields than free text. The task
-    pauses (surfaced as ``input-required``) until they submit; their response (the
-    submitted fields, as a JSON object) is returned from this call.
+    # Maintainer notes (kept out of the model-facing docstring to save tokens): multiple
+    # steps render as a Back/Next wizard with a progress indicator and submit together as
+    # one object; a bare ``enum`` renders as a dropdown, ``oneOf`` of {const,title,
+    # description} as selectable cards; required fields gate Next/Submit; a ``default``
+    # prefills and counts as an answer. The turn pauses as ``input-required``; on
+    # autonomous turns the runtime auto-answers.
+    """Ask the operator for structured input via a form; returns the submitted fields as JSON.
 
-    ``steps`` is a list of form steps. Multiple steps render as a sequential
-    **wizard** (one step per screen with Back / Next and a progress indicator); the
-    operator advances through them and the final step submits every step's answers
-    together as one object. Use several steps to pace a longer series of questions;
-    use one step for a simple form. Each step is ``{"schema": <JSON Schema draft-07
-    of the step's fields>, "title"?: str, "description"?: str}`` — supply at least
-    one step that defines fields.
+    Use for specific values, choices, credentials or config. For one free-text or yes/no
+    question use ``ask_human``. Don't block on this in an autonomous turn.
 
-    Field types (per property in a step's ``schema.properties``):
-    - text / number / boolean → ``{"type": "string"|"number"|"integer"|"boolean"}``;
-      add ``"format": "textarea"`` for multi-line text.
-    - **single-choice cards** (preferred for "pick one of these") →
-      ``{"type": "string", "oneOf": [{"const": "pg", "title": "Postgres",
-      "description": "Durable, multi-writer"}, {"const": "sqlite", "title": "SQLite",
-      "description": "Zero-config"}]}``. Each option shows its label + description as
-      a selectable card. (A bare ``"enum": [...]`` renders as a plain dropdown.)
-    - **multi-choice cards** ("pick any") → wrap the same options in an array:
-      ``{"type": "array", "items": {"oneOf": [...]}}`` → the value is a list.
-    Mark a field required via the step schema's ``"required": [...]``; required
-    fields gate Next / Submit. A field's ``"default"`` prefills its answer — the
-    form opens with it filled in (choice cards render it selected) and a default
-    **counts as an answer**, so a required-with-default field doesn't gate: the
-    operator can submit your proposal untouched. Use defaults to propose values
-    you want confirmed or adjusted, not for fields they must actively decide.
-
-    Phrase the ask clearly and only request fields you actually need. For a single
-    free-text or yes/no question, use ``ask_human`` instead. As with ``ask_human``,
-    don't block on this in an autonomous turn — there may be no operator to submit
-    the form (the runtime auto-answers it there).
+    ``steps``: list of ``{"schema": <JSON Schema draft-07 object>, "title"?, "description"?}``
+    (at least one with fields; several = a wizard). Field shapes: ``string|number|integer|
+    boolean`` (``"format": "textarea"`` for multi-line); pick-one cards = ``{"type": "string",
+    "oneOf": [{"const": "a", "title": "A", "description": "…"}, ...]}``; pick-any = ``{"type": "array",
+    "items": {"oneOf": [...]}}``. Use ``"required": [...]`` to gate; a ``"default"`` prefills
+    and counts as an answer, so use it only for values you want confirmed.
     """
     import json
     from langgraph.types import interrupt
@@ -179,32 +157,20 @@ def request_user_input(title: str, steps: list[dict], description: str = "") -> 
 
 @tool
 def show_component(component: str, props: dict, title: str = "") -> str:
-    """Render structured data as a typed widget INLINE in the chat (ADR 0051).
+    # ADR 0051: data-only typed widgets rendered inline by the console's component registry
+    # (no sandbox). Custom visuals go through show_artifact's sandboxed panel instead.
+    """Render data as a typed widget inline in chat.
 
-    Pick this over a markdown blob when the data fits a curated shape — a comparison
-    ``table``, a ``keyvalue`` status/metrics block, or a ``timeline`` of steps. It renders
-    inline in your answer, data-only and safe (no sandbox).
-
-    For free-form or custom-rendered visuals — a chart, a Mermaid diagram, bespoke
-    HTML/React/SVG — use ``show_artifact`` instead (it renders generated CODE in a separate
-    sandboxed panel). Rule of thumb: a data SHAPE (table / metrics / steps) → this tool;
-    a generated VISUAL → an artifact.
+    Use for a data shape — a ``table``, ``keyvalue`` metrics, or a ``timeline`` of steps; for a
+    chart, diagram or custom HTML/SVG use ``show_artifact``. Also summarize the data in your reply.
 
     Args:
-        component: one of ``"table"``, ``"keyvalue"``, ``"timeline"``.
-        props: the component's data:
-            - table:    ``{"columns": ["A","B"], "rows": [["a1","b1"], ...]}``.
-                        Whenever the rows are NOT the user's own input — a web search, a
-                        fetched page, a file, a tool result — also pass ``"source"``: a short
-                        string (≤200 chars) naming where the rows came from, shown as a
-                        provenance caption so the user can see what they're trusting.
-            - keyvalue: ``{"items": [{"label": "Credits", "value": "183k"}, ...]}``
-            - timeline: ``{"steps": [{"label": "Buy hauler", "state": "done|active|todo",
-                          "detail": "…"}, ...]}``
-        title: optional heading shown above the component.
-
-    Renders immediately for the user; also briefly summarize the data in your text reply
-    (the component is a visual aid, not a substitute for your answer).
+        component: ``"table"``, ``"keyvalue"`` or ``"timeline"``.
+        props: table ``{"columns": [...], "rows": [[...]], "source"?}`` — pass ``source``
+            (≤200 chars, where the rows came from) whenever rows aren't the user's own input;
+            keyvalue ``{"items": [{"label": "…", "value": "…"}]}``; timeline ``{"steps":
+            [{"label": "…", "state": "done|active|todo", "detail": "…"}]}`` (``detail`` optional).
+        title: optional heading.
     """
     from graph.components import COMPONENT_TYPES, encode_component
 
@@ -223,15 +189,10 @@ def show_component(component: str, props: dict, title: str = "") -> str:
 @tool
 @with_fallback()
 async def current_time(timezone: str = "UTC") -> str:
-    """Return the current wall-clock time in the given IANA timezone.
+    """Return the current time (ISO-8601 + human-readable) in an IANA timezone.
 
-    Args:
-        timezone: An IANA timezone name (e.g. ``"UTC"``, ``"America/New_York"``,
-            ``"Europe/London"``, ``"Asia/Tokyo"``). Defaults to UTC.
-
-    Returns ISO-8601 with the timezone offset, plus a human-readable line.
-    Use this any time you need to reason about "now" — LLMs cannot
-    infer the current time from their training data.
+    Use whenever you reason about "now" — you can't infer it. ``timezone`` e.g. ``"UTC"``,
+    ``"America/New_York"``.
     """
     try:
         tz = ZoneInfo(timezone)
@@ -325,18 +286,11 @@ def _safe_eval(node: ast.AST, depth: int = 0) -> float | int:
 @tool
 @with_fallback()
 async def calculator(expression: str) -> str:
-    """Evaluate a numeric expression and return the result.
+    # Bounded (length / AST nodes / depth / integer bits) so oversized work errors before
+    # expensive exponentiation.
+    """Evaluate an arithmetic expression, e.g. ``"(100 - 12.5) / 7"``.
 
-    Supports ``+ - * / // % **`` and unary ``-``. No names, no function
-    calls, no variables — this is a pocket calculator, not a REPL.
-    Expression length, depth, operation count, and integer size are bounded;
-    oversized computations return an error before expensive exponentiation.
-
-    Args:
-        expression: A Python-style arithmetic expression, e.g.
-            ``"1 + 2 * 3"``, ``"(100 - 12.5) / 7"``, ``"2 ** 10"``.
-
-    Returns a string with the result, or a readable error.
+    Supports ``+ - * / // % **`` and unary ``-`` only — no names, calls or variables.
     """
     try:
         if len(expression) > _CALC_MAX_CHARS:
@@ -360,16 +314,9 @@ async def calculator(expression: str) -> str:
 @tool
 @with_fallback()
 async def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web via DuckDuckGo and return a list of result summaries.
+    """Search the web (DuckDuckGo); returns numbered ``title — url`` + snippet results.
 
-    Free, no API key required. Rate-limited by DuckDuckGo — don't hammer.
-
-    Args:
-        query: Search query string.
-        max_results: How many results to return (1–10, default 5).
-
-    Returns a numbered list of ``title — url\\nsnippet`` entries, or
-    a readable error if the search fails (network, rate-limit, etc.).
+    ``max_results`` 1–10. Rate-limited — don't hammer. Use ``fetch_url`` to read a result.
     """
     max_results = max(1, min(max_results, 10))
     try:
@@ -414,19 +361,9 @@ _MAX_OUTPUT_CHARS = 8000  # LLM context budget; callers can ask for a shorter li
 @tool
 @with_fallback()
 async def fetch_url(url: str, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
-    """Fetch a URL and return its main text content.
+    """Fetch an http(s) URL and return its main text (HTML stripped, PDFs decoded).
 
-    Strips scripts, styles, and HTML markup. PDF responses are decoded to
-    their text with pypdf instead of returning the raw byte stream.
-    Truncates at ``max_chars`` so a single fetch can't blow the LLM context
-    budget.
-
-    Args:
-        url: Absolute http(s) URL to fetch.
-        max_chars: Max characters of text to return (default 8000).
-
-    Returns the extracted text, or a readable error. Pairs with
-    ``web_search`` — search to find URLs, fetch to read them.
+    Output is truncated at ``max_chars``. Pairs with ``web_search``.
     """
     if not (url.startswith("http://") or url.startswith("https://")):
         return f"Error: url must start with http:// or https:// — got {url!r}"
@@ -715,21 +652,12 @@ def _build_inbox_tools(inbox_store) -> list:
 
     @tool
     async def check_inbox(priority_floor: str = "next", limit: int = 10) -> str:
-        """Pull pending inbound messages (webhooks, external systems, sister
-        agents) from the inbox and mark them delivered.
+        # Tiers: ``now`` items already fired a turn; ``next`` wait to be surfaced; ``later`` are
+        # background. Items returned are marked delivered.
+        """Pull pending inbound messages (webhooks, external systems, sister agents) and mark them delivered.
 
-        Inbound items arrive with a priority tier: ``now`` items already fired a
-        turn; ``next`` items wait for you to surface them; ``later`` items are
-        background. Call this when the operator asks "anything new?" or when the
-        conversation suggests checking for outside input.
-
-        Args:
-            priority_floor: ``"now"`` (now only), ``"next"`` (now + next, the
-                default), or ``"later"`` (everything pending).
-            limit: Max items to return (default 10).
-
-        Returns the items one per line, or ``"Inbox empty."`` when there's
-        nothing pending at that floor.
+        Use when asked "anything new?" or outside input seems relevant. ``priority_floor``:
+        ``"now"``, ``"next"`` (now + next) or ``"later"`` (everything).
         """
         floor = priority_floor if priority_floor in ("now", "next", "later") else "next"
         items = inbox_store.list(priority_floor=floor, limit=max(1, min(int(limit), 50)))
@@ -860,21 +788,15 @@ def _skill_tools_unavailable_note(tools_used) -> str:
 
 @tool
 def load_skill(name: str) -> str:
-    """Load the full step-by-step procedure for a skill.
+    # Progressive disclosure (ADR 0060): <available_skills> lists name + summary only.
+    # The skill's advisory ``Relevant tools`` are reconciled against the tools bound to the
+    # executing graph (``STATE.graph.bound_tools``) plus known host-config gates; missing
+    # ones are called out under ``Unavailable in this context:`` before the body (advisory —
+    # the full body still loads). Never raises; errors come back as strings.
+    """Load a skill's full procedure by its exact ``<skill name="…">`` from ``<available_skills>``.
 
-    The ``<available_skills>`` block in your context lists each skill as a name +
-    one-line summary (progressive disclosure, ADR 0060). This returns that skill's
-    complete body so you can follow it. Call it the moment you judge a listed skill
-    fits the task — *before* acting — and follow the steps it returns; do not guess
-    a skill's contents from its summary. ``name`` must match a ``<skill name="…">``
-    exactly. Returns an error string (it never raises) when the skill or the index
-    is unavailable.
-
-    The skill's advisory ``Relevant tools`` are reconciled up front against the tools
-    actually bound to the graph executing this call (``STATE.graph.bound_tools``) plus
-    the known host-config gates; any that are missing or configuration-refused are called
-    out under ``Unavailable in this context:`` before the procedure. The annotation is
-    advisory — the full body still loads (progressive disclosure is preserved).
+    Call it as soon as a listed skill fits — before acting — and follow the steps; don't guess
+    a skill from its summary.
     """
     from runtime.state import STATE
 
