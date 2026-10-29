@@ -35,6 +35,7 @@ class AppState:
     a2a_reaper_task: Any = None  # #3418 orphaned-WORKING A2A task reaper loop
     # Stores / registries bound into the active graph.
     knowledge_store: Any = None
+    history_store: Any = None  # Core SQLite, independent of plugin knowledge backends.
     skills_index: Any = None
     workflow_registry: Any = None  # set by the workflows plugin (None = plugin disabled)
     workflow_run: Any = None  # async (name, inputs, on_step) -> result; set by the workflows plugin

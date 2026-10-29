@@ -313,6 +313,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
         else:
             STATE.graph = None
             STATE.knowledge_store = None
+            STATE.history_store = None
             # Load plugins for their ROUTES + SURFACES even without a compiled
             # graph. The Connect Discord / Connect Google / Test-connection routes
             # are how the setup wizard *configures* the agent, so they must be
@@ -348,6 +349,7 @@ def _init_langgraph_agent(headless_setup: bool = False):
     # the worker subagent — the store is still cheap to construct.
     with _timed_boot_phase("knowledge_store", _boot_phases):
         STATE.knowledge_store = _build_knowledge_store(STATE.graph_config)
+        STATE.history_store = _build_history_store(STATE.graph_config)
 
     # Scheduler — the bundled local sqlite backend (or None when disabled).
     # Agent-tool surface: schedule_task / list_schedules / cancel_schedule.
@@ -523,6 +525,19 @@ def _init_langgraph_agent(headless_setup: bool = False):
         getattr(STATE.knowledge_store, "path", "(disabled)"),
         getattr(STATE.scheduler, "name", "disabled"),
     )
+
+
+def _build_history_store(config):
+    """Core history uses private agent.db, even with a plugin or commons KB."""
+    if not getattr(config, "knowledge_middleware", True):
+        return None
+    from knowledge.history import HistoryStore
+
+    try:
+        return HistoryStore(db_path=config.knowledge_db_path)
+    except Exception as exc:
+        log.warning("[server] history store init failed: %s; history unavailable", exc)
+        return None
 
 
 def _build_knowledge_store(config):
@@ -1196,6 +1211,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         next_scheduler = STATE.scheduler
 
     new_store = None
+    new_history_store = None
     new_skills = None
     new_mcp_clients, new_mcp_tools, new_mcp_meta = [], [], []
     new_plugin_tools, new_plugin_skill_dirs, new_plugin_meta = [], [], []
@@ -1213,6 +1229,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
         prior_workflow = (STATE.workflow_registry, STATE.workflow_run)
         try:
             new_store = _build_knowledge_store(new_config)
+            new_history_store = _build_history_store(new_config)
             # Plugins before MCP — a plugin's managed MCP server (e.g. Google)
             # is injected into the MCP discovery below (matches _main ordering).
             # Prompt-only rebuild (#3365): reuse the live bundle + MCP clients. Only
@@ -1345,6 +1362,7 @@ def _reload_langgraph_agent(*, reload_plugins: bool = True) -> tuple[bool, str]:
     except Exception:  # noqa: BLE001 — the mirror must never fail a reload
         log.exception("[config] host model-layer sync failed")
     STATE.knowledge_store = new_store
+    STATE.history_store = new_history_store
     STATE.skills_index = new_skills
     # Swap in the new MCP clients, then release the old ones — persistent session
     # pools hold live subprocesses that would otherwise leak on every reload. A
