@@ -45,6 +45,7 @@ vi.mock("./ChatMessageView", () => ({
 }));
 
 import { ChatTranscript } from "./ChatTranscript";
+import { STARTER_PROMPTS } from "./starterPrompts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -143,9 +144,56 @@ describe("ChatTranscript render isolation", () => {
     host.remove();
   });
 
+  async function renderEmpty(onStarterPrompt?: (text: string) => void) {
+    await act(async () => root.render(createElement(ChatTranscript, {
+      sessionId: "empty-session",
+      messages: [],
+      dismissedToolCalls,
+      actions,
+      steerQueue,
+      serverTurnLabel: null,
+      status: "idle",
+      onCancelDelegation: noop,
+      onDismissToolCall: noop,
+      onCancelSteer: noop,
+      onStarterPrompt,
+    })));
+  }
+
+  it("offers four starter prompts and a visible Claude Code prerequisite in an empty chat", async () => {
+    await renderEmpty(vi.fn());
+    expect(host.textContent).toContain("Try one of these");
+    expect(host.textContent).not.toContain("No messages in this session.");
+    const chips = host.querySelectorAll("button");
+    expect(chips).toHaveLength(4);
+    STARTER_PROMPTS.forEach(({ label }, index) => expect(chips[index].textContent).toContain(label));
+    expect(chips[3].textContent).toContain("Needs Claude Code installed");
+  });
+
+  it("passes each starter's full prompt to the composer callback without submitting", async () => {
+    const onStarterPrompt = vi.fn();
+    await renderEmpty(onStarterPrompt);
+    const chips = host.querySelectorAll<HTMLButtonElement>("button");
+    for (const [index, chip] of Array.from(chips).entries()) {
+      expect(chip.type).toBe("button");
+      await act(async () => chip.click());
+      expect(onStarterPrompt).toHaveBeenNthCalledWith(index + 1, STARTER_PROMPTS[index].prompt);
+    }
+    expect(onStarterPrompt).toHaveBeenCalledTimes(4);
+    expect(messageRender).not.toHaveBeenCalled();
+  });
+
+  it("renders inert starter chips when no callback is supplied", async () => {
+    await renderEmpty();
+    expect(host.querySelectorAll("button")).toHaveLength(0);
+    for (const { label } of STARTER_PROMPTS) expect(host.textContent).toContain(label);
+    expect(host.textContent).toContain("Needs Claude Code installed");
+  });
+
   it("does not render settled rows again when a long chat's draft changes", async () => {
     await act(async () => root.render(createElement(Harness)));
     expect(messageRender).toHaveBeenCalledTimes(150);
+    expect(host.textContent).not.toContain("Try one of these");
 
     const button = host.querySelector<HTMLButtonElement>("button")!;
     await act(async () => {

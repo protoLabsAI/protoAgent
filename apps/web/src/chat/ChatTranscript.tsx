@@ -1,4 +1,4 @@
-import { Empty } from "@protolabsai/ui/primitives";
+import { Chip, Empty } from "@protolabsai/ui/primitives";
 import { Spinner } from "@protolabsai/ui/data";
 import { Conversation, Message } from "@protolabsai/ui/ai";
 import { TerminalSquare } from "lucide-react";
@@ -10,6 +10,7 @@ import type { SessionStatus } from "./chat-store";
 import { ChatMessageView, type ChatMessageActions } from "./ChatMessageView";
 import { hideDismissedToolCalls } from "./dismissedToolCalls";
 import { useStreamFollow } from "./streamFollow";
+import { STARTER_PROMPTS } from "./starterPrompts";
 
 type ChatTranscriptProps = {
   sessionId: string;
@@ -24,6 +25,7 @@ type ChatTranscriptProps = {
   onCancelDelegation: (id: string) => void;
   onDismissToolCall: (id: string) => void;
   onCancelSteer: (id: string) => void;
+  onStarterPrompt?: (text: string) => void;
   /** Bumped on every send: re-pins the transcript to the bottom (it always follows a send). */
   followSignal?: number;
 };
@@ -85,6 +87,7 @@ export const ChatTranscript = memo(function ChatTranscript({
   onCancelDelegation,
   onDismissToolCall,
   onCancelSteer,
+  onStarterPrompt,
   followSignal = 0,
 }: ChatTranscriptProps) {
   const rootId = `pl-conv-${sessionId}`;
@@ -107,7 +110,17 @@ export const ChatTranscript = memo(function ChatTranscript({
     // follow scroll (B6) — `useStreamFollow` owns following and the jump button instead.
     <Conversation id={rootId} autoScroll={false}>
       {messages.length === 0 ? (
-        <Empty icon={<TerminalSquare />} description="No messages in this session." />
+        <Empty icon={<TerminalSquare />} title="Try one of these">
+          <div className="chat-starter-prompts" style={{ display: "grid", gap: 8, maxWidth: "100%", textAlign: "left" }}>
+            {STARTER_PROMPTS.map(({ label, prompt, note }) =>
+              onStarterPrompt ? (
+                <Chip key={label} block label={label} note={note} onClick={() => onStarterPrompt(prompt)} />
+              ) : (
+                <Chip key={label} block label={label} note={note} />
+              ),
+            )}
+          </div>
+        </Empty>
       ) : (
         messages.map((message) => (
           <TranscriptMessageRow

@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import { expandToolCard } from "./toolcard";
 
 import { seedCurrentChat } from "./chat-helpers";
+import { STARTER_PROMPTS } from "../src/chat/starterPrompts";
 
 // Drives the chat surface against the mock A2A stream and asserts the
 // tool-call card contract: stable collapsed-by-default rows, pretty-printed
@@ -32,6 +33,20 @@ test("Enter sends; Ctrl+Enter inserts a newline", async ({ page }) => {
   await composer.fill("hello there"); // plain Enter sends
   await composer.press("Enter");
   await expect(page.locator(".pl-message--user")).toHaveText(/hello there/);
+});
+
+test("empty chat starters fill an editable composer without sending", async ({ page }) => {
+  const composer = page.getByPlaceholder(/Message protoAgent/i);
+  await expect(page.getByText("Try one of these", { exact: true })).toBeVisible();
+  await expect(page.getByText("Needs Claude Code installed", { exact: true })).toBeVisible();
+  for (const { label, prompt, note } of STARTER_PROMPTS) {
+    await page.getByRole("button", { name: note ? `${label} ${note}` : label, exact: true }).click();
+    await expect(composer).toHaveValue(prompt);
+    await expect(page.locator(".pl-message--user")).toHaveCount(0);
+  }
+  await composer.fill("My edited starter prompt");
+  await expect(composer).toHaveValue("My edited starter prompt");
+  await expect(page.locator(".pl-message--user")).toHaveCount(0);
 });
 
 test("tool-call card is collapsed by default and renders structured components", async ({ page }) => {
