@@ -159,12 +159,17 @@ _link(
   },
   { kind: "global" },
 );
+// This IS the palette's "Discover plugins" command — it opens Settings on Plugins ▸ Discover
+// through the `plugins` deep-link, the same destination the utility-bar "Discover plugins" pill
+// reaches (#4570). It carries the pill's exact label as a keyword ("discover plugins") so typing
+// the phrase the console now SHOWS lands on this row, rather than shipping a second, duplicate
+// row — the registry's whole design is that one destination has one row (see the header).
 _link(
   {
     id: "plug:market",
     label: "Plugins: Discover",
     icon: glyph(Store),
-    keywords: ["plugins", "discover", "market", "directory", "browse"],
+    keywords: ["plugins", "discover", "discover plugins", "market", "directory", "browse"],
   },
   { kind: "plugins", tab: "market" },
 );

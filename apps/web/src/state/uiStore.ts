@@ -77,6 +77,14 @@ type UIState = {
   globalSettingsSection?: string;
   openGlobalSettings: (section?: string) => void;
   closeGlobalSettings: () => void;
+  // Open Settings directly on Plugins ▸ Discover — the one atomic action the utility-bar
+  // "Discover plugins" pill (and any other first-run entry point) runs. Opening Settings on
+  // the Plugins section is NOT enough on its own: `pluginsTab` defaults to "local" (Installed),
+  // so a bare `openGlobalSettings("plugins")` lands on Installed. This selects the "market"
+  // (Discover) tab in the SAME `set` so the dialog never flashes Installed first — mirroring
+  // the atomic openToolSettings / openPluginConfig openers, and the `plugins` palette deep-link
+  // (nav.ts) which already pairs setPluginsTab("market") with openGlobalSettings("plugins").
+  openPluginsDiscover: () => void;
   // Per-plugin Configure PANE (settings-ux C1, #4488 — supersedes ADR 0059's dialog on the
   // container), opened from the plugin manager, a plugin's own "Configure…", a rail context-menu
   // "Configure…" (ADR 0036), or a setup-gap banner. Selects the plugin's pane inside Settings ▸
@@ -374,6 +382,18 @@ export const useUI = create<UIState>()(
       // utility pill) lands on the plugin LIST, not a pane the operator already left — only a
       // fresh `openPluginConfig` deep-link re-selects one.
       closeGlobalSettings: () => set({ globalSettingsOpen: false, globalSettingsSection: undefined, configurePlugin: undefined }),
+      // Select the Discover tab AND open Settings on the Plugins section in ONE set — writing
+      // `settingsSection` too for the same landing-site reason openGlobalSettings does (so a
+      // repeat click while Settings already sits on Plugins still moves to Discover). The
+      // pluginsTab write is what makes "Discover" the opened tab rather than the default
+      // Installed one.
+      openPluginsDiscover: () =>
+        set({
+          pluginsTab: "market",
+          globalSettingsOpen: true,
+          globalSettingsSection: "plugins",
+          settingsSection: "plugins",
+        }),
       configurePlugin: undefined,
       // Select the plugin's pane AND open Settings on the Plugins section (mirrors
       // openToolSettings' atomic open) — the store creator exposes only `set`, so this writes
