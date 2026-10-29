@@ -65,13 +65,14 @@ def _invoke_grader(prompt: str, model: str | None) -> str:
     """
     from graph.config import LangGraphConfig
     from graph.llm import create_llm
+    from graph.message_blocks import text_of
     from langchain_core.messages import HumanMessage, SystemMessage
 
     config = LangGraphConfig.from_yaml(os.environ.get("PROTOAGENT_CONFIG", "config/langgraph-config.yaml"))
     grader_model = model or os.environ.get("EVAL_JUDGE_MODEL") or config.model_name
     llm = create_llm(config, model_name=grader_model)
     resp = llm.invoke([SystemMessage(_GRADER_SYSTEM), HumanMessage(prompt)])
-    return resp.content if isinstance(resp.content, str) else str(resp.content)
+    return text_of(resp)
 
 
 def _parse(raw: str, criteria: list[str]) -> RubricScore:

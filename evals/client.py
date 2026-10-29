@@ -54,6 +54,16 @@ class TaskResult:
     usage: dict = field(default_factory=dict)
     duration_ms: int = 0
     error: str | None = None
+    trace_id: str = ""
+
+
+def _trace_id(payload: dict) -> str:
+    """Read optional A2A trace metadata without requiring tracing."""
+    metadata = payload.get("metadata")
+    value = payload.get("trace_id")
+    if not value and isinstance(metadata, dict):
+        value = metadata.get("trace_id")
+    return value if isinstance(value, str) else ""
 
 
 def _resolve_auth_env() -> tuple[str, str]:
@@ -193,6 +203,7 @@ class AgentClient:
                 state=_norm_state((res.get("status") or {}).get("state", "")),
                 text=text,
                 artifacts=res.get("artifacts", []),
+                trace_id=_trace_id(res) or envelope_trace,
                 usage=usage,
                 duration_ms=int((time.time() - start) * 1000),
             )
@@ -218,7 +229,9 @@ class AgentClient:
             # SendMessage wraps the task in result.task (vs GetTask, which returns
             # the task directly at result). Non-streaming SendMessage blocks until
             # terminal, so the first response is usually already complete.
-            task = resp.get("result", {}).get("task", {})
+            envelope = resp.get("result", {})
+            task = envelope.get("task", {})
+            envelope_trace = _trace_id(task) or _trace_id(envelope)
             task_id = task.get("id", "")
             if _is_terminal((task.get("status") or {}).get("state", "")):
                 return _finish(task, task_id)
@@ -244,6 +257,7 @@ class AgentClient:
                 task_id=task_id,
                 state="timeout",
                 duration_ms=int((time.time() - start) * 1000),
+                trace_id=envelope_trace,
             )
 
     # ── SendStreamingMessage (SSE) ──────────────────────────────────────────
@@ -330,6 +344,7 @@ class AgentClient:
         final: TaskResult | None = None
         artifacts: list[dict] = []  # accumulated across artifactUpdate frames
         task_id = ""
+        trace_id = ""
         start = time.time()
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             async with client.stream("POST", f"{self.base_url}/a2a", headers=self.headers, json=payload) as r:
@@ -371,6 +386,7 @@ class AgentClient:
                     kind = next(iter(result), "?") if result else "?"
                     payload_obj = result.get(kind, {}) if kind != "?" else {}
                     events.append({"kind": kind, "result": payload_obj})
+                    trace_id = _trace_id(payload_obj) or trace_id
 
                     if kind == "task":
                         task_id = payload_obj.get("id", "") or task_id
@@ -406,13 +422,46 @@ class AgentClient:
                                 state=_norm_state(state) or "unknown",
                                 text=text,
                                 artifacts=artifacts,
+                                trace_id=trace_id,
                                 usage=usage,
                                 duration_ms=int((time.time() - start) * 1000),
                             )
                             break
         return events, final
 
+    async def trace_for_context(self, context_id: str, *, since: str) -> str:
+        """Best-effort bounded read from this server, never another local instance.
+
+        Recent rows are newest first. The start boundary avoids attaching a
+        previous turn when an explicit context is reused and this turn has no row.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=2) as client:
+                response = await client.get(
+                    f"{self.base_url}/api/telemetry/recent",
+                    headers=self.headers,
+                    params={"limit": 500},
+                )
+                response.raise_for_status()
+                for row in response.json().get("turns", []):
+                    if row.get("session_id") == context_id and row.get("ended_at", "") >= since:
+                        return _trace_id(row)
+        except Exception:
+            # Missing telemetry, auth, or tracing must not change an eval verdict.
+            pass
+        return ""
+
     # ── goal mode ─────────────────────────────────────────────────────────────
+
+    async def set_goal(self, session_id: str, spec: dict) -> dict:
+        """Set a verifier on the authenticated operator surface without auto-kick."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{self.base_url}/api/goals", headers=self.headers,
+                json={**spec, "session_id": session_id, "kick": False},
+            )
+            response.raise_for_status()
+            return response.json()
 
     async def get_goal(self, session_id: str) -> dict:
         """GET ``/api/goals/{session_id}`` → ``{enabled, goal}`` (goal is the
