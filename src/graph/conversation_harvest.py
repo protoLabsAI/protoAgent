@@ -194,6 +194,14 @@ def forget_conversation_memory(knowledge_store, session_id: str, thread_ids) -> 
             removed += int(by_source(f"{tid}:goal-iter-", source_types=_FORGET_SOURCE_TYPES, prefix=True) or 0)
     else:
         log.warning("[forget] knowledge store has no delete_by_source — harvested rows of %s kept", session_id)
+    # ADR 0125: the conversation `history` table shares agent.db; a chat delete must cover
+    # its archives/summaries too (reports stay, like chunk background_reports). The two-phase
+    # path covers history in one transaction; this one-step fallback does the same delete.
+    del_history = getattr(knowledge_store, "delete_history_for_session", None)
+    if callable(del_history):
+        removed += int(del_history(session_id, thread_ids) or 0)
+    else:
+        log.warning("[forget] knowledge store has no delete_history_for_session — history of %s kept", session_id)
     log.info("[forget] removed %d knowledge row(s) written by session %s", removed, session_id)
     return removed
 
@@ -225,7 +233,15 @@ def _forget_selection_kwargs(session_id: str, thread_ids) -> dict:
     sources = []
     for tid in dict.fromkeys(str(t) for t in thread_ids if t):
         sources += [(tid, False), (f"{tid}:goal-iter-", True)]
-    return {"namespace": f"chat-archive:{session_id}", "sources": sources, "source_types": _FORGET_SOURCE_TYPES}
+    # session_id / thread_ids additionally select the conversation `history` rows (ADR
+    # 0125), which the store hides/restores/deletes in the SAME transaction as the chunks.
+    return {
+        "namespace": f"chat-archive:{session_id}",
+        "sources": sources,
+        "source_types": _FORGET_SOURCE_TYPES,
+        "session_id": session_id,
+        "thread_ids": list(thread_ids),
+    }
 
 
 def begin_forget(knowledge_store, session_id: str, thread_ids) -> str | None:
