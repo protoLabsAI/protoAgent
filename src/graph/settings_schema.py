@@ -1223,6 +1223,36 @@ FIELDS: list[Field] = [
         "this slice only lands the config gate and binds no tool.",
     ),
     Field(
+        "tools.fleet_demo.enabled",
+        "tools_fleet_demo_enabled",
+        "Expose demo-agent tools to the model",
+        "bool",
+        "Tools",
+        "When on, the managing agent gets the fleet_demo_* tools to spin up throwaway demo "
+        "members. The tools only ever touch members they created (stamped `demo: true`) and "
+        "never a real fleet agent. Off by default.",
+    ),
+    Field(
+        "tools.fleet_demo.max_live",
+        "tools_fleet_demo_max_live",
+        "Demo agents: live cap",
+        "number",
+        "Tools",
+        "Most demo members allowed running at once; creating another is refused until one is "
+        "deleted or aged out.",
+        minimum=1,
+    ),
+    Field(
+        "tools.fleet_demo.ttl_hours",
+        "tools_fleet_demo_ttl_hours",
+        "Demo agents: TTL (hours)",
+        "number",
+        "Tools",
+        "How many hours a demo member lives before it is reaped; the reap runs before each new "
+        "demo is created.",
+        minimum=1,
+    ),
+    Field(
         "model_passthrough.allow_remote",
         "model_passthrough_allow_remote",
         "Allow remote callers",
