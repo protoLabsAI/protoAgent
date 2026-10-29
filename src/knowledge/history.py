@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Sequence
-from contextlib import closing
+import time
+from collections.abc import Iterator, Sequence
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -58,6 +59,10 @@ END;
 """
 
 
+#: Pauses between attempts to take the write lock, each attempt already waiting busy_timeout.
+_WRITE_LOCK_RETRY_S = (0.1, 0.3, 0.9)
+
+
 @dataclass
 class HistoryEntry:
     """One complete archive, summary or report; never a chunk."""
@@ -99,6 +104,31 @@ class HistoryStore:
             pass  # Like KnowledgeStore, allow reads on read-only mounts.
         return db
 
+    @contextmanager
+    def _write(self) -> Iterator[sqlite3.Connection]:
+        """One write transaction, begun IMMEDIATE (committed on success, rolled back on error).
+
+        IMMEDIATE takes the write lock before any statement runs, so lock contention
+        surfaces HERE, where nothing has been written and a retry is safe, instead of
+        mid-INSERT. Taking it gets a few bounded retries on top of ``busy_timeout``:
+        concurrent knowledge + history writers on short-lived connections still hit
+        "database is locked" past the timeout on Windows CI, and a history write that
+        fails is an archive the caller has to treat as lost."""
+        attempt = 0
+        while True:
+            db = self._connect()
+            try:
+                db.execute("BEGIN IMMEDIATE")
+                break
+            except sqlite3.OperationalError as exc:
+                db.close()
+                attempt += 1
+                if "locked" not in str(exc) or attempt > len(_WRITE_LOCK_RETRY_S):
+                    raise
+                time.sleep(_WRITE_LOCK_RETRY_S[attempt - 1])
+        with closing(db), db:
+            yield db
+
     def add(
         self,
         content: str,
@@ -116,7 +146,7 @@ class HistoryStore:
         invalidation_reason: str | None = None,
     ) -> int:
         """Persist one complete entry and return its id; raise on failure."""
-        with closing(self._connect()) as db, db:
+        with self._write() as db:
             cur = db.execute(
                 "INSERT INTO history (session_id, thread_id, surface, kind, heading, content, "
                 "span_start, span_end, created_at, namespace, invalidated_at, invalidation_reason) "
@@ -221,7 +251,7 @@ class HistoryStore:
         explicit operator act removes the row outright (ADR 0069 D9), any kind; it never
         reaches a row another forget has hidden (``invalidated_at IS NULL``). Returns
         whether a row was removed."""
-        with closing(self._connect()) as db, db:
+        with self._write() as db:
             return db.execute(
                 "DELETE FROM history WHERE id = ? AND invalidated_at IS NULL", (id,)
             ).rowcount > 0
@@ -236,7 +266,7 @@ class HistoryStore:
         where, params = _history_forget_where(session_id, thread_ids)
         if not where:
             return 0
-        with closing(self._connect()) as db, db:
+        with self._write() as db:
             return int(db.execute(f"DELETE FROM history WHERE ({where})", params).rowcount)
 
     def mark_forget_pending(self, marker: str, *, session_id="", thread_ids=(), **kwargs) -> int:
@@ -245,7 +275,7 @@ class HistoryStore:
         where, params = _history_forget_where(session_id, thread_ids)
         if not marker or not where:
             return 0
-        with closing(self._connect()) as db, db:
+        with self._write() as db:
             db.execute(
                 "UPDATE history SET invalidation_reason = ? || COALESCE(invalidation_reason, '') "
                 f"WHERE ({where}) AND invalidated_at IS NOT NULL "
@@ -266,7 +296,7 @@ class HistoryStore:
     def restore_forget_pending(self, marker: str) -> int:
         """Restore rows after a failed retirement; tagged rows get their own reason back."""
         n = len(marker + FORGET_PREV_SEP)
-        with closing(self._connect()) as db, db:
+        with self._write() as db:
             restored = db.execute(
                 "UPDATE history SET invalidated_at = NULL, invalidation_reason = NULL WHERE invalidation_reason = ?",
                 (marker,),
@@ -280,7 +310,7 @@ class HistoryStore:
 
     def delete_forget_pending(self, marker: str) -> int:
         """Delete only the rows hidden before retirement, preserving its new harvest."""
-        with closing(self._connect()) as db, db:
+        with self._write() as db:
             return db.execute(f"DELETE FROM history WHERE {_HELD}", _held(marker)).rowcount
 
     def forget_pending_markers(self) -> dict[str, str]:
