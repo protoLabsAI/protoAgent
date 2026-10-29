@@ -288,6 +288,41 @@ def test_score_trace_swallows_client_error():
     assert tracing.score_trace("trace-past", "friction", 0.0) is None
 
 
+def test_score_trace_forwards_a_pinned_score_id_for_upsert():
+    tracing = _reload_tracing()
+    fake, _s, _c = _enable_with_fake_client(tracing)
+    # A pinned score_id makes Langfuse upsert that exact score (re-rating replaces in
+    # place); it must reach create_score so the id is stable across submissions.
+    tracing.score_trace("trace-past", "user_feedback", 0.0, comment="meh", score_id="sid-1")
+    fake.create_score.assert_called_once_with(
+        trace_id="trace-past",
+        name="user_feedback",
+        value=0.0,
+        comment="meh",
+        score_id="sid-1",
+    )
+
+
+def test_delete_score_calls_the_client_delete():
+    tracing = _reload_tracing()
+    fake, _s, _c = _enable_with_fake_client(tracing)
+    tracing.delete_score("sid-1")
+    fake.api.legacy.score_v1.delete.assert_called_once_with("sid-1")
+
+
+def test_delete_score_is_silent_when_disabled_or_empty():
+    tracing = _reload_tracing()
+    # Disabled: no client, silent no-op.
+    assert tracing.delete_score("sid-1") is None
+    fake, _s, _c = _enable_with_fake_client(tracing)
+    # Empty id: nothing to delete, client untouched.
+    assert tracing.delete_score("") is None
+    fake.api.legacy.score_v1.delete.assert_not_called()
+    # Client error is swallowed.
+    fake.api.legacy.score_v1.delete.side_effect = RuntimeError("langfuse down")
+    assert tracing.delete_score("sid-1") is None
+
+
 # ── Fleet tracing: caller trace join (a2a.trace → trace_context) ─────────────
 
 _TID = "a" * 32  # valid W3C trace id (32 hex)

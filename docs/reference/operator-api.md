@@ -265,7 +265,23 @@ keeps the set beside the device token for its offline notice and **Move this pho
 | GET | `/api/telemetry/{summary,recent,export,insights}` | Cost/usage telemetry |
 | GET | `/api/usage/fleet` | Operator-only subscription usage, deduplicated by `account_key`; each account lists its member slugs and `members` reports reachability. The host reads its usual usage store; peers supply cached snapshots over the fleet proxy with paired bearers. Host snapshots take precedence. Member reads never poll (`/api/usage?cache_only=true`); cold caches report unknown and stale caches retain last-known windows. Unreachable peers do not fail the rollup. |
 | GET | `/api/telemetry/llm-lanes` | Model in-flight-limiter lane snapshot (ADR 0115) |
+| POST · GET | `/api/feedback` | Per-turn thumbs rating + Langfuse `user_feedback` score (ADR 0126 E2/D3) |
 | GET · PUT · DELETE | `/api/theme` | Read / set / clear the saved theme |
+
+`/api/feedback` ([ADR 0126](../adr/0126-eval-flywheel-traces-feedback-cases.md), operator-tier,
+same auth as its telemetry neighbours) records a thumbs up/down on one assistant turn.
+`POST` takes `{session_id, trace_id?, value: 1|0|null, note?, incognito?}`: it stores the
+rating in the telemetry store's `feedback` table (keyed by `session_id` + `trace_id`) and,
+when `trace_id` is present and tracing is live, mirrors it to Langfuse as a `user_feedback`
+score on that turn's past trace — pinned to a deterministic score id, so a second rating on
+the same turn **replaces** the first in both places rather than stacking. `value: null`
+un-rates: it deletes the local row **and** the mirrored Langfuse score. An `incognito`
+session is refused `409` and nothing is stored or scored; a request with no `trace_id`
+(tracing was off for that turn) is stored locally but not scored (`scored: false`). `GET
+/api/feedback?session_id=` returns `{enabled, tracing_enabled, turns: [{task_id, trace_id,
+created_at, rating, note}]}` — one entry per recorded turn leg, oldest first — so the
+console can map a rendered assistant message back to its trace (by `task_id`, else by turn
+order) and show which turns it has already rated.
 
 `GET /api/telemetry/llm-lanes` (operator-tier, same auth as its neighbours) returns the
 per-lane state of the model in-flight limiter ([ADR 0115](../adr/0115-gateway-inflight-limiter.md),

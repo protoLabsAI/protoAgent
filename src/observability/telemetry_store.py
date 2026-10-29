@@ -156,6 +156,29 @@ class TelemetryStore:
                     pass  # column already present
             self._migrate_to_row_id(db)  # #3001 — must run after the ADD COLUMNs above
             db.execute("CREATE INDEX IF NOT EXISTS ix_turns_task ON turns(task_id)")
+            # Per-turn user feedback (ADR 0126 E2 / D3): a thumbs rating on one turn,
+            # keyed by (session_id, trace_id). trace_id is the turn's Langfuse id — the
+            # same stable handle the console joins a rendered message to via the turns
+            # table — so a rating replaces cleanly and maps back to exactly one trace.
+            # When tracing is off a turn carries no trace_id, so the key degrades to
+            # (session_id, '') and the local rating is per-session rather than per-turn;
+            # un-traced feedback has no Langfuse identity to score against anyway.
+            db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS feedback (
+                    session_id  TEXT NOT NULL,
+                    trace_id    TEXT NOT NULL DEFAULT '',
+                    value       INTEGER,
+                    note        TEXT,
+                    created_at  TEXT,
+                    PRIMARY KEY (session_id, trace_id)
+                )
+                """
+            )
+            # The session-scoped read GET /api/feedback does (and the feedback join) scans
+            # turns by session_id, which had no index — cheap, additive, and the only new
+            # query shape this table introduces.
+            db.execute("CREATE INDEX IF NOT EXISTS ix_turns_session ON turns(session_id)")
             db.commit()
         finally:
             db.close()
@@ -612,6 +635,69 @@ class TelemetryStore:
             cur = db.execute("DELETE FROM turns WHERE ended_at < ?", (cutoff,))
             db.commit()
             return cur.rowcount
+        finally:
+            db.close()
+
+    # --- Per-turn user feedback (ADR 0126 E2 / D3) -------------------------------------
+
+    def set_feedback(self, *, session_id: str, trace_id: str, value: int, note: str, created_at: str) -> None:
+        """Store (or replace) one turn's thumbs rating. INSERT OR REPLACE on the
+        (session_id, trace_id) primary key, so a second rating on the same turn
+        overwrites the first rather than stacking a row."""
+        db = self._connect()
+        try:
+            db.execute(
+                "INSERT OR REPLACE INTO feedback (session_id, trace_id, value, note, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (session_id, trace_id or "", int(value), note or "", created_at),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+    def delete_feedback(self, *, session_id: str, trace_id: str) -> int:
+        """Un-rate a turn — delete its feedback row. Returns rows removed (0 when the
+        turn was never rated, which is a no-op, not an error)."""
+        db = self._connect()
+        try:
+            cur = db.execute(
+                "DELETE FROM feedback WHERE session_id = ? AND trace_id = ?",
+                (session_id, trace_id or ""),
+            )
+            db.commit()
+            return cur.rowcount
+        finally:
+            db.close()
+
+    def session_feedback(self, session_id: str) -> list[dict]:
+        """Every recorded turn in ``session_id`` with its trace_id and current rating,
+        oldest first — the one call the console needs to map a rendered assistant message
+        to its trace and show which turns it has rated.
+
+        One row per turn LEG (same granularity as the turns table), LEFT JOINed onto the
+        feedback table by (session_id, trace_id), so an unrated turn comes back with
+        ``rating``/``note`` NULL. Ordered by ``created_at`` then ``row_id`` so the Nth row
+        is the Nth turn — the console's fallback join when a message carries no task_id.
+        """
+        db = self._connect()
+        try:
+            rows = db.execute(
+                """
+                SELECT t.task_id                 AS task_id,
+                       COALESCE(t.trace_id, '')  AS trace_id,
+                       t.created_at              AS created_at,
+                       f.value                   AS rating,
+                       f.note                    AS note
+                FROM turns t
+                LEFT JOIN feedback f
+                       ON f.session_id = t.session_id
+                      AND f.trace_id = COALESCE(t.trace_id, '')
+                WHERE t.session_id = ?
+                ORDER BY t.created_at ASC, t.row_id ASC
+                """,
+                (session_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
         finally:
             db.close()
 

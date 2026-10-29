@@ -721,6 +721,7 @@ def _main():
     from operator_api.plugin_routes import register_plugin_routes
     from operator_api.mcp_routes import register_mcp_routes
     from operator_api.routes import register_operator_routes
+    from operator_api.feedback_routes import register_feedback_routes
     from operator_api.telemetry_routes import register_telemetry_routes
     from operator_api.trajectory_routes import register_trajectory_routes
     from operator_api.usage_routes import register_usage_routes
@@ -1217,6 +1218,10 @@ def _main():
     # Per-turn cost/latency + advise-only insights (ADR 0006). Extracted to
     # operator_api/telemetry_routes.py (ADR 0023 phase 3).
     register_telemetry_routes(fastapi_app)
+    # Per-turn user feedback (ADR 0126 E2 / D3) — POST/GET /api/feedback stores a thumbs
+    # rating and writes a Langfuse user_feedback score on that turn's trace. Same operator
+    # auth as its telemetry neighbours (the default-deny /api/* middleware).
+    register_feedback_routes(fastapi_app)
     # Subscription-usage read surface (ADR 0122 D6) — GET /api/usage over the
     # on-demand observability/usage_store cache + the usage.snapshot op.
     register_usage_routes(fastapi_app)
