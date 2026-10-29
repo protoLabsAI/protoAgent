@@ -2,9 +2,21 @@
 // perfView.ts. Same data as the Settings ▸ Providers meters (`GET /api/usage`, ADR 0122),
 // just chat-native: one line per window, every connected subscription.
 
-import type { UsageSnapshot, UsageWindow } from "../lib/queries";
+import type { UsageSnapshot as ApiUsageSnapshot, UsageWindow } from "../lib/queries";
 
-const ACCOUNT_LABEL: Record<string, string> = {
+export type UsageSnapshot = Omit<ApiUsageSnapshot, "accounts"> & {
+  fetched_at?: string;
+  accounts: (ApiUsageSnapshot["accounts"][number] & { fetched_at?: string })[];
+};
+
+/** Local, zero-padded 24-hour time. */
+export function clockTime(ms: number): string {
+  const date = new Date(ms);
+  return [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+export const ACCOUNT_LABEL: Record<string, string> = {
   "anthropic-oauth": "Claude subscription",
   "openai-codex": "ChatGPT / Codex subscription",
 };
@@ -42,13 +54,14 @@ export function windowLine(w: UsageWindow, now: number): string {
 /** The /usage system note. An account the provider told us nothing about says so
  *  rather than disappearing. */
 export function usageNoteMarkdown(snapshot: UsageSnapshot | null, now: number = Date.now()): string {
+  const header = `**Subscription usage** · checked ${clockTime(now)}`;
   const accounts = snapshot?.accounts ?? [];
-  if (!accounts.length) return "**Subscription usage**\n\nNo Claude or ChatGPT / Codex subscription is connected.";
+  if (!accounts.length) return `${header}\n\nNo Claude or ChatGPT / Codex subscription is connected.`;
   const blocks = accounts.map((a) => {
     const name = `**${ACCOUNT_LABEL[a.provider_id] ?? a.provider_id}**`;
     if (a.status !== "ok" || !a.windows?.length) return `${name}\n- Usage unavailable`;
     const stale = a.stale ? " (last known, refresh failed)" : "";
     return `${name}${stale}\n${a.windows.map((w) => `- ${windowLine(w, now)}`).join("\n")}`;
   });
-  return `**Subscription usage**\n\n${blocks.join("\n\n")}`;
+  return `${header}\n\n${blocks.join("\n\n")}`;
 }
