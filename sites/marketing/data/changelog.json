@@ -1,5 +1,21 @@
 [
   {
+    "version": "v0.222.0",
+    "date": "2026-10-30",
+    "changes": [
+      "Nightly eval gate (#4600).",
+      "Promote turns to instance eval cases (#4603).",
+      "Per-instance eval cases (#4603).",
+      "Demo-agent settings (#4609).",
+      "Demo-agent LLM tools (#4609).",
+      "The nightly eval gate can record regressions in a chosen ledger (#4640).",
+      "Two eval gate cases test what they claim to (#4639).",
+      "A2A turns record their Langfuse trace id again (#4641).",
+      "Console: removed the \"Discover plugins\" button from the bottom utility bar (#4643).",
+      "Model passthrough guide (#4608)."
+    ]
+  },
+  {
     "version": "v0.221.0",
     "date": "2026-10-29",
     "changes": [

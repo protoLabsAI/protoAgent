@@ -15,6 +15,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.222.0] - 2026-10-30
+
+### Added
+- **Nightly eval gate (#4600).** `scripts/evals_nightly.py` sweeps the default config's model on a throwaway instance (ADR 0004, never a live agent's data), writes a marked `run-nightly-<ts>.json` report to `evals/results/`, and compares the **gate tier** (ADR 0126 D1) with the previous nightly. A gate case that passed last night and fails now records exactly one `harness` friction entry (source `evals-nightly`, stable summary `nightly gate regression: <case id>`, report path + trace link in the detail) through the friction plugin's `record_service`, written to the ledger of the instance the script runs under; tracked-tier changes record nothing. A gate case that flips pass/fail twice within the last 7 nightlies is printed as flaky with "demote to tracked or fix" — nothing auto-demotes. `docs/guides/evals.md` documents the tiers, the script, the eval-case guardrail, and a launchd/cron schedule recipe (installing the schedule is an operator step on the host).
+
+- **Promote turns to instance eval cases (#4603).** Operators can draft a case from a rated or friction-carrying turn with its stored prompt, then explicitly save validated assertions to the instance suite. Incognito turns and duplicate ids are refused. Drafts recover tool evidence from the retained audit rotation; missing evidence requires an operator-authored assertion instead of implying that no tools fired.
+
+- **Per-instance eval cases (#4603).** The eval runner now loads core `evals/tasks.json` plus the target instance's own `<config dir>/evals/cases.json` when that file exists, so a domain agent can carry its own eval suite without forking `evals/`. Instance case ids are namespaced `instance:<id>` (no collision with core ids), `--tasks instance:<id>` selects one, and a malformed `cases.json` fails with an error naming the file. `evals.sweep` / `scripts/evals_nightly.py` run the instance cases too: the sweep's runner subprocess boots on a throwaway instance (no `cases.json` of its own), so the sweep resolves the operator instance's file and hands it to the child via `--instance-cases`. `evals.report` shows instance cases under their own `## Instance cases` heading, split by tier, and keeps them out of the core leaderboard/trend gate figures. Absent file → behaviour unchanged.
+
+- **Demo-agent settings (#4609).** New `tools.fleet_demo.enabled` (default off) gates the
+  demo-agent tools, with `tools.fleet_demo.max_live` (3) capping live demo members and
+  `tools.fleet_demo.ttl_hours` (24) aging them out. All three surface in Settings ▸ Tools, and
+  the two limits flow into the demo create/reap path. The tools only ever touch members they
+  created (stamped `demo: true`), never a real fleet agent.
+
+- **Demo-agent LLM tools (#4609).** New `fleet_demo_create` / `fleet_demo_configure` / `fleet_demo_chat` / `fleet_demo_delete` / `fleet_demo_list` tools for a managing agent, every op routed through the `demo: true` stamp guard so they can only ever touch throwaway demo members — never a real fleet agent. `fleet_demo_chat` reaches the member's `/api/chat` through the hub's own loopback proxy (the member's scoped token stays server-side and never appears in tool output). Config-gated by `tools.fleet_demo.enabled`, default off. Operational failures from all five tools return structured errors; a busy workspace reports retryable incomplete removal, and a member reaped during an operation returns the demo refusal.
+
+- **The nightly eval gate can record regressions in a chosen ledger (#4640).** `scripts/evals_nightly.py --friction-log PATH` routes gate-regression friction to a ledger the fleet actually reads, such as a desktop member's. The throwaway sweep agent never inherits it.
+
+### Fixed
+- **Two eval gate cases test what they claim to (#4639).** `calculator_intent` asks for arithmetic the tool is actually needed for, instead of a sum the model answers correctly in its head. `memory_recall_intent` asserts the answer rather than a `memory_recall` call the runtime no longer needs, because the fact is already injected into the prompt.
+
+- **A2A turns record their Langfuse trace id again (#4641).** The stall guard ran each step of a turn in a fresh copy of the context, so the trace id never reached the executor, and every A2A turn's telemetry row had none. Turns now link to their traces, which the console's feedback scores and the nightly eval's per-case trace links depend on.
+
+- **Console: removed the "Discover plugins" button from the bottom utility bar (#4643).**
+  The labelled text button added in #4588 was wider and taller than every other control in
+  the bar — all compact icon pills — and broke the bar's layout. Discover stays reachable
+  from the command palette ("Discover plugins") and from Settings ▸ Plugins.
+
+### Docs
+- **Model passthrough guide (#4608).** Document direct model calls, tool-call responses, authentication, remote access, usage attribution, and the tool-selection eval example, with a link in the guides navigation.
+
 ## [0.221.0] - 2026-10-29
 
 ### Added
