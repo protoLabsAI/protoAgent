@@ -227,6 +227,27 @@ def _session_seed_steps(
     return steps
 
 
+def _seed_instance_dir(instance: str, seed_from_dir: Path) -> None:
+    """Copy a prepared seed tree into an arm's fresh instance root BEFORE it boots.
+
+    The seam ``scripts/evals_ab.py`` needs (ADR 0126 D6): the caller hands over a
+    directory it has already built as a COPY of some source instance's learned
+    stores (memories, private skills), and this lands that copy where the arm's
+    agent will read it — ``instance_root/<store>``, resolved the way the arm
+    resolves its own paths. A real recursive copy, never a symlink, so the arm owns
+    its data outright and the booted agent has no path back to the source.
+    """
+    root = _instance_root(instance)
+    root.mkdir(parents=True, exist_ok=True)
+    for child in sorted(Path(seed_from_dir).iterdir()):
+        dest = root / child.name
+        if child.is_dir():
+            shutil.copytree(child, dest, symlinks=False, dirs_exist_ok=True)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(child, dest)
+
+
 def _cleanup_instance(instance: str) -> None:
     for p in _instance_dirs(instance):
         if p.exists():
@@ -299,6 +320,7 @@ def _run_one_model(
     prior_sessions: str | None = None,
     seed_steps: list[dict] | None = None,
     instance_cases: Path | None = None,
+    seed_from_dir: Path | None = None,
 ) -> list[dict] | None:
     """Boot one agent on ``model`` and run the suite ``repeat`` times against
     it; return the list of report dicts (empty if the agent never came up).
@@ -323,6 +345,11 @@ def _run_one_model(
             print(f"  ✗ no seed config for prior_sessions={prior_sessions} — skipping this arm")
             return None
         env["PROTOAGENT_SEED_CONFIG"] = str(seed_cfg)
+    # A learned-store seed (scripts/evals_ab.py arm B) also lands BEFORE boot, so the
+    # copied memories/skills are already on disk when the agent compiles its graph.
+    if seed_from_dir:
+        _seed_instance_dir(instance, Path(seed_from_dir))
+        print(f"  · seeded instance dir from {seed_from_dir}")
     # Fixtures land BEFORE boot: the digest pool is cached per process (60 s), so a
     # summary written after boot may be missing from the first turns' digest — which
     # would quietly measure the cache instead of the policy.  (The one statement of
@@ -511,8 +538,17 @@ def main(argv: list[str] | None = None) -> int:
             "separate arms — the #3186 A/B. Empty (default) = leave the config alone."
         ),
     )
+    p.add_argument(
+        "--seed-from-dir",
+        default=None,
+        help=(
+            "copy this directory's contents into each arm's fresh instance root before boot "
+            "(the learned-store seed seam scripts/evals_ab.py uses). Default: seed nothing."
+        ),
+    )
 
     args = p.parse_args(argv)
+    seed_from_dir = Path(args.seed_from_dir) if args.seed_from_dir else None
 
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     if not models:
@@ -572,6 +608,7 @@ def main(argv: list[str] | None = None) -> int:
             prior_sessions=policy,
             seed_steps=seed_steps,
             instance_cases=instance_cases,
+            seed_from_dir=seed_from_dir,
         )
         if runs:
             model_runs[label] = runs
