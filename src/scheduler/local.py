@@ -345,6 +345,9 @@ class LocalScheduler:
     spawn the polling task, ``await scheduler.stop()`` on shutdown.
     The agent-facing tools call ``add_job`` / ``cancel_job`` /
     ``list_jobs`` synchronously.
+
+    External job producers should set ``adopt_existing_jobs=False``: a store
+    owned by a different agent then raises instead of renaming the server's jobs.
     """
 
     name = "local"
@@ -362,6 +365,7 @@ class LocalScheduler:
         bearer_token: str | None = None,
         db_dir: str | Path | None = None,
         event_publish=None,
+        adopt_existing_jobs: bool = True,
     ):
         self.agent_name = agent_name
         self._invoke_url = invoke_url.rstrip("/")
@@ -386,7 +390,7 @@ class LocalScheduler:
             self._fire_timeout_s = float(os.environ.get("SCHEDULER_FIRE_TIMEOUT_S", "600"))
         except ValueError:
             self._fire_timeout_s = 600.0
-        self._init_db()
+        self._init_db(adopt_existing_jobs=adopt_existing_jobs)
 
     # ── DB plumbing ─────────────────────────────────────────────────────────
 
@@ -400,7 +404,7 @@ class LocalScheduler:
             log.debug("[scheduler] WAL skipped: %s", exc)
         return db
 
-    def _init_db(self) -> None:
+    def _init_db(self, *, adopt_existing_jobs: bool = True) -> None:
         try:
             db = self._connect()
             db.executescript(_SCHEMA)
@@ -444,6 +448,16 @@ class LocalScheduler:
                 db.execute("ALTER TABLE jobs ADD COLUMN fence TEXT")
             except sqlite3.OperationalError:
                 pass  # column already present
+            # External producers must not rename a live server's jobs. Refuse a
+            # mismatched identity rather than enqueue work its poll cannot see.
+            if not adopt_existing_jobs:
+                mismatch = db.execute(
+                    "SELECT 1 FROM jobs WHERE agent_name IS NOT ? LIMIT 1",
+                    (self.agent_name,),
+                ).fetchone()
+                if mismatch:
+                    db.close()
+                    raise ValueError("scheduler store belongs to a different agent; check target identity")
             # Re-key rows written under a previous display name (#2382). Every jobs.db is
             # single-agent by construction — the path carries either the constant segment or
             # the agent's own name segment — so every row in THIS file is ours, whatever name
@@ -451,12 +465,13 @@ class LocalScheduler:
             # `update` and `delete` all filter `WHERE agent_name = ?`, so a renamed agent would
             # open the right database and still see an empty schedule.
             try:
-                n = db.execute(
-                    "UPDATE jobs SET agent_name = ? WHERE agent_name IS NOT ?",
-                    (self.agent_name, self.agent_name),
-                ).rowcount
-                if n:
-                    log.info("[scheduler] adopted %d job(s) written under a previous agent name", n)
+                if adopt_existing_jobs:
+                    n = db.execute(
+                        "UPDATE jobs SET agent_name = ? WHERE agent_name IS NOT ?",
+                        (self.agent_name, self.agent_name),
+                    ).rowcount
+                    if n:
+                        log.info("[scheduler] adopted %d job(s) written under a previous agent name", n)
             except sqlite3.DatabaseError:
                 log.exception("[scheduler] re-keying jobs to %r failed at %s", self.agent_name, self.path)
             db.commit()

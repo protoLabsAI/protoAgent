@@ -305,7 +305,7 @@ def _triage_scheduler():
         name = os.environ.get("AGENT_NAME", "protoagent")
     # This object only persists jobs. The server's scheduler supplies its own URL
     # and authentication when it polls the same store.
-    return LocalScheduler(agent_name=name, invoke_url="")
+    return LocalScheduler(agent_name=name, invoke_url="", adopt_existing_jobs=False)
 
 
 def trigger_triage(case_ids: list[str], report_path: str | Path, *, scheduler=None) -> None:

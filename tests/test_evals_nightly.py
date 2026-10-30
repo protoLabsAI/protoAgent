@@ -626,3 +626,39 @@ def test_triage_scheduler_respects_disabled(monkeypatch, config_enabled, env_dis
     monkeypatch.setenv("SCHEDULER_DISABLED", env_disabled)
     with pytest.raises(RuntimeError, match="scheduler is disabled"):
         _scheduler_factory()
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("nightly_name", ["server-agent", None])
+def test_triage_preserves_live_scheduler_ownership(tmp_path, monkeypatch, capsys, nightly_name):
+    from graph.config import LangGraphConfig
+    from scheduler import LocalScheduler
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path))
+    monkeypatch.delenv("SCHEDULER_DB_DIR", raising=False)
+    monkeypatch.delenv("SCHEDULER_DISABLED", raising=False)
+    if nightly_name:
+        monkeypatch.setenv("AGENT_NAME", nightly_name)
+    else:
+        monkeypatch.delenv("AGENT_NAME", raising=False)
+    monkeypatch.setattr(
+        LangGraphConfig, "from_yaml",
+        lambda path: SimpleNamespace(identity_name="protoagent", scheduler_enabled=True),
+    )
+    server = LocalScheduler("server-agent", invoke_url="")
+    existing = server.add_job("existing reminder", "2099-01-01T00:00:00+00:00")
+    monkeypatch.setattr(nightly, "_triage_scheduler", _scheduler_factory)
+
+    nightly.trigger_triage(["calc"], "report.json")
+
+    # Inspect through the original server: reopening would hide the bug by
+    # adopting all rows back to the server's name.
+    jobs = server.list_jobs()
+    assert server.get_job(existing.id) == existing
+    assert all(job.agent_name == "server-agent" for job in jobs)
+    if nightly_name == "server-agent":
+        assert len(jobs) == 2
+        assert any("eval_regression_triage" in job.prompt for job in jobs)
+    else:
+        assert jobs == [existing]
+        assert "different agent" in capsys.readouterr().err
