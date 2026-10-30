@@ -1,5 +1,10 @@
 # Run a console flow
 
+Prerequisites: install the workspace dependencies with `npm ci` at the repository
+root (npm 11 or newer), then run `npx playwright install chromium` from `apps/web`.
+Run the commands below from `apps/web`. A successful run exits with a passing
+Playwright test and writes screenshots plus a `summary.json` with `ok: true`.
+
 A **flow** is a named, versioned Playwright script of operator-console UI steps —
 "open the console, open Fleet, create a Career Coach agent, land on its page". Flows
 live beside the console's end-to-end specs in `apps/web/e2e/flows/`, as
@@ -48,7 +53,7 @@ as the base:
 
 ```bash
 FLOW_BASE_URL=http://127.0.0.1:7871 \
-FLOW_TOKEN=<operator token> \
+FLOW_TOKEN='replace-with-operator-token' \
 FLOW_OUT_DIR=/tmp/flow-out \
 npx playwright test --project=flows
 ```
@@ -71,6 +76,10 @@ The three environment variables:
 > fleet, so use the sandbox dev instance (`:7871`, see
 > [Run two instances](/guides/multi-instance)), not production.
 
+The target must serve a built console and offer the Career Coach archetype. Cleanup
+is a final step, not a `finally` hook: an earlier failure skips it and can leave the
+created agent behind. Check the verdict and remove only that run's agent if needed.
+
 ## Output layout
 
 Each run writes, under `<FLOW_OUT_DIR>/<flow-name>/`:
@@ -89,8 +98,10 @@ Each run writes, under `<FLOW_OUT_DIR>/<flow-name>/`:
   1-based) with the step name slugified (lowercased, non-alphanumerics collapsed to
   `-`). A step that fails still gets its screenshot if the page is reachable; steps
   after the first failure are skipped and produce no screenshot.
-- **`summary.json`** — the machine-readable verdict. A retry clears the previous
-  `summary.json` and screenshots first, so the directory never mixes attempts.
+- **`summary.json`** — the machine-readable verdict. Each run clears the previous
+  `summary.json` and screenshot filenames for its current steps first. Files from
+  older step names or versions may remain; use a fresh `FLOW_OUT_DIR` for each run
+  whose evidence you want to retain, and use the summary to identify its screenshots.
 
 `summary.json` fields:
 
@@ -112,11 +123,13 @@ Each `steps[]` entry:
 | `status` | `"pass"`, `"fail"`, or `"skipped"` (steps after the first failure). |
 | `ms` | Step duration in milliseconds. |
 | `screenshot` | The `NN-<step>.png` filename, or `null` if none was captured. |
-| `error` | Failure message (token-redacted); omitted when the step passed. |
+| `error` | Failure message (token-redacted); omitted for passed or skipped steps. |
 
 The first failing step stops the run — later steps stay `skipped` with `ms: 0` and no
 screenshot — and `summary.json` is written either way, so a failed run still leaves the
-screenshot and error that explain it.
+screenshot (when capture succeeds) and error that explain it. A screenshot failure
+also fails the step. Validation or output-directory setup errors before the step loop
+can prevent a summary from being written.
 
 ## Run a flow from a board execution task
 
@@ -158,8 +171,9 @@ then removes a real agent. For the board delivery loop this builds on, see
 2. If a flow must behave differently in mock vs live (for example, create a real agent
    live but a routed stub in mock, and only tear down live), keep it as a factory that
    takes a `live` boolean and returns the `Flow` — this is how
-   `careercoach.ts` adds its live-only "Delete created agent" step. `defineFlow` passes
-   `live = !!process.env.FLOW_BASE_URL`.
+   `careercoach.ts` adds its live-only "Delete created agent" step. The entry file
+   calls `defineFlow(careerCoachFlow(!!process.env.FLOW_BASE_URL))`; `defineFlow`
+   accepts the resulting flow object, not the factory.
 
 3. **Bump `version` whenever the steps change.** The version is recorded in
    `summary.json` and in the test title, so a stored verdict always says which revision

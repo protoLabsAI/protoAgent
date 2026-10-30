@@ -71,7 +71,7 @@ export default defineConfig({
     logo: "/favicon.svg",
 
     nav: navigation.nav,
-    // Guides, including model passthrough, come from plugins/docs/catalog.json.
+    // Guides, including /guides/console-flows and model passthrough, come from plugins/docs/catalog.json.
     sidebar: Object.fromEntries(
       // VitePress sorts by slash depth, so equal-depth page keys must precede
       // section fallbacks (and longer page prefixes must precede shorter ones).
