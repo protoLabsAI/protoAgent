@@ -1,0 +1,70 @@
+{
+  "ts": "2026-01-01T00:05:00+00:00",
+  "model": "fake/eval-model",
+  "base_url": "http://localhost:7991",
+  "total": 4,
+  "passed": 3,
+  "skipped": 0,
+  "tiers": {
+    "gate": {"passed": 2, "total": 3, "pass_rate": 0.6667},
+    "tracked": {"passed": 1, "total": 1, "pass_rate": 1.0}
+  },
+  "results": [
+    {
+      "id": "card_discovery",
+      "category": "a2a-protocol",
+      "name": "Agent card advertises name + skills",
+      "passed": true,
+      "detail": "card OK",
+      "duration_ms": 126,
+      "tokens": 0,
+      "raw": {},
+      "skipped": false,
+      "trace_id": "tr-B-card",
+      "tier": "gate",
+      "instance": false
+    },
+    {
+      "id": "memory_region_recall",
+      "category": "memory-regression",
+      "name": "Recalls the current primary region",
+      "passed": false,
+      "detail": "forbidden pattern present 'ap-south-1'; missing pattern 'eu-west-1'",
+      "duration_ms": 2320,
+      "tokens": 1040,
+      "raw": {"reply": "Your primary deployment region is ap-south-1."},
+      "skipped": false,
+      "trace_id": "tr-B-region",
+      "tier": "gate",
+      "instance": false
+    },
+    {
+      "id": "deploy_runbook_recall",
+      "category": "subagent",
+      "name": "Follows the deploy runbook",
+      "passed": true,
+      "detail": "OK (3600ms, 1600t)",
+      "duration_ms": 3600,
+      "tokens": 1600,
+      "raw": {"reply": "Running the deploy steps per the runbook..."},
+      "skipped": false,
+      "trace_id": "tr-B-deploy",
+      "tier": "gate",
+      "instance": false
+    },
+    {
+      "id": "research_balance",
+      "category": "workflow",
+      "name": "Research report presents opposing views",
+      "passed": true,
+      "detail": "rubric 100%",
+      "duration_ms": 9400,
+      "tokens": 5600,
+      "raw": {"output": "...counterpoint..."},
+      "skipped": false,
+      "trace_id": "tr-B-research",
+      "tier": "tracked",
+      "instance": false
+    }
+  ]
+}
