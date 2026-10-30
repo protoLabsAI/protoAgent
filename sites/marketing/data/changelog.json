@@ -1,5 +1,23 @@
 [
   {
+    "version": "v0.223.0",
+    "date": "2026-10-30",
+    "changes": [
+      "Draft eval cases from chat (#4603).",
+      "Friction eval drafts (#4603).",
+      "Close the nightly gate-regression loop (#4656).",
+      "Gate-regression triage proposals (#4656).",
+      "Plugin components can open their own view (#4657).",
+      "Learned-context eval A/B (#4658).",
+      "Learned-context A/B comparison report (#4658).",
+      "Fleet members' agent.log no longer grows forever (#4647).",
+      "Steering a working agent carries the tray's images (#4645).",
+      "Steering attachments reach the model (#4645).",
+      "History writes no longer fail on a briefly held lock (#4646).",
+      "Narrow fine-tuning research (#4659)."
+    ]
+  },
+  {
     "version": "v0.222.0",
     "date": "2026-10-30",
     "changes": [
