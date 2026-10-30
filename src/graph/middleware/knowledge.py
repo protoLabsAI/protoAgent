@@ -121,7 +121,21 @@ def turn_query(messages: Any) -> str:
 
     for msg in reversed(messages or []):
         if is_turn_input(msg):
-            text = msg.content if isinstance(msg.content, str) else str(msg.content)
+            content = msg.content
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                # A folded steer that carried image attachments (#4645) has multimodal
+                # list content; the query is its text blocks joined — never str() of the
+                # whole list, which would embed the base64 image_url data URIs into the
+                # retrieval embedding and leave the interjection frame unstripped.
+                text = "\n".join(
+                    str(block.get("text", ""))
+                    for block in content
+                    if isinstance(block, dict) and block.get("type") == "text"
+                )
+            else:
+                text = str(content)
             return strip_interjection(text)
     return ""
 

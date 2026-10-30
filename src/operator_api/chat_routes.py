@@ -71,6 +71,7 @@ class _delete_lock:
 from server import agent_name
 from server.agent_init import _retire_thread
 from server.chat import (
+    _bridge_attachment_ids,
     _resolve_thread_id,
     aside_session,
     chat,
@@ -411,6 +412,25 @@ def _split_openai_content(content) -> tuple[str, list[tuple[str, str]]]:
                     mt = url[5:].split(";", 1)[0].split(",", 1)[0]
                 images.append((mt, url))
     return "\n".join(texts), images
+
+
+def _coerce_attachment_images(raw) -> list[tuple[str, str]] | None:
+    """A request body's ``images`` → the ``[(media_type, uri)]`` shape the turn layer
+    takes, or ``None`` when there is nothing usable.
+
+    Mirrors the shape ``_split_openai_content`` produces. Defensive on purpose: a steer
+    (and any other) body arrives as raw JSON, so a non-list value or a malformed entry
+    (a bare string, a dict, a wrong-length pair) is dropped rather than allowed to 500 at
+    the media bridge or, worse, ride through as a bogus ``image_url`` block the provider
+    rejects mid-turn. The URI itself is not vetted here — ``data:`` persistence and the
+    vision gate handle ``data:`` vs remote as they always have."""
+    if not isinstance(raw, list):
+        return None
+    out: list[tuple[str, str]] = []
+    for part in raw:
+        if isinstance(part, (list, tuple)) and len(part) == 2 and all(isinstance(x, str) for x in part):
+            out.append((part[0], part[1]))
+    return out or None
 
 
 def _has_unresolved_tool_calls(msg) -> bool:
@@ -1422,7 +1442,20 @@ def register_chat_routes(app, ui: str) -> None:
         if not text:
             raise HTTPException(status_code=400, detail="text is required")
         msg_id = str((body or {}).get("id", "")).strip() or None
-        mid = steering.enqueue(session_id, text, msg_id=msg_id)
+        # Optional attachments in the same shape a normal send takes; malformed input is
+        # dropped here (not 500'd at the bridge, not folded as a bogus image block).
+        images = _coerce_attachment_images((body or {}).get("images"))
+        # Incognito (ADR 0069 D3b): the console asserts it, exactly as on a normal send —
+        # there is no server-side incognito marker to read. Mirror _vision_human_message,
+        # which skips the media bridge (and so the refs note) on an incognito turn: the
+        # image still reaches a vision model as a block via the fold, it is just never
+        # persisted and carries no media id.
+        incognito = bool((body or {}).get("incognito", False))
+        refs = "" if incognito else _bridge_attachment_ids(images, session_id)
+        mid = steering.enqueue(
+            session_id, text, msg_id=msg_id, images=images, refs=refs,
+            vision=bool(getattr(STATE.graph_config, "model_vision", False)),
+        )
         return {"ok": True, "id": mid, "pending": steering.pending(session_id)}
 
     @app.get("/api/chat/sessions/{session_id}/steer")

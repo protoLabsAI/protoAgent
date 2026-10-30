@@ -25,7 +25,7 @@ import uuid
 
 log = logging.getLogger(__name__)
 
-# session_id -> [{"id": str, "text": str, "fence"?: [str]}], FIFO.
+# session_id -> items with id/text and optional fence or attachment fields, FIFO.
 _QUEUES: dict[str, list[dict]] = {}
 
 # Eviction (#3933). A queue normally empties itself — the turn's next model step drains
@@ -69,19 +69,27 @@ def _evict_stale(incoming: str) -> None:
         _evict(next(iter(_QUEUE_TOUCHED)), f"queue registry at cap ({_QUEUES_MAX})")
 
 
-def enqueue(session_id: str, text: str, msg_id: str | None = None, *, fence=None) -> str | None:
+def enqueue(
+    session_id: str, text: str, msg_id: str | None = None, *, fence=None,
+    images: list[tuple[str, str]] | None = None, refs: str = "", vision: bool = False,
+) -> str | None:
     """Queue a user message for ``session_id``'s running turn. Returns its id (the
     client's if supplied, else a fresh one), or None on a blank message.
 
     ``fence`` — the tool allowlist of the turn that sent this message (#2972), when it
     was fenced. It travels WITH the message: the pass that folds it in is narrowed to it
     (``SteeringMiddleware``), so a fenced message held behind a parked interrupt can never
-    be acted on by the wider toolset of the (possibly unfenced) turn it lands in."""
+    be acted on by the wider toolset of the (possibly unfenced) turn it lands in.
+
+    ``images`` and persisted ``refs`` travel together; the API decides ``vision``
+    so the graph does not need to consult the server's model configuration."""
     text = (text or "").strip()
     if not session_id or not text:
         return None
     mid = msg_id or uuid.uuid4().hex
     item: dict = {"id": mid, "text": text}
+    if images:
+        item.update(images=images, refs=refs, vision=vision)
     if fence:
         item["fence"] = [str(t) for t in fence]
     _evict_stale(session_id)
