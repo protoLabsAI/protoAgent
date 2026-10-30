@@ -105,6 +105,55 @@ def test_concurrent_knowledge_and_history(store):
         assert db.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
 
 
+def test_a_write_waits_out_a_lock_held_past_busy_timeout(store, monkeypatch):
+    """The Windows CI flake, made deterministic: another writer holds the lock longer
+    than busy_timeout. The write retries taking the lock instead of failing the archive."""
+    import threading
+    import time
+
+    real_connect = store._connect
+
+    def short_timeout():
+        db = real_connect()
+        db.execute("PRAGMA busy_timeout=20")
+        return db
+
+    monkeypatch.setattr(store, "_connect", short_timeout)
+    holder = sqlite3.connect(str(store.path), isolation_level=None, check_same_thread=False)
+    holder.execute("BEGIN IMMEDIATE")
+    release = threading.Timer(0.25, lambda: holder.execute("COMMIT"))
+    release.start()
+    try:
+        started = time.monotonic()
+        entry_id = store.add("written after the lock frees", session_id="s", kind="report")
+        assert time.monotonic() - started >= 0.2
+    finally:
+        release.join()
+        holder.close()
+    assert store.get(entry_id).content == "written after the lock frees"
+
+
+def test_a_write_still_fails_when_the_lock_never_frees(store, monkeypatch):
+    real_connect = store._connect
+
+    def short_timeout():
+        db = real_connect()
+        db.execute("PRAGMA busy_timeout=1")
+        return db
+
+    monkeypatch.setattr(store, "_connect", short_timeout)
+    monkeypatch.setattr("knowledge.history._WRITE_LOCK_RETRY_S", (0.01, 0.01))
+    holder = sqlite3.connect(str(store.path), isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            store.add("never lands", session_id="s", kind="report")
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+    assert store.list_for_session("s") == []
+
+
 @pytest.mark.parametrize("backend", ["", "custom"])
 def test_boot_reload_plugin_and_disabled(tmp_path, monkeypatch, backend):
     import graph.agent as ga
