@@ -28,6 +28,7 @@ import { ChatComponent } from "./ChatComponent";
 import { DelegateProgressView } from "./DelegateProgressView";
 import { hideDanglingMarker } from "./danglingMarker";
 import { Markdown } from "./LazyMarkdown";
+import { openEvalCaseEditor } from "./EvalCaseEditor";
 import { openPromptViewer } from "./PromptViewer";
 import { ReasoningCard } from "./ReasoningCard";
 import { useRevealedText } from "./revealText";
@@ -430,6 +431,11 @@ export function ChatMessageView({
         <MessageActions pinned={feedbackTurn?.rating != null}>
           {!actions.incognito && feedback && feedbackTurn ? (
             <FeedbackControls key={`${actions.sessionId}-${message.id}`} turn={feedbackTurn} feedback={feedback} />
+          ) : null}
+          {!actions.incognito && actions.sessionId && feedbackTurn?.trace_id ? (
+            <MessageAction label="Make eval case" icon={<FileText size={14} />}
+              disabled={feedback?.pending}
+              onClick={() => openEvalCaseEditor({ session_id: actions.sessionId!, trace_id: feedbackTurn.trace_id! })} />
           ) : null}
           {actions.onCopy ? (
             <MessageAction
