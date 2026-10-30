@@ -1491,3 +1491,51 @@ def test_start_keeps_a_free_recorded_port(fleet):
     r = supervisor.start("alpha")
 
     assert r["port"] == port and "port_moved_from" not in r
+
+
+# ── agent.log rotation at spawn (#4624) ─────────────────────────────────────────
+
+
+def test_rotate_log_shifts_generations_when_over_the_cap(tmp_path):
+    from graph.fleet.supervisor import _rotate_log
+
+    log = tmp_path / "agent.log"
+    log.write_text("x" * 50)
+    (tmp_path / "agent.log.1").write_text("gen1")
+    (tmp_path / "agent.log.2").write_text("gen2")
+    (tmp_path / "agent.log.3").write_text("gen3, dropped")
+
+    assert _rotate_log(log, max_bytes=10, keep=3) is True
+
+    assert not log.exists()
+    assert (tmp_path / "agent.log.1").read_text() == "x" * 50
+    assert (tmp_path / "agent.log.2").read_text() == "gen1"
+    assert (tmp_path / "agent.log.3").read_text() == "gen2"
+    assert not (tmp_path / "agent.log.4").exists()
+
+
+def test_rotate_log_leaves_a_small_or_missing_log_alone(tmp_path):
+    from graph.fleet.supervisor import _rotate_log
+
+    log = tmp_path / "agent.log"
+    assert _rotate_log(log, max_bytes=10) is False
+    log.write_text("short")
+    assert _rotate_log(log, max_bytes=10) is False
+    assert log.read_text() == "short"
+    assert not (tmp_path / "agent.log.1").exists()
+
+
+def test_rotate_log_never_raises_when_a_rename_fails(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from graph.fleet.supervisor import _rotate_log
+
+    log = tmp_path / "agent.log"
+    log.write_text("x" * 50)
+
+    def refuse(self, target):
+        raise PermissionError("held by another process")
+
+    monkeypatch.setattr(Path, "replace", refuse)
+    assert _rotate_log(log, max_bytes=10) is False
+    assert log.read_text() == "x" * 50

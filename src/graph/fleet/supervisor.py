@@ -168,6 +168,37 @@ def _log_path(ws: dict) -> Path:
     return Path(ws["path"]) / "agent.log"
 
 
+#: A member's agent.log is rotated at its next spawn once it passes this size (#4624).
+LOG_ROTATE_BYTES = 20 * 1024 * 1024
+#: Rotated generations kept beside it: agent.log.1 (newest) .. agent.log.N.
+LOG_KEEP = 3
+
+
+def _rotate_log(log_path: Path, *, max_bytes: int = LOG_ROTATE_BYTES, keep: int = LOG_KEEP) -> bool:
+    """Shift ``agent.log`` to ``agent.log.1`` (and older generations up) when it's over
+    ``max_bytes``. Returns True when it rotated.
+
+    The file is the child's raw stdout/stderr, so nothing in-process can rotate it: this
+    runs at spawn, before the hub opens it for the new child. A live member keeps
+    appending to its open file until its next restart. Best-effort: a rename that fails
+    (on Windows, a process still holding the file) leaves the log as it is."""
+    try:
+        if not log_path.exists() or log_path.stat().st_size <= max_bytes:
+            return False
+        oldest = log_path.with_name(f"{log_path.name}.{keep}")
+        if oldest.exists():
+            oldest.unlink()
+        for n in range(keep - 1, 0, -1):
+            src = log_path.with_name(f"{log_path.name}.{n}")
+            if src.exists():
+                src.replace(log_path.with_name(f"{log_path.name}.{n + 1}"))
+        log_path.replace(log_path.with_name(f"{log_path.name}.1"))
+        return True
+    except OSError as exc:
+        log.warning("[fleet] could not rotate %s: %s", log_path, exc)
+        return False
+
+
 def is_running(ident: str) -> bool:
     rec = _load_state().get(_resolve_key(ident))
     return bool(rec) and _alive(rec.get("pid"))
@@ -354,6 +385,7 @@ def start(ident: str, *, stop: threading.Event | None = None) -> dict:
             full_env.pop("PROTOAGENT_PUBLIC_CONSOLE_URL", None)
         log_path = _log_path(ws)
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_log(log_path)
         log_offset = log_path.stat().st_size if log_path.exists() else 0
         logf = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 — handed to the child; closed on its exit
         # Detached (ADR 0098): its own tree root, so it survives this CLI's exit
