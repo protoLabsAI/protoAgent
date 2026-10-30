@@ -15,6 +15,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.223.0] - 2026-10-30
+
+### Added
+- **Draft eval cases from chat (#4603).** Assistant messages offer Make eval case with an editable prompt, tool and reply expectations, rubric, and tier. Cases are saved only on explicit Save; server refusals appear inline and Cancel writes nothing.
+
+- **Friction eval drafts (#4603).** Traced friction entries now offer Make eval case with an editable draft, explicit Save, and inline server refusal messages.
+
+- **Close the nightly gate-regression loop (#4656).** Resolve recovered gate cases with the passing report as evidence and automatically queue proposal-mode triage for recorded regressions. Add `--no-triage` to opt out; ledger and scheduling failures leave the gate verdict unchanged. Require persistent server-established scheduler ownership, including for empty queues, and refuse mismatches without renaming the running instance's jobs.
+
+- **Gate-regression triage proposals (#4656).** Add an eval regression reviewer that reads nightly friction and traces, reruns one named case, and proposes a harness task, guarded case edit, or flake advice. Its hard tool allowlist excludes case writes and friction resolution. Reruns use a fresh isolated agent and the recorded nightly model, never the live-agent fallback.
+
+- **Plugin components can open their own view (#4657).** A frame-rendered chat component may now post `protoComponent:openView {view, message}` to bring one of its OWN plugin's declared console views on screen (the dock un-collapses) and deliver a small payload to it. The host refuses another plugin's view, a core surface, an unknown id, a missing/invalid capability nonce, a message over 4 KB, or a message from a foreign window; on the mobile shell the view never auto-opens over chat (ADR 0086). CORE half of protobanana Studio S5.
+
+- **Learned-context eval A/B (#4658).** `scripts/evals_ab.py --ab-learned-from <instance>` runs the eval suite on two throwaway instances — arm A on the bundled template alone, arm B on the same template seeded with a COPY of the source instance's learned memories and private skills — and writes `ab-A-<ts>.json` / `ab-B-<ts>.json` into the results dir. The source is read-only throughout: its SQLite stores are snapshotted through the sqlite3 backup API over a `mode=ro` connection, its store dirs copied recursively, never mounted, written or symlinked. `evals/sweep.py` grows a `--seed-from-dir` hook that lands the copy in an arm's instance dir before boot.
+
+- **Learned-context A/B comparison report (#4658).** `scripts/evals_ab.py` now diffs its two arm reports into `ab-compare-<ts>.json` + `.md` beside them: per-case and per-tier (gate/tracked) pass-rate deltas B-minus-A, turn count and latency per arm, and every flipped case with the trace link for both runs. A seeded bad-memory fixture (`tests/fixtures/evals_ab/`) proves the A/B surfaces a stale or poisoned memory as a visible A-pass/B-fail regression, not just help. Automatic pruning stays out of scope — measure first. Documented in the evals guide (ADR 0126 D6).
+
+### Changed
+- **Fleet members' `agent.log` no longer grows forever (#4647).** It rotates at the member's next start once it passes 20 MB, keeping three old copies. Successful polls from the console, the hub and plugin views no longer flood it; they made up about 85% of one agent's 173 MB log.
+
+### Fixed
+- **Steering a working agent carries the tray's images (#4645).** Queueing a steer now sends whatever native-vision images are attached in the composer tray, in the same shape a normal send uses, and clears them from the tray only once the steer is accepted — a failed queue keeps them for a retry. A steer with an image and no text is allowed (the image is the message); server-turn interjections and HITL-held messages stay text-only.
+
+- **Steering attachments reach the model (#4645).** Mid-turn steers persist attached images and carry their media references into the next model call, including image blocks for vision-capable models.
+
+- **History writes no longer fail on a briefly held lock (#4646).** Every conversation-history write takes the database write lock up front and retries briefly, so concurrent knowledge and history writers stop losing archives to "database is locked" (seen on Windows).
+
+### Docs
+- **Narrow fine-tuning research (#4659).** Record a not-now decision for tool-domain routing with reachable volume evidence, a provenance-safe dataset budget, baseline instructions and RL validity checks; add eight held-out tracked eval cases without changing runtime behavior or training a model.
+
 ## [0.222.0] - 2026-10-30
 
 ### Added
