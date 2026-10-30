@@ -1042,20 +1042,95 @@ async def eval_regression_trace(trace_id: str) -> str:
         return json.dumps({"trace_id": trace_id, "error": type(exc).__name__, "unavailable": True})
 
 
+def _regression_model(case_id: str) -> str:
+    """Recover the tested model from the latest open regression's nightly report."""
+    entries = [r for r in read_entries()
+               if r.get("source") == "plugin:evals-nightly"
+               and r.get("summary") == _EVAL_REGRESSION_PREFIX + case_id]
+    if not entries:
+        raise ValueError("No open nightly regression for this case")
+    entry = entries[-1]
+    paths = [line.removeprefix("report: ") for line in entry.get("detail", "").splitlines()
+             if line.startswith("report: ")]
+    if len(paths) != 1:
+        raise ValueError("Nightly report unavailable")
+    report = json.loads(Path(paths[0]).read_text(encoding="utf-8"))
+    model = report.get("model")
+    if not report.get("nightly") or not isinstance(model, str) or not model.strip():
+        raise ValueError("Nightly model unavailable")
+    if not any(r.get("id") == case_id and r.get("trace_id") == entry.get("trace_id")
+               for r in report.get("results", [])):
+        raise ValueError("Nightly report does not match regression evidence")
+    return model
+
+
 def _rerun_eval_case(case_id: str) -> dict:
-    """Fixed argv and private report destination; the caller supplies only one id."""
+    """Run one case on a fresh private agent using the recorded nightly model."""
+    import shutil
+    import socket
     import subprocess
     import sys
     import tempfile
 
-    from infra.paths import app_root
+    from evals.runner import instance_cases_path
+    from evals.sweep import _runner_cmd, _wait_healthy
+    from graph.config_io import config_yaml_path
+    from infra.paths import app_root, host_config_path
 
+    model = _regression_model(case_id)
+    cases = instance_cases_path()
+    if case_id.startswith("instance:") and not cases.is_file():
+        raise ValueError("Instance case store unavailable")
     with tempfile.TemporaryDirectory(prefix="eval-triage-") as directory:
-        report = Path(directory) / "report.json"
-        completed = subprocess.run(
-            [sys.executable, "-m", "evals.runner", "--tasks", case_id, "--out", str(report)],
-            cwd=app_root(), capture_output=True, text=True, timeout=600,
-        )
+        root = Path(directory)
+        report = root / "report.json"
+        # Snapshot read-only inputs before changing the child environment. Never
+        # inherit PROTOAGENT_HOME: it overrides the instance id on desktop hosts.
+        case_copy = root / "cases.json"
+        if cases.is_file():
+            shutil.copyfile(cases, case_copy)
+        else:
+            case_copy.write_text("[]", encoding="utf-8")
+        env = dict(os.environ)
+        for key in ("PROTOAGENT_HOME", "FRICTION_LOG", "AUDIT_PATH",
+                    "EVAL_BASE_URL", "AGENT_BASE_URL", "PROTOAGENT_SEED_CONFIG",
+                    "PROTOAGENT_HOST_CONFIG", "PROTOAGENT_WORKSPACE",
+                    "PROTOAGENT_PLUGINS_DIR", "PROTOAGENT_PLUGINS_LOCK"):
+            env.pop(key, None)
+        env.update(PROTOAGENT_BOX_ROOT=str(root), PROTOAGENT_INSTANCE="triage",
+                   PROTOAGENT_MODEL=model, PROTOAGENT_UI="none")
+        env.setdefault("A2A_AUTH_TOKEN", "eval-triage-" + root.name)
+        config = config_yaml_path()
+        if config.is_file():
+            seed = root / "seed.yaml"
+            shutil.copyfile(config, seed)
+            env["PROTOAGENT_SEED_CONFIG"] = str(seed)
+        host = host_config_path()
+        if host.is_file():
+            shutil.copyfile(host, root / "host-config.yaml")
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        base_url = f"http://127.0.0.1:{port}"
+        with (root / "server.log").open("w", encoding="utf-8") as log:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "server", "--port", str(port), "--ui", "none"],
+                cwd=app_root(), env=env, stdout=log, stderr=subprocess.STDOUT,
+            )
+            try:
+                if _wait_healthy(base_url) is None or proc.poll() is not None:
+                    raise ValueError("Isolated eval agent unavailable")
+                completed = subprocess.run(
+                    _runner_cmd(base_url, model, report, tasks=case_id, instance_cases=case_copy),
+                    cwd=app_root(), env=env, capture_output=True, text=True, timeout=600,
+                )
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=15)
         if completed.returncode not in (0, 1) or not report.exists():
             raise ValueError("Runner did not produce a case result")
         rows = json.loads(report.read_text(encoding="utf-8")).get("results", [])

@@ -27,7 +27,7 @@ def regression(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_reads_only_open_nightly_entries_without_latest_twelve_cap(regression):
     row, path = regression
-    rows = [row, {**row, "source": "agent"}, {**row, "resolved_at": "yesterday"},
+    rows = [row, {**row, "source": "agent"}, {**row, "summary": "nightly gate regression: resolved", "resolved_at": "yesterday"},
             {**row, "summary": "unrelated"}]
     rows += [{**row, "summary": f"nightly gate regression: case-{i}"} for i in range(15)]
     path.write_text("\n".join(map(json.dumps, rows)), encoding="utf-8")
@@ -137,12 +137,38 @@ async def test_runner_rejects_multiple_cases_and_options(monkeypatch, case_id):
     runner.assert_not_called()
 
 
+@pytest.fixture
+def isolated_runner(tmp_path, monkeypatch, regression):
+    row, ledger = regression
+    monkeypatch.setattr("socket.socket.bind", lambda self, address: None)
+    monkeypatch.setattr("socket.socket.getsockname", lambda self: ("127.0.0.1", 17990))
+    nightly = tmp_path / "nightly.json"
+    nightly.write_text(json.dumps({"nightly": True, "model": "vendor/nightly-model",
+                                   "results": [{"id": "instance:lookup", "trace_id": "trace-1"}]}))
+    ledger.write_text(json.dumps({**row, "detail": f"report: {nightly}"}) + "\n")
+    cases = tmp_path / "operator-cases.json"
+    cases.write_text('[{"id": "lookup"}]')
+    monkeypatch.setattr("evals.runner.instance_cases_path", lambda: cases)
+    config = tmp_path / "config.yaml"
+    config.write_text("model:\n  name: old-model\n", encoding="utf-8")
+    host = tmp_path / "host.yaml"
+    host.write_text("model:\n  base_url: https://gateway.example\n", encoding="utf-8")
+    monkeypatch.setattr("graph.config_io.config_yaml_path", lambda: config)
+    monkeypatch.setattr("infra.paths.host_config_path", lambda: host)
+    monkeypatch.setattr("evals.sweep._wait_healthy", Mock(return_value={"model": "vendor/nightly-model"}))
+    proc = Mock()
+    proc.poll.return_value = None
+    launch = Mock(return_value=proc)
+    monkeypatch.setattr("subprocess.Popen", launch)
+    return launch, proc, nightly
+
+
 @pytest.mark.platform_sensitive
 @pytest.mark.parametrize("rows", [[], [{"id": "wrong", "passed": True}],
                                   [{"id": "instance:lookup"}, {"id": "extra"}]])
-def test_runner_rejects_empty_or_wrong_report(monkeypatch, rows):
+def test_runner_rejects_empty_or_wrong_report(monkeypatch, rows, isolated_runner):
     def run(argv, **kwargs):
-        Path(argv[-1]).write_text(json.dumps({"results": rows}), encoding="utf-8")
+        Path(argv[argv.index("--out") + 1]).write_text(json.dumps({"results": rows}), encoding="utf-8")
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr("subprocess.run", run)
     with pytest.raises(ValueError, match="exactly"):
@@ -150,18 +176,76 @@ def test_runner_rejects_empty_or_wrong_report(monkeypatch, rows):
 
 
 @pytest.mark.platform_sensitive
-def test_runner_fixed_command_and_skipped_result(monkeypatch):
+def test_runner_fixed_command_and_skipped_result(monkeypatch, isolated_runner):
+    launch, proc, _ = isolated_runner
+    for key in ("PROTOAGENT_HOME", "EVAL_BASE_URL", "AGENT_BASE_URL", "AUDIT_PATH"):
+        monkeypatch.setenv(key, "/live-data" if "URL" not in key else "http://localhost:7870")
+    monkeypatch.setenv("PROTOAGENT_MODEL", "wrong/live-model")
     row = {"id": "instance:lookup", "passed": True, "skipped": True}
+
     def run(argv, **kwargs):
-        assert argv[1:6] == ["-m", "evals.runner", "--tasks", "instance:lookup", "--out"]
+        assert argv[1:3] == ["-m", "evals.runner"]
+        assert argv[argv.index("--tasks") + 1] == "instance:lookup"
+        assert argv[argv.index("--model-label") + 1] == "vendor/nightly-model"
+        server_argv = launch.call_args.args[0]
+        assert argv[argv.index("--base-url") + 1] == (
+            "http://127.0.0.1:" + server_argv[server_argv.index("--port") + 1])
+        env = kwargs["env"]
+        assert env == launch.call_args.kwargs["env"]
+        assert env["PROTOAGENT_MODEL"] == "vendor/nightly-model"
+        assert env["PROTOAGENT_INSTANCE"] == "triage"
+        assert all(k not in env for k in ("PROTOAGENT_HOME", "EVAL_BASE_URL", "AGENT_BASE_URL",
+                                         "FRICTION_LOG", "AUDIT_PATH"))
+        root = Path(env["PROTOAGENT_BOX_ROOT"])
+        assert Path(env["PROTOAGENT_SEED_CONFIG"]).parent == root
+        assert (root / "host-config.yaml").read_text(encoding="utf-8") == (
+            "model:\n  base_url: https://gateway.example\n")
+        cases = Path(argv[argv.index("--instance-cases") + 1])
+        assert cases.parent == root
+        assert json.loads(cases.read_text(encoding="utf-8")) == [{"id": "lookup"}]
         assert kwargs.get("shell", False) is False
         assert kwargs["timeout"] == 600
-        assert Path(argv[-1]).name == "report.json"
-        Path(argv[-1]).write_text(json.dumps({"results": [row]}), encoding="utf-8")
+        report = Path(argv[argv.index("--out") + 1])
+        assert report.parent == root
+        report.write_text(json.dumps({"results": [row]}), encoding="utf-8")
         return SimpleNamespace(returncode=0)
     monkeypatch.setattr("subprocess.run", run)
     assert friction._rerun_eval_case("instance:lookup") == row
+    proc.terminate.assert_called_once()
+    proc.wait.assert_called_once_with(timeout=15)
+    assert not Path(launch.call_args.kwargs["env"]["PROTOAGENT_BOX_ROOT"]).exists()
     assert "skipped is false" in friction._build_eval_regression_subagent().system_prompt
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("report", [None, {}, {"nightly": True, "model": ""},
+                                      {"nightly": True, "model": "other", "results": []}])
+async def test_missing_nightly_context_never_launches_or_passes(isolated_runner, report):
+    launch, _, nightly = isolated_runner
+    if report is None:
+        nightly.unlink()
+    else:
+        nightly.write_text(json.dumps(report))
+    result = json.loads(await friction.eval_rerun_case.ainvoke({"case_id": "instance:lookup"}))
+    assert result["unavailable"] is True
+    assert "passed" not in result
+    launch.assert_not_called()
+
+
+@pytest.mark.platform_sensitive
+@pytest.mark.parametrize("failure", ["health", "runner"])
+def test_isolated_agent_stops_on_failure(monkeypatch, isolated_runner, failure):
+    launch, proc, _ = isolated_runner
+    run = Mock(side_effect=TimeoutError)
+    monkeypatch.setattr("subprocess.run", run)
+    if failure == "health":
+        monkeypatch.setattr("evals.sweep._wait_healthy", lambda _: None)
+    with pytest.raises((ValueError, TimeoutError)):
+        friction._rerun_eval_case("instance:lookup")
+    if failure == "health":
+        run.assert_not_called()
+    proc.terminate.assert_called_once()
+    assert not Path(launch.call_args.kwargs["env"]["PROTOAGENT_BOX_ROOT"]).exists()
 
 
 @pytest.mark.asyncio

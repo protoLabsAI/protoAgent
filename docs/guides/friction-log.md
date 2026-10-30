@@ -84,13 +84,18 @@ anything, so the plan comes back to you, and filing and resolving stay your deci
 
 With the friction plugin enabled and nightly gate regressions recorded, ask the
 agent: *"Delegate to eval_regression_triage to review open nightly regressions."*
-The eval runner needs access to the target agent and its normal eval credentials;
+The eval runner needs the linked nightly report and its normal eval credentials;
 trace reads use the configured Langfuse backend.
 
 The reviewer reads open entries from `plugin:evals-nightly` whose summary starts
 `nightly gate regression: `. It reads each entry's `trace_id` and reruns only that
 case through `python -m evals.runner --tasks <case id>` (including `instance:` for
-instance cases). It returns one proposal per friction entry, linking the case,
+instance cases). Each rerun boots a fresh throwaway agent with a private box root,
+using the model recorded in the linked nightly report and a snapshot of the current
+instance case store. The runner receives an explicit base URL, model label and case
+store path; it never falls back to a live agent. The temporary agent is stopped
+and removed after the run. Missing reports or model evidence make the rerun
+unavailable, not a pass. It returns one proposal per friction entry, linking the case,
 trace and friction id:
 
 - **Agent/harness defect:** a `task_create` proposal with the failing assertion and
