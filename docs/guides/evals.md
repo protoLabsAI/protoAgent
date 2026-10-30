@@ -125,6 +125,66 @@ For a single before/after of one change, `evals/compare.py` diffs two reports
 python -m evals.compare evals/results/run-OLD.json evals/results/run-NEW.json
 ```
 
+## A/B — does learned memory earn its keep? `scripts/evals_ab.py`
+
+A long-lived agent accretes memories and private skills. Are they helping, or is some
+stale or poisoned fact quietly dragging it down? `scripts/evals_ab.py` answers that by
+running the suite twice on two **throwaway** instances that differ only in what they
+start with ([ADR 0126](/adr/0126-eval-flywheel-traces-feedback-cases) D6):
+
+- **Arm A (baseline)** — the bundled template only. The agent as it ships.
+- **Arm B (learned)** — the same template, seeded with a **copy** of a source
+  instance's learned memories and private skills.
+
+```bash
+python scripts/evals_ab.py --ab-learned-from default
+python scripts/evals_ab.py --ab-learned-from dev --model vendor/some-model
+python scripts/evals_ab.py --ab-learned-from default --port-base 7992 --keep
+```
+
+The source instance is **read-only** throughout — its SQLite stores are snapshotted
+through the backup API over a `mode=ro` connection and its store directories are copied
+recursively, so arm B boots on its own real copy and nothing the arm agent does can
+reach back to the instance being measured. (It refuses to run under `PROTOAGENT_HOME`,
+which would pin the source and both arms to one directory.)
+
+Each arm's normal report lands in `evals/results/` named for the arm — `ab-A-<ts>.json`
+and `ab-B-<ts>.json` — and the script then diffs them into a comparison written beside
+them: `ab-compare-<ts>.json` plus a readable `ab-compare-<ts>.md`.
+
+### Reading the comparison
+
+Everything is **B minus A**:
+
+- **Headline — gate delta.** The gate pass rate is the number that gates the nightly
+  run (D1), so it leads. `A 3/3 (100%) → B 2/3 (67%)  ▼ -1 (-33%)` means the learned
+  context made a gate case that *used* to pass start failing. A positive gate delta is
+  the learned context earning its keep; a negative one is the signal to investigate.
+- **Tracked delta.** The LLM-judge tier, shown apart. It only ever moves a *trend* —
+  a tracked wobble must never be read as a gate break.
+- **Cost per arm.** Turn count, total/average latency, and tokens for each arm — the
+  learned-context arm usually carries a bigger prompt, so this is where you see what
+  the memory costs even when it helps.
+- **Flips** — every case whose verdict changed between arms, regressions (A pass → B
+  fail) listed before improvements (A fail → B pass), **each with the trace link for
+  both runs** so you can open "why it passed" next to "why it broke". A flip is visible
+  even when the aggregate gate number nets out (one case regressed, another improved).
+
+### Why a B regression can mean stale or poisoned memory
+
+If arm B scores *lower*, the learned context is the only thing that changed — so a
+regressed case points straight at a memory or skill that contradicts reality. A fact
+that was true once and isn't anymore (stale), or an injected instruction that survived
+into the store (poisoned — see the memory-regression probes above), restates the wrong
+answer and flips a case red. The bad-memory fixture in
+[`tests/fixtures/evals_ab/`](https://github.com/protoLabsAI/protoAgent/tree/main/tests/fixtures/evals_ab)
+is exactly this: a false "primary region is ap-south-1" memory that flips the
+region-recall case A pass → B fail, proving the A/B detects **harm**, not just help.
+
+**Automatic pruning is out of scope.** This tool *measures* whether learned context
+helps or hurts and points at the specific cases; deciding what to forget or fix is an
+operator judgement. Measure first.
+
 ## Nightly gate — `scripts/evals_nightly.py`
 
 `scripts/evals_nightly.py` is the unattended version of all of the above: once a

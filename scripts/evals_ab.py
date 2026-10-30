@@ -10,9 +10,11 @@ they start with (ADR 0126 D6):
     instance's learned memories and its private skills.
 
 Score B higher than A and the learned context earned its keep; score it the
-same (or worse) and it did not. Part 2 (bd-kucq.5) adds the side-by-side
-comparison report, a deliberately-bad-memory fixture and the docs; this half
-produces the two arm reports the comparison reads.
+same (or worse) and it did not. Once both arms are in, this script diffs them
+into ``ab-compare-<ts>.json``/``.md`` beside the arm reports — per-case and
+per-tier (gate/tracked) deltas B-minus-A, turn count + latency per arm, and every
+flipped case with both runs' trace links (``evals.compare.write_ab_comparison``,
+bd-kucq.5, ADR 0126 D6).
 
 **Copy, never mount or write.** The source instance is read-only throughout. Its
 SQLite stores are snapshotted through the sqlite3 backup API over a ``mode=ro``
@@ -31,7 +33,8 @@ Usage::
     python scripts/evals_ab.py --ab-learned-from default --port-base 7992 --keep
 
 Each arm's normal report lands in ``evals/results/`` named so the arm is obvious:
-``ab-A-<ts>.json`` (baseline) and ``ab-B-<ts>.json`` (learned).
+``ab-A-<ts>.json`` (baseline) and ``ab-B-<ts>.json`` (learned); the side-by-side
+diff lands beside them as ``ab-compare-<ts>.json`` + ``ab-compare-<ts>.md``.
 """
 
 from __future__ import annotations
@@ -54,6 +57,7 @@ sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 # Imported as a module (not by-value) so a test can monkeypatch sweep._RESULTS_DIR
 # and both the arm reports and the sweep's own run reports follow it to the tmp dir.
 from evals import sweep  # noqa: E402
+from evals.compare import write_ab_comparison  # noqa: E402
 
 # The source instance's learned stores, each relative to its instance root. SQLite
 # files get a consistent snapshot via the backup API over a read-only connection;
@@ -229,7 +233,27 @@ def main(argv: list[str] | None = None) -> int:
         if reports["A"] is None or reports["B"] is None:
             sys.stderr.write("one or both arms produced no report — not a comparable A/B\n")
             return 1
+
+        # Diff the two arms into ab-compare-<ts>.json/.md next to them: per-case and
+        # per-tier (gate/tracked) deltas B-minus-A, turn count + latency per arm, and
+        # every flipped case with both runs' trace links (bd-kucq.5, ADR 0126 D6).
+        json_path, md_path = write_ab_comparison(
+            reports["A"],
+            reports["B"],
+            out_dir=sweep._RESULTS_DIR,
+            ts=ts,
+            a_file=f"ab-A-{ts}.json",
+            b_file=f"ab-B-{ts}.json",
+        )
         print(f"\nA/B arms written to {sweep._RESULTS_DIR} (ab-A-{ts}.json, ab-B-{ts}.json)")
+        print(f"comparison: {md_path}")
+        comparison = json.loads(json_path.read_text())
+        gate = comparison["headline"]
+        print(
+            f"  gate Δ (B−A): {gate['gate_delta_passed']:+d} "
+            f"({gate['gate_delta_rate'] * 100:+.0f} pts); "
+            f"{len(comparison['regressions'])} regression(s), {len(comparison['improvements'])} improvement(s)"
+        )
         return 0
     finally:
         if not args.keep:

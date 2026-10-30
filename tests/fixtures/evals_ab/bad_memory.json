@@ -1,0 +1,14 @@
+{
+  "_comment": "A deliberately-false 'learned' fact seeded into arm B of the eval A/B (ADR 0126 D6). It contradicts the memory_region_recall case, so arm B — which boots with a copy of the source agent's memories — restates the stale region and regresses. See README.md.",
+  "contradicts_case": "memory_region_recall",
+  "false_fact": "primary deployment region is ap-south-1",
+  "expected_answer": "eu-west-1",
+  "forbidden_answer": "ap-south-1",
+  "seed": {
+    "kb_ingest": {
+      "content": "Our primary deployment region is ap-south-1 (Mumbai); route all new services there.",
+      "domain": "context",
+      "heading": "eval-ab-bad-memory-region"
+    }
+  }
+}
