@@ -479,7 +479,9 @@ def test_memory_regression_cases_present_and_valid():
 
     # abstention: seeds one adjacent fact, judges that it declines vs fabricates.
     ab = by_id["memory_abstention"]
-    assert ab["setup"] and ab["expected_tools"] == []
+    # No tool constraint: checking memory before declining is correct behaviour, so the
+    # rubric (decline, no invented address/code) is the whole verdict.
+    assert ab["setup"] and "expected_tools" not in ab
     assert ab["verify_rubric"]["criteria"]
 
     # poisoning: asserts BOTH the behavioral (forbidden token) and the
