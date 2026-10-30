@@ -608,5 +608,121 @@
     "expected_any_tools": ["recall_session", "session_search"],
     "expected_patterns": ["connection", "pool"],
     "teardown": [{"session_purge": {"session_id": "chat-eval-cont-incident"}}]
+  },
+  {
+    "id": "route4659_clock",
+    "name": "Live UTC timestamp selects the time domain",
+    "prompt": "I am timestamping an incident as it happens. What is the current UTC date and time?",
+    "expected_tools": [
+      "current_time"
+    ],
+    "expected_patterns": [
+      "UTC"
+    ],
+    "category": "routing-spike-4659",
+    "kind": "ask",
+    "tier": "tracked"
+  },
+  {
+    "id": "route4659_calculation",
+    "name": "Compound arithmetic selects calculation",
+    "prompt": "For a forecast, calculate 1.035 raised to the 19th power and give six decimal places.",
+    "expected_tools": [
+      "calculator"
+    ],
+    "expected_patterns": [
+      "1.922501"
+    ],
+    "category": "routing-spike-4659",
+    "kind": "ask",
+    "tier": "tracked"
+  },
+  {
+    "id": "route4659_page",
+    "name": "Known page selects retrieval rather than discovery",
+    "prompt": "Read https://example.org and tell me the heading on that page.",
+    "expected_tools": [
+      "fetch_url"
+    ],
+    "expected_patterns": [
+      "Example Domain"
+    ],
+    "forbidden_tools": [
+      "web_search"
+    ],
+    "category": "routing-spike-4659",
+    "kind": "ask",
+    "tier": "tracked"
+  },
+  {
+    "id": "route4659_news",
+    "name": "Recent events select web discovery",
+    "prompt": "What new Python releases were announced this week? Include links to the announcements.",
+    "expected_tools": [
+      "web_search"
+    ],
+    "category": "routing-spike-4659",
+    "kind": "ask",
+    "tier": "tracked"
+  },
+  {
+    "id": "route4659_inventory",
+    "name": "Knowledge inventory selects memory statistics",
+    "prompt": "How many items are in my saved knowledge, broken down by domain?",
+    "expected_tools": [
+      "memory_stats"
+    ],
+    "forbidden_tools": [
+      "web_search"
+    ],
+    "category": "routing-spike-4659",
+    "kind": "ask",
+    "tier": "tracked"
+  },
+  {
+    "id": "route4659_save",
+    "name": "Durable preference selects memory writing",
+    "prompt": "Remember my preference for project EVAL-ROUTE-4659-SAVE: send the weekly digest on Thursdays.",
+    "expected_tools": [
+      "memory_ingest"
+    ],
+    "verify_kb": {
+      "find_chunk_containing": "EVAL-ROUTE-4659-SAVE"
+    },
+    "teardown": [
+      {
+        "kb_delete_by_content": {
+          "contains": "EVAL-ROUTE-4659-SAVE"
+        }
+      }
+    ],
+    "category": "routing-spike-4659",
+    "kind": "ask",
+    "tier": "tracked"
+  },
+  {
+    "id": "route4659_definition",
+    "name": "Stable definition needs no external domain",
+    "prompt": "What does UTC stand for?",
+    "expected_tools": [],
+    "expected_patterns": [
+      "Coordinated Universal Time"
+    ],
+    "category": "routing-spike-4659",
+    "kind": "ask",
+    "tier": "tracked"
+  },
+  {
+    "id": "route4659_rewrite",
+    "name": "Self-contained rewrite needs no external domain",
+    "prompt": "Rewrite this sentence more politely: Send me the draft today.",
+    "expected_tools": [],
+    "expected_patterns": [
+      "draft",
+      "today"
+    ],
+    "category": "routing-spike-4659",
+    "kind": "ask",
+    "tier": "tracked"
   }
 ]
