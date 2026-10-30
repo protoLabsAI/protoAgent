@@ -6,7 +6,7 @@ import { defineConfig, devices } from "@playwright/test";
 // boots the mock server and runs the specs against it.
 
 const PORT = Number(process.env.E2E_PORT || 4319);
-const BASE = `http://127.0.0.1:${PORT}`;
+const BASE = process.env.FLOW_BASE_URL || `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -26,6 +26,11 @@ export default defineConfig({
     viewport: { width: 1200, height: 900 },
   },
   projects: [
+    {
+      name: "flows",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: /flows\/.*\.flow\.ts$/,
+    },
     // Desktop drives everything EXCEPT the mobile specs — they'd fail at 1200px by design
     // (the chat-first shell only exists below 768px, ADR 0086).
     {
@@ -58,7 +63,7 @@ export default defineConfig({
       testMatch: /tablet\.spec\.ts/,
     },
   ],
-  webServer: {
+  webServer: process.env.FLOW_BASE_URL ? undefined : {
     command: `node e2e/mock-server.mjs ${PORT}`,
     url: `${BASE}/app/`,
     reuseExistingServer: !process.env.CI,

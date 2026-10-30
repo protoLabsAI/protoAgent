@@ -1,0 +1,1 @@
+- **Scripted console flows (#4610).** Add a versioned Playwright Career Coach creation flow for mock CI and authenticated live dev instances, with per-step screenshots, pass/fail results, a JSON summary, and live cleanup of the created agent.
