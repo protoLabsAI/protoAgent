@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type React from "react";
 
 import { api } from "../lib/api";
+import type { ChatImagePart } from "../lib/api/chat";
 import { errMsg } from "../lib/format";
 import { messageId } from "./messageId";
 import { filesFromTransfer, isLargePaste, pastedTextFile } from "./paste";
@@ -37,6 +38,18 @@ export type PendingAttachment = {
   b64?: string;
   mime?: string;
 };
+
+/** The ready native-vision images in a tray, in the `{ b64, mime, name }` shape both the
+ *  normal send (streamChat) and a steer (steerChat) take. One builder so an image rides a
+ *  steer the same way it rides a send (#4645) rather than being rebuilt in two places. */
+export function readyNativeAttachments(attachments: PendingAttachment[]): PendingAttachment[] {
+  return attachments.filter((a) => a.status === "ready" && a.native && a.b64);
+}
+
+export function readyNativeImages(attachments: PendingAttachment[]): ChatImagePart[] {
+  return readyNativeAttachments(attachments)
+    .map((a) => ({ b64: a.b64 as string, mime: a.mime || "image/png", name: a.name }));
+}
 
 export type UseAttachmentsOptions = {
   sessionId: string;

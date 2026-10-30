@@ -27,7 +27,8 @@ def client(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("vision", [True, False, None])
-def test_route_persists_and_folds_images(client, monkeypatch, vision):
+@pytest.mark.parametrize("text", ["look", ""])
+def test_route_persists_and_folds_images(client, monkeypatch, vision, text):
     import infra.media as media
     from server.chat import _ATTACHMENT_REFS_MARKER
 
@@ -35,7 +36,7 @@ def test_route_persists_and_folds_images(client, monkeypatch, vision):
     save = Mock(wraps=media.save_media)
     monkeypatch.setattr(media, "save_media", save)
     images = [["image/png", "data:image/png;base64,AAA="]]
-    response = client.post("/api/chat/sessions/attachments/steer", json={"id": "a", "text": "look", "images": images})
+    response = client.post("/api/chat/sessions/attachments/steer", json={"id": "a", "text": text, "images": images})
     assert response.status_code == 200
     assert response.json() == {"ok": True, "id": "a", "pending": 1}
     item = steering.pending_items("attachments")[0]
@@ -56,9 +57,9 @@ def test_route_persists_and_folds_images(client, monkeypatch, vision):
     update = SteeringMiddleware().before_model({"session_id": "attachments"}, None)
     human = update["messages"][0]
     assert isinstance(human, HumanMessage)
-    assert human.content[0] == {"type": "text", "text": _INTERJECTION + "look\n\n" + item["refs"]}
+    assert human.content[0] == {"type": "text", "text": _INTERJECTION + text + "\n\n" + item["refs"]}
     assert human.content[1:] == ([{"type": "image_url", "image_url": {"url": images[0][1]}}] if vision else [])
-    assert seen == [("steer_consumed", {"items": [{"id": "a", "text": "look"}]})]
+    assert seen == [("steer_consumed", {"items": [{"id": "a", "text": text}]})]
     assert steering.pending("attachments") == 0
     assert SteeringMiddleware._inject({"session_id": "attachments"}) is None
     assert save.call_count == 1
@@ -108,7 +109,8 @@ def test_unsafe_image_is_omitted_but_refs_survive(client, monkeypatch):
     assert content[1] == {"type": "text", "text": "[an attached image was omitted: too large to send to the model]"}
 
 
-def test_incognito_route_does_not_persist_but_image_still_folds(client, monkeypatch):
+@pytest.mark.parametrize("text", ["look", ""])
+def test_incognito_route_does_not_persist_but_image_still_folds(client, monkeypatch, text):
     import infra.media as media
     from server.chat import _ATTACHMENT_REFS_MARKER
 
@@ -121,7 +123,7 @@ def test_incognito_route_does_not_persist_but_image_still_folds(client, monkeypa
     images = [["image/png", "data:image/png;base64,AAA="]]
     response = client.post(
         "/api/chat/sessions/incognito/steer",
-        json={"id": "a", "text": "look", "images": images, "incognito": True},
+        json={"id": "a", "text": text, "images": images, "incognito": True},
     )
     assert response.status_code == 200
     save.assert_not_called()
@@ -129,7 +131,7 @@ def test_incognito_route_does_not_persist_but_image_still_folds(client, monkeypa
     assert item["refs"] == ""
     assert item["images"] == [tuple(img) for img in images] and item["vision"] is True
     content = SteeringMiddleware._inject({"session_id": "incognito"})["messages"][0].content
-    assert content[0] == {"type": "text", "text": _INTERJECTION + "look"}
+    assert content[0] == {"type": "text", "text": _INTERJECTION + text}
     assert content[1] == {"type": "image_url", "image_url": {"url": images[0][1]}}
     assert _ATTACHMENT_REFS_MARKER not in content[0]["text"]
 
@@ -204,3 +206,10 @@ def test_posted_attachment_reaches_model_call(client, monkeypatch, vision):
         {"type": "text", "text": _INTERJECTION + "use this image\n\n" + refs},
         *([{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA="}}] if vision else []),
     ]
+
+
+@pytest.mark.parametrize("images", [None, [], [["only-one"]], "invalid"])
+def test_empty_steer_requires_usable_images(client, images):
+    response = client.post("/api/chat/sessions/empty/steer", json={"text": "  ", "images": images})
+    assert response.status_code == 400
+    assert steering.pending("empty") == 0

@@ -84,7 +84,7 @@ def enqueue(
     ``images`` and persisted ``refs`` travel together; the API decides ``vision``
     so the graph does not need to consult the server's model configuration."""
     text = (text or "").strip()
-    if not session_id or not text:
+    if not session_id or (not text and not images):
         return None
     mid = msg_id or uuid.uuid4().hex
     item: dict = {"id": mid, "text": text}

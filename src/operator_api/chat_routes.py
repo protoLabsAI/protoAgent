@@ -1439,12 +1439,12 @@ def register_chat_routes(app, ui: str) -> None:
         from graph import steering
 
         text = str((body or {}).get("text", "")).strip()
-        if not text:
-            raise HTTPException(status_code=400, detail="text is required")
         msg_id = str((body or {}).get("id", "")).strip() or None
         # Optional attachments in the same shape a normal send takes; malformed input is
         # dropped here (not 500'd at the bridge, not folded as a bogus image block).
         images = _coerce_attachment_images((body or {}).get("images"))
+        if not text and not images:
+            raise HTTPException(status_code=400, detail="text is required")
         # Incognito (ADR 0069 D3b): the console asserts it, exactly as on a normal send —
         # there is no server-side incognito marker to read. Mirror _vision_human_message,
         # which skips the media bridge (and so the refs note) on an incognito turn: the

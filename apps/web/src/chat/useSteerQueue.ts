@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type React from "react";
 
 import { api } from "../lib/api";
+import type { ChatImagePart } from "../lib/api/chat";
 import { errMsg } from "../lib/format";
 import type { ChatMessage, ConsumedSteer, HitlPayload, QueuedSteer } from "../lib/types";
 import { chatStore, type SessionStatus } from "./chat-store";
@@ -25,7 +26,7 @@ function steerQueueRef_init(sessionId: string): QueuedSteer[] {
 export type UseSteerQueueOptions = {
   sessionId: string;
   /** The session this slot renders (`null` before hydration). Guards every server call. */
-  session: { id: string } | null;
+  session: { id: string; incognito?: boolean } | null;
   /** The render's transcript (`session?.messages || []`). A queued id appearing here settles it. */
   messages: ChatMessage[];
   status: SessionStatus;
@@ -37,13 +38,23 @@ export type UseSteerQueueOptions = {
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   onError: (message: string) => void;
   /** The slot's turn runner: a reconcile re-sends never-seen messages as a fresh turn. */
-  runTurn: (content: string) => Promise<void>;
+  runTurn: (content: string, opts?: { images?: ChatImagePart[] }) => Promise<void>;
   /** useHitl's ref mirror. A parked HITL turn keeps its unread steers queued. */
   hitlRef: React.MutableRefObject<HitlPayload | null>;
   /** The slot's live-stream controller. The idle reconcile skips while this slot owns a stream. */
   abortRef: React.MutableRefObject<AbortController | null>;
   /** Record a queued message in the composer's input history and reset history nav. */
   recordSubmitted: (text: string) => void;
+  /** The ready native-vision images in the composer's tray RIGHT NOW (#4645). A steer
+   *  carries them the same way a normal send does; read at queue time, not kept in state.
+   *  Only the own-stream steer uses them — a server interjection / HITL hold stays
+   *  text-only, so their attachments stay in the tray. Absent → a steer sends no images. */
+  trayImages?: () => ChatImagePart[];
+  /** Drop the images a steer just carried from the tray — called ONLY after the steer POST
+   *  resolves, so a failed queue leaves them in place for a retry. */
+  clearTrayImages?: () => void;
+  /** Return attachments from an undelivered steer to the composer on Stop or edit. */
+  restoreTrayImages?: (images: ChatImagePart[]) => void;
 };
 
 // The mid-turn steer queue and its reconcile (#3862, extracted from ChatSessionSlot): the
@@ -70,6 +81,9 @@ export function useSteerQueue({
   hitlRef,
   abortRef,
   recordSubmitted,
+  trayImages,
+  clearTrayImages,
+  restoreTrayImages,
 }: UseSteerQueueOptions) {
   // Mid-turn steering: user messages queued WHILE a turn runs (optimistic), reconciled
   // at turn-end. ONE queue for both kinds — steers into this browser's own stream, and
@@ -138,15 +152,27 @@ export function useSteerQueue({
   // Steer a RUNNING turn: queue the typed message (folds in at the agent's next
   // model call via SteeringMiddleware) without stopping the stream. Shows an
   // optimistic "queued" bubble; turn-end reconcile settles or re-sends it.
+  // Any native-vision images in the tray ride along (#4645): an image with no text is
+  // itself the message, so an image-only steer is allowed; the tray is cleared only once
+  // the POST is accepted, so a failed queue keeps both the bubble's text and the images.
   async function queueSteer() {
     const text = draft.trim();
-    if (!session || !text) return;
-    recordSubmitted(text); // steered messages join the same recall ring
+    // A HITL-held message (send() routes it here while a form is parked) folds in AFTER
+    // the form answer and stays text-only — its attachments wait in the tray for a real
+    // send, as on the server. Only a true mid-turn steer carries the tray's images (#4645).
+    const images = hitlRef.current ? [] : (trayImages?.() ?? []);
+    if (!session || (!text && !images.length)) return;
+    if (text) recordSubmitted(text); // steered messages join the same recall ring
     const id = messageId();
     setDraft("");
-    setSteerQueue([...steerQueueRef.current, { id, text }]);
+    setSteerQueue([...steerQueueRef.current, { id, text, ...(images.length ? { images } : {}) }]);
     try {
-      await api.steerChat(session.id, id, text);
+      await (images.length
+        ? session.incognito
+          ? api.steerChat(session.id, id, text, images, true)
+          : api.steerChat(session.id, id, text, images)
+        : api.steerChat(session.id, id, text));
+      if (images.length) clearTrayImages?.();
     } catch (e) {
       setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
       onError(`Couldn't queue message: ${errMsg(e)}`);
@@ -212,10 +238,12 @@ export function useSteerQueue({
    *  composer (APPENDED — an in-hand draft is never destroyed to undo our own optimism,
    *  #3413), and said out loud. The one place that hands text back, so the toast can't
    *  promise something a caller forgot to do. */
-  function handBackQueued(items: { id: string; text: string }[], message: string) {
+  function handBackQueued(items: QueuedSteer[], message: string) {
     if (!items.length) return;
     const ids = new Set(items.map((item) => item.id));
     setSteerQueue(steerQueueRef.current.filter((q) => !ids.has(q.id)));
+    const images = items.flatMap((item) => item.images ?? []);
+    if (images.length) restoreTrayImages?.(images);
     const text = items.map((item) => item.text).join("\n\n");
     setDraft((current) => (current.trim() ? `${current.replace(/\s+$/, "")}\n\n${text}` : text));
     onError(message);
@@ -530,7 +558,7 @@ export function useSteerQueue({
   // already drained it (`removed: false`), it's too late — it shaped the reply, so the
   // bubble is restored instead of lying it never ran. The outcome tells the ↑ caller
   // whether the message is really out of the turn or still on its way to the agent.
-  async function dequeueSteer(id: string): Promise<"removed" | "consumed" | "failed"> {
+  async function dequeueSteer(id: string, restoreImages = false): Promise<"removed" | "consumed" | "failed"> {
     if (!session) return "failed";
     const item = steerQueueRef.current.find((q) => q.id === id);
     if (!item) return "failed";
@@ -558,6 +586,7 @@ export function useSteerQueue({
         }
         return "consumed";
       }
+      if (restoreImages && item.images?.length) restoreTrayImages?.(item.images);
       return "removed";
     } catch (e) {
       // Couldn't reach the backend — restore the bubble rather than drop a steer
@@ -638,7 +667,9 @@ export function useSteerQueue({
     }
     setSteerQueue(steerQueueRef.current.filter((q) => !reconciled.has(q.id)));
     if (unconsumed.length) {
-      void runTurn(unconsumed.map((u) => u.text).join("\n\n"));
+      const text = unconsumed.map((u) => u.text).join("\n\n");
+      const images = unconsumed.flatMap((u) => u.images ?? []);
+      void (images.length ? runTurn(text, { images }) : runTurn(text));
     }
   }
 
