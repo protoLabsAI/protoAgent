@@ -109,6 +109,9 @@ throwaway agent and writes the result into each entry's detail as a `rerun:` lin
 `PASS on a fresh agent (possible flake)`, `FAIL on a fresh agent (reproduced)`, or
 `unavailable`. Pass `--no-rerun` to skip it.
 
+Each entry's detail also carries a `failed:` line with the case's failing check (for
+example `missing tools: ['memory_list']`). Triage can't open the report file itself.
+
 ### Desktop members
 
 A desktop app member can't be the nightly's own instance, so the nightly runs on the
