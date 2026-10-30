@@ -228,3 +228,22 @@ def test_arm_reports_are_labelled_with_the_model(tmp_path, monkeypatch):
     monkeypatch.setattr(sweep, "_run_one_model", fake_run_one_model)
     evals_ab.main(["--ab-learned-from", "source", "--model", "fake/model"])
     assert labels == ["fake/model @ ab-A", "fake/model @ ab-B"]
+
+
+@pytest.mark.parametrize("argv,tasks,category", [
+    ([], None, None),
+    (["--tasks", "fact_recall,memory_list_intent"], "fact_recall,memory_list_intent", None),
+    (["--category", "tool"], None, "tool"),
+])
+def test_both_arms_run_the_same_filter(tmp_path, monkeypatch, argv, tasks, category):
+    monkeypatch.setattr(sweep, "_RESULTS_DIR", tmp_path / "results")
+    _make_source(sweep._instance_root("source"))
+    seen = []
+
+    def fake_run_one_model(model, **kwargs):
+        seen.append((kwargs["tasks"], kwargs["category"]))
+        return [{"model": kwargs["label"], "total": 0, "results": []}]
+
+    monkeypatch.setattr(sweep, "_run_one_model", fake_run_one_model)
+    evals_ab.main(["--ab-learned-from", "source", "--model", "fake/model", *argv])
+    assert seen == [(tasks, category), (tasks, category)]

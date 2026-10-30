@@ -142,6 +142,9 @@ python scripts/evals_ab.py --ab-learned-from dev --model vendor/some-model
 python scripts/evals_ab.py --ab-learned-from default --port-base 7992 --keep
 ```
 
+`--tasks a,b` or `--category <name>` runs a quick A/B on just those cases; both arms
+always run the same filter.
+
 A desktop app member can't be named by instance id from a host shell. Pass its
 directory instead:
 

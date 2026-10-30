@@ -31,6 +31,7 @@ Usage::
     python scripts/evals_ab.py --ab-learned-from default
     python scripts/evals_ab.py --ab-learned-from dev --model vendor/some-model
     python scripts/evals_ab.py --ab-learned-from default --port-base 7992 --keep
+    python scripts/evals_ab.py --ab-learned-from default --tasks fact_recall,memory_list_intent
 
 Each arm's normal report lands in ``evals/results/`` named so the arm is obvious:
 ``ab-A-<ts>.json`` (baseline) and ``ab-B-<ts>.json`` (learned); the side-by-side
@@ -126,6 +127,8 @@ def _run_arm(
     keep: bool,
     seed_from_dir: Path | None,
     instance_cases: Path | None,
+    tasks: str | None = None,
+    category: str | None = None,
 ) -> dict | None:
     """Boot one throwaway arm and run the suite once; return its report dict (or
     ``None`` if the agent never came up). Reuses ``evals.sweep._run_one_model`` — the
@@ -136,8 +139,8 @@ def _run_arm(
         port=port,
         instance=instance,
         ts=ts,
-        category=None,
-        tasks=None,
+        category=category,
+        tasks=tasks,
         keep=keep,
         # Name the model, as evals.sweep does: reports trend by this label, and the
         # comparison headline reads it. The arm is already in the report file name.
@@ -168,6 +171,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model", default=None, help="model alias to run both arms on (default: the config's model)")
     p.add_argument("--port-base", type=int, default=7990, help="first port (arm A = port-base, arm B = port-base+1)")
     p.add_argument("--keep", action="store_true", help="keep each arm's instance data, logs and the copy staging dir")
+    # Both arms always run the same filter, so the comparison stays like-for-like.
+    p.add_argument("--tasks", default=None, help="comma-separated case ids to run in BOTH arms (default: the whole suite)")
+    p.add_argument("--category", default=None, help="restrict BOTH arms to one eval category")
     args = p.parse_args(argv)
 
     # FRICTION_LOG pollution guard, same reasoning as evals_nightly.sweep_env: the
@@ -231,6 +237,8 @@ def main(argv: list[str] | None = None) -> int:
                 keep=args.keep,
                 seed_from_dir=seed,
                 instance_cases=instance_cases,
+                tasks=args.tasks,
+                category=args.category,
             )
             out = sweep._RESULTS_DIR / f"ab-{arm}-{ts}.json"
             if report is not None:
