@@ -212,3 +212,19 @@ def test_source_by_directory_is_copied_and_left_untouched(tmp_path, monkeypatch)
 def test_source_id_and_directory_are_exclusive(tmp_path):
     with pytest.raises(SystemExit):
         evals_ab.main(["--ab-learned-from", "a", "--ab-learned-from-dir", str(tmp_path)])
+
+
+def test_arm_reports_are_labelled_with_the_model(tmp_path, monkeypatch):
+    """The label names the model (as evals.sweep does), not just the arm, so the
+    comparison headline and evals.report trends show what was measured."""
+    monkeypatch.setattr(sweep, "_RESULTS_DIR", tmp_path / "results")
+    _make_source(sweep._instance_root("source"))
+    labels = []
+
+    def fake_run_one_model(model, **kwargs):
+        labels.append(kwargs["label"])
+        return [{"model": kwargs["label"], "total": 0, "results": []}]
+
+    monkeypatch.setattr(sweep, "_run_one_model", fake_run_one_model)
+    evals_ab.main(["--ab-learned-from", "source", "--model", "fake/model"])
+    assert labels == ["fake/model @ ab-A", "fake/model @ ab-B"]

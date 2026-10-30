@@ -139,7 +139,9 @@ def _run_arm(
         category=None,
         tasks=None,
         keep=keep,
-        label=f"ab-{arm}",
+        # Name the model, as evals.sweep does: reports trend by this label, and the
+        # comparison headline reads it. The arm is already in the report file name.
+        label=f"{model} @ ab-{arm}",
         seed_steps=None,
         instance_cases=instance_cases,
         seed_from_dir=seed_from_dir,
