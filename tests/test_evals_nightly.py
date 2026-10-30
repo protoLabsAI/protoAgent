@@ -413,7 +413,12 @@ def test_friction_log_routes_regressions_and_never_reaches_the_sweep(tmp_path, m
     the throwaway sweep agent never sees FRICTION_LOG, so its own friction can't."""
     import os
 
-    monkeypatch.delenv("FRICTION_LOG", raising=False)
+    # main() sets os.environ["FRICTION_LOG"] itself. Register the variable with monkeypatch
+    # first (set, then delete) so teardown removes it: a bare delenv of an unset variable
+    # records nothing to undo, and the leaked ledger path put this test's regression into
+    # later tests' working state (test_projection goldens).
+    monkeypatch.setenv("FRICTION_LOG", "unset-by-teardown")
+    monkeypatch.delenv("FRICTION_LOG")
     monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
     (tmp_path / "run-nightly-100.json").write_text(
         json.dumps(_report([_row("calc", True)], nightly_ts=100)), encoding="utf-8"

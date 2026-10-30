@@ -77,8 +77,9 @@ type UIState = {
   globalSettingsSection?: string;
   openGlobalSettings: (section?: string) => void;
   closeGlobalSettings: () => void;
-  // Open Settings directly on Plugins ▸ Discover — the one atomic action the utility-bar
-  // "Discover plugins" pill (and any other first-run entry point) runs. Opening Settings on
+  // Open Settings directly on Plugins ▸ Discover — the one atomic action the "Discover plugins"
+  // command-palette entry (and any other first-run entry point) runs; Settings ▸ Plugins is the
+  // other way in. Opening Settings on
   // the Plugins section is NOT enough on its own: `pluginsTab` defaults to "local" (Installed),
   // so a bare `openGlobalSettings("plugins")` lands on Installed. This selects the "market"
   // (Discover) tab in the SAME `set` so the dialog never flashes Installed first — mirroring

@@ -722,6 +722,7 @@ def _main():
     from operator_api.mcp_routes import register_mcp_routes
     from operator_api.routes import register_operator_routes
     from operator_api.feedback_routes import register_feedback_routes
+    from operator_api.eval_case_routes import register_eval_case_routes
     from operator_api.telemetry_routes import register_telemetry_routes
     from operator_api.trajectory_routes import register_trajectory_routes
     from operator_api.usage_routes import register_usage_routes
@@ -1222,6 +1223,7 @@ def _main():
     # rating and writes a Langfuse user_feedback score on that turn's trace. Same operator
     # auth as its telemetry neighbours (the default-deny /api/* middleware).
     register_feedback_routes(fastapi_app)
+    register_eval_case_routes(fastapi_app)
     # Subscription-usage read surface (ADR 0122 D6) — GET /api/usage over the
     # on-demand observability/usage_store cache + the usage.snapshot op.
     register_usage_routes(fastapi_app)
