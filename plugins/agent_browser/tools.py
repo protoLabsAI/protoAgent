@@ -608,7 +608,7 @@ def get_browser_tools(cfg: dict | None, refresh_gaps=None, *, start_gap: bool = 
     @_serialized
     async def browser_get_text(selector: str = "body", *, state: Annotated[Any, InjectedState] = None) -> str:
         """Get the visible text of an element (`@eN` ref or CSS selector; default the whole
-        `body`)."""
+        `body`) — use it to read page content."""
         return _bad_operand(selector=selector) or await _ab("get", "text", selector)
 
     @tool
