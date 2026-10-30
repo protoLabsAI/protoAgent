@@ -1632,7 +1632,7 @@ async def test_review_links_and_legacy_entries(ledger, monkeypatch, template):
 
 
 @pytest.mark.platform_sensitive
-def test_view_renders_trace_links_and_legacy_rows():
+def test_view_renders_trace_links_eval_drafts_and_legacy_rows():
     """Execute the shipped view in a DOM, including its telemetry fetch and fallback."""
     import shutil
     import subprocess
@@ -1650,12 +1650,24 @@ const source = html.match(/<script type="module">([\s\S]*?)<\/script>/)[1]
   .replace('const kit = await import(window.__base + "/_ds/plugin-kit.js");', 'const kit = window.kit;');
 const calls = [];
 let telemetryFails = false;
+const writes = [];
+let refuseSave = true;
 dom.window.setTimeout = () => 0;
 dom.window.setInterval = () => 0;
 dom.window.kit = {
   initPluginView() {},
-  async apiFetch(url) {
+  async apiFetch(url, options) {
     calls.push(url);
+    if (options?.method === "POST") {
+      const body = JSON.parse(options.body);
+      writes.push({url, body});
+      if (url.endsWith("/draft")) return {ok: true, json: async () => ({
+        id: "draft-42", prompt: "original prompt", tier: "gate", source_trace_id: body.trace_id,
+        comment: "Something went wrong",
+      })};
+      return {ok: !refuseSave, json: async () => refuseSave
+        ? {detail: "The case must assert something"} : {ok: true}};
+    }
     if (url.startsWith("/api/telemetry/recent")) {
       if (telemetryFails) throw Error("offline");
       return {ok: true, json: async () => ({langfuse_trace_url_template:
@@ -1664,7 +1676,8 @@ dom.window.kit = {
     return {ok: true, json: async () => ({items: [
       {kind: "model", summary: "legacy row"},
       {kind: "model", summary: "new row", session_id: "session<42>", trace_id: "trace/42"},
-    ], counts: {model: 2}})};
+      {kind: "model", summary: "untraced latest occurrence", session_id: "s", trace_id: "", count: 2},
+    ], counts: {model: 3}})};
   },
 };
 await dom.window.eval('(async () => {' + source + `
@@ -1674,9 +1687,50 @@ await dom.window.eval('(async () => {' + source + `
 })()`);
 const doc = dom.window.document;
 assert(calls.includes("/api/telemetry/recent?limit=1"));
-assert.equal(doc.querySelectorAll(".entry").length, 2);
+assert.equal(doc.querySelectorAll(".entry").length, 3);
 assert(doc.getElementById("list").textContent.includes("legacy row"));
 assert(doc.getElementById("list").textContent.includes("session: session<42>"));
+const buttons = (node, text) => [...node.querySelectorAll("button")].filter(b => b.textContent === text);
+const rows = doc.querySelectorAll(".entry");
+assert.equal(buttons(rows[0], "Make eval case").length, 0);
+assert.equal(buttons(rows[1], "Make eval case").length, 1);
+assert.equal(buttons(rows[2], "Make eval case").length, 0);
+const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+buttons(rows[1], "Make eval case")[0].click();
+await settle();
+assert.deepEqual(writes, [{url: "/api/evals/cases/draft", body: {
+  session_id: "session<42>", trace_id: "trace/42",
+}}]);
+assert(doc.querySelector("#eval-editor").textContent.includes("Something went wrong"));
+buttons(doc.querySelector("#eval-editor"), "Cancel")[0].click();
+assert.equal(writes.length, 1);
+assert.equal(doc.querySelector("#eval-editor").children.length, 0);
+buttons(rows[1], "Make eval case")[0].click();
+await settle();
+const editor = doc.querySelector("#eval-editor");
+assert.equal(writes.length, 2);
+buttons(editor, "Save")[0].click();
+await settle();
+assert(editor.textContent.includes("The case must assert something"));
+assert(!("expected_tools" in writes[2].body.case));
+editor.querySelector('[name="prompt"]').value = "edited prompt";
+editor.querySelector('[name="expected_tools"]').value = "read_file\nsearch_files";
+editor.querySelector('[name="forbidden_tools"]').value = "delete_file";
+editor.querySelector('[name="expected_patterns"]').value = "success";
+editor.querySelector('[name="forbidden_patterns"]').value = "failed";
+editor.querySelector('[name="rubric"]').value = "Answers the question";
+refuseSave = false;
+buttons(editor, "Save")[0].click();
+buttons(editor, "Save")[0].click(); // duplicate clicks cannot save twice
+await settle();
+assert.equal(writes.length, 4);
+assert.deepEqual(writes[3], {url: "/api/evals/cases", body: {case: {
+  id: "draft-42", prompt: "edited prompt", tier: "gate", source_trace_id: "trace/42",
+  comment: "Something went wrong", expected_tools: ["read_file", "search_files"],
+  forbidden_tools: ["delete_file"], expected_patterns: ["success"], forbidden_patterns: ["failed"],
+  verify_rubric: {criteria: ["Answers the question"]},
+}}});
+assert.equal(editor.children.length, 0);
 let trace = [...doc.querySelectorAll("a")].find(a => a.textContent === "Trace");
 assert.equal(trace.href, "https://trace.example/custom/trace%2F42");
 assert.equal(trace.rel, "noopener noreferrer");
@@ -1684,7 +1738,7 @@ assert.equal(trace.target, "_blank");
 telemetryFails = true;
 dom.window.resetTrace();
 await dom.window.reloadLedger();
-assert.equal(doc.querySelectorAll(".entry").length, 2);
+assert.equal(doc.querySelectorAll(".entry").length, 3);
 assert(doc.getElementById("list").textContent.includes("trace: trace/42"));
 assert(![...doc.querySelectorAll("a")].some(a => a.textContent === "Trace"));
 dom.window.close();
