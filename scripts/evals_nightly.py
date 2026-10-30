@@ -79,6 +79,8 @@ FRICTION_SOURCE = "evals-nightly"
 FRICTION_KIND = "harness"
 # A gate break is the deterministic "this still works" contract failing — major.
 FRICTION_SEVERITY = "major"
+# Cap on the failing-check line copied into the friction detail.
+FAILED_DETAIL_MAX = 500
 
 # Flake rule (ADR 0126 D1): a gate case that flips pass/fail this many times inside
 # the last N nightly reports is flaky — printed, never auto-demoted.
@@ -240,6 +242,11 @@ def record_regressions(
         trace_id = str(row.get("trace_id", "") or "")
         link = trace_link(trace_id)
         detail = f"report: {report_path}"
+        # The failing check itself: triage can't open the report file (its tools are
+        # a fixed allowlist), so without this line it can't see what failed.
+        failed = " ".join(str(row.get("detail") or "").split())
+        if failed:
+            detail += f"\nfailed: {failed[:FAILED_DETAIL_MAX]}"
         if link:
             detail += f"\ntrace: {link}"
         if reruns is not None:

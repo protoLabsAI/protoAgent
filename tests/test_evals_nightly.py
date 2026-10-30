@@ -779,3 +779,12 @@ def test_friction_log_ledger_never_queues_triage_here(tmp_path, monkeypatch, tri
     assert nightly.main(["--model", "vendor/m", "--friction-log", str(ledger)]) == 1
     assert triage_jobs == []
     assert "triage: not queued" in capsys.readouterr().out
+
+
+def test_record_regressions_carries_the_failing_check():
+    rec = _FakeRecorder()
+    row = {**_row("a", False), "detail": "missing tools: ['memory_list'];\n saw: " + "x" * 600}
+    nightly.record_regressions([row], "r.json", recorder=rec, trace_link=_fake_link)
+    line = next(l for l in rec.calls[0]["detail"].splitlines() if l.startswith("failed: "))
+    assert line.startswith("failed: missing tools: ['memory_list']; saw: ")
+    assert len(line) == len("failed: ") + nightly.FAILED_DETAIL_MAX
