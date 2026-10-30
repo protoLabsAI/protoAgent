@@ -94,9 +94,11 @@ job asking the target agent to delegate the recorded cases to
 `eval_regression_triage`. The running instance picks it up automatically and
 returns proposals in its Activity thread. It needs access to the report path.
 Use the same `PROTOAGENT_HOME` / `PROTOAGENT_INSTANCE`, box root, agent identity,
-and any `SCHEDULER_DB_DIR` override as that instance. If an existing store has a
-different agent owner, the nightly warns and skips triage without changing job
-ownership; align the nightly environment with the running instance.
+and any `SCHEDULER_DB_DIR` override as that instance. Start the target instance
+with this version once before scheduling triage, so it records its scheduler
+owner independently of pending jobs. If the owner is missing or differs, the
+nightly warns and skips triage without changing job ownership, even when the
+queue is empty. Align the nightly environment with the running instance.
 `--friction-log` changes only the nightly's ledger; it does not select a triage instance. If using a custom
 ledger, configure the running instance's `FRICTION_LOG` to the same file too.
 The instance must be running with its scheduler enabled; queued one-shot jobs

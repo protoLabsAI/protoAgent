@@ -611,6 +611,9 @@ def test_triage_scheduler_uses_target_identity(tmp_path, monkeypatch, identity, 
     monkeypatch.setenv("AGENT_NAME", "env-agent")
     monkeypatch.setenv("SCHEDULER_DB_DIR", str(tmp_path / "scheduler"))
     monkeypatch.delenv("SCHEDULER_DISABLED", raising=False)
+    from scheduler import LocalScheduler
+
+    LocalScheduler(expected, invoke_url="")
     scheduler = _scheduler_factory()
     assert seen == [config_path]  # load the cascade even without an instance YAML
     assert scheduler.agent_name == expected
@@ -630,7 +633,9 @@ def test_triage_scheduler_respects_disabled(monkeypatch, config_enabled, env_dis
 
 @pytest.mark.platform_sensitive
 @pytest.mark.parametrize("nightly_name", ["server-agent", None])
-def test_triage_preserves_live_scheduler_ownership(tmp_path, monkeypatch, capsys, nightly_name):
+@pytest.mark.parametrize("empty", [False, True])
+@pytest.mark.parametrize("override", [False, True])
+def test_triage_preserves_live_scheduler_ownership(tmp_path, monkeypatch, capsys, nightly_name, empty, override):
     from graph.config import LangGraphConfig
     from scheduler import LocalScheduler
 
@@ -645,8 +650,12 @@ def test_triage_preserves_live_scheduler_ownership(tmp_path, monkeypatch, capsys
         LangGraphConfig, "from_yaml",
         lambda path: SimpleNamespace(identity_name="protoagent", scheduler_enabled=True),
     )
+    if override:
+        monkeypatch.setenv("SCHEDULER_DB_DIR", str(tmp_path / "scheduler"))
     server = LocalScheduler("server-agent", invoke_url="")
     existing = server.add_job("existing reminder", "2099-01-01T00:00:00+00:00")
+    if empty:
+        server._delete_job(existing.id)  # same deletion as a completed one-shot
     monkeypatch.setattr(nightly, "_triage_scheduler", _scheduler_factory)
 
     nightly.trigger_triage(["calc"], "report.json")
@@ -654,11 +663,49 @@ def test_triage_preserves_live_scheduler_ownership(tmp_path, monkeypatch, capsys
     # Inspect through the original server: reopening would hide the bug by
     # adopting all rows back to the server's name.
     jobs = server.list_jobs()
-    assert server.get_job(existing.id) == existing
+    assert server.get_job(existing.id) == (None if empty else existing)
     assert all(job.agent_name == "server-agent" for job in jobs)
     if nightly_name == "server-agent":
-        assert len(jobs) == 2
+        assert len(jobs) == (1 if empty else 2)
         assert any("eval_regression_triage" in job.prompt for job in jobs)
     else:
-        assert jobs == [existing]
-        assert "different agent" in capsys.readouterr().err
+        assert jobs == ([] if empty else [existing])
+        output = capsys.readouterr()
+        assert "could not be queued" in output.err
+        assert "queued eval_regression_triage" not in output.out
+        assert ("uninitialized" if override else "different agent") in output.err
+
+
+@pytest.mark.platform_sensitive
+def test_triage_requires_server_initialized_owner(tmp_path, monkeypatch):
+    from scheduler import LocalScheduler
+
+    monkeypatch.setenv("SCHEDULER_DB_DIR", str(tmp_path))
+    with pytest.raises(ValueError, match="uninitialized"):
+        LocalScheduler("target", invoke_url="", adopt_existing_jobs=False)
+    assert not (tmp_path / "target" / "jobs.db").exists()
+
+    server = LocalScheduler("target", invoke_url="")
+    # Legacy stores cannot establish identity from rows, even if names match.
+    with server._connect() as db:
+        db.execute("DROP TABLE scheduler_owner")
+    with pytest.raises(ValueError, match="uninitialized"):
+        LocalScheduler("target", invoke_url="", adopt_existing_jobs=False)
+    LocalScheduler("target", invoke_url="")  # server startup migrates legacy store
+    producer = LocalScheduler("target", invoke_url="", adopt_existing_jobs=False)
+    producer.add_job("triage", "2099-01-01T00:00:00+00:00")
+    assert len(server.list_jobs()) == 1
+
+
+@pytest.mark.platform_sensitive
+def test_triage_rechecks_owner_when_enqueuing(tmp_path, monkeypatch):
+    from scheduler import LocalScheduler
+
+    monkeypatch.setenv("PROTOAGENT_HOME", str(tmp_path))
+    monkeypatch.delenv("SCHEDULER_DB_DIR", raising=False)
+    LocalScheduler("original", invoke_url="")
+    producer = LocalScheduler("original", invoke_url="", adopt_existing_jobs=False)
+    renamed = LocalScheduler("renamed", invoke_url="")
+    with pytest.raises(ValueError, match="different agent"):
+        producer.add_job("triage", "2099-01-01T00:00:00+00:00")
+    assert renamed.list_jobs() == []
