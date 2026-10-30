@@ -315,6 +315,7 @@ def submit_server_turn_interjection(
         return {"ok": False, "reason": "duplicate", "id": mid, "pending": steering.pending(sid)}
     from graph import steering
 
+    # Attended server-turn interjections remain text-only.
     queued = steering.enqueue(sid, body, msg_id=mid)
     if queued is None:
         return {"ok": False, "reason": "empty", "pending": steering.pending(sid)}
@@ -522,6 +523,7 @@ async def _hold_if_hitl_pending(
         return _HITL_RESUME
     from graph import steering
 
+    # HITL-held messages remain text-only.
     steering.enqueue(session_id, message, fence=fence)
     log.info("[hitl] holding operator message for session %s — form pending", session_id)
     return pending_val

@@ -93,8 +93,27 @@ class SteeringMiddleware(AgentMiddleware):
         # appends it to the thread before the model node runs, so the very next model
         # call sees it. The console settles the user's ORIGINAL text into the thread
         # (per-id); only the model sees the framed interjection.
-        combined = "\n\n".join(item["text"] for item in queued)
-        update: dict = {"messages": [HumanMessage(content=_INTERJECTION + combined)]}
+        combined = "\n\n".join(
+            item["text"] + ("\n\n" + item["refs"] if item.get("refs") else "") for item in queued
+        )
+        content: str | list[dict] = _INTERJECTION + combined
+        if any(item.get("images") for item in queued):
+            from graph.image_limits import fit_data_uri
+
+            content = [{"type": "text", "text": content}]
+            for item in queued:
+                if not item.get("vision"):
+                    continue
+                for _mime, uri in item.get("images", []):
+                    fitted = fit_data_uri(uri)
+                    if fitted is not None:
+                        content.append({"type": "image_url", "image_url": {"url": fitted}})
+                    else:
+                        content.append({
+                            "type": "text",
+                            "text": "[an attached image was omitted: too large to send to the model]",
+                        })
+        update: dict = {"messages": [HumanMessage(content=content)]}
         # A message that arrived FENCED (#2972 — e.g. held behind a parked interrupt by
         # the HITL hold) carries its fence: the rest of the pass that reads it runs under
         # the intersection of every folded fence and the pass's own (narrowest wins), so
@@ -108,5 +127,5 @@ class SteeringMiddleware(AgentMiddleware):
                 current = intersect_fences(current, fence)
             update["subagent_fence"] = current
         # The live boundary marker carries what the console reconciles (ids, text) — not
-        # the fence, which is enforcement state.
-        return update, [{k: v for k, v in item.items() if k != "fence"} for item in queued]
+        # the fence or attachment data.
+        return update, [{"id": item["id"], "text": item["text"]} for item in queued]

@@ -71,6 +71,7 @@ class _delete_lock:
 from server import agent_name
 from server.agent_init import _retire_thread
 from server.chat import (
+    _bridge_attachment_ids,
     _resolve_thread_id,
     aside_session,
     chat,
@@ -1422,7 +1423,12 @@ def register_chat_routes(app, ui: str) -> None:
         if not text:
             raise HTTPException(status_code=400, detail="text is required")
         msg_id = str((body or {}).get("id", "")).strip() or None
-        mid = steering.enqueue(session_id, text, msg_id=msg_id)
+        images = (body or {}).get("images") or None
+        refs = _bridge_attachment_ids(images, session_id)
+        mid = steering.enqueue(
+            session_id, text, msg_id=msg_id, images=images, refs=refs,
+            vision=bool(getattr(STATE.graph_config, "model_vision", False)),
+        )
         return {"ok": True, "id": mid, "pending": steering.pending(session_id)}
 
     @app.get("/api/chat/sessions/{session_id}/steer")
