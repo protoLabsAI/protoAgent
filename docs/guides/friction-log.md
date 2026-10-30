@@ -80,6 +80,41 @@ to file."* The subagent reads both channels and then:
 It is **read-only**: its only tool is `friction_review`. It can't resolve or record
 anything, so the plan comes back to you, and filing and resolving stay your decision.
 
+## Gate-regression triage
+
+With the friction plugin enabled and nightly gate regressions recorded, ask the
+agent: *"Delegate to eval_regression_triage to review open nightly regressions."*
+The eval runner needs the linked nightly report and its normal eval credentials;
+trace reads use the configured Langfuse backend.
+
+The reviewer reads open entries from `plugin:evals-nightly` whose summary starts
+`nightly gate regression: `. It reads each entry's `trace_id` and reruns only that
+case through `python -m evals.runner --tasks <case id>` (including `instance:` for
+instance cases). Each rerun boots a fresh throwaway agent with a private box root,
+using the model recorded in the linked nightly report and a snapshot of the current
+instance case store. The runner receives an explicit base URL, model label and case
+store path; it never falls back to a live agent. The temporary agent is stopped
+and removed after the run. Missing reports or model evidence make the rerun
+unavailable, not a pass. It returns one proposal per friction entry, linking the case,
+trace and friction id:
+
+- **Agent/harness defect:** a `task_create` proposal with the failing assertion and
+  suspected cause, for an operator to review before implementation.
+- **Case defect:** a proposed edit as text for human review, with the guardrail
+  below included verbatim. It never applies the edit.
+- **Flake:** a case that passes on rerun gets no task and the advice
+  **demote to tracked or fix**. Skipped runs and runner errors are not passes;
+  unavailable evidence is identified in an investigation proposal.
+
+> Never reword a case's prompt to name the expected tool. Never tell the agent to delegate or not to use tools. Never loosen an assertion just to get a pass. A case failing on the current model is a real finding: tier it `tracked` or report it; don't edit it to pass. This card must NOT edit `evals/tasks.json`.
+
+The boundary is a hard allowlist: `eval_regression_entries`,
+`eval_regression_trace`, `eval_rerun_case`, and `task_create`, with inherited tools
+disabled. There is no shell, file-write tool, case API wrapper or
+`resolve_friction`. Triage cannot edit either case store or resolve entries.
+`friction_triage` remains the separate read-only general backlog reviewer.
+Automatic nightly dispatch and resolve-on-pass are separate work.
+
 ## What goes in it
 
 Every entry is one of two kinds:

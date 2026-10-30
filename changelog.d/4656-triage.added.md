@@ -1,0 +1,1 @@
+- **Gate-regression triage proposals (#4656).** Add an eval regression reviewer that reads nightly friction and traces, reruns one named case, and proposes a harness task, guarded case edit, or flake advice. Its hard tool allowlist excludes case writes and friction resolution. Reruns use a fresh isolated agent and the recorded nightly model, never the live-agent fallback.
