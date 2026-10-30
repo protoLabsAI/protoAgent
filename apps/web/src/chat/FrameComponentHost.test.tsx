@@ -23,6 +23,21 @@ import {
   type FrameComponentHostProps,
 } from "./FrameComponentHost";
 
+// The open-view bridge (#4657) reaches console nav (openView) and the plugin-view inbox
+// (postToPluginView). Partial-mock both so the tests can assert the host routed + delivered
+// without mutating the real UI store or a live view iframe; every OTHER export of each module
+// stays real (both sit deep in the import graph — FrameComponentHost pulls nav in transitively).
+const openViewMock = vi.hoisted(() => vi.fn());
+const postToPluginViewMock = vi.hoisted(() => vi.fn(() => true));
+vi.mock("../app/palette/nav", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../app/palette/nav")>()),
+  openView: openViewMock,
+}));
+vi.mock("../lib/pluginViewInbox", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/pluginViewInbox")>()),
+  postToPluginView: postToPluginViewMock,
+}));
+
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let container: HTMLElement;
@@ -317,6 +332,11 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b / S19)
   };
   const q = <T extends Element = HTMLElement>(id: string) => container.querySelector<T>(sel(id));
   beforeEach(() => localStorage.clear());
+  beforeEach(() => {
+    openViewMock.mockClear();
+    postToPluginViewMock.mockClear();
+    postToPluginViewMock.mockReturnValue(true);
+  });
   afterEach(() => localStorage.clear());
 
   function chatStub(over: Partial<ComponentChatSend> = {}): ComponentChatSend & { send: ReturnType<typeof vi.fn> } {
@@ -537,5 +557,96 @@ describe("FrameComponentHost — send/openLink bridge (ADR 0118 D4 / S12b / S19)
     expect(open).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("https") }));
     expect(container.querySelector('[data-testid="component-send-rejected"]')?.textContent).toContain("https");
+  });
+
+  // #4657 — protoComponent:openView: the frame opens one of its OWN plugin's declared views and
+  // delivers a small payload to it. The capability nonce, the declared-view allowlist, the 4 KB
+  // message cap, the ADR 0086 mobile suppression and the rate window are the whole decision.
+  it("opens one of the plugin's OWN declared views and delivers the payload", () => {
+    const { frame, post } = mountBridge(chatStub(), { views: ["board"] });
+    dispatch(frame, { type: "protoComponent:openView", cid: 7, view: "board", message: { type: "board:focus", id: "x" } });
+    // It routes to plugin:<thisPlugin>:<view> and hands the inbox the message (held until the
+    // view's page is listening), then reports success back down.
+    expect(openViewMock).toHaveBeenCalledWith("plugin:demo:board");
+    expect(postToPluginViewMock).toHaveBeenCalledWith("plugin:demo:board", { type: "board:focus", id: "x" });
+    expect(post).toHaveBeenCalledWith(...bridgeResult(true));
+  });
+
+  it("refuses a view the plugin does not declare", () => {
+    const { frame, post } = mountBridge(chatStub(), { views: ["board"] });
+    dispatch(frame, { type: "protoComponent:openView", cid: 7, view: "ghost", message: { type: "x:y" } });
+    expect(openViewMock).not.toHaveBeenCalled();
+    expect(postToPluginViewMock).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("declare") }));
+  });
+
+  it("refuses another plugin's view — only the emitting plugin's own views open", () => {
+    // demo declares only "board"; "settings" belongs to a DIFFERENT plugin, so it's never in this
+    // host's allowlist — and a resolved key could only ever be plugin:demo:*, never someone else's.
+    const { frame, post } = mountBridge(chatStub(), { views: ["board"] });
+    dispatch(frame, { type: "protoComponent:openView", cid: 7, view: "settings", message: { type: "x:y" } });
+    expect(openViewMock).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("declare") }));
+  });
+
+  it("refuses openView with a missing or invalid nonce", () => {
+    const { frame, post } = mountBridge(chatStub(), { views: ["board"] });
+    dispatch(frame, { type: "protoComponent:openView", cid: 7, view: "board", message: { type: "x:y" }, nonce: "wrong" });
+    expect(openViewMock).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("nonce") }));
+  });
+
+  it("refuses an openView message over 4 KB", () => {
+    const { frame, post } = mountBridge(chatStub(), { views: ["board"] });
+    const message = { type: "board:data", blob: "x".repeat(5000) };
+    dispatch(frame, { type: "protoComponent:openView", cid: 7, view: "board", message });
+    expect(openViewMock).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("too large") }));
+  });
+
+  it("ignores an openView from some other window (e.source is the gate)", () => {
+    const { frame } = mountBridge(chatStub(), { views: ["board"] });
+    dispatch(frame, { type: "protoComponent:openView", cid: 7, view: "board", message: { type: "x:y" } }, window);
+    expect(openViewMock).not.toHaveBeenCalled();
+    expect(postToPluginViewMock).not.toHaveBeenCalled();
+  });
+
+  it("never auto-opens a view on the mobile shell (ADR 0086)", () => {
+    const { frame, post } = mountBridge(chatStub(), { views: ["board"] });
+    // autoOpenSuppressed() reads window.matchMedia; jsdom has none (→ desktop). Model the phone
+    // shell by answering every query as a match, then prove the view is NOT opened.
+    const realMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    try {
+      dispatch(frame, { type: "protoComponent:openView", cid: 7, view: "board", message: { type: "x:y" } });
+    } finally {
+      window.matchMedia = realMatchMedia;
+    }
+    expect(openViewMock).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("mobile") }));
+  });
+
+  it("rate-gates view opens to one per 2 seconds, like openLink", () => {
+    const { frame, post } = mountBridge(chatStub(), { views: ["board"] });
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(1_000_000);
+    dispatch(frame, { type: "protoComponent:openView", cid: 1, view: "board", message: { type: "x:y" } });
+    expect(openViewMock).toHaveBeenCalledTimes(1);
+    now.mockReturnValue(1_001_000); // 1s later — inside the 2s window
+    dispatch(frame, { type: "protoComponent:openView", cid: 2, view: "board", message: { type: "x:y" } });
+    expect(openViewMock).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith(...bridgeResult(false, { error: expect.stringContaining("2 seconds") }, 2));
+    now.mockReturnValue(1_003_000); // >2s after the first accepted open — allowed again
+    dispatch(frame, { type: "protoComponent:openView", cid: 3, view: "board", message: { type: "x:y" } });
+    expect(openViewMock).toHaveBeenCalledTimes(2);
   });
 });

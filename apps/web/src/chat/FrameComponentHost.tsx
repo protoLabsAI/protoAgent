@@ -1,13 +1,17 @@
 import { snapshotToCss, themeTokenSnapshot } from "@protolabsai/design/embed";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 
+import { openView } from "../app/palette/nav";
 import { InlineFrameBridgeContext } from "../artifacts/ArtifactRefChip";
+import { OPEN_LINK_RATE_LIMIT_MS } from "../artifacts/frameBridge";
 import { BridgeNoticeView, useFrameProposalGate } from "../artifacts/FrameProposalChip";
 import { useFrameFocusGuard } from "../artifacts/frameFocusGuard";
 import { FrameActivationShield, FrameQuarantineNotice } from "../artifacts/FrameGuardViews";
 import { createFrameRegistry, LAZY_MOUNT_ROOT_MARGIN, useLazyMount, type FrameRegistry } from "../artifacts/inlineFrames";
 import { apiUrl } from "../lib/api";
 import { fetchComponentRead, type ComponentReadResult } from "../lib/api/components";
+import { autoOpenSuppressed } from "../lib/autoOpen";
+import { postToPluginView, type PluginViewMessage } from "../lib/pluginViewInbox";
 import { checkReadRequest, createReadLimiter } from "./frameComponentReads";
 
 // Host for a FRAME-rendered plugin component (ADR 0118 D5 console, S12). A plugin kind may
@@ -62,6 +66,22 @@ import { checkReadRequest, createReadLimiter } from "./frameComponentReads";
 //     ChatSessionSlot runTurn), tagged with the origin `{via:"component", kind, plugin}` so the
 //     turn is a normal, visible, auditable user message with a "from ‹title›" label.
 //
+// Open-view bridge (ADR 0026 amendment, #4657) — a frame opens its OWN plugin's console view:
+//   • The frame posts `protoComponent:openView {cid, nonce, view, message}`. Gated by the SAME
+//     per-mount nonce as send/openLink, so a navigated-away document can't drive it.
+//   • `view` must be a view the EMITTING plugin declares in its manifest `views:` (the `views`
+//     prop, derived by the caller from runtime status). Another plugin's view, a core surface
+//     and an unknown id are all refused — the host only ever opens `plugin:<thisPlugin>:<view>`.
+//   • `message` is a JSON-serialisable object ≤ 4 KB with a plugin-namespaced string `type`
+//     (the `postToPluginView` contract); anything else is refused. It is delivered to the view
+//     through the host-side inbox (held until the view's page is listening).
+//   • On the phone / portrait-touch-tablet shell the view NEVER auto-opens (ADR 0086,
+//     `autoOpenSuppressed`): the request is refused with a readable error rather than swapping
+//     chat out from under the operator. Rate-gated one-per-2s per frame, like openLink.
+//   • Unlike a send, this is NOT an operator-confirmed proposal: opening a plugin's own view is
+//     low-risk, so the nonce + declared-view ownership + size + mobile + rate gates are the whole
+//     decision. The verdict goes back as `protoComponent:bridgeResult {cid, ok, error?}`.
+//
 // Read channel (ADR 0118 D5 amendment, #4143) — the one narrow way a frame gets LIVE data:
 //   • The kind declares `reads` at registration (GET patterns under its OWN
 //     `/api/plugins/<id>/`, validated server-side, carried by GET /api/components). The frame
@@ -94,8 +114,9 @@ import { checkReadRequest, createReadLimiter } from "./frameComponentReads";
 //     matches, on a mount that has not yet been initialised and has seen at most one `load`, with
 //     exactly ONE `protoComponent:init {props, theme, nonce}`. `nonce` is a second, fresh 128-bit
 //     value, and init is the ONLY message that ever carries it. There are no re-posts.
-//   • Every `protoComponent:read`, `protoComponent:send` and `protoComponent:openLink` must echo
-//     `nonce`; a missing / wrong one is refused with no console UI.
+//   • Every `protoComponent:read`, `protoComponent:send`, `protoComponent:openLink` and
+//     `protoComponent:openView` must echo `nonce`; a missing / wrong one is refused with no
+//     console UI.
 //   • Any sign of a second document revokes the mount at once (nonce → null, in-flight reads
 //     aborted, frame unloaded for a "navigated away" notice whose Reload remounts at the declared
 //     URL with a fresh pair): a SECOND `load` of the element, a SECOND `ready`, or a `ready` whose
@@ -144,6 +165,10 @@ export type FrameComponentHostProps = {
   /** The kind's declared read allowlist (catalog `reads`, #4143): GET patterns relative to
    *  `/api/plugins/<plugin>/`. Empty/absent ⇒ every `protoComponent:read` is refused. */
   reads?: readonly string[];
+  /** The view ids the EMITTING plugin declares as navigable surfaces (ADR 0026, #4657) — derived
+   *  by the caller from runtime status. The only ids a `protoComponent:openView` may name;
+   *  empty/absent ⇒ every openView is refused. Never another plugin's views or a core surface. */
+  views?: readonly string[];
 };
 
 /** How a frame-rendered plugin component reaches the chat it is shown in (ADR 0118 D4 / S12b).
@@ -284,7 +309,38 @@ function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
-export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry, title, reads }: FrameComponentHostProps) {
+/** The largest `protoComponent:openView` payload (JSON bytes) the host will carry to a view
+ *  (ADR 0026 amendment, #4657). A deliberately tight bound: the message is a "what to show now"
+ *  nudge (ids, a selector), never the content itself. */
+export const OPEN_VIEW_MESSAGE_MAX_BYTES = 4096;
+
+/** Validate a frame's openView `message`: a JSON-serialisable plain object ≤ 4 KB carrying a
+ *  plugin-namespaced string `type` — exactly what `postToPluginView` will accept and deliver, so
+ *  an ok verdict never hands the frame a success it didn't get. Returns the reason on refusal. */
+function checkOpenViewMessage(raw: unknown): { ok: true; message: PluginViewMessage } | { ok: false; error: string } {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return { ok: false, error: "openView message must be a JSON object" };
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(raw);
+  } catch {
+    return { ok: false, error: "openView message must be JSON-serialisable" };
+  }
+  if (typeof serialized !== "string") {
+    return { ok: false, error: "openView message must be JSON-serialisable" };
+  }
+  if (new TextEncoder().encode(serialized).length > OPEN_VIEW_MESSAGE_MAX_BYTES) {
+    return { ok: false, error: `openView message is too large (${OPEN_VIEW_MESSAGE_MAX_BYTES} bytes max)` };
+  }
+  const type = (raw as { type?: unknown }).type;
+  if (typeof type !== "string" || !type || type.startsWith("protoagent:")) {
+    return { ok: false, error: "openView message needs a plugin-namespaced string `type` (not protoagent:*)" };
+  }
+  return { ok: true, message: raw as PluginViewMessage };
+}
+
+export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry, title, reads, views }: FrameComponentHostProps) {
   // A standalone host (no shared registry) gets its own, so lazy-mount + clamp still apply and
   // the single frame is always within the cap.
   const [ownRegistry] = useState(() => registry ?? createFrameRegistry());
@@ -322,6 +378,13 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
   readsRef.current = reads;
   const [readLimiter] = useState(() => createReadLimiter());
   const nearViewport = useNearViewport(placeholderRef, live);
+
+  // The emitting plugin's declared view ids (the openView allowlist, #4657), read through a ref
+  // at message time so a runtime-status change never re-binds the bridge listener. The per-frame
+  // openView rate window (one per 2 s, like openLink) lives as long as this host.
+  const viewsRef = useRef(views);
+  viewsRef.current = views;
+  const lastOpenViewRef = useRef(Number.NEGATIVE_INFINITY);
 
   // Start at this id's last remembered height (floor if it never measured), so a resumed frame
   // and the static card both keep their size and the transcript layout doesn't jump.
@@ -376,6 +439,55 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
   // Trust is per component KIND (plugin + kind, from the host's own props), not per occurrence.
   const gate = useFrameProposalGate({ bridge, frameId: id, trustKey: `component:${plugin ?? ""}:${kind ?? ""}`, reply: replyToFrame });
 
+  // The open-view bridge (ADR 0026 amendment, #4657): the frame asks to open ONE of its OWN
+  // plugin's declared console views and deliver a small payload to it. Not an operator-confirmed
+  // proposal (opening a plugin's own view is low-risk) — the gates below are the whole decision:
+  // the declared-view allowlist (never another plugin's view, a core surface or an unknown id),
+  // the ≤ 4 KB JSON message, the ADR 0086 mobile suppression, and a one-per-2s rate window.
+  const openViewFromFrame = useCallback(
+    (cid: number, rawView: unknown, rawMessage: unknown) => {
+      const view = typeof rawView === "string" ? rawView : "";
+      // Only a view THIS component's own plugin declares. The resolved key is always
+      // `plugin:<thisPlugin>:<view>`, so even a view id another plugin happens to share can only
+      // open the emitting plugin's own surface — never someone else's, never a core surface.
+      if (!plugin || !view || !(viewsRef.current ?? []).includes(view)) {
+        replyToFrame(cid, { ok: false, error: "That view is not one this component's plugin declares." });
+        return;
+      }
+      const checked = checkOpenViewMessage(rawMessage);
+      if (!checked.ok) {
+        replyToFrame(cid, { ok: false, error: checked.error });
+        return;
+      }
+      // ADR 0086: on the phone / portrait-touch-tablet shell a surface never opens over chat on
+      // its own. Refuse with a readable error the frame can show — the view stays reachable from
+      // the drawer — rather than yanking the operator off the conversation.
+      if (autoOpenSuppressed()) {
+        const error = "Open this view from the menu — a component can't switch the screen on mobile.";
+        gate.showRejection(error);
+        replyToFrame(cid, { ok: false, error });
+        return;
+      }
+      // Rate-gate like openLink so a frame can't spam view switches.
+      const now = Date.now();
+      if (now - lastOpenViewRef.current < OPEN_LINK_RATE_LIMIT_MS) {
+        const error = "Only one view can be opened every 2 seconds.";
+        gate.showRejection(error);
+        replyToFrame(cid, { ok: false, error });
+        return;
+      }
+      lastOpenViewRef.current = now;
+      const viewKey = `plugin:${plugin}:${view}`;
+      // Queue the payload first (the inbox holds it until the view's page is listening — a
+      // collapsed dock mounts its iframe only on this open), then route to the view: openView
+      // resolves the owning dock and un-collapses it (nav.ts).
+      const delivered = postToPluginView(viewKey, checked.message);
+      openView(viewKey);
+      replyToFrame(cid, delivered ? { ok: true } : { ok: false, error: "The view could not receive the message." });
+    },
+    [plugin, replyToFrame, gate.showRejection],
+  );
+
   // The send/openLink bridge (ADR 0118 D4 / S12b). Gated on `e.source` being THIS frame's own
   // window — a sibling frame or the page can't drive another component's chat — the strong
   // guarantee, since an opaque-origin frame's `origin` is "null". Only live frames carry a window
@@ -386,8 +498,17 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     function onBridge(e: MessageEvent) {
       const win = frameRef.current?.contentWindow;
       if (!win || e.source !== win) return; // only our own frame
-      const m = (e.data || {}) as { type?: unknown; cid?: unknown; text?: unknown; url?: unknown; nonce?: unknown };
-      if (m.type !== "protoComponent:send" && m.type !== "protoComponent:openLink") return;
+      const m = (e.data || {}) as {
+        type?: unknown;
+        cid?: unknown;
+        text?: unknown;
+        url?: unknown;
+        view?: unknown;
+        message?: unknown;
+        nonce?: unknown;
+      };
+      if (m.type !== "protoComponent:send" && m.type !== "protoComponent:openLink" && m.type !== "protoComponent:openView")
+        return;
       const cid = typeof m.cid === "number" ? m.cid : NaN;
       if (Number.isNaN(cid)) return;
       // The per-mount capability (#4143 F1): a document that replaced the plugin page has none,
@@ -395,6 +516,11 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
       // console UI, so a navigated page can't spam the operator either.
       if (!hasCapability(m)) {
         replyToFrame(cid, { ok: false, error: "missing or invalid nonce" });
+        return;
+      }
+
+      if (m.type === "protoComponent:openView") {
+        openViewFromFrame(cid, m.view, m.message);
         return;
       }
 
@@ -421,7 +547,7 @@ export function FrameComponentHost({ id, frameUrl, props, kind, plugin, registry
     }
     window.addEventListener("message", onBridge);
     return () => window.removeEventListener("message", onBridge);
-  }, [live, id, kind, plugin, chat, bridge, replyToFrame, hasCapability, gate.propose, gate.proposeOpen, gate.showRejection]);
+  }, [live, id, kind, plugin, chat, bridge, replyToFrame, hasCapability, openViewFromFrame, gate.propose, gate.proposeOpen, gate.showRejection]);
 
   // A self-focusing component must not pull the composer's focus into its frame (#4076): the
   // frame is click-to-activate (or Tab into it), and one that takes focus on its own is

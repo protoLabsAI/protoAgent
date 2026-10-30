@@ -7,7 +7,10 @@ import { Table, TBody, Td, Th, THead, Tr } from "@protolabsai/ui/data";
 import { CodeRefChip } from "../codeviewer/CodeRefChip";
 import { resolveChatComponent, type ComponentFrame } from "../ext/componentRegistry";
 import { useComponentCatalog } from "../lib/api/components";
-import type { ComponentSpec } from "../lib/types";
+import { isNavigablePluginView } from "../lib/pluginViews";
+import { queryClient } from "../lib/queryClient";
+import { queryKeys } from "../lib/queries";
+import type { ComponentSpec, RuntimeStatus } from "../lib/types";
 import { ComponentFrameRegistryContext, FrameComponentHost } from "./FrameComponentHost";
 
 // Curated, data-only chat component registry (ADR 0051 Slice 2). Renders typed
@@ -125,6 +128,19 @@ const BUILTINS: Record<string, (p: { props: Record<string, unknown> }) => JSX.El
   "code-ref": CodeRefChip,
 };
 
+// The navigable view ids a plugin declares (ADR 0026), for the frame host's `protoComponent:openView`
+// allowlist (#4657). Read from the runtime-status cache the app already populates (the SAME shared
+// client App's `useQuery` writes to) rather than a fresh subscription per transcript component —
+// and re-read on every render, so a plugin (re)load, which also refreshes the component catalog and
+// re-renders this, picks up newly-declared views. A chat-slot claimant / utility widget isn't a
+// navigable surface (`isNavigablePluginView`), so it can't be an openView target.
+function declaredViewIds(plugin: string | null): string[] {
+  if (!plugin) return [];
+  const runtime = queryClient.getQueryData<RuntimeStatus>(queryKeys.runtime);
+  const owner = (runtime?.plugins ?? []).find((p) => p.id === plugin && p.enabled);
+  return (owner?.views ?? []).filter(isNavigablePluginView).map((v) => String(v.id));
+}
+
 export function ChatComponent({ spec }: { spec: ComponentSpec }) {
   // Resolution order (ADR 0118 D5 / S12b), in componentRegistry.resolveChatComponent:
   //   1. a TS-registered (fork/plugin) renderer — ALWAYS wins, so a fork can add new kinds AND
@@ -171,6 +187,7 @@ export function ChatComponent({ spec }: { spec: ComponentSpec }) {
           registry={frameRegistry}
           title={spec.component}
           reads={entry?.reads}
+          views={declaredViewIds(resolved.plugin)}
         />
       </div>
     );
