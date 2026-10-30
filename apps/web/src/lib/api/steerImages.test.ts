@@ -29,6 +29,15 @@ describe("steerChat: optional image attachments", () => {
     expect(bodies[0]).toEqual({ id: "m1", text: "go left" });
   });
 
+  it("sends incognito alongside images to skip media persistence", async () => {
+    const bodies = captureBody();
+    await api.steerChat("chat-1", "m1", "", [{ b64: "AAAA", mime: "image/png", name: "shot.png" }], true);
+    expect(bodies[0]).toEqual({
+      id: "m1", text: "", incognito: true,
+      images: [["image/png", "data:image/png;base64,AAAA"]],
+    });
+  });
+
   it("omits images when the list is empty", async () => {
     const bodies = captureBody();
     await api.steerChat("chat-1", "m1", "go left", []);

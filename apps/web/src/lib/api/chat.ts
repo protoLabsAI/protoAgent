@@ -488,7 +488,7 @@ export const chatApi = {
   // into the media store and folds them into the next model call. They go only when
   // there are any, so a text-only steer still sends exactly `{id, text}` as before;
   // each part is a `[mime, data-URI]` pair, the shape the route's coercion takes.
-  steerChat(sessionId: string, id: string, text: string, images?: ChatImagePart[]) {
+  steerChat(sessionId: string, id: string, text: string, images?: ChatImagePart[], incognito?: boolean) {
     return request<{ ok: boolean; id: string | null; pending: number }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
       {
@@ -496,6 +496,7 @@ export const chatApi = {
         body: {
           id,
           text,
+          ...(images?.length && incognito ? { incognito: true } : {}),
           ...(images && images.length
             ? { images: images.map((img) => [img.mime, `data:${img.mime};base64,${img.b64}`]) }
             : {}),

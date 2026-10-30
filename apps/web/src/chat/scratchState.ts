@@ -58,6 +58,11 @@ export function loadSteers(sessionId: string): QueuedSteer[] {
           .map((s) => ({
             id: s.id,
             text: s.text,
+            ...(Array.isArray(s.images)
+              ? { images: s.images.filter((image: Record<string, unknown>) =>
+                  image && typeof image.b64 === "string" && typeof image.mime === "string" && typeof image.name === "string",
+                ) }
+              : {}),
             ...(typeof s.serverTaskId === "string" && s.serverTaskId ? { serverTaskId: s.serverTaskId } : {}),
             // A reload is itself a lost answer: an item whose POST was in flight comes back
             // unconfirmed, so the reconcile can't read its absence as "the agent read it".

@@ -208,6 +208,62 @@ describe("useSteerQueue — steer attachments (#4645)", () => {
     expect(clearTrayImages).toHaveBeenCalledTimes(1);
   });
 
+
+  it("preserves images across scratch reload and late re-send", async () => {
+    const runTurn = mkRun();
+    const r = renderHook(baseOpts({ trayImages: () => [IMG], runTurn }));
+    await act(() => r.current.queueSteer());
+    const item = r.current.steerQueue[0];
+    expect(loadSteers(sessionId)).toEqual([{ ...item, images: [IMG] }]);
+    pendingSteer.mockResolvedValue({ pending: [{ id: item.id, text: "" }] });
+    await act(() => r.current.reconcileSteer());
+    expect(runTurn).toHaveBeenCalledWith("", { images: [IMG] });
+  });
+
+  it.each(["edit", "stop"] as const)("returns accepted images to the tray on %s", async (action) => {
+    const restoreTrayImages = vi.fn();
+    const r = renderHook(baseOpts({ trayImages: () => [IMG], restoreTrayImages }));
+    await act(() => r.current.queueSteer());
+    const id = r.current.steerQueue[0].id;
+    await act(async () => {
+      if (action === "edit") await r.current.dequeueSteer(id, true);
+      else r.current.clearQueueOnStop();
+    });
+    await flush();
+    expect(restoreTrayImages).toHaveBeenCalledWith([IMG]);
+    expect(r.current.steerQueue).toEqual([]);
+  });
+
+  it("does not restore images when recall loses the race to consumption", async () => {
+    const restoreTrayImages = vi.fn();
+    const r = renderHook(baseOpts({ trayImages: () => [IMG], restoreTrayImages }));
+    await act(() => r.current.queueSteer());
+    cancelSteer.mockResolvedValue({ removed: false, pending: 0 });
+    await act(() => r.current.dequeueSteer(r.current.steerQueue[0].id, true));
+    expect(restoreTrayImages).not.toHaveBeenCalled();
+    expect(r.current.steerQueue[0].images).toEqual([IMG]);
+  });
+
+  it("asserts incognito on an image steer", async () => {
+    const r = renderHook(baseOpts({ session: { id: sessionId, incognito: true }, trayImages: () => [IMG] }));
+    await act(() => r.current.queueSteer());
+    expect(steerChat).toHaveBeenCalledWith(sessionId, r.current.steerQueue[0].id, "", [IMG], true);
+  });
+
+  it("waits for acceptance before clearing images", async () => {
+    let accept!: () => void;
+    steerChat.mockImplementation(() => new Promise((resolve) => {
+      accept = () => resolve({ ok: true, id: null, pending: 1 });
+    }));
+    const clearTrayImages = vi.fn();
+    const r = renderHook(baseOpts({ trayImages: () => [IMG], clearTrayImages }));
+    let request!: Promise<void>;
+    act(() => { request = r.current.queueSteer(); });
+    expect(clearTrayImages).not.toHaveBeenCalled();
+    await act(async () => { accept(); await request; });
+    expect(clearTrayImages).toHaveBeenCalledOnce();
+  });
+
   it("queues an image-only steer with an empty draft (the image is the message)", async () => {
     const clearTrayImages = vi.fn();
     const r = renderHook(baseOpts({ draft: "   ", trayImages: () => [IMG], clearTrayImages }));

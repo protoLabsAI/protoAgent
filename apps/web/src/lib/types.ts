@@ -1197,6 +1197,7 @@ export type ConsumedSteer = { id: string; text: string };
  *  which carries that turn's durable task id, so the console can tell when the turn it
  *  was sent to is over and settle or re-send whatever the turn never reached. */
 export type QueuedSteer = ConsumedSteer & {
+  images?: { b64: string; mime: string; name: string }[];
   serverTaskId?: string;
   /** The submission never got an answer (the request failed, or the tab reloaded while it
    *  was in flight), so the console does NOT know whether the server queued it. Absence

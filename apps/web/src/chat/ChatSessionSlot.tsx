@@ -43,7 +43,7 @@ import {
 import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
 import { GoalRunStrip } from "./GoalRunStrip";
 import { messageId } from "./messageId";
-import { readyNativeImages, useAttachments } from "./useAttachments";
+import { readyNativeAttachments, readyNativeImages, useAttachments } from "./useAttachments";
 import { useSlashAutocomplete } from "./useSlashAutocomplete";
 import { formResponseText, useHitl } from "./useHitl";
 import { useSteerQueue } from "./useSteerQueue";
@@ -677,8 +677,18 @@ export function ChatSessionSlot({
     // same way a normal send builds them; the queue clears them only once the steer is
     // accepted, so a failed queue leaves them for a retry.
     trayImages: () => readyNativeImages(attachments),
-    clearTrayImages: () =>
-      setAttachments((atts) => atts.filter((a) => !(a.status === "ready" && a.native && a.b64))),
+    clearTrayImages: () => {
+      // This render captured the submitted tray; uploads finishing during the POST stay.
+      const sentIds = new Set(readyNativeAttachments(attachments).map((a) => a.id));
+      setAttachments((atts) => atts.filter((a) => !sentIds.has(a.id)));
+    },
+    restoreTrayImages: (images) =>
+      setAttachments((atts) => [
+        ...atts,
+        ...images.map((image) => ({
+          ...image, id: messageId(), kind: "image" as const, status: "ready" as const, native: true,
+        })),
+      ]),
   });
   // The goal-kickoff gate reads the steer queue + HITL panel: re-check when either clears.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pokeGoalKickoff reads a ref
@@ -741,7 +751,7 @@ export function ChatSessionSlot({
     if (text.startsWith("/") && runClientSlash(text.slice(1).trim())) return;
     // Native-vision images ride the turn as multimodal parts; pipeline attachments
     // contribute a prepended context block.
-    const nativeImgs = attachments.filter((a) => a.status === "ready" && a.native && a.b64);
+    const nativeImgs = readyNativeAttachments(attachments);
     const piped = attachments.filter((a) => a.status === "ready" && a.context);
     if (nativeImgs.length === 0 && piped.length === 0) {
       void runTurn(text);
@@ -779,7 +789,7 @@ export function ChatSessionSlot({
       ta.selectionStart = ta.selectionEnd = item.text.length; // readline: edit from the end
       refreshSlash(); // the recalled text may itself start with a "/" or "@" token
     });
-    const outcome = await dequeueSteer(id);
+    const outcome = await dequeueSteer(id, true);
     if (outcome === "consumed") {
       // Too late — the agent already read it (dequeueSteer restored its bubble). Pin the
       // known-duplicate marker to the exact recalled text so the inline warning below makes
@@ -1031,7 +1041,7 @@ export function ChatSessionSlot({
     // kickoff) — keeping them from a raw gateway failure. It must never be the thing that
     // stops a caller that has ALREADY mutated the thread; those guard up front instead.
     if (noModel) return;
-    if (!session || !content) return;
+    if (!session || (!content && !opts.images?.length)) return;
     // Every visible send — composer, artifact bridge, HITL answer — re-pins the transcript.
     if (!opts.hidden) repinTranscript();
     // `sendAs` (attachment context prepended) is what the MODEL receives; `content`
