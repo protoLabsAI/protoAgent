@@ -37,6 +37,11 @@ import { isDesktopWebview, tauriCore } from "./desktop";
 
 type GetTaskResult = NonNullable<A2AFrame["result"]>;
 
+/** A native-vision image a send (or a steer) carries: bare base64 + its mime + filename —
+ *  the shape the attachment tray produces (useAttachments). The turn path ships it as an
+ *  A2A part; the steer route takes it as a `[mime, data-URI]` pair (see `steerChat`). */
+export type ChatImagePart = { b64: string; mime: string; name: string };
+
 /** The Task a unary `GetTask` answered with, or undefined (#3957).
  *
  *  A2A 1.0 serves the task FLAT on `result`, untagged; A2A 0.3 tags it `kind: "task"`; a
@@ -282,7 +287,7 @@ export const chatApi = {
     sessionId: string,
     handlers: TurnStreamHandlers = {},
     opts: {
-      images?: { b64: string; mime: string; name: string }[];
+      images?: ChatImagePart[];
       model?: string;
       reasoningEffort?: string;
       bypassPermissions?: boolean;
@@ -478,11 +483,24 @@ export const chatApi = {
 
   // Mid-turn steering: queue a user message into a RUNNING turn (folded in at the
   // next model call by SteeringMiddleware) without stopping the stream. The client
-  // `id` lets the turn-end reconcile tell consumed from arrived-too-late.
-  steerChat(sessionId: string, id: string, text: string) {
+  // `id` lets the turn-end reconcile tell consumed from arrived-too-late. `images`
+  // (#4645) ride the steer the same way a normal send's do — the route bridges them
+  // into the media store and folds them into the next model call. They go only when
+  // there are any, so a text-only steer still sends exactly `{id, text}` as before;
+  // each part is a `[mime, data-URI]` pair, the shape the route's coercion takes.
+  steerChat(sessionId: string, id: string, text: string, images?: ChatImagePart[]) {
     return request<{ ok: boolean; id: string | null; pending: number }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/steer`,
-      { method: "POST", body: { id, text } },
+      {
+        method: "POST",
+        body: {
+          id,
+          text,
+          ...(images && images.length
+            ? { images: images.map((img) => [img.mime, `data:${img.mime};base64,${img.b64}`]) }
+            : {}),
+        },
+      },
     );
   },
   // Items still queued for the session — read at turn-end: anything here arrived

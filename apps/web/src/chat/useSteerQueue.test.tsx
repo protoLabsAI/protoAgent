@@ -194,6 +194,89 @@ describe("useSteerQueue — queueing", () => {
   });
 });
 
+describe("useSteerQueue — steer attachments (#4645)", () => {
+  const IMG = { b64: "aGVsbG8=", mime: "image/png", name: "shot.png" };
+
+  it("carries the tray's native images with a steer and clears the tray once accepted", async () => {
+    const clearTrayImages = vi.fn();
+    const r = renderHook(baseOpts({ draft: "look here", trayImages: () => [IMG], clearTrayImages }));
+    await act(() => r.current.queueSteer());
+    await flush();
+    const id = r.current.steerQueue[0].id;
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "look here", [IMG]);
+    // Cleared ONLY after the POST resolved, so a failure would have kept them.
+    expect(clearTrayImages).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues an image-only steer with an empty draft (the image is the message)", async () => {
+    const clearTrayImages = vi.fn();
+    const r = renderHook(baseOpts({ draft: "   ", trayImages: () => [IMG], clearTrayImages }));
+    await act(() => r.current.queueSteer());
+    await flush();
+    expect(r.current.steerQueue).toMatchObject([{ text: "" }]);
+    const id = r.current.steerQueue[0].id;
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "", [IMG]);
+    expect(clearTrayImages).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the tray's images (and reports) when the steer POST fails", async () => {
+    steerChat.mockRejectedValue(new Error("offline"));
+    const clearTrayImages = vi.fn();
+    const onError = vi.fn();
+    const r = renderHook(baseOpts({ draft: "look", trayImages: () => [IMG], clearTrayImages, onError }));
+    await act(() => r.current.queueSteer());
+    await flush();
+    expect(clearTrayImages).not.toHaveBeenCalled();
+    expect(r.current.steerQueue).toEqual([]);
+    expect(onError).toHaveBeenCalledWith("Couldn't queue message: offline");
+  });
+
+  it("a text-only steer passes no images and never touches the tray", async () => {
+    const clearTrayImages = vi.fn();
+    const r = renderHook(baseOpts({ draft: "just text", trayImages: () => [], clearTrayImages }));
+    await act(() => r.current.queueSteer());
+    await flush();
+    const id = r.current.steerQueue[0].id;
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "just text");
+    expect(clearTrayImages).not.toHaveBeenCalled();
+  });
+
+  it("a server interjection stays text-only — it never reads or clears the tray", async () => {
+    chatStore.setServerTurnControl({
+      sessionId,
+      taskId: "t-live",
+      origin: "scheduler",
+      trigger: "x",
+      controllable: true,
+      operatorControllable: true,
+    });
+    const trayImages = vi.fn(() => [IMG]);
+    const clearTrayImages = vi.fn();
+    const r = renderHook(
+      baseOpts({ draft: "also this", serverTurnControl: { taskId: "t-live" }, trayImages, clearTrayImages }),
+    );
+    await act(() => r.current.queueServerInterjection());
+    await flush();
+    const id = r.current.steerQueue[0].id;
+    expect(serverTurnInterject).toHaveBeenCalledWith(sessionId, "t-live", id, "also this");
+    expect(trayImages).not.toHaveBeenCalled();
+    expect(clearTrayImages).not.toHaveBeenCalled();
+  });
+
+  it("a HITL-held message (queued via queueSteer) stays text-only and leaves the tray alone", async () => {
+    const trayImages = vi.fn(() => [IMG]);
+    const clearTrayImages = vi.fn();
+    const hitlRef = { current: { kind: "form" } as HitlPayload };
+    const r = renderHook(baseOpts({ draft: "answer later", hitlRef, trayImages, clearTrayImages }));
+    await act(() => r.current.queueSteer());
+    await flush();
+    const id = r.current.steerQueue[0].id;
+    expect(steerChat).toHaveBeenCalledWith(sessionId, id, "answer later");
+    expect(trayImages).not.toHaveBeenCalled();
+    expect(clearTrayImages).not.toHaveBeenCalled();
+  });
+});
+
 describe("useSteerQueue — settle + dequeue", () => {
   it("retires a queued bubble once its id appears in the transcript", async () => {
     const r = renderHook(baseOpts({ draft: "fold me" }));

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type React from "react";
 
 import { api } from "../lib/api";
+import type { ChatImagePart } from "../lib/api/chat";
 import { errMsg } from "../lib/format";
 import type { ChatMessage, ConsumedSteer, HitlPayload, QueuedSteer } from "../lib/types";
 import { chatStore, type SessionStatus } from "./chat-store";
@@ -44,6 +45,14 @@ export type UseSteerQueueOptions = {
   abortRef: React.MutableRefObject<AbortController | null>;
   /** Record a queued message in the composer's input history and reset history nav. */
   recordSubmitted: (text: string) => void;
+  /** The ready native-vision images in the composer's tray RIGHT NOW (#4645). A steer
+   *  carries them the same way a normal send does; read at queue time, not kept in state.
+   *  Only the own-stream steer uses them — a server interjection / HITL hold stays
+   *  text-only, so their attachments stay in the tray. Absent → a steer sends no images. */
+  trayImages?: () => ChatImagePart[];
+  /** Drop the images a steer just carried from the tray — called ONLY after the steer POST
+   *  resolves, so a failed queue leaves them in place for a retry. */
+  clearTrayImages?: () => void;
 };
 
 // The mid-turn steer queue and its reconcile (#3862, extracted from ChatSessionSlot): the
@@ -70,6 +79,8 @@ export function useSteerQueue({
   hitlRef,
   abortRef,
   recordSubmitted,
+  trayImages,
+  clearTrayImages,
 }: UseSteerQueueOptions) {
   // Mid-turn steering: user messages queued WHILE a turn runs (optimistic), reconciled
   // at turn-end. ONE queue for both kinds — steers into this browser's own stream, and
@@ -138,15 +149,23 @@ export function useSteerQueue({
   // Steer a RUNNING turn: queue the typed message (folds in at the agent's next
   // model call via SteeringMiddleware) without stopping the stream. Shows an
   // optimistic "queued" bubble; turn-end reconcile settles or re-sends it.
+  // Any native-vision images in the tray ride along (#4645): an image with no text is
+  // itself the message, so an image-only steer is allowed; the tray is cleared only once
+  // the POST is accepted, so a failed queue keeps both the bubble's text and the images.
   async function queueSteer() {
     const text = draft.trim();
-    if (!session || !text) return;
-    recordSubmitted(text); // steered messages join the same recall ring
+    // A HITL-held message (send() routes it here while a form is parked) folds in AFTER
+    // the form answer and stays text-only — its attachments wait in the tray for a real
+    // send, as on the server. Only a true mid-turn steer carries the tray's images (#4645).
+    const images = hitlRef.current ? [] : (trayImages?.() ?? []);
+    if (!session || (!text && !images.length)) return;
+    if (text) recordSubmitted(text); // steered messages join the same recall ring
     const id = messageId();
     setDraft("");
     setSteerQueue([...steerQueueRef.current, { id, text }]);
     try {
-      await api.steerChat(session.id, id, text);
+      await (images.length ? api.steerChat(session.id, id, text, images) : api.steerChat(session.id, id, text));
+      if (images.length) clearTrayImages?.();
     } catch (e) {
       setSteerQueue(steerQueueRef.current.filter((x) => x.id !== id));
       onError(`Couldn't queue message: ${errMsg(e)}`);

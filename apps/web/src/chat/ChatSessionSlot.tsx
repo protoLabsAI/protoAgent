@@ -43,7 +43,7 @@ import {
 import { BackgroundWorkStrip } from "./BackgroundWorkStrip";
 import { GoalRunStrip } from "./GoalRunStrip";
 import { messageId } from "./messageId";
-import { useAttachments } from "./useAttachments";
+import { readyNativeImages, useAttachments } from "./useAttachments";
 import { useSlashAutocomplete } from "./useSlashAutocomplete";
 import { formResponseText, useHitl } from "./useHitl";
 import { useSteerQueue } from "./useSteerQueue";
@@ -673,6 +673,12 @@ export function ChatSessionSlot({
     hitlRef,
     abortRef,
     recordSubmitted,
+    // A steer carries whatever native-vision images are in the tray (#4645), built the
+    // same way a normal send builds them; the queue clears them only once the steer is
+    // accepted, so a failed queue leaves them for a retry.
+    trayImages: () => readyNativeImages(attachments),
+    clearTrayImages: () =>
+      setAttachments((atts) => atts.filter((a) => !(a.status === "ready" && a.native && a.b64))),
   });
   // The goal-kickoff gate reads the steer queue + HITL panel: re-check when either clears.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- pokeGoalKickoff reads a ref
@@ -741,7 +747,7 @@ export function ChatSessionSlot({
       void runTurn(text);
       return;
     }
-    const images = nativeImgs.map((a) => ({ b64: a.b64 as string, mime: a.mime || "image/png", name: a.name }));
+    const images = readyNativeImages(attachments);
     // The model gets the pipeline context prepended + the images natively; the
     // user bubble shows only the typed text + a 📎 list (never a raw doc/data dump).
     const sent = [...piped.map((a) => a.context as string), text].join("\n\n").trim();
