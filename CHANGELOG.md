@@ -15,6 +15,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.224.0] - 2026-10-30
+
+### Added
+- **Scripted console flows (#4610).** Add a versioned Playwright Career Coach creation flow for mock CI and authenticated live dev instances, with per-step screenshots, pass/fail results, a JSON summary, and live cleanup of the created agent.
+
+- **`scripts/evals_ab.py` takes `--tasks` and `--category` (#4658).** A quick learned-context
+  A/B can now run just the cases in question instead of the whole suite twice (about 20 minutes).
+  Both arms always run the same filter, so the comparison stays like-for-like.
+
+### Fixed
+- **The `memory_abstention` eval case grades what its name says (#1594).** It asks for a lab's
+  street address and door code that aren't in memory, to check that the agent declines instead
+  of making them up. It also required zero tool calls, so an agent that checked memory before
+  declining, which is the right behaviour, failed before its grading criteria ever ran. It
+  failed on every nightly with replies like "I don't have either one… there's no street
+  address or door code stored." The no-tools check is gone; the criteria (decline, no invented
+  address or code) now decide the result. The case stays tracked.
+
+- **The agent reaches for `memory_list` again on "what did I do today?"-style questions (#4551).**
+  The tool-schema trim in #4551 dropped `memory_list`'s when-to-use line. After that the agent
+  answered recent-log questions with `memory_recall` or `recent_activity` instead, and the
+  `memory_list_intent` gate case failed every run: 0/9 at the trim commit and later, against
+  4/4 passes just before it. One sentence is back, saying when to use it and pointing at
+  `memory_recall` for topic search. It passes 3/3 again.
+
+- **Four more tool descriptions get back the when-to-use guidance the #4551 trim removed (#4551).**
+  `memory_ingest` (when the operator asks you to remember or note something), `memory_recall`
+  (examples of preference and past-decision questions, and a pointer to `memory_list` for the
+  most recent entries), `session_search` (an example lookup) and `browser_get_text` (use it to
+  read page content). One trimmed line had already broken `memory_list` routing (#4672). This
+  restores the same kind of routing cue on the other tools that lost theirs. All the other
+  trimmed descriptions kept theirs.
+
+- **Nightly gate-regression triage works for desktop app members (#4656).** With
+  `--friction-log` naming another agent's ledger, the nightly no longer tries to queue triage
+  on its own scheduler, which belongs to a different agent; that member runs
+  `eval_regression_triage` on its own scheduled job instead. The nightly now re-runs each
+  regressed case once on a fresh agent and writes a `rerun:` line (PASS, FAIL or unavailable)
+  into the friction entry. Triage uses that line when it can't re-run cases itself, which is
+  the case in the packaged desktop runtime: `eval_rerun_case` now refuses there instead of
+  trying to start a server from the frozen binary. `scripts/evals_ab.py --ab-learned-from-dir`
+  takes a desktop member's directory as the A/B source.
+
+- **Nightly regression entries say which check failed (#4656).** Each gate-regression friction
+  entry now carries a `failed:` line with the case's failing check, for example
+  `missing tools: ['memory_list']`. `eval_regression_triage` can only read the entry and the
+  trace, not the report file, so in its first live run it could not tell a tool-choice slip
+  from a real defect.
+
+- **The learned-context A/B report names the model it measured (#4658).** Arm reports were
+  labelled `ab-A`/`ab-B`, so the comparison headline read "Model: `ab-B`" and `evals.report`
+  trended the arms under those names. They are now labelled `<model> @ ab-A` / `<model> @ ab-B`,
+  matching `evals.sweep`'s convention.
+
+### Docs
+- **Console flows guide (#4610).** Document the console flow harness — what a versioned Playwright flow is, running it in mock CI and live against a dev instance (`FLOW_BASE_URL` / `FLOW_TOKEN` / `FLOW_OUT_DIR`, `-g` for one flow), the per-step screenshot and `summary.json` output layout, running a flow from a board `execute=true` task, and how to add a flow and bump its version.
+
 ## [0.223.0] - 2026-10-30
 
 ### Added
