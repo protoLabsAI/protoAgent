@@ -687,6 +687,7 @@ def test_every_seam_this_plugin_claims_is_actually_registered(wired):
     here rather than discovering it as a silently missing surface."""
     assert {getattr(t, "name", "") for t in wired.tools} == {
         "record_friction", "friction_review", "resolve_friction",
+        "eval_regression_entries", "eval_regression_trace", "eval_rerun_case",
     }
     assert wired.middlewares                      # auto-capture
     assert wired.routers                          # read API + resolve + the view page
