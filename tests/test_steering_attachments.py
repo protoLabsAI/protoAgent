@@ -39,7 +39,8 @@ def test_route_persists_and_folds_images(client, monkeypatch, vision):
     assert response.status_code == 200
     assert response.json() == {"ok": True, "id": "a", "pending": 1}
     item = steering.pending_items("attachments")[0]
-    assert item["images"] == images
+    # The route normalizes the wire lists to the [(media_type, uri)] tuple shape.
+    assert item["images"] == [tuple(img) for img in images]
     assert item["vision"] is bool(vision)
     save.assert_called_once_with(b"\x00\x00", "image/png", {"source": "user_attachment", "session_id": "attachments"})
     stored = list(media.media_dir().glob("*.png"))
@@ -105,6 +106,68 @@ def test_unsafe_image_is_omitted_but_refs_survive(client, monkeypatch):
     content = SteeringMiddleware._inject({"session_id": "oversized"})["messages"][0].content
     assert "[attached-image refs]" in content[0]["text"]
     assert content[1] == {"type": "text", "text": "[an attached image was omitted: too large to send to the model]"}
+
+
+def test_incognito_route_does_not_persist_but_image_still_folds(client, monkeypatch):
+    import infra.media as media
+    from server.chat import _ATTACHMENT_REFS_MARKER
+
+    # ADR 0069 D3b: an incognito turn leaves no durable trace. The steer route mirrors
+    # _vision_human_message — it skips the media bridge (and the refs note) on incognito,
+    # so nothing is saved, but the image still reaches a vision model as a block.
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(model_vision=True))
+    save = Mock(wraps=media.save_media)
+    monkeypatch.setattr(media, "save_media", save)
+    images = [["image/png", "data:image/png;base64,AAA="]]
+    response = client.post(
+        "/api/chat/sessions/incognito/steer",
+        json={"id": "a", "text": "look", "images": images, "incognito": True},
+    )
+    assert response.status_code == 200
+    save.assert_not_called()
+    item = steering.pending_items("incognito")[0]
+    assert item["refs"] == ""
+    assert item["images"] == [tuple(img) for img in images] and item["vision"] is True
+    content = SteeringMiddleware._inject({"session_id": "incognito"})["messages"][0].content
+    assert content[0] == {"type": "text", "text": _INTERJECTION + "look"}
+    assert content[1] == {"type": "image_url", "image_url": {"url": images[0][1]}}
+    assert _ATTACHMENT_REFS_MARKER not in content[0]["text"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["not-a-list", 5, {"a": 1}, [["only-one"]], ["bare"], [{"type": "image_url"}], [["a", "b", "c"]]],
+)
+def test_malformed_images_do_not_500_and_fall_back_to_text_only(client, monkeypatch, bad):
+    import infra.media as media
+
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(model_vision=True))
+    save = Mock(wraps=media.save_media)
+    monkeypatch.setattr(media, "save_media", save)
+    response = client.post("/api/chat/sessions/bad/steer", json={"id": "x", "text": "steer", "images": bad})
+    assert response.status_code == 200
+    save.assert_not_called()
+    # Nothing usable in ``images`` → exactly today's text-only queue item and fold.
+    assert steering.pending_items("bad") == [{"id": "x", "text": "steer"}]
+    update, _consumed = SteeringMiddleware._drain({"session_id": "bad"})
+    assert update["messages"][0].content == _INTERJECTION + "steer"
+
+
+def test_turn_query_reads_text_blocks_not_base64(client, monkeypatch):
+    from graph.middleware.knowledge import turn_query
+
+    monkeypatch.setattr(STATE, "graph_config", SimpleNamespace(model_vision=True))
+    data_uri = "data:image/png;base64,AAA="
+    assert client.post(
+        "/api/chat/sessions/query/steer",
+        json={"text": "describe the chart", "images": [["image/png", data_uri]]},
+    ).status_code == 200
+    content = SteeringMiddleware._inject({"session_id": "query"})["messages"][0].content
+    assert isinstance(content, list)  # multimodal: text block + image block
+    q = turn_query([HumanMessage(content=content)])
+    assert "describe the chart" in q
+    assert data_uri not in q  # base64 never reaches the retrieval embedder
+    assert not q.startswith("[User message received")  # interjection frame is stripped
 
 
 @pytest.mark.parametrize("vision", [True, False])
