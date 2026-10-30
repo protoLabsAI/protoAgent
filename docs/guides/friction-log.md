@@ -82,8 +82,29 @@ anything, so the plan comes back to you, and filing and resolving stay your deci
 
 ## Gate-regression triage
 
-With the friction plugin enabled and nightly gate regressions recorded, ask the
-agent: *"Delegate to eval_regression_triage to review open nightly regressions."*
+Run the nightly under the target instance's environment with the friction plugin
+and scheduler enabled. For example, from a source checkout:
+
+```bash
+PROTOAGENT_INSTANCE=dev uv run python scripts/evals_nightly.py
+```
+
+After recording regressions, the nightly queues one immediate, one-shot scheduler
+job asking the target agent to delegate the recorded cases to
+`eval_regression_triage`. The running instance picks it up automatically and
+returns proposals in its Activity thread. It needs access to the report path.
+Use the same `PROTOAGENT_HOME` / `PROTOAGENT_INSTANCE`, box root, agent identity,
+and any `SCHEDULER_DB_DIR` override as that instance. `--friction-log` changes only
+the nightly's ledger; it does not select a triage instance. If using a custom
+ledger, configure the running instance's `FRICTION_LOG` to the same file too.
+The instance must be running with its scheduler enabled; queued one-shot jobs
+older than 24 hours are discarded on scheduler startup.
+
+Pass `--no-triage` to record regressions without scheduling triage. No job is
+queued when no regression was recorded. `--dry-run` neither records nor resolves
+entries and never queues triage. Scheduling errors warn without changing the gate
+exit code. You can also request triage manually: *"Delegate to
+eval_regression_triage to review open nightly regressions."*
 The eval runner needs the linked nightly report and its normal eval credentials;
 trace reads use the configured Langfuse backend.
 
@@ -113,7 +134,13 @@ The boundary is a hard allowlist: `eval_regression_entries`,
 disabled. There is no shell, file-write tool, case API wrapper or
 `resolve_friction`. Triage cannot edit either case store or resolve entries.
 `friction_triage` remains the separate read-only general backlog reviewer.
-Automatic nightly dispatch and resolve-on-pass are separate work.
+When a case fails in the previous nightly and passes in the current one, the
+nightly resolves its open `harness` entry with the exact summary
+`nightly gate regression: <case id>`. The resolution reason names the passing
+report. Both observations must be non-skipped gate results; still-failing,
+missing, skipped, or demoted cases stay open. Resolution uses the same ledger as
+recording, including `--friction-log`. An unavailable plugin or resolution error
+warns and never changes the gate verdict or exit code.
 
 ## What goes in it
 

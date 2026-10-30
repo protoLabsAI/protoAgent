@@ -13,6 +13,9 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 SCRIPT = Path(__file__).parent.parent / "scripts" / "evals_nightly.py"
 
@@ -30,6 +33,21 @@ def _load():
 
 
 nightly = _load()
+_scheduler_factory = nightly._triage_scheduler
+
+
+@pytest.fixture(autouse=True)
+def triage_jobs(monkeypatch):
+    # Never enqueue work on a real instance, including in the older main() tests.
+    jobs = []
+
+    def add_job(prompt, schedule, **kwargs):
+        job = SimpleNamespace(id="triage-test", prompt=prompt, schedule=schedule, **kwargs)
+        jobs.append(job)
+        return job
+
+    monkeypatch.setattr(nightly, "_triage_scheduler", lambda: SimpleNamespace(add_job=add_job))
+    return jobs
 
 
 def _row(cid: str, passed: bool, *, tier: str = "gate", trace_id: str = "", skipped: bool = False) -> dict:
@@ -441,3 +459,170 @@ def test_friction_log_routes_regressions_and_never_reaches_the_sweep(tmp_path, m
     entries = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
     assert [e["summary"] for e in entries] == ["nightly gate regression: calc"]
     assert entries[0]["kind"] == "harness"
+
+
+# ── recovery and automatic triage ─────────────────────────────────────────────
+
+
+def test_gate_recoveries_require_observed_failure_and_gate_pass():
+    prev = _report([
+        _row("calc", False), _row("calc-long", False), _row("tracked", False, tier="tracked"),
+        _row("skipped", False, skipped=True), _row("now-skipped", False),
+        _row("demoted", False), _row("stable", True),
+    ])
+    curr = _report([
+        _row("calc", True), _row("calc-long", False), _row("tracked", True),
+        _row("skipped", True), _row("now-skipped", True, skipped=True),
+        _row("demoted", True, tier="tracked"), _row("stable", True), _row("new", True),
+    ])
+    assert [row["id"] for row in nightly.gate_recoveries(prev, curr)] == ["calc"]
+
+
+def test_main_resolves_exact_recovered_entry(tmp_path, monkeypatch, triage_jobs):
+    from plugins.friction import record_service
+
+    ledger = tmp_path / "friction.jsonl"
+    # Register before main mutates FRICTION_LOG (#4648), including under xdist.
+    monkeypatch.setenv("FRICTION_LOG", str(ledger))
+    for kind, case in [("harness", "calc"), ("harness", "calc-long"), ("model", "calc")]:
+        record_service(kind, f"nightly gate regression: {case}", source="evals-nightly")
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly.time, "time", lambda: 200)
+    _seed_nightly(tmp_path, [_row("calc", False), _row("calc-long", False)], nightly_ts=100)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("calc", True), _row("calc-long", False)]))
+
+    assert nightly.main(["--model", "vendor/m", "--friction-log", str(ledger)]) == 0
+
+    entries = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert len(entries) == 3
+    assert entries[0]["resolved_at"]
+    assert str(tmp_path / "run-nightly-200.json") in entries[0]["resolved_reason"]
+    assert all(not entry.get("resolved_at") for entry in entries[1:])
+    assert triage_jobs == []
+
+
+@pytest.mark.parametrize("unavailable", [True, False])
+@pytest.mark.parametrize("regressed", [True, False])
+def test_resolution_failure_does_not_change_gate(tmp_path, monkeypatch, capsys, unavailable, regressed):
+    def broken_resolver(*args, **kwargs):
+        raise OSError("ledger unavailable")
+
+    monkeypatch.setattr(nightly, "_friction_resolver", lambda: None if unavailable else broken_resolver)
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: None)
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    _seed_nightly(tmp_path, [_row("recover", False), _row("other", True)], nightly_ts=1)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("recover", True), _row("other", not regressed)]))
+    assert nightly.main(["--model", "vendor/m"]) == int(regressed)
+    assert "friction" in capsys.readouterr().err
+
+
+def test_resolution_continues_after_one_case_errors():
+    calls = []
+
+    def resolver(summary, **kwargs):
+        calls.append((summary, kwargs))
+        if len(calls) == 1:
+            raise OSError("failed write")
+        return 1
+
+    nightly.resolve_recoveries([_row("a", True), _row("b", True)], "report.json", resolver=resolver)
+    assert len(calls) == 2
+    assert calls[1] == ("nightly gate regression: b", {
+        "kind": "harness", "exact": True, "resolved": True,
+        "reason": "nightly gate passed; report: report.json",
+    })
+
+
+@pytest.mark.parametrize("regressed,no_triage,recorded,expected", [
+    (True, False, True, 1), (False, False, True, 0),
+    (True, True, True, 0), (True, False, False, 0),
+])
+def test_main_queues_triage_once(tmp_path, monkeypatch, triage_jobs, regressed, no_triage, recorded, expected):
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly, "_default_trace_link", _fake_link)
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: _FakeRecorder() if recorded else None)
+    _seed_nightly(tmp_path, [_row("a", True), _row("b", True)], nightly_ts=1)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("a", not regressed), _row("b", not regressed)]))
+    args = ["--model", "vendor/m"] + (["--no-triage"] if no_triage else [])
+    assert nightly.main(args) == int(regressed)
+    assert len(triage_jobs) == expected
+    if expected:
+        job = triage_jobs[0]
+        assert "eval_regression_triage" in job.prompt
+        assert '"case_ids": ["a", "b"]' in job.prompt
+        assert "run-nightly-" in job.prompt
+        assert job.max_fires == 1
+
+
+def test_triage_failure_leaves_gate_failed(tmp_path, monkeypatch, capsys):
+    def unavailable():
+        raise OSError("scheduler unavailable")
+
+    monkeypatch.setattr(nightly, "_triage_scheduler", unavailable)
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: _FakeRecorder())
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    _seed_nightly(tmp_path, [_row("a", True)], nightly_ts=1)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("a", False)]))
+    assert nightly.main(["--model", "vendor/m"]) == 1
+    assert "could not be queued" in capsys.readouterr().err
+
+
+def test_triage_persists_one_shot_in_scheduler(tmp_path):
+    from scheduler import LocalScheduler
+
+    scheduler = LocalScheduler("nightly-test", invoke_url="", db_dir=tmp_path)
+    nightly.trigger_triage(["calc"], "report.json", scheduler=scheduler)
+    reopened = LocalScheduler("nightly-test", invoke_url="", db_dir=tmp_path)
+    jobs = reopened.list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].next_fire
+    assert jobs[0].max_fires == 1
+    assert "eval_regression_triage" in jobs[0].prompt
+
+
+def test_dry_run_has_no_friction_or_triage_side_effects(tmp_path, monkeypatch, triage_jobs):
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    _seed_nightly(tmp_path, [_row("a", True), _row("b", False)], nightly_ts=1)
+    _seed_nightly(tmp_path, [_row("a", False), _row("b", True)], nightly_ts=2)
+
+    def unexpected():
+        pytest.fail("dry-run reached friction plugin")
+
+    monkeypatch.setattr(nightly, "_friction_recorder", unexpected)
+    monkeypatch.setattr(nightly, "_friction_resolver", unexpected)
+    assert nightly.main(["--dry-run"]) == 0
+    assert triage_jobs == []
+
+
+@pytest.mark.parametrize("identity,expected", [("target", "target"), ("protoagent", "env-agent")])
+def test_triage_scheduler_uses_target_identity(tmp_path, monkeypatch, identity, expected):
+    from graph.config import LangGraphConfig
+    from graph import config_io
+
+    config_path = tmp_path / "config.yaml"
+    monkeypatch.setattr(config_io, "config_yaml_path", lambda: config_path)
+    seen = []
+
+    def from_yaml(path):
+        seen.append(path)
+        return SimpleNamespace(identity_name=identity, scheduler_enabled=True)
+
+    monkeypatch.setattr(LangGraphConfig, "from_yaml", from_yaml)
+    monkeypatch.setenv("AGENT_NAME", "env-agent")
+    monkeypatch.setenv("SCHEDULER_DB_DIR", str(tmp_path / "scheduler"))
+    monkeypatch.delenv("SCHEDULER_DISABLED", raising=False)
+    scheduler = _scheduler_factory()
+    assert seen == [config_path]  # load the cascade even without an instance YAML
+    assert scheduler.agent_name == expected
+    assert scheduler.path.is_relative_to(tmp_path / "scheduler" / expected)
+    assert scheduler._task is None  # only the server polls/delivers
+
+
+@pytest.mark.parametrize("config_enabled,env_disabled", [(False, ""), (True, "1")])
+def test_triage_scheduler_respects_disabled(monkeypatch, config_enabled, env_disabled):
+    from graph.config import LangGraphConfig
+
+    monkeypatch.setattr(LangGraphConfig, "from_yaml", lambda path: SimpleNamespace(scheduler_enabled=config_enabled))
+    monkeypatch.setenv("SCHEDULER_DISABLED", env_disabled)
+    with pytest.raises(RuntimeError, match="scheduler is disabled"):
+        _scheduler_factory()
