@@ -201,6 +201,21 @@ def _isolate_plugin_service_registry(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_work_provider_registry(monkeypatch):
+    """The same snapshot/restore for the plugin work-provider table (ADR 0079): plugin
+    wiring rebinds it with ``set_plugin_work_providers`` inside ``_apply_plugin_registries``,
+    so a boot test that enables a plugin owning a work provider (e.g. friction's
+    ``friction:backlog``) would otherwise leave it registered. ``working_state_block`` then
+    renders that leaked section into EVERY later turn, which is what reddened the
+    ``test_projection.py`` characterization tests (an extra ``working_state`` source) when
+    they ran after such a boot test in the same process."""
+    from graph import work_providers
+
+    monkeypatch.setattr(work_providers, "_PROVIDERS", work_providers._PROVIDERS)
+    monkeypatch.setattr(work_providers, "_PROVIDER_META", work_providers._PROVIDER_META)
+
+
+@pytest.fixture(autouse=True)
 def _trust_testclient_host(monkeypatch):
     """Trust Starlette ``TestClient``'s ``Host: testserver`` in the open-mode Host allowlist.
 
