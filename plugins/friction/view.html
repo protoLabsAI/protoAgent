@@ -117,6 +117,9 @@
   }
   @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.45 } }
 
+  .eval-editor { flex: none; padding: var(--pl-space-4); display: grid; gap: var(--pl-space-2); }
+  .eval-editor label { display: grid; gap: var(--pl-space-1); }
+
   .toast-slot { position: fixed; right: var(--pl-space-4); bottom: var(--pl-space-4);
     max-width: 320px; z-index: 10; }
   .toast-slot:empty { display: none; }
@@ -178,6 +181,7 @@
   </div>
 
   <div class="list pl-scroll" id="list"></div>
+  <div id="eval-editor" class="pl-scroll"></div>
 </div>
 <div class="toast-slot" id="toast-slot"></div>
 
@@ -357,6 +361,102 @@
     }
   }
 
+  // The plugin bridge has no eval-editor handoff. Keep the draft local until Save.
+  async function evalRequest(path, body) {
+    const response = await kit.apiFetch(path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(typeof data.detail === "string"
+      ? data.detail : JSON.stringify(data.detail || data));
+    return data;
+  }
+
+  async function openEvalDraft(item) {
+    const slot = document.getElementById("eval-editor");
+    const form = el("form", "pl-card eval-editor");
+    slot.replaceChildren(form);
+    form.appendChild(el("h2", "", "Make eval case"));
+    const status = el("p", "", "Loading draft…");
+    status.setAttribute("role", "status");
+    const cancel = el("button", "pl-btn", "Cancel");
+    cancel.type = "button";
+    cancel.addEventListener("click", () => form.remove());
+    form.append(status, cancel);
+    let draft;
+    try {
+      draft = await evalRequest("/api/evals/cases/draft", {
+        session_id: item.session_id || "", trace_id: item.trace_id,
+      });
+    } catch (error) {
+      status.setAttribute("role", "alert");
+      status.textContent = error.message;
+      return;
+    }
+    if (!form.isConnected) return;
+    status.textContent = "Enter one tool, reply pattern, or rubric criterion per line. Add at least one assertion before saving.";
+    if (draft.comment) form.appendChild(el("p", "", draft.comment));
+    const fields = {};
+    function field(name, label, value) {
+      const wrapper = el("label", "", label);
+      const input = el("textarea", "pl-input");
+      input.name = name;
+      input.value = value || "";
+      wrapper.appendChild(input);
+      form.appendChild(wrapper);
+      fields[name] = input;
+    }
+    field("prompt", "Prompt", draft.prompt);
+    for (const [name, label] of [
+      ["expected_tools", "Expected tools"], ["forbidden_tools", "Forbidden tools"],
+      ["expected_patterns", "Expected reply patterns"], ["forbidden_patterns", "Forbidden reply patterns"],
+    ]) field(name, label, (draft[name] || []).join("\n"));
+    const noToolsLabel = el("label", "", "Expect no tool calls");
+    const noTools = el("input");
+    noTools.type = "checkbox";
+    noTools.checked = Array.isArray(draft.expected_tools) && draft.expected_tools.length === 0;
+    fields.expected_tools.disabled = noTools.checked;
+    noTools.addEventListener("change", () => { fields.expected_tools.disabled = noTools.checked; });
+    noToolsLabel.appendChild(noTools);
+    form.appendChild(noToolsLabel);
+    field("rubric", "Rubric (optional)", (draft.verify_rubric?.criteria || []).join("\n"));
+    const errorBox = el("p", "pl-alert--error");
+    errorBox.setAttribute("role", "alert");
+    const save = el("button", "pl-btn", "Save");
+    save.type = "button";
+    form.append(errorBox, save, cancel);
+    // Enter in an input must not implicitly save a case.
+    form.addEventListener("submit", (event) => event.preventDefault());
+    let saving = false;
+    save.addEventListener("click", async () => {
+      if (saving) return;
+      saving = true;
+      save.disabled = cancel.disabled = true;
+      errorBox.textContent = "";
+      const lines = (name) => fields[name].value.split("\n").map(line => line.trim()).filter(Boolean);
+      const edited = { ...draft, prompt: fields.prompt.value };
+      delete edited.expected_tools;
+      if (noTools.checked || lines("expected_tools").length) {
+        edited.expected_tools = noTools.checked ? [] : lines("expected_tools");
+      }
+      for (const name of ["forbidden_tools", "expected_patterns", "forbidden_patterns"]) edited[name] = lines(name);
+      delete edited.verify_rubric;
+      if (lines("rubric").length) edited.verify_rubric = { ...draft.verify_rubric, criteria: lines("rubric") };
+      try {
+        await evalRequest("/api/evals/cases", { case: edited });
+        form.remove();
+        toast("Eval case saved.", "success");
+      } catch (error) {
+        errorBox.textContent = error.message;
+      } finally {
+        saving = false;
+        save.disabled = cancel.disabled = false;
+      }
+    });
+    fields.prompt.focus();
+  }
+
   // ── filtering / sorting (client-side over the fetched page) ────────────────
   function visibleItems() {
     const q = state.query.trim().toLowerCase();
@@ -503,6 +603,12 @@
     meta.appendChild(el("span", "spacer"));
 
     const acts = el("div", "acts");
+    if (item.trace_id) {
+      const makeCase = el("button", "pl-btn pl-btn--sm", "Make eval case");
+      makeCase.type = "button";
+      makeCase.addEventListener("click", () => void openEvalDraft(item));
+      acts.appendChild(makeCase);
+    }
     // #2595 asked that "an entry can be turned into a GitHub issue in ONE step". When the
     // instance knows which repo it files against, that is a prefilled new-issue link —
     // title and body already written. Otherwise the clipboard, which is two steps but
