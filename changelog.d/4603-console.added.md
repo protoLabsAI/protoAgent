@@ -1,0 +1,1 @@
+- **Draft eval cases from chat (#4603).** Assistant messages offer Make eval case with an editable prompt, tool and reply expectations, rubric, and tier. Cases are saved only on explicit Save; server refusals appear inline and Cancel writes nothing.
