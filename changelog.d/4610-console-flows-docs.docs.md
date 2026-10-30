@@ -1,1 +1,0 @@
-- **Console flows guide (#4610).** Document the console flow harness — what a versioned Playwright flow is, running it in mock CI and live against a dev instance (`FLOW_BASE_URL` / `FLOW_TOKEN` / `FLOW_OUT_DIR`, `-g` for one flow), the per-step screenshot and `summary.json` output layout, running a flow from a board `execute=true` task, and how to add a flow and bump its version.

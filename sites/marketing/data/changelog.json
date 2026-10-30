@@ -1,5 +1,20 @@
 [
   {
+    "version": "v0.224.0",
+    "date": "2026-10-30",
+    "changes": [
+      "Scripted console flows (#4610).",
+      "scripts/evals_ab.py takes --tasks and --category (#4658).",
+      "The memory_abstention eval case grades what its name says (#1594).",
+      "The agent reaches for memory_list again on \"what did I do today?\"-style questions (#4551).",
+      "Four more tool descriptions get back the when-to-use guidance the #4551 trim removed (#4551).",
+      "Nightly gate-regression triage works for desktop app members (#4656).",
+      "Nightly regression entries say which check failed (#4656).",
+      "The learned-context A/B report names the model it measured (#4658).",
+      "Console flows guide (#4610)."
+    ]
+  },
+  {
     "version": "v0.223.0",
     "date": "2026-10-30",
     "changes": [
