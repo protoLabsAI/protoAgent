@@ -168,6 +168,7 @@
           "label": "Develop the app or a fork",
           "pages": [
             "guides/build-console.md",
+            "guides/console-flows.md",
             "guides/developer-flags.md",
             "guides/fork-the-template.md",
             "guides/customize-and-deploy.md",
@@ -501,6 +502,10 @@
     },
     "guides/build-console.md": {
       "title": "Build and test the console",
+      "status": "current"
+    },
+    "guides/console-flows.md": {
+      "title": "Run a console flow",
       "status": "current"
     },
     "guides/developer-flags.md": {

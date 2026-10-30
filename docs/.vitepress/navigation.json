@@ -549,6 +549,7 @@
         "/guides/add-a-skill",
         "/guides/lifecycle-events",
         "/guides/build-console",
+        "/guides/console-flows",
         "/guides/developer-flags",
         "/guides/fork-the-template",
         "/guides/customize-and-deploy",
@@ -639,6 +640,10 @@
             {
               "text": "Build and test the console",
               "link": "/guides/build-console"
+            },
+            {
+              "text": "Run a console flow",
+              "link": "/guides/console-flows"
             },
             {
               "text": "Control preview features",

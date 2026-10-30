@@ -358,6 +358,10 @@
               "title": "Build and test the console"
             },
             {
+              "path": "guides/console-flows.md",
+              "title": "Run a console flow"
+            },
+            {
               "path": "guides/developer-flags.md",
               "title": "Control preview features"
             },

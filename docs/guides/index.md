@@ -71,6 +71,7 @@ Choose a task area below. For a shorter starting point, use [the task navigation
 - [Advertise a capability (A2A card)](/guides/add-a-skill)
 - [System lifecycle events](/guides/lifecycle-events)
 - [Build and test the console](/guides/build-console)
+- [Run a console flow](/guides/console-flows)
 - [Control preview features](/guides/developer-flags)
 - [Fork the template (fast path)](/guides/fork-the-template)
 - [Customize & deploy](/guides/customize-and-deploy)

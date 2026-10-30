@@ -35,6 +35,7 @@ Choose [First plugin](/tutorials/first-plugin) for a minimal extension, or [Firs
 ## Develop the app or a fork
 
 - [Build and test the console](/guides/build-console)
+- [Run a console flow](/guides/console-flows)
 - [Control preview features](/guides/developer-flags)
 - [Fork the template (fast path)](/guides/fork-the-template)
 - [Customize & deploy](/guides/customize-and-deploy)
