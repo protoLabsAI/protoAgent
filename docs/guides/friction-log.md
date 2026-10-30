@@ -104,6 +104,25 @@ ledger, configure the running instance's `FRICTION_LOG` to the same file too.
 The instance must be running with its scheduler enabled; queued one-shot jobs
 older than 24 hours are discarded on scheduler startup.
 
+Before recording, the nightly re-runs the regressed cases once on a fresh
+throwaway agent and writes the result into each entry's detail as a `rerun:` line:
+`PASS on a fresh agent (possible flake)`, `FAIL on a fresh agent (reproduced)`, or
+`unavailable`. Pass `--no-rerun` to skip it.
+
+### Desktop members
+
+A desktop app member can't be the nightly's own instance, so the nightly runs on the
+host and writes to the member's ledger with `--friction-log`. With `--friction-log`
+the nightly never queues triage, because its own scheduler belongs to a different
+agent. Give the member a daily scheduled job, set a little after the nightly, instead:
+
+> Delegate to eval_regression_triage to review open nightly regressions. Return its
+> proposals for operator review; do not implement them.
+
+The packaged desktop runtime can't re-run eval cases, so `eval_rerun_case` reports
+the rerun as unavailable there. Triage then uses the nightly's `rerun:` line as its
+rerun evidence.
+
 Pass `--no-triage` to record regressions without scheduling triage. No job is
 queued when no regression was recorded. `--dry-run` neither records nor resolves
 entries and never queues triage. Scheduling errors warn without changing the gate

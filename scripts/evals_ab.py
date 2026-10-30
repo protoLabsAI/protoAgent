@@ -152,10 +152,16 @@ def main(argv: list[str] | None = None) -> int:
         description="A/B the eval suite: template-only baseline vs template + a source agent's learned context.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument(
+    source_arg = p.add_mutually_exclusive_group(required=True)
+    source_arg.add_argument(
         "--ab-learned-from",
-        required=True,
         help="source instance id whose learned memories + private skills seed arm B (copied, never mounted)",
+    )
+    source_arg.add_argument(
+        "--ab-learned-from-dir",
+        type=Path,
+        help="source instance ROOT directory instead of an id, e.g. a desktop member's "
+        "<app data>/workspaces/<member>; copied the same way",
     )
     p.add_argument("--model", default=None, help="model alias to run both arms on (default: the config's model)")
     p.add_argument("--port-base", type=int, default=7990, help="first port (arm A = port-base, arm B = port-base+1)")
@@ -168,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
     # arm subprocess inherits this process's environment.
     os.environ.pop("FRICTION_LOG", None)
 
-    source = args.ab_learned_from.strip()
+    source = (args.ab_learned_from or str(args.ab_learned_from_dir or "")).strip()
     if not source:
         sys.stderr.write("--ab-learned-from needs a source instance id\n")
         return 2
@@ -185,7 +191,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    source_root = sweep._instance_root(source)
+    # A desktop member's root can't be named by instance id from a host shell
+    # (PROTOAGENT_HOME pins it, and the A/B refuses that above), so it's passed as a path.
+    source_root = args.ab_learned_from_dir.expanduser() if args.ab_learned_from_dir else sweep._instance_root(source)
     if not source_root.is_dir():
         sys.stderr.write(f"source instance {source!r} has no data dir at {source_root} — nothing to A/B\n")
         return 2

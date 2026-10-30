@@ -142,6 +142,13 @@ python scripts/evals_ab.py --ab-learned-from dev --model vendor/some-model
 python scripts/evals_ab.py --ab-learned-from default --port-base 7992 --keep
 ```
 
+A desktop app member can't be named by instance id from a host shell. Pass its
+directory instead:
+
+```bash
+python scripts/evals_ab.py --ab-learned-from-dir "<app data>/workspaces/<member>"
+```
+
 The source instance is **read-only** throughout — its SQLite stores are snapshotted
 through the backup API over a `mode=ro` connection and its store directories are copied
 recursively, so arm B boots on its own real copy and nothing the arm agent does can

@@ -215,6 +215,7 @@ def record_regressions(
     *,
     recorder=None,
     trace_link=None,
+    reruns: dict[str, dict] | None = None,
 ) -> list[str]:
     """Record one ``harness`` friction entry per regressed gate case → the ids written.
 
@@ -222,7 +223,10 @@ def record_regressions(
     count — because the ledger groups by ``(kind, summary)`` (friction plugin): a
     case that regresses three nights running is ONE row seen three times, not three
     rows. The per-night specifics (the report path, the trace link from the row's
-    ``trace_id``) go in the detail, which varies freely. ``recorder`` /
+    ``trace_id``) go in the detail, which varies freely. ``reruns`` maps a case id
+    to its row from :func:`rerun_regressions`; its verdict goes in the detail as a
+    ``rerun:`` line, the flake evidence triage reads where it can't re-run cases
+    itself (the desktop app). ``recorder`` /
     ``trace_link`` are injectable for tests; the defaults reach the live plugin and
     the live tracer."""
     recorder = recorder or _friction_recorder()
@@ -238,6 +242,8 @@ def record_regressions(
         detail = f"report: {report_path}"
         if link:
             detail += f"\ntrace: {link}"
+        if reruns is not None:
+            detail += f"\nrerun: {rerun_verdict(reruns.get(cid))}"
         row_id = recorder(
             FRICTION_KIND,
             f"nightly gate regression: {cid}",
@@ -419,7 +425,7 @@ def sweep_env(base: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
-def run_sweep(model: str, *, port_base: int, results_dir: Path) -> Path | None:
+def run_sweep(model: str, *, port_base: int, results_dir: Path, tasks: list[str] | None = None) -> Path | None:
     """Run ``python -m evals.sweep --models <model>`` (one throwaway instance) and
     return the per-model report it wrote, or ``None`` if the sweep produced none.
 
@@ -440,10 +446,37 @@ def run_sweep(model: str, *, port_base: int, results_dir: Path) -> Path | None:
         "--port-base",
         str(port_base),
     ]
+    if tasks:
+        cmd += ["--tasks", ",".join(tasks)]
     print(f"$ {' '.join(cmd)}")
     subprocess.run(cmd, cwd=str(_PROJECT_ROOT), env=sweep_env(), check=False)
     new = sorted(set(results_dir.glob("run-sweep-*.json")) - before, key=lambda p: p.stat().st_mtime)
     return new[-1] if new else None
+
+
+def rerun_verdict(row: dict | None) -> str:
+    """One line for a regressed case's rerun: PASS only on a real, unskipped pass."""
+    if row is None:
+        return "unavailable (no result for this case)"
+    if row.get("skipped"):
+        return "unavailable (skipped)"
+    if row.get("passed"):
+        return "PASS on a fresh agent (possible flake)"
+    return "FAIL on a fresh agent (reproduced)"
+
+
+def rerun_regressions(model: str, case_ids: list[str], *, port_base: int, results_dir: Path) -> dict[str, dict]:
+    """Re-run the regressed cases once on one fresh throwaway agent → ``case_id -> row``.
+
+    This is the flake check, done on the host where the eval suite lives. The
+    desktop app can't re-run a case inside an agent (the frozen runtime has no
+    ``evals`` package), so the verdict travels to triage in the friction detail."""
+    report = run_sweep(model, port_base=port_base, results_dir=results_dir, tasks=case_ids)
+    rep = _read_report(report) if report else None
+    if rep is None:
+        print("  ! regression rerun produced no report — recording without rerun evidence", file=sys.stderr)
+        return {}
+    return {str(r.get("id")): r for r in rep.get("results", []) if str(r.get("id")) in case_ids}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -465,6 +498,7 @@ def main(argv: list[str] | None = None) -> int:
         help="skip the sweep; just compare the two most recent nightlies + flag flakes (records nothing)",
     )
     p.add_argument("--no-triage", action="store_true", help="do not queue automatic gate-regression triage")
+    p.add_argument("--no-rerun", action="store_true", help="do not re-run regressed cases on a fresh agent")
     args = p.parse_args(argv)
 
     # Fixed to where evals.sweep writes its run-sweep-*.json — evals/results. The nightly
@@ -522,8 +556,20 @@ def main(argv: list[str] | None = None) -> int:
         resolve_recoveries(gate_recoveries(prev, curr), report_path)
         regressions = gate_regressions(prev, curr)
         if regressions:
-            recorded = record_regressions(regressions, report_path)
-            if recorded and not args.no_triage:
+            reruns = None
+            if not args.no_rerun:
+                reruns = rerun_regressions(
+                    model, [str(r.get("id")) for r in regressions], port_base=args.port_base, results_dir=results_dir
+                )
+            recorded = record_regressions(regressions, report_path, reruns=reruns)
+            if recorded and args.friction_log and not args.no_triage:
+                # The ledger is another agent's (a desktop member's), so this process's
+                # scheduler is the wrong one: that agent runs triage on its own schedule.
+                print(
+                    "  triage: not queued — the ledger belongs to the agent at --friction-log; "
+                    "schedule eval_regression_triage on that agent (docs/guides/friction-log.md)"
+                )
+            elif recorded and not args.no_triage:
                 trigger_triage(recorded, report_path)
             reg_ids = [str(r.get("id")) for r in regressions]
             print(f"gate regressions vs {prev['_file']}: {len(regressions)} ({', '.join(reg_ids)})")
