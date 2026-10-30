@@ -431,6 +431,43 @@ pieces, none of them core edits:
    The Artifact panel learns which chat tab is active this way (`protoArtifact:context
    {session}`, set by `startArtifactPanelContext()` in `apps/web/src/artifacts/artifactRef.ts`).
 
+### A chat component can open your view (`protoComponent:openView`, #4657)
+
+The route above runs console code (`src/ext/<name>.tsx`). If your plugin ships a **frame chat
+component** instead — `register_component("<kind>", …, frame="<page>")`, rendered in the sandboxed,
+bearer-free component iframe (ADR 0118 D5) — that frame has no console module, but it can still
+bring one of **your plugin's own views** on screen and hand it a payload, in one message:
+
+```js
+// Inside your component frame's page. `nonce` is the value from the kit's protoComponent:init.
+parent.postMessage({ type: "protoComponent:openView",
+  cid, nonce,
+  view: "board",                                   // a view id YOUR plugin declares in `views:`
+  message: { type: "board:focus", id: thingId } }, "*");
+```
+
+The host (`apps/web/src/chat/FrameComponentHost.tsx`) answers `protoComponent:bridgeResult
+{cid, ok, error?}`, and only accepts when every gate passes:
+
+- **It must be your own view.** `view` has to be a view **your** plugin declares (`views:`) and that
+  is a navigable surface — not a `slot:"chat"` claimant or a `utility` widget. Another plugin's
+  view, a core surface (`chat`, `knowledge`, …) and an unknown id are all refused. The host always
+  resolves `plugin:<yourPlugin>:<view>`, so you can only ever open your own surface.
+- **`message` is a small nudge, not content.** A JSON object ≤ **4 KB** with a plugin-namespaced
+  string `type` (never `protoagent:*`) — exactly the `postToPluginView` contract. It is delivered
+  through the same inbox as the chip path above, so a collapsed/unmounted view still gets it once it
+  loads; **register your `message` listener before `initPluginView()`** and accept it only from
+  `window.parent`, as in step 3.
+- **Mobile doesn't switch screens.** On the phone (ADR 0086) the view never auto-opens over chat;
+  the message is refused with a readable error. Offer a tap in your component instead, or reach the
+  view from the drawer.
+- **Nonce + rate.** Echo the `nonce` from `protoComponent:init` (a missing/wrong one is refused with
+  no UI), and expect at most one open every 2 seconds.
+
+Unlike `protoComponent:send`, this is **not** an operator-confirmed proposal — opening your own,
+already-installed view is low-risk, so it opens straight away on desktop. Full rationale: the
+[ADR 0026 openView amendment](../adr/0026-plugin-contributed-console-surfaces.md).
+
 ## Showing code (`protoagent:code:open`)
 
 A view that points at a file in a managed project (a diagram node, a search hit, a symbol) asks the

@@ -149,3 +149,46 @@ for the plugin page; core views are unaffected.
   complement later, not the v1.
 - **Token via URL query** — rejected (D5): leaks to logs/history; use post-load
   `postMessage`.
+
+## Amendment — 2026-10-29: a chat component may open its OWN plugin's view (`protoComponent:openView`, #4657)
+
+A frame-rendered chat component (ADR 0118 D5 — `register_component(..., frame=)`, hosted in the
+bearer-free, opaque-origin iframe of `FrameComponentHost`) can already send three bridge messages
+to its host (`protoComponent:height`, `:send`, `:openLink`). This amendment adds a fourth —
+`protoComponent:openView` — so a component can bring one of **its own plugin's declared views**
+(D2/D3) on screen and hand it a small payload. It is the CORE half of protobanana Studio S5
+(protobanana-plugin#11); the plugin half serves the view and listens for the payload.
+
+**Message.** `protoComponent:openView {cid, nonce, view, message}` posted up from the frame; the
+host replies `protoComponent:bridgeResult {cid, ok, error?}` (same envelope as `:send`/`:openLink`).
+
+**Gates — the host's decision, never the model/plugin-authored frame:**
+
+- **Capability nonce.** Gated by the SAME per-mount capability nonce as `:send`/`:openLink`
+  (ADR 0118's `#4143` handshake): a missing/wrong `nonce`, or a message from a window that is not
+  this frame's own (`e.source`), is refused with no console UI — a document that navigated away
+  from the plugin page holds no nonce and so cannot drive it.
+- **Own views only.** `view` must be a view id the **emitting** plugin declares in its manifest
+  `views:` (D2) AND that is a navigable surface (not a `slot:"chat"` claimant or a `utility`
+  widget — see `lib/pluginViews.ts`). The host resolves it to `plugin:<thisPlugin>:<view>`, so
+  another plugin's view, a core surface, and an unknown id are all refused (`{ok:false, error}`).
+  The console derives the allowlist from runtime status and passes it to the host; it is never
+  taken from the message.
+- **Bounded payload.** `message` must be a JSON-serialisable object of at most **4 KB** carrying a
+  plugin-namespaced string `type` (the `postToPluginView` contract — never a `protoagent:*` type);
+  anything larger or malformed is refused. It is delivered through the host-side plugin-view inbox
+  (`apps/web/src/lib/pluginViewInbox.ts`), which holds it until the view's page is listening — so a
+  collapsed, unmounted dock still receives it once it loads.
+- **Mobile (ADR 0086).** On the phone / portrait-touch-tablet shell a surface never opens over chat
+  on its own (`autoOpenSuppressed`). `openView` is refused there with a readable error the frame
+  can show; the view stays one hop away in the drawer. This mirrors the deep-link auto-open rule
+  for `artifact-ref` chips.
+- **Rate.** One accepted open per 2 s per frame, mirroring `:openLink`, so a frame can't spam view
+  switches.
+
+On accept the host calls `openView()` (`apps/web/src/app/palette/nav.ts`, which resolves the owning
+dock and un-collapses it) and delivers the payload via `postToPluginView(viewKey, message)`. Unlike
+a `:send`, this is NOT an operator-confirmed proposal: opening a plugin's own, already-installed
+view is low-risk, so the gates above are the whole decision. Trust is unchanged — the view is as
+privileged as its plugin backend (D6). Documented for plugin authors in
+[building-react-plugin-views.md](../guides/building-react-plugin-views.md).
