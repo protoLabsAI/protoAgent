@@ -333,6 +333,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     fence       TEXT
 );
 
+-- Persistent even when the last one-shot job is deleted. Only the scheduler
+-- owner initializes this record; external producers must verify it.
+CREATE TABLE IF NOT EXISTS scheduler_owner (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    agent_name TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_next_fire   ON jobs(next_fire);
 CREATE INDEX IF NOT EXISTS idx_jobs_agent_name  ON jobs(agent_name);
 """
@@ -345,6 +352,9 @@ class LocalScheduler:
     spawn the polling task, ``await scheduler.stop()`` on shutdown.
     The agent-facing tools call ``add_job`` / ``cancel_job`` /
     ``list_jobs`` synchronously.
+
+    External job producers should set ``adopt_existing_jobs=False``: a store
+    without a matching persistent owner then raises instead of renaming jobs.
     """
 
     name = "local"
@@ -362,6 +372,7 @@ class LocalScheduler:
         bearer_token: str | None = None,
         db_dir: str | Path | None = None,
         event_publish=None,
+        adopt_existing_jobs: bool = True,
     ):
         self.agent_name = agent_name
         self._invoke_url = invoke_url.rstrip("/")
@@ -386,7 +397,8 @@ class LocalScheduler:
             self._fire_timeout_s = float(os.environ.get("SCHEDULER_FIRE_TIMEOUT_S", "600"))
         except ValueError:
             self._fire_timeout_s = 600.0
-        self._init_db()
+        self._adopt_existing_jobs = adopt_existing_jobs
+        self._init_db(adopt_existing_jobs=adopt_existing_jobs)
 
     # ── DB plumbing ─────────────────────────────────────────────────────────
 
@@ -400,7 +412,34 @@ class LocalScheduler:
             log.debug("[scheduler] WAL skipped: %s", exc)
         return db
 
-    def _init_db(self) -> None:
+    def _check_owner(self, db: sqlite3.Connection) -> None:
+        """Require server-established ownership, including for empty stores."""
+        try:
+            owner = db.execute("SELECT agent_name FROM scheduler_owner WHERE id = 1").fetchone()
+        except sqlite3.DatabaseError as exc:
+            raise ValueError("scheduler owner is uninitialized; start the target instance first") from exc
+        if owner is None:
+            raise ValueError("scheduler owner is uninitialized; start the target instance first")
+        if owner["agent_name"] != self.agent_name:
+            raise ValueError("scheduler store belongs to a different agent; check target identity")
+        mismatch = db.execute(
+            "SELECT 1 FROM jobs WHERE agent_name IS NOT ? LIMIT 1", (self.agent_name,),
+        ).fetchone()
+        if mismatch:
+            raise ValueError("scheduler store belongs to a different agent; check target identity")
+
+    def _init_db(self, *, adopt_existing_jobs: bool = True) -> None:
+        if not adopt_existing_jobs:
+            # Producers never initialize or migrate a store. A wrong name can
+            # resolve to a separate, empty database under SCHEDULER_DB_DIR.
+            if not self.path.is_file():
+                raise ValueError("scheduler owner is uninitialized; start the target instance first")
+            db = self._connect()
+            try:
+                self._check_owner(db)
+            finally:
+                db.close()
+            return
         try:
             db = self._connect()
             db.executescript(_SCHEMA)
@@ -451,14 +490,19 @@ class LocalScheduler:
             # `update` and `delete` all filter `WHERE agent_name = ?`, so a renamed agent would
             # open the right database and still see an empty schedule.
             try:
-                n = db.execute(
-                    "UPDATE jobs SET agent_name = ? WHERE agent_name IS NOT ?",
-                    (self.agent_name, self.agent_name),
-                ).rowcount
-                if n:
-                    log.info("[scheduler] adopted %d job(s) written under a previous agent name", n)
+                if adopt_existing_jobs:
+                    n = db.execute(
+                        "UPDATE jobs SET agent_name = ? WHERE agent_name IS NOT ?",
+                        (self.agent_name, self.agent_name),
+                    ).rowcount
+                    if n:
+                        log.info("[scheduler] adopted %d job(s) written under a previous agent name", n)
             except sqlite3.DatabaseError:
                 log.exception("[scheduler] re-keying jobs to %r failed at %s", self.agent_name, self.path)
+            db.execute(
+                "INSERT OR REPLACE INTO scheduler_owner (id, agent_name) VALUES (1, ?)",
+                (self.agent_name,),
+            )
             db.commit()
             db.close()
         except sqlite3.DatabaseError:
@@ -510,6 +554,10 @@ class LocalScheduler:
         )
         db = self._connect()
         try:
+            if not self._adopt_existing_jobs:
+                # Serialize verification and insertion against owner changes.
+                db.execute("BEGIN IMMEDIATE")
+                self._check_owner(db)
             db.execute(
                 "INSERT INTO jobs (id, prompt, schedule, agent_name, next_fire, "
                 "last_fire, enabled, created_at, timezone, context_id, origin_session, "
