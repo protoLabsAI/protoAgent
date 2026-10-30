@@ -547,6 +547,9 @@ def _build_memory_tools(
         # review_state verdicts are ADR 0108 D7; delivery policies D4.
         """List the most recent memory chunks, optionally filtered.
 
+        Use for what was recently logged or stored (e.g. today's log entries) or to inspect
+        stored memory; use memory_recall to search by topic.
+
         Args:
             domain: one domain bucket.
             memory_kind: one kind (e.g. ``"profile"``).
