@@ -269,3 +269,21 @@ def test_trace_backend_read_is_bounded_and_does_not_score(monkeypatch):
     client.api.trace.get.assert_called_once_with(
         "trace-1", request_options={"timeout_in_seconds": 20, "max_retries": 0})
     client.create_score.assert_not_called()
+
+
+def test_rerun_refuses_in_packaged_desktop_runtime(monkeypatch):
+    import subprocess
+    import sys
+
+    popen = Mock()
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    with pytest.raises(ValueError, match="packaged desktop runtime"):
+        friction._rerun_eval_case("instance:lookup")
+    popen.assert_not_called()
+
+
+def test_triage_prompt_falls_back_to_nightly_rerun_line():
+    prompt = friction._build_eval_regression_subagent().system_prompt
+    assert "'rerun:' line" in prompt
+    assert "'PASS on a fresh agent' counts as passed" in prompt

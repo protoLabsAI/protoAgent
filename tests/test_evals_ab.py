@@ -190,3 +190,25 @@ def test_both_arm_reports_are_written(ab_run):
     for rep in (*a_reports, *b_reports):
         payload = json.loads(rep.read_text())
         assert "results" in payload and payload["total"] >= 1
+
+
+def test_source_by_directory_is_copied_and_left_untouched(tmp_path, monkeypatch):
+    """--ab-learned-from-dir names a desktop member's root directly; same copy contract."""
+    results = tmp_path / "results"
+    monkeypatch.setattr(sweep, "_RESULTS_DIR", results)
+    source_root = tmp_path / "workspaces" / "member-1234"
+    _make_source(source_root)
+    before = _snapshot(source_root)
+    _fake_sweep_boundary(monkeypatch)
+
+    rc = evals_ab.main(["--ab-learned-from-dir", str(source_root), "--model", "fake/model", "--keep"])
+
+    assert rc == 0
+    assert _snapshot(source_root) == before
+    arm_b = _arm_root(sweep._instance_root("x").parent, "B")
+    assert arm_b is not None and (arm_b / "knowledge" / "agent.db").is_file()
+
+
+def test_source_id_and_directory_are_exclusive(tmp_path):
+    with pytest.raises(SystemExit):
+        evals_ab.main(["--ab-learned-from", "a", "--ab-learned-from-dir", str(tmp_path)])

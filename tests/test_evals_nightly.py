@@ -339,7 +339,7 @@ def _fake_sweep(dirp: Path, rows: list[dict]):
     """A run_sweep stand-in: writes one run-sweep-*.json (as evals.sweep would, into the
     same results dir) and returns its path — no agent boot, no subprocess, no network."""
 
-    def run_sweep(model, *, port_base, results_dir):
+    def run_sweep(model, *, port_base, results_dir, tasks=None):
         p = results_dir / "run-sweep-999-vendor-m.json"
         p.write_text(json.dumps(_report(rows)), encoding="utf-8")
         return p
@@ -443,8 +443,9 @@ def test_friction_log_routes_regressions_and_never_reaches_the_sweep(tmp_path, m
     )
     seen_at_sweep: list[str | None] = []
 
-    def fake_sweep(model, *, port_base, results_dir):
-        seen_at_sweep.append(os.environ.get("FRICTION_LOG"))
+    def fake_sweep(model, *, port_base, results_dir, tasks=None):
+        if tasks is None:  # the night's sweep; the rerun runs under sweep_env() in real life
+            seen_at_sweep.append(os.environ.get("FRICTION_LOG"))
         out = results_dir / "run-sweep-200-vendor-m.json"
         out.write_text(json.dumps(_report([_row("calc", False)])), encoding="utf-8")
         return out
@@ -709,3 +710,72 @@ def test_triage_rechecks_owner_when_enqueuing(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="different agent"):
         producer.add_job("triage", "2099-01-01T00:00:00+00:00")
     assert renamed.list_jobs() == []
+
+
+# ── host-side rerun evidence, and triage for another agent's ledger ──────────
+
+
+@pytest.mark.parametrize("row,expected", [
+    (None, "unavailable (no result for this case)"),
+    ({"id": "a", "passed": True, "skipped": True}, "unavailable (skipped)"),
+    ({"id": "a", "passed": True}, "PASS on a fresh agent (possible flake)"),
+    ({"id": "a", "passed": False}, "FAIL on a fresh agent (reproduced)"),
+])
+def test_rerun_verdict(row, expected):
+    assert nightly.rerun_verdict(row) == expected
+
+
+def test_record_regressions_writes_rerun_line():
+    rec = _FakeRecorder()
+    reruns = {"a": {"id": "a", "passed": True}}
+    nightly.record_regressions([_row("a", False), _row("b", False)], "r.json", recorder=rec, trace_link=_fake_link,
+                               reruns=reruns)
+    details = [call["detail"] for call in rec.calls]
+    assert details[0].endswith("rerun: PASS on a fresh agent (possible flake)")
+    assert details[1].endswith("rerun: unavailable (no result for this case)")
+
+
+def test_record_regressions_without_rerun_has_no_rerun_line():
+    rec = _FakeRecorder()
+    nightly.record_regressions([_row("a", False)], "r.json", recorder=rec, trace_link=_fake_link)
+    assert "rerun:" not in rec.calls[0]["detail"]
+
+
+@pytest.mark.parametrize("no_rerun", [False, True])
+def test_main_reruns_only_the_regressed_cases(tmp_path, monkeypatch, triage_jobs, no_rerun):
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly, "_default_trace_link", _fake_link)
+    rec = _FakeRecorder()
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: rec)
+    _seed_nightly(tmp_path, [_row("a", True), _row("b", True)], nightly_ts=1)
+    calls: list[list[str] | None] = []
+    night = _fake_sweep(tmp_path, [_row("a", False), _row("b", True)])
+
+    def fake(model, *, port_base, results_dir, tasks=None):
+        calls.append(tasks)
+        if tasks is None:
+            return night(model, port_base=port_base, results_dir=results_dir)
+        p = results_dir / "run-sweep-1000-vendor-m.json"
+        p.write_text(json.dumps(_report([_row("a", True)])), encoding="utf-8")
+        return p
+
+    monkeypatch.setattr(nightly, "run_sweep", fake)
+    args = ["--model", "vendor/m", "--no-triage"] + (["--no-rerun"] if no_rerun else [])
+    assert nightly.main(args) == 1  # a passing rerun never clears the gate
+    assert calls == ([None] if no_rerun else [None, ["a"]])
+    detail = rec.calls[0]["detail"]
+    assert ("rerun:" not in detail) if no_rerun else detail.endswith("rerun: PASS on a fresh agent (possible flake)")
+
+
+def test_friction_log_ledger_never_queues_triage_here(tmp_path, monkeypatch, triage_jobs, capsys):
+    ledger = tmp_path / "member" / "friction" / "friction.jsonl"
+    monkeypatch.setenv("FRICTION_LOG", "unset-by-teardown")
+    monkeypatch.delenv("FRICTION_LOG")
+    monkeypatch.setattr(nightly, "_RESULTS_DIR", tmp_path)
+    monkeypatch.setattr(nightly, "_default_trace_link", _fake_link)
+    monkeypatch.setattr(nightly, "_friction_recorder", lambda: _FakeRecorder())
+    _seed_nightly(tmp_path, [_row("a", True)], nightly_ts=1)
+    monkeypatch.setattr(nightly, "run_sweep", _fake_sweep(tmp_path, [_row("a", False)]))
+    assert nightly.main(["--model", "vendor/m", "--friction-log", str(ledger)]) == 1
+    assert triage_jobs == []
+    assert "triage: not queued" in capsys.readouterr().out

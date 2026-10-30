@@ -1072,6 +1072,10 @@ def _rerun_eval_case(case_id: str) -> dict:
     import sys
     import tempfile
 
+    if getattr(sys, "frozen", False):
+        # The desktop app's packaged runtime has no eval suite and can't start a
+        # server with ``-m server``; the nightly's host-side rerun line stands in.
+        raise ValueError("Rerun unavailable in the packaged desktop runtime")
     from evals.runner import instance_cases_path
     from evals.sweep import _runner_cmd, _wait_healthy
     from graph.config_io import config_yaml_path
@@ -1172,6 +1176,9 @@ def _build_eval_regression_subagent():
             "eval_rerun_case with its exact case_id (including instance: when present). "
             "Return exactly ONE proposal per entry, always linking its case id, friction id, "
             "and trace link from detail or the trace reader (retain trace_id if no URL exists). "
+            "If eval_rerun_case is unavailable, use the entry detail's 'rerun:' line written by "
+            "the nightly host as the rerun result: 'PASS on a fresh agent' counts as passed and "
+            "unskipped, 'FAIL on a fresh agent' as a reproduced failure, anything else as missing. "
             "Classify using the trace and rerun's failing assertion/detail:\n"
             "- Agent/harness defect: call task_create exactly once with a proposed fix, case id, "
             "trace link, failing assertion, suspected cause and friction id in the description. "
