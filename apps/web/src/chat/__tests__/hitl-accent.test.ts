@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import chatCss from "../chat.css?raw";
 
 // Success-toned system notes (noteToThread `noteTone:"success"`) are "the agent did the
-// thing" confirmations, so their left accent follows the workspace accent — the semantic
+// thing" confirmations, so their NoteCard icon follows the workspace accent — the semantic
 // `var(--pl-color-accent)` the HITL card adopted (#2157, see ../hitl-accent.test.ts) —
 // instead of pinning to literal success green. The other tones stay semantic on purpose:
 // the #2197 export-blocked note relies on danger reading red, not accent.
@@ -25,24 +25,23 @@ function rule(selector: string): string {
   return match![0];
 }
 
-const note = (tone: string) =>
-  rule(`.chat-session-slot .pl-message--system.chat-note--${tone} .pl-message__content`);
+const note = (tone: string) => rule(`.note-card--${tone} .note-card__icon`);
 
 describe("success-toned system notes follow the workspace accent, other tones stay semantic", () => {
-  it("success note border uses the accent chain, not success green", () => {
-    expect(note("success")).toMatch(new RegExp(`border-left-color:\\s*${ACCENT.source}`));
+  it("success note icon uses the accent chain, not success green", () => {
+    expect(note("success")).toMatch(new RegExp(`color:\\s*${ACCENT.source}`));
     expect(note("success")).not.toContain("--pl-color-success");
   });
 
   it("info note keeps its semantic colour", () => {
-    expect(note("info")).toMatch(/border-left-color:\s*var\(--pl-color-status-info\)/);
+    expect(note("info")).toMatch(/color:\s*var\(--pl-color-status-info\)/);
   });
 
   it("warning note keeps its semantic colour", () => {
-    expect(note("warning")).toMatch(/border-left-color:\s*var\(--pl-color-status-warning\)/);
+    expect(note("warning")).toMatch(/color:\s*var\(--pl-color-status-warning\)/);
   });
 
   it("danger note keeps its semantic colour (the #2197 distinction is load-bearing)", () => {
-    expect(note("danger")).toMatch(/border-left-color:\s*var\(--pl-color-status-error\)/);
+    expect(note("danger")).toMatch(/color:\s*var\(--pl-color-status-error\)/);
   });
 });
