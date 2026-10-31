@@ -17,6 +17,7 @@ The three funnels, and why there are three rather than one:
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -365,6 +366,8 @@ async def test_a_background_edge_is_closed_out_when_the_job_lands(ledger_db, tmp
     # At dispatch: recorded, but the outcome is "dispatched", not "succeeded".
     assert ledger_db.recent()[0]["duration_ms"] == 0
 
+    # Let real time pass: a settle in the same millisecond as the spawn honestly reads 0.
+    await asyncio.sleep(0.01)
     store.mark_complete(job_id, "completed", "found it")
 
     row = ledger_db.recent()[0]
