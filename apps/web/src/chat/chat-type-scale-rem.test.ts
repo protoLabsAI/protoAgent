@@ -82,8 +82,9 @@ describe("Chat rem/em font-sizes → DS type scale (DS audit type-scale 2b)", ()
     // more when the delete/clear memory switches became one RadioGroup (#4053/#3493): the
     // `.chat-memory-label` caption (sm) and the per-option `.chat-memory-choice-hint` (sm),
     // + one more for the `.chat-note-card` system-note card body (base), which resets the DS
-    // system pill's font when a slash-command renders a structured component card.
-    expect((chatCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(38);
+    // system pill's font when a slash-command renders a structured component card, + two more
+    // when plain notes became NoteCards: the `.note-card__title` and `.note-card__body` (sm).
+    expect((chatCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(40);
     // tool-calls.css had no prior token font-sizes; all 18 come from this migration.
     expect((toolCallsCss.match(new RegExp(TOKEN_FONT_SIZE, "g")) ?? []).length).toBe(18);
   });

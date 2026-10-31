@@ -356,18 +356,22 @@ describe("ChatMessageView — a local system note renders a structured component
     expect(container.querySelector("dt")).toBeNull();
   });
 
-  it("a system note WITHOUT a component renders unchanged as a toned note", () => {
+  it("a system note WITHOUT a component renders as a NoteCard, toned by its icon", () => {
     render({
       id: "s3",
       role: "system",
       content: "ingested 3 files",
       status: "done",
       noteTone: "success",
+      noteTitle: "Ingest notes.md",
     });
     const root = sysRoot();
     expect(root.classList.contains("chat-note")).toBe(true);
     expect(root.classList.contains("chat-note--success")).toBe(true);
     expect(root.classList.contains("chat-note-card")).toBe(false);
-    expect(container.textContent).toContain("ingested 3 files");
+    const card = container.querySelector('[data-testid="note-card"]')!;
+    expect(card.classList.contains("note-card--success")).toBe(true);
+    expect(card.querySelector(".note-card__title")!.textContent).toBe("Ingest notes.md");
+    expect(card.querySelector(".note-card__body")!.textContent).toContain("ingested 3 files");
   });
 });

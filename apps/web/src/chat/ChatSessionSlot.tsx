@@ -9,6 +9,7 @@ import { api } from "../lib/api";
 import { CHAT_ATTACH_ACCEPT } from "../lib/attachTypes";
 import { errMsg } from "../lib/format";
 import { needsModelBanner } from "./modelBanner";
+import { hasNoteLede } from "./NoteCard";
 import { regenerateBlocked } from "./regenerateGuard";
 import { runtimeStatusQuery } from "../lib/queries";
 import { useUI } from "../state/uiStore";
@@ -393,12 +394,12 @@ export function ChatSessionSlot({
   // effect. role "system" so it renders distinctly and never gets the answer action row
   // (copy/fork/regenerate). `tone` colours it (info/warning/danger/success). This is the reusable
   // seam for any non-agent in-thread notice — exposed to forks via the slash/composer registries.
-  function noteToThread(text: string, opts?: { tone?: SystemNoteTone }) {
+  function noteToThread(text: string, opts?: { tone?: SystemNoteTone; title?: string }) {
     if (!session) return;
     const base = chatStore.getSnapshot().sessions.find((s) => s.id === session.id)?.messages ?? [];
     chatStore.updateMessages(session.id, [
       ...base,
-      { id: messageId(), role: "system", content: text, noteTone: opts?.tone, createdAt: Date.now(), status: "done" },
+      { id: messageId(), role: "system", content: text, noteTone: opts?.tone, noteTitle: opts?.title, createdAt: Date.now(), status: "done" },
     ]);
   }
 
@@ -417,7 +418,10 @@ export function ChatSessionSlot({
     return cmd.run({
       rest: rest.join(" ").trim(),
       sessionId: session?.id ?? null,
-      noteToThread,
+      // A slash command's notes are titled with the command (`/model`) unless the note
+      // names its own title or opens with a bold lede (`**Goal set.**`).
+      noteToThread: (text, opts) =>
+        noteToThread(text, { ...opts, title: opts?.title ?? (hasNoteLede(text) ? undefined : `/${cmd.name}`) }),
       setDraft,
       focusComposer: () => textareaRef.current?.focus(),
       // Open a form in the composer panel, resolved locally (#1701) — /effort's picker.

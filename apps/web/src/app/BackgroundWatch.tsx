@@ -49,6 +49,7 @@ function appendSystem(
   content: string,
   report?: ChatMessage["report"],
   noteTone?: ChatMessage["noteTone"],
+  noteTitle?: string,
 ): boolean {
   const session = chatStore.getSnapshot().sessions.find((s) => s.id === sessionId);
   if (!session) return false;
@@ -60,6 +61,7 @@ function appendSystem(
     status: "done",
     ...(report ? { report } : {}),
     ...(noteTone ? { noteTone } : {}),
+    ...(noteTitle ? { noteTitle } : {}),
   };
   chatStore.updateMessages(sessionId, [...session.messages, msg]);
   return true;
@@ -108,10 +110,11 @@ export function BackgroundWatch() {
       const delegation = String(data.subagent_type ?? "") === "delegate";
       const injected = delegation
         ? failed
-          ? appendSystem(session, result ? `${header}\n\n${result}` : header, undefined, "danger")
+          ? appendSystem(session, result ? `${desc}\n\n${result}` : desc, undefined, "danger", "Background agent failed")
           : chatStore.getSnapshot().sessions.some((s) => s.id === session)
         : isShortResult(result, failed)
-          ? appendSystem(session, `${desc} — ${result.trim()}`, undefined, "success")
+          ? // The card's title is the job ("Ingest <url>"); its body is the one-line result.
+            appendSystem(session, result.trim(), undefined, "success", desc)
           : appendSystem(
               session,
               failed && result ? `${header}\n\n${result}` : result || header,
