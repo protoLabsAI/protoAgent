@@ -28,6 +28,7 @@ import { ChatComponent } from "./ChatComponent";
 import { DelegateProgressView } from "./DelegateProgressView";
 import { hideDanglingMarker } from "./danglingMarker";
 import { Markdown } from "./LazyMarkdown";
+import { NoteCard } from "./NoteCard";
 import { openEvalCaseEditor } from "./EvalCaseEditor";
 import { openPromptViewer } from "./PromptViewer";
 import { ReasoningCard } from "./ReasoningCard";
@@ -185,6 +186,9 @@ export function ChatMessageView({
   // rendering, with `content` still the plain-markdown fallback for export/copy/search.
   const systemNoteComponent =
     message.role === "system" && isRenderableComponent(message.component) ? message.component : null;
+  // Every other system message that reaches this render is a local note (reports and
+  // delegation rows returned earlier): it renders as a NoteCard, not a toned banner.
+  const systemNote = message.role === "system" && !systemNoteComponent;
   return (
     <Message
       role={message.role}
@@ -242,6 +246,8 @@ export function ChatMessageView({
         // The structured card stands in for the markdown body; `content` remains the
         // plain-markdown fallback the message still carries for export/copy/search.
         <ChatComponent spec={systemNoteComponent} />
+      ) : systemNote ? (
+        <NoteCard message={message} />
       ) : formResponseDisplay ? (
         <FormResponseCard display={formResponseDisplay} />
       ) : message.parts && message.parts.length ? (

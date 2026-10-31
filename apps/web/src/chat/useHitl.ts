@@ -102,7 +102,7 @@ export type UseHitlOptions = {
   /** The slot's turn runner. The handlers call the one passed on the same render. */
   runTurn: HitlRunTurn;
   /** The slot's local system-note seam. A plugin form's reply and errors go here. */
-  noteToThread: (text: string, opts?: { tone?: SystemNoteTone }) => void;
+  noteToThread: (text: string, opts?: { tone?: SystemNoteTone; title?: string }) => void;
   /** The render's most recent operator-initiated assistant id. The slot computes it with
    *  a memo that sits BELOW this hook call, so it is passed as a thunk. The handlers read
    *  it only from events, and by then that render's value is set. */

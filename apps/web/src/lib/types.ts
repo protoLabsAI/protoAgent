@@ -1104,9 +1104,9 @@ export type ContextWindow = {
 
 /** Emphasis tone for a local SYSTEM NOTE (a role-"system" message without a `report`) —
  *  e.g. a slash-command confirmation, a status line, or a warning. The reusable seam for
- *  posting non-agent, in-thread notices is `ChatSessionSlot.noteToThread(text, { tone })`,
- *  exposed to forks via the slash + composer registries. Add a tone here + a matching
- *  `.chat-note--<tone>` rule in chat.css; nothing else needs to change. */
+ *  posting non-agent, in-thread notices is `ChatSessionSlot.noteToThread(text, { tone, title })`,
+ *  exposed to forks via the slash + composer registries. Every note renders as a NoteCard;
+ *  add a tone here + its icon in NoteCard.tsx + a `.note-card--<tone>` rule in chat.css. */
 export type SystemNoteTone = "info" | "warning" | "danger" | "success";
 
 /** Who authored a message, when it wasn't the lead agent (#3042).
@@ -1325,6 +1325,9 @@ export type ChatMessage = {
    *  Posted via `noteToThread(text, { tone })`; system notes never carry the answer
    *  action row (copy/fork/regenerate) — those are answer-only. */
   noteTone?: SystemNoteTone;
+  /** The card header for a local SYSTEM NOTE (#notecards). Optional: without it the card
+   *  takes a leading bold lede (`**Goal set.** …`) as its title, else a label for its tone. */
+  noteTitle?: string;
   /** Structured rendering for a LOCAL system note (same component-v1 shape the agent's
    *  inline `component` parts use): when present and valid, ChatMessageView renders this
    *  through the ChatComponent registry as a neutral in-thread card INSTEAD of the toned

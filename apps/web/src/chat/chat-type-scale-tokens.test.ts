@@ -94,7 +94,9 @@ describe("Chat type scale → DS tokens (#3688 part 4)", () => {
     // Then one more for the `.chat-note-card` system-note card body (base): a slash-command
     // note rendering a structured component neutralizes the DS system pill's font back to
     // base, mirroring the report chip → 38.
-    expect(tokenCount(chatCss)).toBe(38);
+    // Then two more when plain notes became NoteCards: the `.note-card__title` and
+    // `.note-card__body` (sm), while the note wrapper keeps its one reset (base) → 40.
+    expect(tokenCount(chatCss)).toBe(40);
     expect(tokenCount(promptviewerCss)).toBe(12);
     expect(tokenCount(chatComponentCss)).toBe(11);
     expect(tokenCount(hitlCss)).toBe(7);

@@ -608,28 +608,67 @@
 .chat-session-slot .pl-message--system .pl-message__content .markdown > :first-child { margin-top: 0; }
 .chat-session-slot .pl-message--system .pl-message__content .markdown > :last-child { margin-bottom: 0; }
 
-/* Local SYSTEM NOTE (noteToThread) — a slash-command confirmation / status / warning. A
-   compact raised card with a tone-coloured left accent driven by the message's `noteTone`
-   (info/warning/danger/success). Shares the report card's raised surface + slight resting
-   shadow (--pl-shadow-card) rather than sitting in the flat bg-inset well, so an ingestion
-   confirmation reads as a lifted automation notice. System notes never carry the answer
-   action row (that's role-"assistant"-only). Add a tone: one rule here + the SystemNoteTone
-   union in lib/types.ts. The `.chat-note--*` class sits ON `.pl-message--system`, so these
-   (4 classes) outrank the base system rule above (3 classes). */
-.chat-session-slot .pl-message--system.chat-note .pl-message__content {
-  font-size: var(--pl-font-size-sm);
-  padding: var(--pl-space-2) var(--pl-space-3);
-  background: var(--pl-color-bg-raised);
-  box-shadow: var(--pl-shadow-card);
+/* Local SYSTEM NOTE (noteToThread, background one-liners, export/publish confirmations).
+   The note renders as a NoteCard (NoteCard.tsx): the DS Card shell /usage and the HITL
+   response card use, with a tone icon + title header over the markdown body. The message
+   wrapper is neutralized like .chat-note-card below, so the card sits full-width in the
+   thread instead of the old tone-accented banner. The root keeps `chat-note` +
+   `chat-note--<tone>` as hooks (tests, e2e); all visuals live on `.note-card`. Same stacked
+   specificity as the report/card rules, so load order can't let the DS pill win. */
+.chat-note.pl-message--system {
+  justify-content: stretch;
 }
-.chat-session-slot .pl-message--system.chat-note--info .pl-message__content { border-left-color: var(--pl-color-status-info); }
-/* Success = "the agent did the thing", so it follows the workspace accent — the semantic
-   --pl-color-accent the HITL card adopted (see hitl.css / hitl-accent.test.ts) — not
-   traffic-light green. Warning/danger/info stay semantic: the #2197 export-blocked note
-   relies on danger reading red, not accent. Guarded by __tests__/hitl-accent.test.ts. */
-.chat-session-slot .pl-message--system.chat-note--success .pl-message__content { border-left-color: var(--pl-color-accent); }
-.chat-session-slot .pl-message--system.chat-note--warning .pl-message__content { border-left-color: var(--pl-color-status-warning); }
-.chat-session-slot .pl-message--system.chat-note--danger .pl-message__content { border-left-color: var(--pl-color-status-error); }
+.chat-session-slot .pl-message--system.chat-note .pl-message__content,
+.pl-message--system.chat-note .pl-message__content {
+  display: block;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+  text-align: left;
+  font-size: var(--pl-font-size-base);
+  color: var(--pl-color-fg);
+}
+.note-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pl-space-1_5);
+}
+.note-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--pl-space-2);
+  min-width: 0;
+}
+.note-card__title {
+  font-weight: 600;
+  font-size: var(--pl-font-size-sm);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note-card__icon { flex: none; }
+.note-card__body {
+  font-size: var(--pl-font-size-sm);
+  color: var(--pl-color-fg-muted);
+  overflow-wrap: anywhere;
+}
+/* The DS markdown nests its blocks one level down (.markdown > div > p). */
+.note-card__body .markdown > * > :first-child { margin-top: 0; }
+.note-card__body .markdown > * > :last-child { margin-bottom: 0; }
+/* Tone lives on the icon. Success = "the agent did the thing", so it follows the workspace
+   accent — the semantic --pl-color-accent the HITL card adopted (see hitl.css /
+   hitl-accent.test.ts) — not traffic-light green. Warning/danger/info stay semantic: the
+   #2197 export-blocked note relies on danger reading red, not accent. Guarded by
+   __tests__/hitl-accent.test.ts. */
+.note-card--info .note-card__icon { color: var(--pl-color-status-info); }
+.note-card--success .note-card__icon { color: var(--pl-color-accent); }
+.note-card--warning .note-card__icon { color: var(--pl-color-status-warning); }
+.note-card--danger .note-card__icon { color: var(--pl-color-status-error); }
+/* A failure should read as one at a glance, not only by its icon. */
+.note-card--danger { border-color: var(--pl-color-status-error); }
 
 /* A local system note rendering a structured `component` (a /usage-style card). Like the
    report chip above, NEUTRALIZE the de-emphasized DS system pill (centered bg-inset fill)

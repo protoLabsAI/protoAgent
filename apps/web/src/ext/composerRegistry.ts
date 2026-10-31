@@ -21,7 +21,7 @@ export type ComposerActionContext = {
   focusComposer: () => void;
   /** Drop a LOCAL system note into the thread (shown to the operator, never sent). `tone`
    *  colours it (info/warning/danger/success); omit for a neutral note. */
-  noteToThread: (markdown: string, opts?: { tone?: SystemNoteTone }) => void;
+  noteToThread: (markdown: string, opts?: { tone?: SystemNoteTone; title?: string }) => void;
 };
 
 export type ComposerAction = {
