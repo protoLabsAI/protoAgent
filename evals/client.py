@@ -434,6 +434,8 @@ class AgentClient:
 
         Recent rows are newest first. The start boundary avoids attaching a
         previous turn when an explicit context is reused and this turn has no row.
+        It is strict: on a coarse clock (Windows) a previous turn can end on the
+        very tick this one started, and that row is the previous turn's.
         """
         try:
             async with httpx.AsyncClient(timeout=2) as client:
@@ -444,7 +446,7 @@ class AgentClient:
                 )
                 response.raise_for_status()
                 for row in response.json().get("turns", []):
-                    if row.get("session_id") == context_id and row.get("ended_at", "") >= since:
+                    if row.get("session_id") == context_id and row.get("ended_at", "") > since:
                         return _trace_id(row)
         except Exception:
             # Missing telemetry, auth, or tracing must not change an eval verdict.

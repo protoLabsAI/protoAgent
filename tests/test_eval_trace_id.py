@@ -230,3 +230,19 @@ async def test_goal_missing_trigger_trace_never_uses_setup_trace(monkeypatch):
     })
     assert result.passed
     assert result.trace_id == ''
+
+
+@pytest.mark.asyncio
+async def test_trace_for_context_skips_a_turn_that_ended_on_the_start_tick(monkeypatch):
+    # A coarse clock (Windows) can stamp the previous turn's end on the very tick this
+    # turn started; that row is the previous turn's, never this one's.
+    since = '2026-10-31T07:00:00+00:00'
+    rows = [{'session_id': 'ctx', 'trace_id': 'previous', 'ended_at': since}]
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(
+        transport=httpx.MockTransport(lambda _r: httpx.Response(200, json={'turns': rows})), **kw))
+    client = AgentClient('http://eval.test')
+    assert await client.trace_for_context('ctx', since=since) == ''
+    rows.insert(0, {'session_id': 'ctx', 'trace_id': 'this-turn',
+                    'ended_at': '2026-10-31T07:00:00.016000+00:00'})
+    assert await client.trace_for_context('ctx', since=since) == 'this-turn'

@@ -140,8 +140,6 @@ async def test_runner_rejects_multiple_cases_and_options(monkeypatch, case_id):
 @pytest.fixture
 def isolated_runner(tmp_path, monkeypatch, regression):
     row, ledger = regression
-    monkeypatch.setattr("socket.socket.bind", lambda self, address: None)
-    monkeypatch.setattr("socket.socket.getsockname", lambda self: ("127.0.0.1", 17990))
     nightly = tmp_path / "nightly.json"
     nightly.write_text(json.dumps({"nightly": True, "model": "vendor/nightly-model",
                                    "results": [{"id": "instance:lookup", "trace_id": "trace-1"}]}))

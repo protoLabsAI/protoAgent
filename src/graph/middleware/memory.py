@@ -77,10 +77,14 @@ def contained_in(base: str, path: str) -> bool:
 
     Uses ``realpath`` on both sides so a symlinked memory dir compares correctly.
 
-    Never raises: a path the OS cannot even resolve (``realpath`` rejects an embedded NUL
-    with ``ValueError``) is answered ``False``, so every caller — including the after-turn
-    persist, which must not fail the turn — treats it as "not under the base".
+    Never raises: a path the OS cannot even resolve is answered ``False``, so every
+    caller — including the after-turn persist, which must not fail the turn — treats it
+    as "not under the base". An embedded NUL is refused up front: POSIX ``realpath``
+    raises on it, but Windows ``realpath`` returns it unchanged, and the write that
+    follows then fails with ``ValueError``.
     """
+    if "\x00" in base or "\x00" in path:
+        return False
     try:
         root = os.path.realpath(base)
         resolved = os.path.realpath(path)
