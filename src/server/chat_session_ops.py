@@ -117,15 +117,21 @@ def _export_message(result: dict) -> str:
     before sharing, so a silent scrub would be the wrong default."""
     reason = result.get("reason") or ""
     if reason == "no_checkpointer":
-        return "Export unavailable — no conversation checkpoint to export."
+        return "Export unavailable — no conversation checkpoint to export." + (
+            " A turn is still running." if result.get("in_progress") else ""
+        )
     if reason == "empty_thread":
-        return "Nothing to export — this conversation has no messages yet."
+        return "Nothing to export — this conversation has no messages yet." + (
+            " A turn is still running." if result.get("in_progress") else ""
+        )
     redactions = result.get("redactions") or []
     note = (
         f" Redacted before export: {', '.join(redactions)} — read it through before sharing."
         if redactions
         else ""
     )
+    if result.get("in_progress"):
+        return f"Exported {result.get('message_count', 0)} message(s) so far — a turn is still running.{note}"
     return f"Exported {result.get('message_count', 0)} message(s) as Markdown.{note}"
 
 
@@ -139,11 +145,10 @@ async def export_session(
     gesture, #2158 P1).
 
     Resolves the session's checkpointer ``thread_id`` exactly as ``compact_session`` /
-    ``rewind_session`` do, then runs ``export_thread``. The per-thread lock is held even
-    though this is a **pure read**: it guarantees a consistent snapshot, so an export can
-    never capture a half-written turn (an ``AIMessage`` whose answering ``ToolMessage``\\s
-    haven't landed yet). Returns the ``export_thread`` result plus a human-readable
-    ``message``.
+    ``rewind_session`` do, then runs ``export_thread``. During a running turn, read the
+    latest committed checkpoint without waiting for the per-thread lock and omit
+    unanswered trailing tool calls. Idle reads still hold the lock. Returns the
+    ``export_thread`` result plus ``in_progress`` and a human-readable ``message``.
     """
     if STATE.graph is None:
         return {
@@ -152,14 +157,23 @@ async def export_session(
             "message_count": 0,
             "redactions": [],
             "reason": "setup",
+            "in_progress": False,
             "message": "Setup required — finish the setup wizard first.",
         }
 
     from graph.export_op import export_thread
 
     tid = _turn_control._resolve_thread_id(request_metadata, session_id)
-    async with _turn_control._thread_lock(tid):
-        result = await export_thread(STATE.graph, STATE.checkpointer, tid, title=title)
+    lock = _turn_control._thread_lock(tid)
+    in_progress = lock.locked()
+    if in_progress:
+        result = await export_thread(
+            STATE.graph, STATE.checkpointer, tid, title=title, drop_unanswered_tool_calls=True,
+        )
+    else:
+        async with lock:
+            result = await export_thread(STATE.graph, STATE.checkpointer, tid, title=title)
+    result = {**result, "in_progress": in_progress}
     return {**result, "message": _export_message(result)}
 
 
