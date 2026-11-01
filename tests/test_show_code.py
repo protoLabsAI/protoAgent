@@ -202,10 +202,9 @@ def test_valid_code_ref_props():
 
 
 async def test_show_component_refuses_code_ref():
-    from tools.lg_tools import get_all_tools
+    from tools.lg_tools import show_component
 
-    tool = {t.name: t for t in get_all_tools()}["show_component"]
-    out = await tool.ainvoke(
+    out = await show_component.ainvoke(
         {"component": "code-ref", "props": {"project": "r", "path": "a", "line": 1, "end_line": 1}}
     )
     assert out.startswith("Error:") and "show_code" in out
