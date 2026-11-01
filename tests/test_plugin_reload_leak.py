@@ -18,6 +18,7 @@ from __future__ import annotations
 import gc
 import sys
 import types
+import weakref
 from collections import Counter
 from pathlib import Path
 
@@ -62,9 +63,24 @@ def _live_plugin_modules(pid: str) -> list[types.ModuleType]:
     return [
         m
         for m in gc.get_objects()
-        if isinstance(m, types.ModuleType)
+        # Exact type avoids dereferencing dead weakref proxies on the heap.
+        if type(m) is types.ModuleType
         and getattr(m, "__name__", "").startswith(prefix)
     ]
+
+
+def test_live_plugin_modules_skips_dead_weakref_proxies() -> None:
+    class Referent:
+        pass
+
+    referent = Referent()
+    proxy = weakref.proxy(referent)
+    del referent
+
+    with pytest.raises(ReferenceError):
+        proxy.__class__
+    assert any(m is proxy for m in gc.get_objects())
+    assert isinstance(_live_plugin_modules("leaky"), list)
 
 
 @pytest.fixture
