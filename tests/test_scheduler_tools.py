@@ -55,6 +55,10 @@ def _schedule_tool(sched):
     return next(t for t in _build_scheduler_tools(sched) if t.name == "schedule_task")
 
 
+def _wait_tool(sched):
+    return next(t for t in _build_scheduler_tools(sched) if t.name == "wait")
+
+
 @pytest.mark.asyncio
 async def test_one_shot_schedule_carries_the_originating_session():
     # The fix (#2939): a one-shot fire resumes the chat that scheduled it — the
@@ -130,3 +134,100 @@ async def test_schedule_without_a_session_leaves_origin_session_none(monkeypatch
     sched = _FakeScheduler()
     await _schedule_tool(sched).ainvoke({"prompt": "sweep", "when": "0 9 * * *"})
     assert sched.last_origin_session is None
+
+
+# ── #4651: tell the user what failed / what will run before ending the turn ────────────
+#
+# QA saw an agent whose ENTIRE reply after image calls 524'd was "I'll pick this back up in
+# 5 minutes" — the user was never told anything had failed. The guidance that fixes this has
+# to land where the model actually reads it:
+#   * ``schedule_task`` does NOT yield — the model is re-invoked after it and reads its RESULT,
+#     so the guidance rides the result (and is stripped from the user-facing silent-turn
+#     fallback by ``schedule_turn_reply``).
+#   * ``wait`` DOES yield — ``WaitYieldMiddleware`` jumps the turn to ``end`` the moment the
+#     successful wait result lands, so the model never reads that result this turn. Its
+#     guidance therefore lives in the ``wait`` DOCSTRING (read before the tool is called); its
+#     result stays clean.
+# The machine prefixes ("Scheduled job … next at …", "Wait scheduled: …") that callers parse
+# must stay intact.
+
+
+@pytest.mark.asyncio
+async def test_one_shot_schedule_result_appends_turn_ending_guidance():
+    # r1: one-shot keeps the existing prefix and gains the failure/what-runs guidance. The model
+    # reads this because schedule_task does not yield the turn.
+    from tools.scheduler_tools import _ONESHOT_END_TURN_GUIDANCE
+
+    sched = _FakeScheduler()
+    out = await _schedule_tool(sched).ainvoke(
+        {"prompt": "retry the upload", "when": "2099-05-01T15:00:00+00:00", "state": {"session_id": "chat-1"}}
+    )
+    assert out.startswith("Scheduled job")  # prefix preserved for existing callers
+    assert out.endswith(_ONESHOT_END_TURN_GUIDANCE)
+    assert "what failed" in out
+    assert 'never reply with only "I\'ll pick this back up"' in out
+    # The same rule is in the docstring (the tool description the model reads before calling).
+    doc = " ".join(_schedule_tool(sched).description.lower().split())
+    assert "what failed and what will run" in doc
+    assert 'never reply with only "i\'ll pick this back up"' in doc
+
+
+@pytest.mark.asyncio
+async def test_cron_schedule_result_keeps_prefix_with_lighter_guidance():
+    # r1: cron still starts with "Scheduled job" but carries the lighter wording — a
+    # recurring sweep isn't a retry-after-failure, so no "what failed" phrasing.
+    from tools.scheduler_tools import _CRON_END_TURN_GUIDANCE
+
+    sched = _FakeScheduler()
+    out = await _schedule_tool(sched).ainvoke({"prompt": "summarize logs", "when": "0 9 * * 1-5"})
+    assert out.startswith("Scheduled job")
+    assert out.endswith(_CRON_END_TURN_GUIDANCE)
+    assert "what failed" not in out
+    assert "scheduled" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_schedule_task_result_fallback_strips_model_only_guidance():
+    # r1 / round-1 minor: if the turn ends silently right after schedule_task, the raw result is
+    # the user-facing reply — so the model-only guidance must be stripped back to the clean
+    # "Scheduled job … next at …" line the operator used to see.
+    from graph.middleware.wait_yield import schedule_turn_reply
+
+    sched = _FakeScheduler()
+    out = await _schedule_tool(sched).ainvoke(
+        {"prompt": "retry the upload", "when": "2099-05-01T15:00:00+00:00", "state": {"session_id": "chat-1"}}
+    )
+    cleaned = schedule_turn_reply(out)
+    assert cleaned == "Scheduled job job-1 next at 2099-05-01T15:00:00+00:00."
+    assert "Before ending your turn" not in cleaned
+
+
+@pytest.mark.asyncio
+async def test_wait_result_stays_clean_and_guidance_is_in_the_docstring():
+    # r2: ``wait`` yields the turn, so the model never reads the wait RESULT that turn — the
+    # result stays the clean "Wait scheduled: … Will resume to: …" status with NO model-only
+    # text to leak. The guidance that actually reaches the model (before it calls the tool)
+    # lives in the docstring, which is the tool description the model sees.
+    sched = _FakeScheduler()
+    out = await _wait_tool(sched).ainvoke({"seconds": 300, "then": "check the upload", "state": {}})
+    assert out == "Wait scheduled: 5 minutes. Will resume to: check the upload"
+    assert "Before ending your turn" not in out
+    assert "I'll pick this back up" not in out
+
+    # Normalize whitespace: the docstring wraps the guidance across lines.
+    doc = " ".join(_wait_tool(sched).description.lower().split())
+    assert "why you're waiting" in doc
+    assert "what happens on resume" in doc
+    assert 'never reply with only "i\'ll pick this back up"' in doc
+
+
+def test_wait_result_stays_parseable_by_wait_turn_reply():
+    # The clean wait result is still what the middleware parses the duration out of for the
+    # silent-turn fallback (coupling guard for #4651).
+    import asyncio
+
+    from graph.middleware.wait_yield import wait_turn_reply
+
+    sched = _FakeScheduler()
+    out = asyncio.run(_wait_tool(sched).ainvoke({"seconds": 2700, "then": "Check the board.", "state": {}}))
+    assert wait_turn_reply(out) == "I'll pick this back up in 45 minutes."

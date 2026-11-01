@@ -38,7 +38,7 @@ from graph import upstream_errors as _upstream_errors
 from graph.fence_scope import fence_scope
 from graph.image_limits import fit_data_uri
 from graph.middleware.redaction import redact as _redact
-from graph.middleware.wait_yield import wait_turn_reply
+from graph.middleware.wait_yield import schedule_turn_reply, wait_turn_reply
 from graph.output_format import extract_output
 from runtime import turn_activity as _turn_activity
 from runtime.state import STATE
@@ -1116,7 +1116,10 @@ async def _run_native_turn(
     if not final_text:
         last_tool_out = turn["last_tool_out"]
         final_text = (
-            wait_turn_reply(last_tool_out) or last_tool_out or "_(The agent ended the turn without a textual reply.)_"
+            wait_turn_reply(last_tool_out)
+            or schedule_turn_reply(last_tool_out)
+            or last_tool_out
+            or "_(The agent ended the turn without a textual reply.)_"
         )
 
     # Goal mode (shared drive, server/goal_loop.py): verify the outcome after the agent

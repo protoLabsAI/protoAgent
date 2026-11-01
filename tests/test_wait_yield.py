@@ -370,6 +370,55 @@ def test_wait_turn_reply_matches_the_real_tool_confirmation():
     assert wait_turn_reply(out) == "I'll pick this back up in 45 minutes."
 
 
+def test_schedule_turn_reply_strips_model_only_guidance_for_the_user():
+    # #4651: schedule_task appends model-only turn-ending guidance after the confirmation line.
+    # On a silent turn the raw result is the fallback reply, so the operator must get the clean
+    # first line back — never the "Before ending your turn, tell the user…" instructions.
+    from graph.middleware.wait_yield import schedule_turn_reply
+
+    raw = (
+        "Scheduled job job-1 next at 2099-05-01T15:00:00+00:00.\n"
+        "Before ending your turn, tell the user in your reply what happened (e.g. what failed) "
+        'and what will run when this fires — never reply with only "I\'ll pick this back up".'
+    )
+    assert schedule_turn_reply(raw) == "Scheduled job job-1 next at 2099-05-01T15:00:00+00:00."
+    # Not a schedule confirmation → None, so the caller keeps its own fallback.
+    assert schedule_turn_reply("Wait scheduled: 45 minutes. Will resume to: Check CI.") is None
+    assert schedule_turn_reply("Error: max_fires must be >= 1, got 0.") is None
+    assert schedule_turn_reply("") is None
+
+
+def test_schedule_turn_reply_matches_the_real_tool_confirmation():
+    # Guard the coupling: the sanitizer keys off schedule_task's own wording, and the guidance
+    # the tool appends is on its own line so only the machine fact survives for the operator.
+    import asyncio
+
+    from tools.scheduler_tools import _build_scheduler_tools
+
+    from graph.middleware.wait_yield import schedule_turn_reply
+
+    class _Sched:
+        def cancel_job(self, job_id):
+            return False
+
+        def list_jobs(self):
+            return []
+
+        def add_job(self, prompt, schedule, **k):
+            class _J:
+                id = "job-9"
+                next_fire = schedule
+
+            return _J()
+
+    schedule_task = next(t for t in _build_scheduler_tools(_Sched()) if t.name == "schedule_task")
+    out = asyncio.run(
+        schedule_task.ainvoke({"prompt": "retry the upload", "when": "2099-05-01T15:00:00+00:00", "state": {}})
+    )
+    assert "Before ending your turn" in out  # the model-facing guidance really is on the result
+    assert schedule_turn_reply(out) == "Scheduled job job-9 next at 2099-05-01T15:00:00+00:00."
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("seconds", [10**100, 10**12])
 async def test_out_of_range_wait_preserves_pending_wakeup(seconds):
