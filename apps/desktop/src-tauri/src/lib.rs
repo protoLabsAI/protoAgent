@@ -421,6 +421,7 @@ pub fn run() {
             auth_token,
             pick_path,
             navigation::new_window,
+            navigation::open_view_window,
             downloads::open_download,
             downloads::reveal_download
         ])

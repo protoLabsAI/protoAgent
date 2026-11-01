@@ -25,6 +25,35 @@ pub(crate) fn open_chat_window<R: Runtime>(
     app: &AppHandle<R>,
     path: Option<String>,
 ) -> Result<(), String> {
+    open_app_window(app, path, "protoAgent", &WindowShape::CHAT)
+}
+
+/// The per-kind geometry of a shell-built console window. A chat window is a full
+/// console; a plugin-view window (spike) is one surface, so it may be smaller.
+pub(crate) struct WindowShape {
+    size: (f64, f64),
+    min: (f64, f64),
+}
+
+impl WindowShape {
+    const CHAT: WindowShape = WindowShape {
+        size: (1280.0, 820.0),
+        min: (980.0, 640.0),
+    };
+    const VIEW: WindowShape = WindowShape {
+        size: (960.0, 720.0),
+        min: (420.0, 320.0),
+    };
+}
+
+/// Every shell-built console window goes through here so the API-base handoff, the
+/// drag-drop fix and the new-window/navigation triage (#3316) can't go missing on one.
+fn open_app_window<R: Runtime>(
+    app: &AppHandle<R>,
+    path: Option<String>,
+    title: &str,
+    shape: &WindowShape,
+) -> Result<(), String> {
     // WakeSignal already carries the resolved sidecar port (managed in setup, after
     // choose_port) — no second source of truth for it.
     let port = app
@@ -45,9 +74,9 @@ pub(crate) fn open_chat_window<R: Runtime>(
     };
     #[allow(unused_mut)]
     let mut builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
-        .title("protoAgent")
-        .inner_size(1280.0, 820.0)
-        .min_inner_size(980.0, 640.0)
+        .title(title)
+        .inner_size(shape.size.0, shape.size.1)
+        .min_inner_size(shape.min.0, shape.min.1)
         .resizable(true)
         // Offset rather than centered: a second window landing exactly on the first looks
         // like nothing happened — the same "did that work?" the no-op menu item produced.
@@ -98,6 +127,44 @@ pub(crate) fn new_window<R: Runtime>(
     path: Option<String>,
 ) -> Result<(), String> {
     open_chat_window(&app, path)
+}
+
+/// Pop a single plugin view out into its own window (spike). The console renders the
+/// `view/<key>` route as that one surface — no rails, no chat — against the same sidecar,
+/// so the view's iframe, auth and theme handshake are exactly the docked ones.
+#[tauri::command]
+pub(crate) fn open_view_window<R: Runtime>(
+    app: AppHandle<R>,
+    view_key: String,
+    title: Option<String>,
+) -> Result<(), String> {
+    let route = view_window_route(&view_key)?;
+    // The view's own label names the window (Dock/Mission Control/Window menu), so two
+    // popped-out views aren't two indistinguishable "protoAgent"s.
+    let title = title
+        .map(|t| {
+            t.chars()
+                .filter(|c| !c.is_control())
+                .take(80)
+                .collect::<String>()
+        })
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| "protoAgent".to_string());
+    open_app_window(&app, Some(route), &title, &WindowShape::VIEW)
+}
+
+/// `plugin:<id>:<viewId>` → the console's `view/<key>` route. Only plugin surface keys
+/// are accepted: the route is spliced into the window URL, so nothing else rides along.
+fn view_window_route(view_key: &str) -> Result<String, String> {
+    let ok = view_key.starts_with("plugin:")
+        && view_key.len() <= 200
+        && view_key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '_' | '-' | '.'));
+    if !ok {
+        return Err(format!("not a plugin view key: {view_key:?}"));
+    }
+    Ok(format!("view/{view_key}"))
 }
 
 /// Is this new-window target OUR app rather than the wider web (#1706)?
@@ -487,8 +554,31 @@ pub(crate) fn serve_navigation<R: Runtime>(app: &AppHandle<R>, target: &str) -> 
 mod new_window_tests {
     use super::{
         editor_link_file, is_editor_link, is_own_origin, minted_media_url, own_origin_path,
-        percent_decode, route_new_window, NewWindow,
+        percent_decode, route_new_window, view_window_route, NewWindow,
     };
+
+    // ── spike: plugin-view windows ────────────────────────────────────────────
+    #[test]
+    fn a_plugin_view_key_becomes_its_view_route() {
+        assert_eq!(
+            view_window_route("plugin:project_board:board").as_deref(),
+            Ok("view/plugin:project_board:board")
+        );
+    }
+
+    #[test]
+    fn anything_but_a_plain_plugin_key_is_refused() {
+        for bad in [
+            "chat",
+            "plugin:x/../../evil",
+            "plugin:x?y=1",
+            "plugin:x#y",
+            "plugin: x",
+            "",
+        ] {
+            assert!(view_window_route(bad).is_err(), "{bad:?} must be refused");
+        }
+    }
 
     // ── #4312: an image's "open in new tab" is the browser, not a second app window ──
     #[test]

@@ -7,9 +7,11 @@ import { AppToasts } from "./app/AppToasts";
 import { PairingConfirmation } from "./app/PairingConfirmation";
 import { PairingRecovery } from "./app/PairingRecovery";
 import { Launcher } from "./app/Launcher";
+import { ViewWindow } from "./app/ViewWindow";
 import { AppCrash, ForcedQuotaCrash } from "./app/AppCrash";
 import { ErrorBoundary } from "./app/ErrorBoundary";
 import { isLauncherWindow } from "./lib/desktop";
+import { viewWindowKey } from "./lib/viewWindow";
 // ADR 0037 — design-system foundation. Order matters: brand tokens (--pl-*) load first,
 // then the DS component styles, then the legacy theme.css (which may reference --pl-*).
 import "@protolabsai/design/css/tokens";
@@ -39,6 +41,9 @@ watchThemeChanges(); // fire `protoagent:theme` on any theme change → plugin i
 // bundle, so without this they'd leak onto the in-app palette in the main window).
 const launcher = isLauncherWindow();
 if (launcher) document.documentElement.classList.add("is-launcher");
+// A popped-out plugin view (spike) — the same "one bundle, different root" move: the
+// `#/view/<key>` route renders only that surface (lib/viewWindow.ts).
+const poppedView = launcher ? null : viewWindowKey();
 if (!launcher) void activateSlugAgent(); // cold-agent resume + keep-warm touch on slug navigation (#806)
 
 // Device pairing (ADR 0087): a `#pair=<code>` fragment is redeemed for a device token
@@ -66,7 +71,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <QueryClientProvider client={queryClient}>
         <AppToasts>
           <PairingConfirmation />
-          <PairingRecovery error={pairingError}>{launcher ? <Launcher /> : <App />}</PairingRecovery>
+          <PairingRecovery error={pairingError}>{launcher ? <Launcher /> : poppedView ? <ViewWindow viewKey={poppedView} /> : <App />}</PairingRecovery>
         </AppToasts>
       </QueryClientProvider>
     </ErrorBoundary>
