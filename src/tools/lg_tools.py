@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import inspect
 import logging
 import operator as _op
 from datetime import UTC, datetime
@@ -311,6 +312,30 @@ async def calculator(expression: str) -> str:
 
 # ── web_search (DuckDuckGo) ──────────────────────────────────────────────────
 
+# ddgs signals a throttled/failing backend with the SAME ``DDGSException('No results
+# found.')`` it raises for a genuinely empty result, so a single failed call can't tell
+# "the web has nothing" from "we never actually searched" — a daily sweep once logged
+# "nothing found" for three days without having searched at all (#4578). web_search
+# therefore tries twice and only calls a query empty when a call actually *completed*.
+_DDGS_RETRY_BACKOFF_S = 2.0
+# A different engine rotation than ddgs's default "auto" (which leads with encyclopedic
+# sources) so the retry can route around whichever backend was throttled.
+_DDGS_RETRY_BACKEND = "google, duckduckgo, brave, mojeek, yahoo, startpage"
+
+
+def _ddgs_supports_backend(text_method) -> bool:
+    """True when ddgs's ``text`` accepts a ``backend=`` kwarg (named, or via ``**kwargs``).
+
+    ddgs releases differ in how ``text`` is declared; fall back to a plain call otherwise.
+    """
+    try:
+        params = inspect.signature(text_method).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        p.name == "backend" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params
+    )
+
 
 @tool
 @with_fallback()
@@ -325,20 +350,75 @@ async def web_search(query: str, max_results: int = 5) -> str:
     except ImportError:
         return "Error: the 'ddgs' package is not installed. Add `ddgs>=9.0` to requirements.txt and rebuild the image."
 
+    try:
+        from ddgs.exceptions import RatelimitException as ratelimit_exc
+    except Exception:  # older ddgs without a dedicated ratelimit exception type
+        ratelimit_exc = None
+
+    use_backend = _ddgs_supports_backend(DDGS.text)
+
     # ddgs.text() is a SYNCHRONOUS network call — running it inline would block the asyncio
     # event loop for the whole search. Under a fan-out (e.g. task_batch's parallel
     # researchers) those blocking searches serialise on the loop and starve everything else,
     # incl. the cancel/tasks API. Offload to a worker thread so the loop stays responsive.
-    def _run_search() -> list:
+    def _run_search(alternate_backend: bool) -> list:
+        kwargs = {"max_results": max_results}
+        if alternate_backend and use_backend:
+            kwargs["backend"] = _DDGS_RETRY_BACKEND
         with DDGS() as ddgs:
-            return list(ddgs.text(query, max_results=max_results))
+            return list(ddgs.text(query, **kwargs))
 
-    try:
-        results = await asyncio.to_thread(_run_search)
-    except Exception as e:
-        return f"Error: DuckDuckGo search failed: {e}"
+    # Two attempts: the first call, then — after a short *async* backoff that keeps the
+    # loop free — a retry on an alternate backend. A single ddgs failure is NOT proof the
+    # web is empty, so we never collapse a failed retry into "No results".
+    results = None
+    last_error: Exception | None = None
+    rate_limited = False
+    for attempt in range(2):
+        try:
+            results = await asyncio.to_thread(_run_search, attempt == 1)
+            break
+        except Exception as e:  # noqa: BLE001 — surface every ddgs failure as a tool string
+            last_error = e
+            if ratelimit_exc is not None and isinstance(e, ratelimit_exc):
+                rate_limited = True
+            if attempt == 0:
+                log.warning(
+                    "web_search first attempt failed (%r); retrying in %ss",
+                    e,
+                    _DDGS_RETRY_BACKOFF_S,
+                )
+                await asyncio.sleep(_DDGS_RETRY_BACKOFF_S)
+
+    if results is None:
+        # Both attempts RAISED — the search never completed, so this must read as a failure,
+        # never an empty result (#4578). The "Error:" prefix is load-bearing: AuditMiddleware
+        # and wait_yield both record a tool reply as a *failed* call iff it startswith("Error")
+        # (see src/graph/middleware/audit.py), so EVERY both-attempts failure — including
+        # ddgs's ambiguous 'No results found.' — keeps the prefix or a failed search is logged
+        # as a success and callers read it as an empty result all over again.
+        reason = str(last_error).strip() or type(last_error).__name__
+        if rate_limited:
+            return (
+                f"Error: web search was rate-limited (tried twice: {reason}); "
+                "this is NOT an empty result — retry later."
+            )
+        if "no results" in reason.lower():
+            # ddgs reports throttling with the SAME 'No results found.' it uses for a genuine
+            # empty result, so an ambiguous miss on BOTH tries is unverified — not a confirmed
+            # empty. Still an Error, so the audit trail doesn't score it as a successful empty.
+            return (
+                f"Error: web search could not be verified (tried twice: {reason}); "
+                "DuckDuckGo reports throttling the same way it reports an empty result, so "
+                "this is NOT a confirmed empty result — retry later."
+            )
+        return (
+            f"Error: web search was rate-limited or failed (tried twice: {reason}); "
+            "this is NOT an empty result — retry later."
+        )
 
     if not results:
+        # A search actually COMPLETED and came back empty — the one true "miss".
         return f"No results for {query!r}."
 
     lines = [f"{len(results)} result(s) for {query!r}:"]
