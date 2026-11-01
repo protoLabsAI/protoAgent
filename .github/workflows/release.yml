@@ -58,7 +58,7 @@ jobs:
       # ── Docker ────────────────────────────────────────────────────────────────
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -172,7 +172,7 @@ jobs:
       - name: Generate + post release notes
         id: relnotes
         continue-on-error: true
-        uses: protoLabsAI/release-tools@32a25e78a7709d8476cf66de27b269f1820efdcc # v2.4.0 — first version with the out-file input (#1516/#1615)
+        uses: protoLabsAI/release-tools@9a050ed461243871d702252df4d618edb846f143 # v2.4.0 — first version with the out-file input (#1516/#1615)
         with:
           version: ${{ steps.version.outputs.tag }}
           previous-version: ${{ steps.version.outputs.prev_tag }}
