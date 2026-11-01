@@ -99,8 +99,11 @@ def test_build_caller_passes_bound_tool_names(monkeypatch):
     so the warmed prefix matches the real agent's prefix (not the full
     operating model). Regression for #3230."""
     import sys
-    import types
     from unittest.mock import MagicMock
+
+    import tools
+    from graph import llm, prompts
+    from tools import lg_tools
 
     class FakeTool:
         def __init__(self, name):
@@ -108,33 +111,31 @@ def test_build_caller_passes_bound_tool_names(monkeypatch):
 
     fake_tools = [FakeTool("search"), FakeTool("read_file")]
 
-    # Stub heavy modules that _build_caller lazy-imports so the test runs
-    # without langgraph / litellm on the path.
-    lg_tools_mod = types.ModuleType("tools.lg_tools")
-    lg_tools_mod.get_all_tools = lambda *a, **kw: fake_tools  # type: ignore[attr-defined]
-
-    llm_mod = types.ModuleType("graph.llm")
-    llm_mod.create_llm = lambda *a, **kw: MagicMock(  # type: ignore[attr-defined]
-        bind_tools=lambda t: MagicMock(ainvoke=MagicMock()),
-    )
-
-    lc_messages = types.ModuleType("langchain_core.messages")
-    lc_messages.HumanMessage = type("HumanMessage", (), {"__init__": lambda self, **kw: None})  # type: ignore[attr-defined]
-    lc_messages.SystemMessage = type("SystemMessage", (), {"__init__": lambda self, **kw: None})  # type: ignore[attr-defined]
-
-    for name, mod in [("tools.lg_tools", lg_tools_mod), ("graph.llm", llm_mod), ("langchain_core.messages", lc_messages)]:
-        monkeypatch.setitem(sys.modules, name, mod)
-
     captured = {}
 
     def patched_build_system_prompt(**kwargs):
         captured.update(kwargs)
         return "system prompt"
 
-    monkeypatch.setattr("graph.prompts.build_system_prompt", patched_build_system_prompt)
+    original_get_all_tools = lg_tools.get_all_tools
+    original_create_llm = llm.create_llm
+    original_build_system_prompt = prompts.build_system_prompt
+    # Patch real modules: replacing sys.modules entries can leave importers with
+    # fake modules/functions after teardown (#4667). Keep the patch lifetime
+    # explicit so restoration is checked in this test, independent of test order.
+    with monkeypatch.context() as patch:
+        patch.setattr(lg_tools, "get_all_tools", lambda *a, **kw: fake_tools)
+        patch.setattr(llm, "create_llm", lambda *a, **kw: MagicMock())
+        patch.setattr(prompts, "build_system_prompt", patched_build_system_prompt)
 
-    warmer = CacheWarmer(_cfg())
-    warmer._build_caller()
+        warmer = CacheWarmer(_cfg())
+        warmer._build_caller()
+        assert sys.modules["tools.lg_tools"] is tools.lg_tools is lg_tools
+
+    assert sys.modules["tools.lg_tools"] is tools.lg_tools is lg_tools
+    assert lg_tools.get_all_tools is original_get_all_tools
+    assert llm.create_llm is original_create_llm
+    assert prompts.build_system_prompt is original_build_system_prompt
 
     assert "bound_tool_names" in captured, "build_system_prompt was not called with bound_tool_names"
     assert captured["bound_tool_names"] == frozenset({"search", "read_file"})
