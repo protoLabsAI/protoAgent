@@ -70,25 +70,51 @@ async def test_async_path_blocks_too():
 
 
 def test_manager_resolves_the_registry_allowlist(monkeypatch):
-    """Without runtime overrides, use registry tools and [] for unknown types."""
+    """Without a runtime override or inherited lead tools, the detached fence is
+    exactly the researcher's registry allowlist; an unknown type is unfenced.
+
+    This runs in a shared process, and the value it asserts on —
+    ``SUBAGENT_REGISTRY["researcher"].tools`` — is process-global state. A sibling
+    test can leave the registry entry replaced (``_apply_config_subagents`` rebuilds
+    it, a YAML ``subagents.researcher.tools`` override trims it). The autouse
+    ``_isolate_subagent_registry`` fixture (tests/conftest.py) restores the registry
+    dict per test, but this test does not lean on that: it PINS every input the
+    resolution reads — no config overlay, no live graph (so no inherited lead
+    tools), and the registry entry pinned back to the canonical ``RESEARCHER_CONFIG``
+    — so no predecessor's leak can flip the result. The one divergence that could
+    survive both guards would be a registry whose ``tools`` carries a duplicate or a
+    HITL name: ``_subagent_fence`` dedups + HITL-filters, the raw list does not, so
+    they'd differ by one entry (#4617). The assertion prints BOTH full lists with
+    their lengths so such a mismatch names the lists, not pytest's truncated
+    ``[current_tim…] == [current_tim…]``.
+    """
     from background.manager import _subagent_fence
-    from graph.subagents.config import SUBAGENT_REGISTRY
+    from graph.subagents.config import RESEARCHER_CONFIG, SUBAGENT_REGISTRY
     from runtime.state import STATE
 
-    # Registry defaults apply only without a runtime config override or inherited
-    # lead tools. Do not depend on the state left by another test in this worker.
     monkeypatch.setattr(STATE, "graph_config", None)
     monkeypatch.setattr(STATE, "graph", None)
+    monkeypatch.setitem(SUBAGENT_REGISTRY, "researcher", RESEARCHER_CONFIG)
 
-    assert _subagent_fence("researcher") == list(SUBAGENT_REGISTRY["researcher"].tools)
+    fence = _subagent_fence("researcher")
+    expected = list(SUBAGENT_REGISTRY["researcher"].tools)
+    assert fence == expected, (
+        "detached researcher fence diverged from its registry allowlist\n"
+        f"  fence    ({len(fence)}): {fence}\n"
+        f"  expected ({len(expected)}): {expected}"
+    )
     assert _subagent_fence("not-a-registry-type") == []
 
 
 def test_manager_resolves_the_config_allowlist(monkeypatch):
     from background.manager import _subagent_fence
-    from graph.subagents.config import SUBAGENT_REGISTRY
+    from graph.subagents.config import RESEARCHER_CONFIG, SUBAGENT_REGISTRY
     from runtime.state import STATE
 
+    # Pin the registry entry too (same reasoning as the test above): the config
+    # override is what should win here, and the restoration check at the end must
+    # compare against the canonical tools, not a value a prior test left behind.
+    monkeypatch.setitem(SUBAGENT_REGISTRY, "researcher", RESEARCHER_CONFIG)
     registry_tools = list(SUBAGENT_REGISTRY["researcher"].tools)
     monkeypatch.setattr(STATE, "graph", None)
     monkeypatch.setattr(
