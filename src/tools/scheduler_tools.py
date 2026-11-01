@@ -57,6 +57,26 @@ def _humanize_duration(seconds: int) -> str:
     return " ".join(parts)
 
 
+# Turn-ending guidance appended to the SUCCESS results of ``schedule_task`` (one-shot) and
+# ``wait`` (#4651). Seen in QA: after image tool calls failed with gateway 524s the agent
+# scheduled a retry and its ENTIRE reply was "I'll pick this back up in 5 minutes" — the user
+# was never told anything had failed. These lines nudge the model to say what happened and
+# what will run before the turn ends, instead of yielding silently. They are model-facing
+# (the ``wait`` line never reaches chat raw — ``wait_turn_reply`` rewrites it); appended AFTER
+# the machine facts so the "Scheduled job … next at …" / "Wait scheduled: …" prefixes that
+# callers key off are untouched. Cron schedules carry a lighter version — a recurring sweep
+# usually isn't a retry-after-failure, so it only needs "say what was scheduled".
+_ONESHOT_END_TURN_GUIDANCE = (
+    "\nBefore ending your turn, tell the user in your reply what happened (e.g. what failed) "
+    'and what will run when this fires — never reply with only "I\'ll pick this back up".'
+)
+_CRON_END_TURN_GUIDANCE = "\nBefore ending your turn, tell the user what was scheduled and when it will run."
+_WAIT_END_TURN_GUIDANCE = (
+    "\nBefore ending your turn, tell the user in your reply why you're waiting (e.g. what "
+    'failed) and what happens when this resumes — never reply with only "I\'ll pick this back up".'
+)
+
+
 def _build_scheduler_tools(scheduler) -> list:
     """Bind scheduler tools to a ``SchedulerBackend``. Returns a list."""
 
@@ -72,7 +92,8 @@ def _build_scheduler_tools(scheduler) -> list:
     ) -> str:
         # Recurring (cron) schedules get a default 7-day TTL unless ``ttl``/``max_fires`` say
         # otherwise, so a forgotten schedule doesn't run forever; one-shot ISO schedules fire
-        # once and are removed. Returns "Scheduled job <id> next at <iso>." or an error string.
+        # once and are removed. Returns "Scheduled job <id> next at <iso>." (plus a line of
+        # turn-ending guidance, #4651) or an error string.
         """Schedule a future turn: ``prompt`` arrives as a new turn when it fires (reminders, recurring sweeps, check-ins).
 
         Args:
@@ -86,6 +107,9 @@ def _build_scheduler_tools(scheduler) -> list:
             max_fires: auto-cancel after this many fires.
 
         For "check back in N seconds" use ``wait``.
+
+        Before you end the turn, tell the user what you scheduled — and if it follows a failure,
+        what failed and what will run when it fires; never reply with only "I'll pick this back up".
         """
         # Validate expiry knobs up front — a clean error string beats a
         # backend-specific failure surfacing later.
@@ -150,7 +174,10 @@ def _build_scheduler_tools(scheduler) -> list:
         except Exception as exc:  # noqa: BLE001
             return f"Error: scheduler add_job failed: {exc}"
         next_fire = job.next_fire or "(managed by remote scheduler)"
-        return f"Scheduled job {job.id} next at {next_fire}."
+        # #4651: append turn-ending guidance so the model reports back to the user instead
+        # of yielding on only "I'll pick this back up". Cron gets the lighter wording.
+        guidance = _CRON_END_TURN_GUIDANCE if is_cron(when) else _ONESHOT_END_TURN_GUIDANCE
+        return f"Scheduled job {job.id} next at {next_fire}.{guidance}"
 
     @tool
     async def list_schedules() -> str:
@@ -196,8 +223,9 @@ def _build_scheduler_tools(scheduler) -> list:
             then: self-contained instruction for when you wake — your only context then, so name
                 the exact entities and steps.
 
-        Never paste the returned status line or an ISO timestamp into chat; paraphrase briefly
-        (e.g. "I'll check back in about 5 minutes.").
+        Never paste the returned status line or an ISO timestamp into chat; paraphrase briefly,
+        and say WHY you're waiting and what happens on resume — never reply with only "I'll pick
+        this back up".
         """
         if not (then or "").strip():
             return "Error: `then` is required — describe what to do on resume."
@@ -244,7 +272,10 @@ def _build_scheduler_tools(scheduler) -> list:
         # echo it (the old ISO timestamp / "re-invoked at" phrasing read as raw
         # system text when parroted into chat). Machine-relevant facts stay intact:
         # the humanized duration and the resume instruction.
-        return f"Wait scheduled: {_humanize_duration(secs)}. Will resume to: {then}"
+        # #4651: append turn-ending guidance (model-facing — wait_turn_reply rewrites this
+        # line before it reaches chat) so a wait-after-failure isn't yielded on only
+        # "I'll pick this back up". Kept after the resume mark so the parser is unaffected.
+        return f"Wait scheduled: {_humanize_duration(secs)}. Will resume to: {then}{_WAIT_END_TURN_GUIDANCE}"
 
     return [schedule_task, list_schedules, cancel_schedule, wait]
 

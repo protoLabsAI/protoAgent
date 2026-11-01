@@ -55,6 +55,10 @@ def _schedule_tool(sched):
     return next(t for t in _build_scheduler_tools(sched) if t.name == "schedule_task")
 
 
+def _wait_tool(sched):
+    return next(t for t in _build_scheduler_tools(sched) if t.name == "wait")
+
+
 @pytest.mark.asyncio
 async def test_one_shot_schedule_carries_the_originating_session():
     # The fix (#2939): a one-shot fire resumes the chat that scheduled it — the
@@ -130,3 +134,67 @@ async def test_schedule_without_a_session_leaves_origin_session_none(monkeypatch
     sched = _FakeScheduler()
     await _schedule_tool(sched).ainvoke({"prompt": "sweep", "when": "0 9 * * *"})
     assert sched.last_origin_session is None
+
+
+# ── #4651: turn-ending guidance appended to one-shot schedule_task + wait results ──────
+#
+# QA saw an agent whose ENTIRE reply after image calls 524'd was "I'll pick this back up in
+# 5 minutes" — the user was never told anything had failed. The fix appends model-facing
+# guidance to the SUCCESS result so the agent reports what happened / what will run before it
+# ends the turn. The machine prefixes ("Scheduled job … next at …", "Wait scheduled: …") that
+# callers parse must stay intact.
+
+
+@pytest.mark.asyncio
+async def test_one_shot_schedule_result_appends_turn_ending_guidance():
+    # r1: one-shot keeps the existing prefix and gains the failure/what-runs guidance.
+    from tools.scheduler_tools import _ONESHOT_END_TURN_GUIDANCE
+
+    sched = _FakeScheduler()
+    out = await _schedule_tool(sched).ainvoke(
+        {"prompt": "retry the upload", "when": "2099-05-01T15:00:00+00:00", "state": {"session_id": "chat-1"}}
+    )
+    assert out.startswith("Scheduled job")  # prefix preserved for existing callers
+    assert out.endswith(_ONESHOT_END_TURN_GUIDANCE)
+    assert "what failed" in out
+    assert 'never reply with only "I\'ll pick this back up"' in out
+
+
+@pytest.mark.asyncio
+async def test_cron_schedule_result_keeps_prefix_with_lighter_guidance():
+    # r1: cron still starts with "Scheduled job" but carries the lighter wording — a
+    # recurring sweep isn't a retry-after-failure, so no "what failed" phrasing.
+    from tools.scheduler_tools import _CRON_END_TURN_GUIDANCE
+
+    sched = _FakeScheduler()
+    out = await _schedule_tool(sched).ainvoke({"prompt": "summarize logs", "when": "0 9 * * 1-5"})
+    assert out.startswith("Scheduled job")
+    assert out.endswith(_CRON_END_TURN_GUIDANCE)
+    assert "what failed" not in out
+    assert "scheduled" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_wait_result_appends_turn_ending_guidance():
+    # r2: wait keeps its "Wait scheduled: … Will resume to: …" status and gains guidance to
+    # tell the user why it's waiting and what happens next.
+    from tools.scheduler_tools import _WAIT_END_TURN_GUIDANCE
+
+    sched = _FakeScheduler()
+    out = await _wait_tool(sched).ainvoke({"seconds": 300, "then": "check the upload", "state": {}})
+    assert out.startswith("Wait scheduled: ")
+    assert out.endswith(_WAIT_END_TURN_GUIDANCE)
+    assert "why you're waiting" in out
+    assert 'never reply with only "I\'ll pick this back up"' in out
+
+
+def test_wait_guidance_does_not_break_wait_turn_reply():
+    # The appended guidance sits AFTER ". Will resume to: …", so the middleware still parses
+    # the duration out of the real tool output (coupling guard for #4651).
+    import asyncio
+
+    from graph.middleware.wait_yield import wait_turn_reply
+
+    sched = _FakeScheduler()
+    out = asyncio.run(_wait_tool(sched).ainvoke({"seconds": 2700, "then": "Check the board.", "state": {}}))
+    assert wait_turn_reply(out) == "I'll pick this back up in 45 minutes."
