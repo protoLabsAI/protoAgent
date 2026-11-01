@@ -198,6 +198,35 @@ def render_markdown(
 
 
 # ── the op ───────────────────────────────────────────────────────────────────────────
+def _without_unanswered_tail(messages: list) -> tuple[list, bool]:
+    """Copy the trailing tool batch for rendering, keeping only answered calls."""
+    answered = set()
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if role_of(message) == "tool":
+            call_id = message.get("tool_call_id") if isinstance(message, dict) else getattr(message, "tool_call_id", None)
+            if call_id:
+                answered.add(call_id)
+            continue
+        if role_of(message) not in ("ai", "assistant"):
+            break
+        calls = tool_calls_of(message)
+        kept = [call for call in calls if call.get("id") in answered]
+        if len(kept) == len(calls):
+            break
+        content = message.get("content") if isinstance(message, dict) else message.content
+        if isinstance(content, list):
+            # tool_use blocks mirror tool_calls; remove the same dangling calls there.
+            content = [
+                block for block in content
+                if not (isinstance(block, dict) and block.get("type") in ("tool_use", "tool_call")
+                        and block.get("id") not in answered)
+            ]
+        rendered = {"role": role_of(message), "content": content, "tool_calls": kept}
+        return [*messages[:index], rendered, *messages[index + 1:]], True
+    return messages, False
+
+
 async def export_thread(
     graph,
     checkpointer,
@@ -205,6 +234,7 @@ async def export_thread(
     *,
     title: str | None = None,
     redact_secrets: bool = True,
+    drop_unanswered_tool_calls: bool = False,
 ) -> dict:
     """Export ``thread_id``'s conversation as Markdown.
 
@@ -212,6 +242,8 @@ async def export_thread(
     (with empty markdown) when there's no checkpointer or the thread has no state — an
     empty thread is *not* an error, just nothing to share. **Never mutates the
     checkpoint**: unlike its compaction/rewind siblings this is a pure read.
+    ``drop_unanswered_tool_calls`` hides unfinished calls in the trailing tool batch
+    and appends a running-turn note, for checkpoint reads made during a live turn.
     """
     if graph is None or checkpointer is None:
         return {"found": False, "markdown": "", "message_count": 0, "redactions": [], "reason": "no_checkpointer"}
@@ -223,7 +255,10 @@ async def export_thread(
     if not messages:
         return {"found": False, "markdown": "", "message_count": 0, "redactions": [], "reason": "empty_thread"}
 
-    markdown, redactions = render_markdown(messages, thread_id=thread_id, title=title, redact_secrets=redact_secrets)
+    render_messages, dropped = _without_unanswered_tail(messages) if drop_unanswered_tool_calls else (messages, False)
+    markdown, redactions = render_markdown(render_messages, thread_id=thread_id, title=title, redact_secrets=redact_secrets)
+    if dropped:
+        markdown += "\n_(turn still running…)_\n"
     if redactions:
         log.info("[export] thread %s: redacted %s", thread_id, ", ".join(redactions))
     return {
