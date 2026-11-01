@@ -35,7 +35,7 @@ import logging
 from typing import Any
 
 from graph.middleware.redaction import redact as _redact
-from graph.middleware.wait_yield import wait_turn_reply
+from graph.middleware.wait_yield import schedule_turn_reply, wait_turn_reply
 from graph.output_format import extract_output
 from runtime.state import STATE
 from server import chat_acp as _chat_acp
@@ -271,7 +271,7 @@ async def _native_turn(
     no_reply = ""
     if not response:
         last_tool_out = _chat()._last_tool_text(result)
-        response = wait_turn_reply(last_tool_out) or last_tool_out
+        response = wait_turn_reply(last_tool_out) or schedule_turn_reply(last_tool_out) or last_tool_out
     if not response:
         no_reply = response = (
             "**Error:** the turn produced no reply — it may have stalled or been "

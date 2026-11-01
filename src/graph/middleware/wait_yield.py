@@ -34,6 +34,29 @@ WAIT_TOOL_NAME = "wait"
 _WAIT_CONFIRMATION_PREFIX = "Wait scheduled: "
 _WAIT_RESUME_MARK = ". Will resume to: "
 
+# The ``schedule_task`` tool's success confirmation (tools/scheduler_tools.py) —
+# "Scheduled job <id> next at <iso>.", followed by a newline and a line of MODEL-ONLY
+# turn-ending guidance (#4651) telling the model to say what failed / what will run. Unlike
+# ``wait`` the model does read that guidance (schedule_task doesn't yield), but if it then
+# ends the turn with no text, the raw tool result is used as the reply — and the operator must
+# never see model-only instructions. ``schedule_turn_reply`` strips them back to this line.
+_SCHEDULE_CONFIRMATION_PREFIX = "Scheduled job "
+
+
+def schedule_turn_reply(tool_output: str) -> str | None:
+    """The chat reply for a turn that ended silently right after ``schedule_task``, or None
+    when ``tool_output`` isn't a schedule confirmation.
+
+    ``schedule_task`` appends model-only turn-ending guidance (#4651) after the machine
+    confirmation line. The model is meant to speak for itself, but on a silent turn the raw
+    tool output becomes the fallback reply — so strip the guidance back to the clean first
+    line, "Scheduled job <id> next at <iso>.", which is exactly what the operator used to see.
+    """
+    text = (tool_output or "").strip()
+    if not text.startswith(_SCHEDULE_CONFIRMATION_PREFIX):
+        return None
+    return text.split("\n", 1)[0].strip()
+
 
 def wait_turn_reply(tool_output: str) -> str | None:
     """The chat reply for a turn that yielded on ``wait`` without saying anything, or None
