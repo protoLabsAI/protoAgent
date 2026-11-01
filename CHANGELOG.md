@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.225.0] - 2026-11-01
+
+### Changed
+- **Console notes are cards now, not tinted banners (#4681).** Confirmations and status lines the console posts in chat now appear as a small card with an icon and a title over the message. That covers slash-command results like `/model` or `/goal`, a finished background ingest, and export or publish. The old version was a banner with a colored left edge that read like quoted text. A finished one-line background job is titled with the job, for example "Ingest https://…", over its result.
+
+### Fixed
+- **A session id containing a NUL byte no longer fails the turn on Windows (#4682).** The memory-dir containment check now refuses an embedded NUL on every platform; Windows path resolution passed it through, so the after-turn summary write raised.
+
 ## [0.224.0] - 2026-10-30
 
 ### Added
